@@ -21,6 +21,27 @@ CString RepeatPathFragment(LPCTSTR pszFragment, const int nCount)
 		strRepeated += pszFragment;
 	return strRepeated;
 }
+
+struct SpecialNameCase
+{
+	const wchar_t *pszDirectoryName;
+	const wchar_t *pszFileName;
+	bool bRequiresExactNamespace;
+};
+
+std::vector<SpecialNameCase> GetSpecialNameCases()
+{
+	return {
+		{ L".leading-dot-dir", L".leading-dot-file", false },
+		{ L"trailing-dot-dir.", L"trailing-dot-file.", true },
+		{ L" leading-space-dir", L" leading-space-file", false },
+		{ L"trailing-space-dir ", L"trailing-space-file ", true },
+		{ L"\u00A0leading-nbsp-dir", L"\u00A0leading-nbsp-file", false },
+		{ L"trailing-nbsp-dir\u00A0", L"trailing-nbsp-file\u00A0", false },
+		{ L"\u2003leading-emspace-dir", L"\u2003leading-emspace-file", false },
+		{ L"trailing-emspace-dir\u2003", L"trailing-emspace-file\u2003", false }
+	};
+}
 }
 
 TEST_CASE("Other-functions seam strips Win32 long-path prefixes before shell parsing")
@@ -57,6 +78,8 @@ TEST_CASE("Shell/UI seam preserves folder roots when preparing shell selection p
 	CHECK(ShellUiHelpers::PrepareFolderSelectionPathForShell(CString(_T("\\\\server\\share\\"))) == CString(_T("\\\\server\\share\\")));
 	CHECK(ShellUiHelpers::PrepareFolderSelectionPathForShell(CString(_T("\\\\?\\C:\\deep\\folder\\"))) == CString(_T("C:\\deep\\folder")));
 	CHECK(ShellUiHelpers::PrepareFolderSelectionPathForShell(CString(_T("\\\\?\\UNC\\server\\share\\folder\\"))) == CString(_T("\\\\server\\share\\folder")));
+	CHECK(ShellUiHelpers::PrepareFolderSelectionPathForShell(CString(_T("C:\\deep\\folder. \\"))).IsEmpty());
+	CHECK(ShellUiHelpers::PrepareFolderSelectionPathForShell(CString(_T("\\\\?\\C:\\deep\\folder. \\"))).IsEmpty());
 }
 
 TEST_CASE("Other-functions seam routes deep unicode deletes through the direct long-path path when recycle-bin delete is disabled")
@@ -249,6 +272,58 @@ TEST_CASE("Path-helper seam queries single overlong filesystem entries without M
 	CHECK_EQ(ullFoundFileSize, static_cast<ULONGLONG>(fixture.Payload().size()));
 }
 
+TEST_CASE("Path-helper seam preserves exact leading and trailing dot and whitespace names for files and folders")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x0F5500Fu));
+
+	unsigned int uSeed = 0x71710000u;
+	for (const SpecialNameCase &nameCase : GetSpecialNameCases()) {
+		const std::wstring directoryPath = fixture.DirectoryPath() + L"\\" + nameCase.pszDirectoryName;
+		const std::wstring filePath = directoryPath + L"\\" + nameCase.pszFileName;
+		const std::vector<BYTE> payload = LongPathTestSupport::BuildDeterministicPayload(193u + (uSeed & 0x3Fu), uSeed++);
+
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(directoryPath));
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(filePath, payload));
+
+		CString strCanonicalDirectory;
+		DWORD dwCanonicalDirectoryError = ERROR_SUCCESS;
+		REQUIRE(PathHelpers::TryCanonicalizeExistingPath(CString(directoryPath.c_str()), strCanonicalDirectory, &dwCanonicalDirectoryError));
+		CHECK(strCanonicalDirectory == CString(directoryPath.c_str()));
+
+		CString strCanonicalFile;
+		DWORD dwCanonicalFileError = ERROR_SUCCESS;
+		REQUIRE(PathHelpers::TryCanonicalizeExistingPath(CString(filePath.c_str()), strCanonicalFile, &dwCanonicalFileError));
+		CHECK(strCanonicalFile == CString(filePath.c_str()));
+		CHECK(PathHelpers::RequiresExtendedLengthPathForExactName(strCanonicalFile) == nameCase.bRequiresExactNamespace);
+		CHECK(PathHelpers::ArePathsEquivalent(strCanonicalFile, CString(LongPathTestSupport::PreparePathForLongPath(filePath).c_str())));
+		CHECK(PathHelpers::IsPathWithinDirectory(PathHelpers::EnsureTrailingSeparator(strCanonicalDirectory), strCanonicalFile));
+
+		WIN32_FIND_DATA findData = {};
+		DWORD dwFindError = ERROR_SUCCESS;
+		REQUIRE(PathHelpers::TryGetPathEntryData(strCanonicalFile, findData, &dwFindError));
+		CHECK(CString(findData.cFileName) == CString(nameCase.pszFileName));
+
+		bool bFoundDirectory = false;
+		REQUIRE(PathHelpers::ForEachDirectoryEntry(CString(fixture.DirectoryPath().c_str()), [&](const WIN32_FIND_DATA &entry) -> bool {
+			bFoundDirectory = bFoundDirectory || CString(entry.cFileName) == CString(nameCase.pszDirectoryName);
+			return true;
+		}));
+		CHECK(bFoundDirectory);
+
+		bool bFoundFile = false;
+		REQUIRE(PathHelpers::ForEachDirectoryEntry(strCanonicalDirectory, [&](const WIN32_FIND_DATA &entry) -> bool {
+			bFoundFile = bFoundFile || CString(entry.cFileName) == CString(nameCase.pszFileName);
+			return true;
+		}));
+		CHECK(bFoundFile);
+
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(filePath));
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(directoryPath));
+	}
+}
+
 TEST_CASE("Path-helper seam enumerates wildcard matches under overlong directories")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
@@ -363,6 +438,8 @@ TEST_CASE("Shell/UI seam limits shell display-name enrichment to shell-friendly 
 	CHECK(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\folder")));
 	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("\\\\?\\C:\\deep\\folder")));
 	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(CString(_T("C:\\")) + RepeatPathFragment(_T("segment\\"), 80)));
+	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\folder ")));
+	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\folder.")));
 }
 
 TEST_CASE("Shell/UI seam builds stable extension and directory icon queries")

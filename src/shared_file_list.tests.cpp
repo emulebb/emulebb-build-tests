@@ -54,6 +54,31 @@ TEST_CASE("Shared file list contains child files across canonicalized directory 
 	const CString strShortDirectory(PathHelpers::EnsureTrailingSeparator(CString(shortAlias.c_str())));
 	CHECK(SharedFileListSeams::ContainsSharedChildPath(strShortDirectory, strFilePath));
 }
+
+TEST_CASE("Shared file list preserves exact trailing dot and trailing space names across canonical path spellings")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x717273u));
+
+	const std::wstring directoryPath = fixture.DirectoryPath() + L"\\shared-dir. ";
+	const std::wstring filePath = directoryPath + L"\\shared-file ";
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(directoryPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(filePath, LongPathTestSupport::BuildDeterministicPayload(211u, 0x818283u)));
+
+	const CString strDirectory(PathHelpers::EnsureTrailingSeparator(CString(directoryPath.c_str())));
+	const CString strFilePath(CString(filePath.c_str()));
+	const CString strPrefixedDirectory(PathHelpers::EnsureTrailingSeparator(CString(LongPathTestSupport::PreparePathForLongPath(directoryPath).c_str())));
+	const CString strPrefixedFile(CString(LongPathTestSupport::PreparePathForLongPath(filePath).c_str()));
+
+	CHECK(SharedFileListSeams::ContainsSharedChildPath(strDirectory, strFilePath));
+	CHECK(SharedFileListSeams::ContainsSharedChildPath(strPrefixedDirectory, strFilePath));
+	CHECK(SharedFileListSeams::ContainsSharedChildPath(strDirectory, strPrefixedFile));
+	CHECK(SharedFileListSeams::MatchesExplicitSharedFilePath(strFilePath, strPrefixedFile));
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(filePath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(directoryPath));
+}
 #endif
 
 TEST_CASE("Shared file list rejects complete files that are neither directory-shared nor explicitly shared")
