@@ -207,6 +207,31 @@ TEST_CASE("Path-helper seam treats prefixed, dotted, and DOS 8.3 aliases as the 
 	CHECK(PathHelpers::ArePathsEquivalent(strLongPath, CString(shortAlias.c_str())));
 }
 
+TEST_CASE("Path-helper seam treats descendant checks as equivalent across canonical path spellings")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x0F2200Fu));
+
+	const CString strLongDirectory(PathHelpers::EnsureTrailingSeparator(CString(fixture.DirectoryPath().c_str())));
+	const CString strLongFile(CString(fixture.FilePath().c_str()));
+	const CString strPrefixedDirectory(PathHelpers::EnsureTrailingSeparator(CString(LongPathTestSupport::PreparePathForLongPath(fixture.DirectoryPath()).c_str())));
+	const CString strPrefixedFile(CString(LongPathTestSupport::PreparePathForLongPath(fixture.FilePath()).c_str()));
+
+	CHECK(PathHelpers::IsPathWithinDirectory(strLongDirectory, strLongFile));
+	CHECK(PathHelpers::IsPathWithinDirectory(strLongDirectory, strPrefixedFile));
+	CHECK(PathHelpers::IsPathWithinDirectory(strPrefixedDirectory, strLongFile));
+
+	std::wstring shortAlias;
+	if (LongPathTestSupport::TryGetShortPathAlias(fixture.DirectoryPath(), shortAlias)) {
+		const CString strShortDirectory(PathHelpers::EnsureTrailingSeparator(CString(shortAlias.c_str())));
+		CHECK(PathHelpers::IsPathWithinDirectory(strShortDirectory, strLongFile));
+	}
+
+	const CString strEscapingCandidate((fixture.DirectoryPath() + L"\\..\\outside.bin").c_str());
+	CHECK_FALSE(PathHelpers::IsPathWithinDirectory(strLongDirectory, strEscapingCandidate));
+}
+
 TEST_CASE("Path-helper seam enumerates child entries whose full paths exceed MAX_PATH even when the parent directory does not")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
