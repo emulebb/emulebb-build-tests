@@ -5,6 +5,10 @@
 #include "SharedDirectoryOps.h"
 #define EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS 1
 #endif
+#if __has_include("SharedFilesWndSeams.h")
+#include "SharedFilesWndSeams.h"
+#define EMULE_TESTS_HAS_SHARED_FILES_WND_SEAMS 1
+#endif
 #endif
 #include "SharedFileListSeams.h"
 
@@ -54,6 +58,22 @@ TEST_CASE("Shared file list accepts part files outside shared directories")
 {
 	CHECK(SharedFileListSeams::CanAddSharedFile(true, false, false));
 }
+
+#ifdef EMULE_TESTS_HAS_SHARED_FILES_WND_SEAMS
+TEST_CASE("Shared files splitter range scales with dialog width instead of capping at the legacy maximum")
+{
+	CHECK_EQ(SharedFilesWndSeams::ClampSplitterPosition(50, 900), SharedFilesWndSeams::kMinTreeWidth);
+	CHECK_EQ(SharedFilesWndSeams::ClampSplitterPosition(999, 900), SharedFilesWndSeams::GetSplitterRangeMax(900));
+	CHECK(SharedFilesWndSeams::GetSplitterRangeMax(900) > 350);
+	CHECK_EQ(SharedFilesWndSeams::ClampSplitterPosition(500, 900), 500);
+}
+
+TEST_CASE("Shared files splitter keeps a usable right pane in narrow windows")
+{
+	CHECK_EQ(SharedFilesWndSeams::GetSplitterRangeMax(180), SharedFilesWndSeams::kMinTreeWidth);
+	CHECK_EQ(SharedFilesWndSeams::ClampSplitterPosition(999, 180), SharedFilesWndSeams::kMinTreeWidth);
+}
+#endif
 
 #ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS
 TEST_CASE("Shared directory recursion dedupes non-recursive junction aliases by filesystem identity")
