@@ -1,4 +1,5 @@
 #include "../third_party/doctest/doctest.h"
+#include "../include/LongPathTestSupport.h"
 #include "SharedFileListSeams.h"
 
 TEST_SUITE_BEGIN("parity");
@@ -17,6 +18,43 @@ TEST_CASE("Shared file list accepts part files outside shared directories")
 {
 	CHECK(SharedFileListSeams::CanAddSharedFile(true, false, false));
 }
+
+#ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_PATH_SEAMS
+TEST_CASE("Shared file list matches explicit shared files across prefixed and DOS 8.3 spellings")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 301u, 0x515151u));
+
+	const CString strLongPath(fixture.FilePath().c_str());
+	const CString strPrefixedPath(LongPathTestSupport::PreparePathForLongPath(fixture.FilePath()).c_str());
+	CHECK(SharedFileListSeams::MatchesExplicitSharedFilePath(strLongPath, strPrefixedPath));
+
+	std::wstring shortAlias;
+	if (!LongPathTestSupport::TryGetShortPathAlias(fixture.FilePath(), shortAlias))
+		return;
+
+	CHECK(SharedFileListSeams::MatchesExplicitSharedFilePath(strLongPath, CString(shortAlias.c_str())));
+}
+
+TEST_CASE("Shared file list contains child files across canonicalized directory spellings")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 302u, 0x616161u));
+
+	const CString strDirectory(PathHelpers::EnsureTrailingSeparator(CString(fixture.DirectoryPath().c_str())));
+	const CString strFilePath(fixture.FilePath().c_str());
+	CHECK(SharedFileListSeams::ContainsSharedChildPath(strDirectory, strFilePath));
+
+	std::wstring shortAlias;
+	if (!LongPathTestSupport::TryGetShortPathAlias(fixture.DirectoryPath(), shortAlias))
+		return;
+
+	const CString strShortDirectory(PathHelpers::EnsureTrailingSeparator(CString(shortAlias.c_str())));
+	CHECK(SharedFileListSeams::ContainsSharedChildPath(strShortDirectory, strFilePath));
+}
+#endif
 
 TEST_CASE("Shared file list rejects complete files that are neither directory-shared nor explicitly shared")
 {

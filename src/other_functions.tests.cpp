@@ -170,6 +170,42 @@ TEST_CASE("Path-helper seam canonicalizes overlong paths lexically")
 	CHECK(strInput.GetLength() > MAX_PATH);
 }
 
+TEST_CASE("Path-helper seam expands DOS 8.3 aliases to canonical long names for existing files")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 513u, 0x0C0FFEEu));
+
+	std::wstring shortAlias;
+	if (!LongPathTestSupport::TryGetShortPathAlias(fixture.FilePath(), shortAlias))
+		return;
+
+	CString strCanonicalPath;
+	DWORD dwCanonicalizeError = ERROR_SUCCESS;
+	REQUIRE(PathHelpers::TryCanonicalizeExistingPath(CString(shortAlias.c_str()), strCanonicalPath, &dwCanonicalizeError));
+	CHECK(strCanonicalPath == CString(fixture.FilePath().c_str()));
+}
+
+TEST_CASE("Path-helper seam treats prefixed, dotted, and DOS 8.3 aliases as the same existing path")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 777u, 0x0D00D00u));
+
+	const CString strLongPath(fixture.FilePath().c_str());
+	const CString strPrefixedPath(LongPathTestSupport::PreparePathForLongPath(fixture.FilePath()).c_str());
+	const CString strDottedPath((fixture.DirectoryPath() + L"\\.\\payload_" + LongPathTestSupport::MakeSpecialSegment() + L".bin").c_str());
+
+	CHECK(PathHelpers::ArePathsEquivalent(strLongPath, strPrefixedPath));
+	CHECK(PathHelpers::ArePathsEquivalent(strLongPath, strDottedPath));
+
+	std::wstring shortAlias;
+	if (!LongPathTestSupport::TryGetShortPathAlias(fixture.FilePath(), shortAlias))
+		return;
+
+	CHECK(PathHelpers::ArePathsEquivalent(strLongPath, CString(shortAlias.c_str())));
+}
+
 TEST_CASE("Path-helper seam formats MiniMule resource URLs from overlong module paths")
 {
 	const CString strModulePath = CString(_T("C:\\Program Files\\eMule\\")) + RepeatPathFragment(_T("segment\\"), 70) + CString(_T("emule.exe"));

@@ -91,6 +91,37 @@ inline std::wstring PrepareDirectoryCreatePathForLongPath(const std::wstring &pa
 }
 
 /**
+ * @brief Returns the preferred real-FS root used for long-path regression scenarios.
+ */
+inline std::wstring PreferredFixtureRoot()
+{
+	return std::wstring(L"C:\\tmp\\00_long_paths\\emule-longpath-tests");
+}
+
+/**
+ * @brief Queries the DOS 8.3 short-name alias for an existing path when the volume exposes one.
+ */
+inline bool TryGetShortPathAlias(const std::wstring &path, std::wstring &aliasOut)
+{
+	aliasOut.clear();
+	if (path.empty())
+		return false;
+
+	const std::wstring preparedPath = PreparePathForLongPath(path);
+	DWORD cchRequired = ::GetShortPathNameW(preparedPath.c_str(), NULL, 0);
+	if (cchRequired == 0)
+		return false;
+
+	std::vector<wchar_t> buffer(static_cast<size_t>(cchRequired), L'\0');
+	const DWORD cchWritten = ::GetShortPathNameW(preparedPath.c_str(), buffer.data(), cchRequired);
+	if (cchWritten == 0 || cchWritten >= cchRequired)
+		return false;
+
+	aliasOut.assign(buffer.data(), cchWritten);
+	return !aliasOut.empty() && _wcsicmp(aliasOut.c_str(), path.c_str()) != 0;
+}
+
+/**
  * @brief Builds deterministic binary payloads so real-FS tests can assert exact golden vectors.
  */
 inline std::vector<BYTE> BuildDeterministicPayload(const size_t nByteCount, const std::uint32_t nSeed)
@@ -128,17 +159,15 @@ public:
 	 */
 	bool Initialize(const bool bMakeLongPath, const size_t nPayloadBytes, const std::uint32_t nSeed)
 	{
-		WCHAR szTempPath[MAX_PATH] = {};
-		if (::GetTempPathW(_countof(szTempPath), szTempPath) == 0) {
-			m_dwLastError = ::GetLastError();
-			return false;
-		}
-
 		m_directories.clear();
 		m_payload = BuildDeterministicPayload(nPayloadBytes, nSeed);
 		m_dwLastError = ERROR_SUCCESS;
 
-		const std::wstring root = std::wstring(szTempPath) + L"emule-longpath-tests";
+		const std::wstring root = PreferredFixtureRoot();
+		if (!EnsureDirectoryTree(std::wstring(L"C:\\"), root)) {
+			m_dwLastError = ::GetLastError();
+			return false;
+		}
 		if (!CreateDirectoryIfNeeded(root))
 			return false;
 		m_directories.push_back(root);
