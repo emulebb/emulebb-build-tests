@@ -249,6 +249,38 @@ TEST_CASE("Path-helper seam queries single overlong filesystem entries without M
 	CHECK_EQ(ullFoundFileSize, static_cast<ULONGLONG>(fixture.Payload().size()));
 }
 
+TEST_CASE("Path-helper seam enumerates wildcard matches under overlong directories")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 333u, 0x0F4400Fu));
+
+	const std::wstring secondFilePath = fixture.MakeDirectoryChildPath(L"second_payload.bin");
+	const std::wstring ignoredFilePath = fixture.MakeDirectoryChildPath(L"ignored.txt");
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(secondFilePath, LongPathTestSupport::BuildDeterministicPayload(64u, 0x0ABCDEF0u)));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(ignoredFilePath, LongPathTestSupport::BuildDeterministicPayload(16u, 0x01020304u)));
+
+	bool bFoundFixturePayload = false;
+	bool bFoundSecondPayload = false;
+	bool bFoundIgnored = false;
+	DWORD dwFindError = ERROR_SUCCESS;
+	REQUIRE(PathHelpers::ForEachMatchingEntry(CString((fixture.DirectoryPath() + L"\\*.bin").c_str()),
+		[&](const WIN32_FIND_DATA &findData) -> bool {
+		const CString strFileName(findData.cFileName);
+		bFoundFixturePayload = bFoundFixturePayload || strFileName == CString((L"payload_" + LongPathTestSupport::MakeSpecialSegment() + L".bin").c_str());
+		bFoundSecondPayload = bFoundSecondPayload || strFileName == _T("second_payload.bin");
+		bFoundIgnored = bFoundIgnored || strFileName == _T("ignored.txt");
+		return true;
+	}, &dwFindError));
+	CHECK(dwFindError == ERROR_SUCCESS);
+	CHECK(bFoundFixturePayload);
+	CHECK(bFoundSecondPayload);
+	CHECK_FALSE(bFoundIgnored);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(secondFilePath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(ignoredFilePath));
+}
+
 TEST_CASE("Path-helper seam enumerates child entries whose full paths exceed MAX_PATH even when the parent directory does not")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
