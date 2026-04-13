@@ -5,9 +5,11 @@
 #include "LongPathSeams.h"
 #include "OtherFunctionsSeams.h"
 #include "PathHelpers.h"
+#include "SharedFileIntakePolicy.h"
 #include "ShellUiHelpers.h"
 
 #include <algorithm>
+#include <objbase.h>
 #include <windows.h>
 
 TEST_SUITE_BEGIN("parity");
@@ -43,6 +45,31 @@ std::vector<SpecialNameCase> GetSpecialNameCases()
 		{ L"\u2003leading-emspace-dir", L"\u2003leading-emspace-file", false },
 		{ L"trailing-emspace-dir\u2003", L"trailing-emspace-file\u2003", false }
 	};
+}
+
+bool IsRealThumbsDbStorage(const CString &rstrFilePath, const CString &rstrFileName)
+{
+	if (rstrFileName.CompareNoCase(_T("thumbs.db")) != 0)
+		return false;
+
+	IStorage *pStorage = NULL;
+	if (::StgOpenStorage(rstrFilePath, NULL, STGM_READ | STGM_SHARE_DENY_WRITE, NULL, 0, &pStorage) != S_OK)
+		return false;
+
+	IEnumSTATSTG *pEnumSTATSTG = NULL;
+	const HRESULT hrEnum = pStorage->EnumElements(0, NULL, 0, &pEnumSTATSTG);
+	if (FAILED(hrEnum)) {
+		pStorage->Release();
+		return false;
+	}
+
+	STATSTG statstg = {};
+	const HRESULT hrNext = pEnumSTATSTG->Next(1, &statstg, 0);
+	if (statstg.pwcsName != NULL)
+		::CoTaskMemFree(statstg.pwcsName);
+	pEnumSTATSTG->Release();
+	pStorage->Release();
+	return hrNext == S_OK;
 }
 }
 
@@ -475,6 +502,84 @@ TEST_CASE("Shell/UI seam ignores Windows shortcuts by extension")
 	CHECK(ShellUiHelpers::ShouldIgnoreShortcutFileName(_T("sample.lnk")));
 	CHECK(ShellUiHelpers::ShouldIgnoreShortcutFileName(_T("SAMPLE.LNK")));
 	CHECK_FALSE(ShellUiHelpers::ShouldIgnoreShortcutFileName(_T("sample.txt")));
+}
+
+TEST_CASE("Shared-file intake policy ignores built-in junk names and preserves nearby names")
+{
+	const CString strIconCrPath(_T("C:\\share\\Icon\r"));
+	const CString strIconCrName(_T("Icon\r"));
+	const CString strIconCrTxtPath(_T("C:\\share\\Icon\r.txt"));
+	const CString strIconCrTxtName(_T("Icon\r.txt"));
+
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("desktop.ini")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("Desktop.ini")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("ehthumbs.db")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".DS_Store")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".localized")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(strIconCrName));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.lnk")));
+
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("desktop.ini.bak")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".localized.bak")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("Icon")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(strIconCrTxtName));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreCandidate(_T("C:\\share\\thumbs.db"), _T("thumbs.db"), [](const CString &, const CString &) { return false; }));
+}
+
+TEST_CASE("Shared-file intake policy ignores real thumbs databases but not arbitrary files with the same name")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0xA10080u));
+
+	const std::wstring plainDir = fixture.MakeDirectoryChildPath(L"plain");
+	const std::wstring storageDir = fixture.MakeDirectoryChildPath(L"storage");
+	const std::wstring plainThumbsPath = plainDir + L"\\thumbs.db";
+	const std::wstring storageThumbsPath = storageDir + L"\\thumbs.db";
+	struct CleanupPaths
+	{
+		std::wstring plainThumbsPath;
+		std::wstring storageThumbsPath;
+		std::wstring storageDir;
+		std::wstring plainDir;
+
+		~CleanupPaths()
+		{
+			if (!plainThumbsPath.empty())
+				(void)LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(plainThumbsPath);
+			if (!storageThumbsPath.empty())
+				(void)LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(storageThumbsPath);
+			if (!storageDir.empty())
+				(void)LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(storageDir);
+			if (!plainDir.empty())
+				(void)LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(plainDir);
+		}
+	} cleanup = { plainThumbsPath, storageThumbsPath, storageDir, plainDir };
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(plainDir));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(storageDir));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(
+		plainThumbsPath,
+		LongPathTestSupport::BuildDeterministicPayload(16u, 0x0BADF00Du)));
+
+	IStorage *pStorage = NULL;
+	REQUIRE(SUCCEEDED(::StgCreateDocfile(
+		LongPathTestSupport::PreparePathForLongPath(storageThumbsPath).c_str(),
+		STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
+		0,
+		&pStorage)));
+	IStream *pStream = NULL;
+	REQUIRE(SUCCEEDED(pStorage->CreateStream(L"Catalog", STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, 0, 0, &pStream)));
+	const char payload = 'x';
+	ULONG cbWritten = 0;
+	REQUIRE(SUCCEEDED(pStream->Write(&payload, sizeof(payload), &cbWritten)));
+	CHECK_EQ(cbWritten, static_cast<ULONG>(sizeof(payload)));
+	pStream->Release();
+	pStorage->Commit(STGC_DEFAULT);
+	pStorage->Release();
+
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreCandidate(CString(plainThumbsPath.c_str()), _T("thumbs.db"), IsRealThumbsDbStorage));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreCandidate(CString(storageThumbsPath.c_str()), _T("thumbs.db"), IsRealThumbsDbStorage));
 }
 
 TEST_CASE("Shell/UI seam limits shell display-name enrichment to shell-friendly paths")
