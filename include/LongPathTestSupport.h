@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <windows.h>
+#include <winioctl.h>
 
 namespace LongPathTestSupport
 {
@@ -279,6 +280,83 @@ inline std::uint64_t ComputeFnv1a64(const std::vector<BYTE> &payload)
 		value *= 1099511628211ull;
 	}
 	return value;
+}
+
+/**
+ * @brief Creates a directory junction that resolves to the target directory.
+ */
+inline bool CreateDirectoryJunction(const std::wstring &junctionPath, const std::wstring &targetPath)
+{
+	struct MountPointReparseBuffer
+	{
+		DWORD ReparseTag;
+		WORD ReparseDataLength;
+		WORD Reserved;
+		WORD SubstituteNameOffset;
+		WORD SubstituteNameLength;
+		WORD PrintNameOffset;
+		WORD PrintNameLength;
+		WCHAR PathBuffer[1];
+	};
+
+	if (::CreateDirectoryW(PrepareDirectoryCreatePathForLongPath(junctionPath).c_str(), NULL) == FALSE
+		&& ::GetLastError() != ERROR_ALREADY_EXISTS)
+	{
+		return false;
+	}
+
+	HANDLE hJunction = ::CreateFileW(
+		PreparePathForLongPath(junctionPath).c_str(),
+		GENERIC_WRITE,
+		0,
+		NULL,
+		OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+		NULL);
+	if (hJunction == INVALID_HANDLE_VALUE) {
+		(void)::RemoveDirectoryW(PreparePathForLongPath(junctionPath).c_str());
+		return false;
+	}
+
+	const std::wstring substituteName = std::wstring(L"\\??\\") + StripLongPathPrefix(targetPath);
+	const std::wstring printName = StripLongPathPrefix(targetPath);
+	const USHORT cbSubstituteName = static_cast<USHORT>(substituteName.size() * sizeof(wchar_t));
+	const USHORT cbPrintName = static_cast<USHORT>(printName.size() * sizeof(wchar_t));
+	const size_t cbPathBuffer = static_cast<size_t>(cbSubstituteName) + sizeof(wchar_t) + static_cast<size_t>(cbPrintName) + sizeof(wchar_t);
+	const size_t cbReparseBuffer = FIELD_OFFSET(MountPointReparseBuffer, PathBuffer) + cbPathBuffer;
+
+	std::vector<BYTE> buffer(cbReparseBuffer, 0);
+	MountPointReparseBuffer *pReparseData = reinterpret_cast<MountPointReparseBuffer *>(buffer.data());
+	pReparseData->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
+	pReparseData->ReparseDataLength = static_cast<USHORT>(cbPathBuffer + 8u);
+	pReparseData->Reserved = 0;
+	pReparseData->SubstituteNameOffset = 0;
+	pReparseData->SubstituteNameLength = cbSubstituteName;
+	pReparseData->PrintNameOffset = static_cast<USHORT>(cbSubstituteName + sizeof(wchar_t));
+	pReparseData->PrintNameLength = cbPrintName;
+
+	BYTE *pPathBuffer = reinterpret_cast<BYTE *>(pReparseData->PathBuffer);
+	memcpy(pPathBuffer, substituteName.data(), cbSubstituteName);
+	memcpy(pPathBuffer + cbSubstituteName + sizeof(wchar_t), printName.data(), cbPrintName);
+
+	DWORD dwBytesReturned = 0;
+	const BOOL bOk = ::DeviceIoControl(
+		hJunction,
+		FSCTL_SET_REPARSE_POINT,
+		pReparseData,
+		static_cast<DWORD>(FIELD_OFFSET(MountPointReparseBuffer, PathBuffer) + pReparseData->ReparseDataLength),
+		NULL,
+		0,
+		&dwBytesReturned,
+		NULL);
+	const DWORD dwError = bOk ? ERROR_SUCCESS : ::GetLastError();
+	(void)::CloseHandle(hJunction);
+	if (bOk != FALSE)
+		return true;
+
+	(void)::RemoveDirectoryW(PreparePathForLongPath(junctionPath).c_str());
+	::SetLastError(dwError);
+	return false;
 }
 
 /**

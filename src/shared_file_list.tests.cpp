@@ -1,8 +1,44 @@
 #include "../third_party/doctest/doctest.h"
 #include "../include/LongPathTestSupport.h"
+#if defined(__has_include)
+#if __has_include("SharedDirectoryOps.h")
+#include "SharedDirectoryOps.h"
+#define EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS 1
+#endif
+#endif
 #include "SharedFileListSeams.h"
 
 TEST_SUITE_BEGIN("parity");
+
+#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS
+bool EqualPaths(const CString &rstrDir1, const CString &rstrDir2)
+{
+	return PathHelpers::ArePathsEquivalent(rstrDir1, rstrDir2);
+}
+#endif
+
+namespace
+{
+#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS
+int CountEquivalentPaths(const CStringList &rList, const CString &rstrPath)
+{
+	int nMatches = 0;
+	for (POSITION pos = rList.GetHeadPosition(); pos != NULL;) {
+		if (EqualPaths(rList.GetNext(pos), rstrPath))
+			++nMatches;
+	}
+	return nMatches;
+}
+
+int CountPaths(const CStringList &rList)
+{
+	int nCount = 0;
+	for (POSITION pos = rList.GetHeadPosition(); pos != NULL;)
+		(void)rList.GetNext(pos), ++nCount;
+	return nCount;
+}
+#endif
+}
 
 TEST_CASE("Shared file list accepts files from shared directories")
 {
@@ -18,6 +54,77 @@ TEST_CASE("Shared file list accepts part files outside shared directories")
 {
 	CHECK(SharedFileListSeams::CanAddSharedFile(true, false, false));
 }
+
+#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS
+TEST_CASE("Shared directory recursion dedupes non-recursive junction aliases by filesystem identity")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0xA10001u));
+
+	const std::wstring targetPath = fixture.MakeDirectoryChildPath(L"real-target");
+	const std::wstring aliasPath = fixture.MakeDirectoryChildPath(L"alias-target");
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(targetPath));
+	if (!LongPathTestSupport::CreateDirectoryJunction(aliasPath, targetPath))
+		return;
+
+	CStringList sharedDirectories;
+	CHECK(SharedDirectoryOps::AddSharedDirectory(sharedDirectories, CString(targetPath.c_str()), false, [](const CString &) { return true; }));
+	CHECK_FALSE(SharedDirectoryOps::AddSharedDirectory(sharedDirectories, CString(aliasPath.c_str()), false, [](const CString &) { return true; }));
+	CHECK_EQ(CountPaths(sharedDirectories), 1);
+	CHECK(CountEquivalentPaths(sharedDirectories, CString(targetPath.c_str())) + CountEquivalentPaths(sharedDirectories, CString(aliasPath.c_str())) == 1);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(aliasPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(targetPath));
+}
+
+TEST_CASE("Shared directory recursion keeps only one child path when a junction aliases the same target")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0xA10002u));
+
+	const std::wstring rootPath = fixture.DirectoryPath();
+	const std::wstring targetPath = fixture.MakeDirectoryChildPath(L"real-child");
+	const std::wstring aliasPath = fixture.MakeDirectoryChildPath(L"alias-child");
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(targetPath));
+	if (!LongPathTestSupport::CreateDirectoryJunction(aliasPath, targetPath))
+		return;
+
+	CStringList sharedDirectories;
+	CHECK(SharedDirectoryOps::AddSharedDirectory(sharedDirectories, CString(rootPath.c_str()), true, [](const CString &) { return true; }));
+	CHECK_EQ(CountPaths(sharedDirectories), 2);
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(rootPath.c_str())), 1);
+	CHECK(CountEquivalentPaths(sharedDirectories, CString(targetPath.c_str())) + CountEquivalentPaths(sharedDirectories, CString(aliasPath.c_str())) == 1);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(aliasPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(targetPath));
+}
+
+TEST_CASE("Shared directory recursion stops junction loops by filesystem identity")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0xA10003u));
+
+	const std::wstring rootPath = fixture.DirectoryPath();
+	const std::wstring childPath = fixture.MakeDirectoryChildPath(L"loop-child");
+	const std::wstring loopPath = childPath + L"\\back-to-root";
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(childPath));
+	if (!LongPathTestSupport::CreateDirectoryJunction(loopPath, rootPath))
+		return;
+
+	CStringList sharedDirectories;
+	CHECK(SharedDirectoryOps::AddSharedDirectory(sharedDirectories, CString(rootPath.c_str()), true, [](const CString &) { return true; }));
+	CHECK_EQ(CountPaths(sharedDirectories), 2);
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(rootPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(childPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(loopPath.c_str())), 0);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(loopPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(childPath));
+}
+#endif
 
 #ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_PATH_SEAMS
 TEST_CASE("Shared file list matches explicit shared files across prefixed and DOS 8.3 spellings")
