@@ -232,6 +232,23 @@ TEST_CASE("Path-helper seam treats descendant checks as equivalent across canoni
 	CHECK_FALSE(PathHelpers::IsPathWithinDirectory(strLongDirectory, strEscapingCandidate));
 }
 
+TEST_CASE("Path-helper seam queries single overlong filesystem entries without MAX_PATH-specific branches")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 222u, 0x0F3300Fu));
+
+	WIN32_FIND_DATA findData = {};
+	DWORD dwFindError = ERROR_SUCCESS;
+	REQUIRE(PathHelpers::TryGetPathEntryData(CString(fixture.FilePath().c_str()), findData, &dwFindError));
+	CHECK(dwFindError == ERROR_SUCCESS);
+	CHECK((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0);
+	CHECK(CString(findData.cFileName) == CString((L"payload_" + LongPathTestSupport::MakeSpecialSegment() + L".bin").c_str()));
+
+	const ULONGLONG ullFoundFileSize = (static_cast<ULONGLONG>(findData.nFileSizeHigh) << 32) | findData.nFileSizeLow;
+	CHECK_EQ(ullFoundFileSize, static_cast<ULONGLONG>(fixture.Payload().size()));
+}
+
 TEST_CASE("Path-helper seam enumerates child entries whose full paths exceed MAX_PATH even when the parent directory does not")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
