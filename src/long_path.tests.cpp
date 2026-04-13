@@ -45,8 +45,10 @@ namespace
 		return {
 			{ L".leading-dot-dir", L".leading-dot-file", false },
 			{ L"trailing-dot-dir.", L"trailing-dot-file.", true },
-			{ L" leading-space-dir", L" leading-space-file", false },
+			{ L" leading-space-dir", L" leading-space-file", true },
 			{ L"trailing-space-dir ", L"trailing-space-file ", true },
+			{ L"space-only-dir ", L" ", true },
+			{ L"reserved-device-dir", L"NUL.txt", true },
 			{ L"\u00A0leading-nbsp-dir", L"\u00A0leading-nbsp-file", false },
 			{ L"trailing-nbsp-dir\u00A0", L"trailing-nbsp-file\u00A0", false },
 			{ L"\u2003leading-emspace-dir", L"\u2003leading-emspace-file", false },
@@ -77,6 +79,7 @@ TEST_CASE("Long-path seam matches the reference prefix policy for overlong and e
 	const std::wstring leadingSpacePath = L"C:\\Temp\\ leading-space";
 	const std::wstring leadingDotPath = L"C:\\Temp\\.leading-dot";
 	const std::wstring trailingNbspPath = L"C:\\Temp\\nbsp-trailing\u00A0";
+	const std::wstring reservedDevicePath = L"C:\\Temp\\NUL.txt";
 
 	CHECK(LongPathSeams::PreparePathForLongPath(_T("C:\\Temp\\short.txt")) == LongPathSeams::PathString(_T("C:\\Temp\\short.txt")));
 	CHECK(LongPathSeams::PreparePathForLongPath(_T("\\\\server\\share\\short.txt")) == LongPathSeams::PathString(_T("\\\\server\\share\\short.txt")));
@@ -93,6 +96,7 @@ TEST_CASE("Long-path seam matches the reference prefix policy for overlong and e
 	CHECK(LongPathSeams::PreparePathForLongPath(leadingSpacePath.c_str()) == LongPathTestSupport::PreparePathForLongPath(leadingSpacePath));
 	CHECK(LongPathSeams::PreparePathForLongPath(leadingDotPath.c_str()) == LongPathTestSupport::PreparePathForLongPath(leadingDotPath));
 	CHECK(LongPathSeams::PreparePathForLongPath(trailingNbspPath.c_str()) == LongPathTestSupport::PreparePathForLongPath(trailingNbspPath));
+	CHECK(LongPathSeams::PreparePathForLongPath(reservedDevicePath.c_str()) == LongPathTestSupport::PreparePathForLongPath(reservedDevicePath));
 }
 
 TEST_CASE("Long-path seam reads deterministic generated payloads from overlong unicode paths")
@@ -319,6 +323,84 @@ TEST_CASE("Long-path seam preserves exact dot and whitespace names for files and
 		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(filePath));
 		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(directoryPath));
 	}
+}
+
+TEST_CASE("Long-path seam preserves leading-space and reserved-name short paths without relying on path length")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0x20260417u));
+
+	const std::wstring leadingSpaceDirectory = fixture.DirectoryPath() + L"\\ leading-space-dir";
+	const std::wstring leadingSpaceFile = leadingSpaceDirectory + L"\\ leading-space-file.bin";
+	const std::wstring reservedDirectory = fixture.DirectoryPath() + L"\\reserved-device-dir";
+	const std::wstring reservedFile = reservedDirectory + L"\\NUL.txt";
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(leadingSpaceDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(leadingSpaceFile, LongPathTestSupport::BuildDeterministicPayload(73u, 0x17A1u)));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(reservedDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(reservedFile, LongPathTestSupport::BuildDeterministicPayload(91u, 0x17B2u)));
+
+	CHECK(LongPathSeams::PreparePathForLongPath(leadingSpaceDirectory.c_str()).rfind(L"\\\\?\\", 0) == 0);
+	CHECK(LongPathSeams::PreparePathForLongPath(reservedFile.c_str()).rfind(L"\\\\?\\", 0) == 0);
+	CHECK(LongPathSeams::PathExists(leadingSpaceFile.c_str()));
+	CHECK(LongPathSeams::PathExists(reservedFile.c_str()));
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(leadingSpaceFile));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(leadingSpaceDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(reservedFile));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(reservedDirectory));
+}
+
+TEST_CASE("Long-path seam enumerates wildcard matches inside exact-name and reserved-name directories")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0x20260418u));
+
+	const std::wstring exactDirectory = fixture.DirectoryPath() + L"\\ leading-space-dir";
+	const std::wstring reservedDirectory = fixture.DirectoryPath() + L"\\reserved-device-dir";
+	const std::wstring exactFile = exactDirectory + L"\\alpha.bin";
+	const std::wstring exactIgnored = exactDirectory + L"\\beta.txt";
+	const std::wstring reservedFile = reservedDirectory + L"\\NUL.bin";
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(exactDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(reservedDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(exactFile, LongPathTestSupport::BuildDeterministicPayload(29u, 0x18A1u)));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(exactIgnored, LongPathTestSupport::BuildDeterministicPayload(31u, 0x18A2u)));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(reservedFile, LongPathTestSupport::BuildDeterministicPayload(37u, 0x18A3u)));
+
+	std::vector<std::wstring> exactNames;
+	WIN32_FIND_DATAW findData = {};
+	HANDLE hFind = LongPathSeams::FindFirstFile((exactDirectory + L"\\*.bin").c_str(), &findData);
+	REQUIRE(hFind != INVALID_HANDLE_VALUE);
+	do {
+		if (wcscmp(findData.cFileName, L".") != 0 && wcscmp(findData.cFileName, L"..") != 0)
+			exactNames.push_back(findData.cFileName);
+	} while (::FindNextFileW(hFind, &findData) != FALSE);
+	REQUIRE(::GetLastError() == ERROR_NO_MORE_FILES);
+	REQUIRE(::FindClose(hFind) != FALSE);
+
+	CHECK(std::find(exactNames.begin(), exactNames.end(), std::wstring(L"alpha.bin")) != exactNames.end());
+	CHECK(std::find(exactNames.begin(), exactNames.end(), std::wstring(L"beta.txt")) == exactNames.end());
+
+	std::vector<std::wstring> reservedNames;
+	WIN32_FIND_DATAW reservedFindData = {};
+	HANDLE hReservedFind = LongPathSeams::FindFirstFile((reservedDirectory + L"\\*.bin").c_str(), &reservedFindData);
+	REQUIRE(hReservedFind != INVALID_HANDLE_VALUE);
+	do {
+		if (wcscmp(reservedFindData.cFileName, L".") != 0 && wcscmp(reservedFindData.cFileName, L"..") != 0)
+			reservedNames.push_back(reservedFindData.cFileName);
+	} while (::FindNextFileW(hReservedFind, &reservedFindData) != FALSE);
+	REQUIRE(::GetLastError() == ERROR_NO_MORE_FILES);
+	REQUIRE(::FindClose(hReservedFind) != FALSE);
+
+	CHECK(std::find(reservedNames.begin(), reservedNames.end(), std::wstring(L"NUL.bin")) != reservedNames.end());
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(exactFile));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(exactIgnored));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(reservedFile));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(exactDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(reservedDirectory));
 }
 
 TEST_CASE("Long-path seam rejects tab-prefixed and tab-suffixed names as invalid Win32 filenames")

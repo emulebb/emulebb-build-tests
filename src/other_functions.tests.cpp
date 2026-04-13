@@ -34,8 +34,10 @@ std::vector<SpecialNameCase> GetSpecialNameCases()
 	return {
 		{ L".leading-dot-dir", L".leading-dot-file", false },
 		{ L"trailing-dot-dir.", L"trailing-dot-file.", true },
-		{ L" leading-space-dir", L" leading-space-file", false },
+		{ L" leading-space-dir", L" leading-space-file", true },
 		{ L"trailing-space-dir ", L"trailing-space-file ", true },
+		{ L"space-only-dir ", L" ", true },
+		{ L"reserved-device-dir", L"NUL.txt", true },
 		{ L"\u00A0leading-nbsp-dir", L"\u00A0leading-nbsp-file", false },
 		{ L"trailing-nbsp-dir\u00A0", L"trailing-nbsp-file\u00A0", false },
 		{ L"\u2003leading-emspace-dir", L"\u2003leading-emspace-file", false },
@@ -356,6 +358,48 @@ TEST_CASE("Path-helper seam enumerates wildcard matches under overlong directori
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(ignoredFilePath));
 }
 
+TEST_CASE("Path-helper seam enumerates wildcard matches inside short exact-name and reserved-name directories")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0x0F4410Fu));
+
+	const std::wstring exactDirectory = fixture.DirectoryPath() + L"\\ leading-space-dir";
+	const std::wstring exactFile = exactDirectory + L"\\alpha.bin";
+	const std::wstring exactIgnored = exactDirectory + L"\\beta.txt";
+	const std::wstring reservedDirectory = fixture.DirectoryPath() + L"\\reserved-device-dir";
+	const std::wstring reservedFile = reservedDirectory + L"\\NUL.bin";
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(exactDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(exactFile, LongPathTestSupport::BuildDeterministicPayload(48u, 0x4411u)));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(exactIgnored, LongPathTestSupport::BuildDeterministicPayload(24u, 0x4412u)));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(reservedDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(reservedFile, LongPathTestSupport::BuildDeterministicPayload(52u, 0x4413u)));
+
+	bool bFoundExact = false;
+	bool bFoundIgnored = false;
+	REQUIRE(PathHelpers::ForEachMatchingEntry(CString((exactDirectory + L"\\*.bin").c_str()), [&](const WIN32_FIND_DATA &findData) -> bool {
+		const CString strFileName(findData.cFileName);
+		bFoundExact = bFoundExact || strFileName == _T("alpha.bin");
+		bFoundIgnored = bFoundIgnored || strFileName == _T("beta.txt");
+		return true;
+	}));
+	CHECK(bFoundExact);
+	CHECK_FALSE(bFoundIgnored);
+
+	bool bFoundReserved = false;
+	REQUIRE(PathHelpers::ForEachMatchingEntry(CString((reservedDirectory + L"\\*.bin").c_str()), [&](const WIN32_FIND_DATA &findData) -> bool {
+		bFoundReserved = bFoundReserved || CString(findData.cFileName) == _T("NUL.bin");
+		return true;
+	}));
+	CHECK(bFoundReserved);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(exactFile));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(exactIgnored));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(reservedFile));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(exactDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(reservedDirectory));
+}
+
 TEST_CASE("Path-helper seam enumerates child entries whose full paths exceed MAX_PATH even when the parent directory does not")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
@@ -438,8 +482,10 @@ TEST_CASE("Shell/UI seam limits shell display-name enrichment to shell-friendly 
 	CHECK(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\folder")));
 	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("\\\\?\\C:\\deep\\folder")));
 	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(CString(_T("C:\\")) + RepeatPathFragment(_T("segment\\"), 80)));
+	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\ leading-space")));
 	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\folder ")));
 	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\folder.")));
+	CHECK_FALSE(ShellUiHelpers::CanUseShellDisplayName(_T("C:\\short\\NUL.txt")));
 }
 
 TEST_CASE("Shell/UI seam builds stable extension and directory icon queries")

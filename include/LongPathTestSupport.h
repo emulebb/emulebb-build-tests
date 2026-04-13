@@ -80,7 +80,79 @@ inline bool IsUncPath(const std::wstring &path)
 }
 
 /**
- * @brief Returns true when any logical path component ends with a space or period and therefore needs namespace semantics.
+ * @brief Returns the index at which logical filesystem components begin after a DOS drive or UNC root.
+ */
+inline size_t GetLogicalPathComponentStart(const std::wstring &path)
+{
+	if (path.empty())
+		return 0u;
+
+	const std::wstring logicalPath = StripLongPathPrefix(path);
+	if (logicalPath.size() >= 3u
+		&& ((logicalPath[0] >= L'A' && logicalPath[0] <= L'Z') || (logicalPath[0] >= L'a' && logicalPath[0] <= L'z'))
+		&& logicalPath[1] == L':'
+		&& IsPathSeparator(logicalPath[2]))
+	{
+		return 3u;
+	}
+
+	if (logicalPath.size() >= 2u && logicalPath[0] == L'\\' && logicalPath[1] == L'\\') {
+		size_t iIndex = 2u;
+		while (iIndex < logicalPath.size() && !IsPathSeparator(logicalPath[iIndex]))
+			++iIndex;
+		while (iIndex < logicalPath.size() && IsPathSeparator(logicalPath[iIndex]))
+			++iIndex;
+		while (iIndex < logicalPath.size() && !IsPathSeparator(logicalPath[iIndex]))
+			++iIndex;
+		while (iIndex < logicalPath.size() && IsPathSeparator(logicalPath[iIndex]))
+			++iIndex;
+		return iIndex;
+	}
+
+	return 0u;
+}
+
+/**
+ * @brief Returns true when a logical path component is a reserved Win32 device alias.
+ */
+inline bool IsReservedWin32DeviceName(const std::wstring &segment)
+{
+	if (segment.empty())
+		return false;
+
+	std::wstring candidate(segment);
+	while (!candidate.empty() && (candidate.back() == L' ' || candidate.back() == L'.'))
+		candidate.pop_back();
+	if (candidate.empty())
+		return false;
+
+	const size_t iDot = candidate.find(L'.');
+	if (iDot != std::wstring::npos)
+		candidate.erase(iDot);
+
+	std::wstring upper(candidate);
+	std::transform(upper.begin(), upper.end(), upper.begin(), [](const wchar_t ch) { return static_cast<wchar_t>(towupper(ch)); });
+
+	if (upper == L"CON" || upper == L"PRN" || upper == L"AUX" || upper == L"NUL")
+		return true;
+
+	const auto IsReservedPortName = [&](const wchar_t *prefix) -> bool {
+		const size_t nPrefixLength = std::wcslen(prefix);
+		if (upper.compare(0u, nPrefixLength, prefix) != 0 || upper.size() != nPrefixLength + 1u)
+			return false;
+
+		const wchar_t chDigit = upper[nPrefixLength];
+		return (chDigit >= L'1' && chDigit <= L'9')
+			|| chDigit == static_cast<wchar_t>(0x00B9)
+			|| chDigit == static_cast<wchar_t>(0x00B2)
+			|| chDigit == static_cast<wchar_t>(0x00B3);
+	};
+
+	return IsReservedPortName(L"COM") || IsReservedPortName(L"LPT");
+}
+
+/**
+ * @brief Returns true when any logical path component needs namespace semantics to preserve its exact Win32 meaning.
  */
 inline bool RequiresExtendedLengthPathForExactName(const std::wstring &path)
 {
@@ -88,7 +160,7 @@ inline bool RequiresExtendedLengthPathForExactName(const std::wstring &path)
 		return false;
 
 	const std::wstring logicalPath = StripLongPathPrefix(path);
-	size_t iIndex = 0;
+	size_t iIndex = GetLogicalPathComponentStart(logicalPath);
 	while (iIndex < logicalPath.size()) {
 		while (iIndex < logicalPath.size() && IsPathSeparator(logicalPath[iIndex]))
 			++iIndex;
@@ -103,7 +175,10 @@ inline bool RequiresExtendedLengthPathForExactName(const std::wstring &path)
 		if (!segment.empty()
 			&& segment != L"."
 			&& segment != L".."
-			&& (segment.back() == L' ' || segment.back() == L'.'))
+			&& (segment.front() == L' '
+				|| segment.back() == L' '
+				|| segment.back() == L'.'
+				|| IsReservedWin32DeviceName(segment)))
 		{
 			return true;
 		}

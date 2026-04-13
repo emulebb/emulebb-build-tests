@@ -25,6 +25,7 @@ TEST_CASE("Long-path reference helper prefixes only fully qualified overlong DOS
 	std::wstring trailingDotPath = L"C:\\Temp\\namespace-only.";
 	std::wstring trailingSpacePath = L"C:\\Temp\\namespace-only ";
 	std::wstring leadingSpacePath = L"C:\\Temp\\ leading-space";
+	std::wstring reservedDevicePath = L"C:\\Temp\\NUL.txt";
 
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longDriveAbsolute).rfind(L"\\\\?\\", 0) == 0);
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longUnc).rfind(L"\\\\?\\UNC\\", 0) == 0);
@@ -33,7 +34,8 @@ TEST_CASE("Long-path reference helper prefixes only fully qualified overlong DOS
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longRootRelative) == longRootRelative);
 	CHECK(LongPathTestSupport::PreparePathForLongPath(trailingDotPath).rfind(L"\\\\?\\", 0) == 0);
 	CHECK(LongPathTestSupport::PreparePathForLongPath(trailingSpacePath).rfind(L"\\\\?\\", 0) == 0);
-	CHECK(LongPathTestSupport::PreparePathForLongPath(leadingSpacePath) == leadingSpacePath);
+	CHECK(LongPathTestSupport::PreparePathForLongPath(leadingSpacePath).rfind(L"\\\\?\\", 0) == 0);
+	CHECK(LongPathTestSupport::PreparePathForLongPath(reservedDevicePath).rfind(L"\\\\?\\", 0) == 0);
 }
 
 TEST_CASE("Long-path reference filesystem preserves deterministic payloads on short and overlong unicode paths")
@@ -159,6 +161,8 @@ TEST_CASE("Long-path reference filesystem preserves exact dot and whitespace nam
 		{ L"trailing-dot-dir.", L"trailing-dot-file." },
 		{ L" leading-space-dir", L" leading-space-file" },
 		{ L"trailing-space-dir ", L"trailing-space-file " },
+		{ L"space-only-dir ", L" " },
+		{ L"reserved-device-dir", L"NUL.txt" },
 		{ L"\u00A0leading-nbsp-dir", L"\u00A0leading-nbsp-file" },
 		{ L"trailing-nbsp-dir\u00A0", L"trailing-nbsp-file\u00A0" },
 		{ L"\u2003leading-emspace-dir", L"\u2003leading-emspace-file" },
@@ -197,6 +201,39 @@ TEST_CASE("Long-path reference filesystem preserves exact dot and whitespace nam
 		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(filePath));
 		REQUIRE(::RemoveDirectoryW(LongPathTestSupport::PreparePathForLongPath(directoryPath).c_str()) != FALSE);
 	}
+}
+
+TEST_CASE("Long-path reference wildcard enumeration works inside exact-name directories")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0x20260416u));
+
+	const std::wstring exactDirectory = fixture.DirectoryPath() + L"\\ leading-space-dir";
+	const std::wstring fileOne = exactDirectory + L"\\alpha.bin";
+	const std::wstring fileTwo = exactDirectory + L"\\beta.txt";
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(exactDirectory));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(fileOne, LongPathTestSupport::BuildDeterministicPayload(64u, 0xA1u)));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(fileTwo, LongPathTestSupport::BuildDeterministicPayload(32u, 0xB2u)));
+
+	std::vector<std::wstring> names;
+	WIN32_FIND_DATAW findData = {};
+	const std::wstring searchPath = exactDirectory + L"\\*.bin";
+	HANDLE hFind = ::FindFirstFileW(LongPathTestSupport::PreparePathForLongPath(searchPath).c_str(), &findData);
+	REQUIRE(hFind != INVALID_HANDLE_VALUE);
+	do {
+		if (wcscmp(findData.cFileName, L".") != 0 && wcscmp(findData.cFileName, L"..") != 0)
+			names.push_back(findData.cFileName);
+	} while (::FindNextFileW(hFind, &findData) != FALSE);
+	REQUIRE(::GetLastError() == ERROR_NO_MORE_FILES);
+	REQUIRE(::FindClose(hFind) != FALSE);
+
+	CHECK(std::find(names.begin(), names.end(), std::wstring(L"alpha.bin")) != names.end());
+	CHECK(std::find(names.begin(), names.end(), std::wstring(L"beta.txt")) == names.end());
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(fileOne));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(fileTwo));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(exactDirectory));
 }
 
 TEST_SUITE_END;
