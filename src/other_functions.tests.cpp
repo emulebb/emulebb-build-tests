@@ -7,6 +7,7 @@
 #include "PathHelpers.h"
 #include "ShellUiHelpers.h"
 
+#include <algorithm>
 #include <windows.h>
 
 TEST_SUITE_BEGIN("parity");
@@ -204,6 +205,47 @@ TEST_CASE("Path-helper seam treats prefixed, dotted, and DOS 8.3 aliases as the 
 		return;
 
 	CHECK(PathHelpers::ArePathsEquivalent(strLongPath, CString(shortAlias.c_str())));
+}
+
+TEST_CASE("Path-helper seam enumerates child entries whose full paths exceed MAX_PATH even when the parent directory does not")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0x0E11E11u));
+	REQUIRE(fixture.DirectoryPath().size() < MAX_PATH);
+
+	std::wstring longDirectoryLeaf = L"childdir_";
+	while (fixture.DirectoryPath().size() + 1u + longDirectoryLeaf.size() <= MAX_PATH + 8u && longDirectoryLeaf.size() < 220u) {
+		longDirectoryLeaf += L"segment_";
+		longDirectoryLeaf += LongPathTestSupport::MakeSpecialSegment();
+	}
+	const std::wstring longDirectoryPath = fixture.DirectoryPath() + L"\\" + longDirectoryLeaf;
+	REQUIRE(longDirectoryPath.size() > MAX_PATH);
+	REQUIRE(::CreateDirectoryW(LongPathTestSupport::PrepareDirectoryCreatePathForLongPath(longDirectoryPath).c_str(), NULL) != FALSE);
+
+	std::wstring longFileLeaf = L"payload_";
+	while (fixture.DirectoryPath().size() + 1u + longFileLeaf.size() + 4u <= MAX_PATH + 12u && longFileLeaf.size() < 220u) {
+		longFileLeaf += L"segment_";
+		longFileLeaf += LongPathTestSupport::MakeSpecialSegment();
+	}
+	longFileLeaf += L".bin";
+	const std::wstring longFilePath = fixture.DirectoryPath() + L"\\" + longFileLeaf;
+	REQUIRE(longFilePath.size() > MAX_PATH);
+	const std::vector<BYTE> payload = LongPathTestSupport::BuildDeterministicPayload(321u, 0x12345678u);
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(longFilePath, payload));
+
+	std::vector<std::wstring> names;
+	DWORD dwEnumerateError = ERROR_SUCCESS;
+	REQUIRE(PathHelpers::ForEachDirectoryEntry(CString(fixture.DirectoryPath().c_str()), [&](const WIN32_FIND_DATA &findData) -> bool {
+		names.push_back(findData.cFileName);
+		return true;
+	}, &dwEnumerateError));
+	CHECK(dwEnumerateError == ERROR_SUCCESS);
+	CHECK(std::find(names.begin(), names.end(), longDirectoryLeaf) != names.end());
+	CHECK(std::find(names.begin(), names.end(), longFileLeaf) != names.end());
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(longFilePath));
+	REQUIRE(::RemoveDirectoryW(LongPathTestSupport::PreparePathForLongPath(longDirectoryPath).c_str()) != FALSE);
 }
 
 TEST_CASE("Path-helper seam formats MiniMule resource URLs from overlong module paths")
