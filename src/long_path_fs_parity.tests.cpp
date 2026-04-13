@@ -22,12 +22,18 @@ TEST_CASE("Long-path reference helper prefixes only fully qualified overlong DOS
 	longDriveRelative.append(static_cast<size_t>(MAX_PATH), L'd');
 	std::wstring longRootRelative = L"\\";
 	longRootRelative.append(static_cast<size_t>(MAX_PATH), L'e');
+	std::wstring trailingDotPath = L"C:\\Temp\\namespace-only.";
+	std::wstring trailingSpacePath = L"C:\\Temp\\namespace-only ";
+	std::wstring leadingSpacePath = L"C:\\Temp\\ leading-space";
 
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longDriveAbsolute).rfind(L"\\\\?\\", 0) == 0);
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longUnc).rfind(L"\\\\?\\UNC\\", 0) == 0);
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longRelative) == longRelative);
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longDriveRelative) == longDriveRelative);
 	CHECK(LongPathTestSupport::PreparePathForLongPath(longRootRelative) == longRootRelative);
+	CHECK(LongPathTestSupport::PreparePathForLongPath(trailingDotPath).rfind(L"\\\\?\\", 0) == 0);
+	CHECK(LongPathTestSupport::PreparePathForLongPath(trailingSpacePath).rfind(L"\\\\?\\", 0) == 0);
+	CHECK(LongPathTestSupport::PreparePathForLongPath(leadingSpacePath) == leadingSpacePath);
 }
 
 TEST_CASE("Long-path reference filesystem preserves deterministic payloads on short and overlong unicode paths")
@@ -137,6 +143,59 @@ TEST_CASE("Long-path reference directory-create headroom supports payload round-
 		const size_t nLastSlash = current.find_last_of(L'\\');
 		REQUIRE(nLastSlash != std::wstring::npos);
 		current.erase(nLastSlash);
+	}
+}
+
+TEST_CASE("Long-path reference filesystem preserves exact dot and whitespace names for files and folders")
+{
+	struct SpecialNameCase
+	{
+		const wchar_t *pszDirectoryName;
+		const wchar_t *pszFileName;
+	};
+
+	const SpecialNameCase aCases[] = {
+		{ L".leading-dot-dir", L".leading-dot-file" },
+		{ L"trailing-dot-dir.", L"trailing-dot-file." },
+		{ L" leading-space-dir", L" leading-space-file" },
+		{ L"trailing-space-dir ", L"trailing-space-file " },
+		{ L"\u00A0leading-nbsp-dir", L"\u00A0leading-nbsp-file" },
+		{ L"trailing-nbsp-dir\u00A0", L"trailing-nbsp-file\u00A0" },
+		{ L"\u2003leading-emspace-dir", L"\u2003leading-emspace-file" },
+		{ L"trailing-emspace-dir\u2003", L"trailing-emspace-file\u2003" }
+	};
+
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x20260415u));
+
+	unsigned int uSeed = 0x51510000u;
+	for (const SpecialNameCase &nameCase : aCases) {
+		const std::wstring directoryPath = fixture.DirectoryPath() + L"\\" + nameCase.pszDirectoryName;
+		const std::wstring filePath = directoryPath + L"\\" + nameCase.pszFileName;
+		const std::vector<BYTE> payload = LongPathTestSupport::BuildDeterministicPayload(321u + (uSeed & 0x1Fu), uSeed++);
+
+		const BOOL bCreatedDirectory = ::CreateDirectoryW(LongPathTestSupport::PrepareDirectoryCreatePathForLongPath(directoryPath).c_str(), NULL);
+		const DWORD dwCreateDirectoryError = bCreatedDirectory != FALSE ? ERROR_SUCCESS : ::GetLastError();
+		const bool bCreateDirectoryOk = bCreatedDirectory != FALSE || dwCreateDirectoryError == ERROR_ALREADY_EXISTS;
+		REQUIRE(bCreateDirectoryOk);
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(filePath, payload));
+
+		std::vector<std::wstring> rootNames;
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::EnumerateFileNames(fixture.DirectoryPath(), rootNames));
+		CHECK(std::find(rootNames.begin(), rootNames.end(), std::wstring(nameCase.pszDirectoryName)) != rootNames.end());
+
+		std::vector<std::wstring> childNames;
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::EnumerateFileNames(directoryPath, childNames));
+		CHECK(std::find(childNames.begin(), childNames.end(), std::wstring(nameCase.pszFileName)) != childNames.end());
+
+		std::vector<BYTE> loaded;
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::ReadBytes(filePath, loaded));
+		CHECK(loaded == payload);
+		CHECK(LongPathTestSupport::ComputeFnv1a64(loaded) == LongPathTestSupport::ComputeFnv1a64(payload));
+
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(filePath));
+		REQUIRE(::RemoveDirectoryW(LongPathTestSupport::PreparePathForLongPath(directoryPath).c_str()) != FALSE);
 	}
 }
 

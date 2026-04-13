@@ -32,11 +32,32 @@ namespace
 			bytes.insert(bytes.end(), buffer, buffer + nRead);
 		return bytes;
 	}
+
+	struct SpecialNameCase
+	{
+		const wchar_t *pszDirectoryName;
+		const wchar_t *pszFileName;
+		bool bRequiresExactNamespace;
+	};
+
+	std::vector<SpecialNameCase> GetSpecialNameCases()
+	{
+		return {
+			{ L".leading-dot-dir", L".leading-dot-file", false },
+			{ L"trailing-dot-dir.", L"trailing-dot-file.", true },
+			{ L" leading-space-dir", L" leading-space-file", false },
+			{ L"trailing-space-dir ", L"trailing-space-file ", true },
+			{ L"\u00A0leading-nbsp-dir", L"\u00A0leading-nbsp-file", false },
+			{ L"trailing-nbsp-dir\u00A0", L"trailing-nbsp-file\u00A0", false },
+			{ L"\u2003leading-emspace-dir", L"\u2003leading-emspace-file", false },
+			{ L"trailing-emspace-dir\u2003", L"trailing-emspace-file\u2003", false }
+		};
+	}
 }
 
 TEST_SUITE_BEGIN("divergence");
 
-TEST_CASE("Long-path seam matches the reference prefix policy for absolute and relative paths")
+TEST_CASE("Long-path seam matches the reference prefix policy for overlong and exact-name absolute paths")
 {
 	std::wstring longDriveAbsolute = L"C:\\";
 	longDriveAbsolute.append(static_cast<size_t>(MAX_PATH), L'a');
@@ -51,6 +72,11 @@ TEST_CASE("Long-path seam matches the reference prefix policy for absolute and r
 	longRootRelative.append(static_cast<size_t>(MAX_PATH), L'e');
 	std::wstring longDriveForwardSlash = L"C:/";
 	longDriveForwardSlash.append(static_cast<size_t>(MAX_PATH), L'f');
+	const std::wstring trailingDotPath = L"C:\\Temp\\namespace-only.";
+	const std::wstring trailingSpacePath = L"C:\\Temp\\namespace-only ";
+	const std::wstring leadingSpacePath = L"C:\\Temp\\ leading-space";
+	const std::wstring leadingDotPath = L"C:\\Temp\\.leading-dot";
+	const std::wstring trailingNbspPath = L"C:\\Temp\\nbsp-trailing\u00A0";
 
 	CHECK(LongPathSeams::PreparePathForLongPath(_T("C:\\Temp\\short.txt")) == LongPathSeams::PathString(_T("C:\\Temp\\short.txt")));
 	CHECK(LongPathSeams::PreparePathForLongPath(_T("\\\\server\\share\\short.txt")) == LongPathSeams::PathString(_T("\\\\server\\share\\short.txt")));
@@ -62,6 +88,11 @@ TEST_CASE("Long-path seam matches the reference prefix policy for absolute and r
 	CHECK(LongPathSeams::PreparePathForLongPath(longDriveRelative.c_str()) == LongPathTestSupport::PreparePathForLongPath(longDriveRelative));
 	CHECK(LongPathSeams::PreparePathForLongPath(longRootRelative.c_str()) == LongPathTestSupport::PreparePathForLongPath(longRootRelative));
 	CHECK(LongPathSeams::PreparePathForLongPath(longDriveForwardSlash.c_str()) == LongPathTestSupport::PreparePathForLongPath(longDriveForwardSlash));
+	CHECK(LongPathSeams::PreparePathForLongPath(trailingDotPath.c_str()) == LongPathTestSupport::PreparePathForLongPath(trailingDotPath));
+	CHECK(LongPathSeams::PreparePathForLongPath(trailingSpacePath.c_str()) == LongPathTestSupport::PreparePathForLongPath(trailingSpacePath));
+	CHECK(LongPathSeams::PreparePathForLongPath(leadingSpacePath.c_str()) == LongPathTestSupport::PreparePathForLongPath(leadingSpacePath));
+	CHECK(LongPathSeams::PreparePathForLongPath(leadingDotPath.c_str()) == LongPathTestSupport::PreparePathForLongPath(leadingDotPath));
+	CHECK(LongPathSeams::PreparePathForLongPath(trailingNbspPath.c_str()) == LongPathTestSupport::PreparePathForLongPath(trailingNbspPath));
 }
 
 TEST_CASE("Long-path seam reads deterministic generated payloads from overlong unicode paths")
@@ -255,6 +286,55 @@ TEST_CASE("Long-path seam handles special-character short paths without changing
 
 	CHECK(bytes == fixture.Payload());
 	CHECK(LongPathTestSupport::ComputeFnv1a64(bytes) == fixture.PayloadFnv1a64());
+}
+
+TEST_CASE("Long-path seam preserves exact dot and whitespace names for files and folders on real filesystem paths")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x20260413u));
+
+	unsigned int uSeed = 0x31415000u;
+	for (const SpecialNameCase &nameCase : GetSpecialNameCases()) {
+		const std::wstring directoryPath = fixture.DirectoryPath() + L"\\" + nameCase.pszDirectoryName;
+		const std::wstring filePath = directoryPath + L"\\" + nameCase.pszFileName;
+		const std::vector<BYTE> payload = LongPathTestSupport::BuildDeterministicPayload(257u + (uSeed & 0x3Fu), uSeed++);
+
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(directoryPath));
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(filePath, payload));
+
+		std::vector<std::wstring> rootNames;
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::EnumerateFileNames(fixture.DirectoryPath(), rootNames));
+		CHECK(std::find(rootNames.begin(), rootNames.end(), std::wstring(nameCase.pszDirectoryName)) != rootNames.end());
+
+		std::vector<std::wstring> childNames;
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::EnumerateFileNames(directoryPath, childNames));
+		CHECK(std::find(childNames.begin(), childNames.end(), std::wstring(nameCase.pszFileName)) != childNames.end());
+
+		std::vector<BYTE> loaded;
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::ReadBytes(filePath, loaded));
+		CHECK(loaded == payload);
+		CHECK(LongPathTestSupport::RequiresExtendedLengthPathForExactName(filePath) == nameCase.bRequiresExactNamespace);
+
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(filePath));
+		REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(directoryPath));
+	}
+}
+
+TEST_CASE("Long-path seam rejects tab-prefixed and tab-suffixed names as invalid Win32 filenames")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0x20260414u));
+
+	const std::wstring invalidDirectory = fixture.DirectoryPath() + L"\\\tinvalid-dir";
+	CHECK_FALSE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(invalidDirectory));
+	CHECK(::GetLastError() == ERROR_INVALID_NAME);
+
+	const std::wstring invalidFile = fixture.DirectoryPath() + L"\\invalid-file\t";
+	const HANDLE hFile = ::CreateFileW(LongPathTestSupport::PreparePathForLongPath(invalidFile).c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	CHECK(hFile == INVALID_HANDLE_VALUE);
+	CHECK(::GetLastError() == ERROR_INVALID_NAME);
 }
 
 TEST_CASE("Long-path seam supports deny-write FILE streams for create append and reread on overlong unicode paths")

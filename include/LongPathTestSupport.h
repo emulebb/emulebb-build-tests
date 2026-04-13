@@ -22,6 +22,14 @@ inline std::wstring NormalizeAbsolutePathSeparators(const std::wstring &path)
 }
 
 /**
+ * @brief Returns true when the character is treated as a Win32 path separator.
+ */
+inline bool IsPathSeparator(const wchar_t ch)
+{
+	return ch == L'\\' || ch == L'/';
+}
+
+/**
  * @brief Returns a mixed Cyrillic and emoji path segment to stress Unicode handling in real-FS tests.
  */
 inline std::wstring MakeSpecialSegment()
@@ -35,6 +43,19 @@ inline std::wstring MakeSpecialSegment()
 inline bool HasLongPathPrefix(const std::wstring &path)
 {
 	return path.rfind(L"\\\\?\\", 0) == 0;
+}
+
+/**
+ * @brief Removes an existing extended-length prefix so tests can inspect the logical DOS/UNC path text.
+ */
+inline std::wstring StripLongPathPrefix(const std::wstring &path)
+{
+	const std::wstring normalized = NormalizeAbsolutePathSeparators(path);
+	if (normalized.rfind(L"\\\\?\\UNC\\", 0) == 0)
+		return std::wstring(L"\\\\") + normalized.substr(8);
+	if (normalized.rfind(L"\\\\?\\", 0) == 0)
+		return normalized.substr(4);
+	return normalized;
 }
 
 /**
@@ -59,13 +80,49 @@ inline bool IsUncPath(const std::wstring &path)
 }
 
 /**
+ * @brief Returns true when any logical path component ends with a space or period and therefore needs namespace semantics.
+ */
+inline bool RequiresExtendedLengthPathForExactName(const std::wstring &path)
+{
+	if (path.empty())
+		return false;
+
+	const std::wstring logicalPath = StripLongPathPrefix(path);
+	size_t iIndex = 0;
+	while (iIndex < logicalPath.size()) {
+		while (iIndex < logicalPath.size() && IsPathSeparator(logicalPath[iIndex]))
+			++iIndex;
+		if (iIndex >= logicalPath.size())
+			break;
+
+		const size_t iStart = iIndex;
+		while (iIndex < logicalPath.size() && !IsPathSeparator(logicalPath[iIndex]))
+			++iIndex;
+
+		const std::wstring segment = logicalPath.substr(iStart, iIndex - iStart);
+		if (!segment.empty()
+			&& segment != L"."
+			&& segment != L".."
+			&& (segment.back() == L' ' || segment.back() == L'.'))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
  * @brief Applies the reference extended-length prefix policy used by the real-FS tests and probes.
  */
 inline std::wstring PreparePathForLongPath(const std::wstring &path)
 {
-	if (path.empty() || path.size() < MAX_PATH || HasLongPathPrefix(path))
+	if (path.empty() || HasLongPathPrefix(path))
 		return path;
 	const std::wstring normalized = NormalizeAbsolutePathSeparators(path);
+	const bool bRequiresExactNamePrefix = RequiresExtendedLengthPathForExactName(normalized);
+	if (normalized.size() < MAX_PATH && !bRequiresExactNamePrefix)
+		return path;
 	if (!IsDriveAbsolutePath(normalized) && !IsUncPath(normalized))
 		return path;
 	if (IsUncPath(normalized))
@@ -80,9 +137,10 @@ inline std::wstring PrepareDirectoryCreatePathForLongPath(const std::wstring &pa
 {
 	if (path.empty() || HasLongPathPrefix(path))
 		return path;
-	if (path.size() + kCreateDirectoryLegacyHeadroom < MAX_PATH)
-		return path;
 	const std::wstring normalized = NormalizeAbsolutePathSeparators(path);
+	const bool bRequiresExactNamePrefix = RequiresExtendedLengthPathForExactName(normalized);
+	if (normalized.size() + kCreateDirectoryLegacyHeadroom < MAX_PATH && !bRequiresExactNamePrefix)
+		return path;
 	if (!IsDriveAbsolutePath(normalized) && !IsUncPath(normalized))
 		return path;
 	if (IsUncPath(normalized))
@@ -406,6 +464,22 @@ public:
 	static bool DeleteFilePath(const std::wstring &path)
 	{
 		return ::DeleteFileW(PreparePathForLongPath(path).c_str()) != FALSE;
+	}
+
+	/**
+	 * @brief Creates a directory through the reference long-path preparation helper.
+	 */
+	static bool CreateDirectoryPath(const std::wstring &path)
+	{
+		return ::CreateDirectoryW(PrepareDirectoryCreatePathForLongPath(path).c_str(), NULL) != FALSE || ::GetLastError() == ERROR_ALREADY_EXISTS;
+	}
+
+	/**
+	 * @brief Removes a directory through the reference long-path preparation helper.
+	 */
+	static bool RemoveDirectoryPath(const std::wstring &path)
+	{
+		return ::RemoveDirectoryW(PreparePathForLongPath(path).c_str()) != FALSE;
 	}
 
 	/**
