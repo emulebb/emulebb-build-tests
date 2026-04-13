@@ -506,9 +506,10 @@ TEST_CASE("Shell/UI seam ignores Windows shortcuts by extension")
 
 TEST_CASE("Shared-file intake policy ignores built-in junk names and preserves nearby names")
 {
-	const CString strIconCrPath(_T("C:\\share\\Icon\r"));
+	SharedFileIntakePolicy::ScopedUserRuleOverride restoreRules;
+	SharedFileIntakePolicy::ClearUserRules();
+
 	const CString strIconCrName(_T("Icon\r"));
-	const CString strIconCrTxtPath(_T("C:\\share\\Icon\r.txt"));
 	const CString strIconCrTxtName(_T("Icon\r.txt"));
 
 	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("desktop.ini")));
@@ -516,14 +517,96 @@ TEST_CASE("Shared-file intake policy ignores built-in junk names and preserves n
 	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("ehthumbs.db")));
 	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".DS_Store")));
 	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".localized")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".directory")));
 	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(strIconCrName));
 	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.lnk")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.part")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.crdownload")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.download")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.tmp")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.temp")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample~")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("~$draft.docx")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("._resource")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".nfsA1B2C3")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".sb-cache")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".syncthing.index-v0")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("~lock.report.odt#")));
 
 	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("desktop.ini.bak")));
 	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".localized.bak")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.part.txt")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("sample.tmpx")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T(".syncthing")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("~lock.report.odt")));
 	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("Icon")));
 	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(strIconCrTxtName));
 	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreCandidate(_T("C:\\share\\thumbs.db"), _T("thumbs.db"), [](const CString &, const CString &) { return false; }));
+}
+
+TEST_CASE("Shared-file intake policy parses additive shareignore rules and applies them to files and directories")
+{
+	SharedFileIntakePolicy::ScopedUserRuleOverride restoreRules;
+	SharedFileIntakePolicy::ClearUserRules();
+
+	SharedFileIntakePolicy::IgnoreRule rule = {};
+	REQUIRE(SharedFileIntakePolicy::TryParseUserRule(_T("exact.name"), rule));
+	CHECK_EQ(rule.eMatchKind, SharedFileIntakePolicy::RuleMatchExact);
+	CHECK(rule.strPattern == CString(_T("exact.name")));
+
+	REQUIRE(SharedFileIntakePolicy::TryParseUserRule(_T("prefix*"), rule));
+	CHECK_EQ(rule.eMatchKind, SharedFileIntakePolicy::RuleMatchPrefix);
+	CHECK(rule.strPattern == CString(_T("prefix")));
+
+	REQUIRE(SharedFileIntakePolicy::TryParseUserRule(_T("*suffix"), rule));
+	CHECK_EQ(rule.eMatchKind, SharedFileIntakePolicy::RuleMatchSuffix);
+	CHECK(rule.strPattern == CString(_T("suffix")));
+
+	CHECK_FALSE(SharedFileIntakePolicy::TryParseUserRule(_T(""), rule));
+	CHECK_FALSE(SharedFileIntakePolicy::TryParseUserRule(_T("*"), rule));
+	CHECK_FALSE(SharedFileIntakePolicy::TryParseUserRule(_T("prefix*suffix"), rule));
+	CHECK_FALSE(SharedFileIntakePolicy::TryParseUserRule(_T("*middle*"), rule));
+
+	std::vector<SharedFileIntakePolicy::IgnoreRule> userRules;
+	REQUIRE(SharedFileIntakePolicy::TryParseUserRule(_T("skip-exact"), rule));
+	userRules.push_back(rule);
+	REQUIRE(SharedFileIntakePolicy::TryParseUserRule(_T("skip-prefix*"), rule));
+	userRules.push_back(rule);
+	REQUIRE(SharedFileIntakePolicy::TryParseUserRule(_T("*skip-suffix"), rule));
+	userRules.push_back(rule);
+	SharedFileIntakePolicy::ReplaceUserRules(userRules);
+
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("skip-exact")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("skip-prefix-file.bin")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreByName(_T("archive.skip-suffix")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("keep-prefix-file.bin")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreByName(_T("archive.skip-suffix.txt")));
+
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T("skip-exact")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T("skip-prefix-folder")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T("folder.skip-suffix")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T("legit-folder")));
+}
+
+TEST_CASE("Shared-file intake policy ignores configured junk directories without hiding nearby legitimate folders")
+{
+	SharedFileIntakePolicy::ScopedUserRuleOverride restoreRules;
+	SharedFileIntakePolicy::ClearUserRules();
+
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".git")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".svn")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".hg")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T("CVS")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".fseventsd")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".spotlight-v100")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".temporaryitems")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".trashes")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".syncthing.private")));
+	CHECK(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T("._metadata")));
+
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".github")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T(".spotlight-v100-backup")));
+	CHECK_FALSE(SharedFileIntakePolicy::ShouldIgnoreDirectoryByName(_T("CVSROOT")));
 }
 
 TEST_CASE("Shared-file intake policy ignores real thumbs databases but not arbitrary files with the same name")

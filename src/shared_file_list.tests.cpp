@@ -5,6 +5,10 @@
 #include "SharedDirectoryOps.h"
 #define EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS 1
 #endif
+#if __has_include("SharedFileIntakePolicy.h")
+#include "SharedFileIntakePolicy.h"
+#define EMULE_TESTS_HAS_SHARED_FILE_INTAKE_POLICY 1
+#endif
 #if __has_include("SharedFilesWndSeams.h")
 #include "SharedFilesWndSeams.h"
 #define EMULE_TESTS_HAS_SHARED_FILES_WND_SEAMS 1
@@ -144,6 +148,44 @@ TEST_CASE("Shared directory recursion stops junction loops by filesystem identit
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(loopPath));
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(childPath));
 }
+
+#if defined(EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS) && defined(EMULE_TESTS_HAS_SHARED_FILE_INTAKE_POLICY)
+TEST_CASE("Shared directory recursion skips built-in and configured ignored directory names")
+{
+	SharedFileIntakePolicy::ScopedUserRuleOverride restoreRules;
+	SharedFileIntakePolicy::ClearUserRules();
+
+	SharedFileIntakePolicy::IgnoreRule rule = {};
+	REQUIRE(SharedFileIntakePolicy::TryParseUserRule(_T("skip-me"), rule));
+	std::vector<SharedFileIntakePolicy::IgnoreRule> userRules;
+	userRules.push_back(rule);
+	SharedFileIntakePolicy::ReplaceUserRules(userRules);
+
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0xA10004u));
+
+	const std::wstring rootPath = fixture.DirectoryPath();
+	const std::wstring keepPath = fixture.MakeDirectoryChildPath(L"keep-me");
+	const std::wstring vcsPath = fixture.MakeDirectoryChildPath(L".git");
+	const std::wstring configuredPath = fixture.MakeDirectoryChildPath(L"skip-me");
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(keepPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(vcsPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(configuredPath));
+
+	CStringList sharedDirectories;
+	CHECK(SharedDirectoryOps::AddSharedDirectory(sharedDirectories, CString(rootPath.c_str()), true, [](const CString &) { return true; }));
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(rootPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(keepPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(vcsPath.c_str())), 0);
+	CHECK_EQ(CountEquivalentPaths(sharedDirectories, CString(configuredPath.c_str())), 0);
+	CHECK(CountPaths(sharedDirectories) >= 2);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(configuredPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(vcsPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(keepPath));
+}
+#endif
 #endif
 
 #ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_PATH_SEAMS
