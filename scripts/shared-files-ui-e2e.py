@@ -718,6 +718,7 @@ def run_shared_files_e2e(app_exe: Path, seed_config_dir: Path, artifacts_dir: Pa
             ],
         )
         summary["startup_profile_top_slowest_phases"] = live_common.get_top_slowest_phases(startup_profile_phases, limit=8)
+        live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
         process_handle = open_process(process_id)
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
@@ -946,6 +947,7 @@ def run_generated_robustness_e2e(app_exe: Path, seed_config_dir: Path, artifacts
             ],
         )
         summary["startup_profile_top_slowest_phases"] = live_common.get_top_slowest_phases(startup_profile_phases, limit=8)
+        live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
         process_handle = open_process(process_id)
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")

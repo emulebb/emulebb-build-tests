@@ -354,6 +354,7 @@ def run_scenario(app_exe: Path, seed_config_dir: Path, scenario_dir: Path, share
         )
         summary["startup_profile_top_slowest_phases"] = live_common.get_top_slowest_phases(startup_profile_phases, limit=8)
         summary["startup_profile_derived_metrics"] = build_derived_metrics(summary)
+        live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, scenario["name"])
         summary["status"] = "passed"
         summary["error"] = None
         live_common.write_json(scenario_dir / "result.json", summary)

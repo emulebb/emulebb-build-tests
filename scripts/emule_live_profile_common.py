@@ -29,6 +29,8 @@ STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
 STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID = "shared.tree.populated"
 STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID = "shared.model.populated"
 STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID = "ui.shared_files_ready"
+STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID = "shared.hashing.deferred_start"
+STARTUP_PROFILE_DEFERRED_SHARED_HASHING_MAX_LEAD_MS = 10.0
 
 REQUIRED_SEED_KEYS = (
     "AppVersion",
@@ -685,3 +687,29 @@ def summarize_shared_files_readiness(
         },
         "metrics": metrics,
     }
+
+
+def enforce_deferred_shared_hashing_boundary(
+    phases: list[dict[str, object]],
+    scenario_name: str,
+) -> None:
+    """Fails when deferred shared hashing starts well before startup finalization."""
+
+    startup_complete = get_phase_by_id(phases, STARTUP_PROFILE_COMPLETE_PHASE_ID)
+    deferred_start = get_phase_by_id(phases, STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID)
+    if startup_complete is None or deferred_start is None:
+        return
+
+    lead_us = int(startup_complete["absolute_us"]) - int(deferred_start["absolute_us"])
+    if lead_us < 0:
+        raise RuntimeError(
+            f"Deferred shared hashing boundary regression in '{scenario_name}': "
+            "shared.hashing.deferred_start occurred after startup.complete."
+        )
+
+    lead_ms = lead_us / 1000.0
+    if lead_ms > STARTUP_PROFILE_DEFERRED_SHARED_HASHING_MAX_LEAD_MS:
+        raise RuntimeError(
+            f"Deferred shared hashing boundary regression in '{scenario_name}': "
+            f"shared.hashing.deferred_start occurred {lead_ms:.3f} ms before startup.complete."
+        )
