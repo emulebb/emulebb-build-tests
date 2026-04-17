@@ -22,6 +22,13 @@ DEFAULT_WINDOW_RECT = (10, 10, 700, 500)
 WINDOWS_DIRECTORY_PATH_LIMIT = 248
 WINDOWS_PATH_LIMIT = 260
 PATH_SAMPLE_LIMIT = 5
+STARTUP_PROFILE_TRACE_FILE_NAME = "startup-profile.trace.json"
+STARTUP_PROFILE_COMPLETE_PHASE_ID = "startup.complete"
+STARTUP_PROFILE_COMPLETE_PHASE_NAME = "StartupTimer complete"
+STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
+STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID = "shared.tree.populated"
+STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID = "shared.model.populated"
+STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID = "ui.shared_files_ready"
 
 REQUIRED_SEED_KEYS = (
     "AppVersion",
@@ -42,8 +49,6 @@ REQUIRED_SEED_KEYS = (
     "ShowSharedFilesDetails",
     "IgnoreInstances",
 )
-
-STARTUP_PROFILE_LINE_PATTERN = re.compile(r"^(?P<absolute_ms>\d+) ms \| (?P<duration_ms>\d+) ms \| (?P<name>.+)$")
 
 
 def write_json(path: Path, payload) -> None:
@@ -170,7 +175,7 @@ def prepare_profile_base(
         "log_dir": log_dir,
         "incoming_dir": incoming_dir,
         "temp_dir": temp_dir,
-        "startup_profile_path": config_dir / "startup-profile.txt",
+        "startup_profile_path": config_dir / STARTUP_PROFILE_TRACE_FILE_NAME,
     }
 
 
@@ -411,34 +416,100 @@ def close_app_cleanly(app: Application) -> None:
     wait_for(resolve, timeout=10.0, interval=0.2, description="clean app shutdown")
 
 
+def load_startup_profile_trace_events(text: str) -> list[dict[str, object]]:
+    """Parses one Chrome Trace startup-profile payload and returns its trace-event rows."""
+
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Startup profile trace payload must be one JSON object.")
+    trace_events = payload.get("traceEvents")
+    if not isinstance(trace_events, list):
+        raise RuntimeError("Startup profile trace payload is missing a traceEvents list.")
+    return [event for event in trace_events if isinstance(event, dict)]
+
+
 def wait_for_startup_profile_complete(startup_profile_path: Path) -> str:
-    """Waits until the startup-profile text has reached its completion marker."""
+    """Waits until the finalized Chrome Trace startup profile becomes readable."""
 
     def resolve():
         if not startup_profile_path.exists():
             return None
         text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
-        return text if "StartupTimer complete" in text else None
+        trace_events = load_startup_profile_trace_events(text)
+        for event in trace_events:
+            if str(event.get("name") or "") == STARTUP_PROFILE_COMPLETE_PHASE_NAME:
+                return text
+            args = event.get("args")
+            if isinstance(args, dict) and str(args.get("phase_id") or "") == STARTUP_PROFILE_COMPLETE_PHASE_ID:
+                return text
+        return None
 
     return wait_for(resolve, timeout=120.0, interval=0.5, description="startup profile completion")
 
 
 def parse_startup_profile(text: str) -> list[dict[str, object]]:
-    """Parses one startup-profile.txt payload into structured phase rows."""
+    """Parses one Chrome Trace startup-profile payload into structured phase rows."""
 
     phases: list[dict[str, object]] = []
-    for raw_line in text.splitlines():
-        match = STARTUP_PROFILE_LINE_PATTERN.match(raw_line.strip())
-        if not match:
+    for event in load_startup_profile_trace_events(text):
+        phase_type = str(event.get("ph") or "")
+        if phase_type not in {"X", "i"}:
             continue
+        args = event.get("args")
+        if not isinstance(args, dict):
+            args = {}
+        absolute_us = int(event.get("ts", 0) or 0)
+        duration_us = int(event.get("dur", 0) or 0)
         phases.append(
             {
-                "name": match.group("name"),
-                "absolute_ms": int(match.group("absolute_ms")),
-                "duration_ms": int(match.group("duration_ms")),
+                "name": str(event.get("name") or ""),
+                "phase_id": str(args.get("phase_id") or ""),
+                "category": str(event.get("cat") or ""),
+                "event_type": "complete" if phase_type == "X" else "instant",
+                "absolute_us": absolute_us,
+                "duration_us": duration_us,
+                "absolute_ms": round(absolute_us / 1000.0, 3),
+                "duration_ms": round(duration_us / 1000.0, 3),
             }
         )
+    phases.sort(key=lambda phase: (int(phase["absolute_us"]), str(phase["name"])))
     return phases
+
+
+def parse_startup_profile_counters(text: str) -> list[dict[str, object]]:
+    """Parses one Chrome Trace startup-profile payload into structured counter rows."""
+
+    counters: list[dict[str, object]] = []
+    for event in load_startup_profile_trace_events(text):
+        if str(event.get("ph") or "") != "C":
+            continue
+        args = event.get("args")
+        if not isinstance(args, dict):
+            continue
+        values = {
+            str(key): value
+            for key, value in args.items()
+            if key != "counter_id" and isinstance(value, (int, float))
+        }
+        if not values:
+            continue
+
+        absolute_us = int(event.get("ts", 0) or 0)
+        value_key, value = next(iter(values.items()))
+        counters.append(
+            {
+                "name": str(event.get("name") or ""),
+                "counter_id": str(args.get("counter_id") or event.get("name") or ""),
+                "category": str(event.get("cat") or ""),
+                "absolute_us": absolute_us,
+                "absolute_ms": round(absolute_us / 1000.0, 3),
+                "value_key": value_key,
+                "value": value,
+                "values": values,
+            }
+        )
+    counters.sort(key=lambda counter: (int(counter["absolute_us"]), str(counter["counter_id"])))
+    return counters
 
 
 def summarize_startup_profile(phases: list[dict[str, object]], interesting_names: list[str]) -> dict[str, object]:
@@ -451,8 +522,13 @@ def summarize_startup_profile(phases: list[dict[str, object]], interesting_names
         if phase is None:
             continue
         highlights[name] = {
-            "absolute_ms": int(phase["absolute_ms"]),
-            "duration_ms": int(phase["duration_ms"]),
+            "phase_id": str(phase["phase_id"]),
+            "category": str(phase["category"]),
+            "event_type": str(phase["event_type"]),
+            "absolute_us": int(phase["absolute_us"]),
+            "duration_us": int(phase["duration_us"]),
+            "absolute_ms": float(phase["absolute_ms"]),
+            "duration_ms": float(phase["duration_ms"]),
         }
     return highlights
 
@@ -462,13 +538,150 @@ def get_top_slowest_phases(phases: list[dict[str, object]], limit: int = 10) -> 
 
     ranked = sorted(
         phases,
-        key=lambda phase: (-int(phase["duration_ms"]), -int(phase["absolute_ms"]), str(phase["name"])),
+        key=lambda phase: (-int(phase["duration_us"]), -int(phase["absolute_us"]), str(phase["name"])),
     )
     return [
         {
             "name": str(phase["name"]),
-            "absolute_ms": int(phase["absolute_ms"]),
-            "duration_ms": int(phase["duration_ms"]),
+            "phase_id": str(phase["phase_id"]),
+            "category": str(phase["category"]),
+            "event_type": str(phase["event_type"]),
+            "absolute_us": int(phase["absolute_us"]),
+            "duration_us": int(phase["duration_us"]),
+            "absolute_ms": float(phase["absolute_ms"]),
+            "duration_ms": float(phase["duration_ms"]),
         }
         for phase in ranked[:limit]
     ]
+
+
+def summarize_startup_profile_counters(counters: list[dict[str, object]]) -> dict[str, object]:
+    """Collapses startup-profile counters to the latest value per stable counter id."""
+
+    summarized: dict[str, object] = {}
+    for counter in counters:
+        entry = {
+            "name": str(counter["name"]),
+            "category": str(counter["category"]),
+            "absolute_us": int(counter["absolute_us"]),
+            "absolute_ms": float(counter["absolute_ms"]),
+            "value_key": str(counter["value_key"]),
+            "value": counter["value"],
+            "values": dict(counter["values"]),
+        }
+        summarized[str(counter["counter_id"])] = entry
+    return summarized
+
+
+def get_phase_by_id(phases: list[dict[str, object]], phase_id: str) -> dict[str, object] | None:
+    """Returns the latest parsed phase row for one stable phase id when present."""
+
+    for phase in reversed(phases):
+        if str(phase.get("phase_id") or "") == phase_id:
+            return phase
+    return None
+
+
+def get_counter_by_id(counters: list[dict[str, object]], counter_id: str) -> dict[str, object] | None:
+    """Returns the latest parsed counter row for one stable counter id when present."""
+
+    for counter in reversed(counters):
+        if str(counter.get("counter_id") or "") == counter_id:
+            return counter
+    return None
+
+
+def summarize_shared_files_readiness(
+    phases: list[dict[str, object]],
+    counters: list[dict[str, object]],
+) -> dict[str, object]:
+    """Validates the Shared Files startup-readiness contract and returns compact derived metrics."""
+
+    startup_complete = get_phase_by_id(phases, STARTUP_PROFILE_COMPLETE_PHASE_ID)
+    if startup_complete is None:
+        raise RuntimeError("Startup profile is missing the startup.complete milestone.")
+
+    shared_scan_complete = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID)
+    if shared_scan_complete is None:
+        raise RuntimeError("Startup profile is missing the shared.scan.complete milestone.")
+
+    shared_tree_populated = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID)
+    if shared_tree_populated is None:
+        raise RuntimeError("Startup profile is missing the shared.tree.populated milestone.")
+
+    shared_model_populated = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID)
+    if shared_model_populated is None:
+        raise RuntimeError("Startup profile is missing the shared.model.populated milestone.")
+
+    shared_files_ready = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID)
+    if shared_files_ready is None:
+        raise RuntimeError("Startup profile is missing the ui.shared_files_ready milestone.")
+    if int(shared_files_ready["absolute_us"]) < int(startup_complete["absolute_us"]):
+        raise RuntimeError("Startup profile reached ui.shared_files_ready before startup.complete.")
+
+    for phase_id, phase in (
+        (STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID, shared_scan_complete),
+        (STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID, shared_tree_populated),
+        (STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID, shared_model_populated),
+    ):
+        if int(phase["absolute_us"]) > int(shared_files_ready["absolute_us"]):
+            raise RuntimeError(
+                f"Startup profile milestone {phase_id} occurs after ui.shared_files_ready."
+            )
+
+    pending_hashes = get_counter_by_id(counters, "shared.model.pending_hashes")
+    if pending_hashes is not None and int(pending_hashes["value"]) != 0:
+        raise RuntimeError(
+            "Startup profile reached ui.shared_files_ready before shared.model.pending_hashes drained to zero."
+        )
+
+    visible_rows = get_counter_by_id(counters, "shared.model.visible_rows")
+    shared_files = get_counter_by_id(counters, "shared.model.shared_files")
+    hidden_files = get_counter_by_id(counters, "shared.model.hidden_shared_files")
+    active_filter = get_counter_by_id(counters, "shared.model.active_filter")
+
+    metrics: dict[str, object] = {
+        "shared_files_ready_absolute_ms": float(shared_files_ready["absolute_ms"]),
+        "shared_files_ready_after_startup_complete_ms": round(
+            (int(shared_files_ready["absolute_us"]) - int(startup_complete["absolute_us"])) / 1000.0,
+            3,
+        ),
+        "shared_scan_to_ready_ms": round(
+            (int(shared_files_ready["absolute_us"]) - int(shared_scan_complete["absolute_us"])) / 1000.0,
+            3,
+        ),
+        "shared_tree_to_ready_ms": round(
+            (int(shared_files_ready["absolute_us"]) - int(shared_tree_populated["absolute_us"])) / 1000.0,
+            3,
+        ),
+        "shared_model_to_ready_ms": round(
+            (int(shared_files_ready["absolute_us"]) - int(shared_model_populated["absolute_us"])) / 1000.0,
+            3,
+        ),
+    }
+    if visible_rows is not None:
+        metrics["shared_visible_rows_at_readiness"] = int(visible_rows["value"])
+    if shared_files is not None:
+        metrics["shared_files_at_readiness"] = int(shared_files["value"])
+    if hidden_files is not None:
+        metrics["shared_hidden_files_at_readiness"] = int(hidden_files["value"])
+    if active_filter is not None:
+        metrics["shared_active_filter_at_readiness"] = int(active_filter["value"])
+
+    return {
+        "phases": {
+            "startup.complete": dict(startup_complete),
+            STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID: dict(shared_scan_complete),
+            STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID: dict(shared_tree_populated),
+            STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID: dict(shared_model_populated),
+            STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID: dict(shared_files_ready),
+        },
+        "counters": {
+            "shared.model.pending_hashes": dict(pending_hashes) if pending_hashes is not None else None,
+            "shared.model.visible_rows": dict(visible_rows) if visible_rows is not None else None,
+            "shared.model.shared_files": dict(shared_files) if shared_files is not None else None,
+            "shared.model.hidden_shared_files": dict(hidden_files) if hidden_files is not None else None,
+            "shared.model.active_filter": dict(active_filter) if active_filter is not None else None,
+        },
+        "metrics": metrics,
+    }

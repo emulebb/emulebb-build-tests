@@ -19,6 +19,10 @@ HIGHLIGHTED_PHASES = [
     "Construct CSharedFileList (share cache/scan)",
     "CSharedFilesWnd::OnInitDialog total",
     "BuildSharedDirectoryTree done",
+    "shared.scan.complete",
+    "shared.tree.populated",
+    "shared.model.populated",
+    "ui.shared_files_ready",
     "StartupTimer complete",
 ]
 
@@ -155,7 +159,7 @@ def build_scenario_definition(name: str, artifacts_dir: Path, shared_root: Path)
     raise RuntimeError(f"Unknown startup-profile scenario: {name}")
 
 
-def get_highlight_metric(summary: dict[str, object], name: str, field: str) -> int | None:
+def get_highlight_metric(summary: dict[str, object], name: str, field: str) -> float | None:
     """Returns one highlighted startup metric from a scenario result when present."""
 
     highlights = summary.get("startup_profile_highlights")
@@ -165,7 +169,7 @@ def get_highlight_metric(summary: dict[str, object], name: str, field: str) -> i
     if not isinstance(phase, dict):
         return None
     value = phase.get(field)
-    return int(value) if value is not None else None
+    return float(value) if value is not None else None
 
 
 def get_derived_metric(summary: dict[str, object], key: str) -> float | int | None:
@@ -175,6 +179,21 @@ def get_derived_metric(summary: dict[str, object], key: str) -> float | int | No
     if not isinstance(metrics, dict):
         return None
     value = metrics.get(key)
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def get_counter_metric(summary: dict[str, object], counter_id: str, field: str = "value") -> float | int | None:
+    """Returns one summarized startup-profile counter value from a scenario result when present."""
+
+    counters = summary.get("startup_profile_counters")
+    if not isinstance(counters, dict):
+        return None
+    counter = counters.get(counter_id)
+    if not isinstance(counter, dict):
+        return None
+    value = counter.get(field)
     if isinstance(value, (int, float)):
         return value
     return None
@@ -194,11 +213,11 @@ def build_derived_metrics(summary: dict[str, object]) -> dict[str, object]:
 
     startup_complete_absolute_ms = get_highlight_metric(summary, "StartupTimer complete", "absolute_ms")
     if startup_complete_absolute_ms is not None:
-        metrics["startup_complete_absolute_ms"] = startup_complete_absolute_ms
+        metrics["startup_complete_absolute_ms"] = round(startup_complete_absolute_ms, 3)
 
     shared_file_scan_duration_ms = get_highlight_metric(summary, "Construct CSharedFileList (share cache/scan)", "duration_ms")
     if shared_file_scan_duration_ms is not None:
-        metrics["shared_file_scan_duration_ms"] = shared_file_scan_duration_ms
+        metrics["shared_file_scan_duration_ms"] = round(shared_file_scan_duration_ms, 3)
         if shared_directory_count > 0:
             metrics["shared_file_scan_ms_per_shared_directory"] = round(shared_file_scan_duration_ms / shared_directory_count, 2)
         if directory_count > 0:
@@ -208,11 +227,27 @@ def build_derived_metrics(summary: dict[str, object]) -> dict[str, object]:
 
     shared_tree_build_duration_ms = get_highlight_metric(summary, "BuildSharedDirectoryTree done", "duration_ms")
     if shared_tree_build_duration_ms is not None:
-        metrics["shared_tree_build_duration_ms"] = shared_tree_build_duration_ms
+        metrics["shared_tree_build_duration_ms"] = round(shared_tree_build_duration_ms, 3)
         if shared_directory_count > 0:
             metrics["shared_tree_build_ms_per_shared_directory"] = round(shared_tree_build_duration_ms / shared_directory_count, 2)
         if directory_count > 0:
             metrics["shared_tree_build_ms_per_tree_directory"] = round(shared_tree_build_duration_ms / directory_count, 2)
+
+    visible_rows = get_counter_metric(summary, "shared.list.visible_rows")
+    if visible_rows is not None:
+        metrics["shared_visible_rows"] = int(visible_rows)
+
+    broadband_budget = get_counter_metric(summary, "broadband.configured_upload_budget_bytes_per_sec")
+    if broadband_budget is not None:
+        metrics["broadband_upload_budget_bytes_per_sec"] = int(broadband_budget)
+
+    readiness = summary.get("startup_profile_readiness")
+    if isinstance(readiness, dict):
+        readiness_metrics = readiness.get("metrics")
+        if isinstance(readiness_metrics, dict):
+            for key, value in readiness_metrics.items():
+                if isinstance(value, (int, float)):
+                    metrics[key] = value
 
     return metrics
 
@@ -228,6 +263,9 @@ def build_comparison(left: dict[str, object], right: dict[str, object]) -> dict[
         ("shared_file_scan_duration_ms", "shared_file_scan_duration_delta_ms"),
         ("shared_tree_build_duration_ms", "shared_tree_build_duration_delta_ms"),
         ("startup_complete_absolute_ms", "startup_complete_absolute_delta_ms"),
+        ("shared_files_ready_absolute_ms", "shared_files_ready_absolute_delta_ms"),
+        ("shared_files_ready_after_startup_complete_ms", "shared_files_ready_after_startup_complete_delta_ms"),
+        ("shared_scan_to_ready_ms", "shared_scan_to_ready_delta_ms"),
         ("shared_file_scan_ms_per_shared_directory", "shared_file_scan_per_shared_directory_delta_ms"),
         ("shared_file_scan_ms_per_file", "shared_file_scan_per_file_delta_ms"),
     ):
@@ -236,7 +274,7 @@ def build_comparison(left: dict[str, object], right: dict[str, object]) -> dict[
         if left_value is None or right_value is None:
             continue
         delta = left_value - right_value
-        result[token] = round(delta, 2) if isinstance(delta, float) else delta
+        result[token] = round(delta, 3) if isinstance(delta, float) else delta
 
     for left_key, right_key, token in (
         ("shared_directory_count", "shared_directory_count", "shared_directory_count_delta"),
@@ -302,7 +340,14 @@ def run_scenario(app_exe: Path, seed_config_dir: Path, scenario_dir: Path, share
 
         startup_profile_text = live_common.wait_for_startup_profile_complete(fixture["startup_profile_path"])
         startup_profile_phases = live_common.parse_startup_profile(startup_profile_text)
+        startup_profile_counters = live_common.parse_startup_profile_counters(startup_profile_text)
         summary["startup_profile_phase_count"] = len(startup_profile_phases)
+        summary["startup_profile_counter_count"] = len(startup_profile_counters)
+        summary["startup_profile_counters"] = live_common.summarize_startup_profile_counters(startup_profile_counters)
+        summary["startup_profile_readiness"] = live_common.summarize_shared_files_readiness(
+            startup_profile_phases,
+            startup_profile_counters,
+        )
         summary["startup_profile_highlights"] = live_common.summarize_startup_profile(
             startup_profile_phases,
             HIGHLIGHTED_PHASES,

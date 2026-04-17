@@ -696,15 +696,28 @@ def run_shared_files_e2e(app_exe: Path, seed_config_dir: Path, artifacts_dir: Pa
 
         startup_profile_text = live_common.wait_for_startup_profile_complete(fixture["startup_profile_path"])
         startup_profile_phases = live_common.parse_startup_profile(startup_profile_text)
+        startup_profile_counters = live_common.parse_startup_profile_counters(startup_profile_text)
         summary["startup_profile_path"] = str(fixture["startup_profile_path"])
+        summary["startup_profile_phase_count"] = len(startup_profile_phases)
+        summary["startup_profile_counter_count"] = len(startup_profile_counters)
+        summary["startup_profile_counters"] = live_common.summarize_startup_profile_counters(startup_profile_counters)
+        summary["startup_profile_readiness"] = live_common.summarize_shared_files_readiness(
+            startup_profile_phases,
+            startup_profile_counters,
+        )
         summary["startup_profile_highlights"] = live_common.summarize_startup_profile(
             startup_profile_phases,
             [
                 "Construct CSharedFileList (share cache/scan)",
                 "CSharedFilesWnd::OnInitDialog total",
+                "shared.scan.complete",
+                "shared.tree.populated",
+                "shared.model.populated",
+                "ui.shared_files_ready",
                 "StartupTimer complete",
             ],
         )
+        summary["startup_profile_top_slowest_phases"] = live_common.get_top_slowest_phases(startup_profile_phases, limit=8)
         process_handle = open_process(process_id)
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
@@ -911,15 +924,28 @@ def run_generated_robustness_e2e(app_exe: Path, seed_config_dir: Path, artifacts
 
         startup_profile_text = live_common.wait_for_startup_profile_complete(fixture["startup_profile_path"])
         startup_profile_phases = live_common.parse_startup_profile(startup_profile_text)
+        startup_profile_counters = live_common.parse_startup_profile_counters(startup_profile_text)
         summary["startup_profile_path"] = str(fixture["startup_profile_path"])
+        summary["startup_profile_phase_count"] = len(startup_profile_phases)
+        summary["startup_profile_counter_count"] = len(startup_profile_counters)
+        summary["startup_profile_counters"] = live_common.summarize_startup_profile_counters(startup_profile_counters)
+        summary["startup_profile_readiness"] = live_common.summarize_shared_files_readiness(
+            startup_profile_phases,
+            startup_profile_counters,
+        )
         summary["startup_profile_highlights"] = live_common.summarize_startup_profile(
             startup_profile_phases,
             [
                 "Construct CSharedFileList (share cache/scan)",
                 "CSharedFilesWnd::OnInitDialog total",
+                "shared.scan.complete",
+                "shared.tree.populated",
+                "shared.model.populated",
+                "ui.shared_files_ready",
                 "StartupTimer complete",
             ],
         )
+        summary["startup_profile_top_slowest_phases"] = live_common.get_top_slowest_phases(startup_profile_phases, limit=8)
         process_handle = open_process(process_id)
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
