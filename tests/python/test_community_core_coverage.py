@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from emule_test_harness.bugfix_core_coverage import build_config, get_latest_coverage_summary_path
+from emule_test_harness.community_core_coverage import build_config, get_latest_coverage_summary_path
 
 
 def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path) -> None:
@@ -30,17 +30,17 @@ def test_build_config_resolves_default_app_roots(tmp_path: Path) -> None:
     test_repo_root = tmp_path / "repos" / "eMule-build-tests"
     workspace_root = tmp_path / "workspaces" / "v0.72a"
     (workspace_root / "app" / "eMule-main").mkdir(parents=True)
-    (workspace_root / "app" / "eMule-v0.72a-bugfix").mkdir(parents=True)
+    (workspace_root / "app" / "eMule-v0.72a-community").mkdir(parents=True)
 
     config = build_config(
         test_repo_root=test_repo_root,
         workspace_root=workspace_root,
         main_app_root=None,
-        bugfix_app_root=None,
+        community_app_root=None,
         configuration="Debug",
         platform="x64",
         preferred_coverage_root=None,
     )
 
     assert config.main_app_root == workspace_root / "app" / "eMule-main"
-    assert config.bugfix_app_root == workspace_root / "app" / "eMule-v0.72a-bugfix"
+    assert config.community_app_root == workspace_root / "app" / "eMule-v0.72a-community"

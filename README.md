@@ -31,7 +31,7 @@ Supported branch:
 
 - `main`
 
-Oracle workspaces may be edited when the change is strictly to enable tests, seams, logging, tracing, or debugging. They are not feature-development branches.
+Baseline workspaces may be edited when the change is strictly to enable tests, seams, logging, tracing, or debugging. They are not feature-development branches.
 
 Current suite model:
 
@@ -39,19 +39,19 @@ Current suite model:
 - `divergence`: cases that are expected to differ between two explicitly chosen workspace roots
 - focused comparison suites may be added when a specific branch-to-branch audit needs a tighter signal than the repo-wide `divergence` bucket
 
-Bugfix core comparison workflow:
+Community core comparison workflow:
 
-- `scripts\run_bugfix_core_coverage.py` is the operator-facing wrapper for the canonical `main` vs `release/v0.72a-bugfix` comparison
-- it runs native coverage for `app\eMule-main` with `parity` and `bugfix-core-divergence`
-- it runs the focused `bugfix-core-divergence` suite for main-only queue-scoring and persistence behavior
-- it runs native coverage for `app\eMule-v0.72a-bugfix` with `parity`
+- `scripts\run_community_core_coverage.py` is the operator-facing wrapper for the canonical `main` vs `release/v0.72a-community` comparison
+- it runs native coverage for `app\eMule-main` with `parity` and `community-core-divergence`
+- it runs the focused `community-core-divergence` suite for main-only queue-scoring and persistence behavior
+- it runs native coverage for `app\eMule-v0.72a-community` with `parity`
 - it runs `scripts\run_live_diff.py` against those two app roots and keeps the suite-level pass/fail split explicit
-- the wrapper writes a combined summary under `reports\bugfix-core-coverage`
+- the wrapper writes a combined summary under `reports\community-core-coverage`
 
 Current critical comparison slices:
 
 - upload queue entry access parity: `src\upload_queue.tests.cpp`
-- upload queue/scoring divergence and FEAT-023 consumer helpers: `src\bugfix_core_divergence.tests.cpp`, `src\upload_score.tests.cpp`
+- upload queue/scoring divergence and FEAT-023 consumer helpers: `src\community_core_divergence.tests.cpp`, `src\upload_score.tests.cpp`
 - protocol receive replay parity with fragmented temp-file streams: `src\protocol_receive_flow.tests.cpp`
 - long-path and part/met persistence IO: `src\long_path_fs_parity.tests.cpp`, `src\part_file_persistence.tests.cpp`
 - core socket IO guards: `src\socket_io.tests.cpp`, `src\emsocket_send.tests.cpp`, `src\async_socket_ex.tests.cpp`
@@ -71,7 +71,7 @@ Script inventory:
 | `scripts\guard_tracked_files.py` | operator-facing guard | maintained | privacy/path leak gate before builds |
 | `scripts\run_native_coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
 | `scripts\run_live_diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
-| `scripts\run_bugfix_core_coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `bugfix` pass |
+| `scripts\run_community_core_coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
 | `scripts\run_pipe_live_matrix.py` | operator-facing live harness wrapper | maintained | resolves the current helper from `repos\eMule-tooling` first, legacy path second |
 | `scripts\run_live_e2e_suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
@@ -91,14 +91,14 @@ Script inventory:
 Workspace quick reference:
 
 - default canonical workspace: `EMULE_WORKSPACE_ROOT\workspaces\v0.72a`
-- canonical target app paths are `app\eMule-main`, `app\eMule-v0.72a-oracle`, `app\eMule-v0.72a-build`, and `app\eMule-v0.72a-bugfix`
-- for live-diff runs, point `-DevWorkspaceRoot` and `-OracleWorkspaceRoot` at the two workspace roots you want to compare
+- canonical target app paths are `app\eMule-main`, `app\eMule-v0.72a-community`, `app\eMule-v0.72a-broadband`, and `app\eMule-v0.72a-tracing-harness-community`
+- for live-diff runs, point `-TestRunWorkspaceRoot` and `-BaselineWorkspaceRoot` at the two workspace roots you want to compare
 - for cleanroom validation, pass both `-WorkspaceRoot` and `-AppRoot` explicitly so reports and build tags stay tied to the selected workspace root
 
-The sanctioned seam-enabled oracle baseline for 0.72a comparisons is
-`oracle/v0.72a-build`, materialized as `app\eMule-v0.72a-oracle`. It should
-stay behavior-preserving relative to `release/v0.72a-build` during normal app
-execution and may accept only test-enablement changes.
+The sanctioned seam-enabled baseline for 0.72a comparisons is
+`release/v0.72a-community`, materialized as `app\eMule-v0.72a-community`.
+It should stay behavior-preserving during normal app execution and may accept
+only test-enablement changes.
 
 Standalone probe mode:
 
@@ -214,7 +214,7 @@ Tracked-file privacy guard:
 Native seam coverage and shared reports:
 
 - `scripts\run_native_coverage.py` builds `emule-tests.exe`, runs the requested doctest suites under OpenCppCoverage, and writes Cobertura plus summary outputs under `reports\native-coverage`
-- `scripts\run_bugfix_core_coverage.py` chains the canonical `main` and `bugfix` native-coverage runs with the workspace live-diff pass and writes a combined summary under `reports\bugfix-core-coverage`
+- `scripts\run_community_core_coverage.py` chains the canonical `main` and `community` native-coverage runs with the workspace live-diff pass and writes a combined summary under `reports\community-core-coverage`
 - Python OpenCppCoverage resolution uses an explicit install root when provided, otherwise discovers `OpenCppCoverage.exe` from `PATH`, and finally falls back to a repo-managed pinned install under `tools\OpenCppCoverage`
 - `scripts\run_live_diff.py` writes both text and JSON parity/divergence summaries under `reports`
 - `scripts\publish-harness-summary.py` combines native coverage, parity, optional live-harness manifest data, optional live UI status, and optional startup-profile scenario status into one shared summary under `reports`

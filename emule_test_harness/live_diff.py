@@ -21,10 +21,10 @@ class LiveDiffConfig:
     """Resolved configuration for one Python live-diff run."""
 
     test_repo_root: Path
-    dev_workspace_root: Path
-    oracle_workspace_root: Path
-    dev_app_root: Path | None
-    oracle_app_root: Path | None
+    test_run_workspace_root: Path
+    baseline_workspace_root: Path
+    test_run_app_root: Path | None
+    baseline_app_root: Path | None
     configuration: str
     platform: str
     suite_names: tuple[str, ...]
@@ -93,29 +93,29 @@ def run_live_diff(config: LiveDiffConfig) -> int:
 
     config.report_root.mkdir(parents=True, exist_ok=True)
     if not config.skip_build:
-        _build_workspace(config, config.dev_workspace_root, config.dev_app_root)
-        _build_workspace(config, config.oracle_workspace_root, config.oracle_app_root)
+        _build_workspace(config, config.test_run_workspace_root, config.test_run_app_root)
+        _build_workspace(config, config.baseline_workspace_root, config.baseline_app_root)
 
     summary_lines: list[str] = []
     suite_summaries: list[dict[str, int | str]] = []
     failed = False
 
     for suite_name in config.suite_names:
-        dev_results = _run_and_parse_suite(
+        test_run_results = _run_and_parse_suite(
             config,
-            workspace_root=config.dev_workspace_root,
-            app_root=config.dev_app_root,
-            workspace_id="dev",
+            workspace_root=config.test_run_workspace_root,
+            app_root=config.test_run_app_root,
+            workspace_id="test-run",
             suite_name=suite_name,
         )
-        oracle_results = _run_and_parse_suite(
+        baseline_results = _run_and_parse_suite(
             config,
-            workspace_root=config.oracle_workspace_root,
-            app_root=config.oracle_app_root,
-            workspace_id="oracle",
+            workspace_root=config.baseline_workspace_root,
+            app_root=config.baseline_app_root,
+            workspace_id="baseline",
             suite_name=suite_name,
         )
-        comparison = compare_case_sets(dev_results, oracle_results, suite_name=suite_name)
+        comparison = compare_case_sets(test_run_results, baseline_results, suite_name=suite_name)
         summary_lines.extend(comparison.lines)
         suite_summaries.append(comparison.summary.to_dict())
         failed = failed or comparison.has_failure
@@ -127,8 +127,8 @@ def run_live_diff(config: LiveDiffConfig) -> int:
         summary_json_path,
         generated_at=datetime.now(UTC).isoformat(),
         report_root=config.report_root,
-        dev_workspace_root=config.dev_workspace_root,
-        oracle_workspace_root=config.oracle_workspace_root,
+        test_run_workspace_root=config.test_run_workspace_root,
+        baseline_workspace_root=config.baseline_workspace_root,
         configuration=config.configuration,
         platform=config.platform,
         suite_summaries=suite_summaries,
@@ -148,8 +148,8 @@ def write_live_diff_summary(
     *,
     generated_at: str,
     report_root: Path,
-    dev_workspace_root: Path,
-    oracle_workspace_root: Path,
+    test_run_workspace_root: Path,
+    baseline_workspace_root: Path,
     configuration: str,
     platform: str,
     suite_summaries: Iterable[dict[str, int | str]],
@@ -161,8 +161,8 @@ def write_live_diff_summary(
     payload = {
         "generated_at": generated_at,
         "report_root": str(report_root),
-        "dev_workspace_root": str(dev_workspace_root),
-        "oracle_workspace_root": str(oracle_workspace_root),
+        "test_run_workspace_root": str(test_run_workspace_root),
+        "baseline_workspace_root": str(baseline_workspace_root),
         "configuration": configuration,
         "platform": platform,
         "suites": list(suite_summaries),

@@ -41,7 +41,7 @@ def test_parse_doctest_xml_filters_suite_and_preserves_case_state(tmp_path: Path
 """,
     )
 
-    results = parse_doctest_xml(xml_path, suite_name="parity", workspace_id="dev")
+    results = parse_doctest_xml(xml_path, suite_name="parity", workspace_id="test-run")
 
     assert sorted(results) == ["fails", "passes", "skipped"]
     assert results["passes"].success is True
@@ -64,7 +64,7 @@ def test_compare_parity_marks_any_side_failure_as_failure() -> None:
     assert "[FAIL] parity: regressed" in "\n".join(comparison.lines)
 
 
-def test_compare_divergence_accepts_dev_pass_oracle_fail() -> None:
+def test_compare_divergence_accepts_test_run_pass_baseline_fail() -> None:
     comparison = compare_case_sets(
         {"fixed": case("fixed", True), "still_broken": case("still_broken", False)},
         {"fixed": case("fixed", False), "still_broken": case("still_broken", False)},
@@ -79,7 +79,7 @@ def test_compare_divergence_accepts_dev_pass_oracle_fail() -> None:
 
 def test_compare_case_set_mismatch_is_warning_not_failure() -> None:
     comparison = compare_case_sets(
-        {"dev_only": case("dev_only", True)},
+        {"test_run_only": case("test_run_only", True)},
         {},
         suite_name="parity",
     )

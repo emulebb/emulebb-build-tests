@@ -36,7 +36,7 @@ namespace
 #endif
 }
 
-TEST_SUITE_BEGIN("bugfix-core-divergence");
+TEST_SUITE_BEGIN("community-core-divergence");
 
 TEST_CASE("Main-only upload score seam restores FEAT-023 low-ratio ordering")
 {

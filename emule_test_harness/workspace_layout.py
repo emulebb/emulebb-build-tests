@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 WORKSPACE_NAME = "v0.72a"
-DEFAULT_APP_VARIANTS = ("bugfix", "test", "build")
+DEFAULT_APP_VARIANTS = ("community", "main", "broadband")
 
 
 @dataclass(frozen=True)

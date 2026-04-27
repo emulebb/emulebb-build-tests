@@ -1,15 +1,15 @@
-# Bugfix Coverage Map
+# Community Coverage Map
 
-Canonical app target: `release/v0.72a-bugfix`
+Canonical app target: `release/v0.72a-community`
 Canonical test branch: `main`
 
 ## Automated Coverage
 
 - Upload queue entry lifetime parity: `src/upload_queue.tests.cpp`
-- Upload queue scoring and FEAT-023 consumer divergence: `src/bugfix_core_divergence.tests.cpp`, `src/upload_score.tests.cpp`
+- Upload queue scoring and FEAT-023 consumer divergence: `src/community_core_divergence.tests.cpp`, `src/upload_score.tests.cpp`
 - Protocol receive replay parity from fragmented temp-file streams: `src/protocol_receive_flow.tests.cpp`
 - Long-path reference filesystem IO and temp-file lifecycle parity: `src/long_path_fs_parity.tests.cpp`
-- Part/met write-guard and atomic replace divergence on overlong live temp paths: `src/part_file_persistence.tests.cpp`, `src/bugfix_core_divergence.tests.cpp`
+- Part/met write-guard and atomic replace divergence on overlong live temp paths: `src/part_file_persistence.tests.cpp`, `src/community_core_divergence.tests.cpp`
 - Core socket send/receive bookkeeping parity: `src/socket_io.tests.cpp`, `src/emsocket_send.tests.cpp`, `src/async_socket_ex.tests.cpp`
 - Packet length parsing hardening: `src/protocol.tests.cpp`
 - Blob/tag payload bounds checking: `src/protocol.tests.cpp`
@@ -35,14 +35,14 @@ Canonical test branch: `main`
 
 ## Current Checkpoint
 
-- Canonical comparison wrapper: `scripts/run_bugfix_core_coverage.py`
+- Canonical comparison wrapper: `scripts/run_community_core_coverage.py`
 - Live-diff implementation: `scripts/run_live_diff.py`
 - Latest wrapper run:
-  - combined summary: `reports/bugfix-core-coverage/20260411-195801/bugfix-core-coverage-summary.json`
+  - combined summary: `reports/community-core-coverage/20260411-195801/community-core-coverage-summary.json`
   - canonical `main` coverage: `reports/native-coverage/20260411-195802-eMuleaz01-v0.72a-eMule-main-x64-Debug`
-  - canonical `release/v0.72a-bugfix` coverage: `reports/native-coverage/20260411-195836-eMuleaz01-v0.72a-eMule-v0.72a-bugfix-x64-Debug`
+  - canonical `release/v0.72a-community` coverage: `reports/native-coverage/20260411-195836-eMuleaz01-v0.72a-eMule-v0.72a-community-x64-Debug`
   - live diff summary: `reports/live-diff-summary.json`
 - Latest wrapper metrics:
-  - canonical `main`: `parity` 328 passed, `bugfix-core-divergence` 3 passed, line rate `88.32%`
-  - canonical `release/v0.72a-bugfix`: `parity` 268 passed, line rate `95.51%`
-  - focused divergence results: 3 expected `dev pass / oracle fail` cases for upload score ordering, queue-score helpers, and part/met persistence seams
+  - canonical `main`: `parity` 328 passed, `community-core-divergence` 3 passed, line rate `88.32%`
+  - canonical `release/v0.72a-community`: `parity` 268 passed, line rate `95.51%`
+  - focused divergence results: 3 expected `test-run pass / baseline fail` cases for upload score ordering, queue-score helpers, and part/met persistence seams

@@ -21,7 +21,7 @@ class DoctestCaseResult:
 
 @dataclass(frozen=True)
 class SuiteComparisonSummary:
-    """Suite-level pass/warn/fail counters for one dev-vs-oracle comparison."""
+    """Suite-level pass/warn/fail counters for one test-run-vs-baseline comparison."""
 
     suite_name: str
     total_cases: int
@@ -38,7 +38,7 @@ class SuiteComparisonSummary:
 
 @dataclass(frozen=True)
 class SuiteComparisonResult:
-    """Result of comparing one suite across dev and oracle result sets."""
+    """Result of comparing one suite across test-run and baseline result sets."""
 
     has_failure: bool
     summary: SuiteComparisonSummary
@@ -90,14 +90,14 @@ def parse_doctest_xml(
 
 
 def compare_case_sets(
-    dev_results: dict[str, DoctestCaseResult],
-    oracle_results: dict[str, DoctestCaseResult],
+    test_run_results: dict[str, DoctestCaseResult],
+    baseline_results: dict[str, DoctestCaseResult],
     *,
     suite_name: str,
 ) -> SuiteComparisonResult:
-    """Compares dev and oracle result sets using the existing live-diff rules."""
+    """Compares test-run and baseline result sets using the existing live-diff rules."""
 
-    all_names = sorted(set(dev_results) | set(oracle_results))
+    all_names = sorted(set(test_run_results) | set(baseline_results))
     pass_count = 0
     warn_count = 0
     fail_count = 0
@@ -106,44 +106,44 @@ def compare_case_sets(
     lines: list[str] = []
 
     for name in all_names:
-        dev_case = dev_results.get(name)
-        oracle_case = oracle_results.get(name)
-        if dev_case is None or oracle_case is None:
+        test_run_case = test_run_results.get(name)
+        baseline_case = baseline_results.get(name)
+        if test_run_case is None or baseline_case is None:
             lines.append(f"[WARN] {suite_name}: case-set mismatch for '{name}'")
             warn_count += 1
             case_set_mismatch_count += 1
             continue
 
         if suite_name == "parity":
-            if dev_case.success and oracle_case.success:
+            if test_run_case.success and baseline_case.success:
                 lines.append(f"[PASS] parity: {name}")
                 pass_count += 1
             else:
                 lines.append(
                     f"[FAIL] parity: {name} "
-                    f"(dev={dev_case.success}, oracle={oracle_case.success})"
+                    f"(test_run={test_run_case.success}, baseline={baseline_case.success})"
                 )
                 has_failure = True
                 fail_count += 1
             continue
 
-        if dev_case.success and not oracle_case.success:
-            lines.append(f"[PASS] divergence: {name} (dev pass, oracle fail as expected)")
+        if test_run_case.success and not baseline_case.success:
+            lines.append(f"[PASS] divergence: {name} (test-run pass, baseline fail as expected)")
             pass_count += 1
-        elif not dev_case.success and not oracle_case.success:
-            lines.append(f"[WARN] divergence: {name} (dev and oracle both failed)")
+        elif not test_run_case.success and not baseline_case.success:
+            lines.append(f"[WARN] divergence: {name} (test-run and baseline both failed)")
             warn_count += 1
-        elif not dev_case.success and oracle_case.success:
-            lines.append(f"[FAIL] divergence: {name} (dev failed while oracle passed)")
+        elif not test_run_case.success and baseline_case.success:
+            lines.append(f"[FAIL] divergence: {name} (test-run failed while baseline passed)")
             has_failure = True
             fail_count += 1
-        elif oracle_case.success:
-            lines.append(f"[WARN] divergence: {name} (oracle also passed)")
+        elif baseline_case.success:
+            lines.append(f"[WARN] divergence: {name} (baseline also passed)")
             warn_count += 1
         else:
             lines.append(
                 f"[FAIL] divergence: {name} "
-                f"(unexpected state dev={dev_case.success}, oracle={oracle_case.success})"
+                f"(unexpected state test_run={test_run_case.success}, baseline={baseline_case.success})"
             )
             has_failure = True
             fail_count += 1

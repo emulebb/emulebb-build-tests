@@ -347,7 +347,7 @@ namespace
 	}
 
 	/**
-	 * @brief Chooses the workspace-preferred reader so dev uses mapped I/O while oracle keeps the buffered reference path.
+	 * @brief Chooses the workspace-preferred reader so the test run uses mapped I/O while the baseline keeps the buffered reference path.
 	 */
 	EReaderMode GetWorkspacePreferredReaderMode()
 	{
@@ -695,7 +695,7 @@ namespace
 	}
 
 	/**
-	 * @brief Feeds the full hashing artifacts into an aggregate digest for dev-vs-oracle comparisons.
+	 * @brief Feeds the full hashing artifacts into an aggregate digest for test-run-vs-baseline comparisons.
 	 */
 	void AddArtifactsToDigest(CFnv1a64 &rDigest, const CFileHashArtifacts &rArtifacts)
 	{

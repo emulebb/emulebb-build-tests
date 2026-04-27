@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 WORKSPACE_NAME = "v0.72a"
-DEFAULT_APP_VARIANTS = ("main", "build", "bugfix")
+DEFAULT_APP_VARIANTS = ("main", "community", "broadband")
 REPORT_EXCLUDED_DIRECTORY_NAMES = frozenset(("shared-hash-root",))
 
 

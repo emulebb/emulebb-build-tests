@@ -30,7 +30,7 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
             }
             Variants = @(
                 @{ Name = 'main'; Path = 'app\\eMule-main'; Branch = 'main' }
-                @{ Name = 'bugfix'; Path = 'app\\eMule-v0.72a-bugfix'; Branch = 'release/v0.72a-bugfix' }
+                @{ Name = 'community'; Path = 'app\\eMule-v0.72a-community'; Branch = 'release/v0.72a-community' }
             )
         }
     }
@@ -44,14 +44,14 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
     assert manifest.seed_repo_path == Path("..\\..\\repos\\eMule")
     assert [(variant.name, variant.path) for variant in manifest.variants] == [
         ("main", Path("app\\eMule-main")),
-        ("bugfix", Path("app\\eMule-v0.72a-bugfix")),
+        ("community", Path("app\\eMule-v0.72a-community")),
     ]
 
 
 def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspaces" / "v0.72a"
-    bugfix_root = workspace_root / "app" / "eMule-v0.72a-bugfix"
-    bugfix_root.mkdir(parents=True)
+    community_root = workspace_root / "app" / "eMule-v0.72a-community"
+    community_root.mkdir(parents=True)
     (workspace_root / "deps.psd1").write_text(
         """@{
     Workspace = @{
@@ -59,7 +59,7 @@ def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path
             SeedRepo = @{ Path = '..\\..\\repos\\eMule' }
             Variants = @(
                 @{ Name = 'main'; Path = 'app\\eMule-main'; Branch = 'main' }
-                @{ Name = 'bugfix'; Path = 'app\\eMule-v0.72a-bugfix'; Branch = 'release/v0.72a-bugfix' }
+                @{ Name = 'community'; Path = 'app\\eMule-v0.72a-community'; Branch = 'release/v0.72a-community' }
             )
         }
     }
@@ -68,4 +68,4 @@ def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path
         encoding="utf-8",
     )
 
-    assert resolve_workspace_app_root(workspace_root) == bugfix_root.resolve()
+    assert resolve_workspace_app_root(workspace_root) == community_root.resolve()

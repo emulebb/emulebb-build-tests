@@ -1,4 +1,4 @@
-"""Runs the canonical main-vs-bugfix native coverage comparison."""
+"""Runs the canonical main-vs-community native coverage comparison."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.bugfix_core_coverage import invoke_script
+from emule_test_harness.community_core_coverage import invoke_script
 
 
 if __name__ == "__main__":

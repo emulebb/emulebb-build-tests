@@ -38,12 +38,12 @@ def test_build_doctest_xml_command_matches_existing_reporter_contract() -> None:
     command = build_doctest_xml_command(
         binary_path=Path("C:/repo/build/tag/x64/Debug/emule-tests.exe"),
         suite_name="parity",
-        xml_path=Path("C:/repo/reports/dev-parity.xml"),
+        xml_path=Path("C:/repo/reports/test-run-parity.xml"),
     )
 
     assert "--reporters=xml" in command
     assert "--test-suite=parity" in command
-    assert any(part.endswith("dev-parity.xml") and part.startswith("--out=") for part in command)
+    assert any(part.endswith("test-run-parity.xml") and part.startswith("--out=") for part in command)
 
 
 def test_write_live_diff_summary_matches_publisher_contract(tmp_path: Path) -> None:
@@ -54,8 +54,8 @@ def test_write_live_diff_summary_matches_publisher_contract(tmp_path: Path) -> N
         summary_path,
         generated_at="2026-04-21T00:00:00+00:00",
         report_root=tmp_path,
-        dev_workspace_root=Path("C:/dev"),
-        oracle_workspace_root=Path("C:/oracle"),
+        test_run_workspace_root=Path("C:/test-run"),
+        baseline_workspace_root=Path("C:/baseline"),
         configuration="Debug",
         platform="x64",
         suite_summaries=[{"suite_name": "parity", "total_cases": 1, "pass_count": 1}],
