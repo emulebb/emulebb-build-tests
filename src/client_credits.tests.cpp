@@ -28,6 +28,15 @@ TEST_CASE("Client credits seam validates signature buffer capacity")
 	CHECK_FALSE(CanStoreClientCreditsSignature(81u, 80));
 }
 
+#if defined(EMULE_TEST_HAVE_CLIENT_CREDITS_FAILURE_POLICY_SEAMS)
+TEST_CASE("Client credits seam keeps secure-ident failure policy stable")
+{
+	CHECK(GetClientCreditsSignatureFailureResult() == 0u);
+	CHECK(ShouldLogClientCreditsFailureDetail(true));
+	CHECK_FALSE(ShouldLogClientCreditsFailureDetail(false));
+}
+#endif
+
 #if defined(EMULE_TEST_HAVE_CLIENT_CREDITS_BUFFER_SEAMS)
 TEST_CASE("Client credits seam sizes transient save buffers without overflow")
 {
