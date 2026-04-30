@@ -37,6 +37,13 @@ TEST_CASE("Collection seam keeps malformed single-entry imports skippable")
 	CHECK(ShouldContinueAfterCollectionEntryFailure());
 }
 
+#if defined(EMULE_TEST_HAVE_COLLECTION_REJECTED_IMPORT_SEAM)
+TEST_CASE("Collection seam treats rejected imported entries as caller-owned")
+{
+	CHECK(ShouldDisposeRejectedCollectionImportEntry());
+}
+#endif
+
 #if defined(EMULE_TEST_HAVE_COLLECTION_OWNERSHIP_SEAMS)
 TEST_CASE("Collection seam keeps author-key ownership and raw-view state in sync")
 {
