@@ -1,0 +1,78 @@
+{
+  "schema": "emule-build-tests.release-live-wire-golden.v1",
+  "seed_sources": {
+    "home_url": "https://emule-security.org/",
+    "files": [
+      {
+        "name": "server_met",
+        "url": "https://upd.emule-security.org/server.met",
+        "file_name": "server.met",
+        "minimum_bytes": 64
+      },
+      {
+        "name": "nodes_dat",
+        "url": "https://upd.emule-security.org/nodes.dat",
+        "file_name": "nodes.dat",
+        "minimum_bytes": 64
+      }
+    ]
+  },
+  "search_terms": [
+    "linux",
+    "ubuntu",
+    "fedora",
+    "freebsd",
+    "debian",
+    "emule"
+  ],
+  "rest": {
+    "server_search_count": 6,
+    "kad_search_count": 6,
+    "search_type": "any",
+    "safe_stress_operations": [
+      {
+        "method": "PATCH",
+        "path": "/api/v1/app/preferences"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/transfers"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/browse"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/v1/kad"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/searches"
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/v1/searches/123"
+      }
+    ]
+  },
+  "auto_browse": {
+    "bootstrap_transfer_hash": "28EAB1A0AB1B9416AAF534E27A234941",
+    "direct_bootstrap_transfers": [
+      {
+        "hash": "0031c9cba65c50dd2015c184b2ca2c88",
+        "name": "ubuntu-24.04.4-desktop-amd64.iso",
+        "size": 6655619072,
+        "method": "direct_ed2k"
+      }
+    ]
+  }
+}
