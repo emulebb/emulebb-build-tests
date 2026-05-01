@@ -177,6 +177,7 @@
     <ClCompile Include="src\null_guard.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
     <ClCompile Include="src\other_functions.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\OtherFunctionsSeams.h')" />
     <ClCompile Include="src\web_api.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerJsonSeams.h')" />
+    <ClCompile Include="src\web_server_legacy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerLegacySeams.h')" />
     <ClCompile Include="src\part_file_completion.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileCompletionSeams.h')" />
     <ClCompile Include="src\part_file_persistence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePersistenceSeams.h')" />
     <ClCompile Include="src\part_file_preview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePreviewSeams.h')" />
@@ -273,6 +274,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\UploadBandwidthThrottlerSeams.h" Condition="Exists('$(AppRoot)\srchybrid\UploadBandwidthThrottlerSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\UploadQueueFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\UploadQueueSeams.h" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\WebServerLegacySeams.h" Condition="Exists('$(AppRoot)\srchybrid\WebServerLegacySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\WorkerUiMessageSeams.h" Condition="Exists('$(AppRoot)\srchybrid\WorkerUiMessageSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\WorkerUiMessageFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\WorkerUiMessageFlowSeams.h')" />
     <ClInclude Include="third_party\doctest\doctest.h" />
