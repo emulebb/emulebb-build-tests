@@ -419,7 +419,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     app_payload = require_json_object(app, 200)
     capabilities = app_payload.get("capabilities")
     assert isinstance(capabilities, dict), compact_http_result(app)
-    for capability in ("transfers", "searches", "categoriesRead", "categoryAssignment"):
+    for capability in ("transfers", "searches", "categoriesRead", "categoryAssignment", "fileRatingComment"):
         assert capabilities.get(capability) is True, compact_http_result(app)
     assert capabilities.get("categoryCrud") is False, compact_http_result(app)
     surface["app"] = {
@@ -616,7 +616,29 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
 
     shared = http_request(base_url, "/api/v1/shared-files", api_key=api_key)
     shared_rows = require_json_array(shared, 200)
+    for row in shared_rows:
+        assert isinstance(row, dict), compact_http_result(shared)
+        for field_name in ("comment", "rating", "hasComment", "userRating"):
+            assert field_name in row, compact_http_result(shared)
     missing_shared = http_request(base_url, f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", api_key=api_key)
+    shared_rating_missing = http_request(
+        base_url,
+        f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"comment": "rest smoke", "rating": 4},
+    )
+    shared_rating_bad_payload = None
+    if shared_rows:
+        first_hash = str(shared_rows[0].get("hash") or "")
+        if first_hash:
+            shared_rating_bad_payload = http_request(
+                base_url,
+                f"/api/v1/shared-files/{first_hash}",
+                method="PATCH",
+                api_key=api_key,
+                json_body={"comment": "rest smoke", "rating": 9},
+            )
     shared_add_bad = http_request(
         base_url,
         "/api/v1/shared-files",
@@ -634,6 +656,17 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     surface["shared"] = {
         "list_count": len(shared_rows),
         "missing_get": require_error_response(missing_shared, 404, "NOT_FOUND", message_contains="shared file not found"),
+        "rating_missing": require_error_response(shared_rating_missing, 404, "NOT_FOUND", message_contains="shared file not found"),
+        "rating_bad_payload": (
+            require_error_response(
+                shared_rating_bad_payload,
+                400,
+                "INVALID_ARGUMENT",
+                message_contains="rating must be an integer between 0 and 5",
+            )
+            if shared_rating_bad_payload is not None
+            else None
+        ),
         "add_bad_payload": require_error_response(
             shared_add_bad,
             400,

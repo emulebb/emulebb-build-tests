@@ -317,6 +317,47 @@ TEST_CASE("Web API accepts both delete-file aliases and rejects missing hash arr
 	CHECK_EQ(error, "hashes must be a string array");
 }
 
+TEST_CASE("Web API validates shared-file rating/comment payloads")
+{
+	WebApiCommandSeams::SSharedFileRatingCommentRequest request;
+	std::string error;
+
+	CHECK(WebApiCommandSeams::TryParseSharedFileRatingCommentRequest(
+		WebApiCommandSeams::json{{"comment", "good release"}, {"rating", 5}},
+		request,
+		error));
+	CHECK_EQ(request.strComment, "good release");
+	CHECK_EQ(request.iRating, 5);
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSharedFileRatingCommentRequest(
+		WebApiCommandSeams::json{{"rating", 3}},
+		request,
+		error));
+	CHECK_EQ(error, "comment must be a string");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSharedFileRatingCommentRequest(
+		WebApiCommandSeams::json{{"comment", 7}, {"rating", 3}},
+		request,
+		error));
+	CHECK_EQ(error, "comment must be a string");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSharedFileRatingCommentRequest(
+		WebApiCommandSeams::json{{"comment", "bad"}},
+		request,
+		error));
+	CHECK_EQ(error, "rating must be an integer between 0 and 5");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSharedFileRatingCommentRequest(
+		WebApiCommandSeams::json{{"comment", "bad"}, {"rating", 6}},
+		request,
+		error));
+	CHECK_EQ(error, "rating must be an integer between 0 and 5");
+}
+
 TEST_CASE("Web API recognizes REST request targets without disturbing legacy HTML paths")
 {
 	CHECK(WebServerJsonSeams::IsApiRequestTarget("/api/v1"));
@@ -389,6 +430,18 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 		errorMessage));
 	CHECK_EQ(route.strCommand, "search/results");
 	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+
+	CHECK(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
+		R"({"comment":"good release","rating":4})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(route.strCommand, "shared/set_rating_comment");
+	CHECK_EQ(route.params["hash"].get<std::string>(), "0123456789abcdef0123456789abcdef");
+	CHECK_EQ(route.params["comment"].get<std::string>(), "good release");
+	CHECK_EQ(route.params["rating"].get<int>(), 4);
 }
 
 TEST_CASE("Web API maps every current REST route family to a command")
@@ -478,6 +531,10 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/shared-files", R"({"path":"C:\\share\\file.txt"})", "shared/add");
 	assertRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", "", "shared/get");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("PATCH", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({"comment":"good release","rating":4})", "shared/set_rating_comment");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK_EQ(route.params["comment"].get<std::string>(), "good release");
+	CHECK_EQ(route.params["rating"].get<int>(), 4);
 	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({})", "shared/remove");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 
