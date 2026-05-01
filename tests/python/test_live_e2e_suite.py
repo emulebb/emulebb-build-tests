@@ -74,6 +74,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
 
     assert summary["status"] == "passed"
     assert summary["live_seed_source_url"] == EMULE_SECURITY_HOME_URL
+    assert summary["live_wire_search_queries"] == ["linux", "ubuntu", "fedora", "freebsd", "debian", "emule"]
     assert [suite["name"] for suite in summary["suites"]] == list(live_e2e_suite.SUITE_NAMES)
     assert [script_name(command) for command in commands] == [
         "preference-ui-e2e.py",
@@ -94,8 +95,8 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
 
     rest_command = commands[5]
     assert "--enable-upnp" in rest_command
-    assert option_values(rest_command, "--server-search-count") == ["1"]
-    assert option_values(rest_command, "--kad-search-count") == ["1"]
+    assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
+    assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--rest-coverage-profile") == ["contract"]
     assert option_values(rest_command, "--rest-stress-profile") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["4"]

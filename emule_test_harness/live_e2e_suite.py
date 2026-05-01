@@ -31,6 +31,8 @@ STARTUP_PROFILE_SCENARIOS = (
     "shared-files-robustness-root-only",
     "shared-files-robustness-recursive",
 )
+LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
+DEFAULT_REST_SEARCH_COUNT = len(LIVE_WIRE_SEARCH_QUERIES)
 
 
 @dataclass(frozen=True)
@@ -132,8 +134,8 @@ def build_suite_command(
     startup_profile_mode: str = "required",
     shared_root: Path | None = None,
     skip_live_seed_refresh: bool = False,
-    rest_server_search_count: int = 1,
-    rest_kad_search_count: int = 1,
+    rest_server_search_count: int = DEFAULT_REST_SEARCH_COUNT,
+    rest_kad_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_coverage_profile: str = "contract",
     rest_stress_profile: str = "smoke",
     rest_stress_duration_seconds: float = 30.0,
@@ -216,8 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
-    parser.add_argument("--rest-server-search-count", type=int, default=1)
-    parser.add_argument("--rest-kad-search-count", type=int, default=1)
+    parser.add_argument("--rest-server-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
+    parser.add_argument("--rest-kad-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-coverage-profile", choices=["smoke", "contract", "contract-stress"], default="contract")
     parser.add_argument("--rest-stress-profile", choices=["off", "smoke", "soak"], default="smoke")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
@@ -271,6 +273,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "source_artifact_dir": str(paths.source_artifacts_dir),
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
+        "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
         "rest_coverage_profile": args.rest_coverage_profile,
         "rest_stress_profile": args.rest_stress_profile,
         "fail_fast": bool(args.fail_fast),

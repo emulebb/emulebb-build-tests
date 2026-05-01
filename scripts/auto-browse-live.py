@@ -36,7 +36,8 @@ wait_for_main_window = live_common.wait_for_main_window
 write_json = live_common.write_json
 
 BOOTSTRAP_TRANSFER_HASH = "28EAB1A0AB1B9416AAF534E27A234941"
-FALLBACK_SEARCH_QUERIES = ("ubuntu", "linux", "debian")
+LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
+FALLBACK_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
 BOOTSTRAP_SEARCH_METHODS = ("server", "global", "automatic", "kad")
 FALLBACK_SEARCH_METHODS = ("server", "global", "kad", "automatic")
 DIRECT_BOOTSTRAP_TRANSFERS = (
@@ -1050,6 +1051,7 @@ def main() -> int:
             "enable_upnp": True,
             "autoconnect_via_preferences": True,
             "bootstrap_transfer_hash": BOOTSTRAP_TRANSFER_HASH,
+            "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
             "reject_exe_results": True,
             "keep_running": bool(args.keep_running),
             "timeouts": {

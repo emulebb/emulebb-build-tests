@@ -46,8 +46,9 @@ wait_for = live_common.wait_for
 wait_for_main_window = live_common.wait_for_main_window
 write_json = live_common.write_json
 
-DEFAULT_SERVER_SEARCH_QUERIES = ("ubuntu", "linux", "debian")
-DEFAULT_KAD_SEARCH_QUERIES = ("ubuntu", "linux", "debian")
+LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
+DEFAULT_SERVER_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
+DEFAULT_KAD_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
 NAT_BACKEND_ATTEMPT_PREFIX = "Attempting NAT mapping backend "
 UPNP_IGD_BACKEND_NAME = "UPnP IGD (MiniUPnP)"
 PCP_NATPMP_BACKEND_NAME = "PCP/NAT-PMP"
@@ -1393,7 +1394,7 @@ def start_live_search(
             json_body={
                 "query": query,
                 "method": method_name,
-                "type": "program",
+                "type": "any",
             },
         )
         attempt = {
@@ -1756,6 +1757,7 @@ def main() -> int:
             "keep_running": bool(args.keep_running),
             "server_search_count": args.server_search_count,
             "kad_search_count": args.kad_search_count,
+            "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
             "search_method_override": args.search_method_override,
             "rest_coverage_profile": args.rest_coverage_profile,
             "rest_contract_completeness_enabled": not args.skip_rest_contract_completeness,

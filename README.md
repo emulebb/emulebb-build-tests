@@ -131,8 +131,8 @@ Canonical live REST E2E lane:
   by the aggregate live E2E lane; `off` disables stress and `soak` is reserved
   for longer operator-driven runs with explicit duration/concurrency knobs
 - each run refreshes `server.met` and `nodes.dat` in the isolated profile from `https://emule-security.org/` / `https://upd.emule-security.org/` before launch, and records file sizes plus SHA-256 hashes in the report; `--skip-live-seed-refresh` keeps the checked-in seed files for offline diagnosis
-- the lane requires real server-connect activity, Kad running state, network readiness, and one real live search lifecycle through the first usable network path
-- `-ServerSearchCount <N>` and `-KadSearchCount <N>` upgrade the run into one stricter mixed-network scenario with exact per-network live search counts
+- the lane requires real server-connect activity, Kad running state, network readiness, and one or more real live search lifecycles through the requested network paths; release-corpus searches use REST `type=any` so OS and eMule terms are not incorrectly constrained to program-only results
+- the canonical release search corpus is `linux`, `ubuntu`, `fedora`, `freebsd`, `debian`, and `emule`; `--server-search-count <N>` and `--kad-search-count <N>` cycle through that corpus for exact per-network live search counts
 - `-KeepRunning` leaves the launched isolated eMule instance alive after a passing run and forces artifact retention so the profile can be inspected afterward
 - failure artifacts include the failing phase plus the last observed server/Kad state so live-network regressions are diagnosable
 
@@ -141,7 +141,7 @@ Aggregate live E2E lane:
 - `scripts\run_live_e2e_suite.py` is the operator-facing aggregate runner for the maintained UI, REST API, and live-wire scenarios
 - the default run sequences Preferences UI, Shared Files UI, config-stability UI, shared-hash UI, startup-profile scenarios, REST live smoke, and auto-browse live coverage
 - Shared Files UI is always expanded to include `fixture-three-files`, `generated-robustness-recursive`, and `duplicate-startup-reuse`; config-stability and startup-profile scenarios are also passed explicitly
-- REST live smoke defaults to one server search and one Kad search and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
+- REST live smoke defaults to the full six-term release search corpus on both server search and Kad search, and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
 - REST live smoke is invoked with `--rest-coverage-profile contract` and
   `--rest-stress-profile smoke` by default; use the aggregate runner's REST
   profile flags to reduce or expand that budget for a specific run
@@ -156,7 +156,7 @@ Canonical live auto-browse lane:
 - the default P2P bind target is the `hide.me` interface and the scenario always enables the main P2P `UPnP` setting
 - the scenario relies on `Autoconnect=1` in the isolated profile and intentionally does not issue overlapping REST connect requests for eD2K or Kad
 - the scenario first waits for real browse-capable clients to accumulate naturally after server+Kad autoconnect; transfer/source bootstrap is only a fallback if natural auto-browse never starts succeeding
-- the transfer bootstrap path uses the persisted hash `28EAB1A0AB1B9416AAF534E27A234941` first and refuses `.exe` candidates when selecting a downloadable result
+- the transfer bootstrap path uses the persisted hash `28EAB1A0AB1B9416AAF534E27A234941` first, then falls back through the same release search corpus, and refuses `.exe` candidates when selecting a downloadable result
 - like the REST smoke lane, each run refreshes `server.met` and `nodes.dat` in the isolated profile from eMule Security unless `--skip-live-seed-refresh` is supplied
 - the lane requires:
   - real eD2K server connectivity

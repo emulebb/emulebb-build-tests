@@ -24,6 +24,7 @@ def test_transfer_acquisition_plan_covers_bootstrap_and_public_queries() -> None
     plan = module.build_transfer_acquisition_plan()
     direct_plan = module.build_direct_bootstrap_transfer_plan()
 
+    assert module.LIVE_WIRE_SEARCH_QUERIES == ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
     assert plan[0] == (module.BOOTSTRAP_TRANSFER_HASH, list(module.BOOTSTRAP_SEARCH_METHODS))
     assert [query for query, _methods in plan[1:]] == list(module.FALLBACK_SEARCH_QUERIES)
     assert all("server" in methods and "kad" in methods for _query, methods in plan)

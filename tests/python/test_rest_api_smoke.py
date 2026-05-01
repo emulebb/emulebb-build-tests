@@ -122,6 +122,46 @@ def test_rest_contract_registry_covers_release_families() -> None:
     assert any(route["name"] == "app_shutdown" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
 
 
+def test_live_search_plan_covers_release_query_corpus() -> None:
+    module = load_rest_api_smoke_module()
+
+    server_count = len(module.LIVE_WIRE_SEARCH_QUERIES)
+    kad_count = len(module.LIVE_WIRE_SEARCH_QUERIES)
+    plan = module.build_search_plan(server_count, kad_count)
+
+    assert module.LIVE_WIRE_SEARCH_QUERIES == ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
+    assert [row["query"] for row in plan[:server_count]] == list(module.LIVE_WIRE_SEARCH_QUERIES)
+    assert [row["network"] for row in plan[:server_count]] == ["server"] * server_count
+    assert [row["query"] for row in plan[server_count:]] == list(module.LIVE_WIRE_SEARCH_QUERIES)
+    assert [row["network"] for row in plan[server_count:]] == ["kad"] * kad_count
+
+
+def test_live_search_start_uses_broad_file_type_for_release_terms(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    requests: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        requests.append({"path": path, **kwargs})
+        return {
+            "status": 200,
+            "content_type": "application/json; charset=utf-8",
+            "json": {"search_id": "42"},
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.start_live_search("http://127.0.0.1:1", "key", "server", "fedora", forced_method="server")
+
+    assert result["ok"] is True
+    assert requests[0]["path"] == "/api/v1/searches"
+    assert requests[0]["json_body"] == {
+        "query": "fedora",
+        "method": "server",
+        "type": "any",
+    }
+
+
 def test_rest_stress_config_rejects_invalid_values() -> None:
     module = load_rest_api_smoke_module()
 
