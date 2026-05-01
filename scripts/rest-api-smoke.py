@@ -419,7 +419,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     app_payload = require_json_object(app, 200)
     capabilities = app_payload.get("capabilities")
     assert isinstance(capabilities, dict), compact_http_result(app)
-    for capability in ("transfers", "searches", "categoriesRead", "categoryAssignment", "fileRatingComment"):
+    for capability in ("transfers", "searches", "categoriesRead", "categoryAssignment", "fileRatingComment", "renameFile"):
         assert capabilities.get(capability) is True, compact_http_result(app)
     assert capabilities.get("categoryCrud") is False, compact_http_result(app)
     surface["app"] = {
@@ -557,6 +557,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={"category": 0},
     )
+    transfer_rename_missing = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"name": "renamed.bin"},
+    )
     surface["transfers"] = {
         "list_count": len(transfer_rows),
         "list_status": transfers["status"],
@@ -579,6 +586,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "recheck_missing": require_error_response(transfer_recheck_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "priority_missing": require_error_response(transfer_priority_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "category_missing": require_error_response(transfer_category_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
+        "rename_missing": require_error_response(transfer_rename_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
     }
 
     upload_list = http_request(base_url, "/api/v1/uploads", api_key=api_key)

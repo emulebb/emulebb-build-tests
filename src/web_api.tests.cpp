@@ -317,6 +317,36 @@ TEST_CASE("Web API accepts both delete-file aliases and rejects missing hash arr
 	CHECK_EQ(error, "hashes must be a string array");
 }
 
+TEST_CASE("Web API validates transfer rename payloads")
+{
+	WebApiCommandSeams::STransferRenameRequest request;
+	std::string error;
+
+	CHECK(WebApiCommandSeams::TryParseTransferRenameRequest(
+		WebApiCommandSeams::json{{"name", " renamed.bin "}},
+		request,
+		error));
+	CHECK_EQ(request.strName, "renamed.bin");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferRenameRequest(WebApiCommandSeams::json::object(), request, error));
+	CHECK_EQ(error, "name must be a string");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferRenameRequest(
+		WebApiCommandSeams::json{{"name", 7}},
+		request,
+		error));
+	CHECK_EQ(error, "name must be a string");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferRenameRequest(
+		WebApiCommandSeams::json{{"name", "   "}},
+		request,
+		error));
+	CHECK_EQ(error, "name must not be empty");
+}
+
 TEST_CASE("Web API validates shared-file rating/comment payloads")
 {
 	WebApiCommandSeams::SSharedFileRatingCommentRequest request;
@@ -433,6 +463,17 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"PATCH",
+		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
+		R"({"name":"renamed.bin"})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(route.strCommand, "transfers/rename");
+	CHECK_EQ(route.params["hash"].get<std::string>(), "0123456789abcdef0123456789abcdef");
+	CHECK_EQ(route.params["name"].get<std::string>(), "renamed.bin");
+
+	CHECK(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
 		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
 		R"({"comment":"good release","rating":4})",
 		route,
@@ -500,6 +541,9 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"categoryName":"Default"})", "transfers/set_category");
 	CHECK_EQ(route.params["categoryName"].get<std::string>(), "Default");
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"name":"renamed.bin"})", "transfers/rename");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK_EQ(route.params["name"].get<std::string>(), "renamed.bin");
 
 	assertRoute("GET", "/api/v1/uploads", "", "uploads/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
