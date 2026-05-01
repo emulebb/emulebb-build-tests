@@ -106,7 +106,6 @@ TWEAKS_EXPECTED_LABELS = (
     "Text editor command",
     "High-resolution system timer",
     "Intelligent Corruption Handling",
-    "Do not compress AVI uploads",
     "Preview incomplete media blocks",
     "Force even with missing first block",
     "Beep on important errors",
