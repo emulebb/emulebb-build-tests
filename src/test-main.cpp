@@ -3,6 +3,7 @@
 
 #include "../include/FullHashProbe.h"
 #include "../include/HashProbe.h"
+#include "../include/TimerResolutionProbe.h"
 
 #ifndef EMULE_TESTS_HAS_MAPPED_FILE_READER
 #define EMULE_TESTS_HAS_MAPPED_FILE_READER 0
@@ -38,6 +39,10 @@ int main(int argc, char **argv)
 	const int nProbeResult = RunHashProbeIfRequested(argc, argv);
 	if (nProbeResult >= 0)
 		return nProbeResult;
+
+	const int nTimerResolutionProbeResult = RunTimerResolutionProbeIfRequested(argc, argv);
+	if (nTimerResolutionProbeResult >= 0)
+		return nTimerResolutionProbeResult;
 
 	doctest::Context context;
 	context.applyCommandLine(argc, argv);
