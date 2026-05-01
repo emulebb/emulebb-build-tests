@@ -421,6 +421,9 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/categories", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "categories/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
+
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/shared-directories", "", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "shared_directories/get");
 }
 
 TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes")
@@ -569,6 +572,11 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("PATCH", "/api/v1/kad", R"({"action":"connect"})", "kad/connect");
 	assertRoute("PATCH", "/api/v1/kad", R"({"action":"disconnect"})", "kad/disconnect");
 	assertRoute("PATCH", "/api/v1/kad", R"({"action":"recheck_firewall"})", "kad/recheck_firewall");
+
+	assertRoute("GET", "/api/v1/shared-directories", "", "shared_directories/get");
+	assertRoute("PATCH", "/api/v1/shared-directories", R"({"roots":[{"path":"C:\\share","recursive":true}]})", "shared_directories/set");
+	CHECK(route.params["roots"][0]["recursive"].get<bool>());
+	assertRoute("POST", "/api/v1/shared-directories/reload", R"({})", "shared_directories/reload");
 
 	assertRoute("GET", "/api/v1/shared-files", "", "shared/list");
 	CHECK(route.params["_items_envelope"].get<bool>());

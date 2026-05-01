@@ -112,6 +112,7 @@ def test_rest_contract_registry_covers_release_families() -> None:
         "status",
         "categories",
         "transfers",
+        "shared-directories",
         "shared",
         "uploads",
         "servers",
@@ -190,6 +191,7 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     method_path_pairs = {(operation["method"], operation["path"]) for operation in operations}
 
     assert ("GET", "/api/v1/status") in method_path_pairs
+    assert ("GET", "/api/v1/shared-directories") in method_path_pairs
     assert ("PATCH", "/api/v1/app/preferences") in method_path_pairs
     assert ("POST", "/api/v1/transfers") in method_path_pairs
     assert ("PATCH", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}") in method_path_pairs

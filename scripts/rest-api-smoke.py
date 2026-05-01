@@ -94,6 +94,9 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "transfers_delete", "family": "transfers", "method": "DELETE", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "transfers_sources", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources", "safe": True},
     {"name": "transfers_source_browse", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/browse", "safe": True},
+    {"name": "shared_directories_get", "family": "shared-directories", "method": "GET", "path": "/api/v1/shared-directories", "safe": True},
+    {"name": "shared_directories_patch", "family": "shared-directories", "method": "PATCH", "path": "/api/v1/shared-directories", "safe": True},
+    {"name": "shared_directories_reload", "family": "shared-directories", "method": "POST", "path": "/api/v1/shared-directories/reload", "safe": True},
     {"name": "shared_files_list", "family": "shared", "method": "GET", "path": "/api/v1/shared-files", "safe": True},
     {"name": "shared_files_add", "family": "shared", "method": "POST", "path": "/api/v1/shared-files", "safe": True},
     {"name": "shared_files_get", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
@@ -121,6 +124,7 @@ REST_STRESS_READ_PATHS = (
     "/api/v1/snapshot?limit=10",
     "/api/v1/categories",
     "/api/v1/transfers",
+    "/api/v1/shared-directories",
     "/api/v1/shared-files",
     "/api/v1/uploads",
     "/api/v1/upload-queue",
@@ -841,7 +845,15 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     app_payload = require_json_object(app, 200)
     capabilities = app_payload.get("capabilities")
     assert isinstance(capabilities, dict), compact_http_result(app)
-    for capability in ("transfers", "searches", "categoriesRead", "categoryAssignment", "fileRatingComment", "renameFile"):
+    for capability in (
+        "transfers",
+        "searches",
+        "sharedDirectories",
+        "categoriesRead",
+        "categoryAssignment",
+        "fileRatingComment",
+        "renameFile",
+    ):
         assert capabilities.get(capability) is True, compact_http_result(app)
     assert capabilities.get("categoryCrud") is False, compact_http_result(app)
     surface["app"] = {
@@ -1010,6 +1022,37 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "category_missing": require_error_response(transfer_category_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "rename_missing": require_error_response(transfer_rename_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
     }
+
+    shared_directories = http_request(base_url, "/api/v1/shared-directories", api_key=api_key)
+    shared_directories_payload = require_json_object(shared_directories, 200)
+    assert isinstance(shared_directories_payload.get("roots"), list), compact_http_result(shared_directories)
+    assert isinstance(shared_directories_payload.get("items"), list), compact_http_result(shared_directories)
+    shared_directories_bad_patch = http_request(
+        base_url,
+        "/api/v1/shared-directories",
+        method="PATCH",
+        api_key=api_key,
+        json_body={},
+    )
+    shared_directories_reload = http_request(
+        base_url,
+        "/api/v1/shared-directories/reload",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
+    surface["shared_directories"] = {
+        "root_count": len(shared_directories_payload["roots"]),
+        "item_count": len(shared_directories_payload["items"]),
+        "bad_patch": require_error_response(
+            shared_directories_bad_patch,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="roots must be an array",
+        ),
+        "reload": compact_http_result(shared_directories_reload),
+    }
+    assert shared_directories_reload["status"] == 200, compact_http_result(shared_directories_reload)
 
     upload_list = http_request(base_url, "/api/v1/uploads", api_key=api_key)
     upload_queue = http_request(base_url, "/api/v1/upload-queue", api_key=api_key)
