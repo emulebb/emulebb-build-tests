@@ -1,6 +1,8 @@
 #include "../third_party/doctest/doctest.h"
 #include "../include/TestSupport.h"
+#include <cstring>
 #include <limits>
+#include <vector>
 #include "ProtocolGuards.h"
 #include "ProtocolParsers.h"
 #include "ServerConnectionGuards.h"
@@ -19,6 +21,54 @@ namespace
 	static const size_t TCP_READ_BUFFER_SIZE = 2000000u;
 	static const uint32 MAX_PROTOCOL_TAGS = 256u;
 	static const uint32 IPV4_BROADCAST = 0xFFFFFFFFu;
+	static const unsigned long long FNV1A64_OFFSET = 14695981039346656037ull;
+	static const unsigned long long FNV1A64_PRIME = 1099511628211ull;
+
+	struct ReleaseSearchPacketGoldenVector
+	{
+		const char *pszTerm;
+		uint32 nPacketLength;
+		size_t nTagTotalSize;
+		unsigned long long nFnv1a64;
+	};
+
+	/**
+	 * Computes the stable FNV-1a digest used by protocol golden-vector tests.
+	 */
+	unsigned long long ComputeFnv1a64(const std::vector<BYTE> &rBytes)
+	{
+		unsigned long long nHash = FNV1A64_OFFSET;
+		for (BYTE byValue : rBytes) {
+			nHash ^= static_cast<unsigned long long>(byValue);
+			nHash *= FNV1A64_PRIME;
+		}
+		return nHash;
+	}
+
+	/**
+	 * Builds the canonical release live-wire search packet fixture.
+	 */
+	std::vector<BYTE> BuildReleaseSearchPacketFixture(const char *pszTerm)
+	{
+		const size_t nTermLength = std::strlen(pszTerm);
+		REQUIRE(nTermLength <= 0xFFFFu);
+		const uint32 nPacketLength = static_cast<uint32>(1u + 2u + 2u + nTermLength);
+		std::vector<BYTE> bytes;
+		bytes.reserve(static_cast<size_t>(PROTOCOL_PACKET_HEADER_SIZE) + nPacketLength - 1u);
+		bytes.push_back(static_cast<BYTE>(OP_EDONKEYPROT));
+		bytes.push_back(static_cast<BYTE>(nPacketLength & 0xFFu));
+		bytes.push_back(static_cast<BYTE>((nPacketLength >> 8) & 0xFFu));
+		bytes.push_back(static_cast<BYTE>((nPacketLength >> 16) & 0xFFu));
+		bytes.push_back(static_cast<BYTE>((nPacketLength >> 24) & 0xFFu));
+		bytes.push_back(static_cast<BYTE>(OP_SEARCHREQUEST));
+		bytes.push_back(static_cast<BYTE>(TAGTYPE_STRING | 0x80u));
+		bytes.push_back(static_cast<BYTE>(CT_NAME));
+		bytes.push_back(static_cast<BYTE>(nTermLength & 0xFFu));
+		bytes.push_back(static_cast<BYTE>((nTermLength >> 8) & 0xFFu));
+		for (size_t i = 0; i < nTermLength; ++i)
+			bytes.push_back(static_cast<BYTE>(pszTerm[i]));
+		return bytes;
+	}
 
 	/**
 	 * Keeps the packet fixtures readable when asserting serialized header decode paths.
@@ -131,6 +181,37 @@ TEST_CASE("Protocol parser decodes the smallest legal packet header from seriali
 	CHECK_EQ(header.nOpcode, static_cast<uint8>(OP_HELLO));
 	CHECK_EQ(header.nPacketLength, static_cast<uint32>(1));
 	CHECK_EQ(header.nPayloadLength, static_cast<uint32>(0));
+}
+
+TEST_CASE("Protocol parser preserves release live-wire search packet golden vectors")
+{
+	static const ReleaseSearchPacketGoldenVector vectors[] = {
+		{"linux", 10u, 9u, 0x3E754120FCC3EB84ull},
+		{"ubuntu", 11u, 10u, 0xCE7D5C38D51E41FDull},
+		{"fedora", 11u, 10u, 0xD13803A7A5A9EF97ull},
+		{"freebsd", 12u, 11u, 0x9AF6C316F24A8DD1ull},
+		{"debian", 11u, 10u, 0x17F39CB63770AA53ull},
+		{"emule", 10u, 9u, 0x27C377811D510298ull},
+	};
+
+	for (const ReleaseSearchPacketGoldenVector &rVector : vectors) {
+		CAPTURE(rVector.pszTerm);
+		const std::vector<BYTE> packet = BuildReleaseSearchPacketFixture(rVector.pszTerm);
+		const ProtocolPacketHeader header = ParsePacketHeaderFixture(packet.data(), packet.size());
+		const ProtocolTagSpan tag = ParseTagFixture(packet.data() + PROTOCOL_PACKET_HEADER_SIZE, packet.size() - PROTOCOL_PACKET_HEADER_SIZE);
+		const size_t nTermLength = std::strlen(rVector.pszTerm);
+
+		CHECK_EQ(ComputeFnv1a64(packet), rVector.nFnv1a64);
+		CHECK_EQ(header.nProtocol, static_cast<uint8>(OP_EDONKEYPROT));
+		CHECK_EQ(header.nOpcode, static_cast<uint8>(OP_SEARCHREQUEST));
+		CHECK_EQ(header.nPacketLength, rVector.nPacketLength);
+		CHECK_EQ(header.nPayloadLength, static_cast<uint32>(rVector.nTagTotalSize));
+		CHECK_EQ(tag.Header.nType, static_cast<uint8>(TAGTYPE_STRING));
+		CHECK(tag.Header.bUsesNameId);
+		CHECK_EQ(tag.Header.nNameId, static_cast<uint8>(CT_NAME));
+		CHECK_EQ(tag.nValueSize, static_cast<size_t>(2u + nTermLength));
+		CHECK_EQ(tag.nTotalSize, rVector.nTagTotalSize);
+	}
 }
 
 TEST_CASE("Protocol parser reads little-endian packet primitives without sign extension")
