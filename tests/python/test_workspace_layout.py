@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from emule_test_harness.workspace_layout import (
-    get_default_remote_root,
     get_default_workspace_root,
     load_workspace_manifest,
     resolve_workspace_app_root,
@@ -15,7 +14,6 @@ def test_default_roots_use_canonical_repo_layout(tmp_path: Path, monkeypatch) ->
     test_repo_root = tmp_path / "repos" / "eMule-build-tests"
 
     assert get_default_workspace_root(test_repo_root) == tmp_path / "workspaces" / "v0.72a"
-    assert get_default_remote_root(test_repo_root) == tmp_path / "repos" / "eMule-remote"
 
 
 def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> None:

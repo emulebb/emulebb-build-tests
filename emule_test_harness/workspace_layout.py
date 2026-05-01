@@ -42,12 +42,6 @@ def get_default_workspace_root(test_repo_root: Path, workspace_name: str = WORKS
     return (get_emule_workspace_root(test_repo_root) / "workspaces" / workspace_name).resolve()
 
 
-def get_default_remote_root(test_repo_root: Path) -> Path:
-    """Returns the default remote repo root for live harnesses."""
-
-    return (get_emule_workspace_root(test_repo_root) / "repos" / "eMule-remote").resolve()
-
-
 def load_workspace_manifest(workspace_root: Path) -> WorkspaceManifest:
     """Parses the app-root subset of the generated workspace `deps.psd1` file."""
 

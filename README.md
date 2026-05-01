@@ -8,7 +8,6 @@ Minimum expected roots:
 
 - `EMULE_WORKSPACE_ROOT\repos\eMule-build`
 - `EMULE_WORKSPACE_ROOT\repos\eMule-build-tests`
-- `EMULE_WORKSPACE_ROOT\repos\eMule-remote`
 - `EMULE_WORKSPACE_ROOT\workspaces\v0.72a`
 
 Use `eMulebb-setup\README.md` for the full workspace topology and materialization
