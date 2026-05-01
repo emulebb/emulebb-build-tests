@@ -86,6 +86,10 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "status", "family": "status", "method": "GET", "path": "/api/v1/status", "safe": True},
     {"name": "snapshot", "family": "status", "method": "GET", "path": "/api/v1/snapshot?limit=7", "safe": True},
     {"name": "categories", "family": "categories", "method": "GET", "path": "/api/v1/categories", "safe": True},
+    {"name": "categories_create", "family": "categories", "method": "POST", "path": "/api/v1/categories", "safe": True},
+    {"name": "categories_get", "family": "categories", "method": "GET", "path": "/api/v1/categories/999999", "safe": True},
+    {"name": "categories_patch", "family": "categories", "method": "PATCH", "path": "/api/v1/categories/999999", "safe": True},
+    {"name": "categories_delete", "family": "categories", "method": "DELETE", "path": "/api/v1/categories/999999", "safe": True},
     {"name": "transfers_list", "family": "transfers", "method": "GET", "path": "/api/v1/transfers", "safe": True},
     {"name": "transfers_add_link", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
     {"name": "transfers_add_links", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
@@ -640,6 +644,10 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
 
     if route_name == "app_preferences_patch":
         return {"safeServerConnect": True}
+    if route_name == "categories_create":
+        return {}
+    if route_name == "categories_patch":
+        return {"name": "REST contract"}
     if route_name == "transfers_add_link":
         return {"link": "not-an-ed2k-link"}
     if route_name == "transfers_add_links":
@@ -855,7 +863,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "renameFile",
     ):
         assert capabilities.get(capability) is True, compact_http_result(app)
-    assert capabilities.get("categoryCrud") is False, compact_http_result(app)
+    assert capabilities.get("categoryCrud") is True, compact_http_result(app)
     surface["app"] = {
         "status": app["status"],
         "apiVersion": app_payload.get("apiVersion"),
@@ -915,6 +923,28 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         isinstance(row, dict) and row.get("id") == 0 and row.get("name") == "Default"
         for row in category_rows
     ), compact_http_result(categories)
+    category_create_bad = http_request(
+        base_url,
+        "/api/v1/categories",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
+    category_get_missing = http_request(base_url, "/api/v1/categories/999999", api_key=api_key)
+    category_patch_default = http_request(
+        base_url,
+        "/api/v1/categories/0",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"name": "Default"},
+    )
+    category_delete_default = http_request(
+        base_url,
+        "/api/v1/categories/0",
+        method="DELETE",
+        api_key=api_key,
+        json_body={},
+    )
     missing_transfer = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", api_key=api_key)
     missing_transfer_sources = http_request(
         base_url,
@@ -1003,6 +1033,10 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "list_status": transfers["status"],
         "filter_status": transfers_by_filter["status"],
         "category_count": len(category_rows),
+        "category_create_bad": require_error_response(category_create_bad, 400, "INVALID_ARGUMENT", message_contains="name must be"),
+        "category_get_missing": require_error_response(category_get_missing, 404, "NOT_FOUND", message_contains="category not found"),
+        "category_patch_default": require_error_response(category_patch_default, 400, "INVALID_ARGUMENT", message_contains="default category"),
+        "category_delete_default": require_error_response(category_delete_default, 400, "INVALID_ARGUMENT", message_contains="default category"),
         "missing_get": require_error_response(missing_transfer, 404, "NOT_FOUND", message_contains="transfer not found"),
         "missing_sources": require_error_response(missing_transfer_sources, 404, "NOT_FOUND", message_contains="transfer not found"),
         "missing_source_browse": require_error_response(missing_transfer_source_browse, 404, "NOT_FOUND", message_contains="transfer not found"),

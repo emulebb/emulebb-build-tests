@@ -514,6 +514,14 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["limit"].get<int>(), 7);
 	assertRoute("GET", "/api/v1/categories", "", "categories/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("POST", "/api/v1/categories", R"({"name":"Linux","path":"C:\\incoming\\linux","priority":"high","color":255})", "categories/create");
+	CHECK_EQ(route.params["name"].get<std::string>(), "Linux");
+	assertRoute("GET", "/api/v1/categories/2", "", "categories/get");
+	CHECK_EQ(route.params["id"].get<std::string>(), "2");
+	assertRoute("PATCH", "/api/v1/categories/2", R"({"name":"ISOs","priority":"normal"})", "categories/update");
+	CHECK_EQ(route.params["id"].get<std::string>(), "2");
+	assertRoute("DELETE", "/api/v1/categories/2", "", "categories/delete");
+	CHECK_EQ(route.params["id"].get<std::string>(), "2");
 
 	assertRoute("GET", "/api/v1/transfers?filter=paused&category=2", "", "transfers/list");
 	CHECK_EQ(route.params["filter"].get<std::string>(), "paused");
