@@ -2,6 +2,7 @@
 
 #include "../include/LongPathTestSupport.h"
 
+#include "FileCompletionCommandSeams.h"
 #include "PartFileCompletionSeams.h"
 
 #include <vector>
@@ -53,6 +54,73 @@ TEST_CASE("Part-file completion seam skips disabled-long-path warnings for suppo
 	CHECK_FALSE(PartFileCompletionSeams::ShouldWarnAboutDisabledLongPathSupport(ERROR_FILENAME_EXCED_RANGE, strShortPath, false));
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(shortFinishedPath));
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(longFinishedPath));
+}
+
+TEST_CASE("File completion command seam builds direct launch requests with supported tokens")
+{
+	FileCompletionCommandSeams::CompletionCommandContext context;
+	context.enabled = true;
+	context.completionSucceeded = true;
+	context.knownFileAdded = true;
+	context.programPath = _T("C:\\Tools\\complete.exe");
+	context.argumentTemplate = _T("--input %F --dir %D --name %N --hash %H --size %S --cat %C");
+	context.filePath = _T("C:\\Incoming\\linux iso.iso");
+	context.directory = _T("C:\\Incoming\\");
+	context.fileName = _T("linux iso.iso");
+	context.fileHash = _T("abcdef0123456789abcdef0123456789");
+	context.categoryName = _T("Linux");
+	context.fileSize = 123456789u;
+
+	FileCompletionCommandSeams::CompletionCommandLaunchRequest request;
+	REQUIRE(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+
+	CHECK(request.applicationName == CString(_T("C:\\Tools\\complete.exe")));
+	CHECK(request.workingDirectory == CString(_T("C:\\Incoming\\")));
+	CHECK(request.commandLine == CString(_T("\"C:\\Tools\\complete.exe\" --input \"C:\\Incoming\\linux iso.iso\" --dir \"C:\\Incoming\\\\\" --name linux iso.iso --hash abcdef0123456789abcdef0123456789 --size 123456789 --cat Linux")));
+}
+
+TEST_CASE("File completion command seam skips unsafe or non-retained completion states")
+{
+	FileCompletionCommandSeams::CompletionCommandContext context;
+	context.enabled = true;
+	context.completionSucceeded = true;
+	context.knownFileAdded = true;
+	context.programPath = _T("C:\\Tools\\complete.exe");
+	context.filePath = _T("C:\\Incoming\\debian.iso");
+	context.directory = _T("C:\\Incoming");
+	context.fileName = _T("debian.iso");
+
+	FileCompletionCommandSeams::CompletionCommandLaunchRequest request;
+	CHECK(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+
+	context.enabled = false;
+	CHECK_FALSE(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+	context.enabled = true;
+
+	context.appClosing = true;
+	CHECK_FALSE(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+	context.appClosing = false;
+
+	context.completionSucceeded = false;
+	CHECK_FALSE(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+	context.completionSucceeded = true;
+
+	context.knownFileAdded = false;
+	CHECK_FALSE(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+	context.knownFileAdded = true;
+
+	context.programPath = _T("C:\\Tools\\complete.bat");
+	CHECK_FALSE(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+}
+
+TEST_CASE("File completion command seam accepts only executable program extensions")
+{
+	CHECK(FileCompletionCommandSeams::HasSupportedProgramExtension(CString(_T("C:\\Tools\\complete.exe"))));
+	CHECK(FileCompletionCommandSeams::HasSupportedProgramExtension(CString(_T("C:\\Tools\\complete.COM"))));
+	CHECK_FALSE(FileCompletionCommandSeams::HasSupportedProgramExtension(CString(_T("C:\\Tools\\complete.ps1"))));
+	CHECK_FALSE(FileCompletionCommandSeams::HasSupportedProgramExtension(CString(_T("C:\\Tools\\complete.bat"))));
+	CHECK_FALSE(FileCompletionCommandSeams::HasSupportedProgramExtension(CString(_T("C:\\Tools\\complete"))));
+	CHECK(FileCompletionCommandSeams::QuoteCommandLineArgument(CString(_T("C:\\Incoming\\"))) == CString(_T("\"C:\\Incoming\\\\\"")));
 }
 
 TEST_SUITE_END;
