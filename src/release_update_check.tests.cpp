@@ -36,6 +36,7 @@ TEST_CASE("eMule BB release tags use strict semver identity")
 	CHECK_FALSE(TryParseReleaseTag("bb-v1.1.0", parsed));
 	CHECK_FALSE(TryParseReleaseTag("emule-bb-v1.1", parsed));
 	CHECK_FALSE(TryParseReleaseTag("emule-bb-v1.1.0-beta", parsed));
+	CHECK_FALSE(TryParseReleaseTag("emule-bb-v42949672960.0.0", parsed));
 }
 
 TEST_CASE("eMule BB release version comparison orders major minor and patch")
@@ -69,6 +70,9 @@ TEST_CASE("eMule BB release evaluation ignores malformed and prerelease payloads
 
 	const auto malformedTag = EvaluateLatestReleaseJson(BuildReleaseJson("v0.72a-bb.1", "eMule-BB-1.1.1-x64.zip"), local, "x64");
 	CHECK_EQ(malformedTag.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
+
+	const auto overflowedTag = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v42949672960.0.0", "eMule-BB-42949672960.0.0-x64.zip"), local, "x64");
+	CHECK_EQ(overflowedTag.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
 
 	const auto prerelease = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.1.1", "eMule-BB-1.1.1-x64.zip", false, true), local, "x64");
 	CHECK_EQ(prerelease.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
