@@ -204,6 +204,7 @@
     <ClCompile Include="src\source_exchange_replay.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h')" />
     <ClCompile Include="src\test-main.cpp" />
     <ClCompile Include="src\tickcount64.tests.cpp" />
+    <ClCompile Include="src\transfer_wnd.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\TransferWndSeams.h')" />
     <ClCompile Include="src\upload_bandwidth_throttler.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadBandwidthThrottlerSeams.h')" />
     <ClCompile Include="src\upload_bandwidth_throttler_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadBandwidthThrottlerFlowSeams.h')" />
     <ClCompile Include="src\upload_score.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadScoreSeams.h')" />
@@ -268,6 +269,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\SocketIoSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SocketIoSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SocketPolicySeams.h" Condition="Exists('$(AppRoot)\srchybrid\SocketPolicySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\StatusBarInfo.h" Condition="Exists('$(AppRoot)\srchybrid\StatusBarInfo.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\TransferWndSeams.h" Condition="Exists('$(AppRoot)\srchybrid\TransferWndSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\UPnPImplMiniLibSeams.h" Condition="Exists('$(AppRoot)\srchybrid\UPnPImplMiniLibSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\UPnPImplWrapperSeams.h" Condition="Exists('$(AppRoot)\srchybrid\UPnPImplWrapperSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\UploadBandwidthThrottlerFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\UploadBandwidthThrottlerFlowSeams.h')" />
