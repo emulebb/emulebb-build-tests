@@ -285,6 +285,43 @@ def test_source_browse_candidate_wait_prefers_handshaken_sources(monkeypatch) ->
     assert [observation["ready_candidate_count"] for observation in result["observations"]] == [0, 1]
 
 
+def test_transfer_source_wait_accepts_items_envelope(monkeypatch) -> None:
+    module = load_auto_browse_module()
+    responses = iter(
+        [
+            {
+                "status": 200,
+                "content_type": "application/json; charset=utf-8",
+                "json": {"items": []},
+                "body_text": "{\"items\":[]}",
+            },
+            {
+                "status": 200,
+                "content_type": "application/json; charset=utf-8",
+                "json": {
+                    "items": [
+                        {
+                            "userHash": "b" * 32,
+                            "ip": "5.6.7.8",
+                            "port": 4662,
+                            "viewSharedFiles": True,
+                        }
+                    ]
+                },
+                "body_text": "{}",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.wait_for_transfer_sources("http://127.0.0.1:1", "key", "c" * 32, 30.0)
+
+    assert [observation["source_count"] for observation in result["observations"]] == [0, 1]
+    assert result["sources"][0]["userHash"] == "b" * 32
+
+
 def test_source_browse_success_tries_selector_variants(monkeypatch) -> None:
     module = load_auto_browse_module()
     attempted_selectors: list[dict[str, object]] = []

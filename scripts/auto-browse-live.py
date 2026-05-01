@@ -749,8 +749,7 @@ def wait_for_transfer_sources(
     while time.time() < deadline:
         result = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}/sources", api_key=api_key)
         assert int(result["status"]) == 200, compact_http_result(result)
-        payload = result.get("json")
-        assert isinstance(payload, list), compact_http_result(result)
+        payload = rest_smoke.require_json_array(result, 200)
         snapshot = {
             "observed_at": round(time.time(), 3),
             "source_count": len(payload),
@@ -780,8 +779,7 @@ def wait_for_source_browse_candidates(
     while time.time() < deadline:
         result = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}/sources", api_key=api_key)
         assert int(result["status"]) == 200, compact_http_result(result)
-        payload = result.get("json")
-        assert isinstance(payload, list), compact_http_result(result)
+        payload = rest_smoke.require_json_array(result, 200)
         candidates = iter_source_browse_candidates(payload)
         ready_candidates = [
             candidate
