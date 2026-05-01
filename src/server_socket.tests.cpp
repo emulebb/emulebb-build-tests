@@ -4,6 +4,8 @@
 
 #include "ServerSocketSeams.h"
 
+TEST_SUITE_BEGIN("parity");
+
 namespace
 {
 struct TestServerPacket
@@ -42,3 +44,5 @@ TEST_CASE("ServerSocket seam supplies safe packet log defaults")
 	CHECK(ServerSocketSeams::GetPacketFieldOrDefault(static_cast<const TestServerPacket *>(NULL), &TestServerPacket::opcode, static_cast<std::uint8_t>(0)) == 0u);
 	CHECK(ServerSocketSeams::GetPacketFieldOrDefault(static_cast<const TestServerPacket *>(NULL), &TestServerPacket::size, static_cast<std::uint32_t>(0)) == 0u);
 }
+
+TEST_SUITE_END();

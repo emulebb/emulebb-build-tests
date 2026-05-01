@@ -2,6 +2,8 @@
 
 #include "WebServerLegacySeams.h"
 
+TEST_SUITE_BEGIN("parity");
+
 TEST_CASE("WebServer legacy search seam validates historical file type tokens")
 {
 	CHECK(WebServerLegacySeams::IsLegacySearchFileTypeAllowed(_T("")));
@@ -25,3 +27,5 @@ TEST_CASE("WebServer legacy search seam preserves failure fallback policy")
 	CHECK(WebServerLegacySeams::ShouldUseGenericLegacySearchErrorAfterException());
 	CHECK(WebServerLegacySeams::ShouldFallbackToUncompressedResponseAfterGzipFailure());
 }
+
+TEST_SUITE_END();

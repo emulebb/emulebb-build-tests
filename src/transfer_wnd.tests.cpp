@@ -2,6 +2,8 @@
 
 #include "TransferWndSeams.h"
 
+TEST_SUITE_BEGIN("parity");
+
 TEST_CASE("Transfer window seam validates secondary panes")
 {
 	CHECK(TransferWndSeams::IsValidSecondaryPane(TransferWndSeams::kSecondaryPaneDownloading));
@@ -51,3 +53,5 @@ TEST_CASE("Transfer window seam logs invalid state only")
 	CHECK_FALSE(TransferWndSeams::ShouldLogInvalidState(true));
 	CHECK(TransferWndSeams::ShouldLogInvalidState(false));
 }
+
+TEST_SUITE_END();
