@@ -30,6 +30,7 @@ DEFAULT_WINDOW_RECT = (10, 10, 700, 500)
 WINDOWS_DIRECTORY_PATH_LIMIT = 248
 WINDOWS_PATH_LIMIT = 260
 PATH_SAMPLE_LIMIT = 5
+MAIN_WINDOW_TITLE_PREFIXES = ("eMule v", "eMule BB")
 STARTUP_PROFILE_TRACE_FILE_NAME = "startup-profile.trace.json"
 STARTUP_PROFILE_COMPLETE_PHASE_ID = "startup.complete"
 STARTUP_PROFILE_COMPLETE_PHASE_NAME = "StartupTimer complete"
@@ -392,7 +393,8 @@ def launch_app(app_exe: Path, profile_base: Path) -> Application:
 def is_main_emule_window(hwnd: int) -> bool:
     """Reports whether one visible top-level window is the real main eMule dialog."""
 
-    return win32gui.GetClassName(hwnd) == "#32770" and win32gui.GetWindowText(hwnd).startswith("eMule v")
+    title = win32gui.GetWindowText(hwnd)
+    return win32gui.GetClassName(hwnd) == "#32770" and title.startswith(MAIN_WINDOW_TITLE_PREFIXES)
 
 
 def describe_startup_dialog(hwnd: int) -> str:
