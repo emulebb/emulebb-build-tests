@@ -88,6 +88,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
 
     shared_files_command = commands[1]
     assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_SCENARIOS)
+    assert "dynamic-folder-lifecycle" in option_values(shared_files_command, "--scenario")
     config_command = commands[2]
     assert option_values(config_command, "--scenario") == list(live_e2e_suite.CONFIG_STABILITY_UI_SCENARIOS)
     startup_command = commands[4]

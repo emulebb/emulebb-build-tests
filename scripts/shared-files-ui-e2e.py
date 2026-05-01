@@ -9,10 +9,13 @@ import json
 import os
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import win32con
@@ -50,9 +53,12 @@ WM_LBUTTONUP = 0x0202
 BM_CLICK = 0x00F5
 MK_LBUTTON = 0x0001
 MP_HM_FILES = 10213
+MP_SHAREDIR = 10346
+MP_UNSHAREDIR = 10348
 IDC_RELOADSHAREDFILES = 2049
 IDC_SFLIST = 2167
 IDC_SF_FNAME = 3038
+IDC_SHAREDDIRSTREE = 2926
 
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
@@ -70,6 +76,19 @@ LVIF_TEXT = 0x0001
 LVIR_BOUNDS = 0
 LVIS_FOCUSED = 0x0001
 LVIS_SELECTED = 0x0002
+
+TV_FIRST = 0x1100
+TVM_EXPAND = TV_FIRST + 2
+TVM_GETNEXTITEM = TV_FIRST + 10
+TVM_SELECTITEM = TV_FIRST + 11
+TVM_GETITEMW = TV_FIRST + 62
+
+TVGN_ROOT = 0x0000
+TVGN_NEXT = 0x0001
+TVGN_CHILD = 0x0004
+TVGN_CARET = 0x0009
+TVE_EXPAND = 0x0002
+TVIF_TEXT = 0x0001
 
 PROCESS_VM_OPERATION = 0x0008
 PROCESS_VM_READ = 0x0010
@@ -137,6 +156,23 @@ class LVITEMW(ctypes.Structure):
         ("puColumns", ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32),
         ("piColFmt", ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32),
         ("iGroup", ctypes.c_int),
+    ]
+
+
+class TVITEMW(ctypes.Structure):
+    """Mirror of the Win32 TVITEMW structure for remote tree-view text retrieval."""
+
+    _fields_ = [
+        ("mask", ctypes.c_uint),
+        ("hItem", ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32),
+        ("state", ctypes.c_uint),
+        ("stateMask", ctypes.c_uint),
+        ("pszText", ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32),
+        ("cchTextMax", ctypes.c_int),
+        ("iImage", ctypes.c_int),
+        ("iSelectedImage", ctypes.c_int),
+        ("cChildren", ctypes.c_int),
+        ("lParam", ctypes.c_longlong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_long),
     ]
 
 
@@ -365,6 +401,96 @@ def prepare_duplicate_reuse_fixture(seed_config_dir: Path, artifacts_dir: Path) 
     return fixture
 
 
+def choose_rest_listen_port() -> int:
+    """Returns one ephemeral localhost TCP port for a live REST verification listener."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: int) -> None:
+    """Enables the WebServer REST listener inside one isolated Shared Files UI profile."""
+
+    preferences_path = config_dir / "preferences.ini"
+    text = preferences_path.read_text(encoding="utf-8", errors="ignore")
+    text = patch_ini_value(text, "ConfirmExit", "0")
+    for key, value in (
+        ("Autoconnect", "0"),
+        ("Reconnect", "0"),
+        ("NetworkED2K", "0"),
+        ("NetworkKademlia", "0"),
+    ):
+        text = patch_ini_value(text, key, value)
+    template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
+    text = patch_ini_value(text, "WebTemplateFile", str(template_path))
+    for key, value in (
+        ("Password", ""),
+        ("PasswordLow", ""),
+        ("ApiKey", api_key),
+        ("BindAddr", "127.0.0.1"),
+        ("Port", str(port)),
+        ("WebUseUPnP", "0"),
+        ("Enabled", "1"),
+        ("UseGzip", "0"),
+        ("PageRefreshTime", "120"),
+        ("UseLowRightsUser", "0"),
+        ("AllowAdminHiLevelFunc", "1"),
+        ("WebTimeoutMins", "5"),
+        ("UseHTTPS", "0"),
+        ("HTTPSCertificate", ""),
+        ("HTTPSKey", ""),
+    ):
+        text = live_common.upsert_ini_section_value(text, "WebServer", key, value)
+    text = live_common.upsert_ini_section_value(text, "UPnP", "EnableUPnP", "0")
+    text = patch_ini_value(text, "CloseUPnPOnExit", "0")
+    preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
+
+
+def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_dir: Path, app_exe: Path) -> dict:
+    """Creates an initially unshared folder used for live share/unshare UI mutation coverage."""
+
+    incoming_dir = artifacts_dir / "incoming"
+    temp_dir = artifacts_dir / "temp"
+    candidate_dir = artifacts_dir / "dynamic-share-candidate"
+
+    incoming_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+
+    initial_files = [
+        (candidate_dir / "alpha_dynamic.txt", b"alpha dynamic shared file\r\n"),
+        (candidate_dir / "beta_dynamic.bin", b"b" * 2048),
+    ]
+    for file_path, content in initial_files:
+        file_path.write_bytes(content)
+
+    fixture = live_common.prepare_profile_base(
+        seed_config_dir=seed_config_dir,
+        artifacts_dir=artifacts_dir,
+        shared_dirs=[],
+        incoming_dir=incoming_dir,
+        temp_dir=temp_dir,
+    )
+    rest_api_key = "shared-files-ui-lifecycle-key"
+    rest_port = choose_rest_listen_port()
+    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port)
+    fixture.update(
+        {
+            "candidate_dir": candidate_dir,
+            "late_file": candidate_dir / "gamma_late.txt",
+            "deleted_file": candidate_dir / "alpha_dynamic.txt",
+            "initial_names": ["alpha_dynamic.txt", "beta_dynamic.bin"],
+            "after_add_names": ["alpha_dynamic.txt", "beta_dynamic.bin", "gamma_late.txt"],
+            "after_delete_names": ["beta_dynamic.bin", "gamma_late.txt"],
+            "rest_api_key": rest_api_key,
+            "rest_port": rest_port,
+            "rest_base_url": f"http://127.0.0.1:{rest_port}",
+        }
+    )
+    return fixture
+
+
 def read_duplicate_cache_header(path: Path) -> dict[str, int]:
     """Reads the duplicate-path sidecar header and returns its magic, version, and record count."""
 
@@ -483,6 +609,118 @@ def get_list_names(process_handle: int, list_hwnd: int, count: int) -> list[str]
     """Reads the first N Shared Files row names from the owner-data list."""
 
     return [get_list_item_text(process_handle, list_hwnd, i, 0) for i in range(count)]
+
+
+def get_all_list_names(process_handle: int, list_hwnd: int) -> list[str]:
+    """Reads all currently exposed Shared Files row names from the owner-data list."""
+
+    count = win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0)
+    return get_list_names(process_handle, list_hwnd, count)
+
+
+def get_tree_item_text(process_handle: int, tree_hwnd: int, item_handle: int) -> str:
+    """Reads one tree-view item text through `TVM_GETITEMW`."""
+
+    max_chars = 1024
+    text_bytes = max_chars * ctypes.sizeof(ctypes.c_wchar)
+    total_size = ctypes.sizeof(TVITEMW) + text_bytes
+    with RemoteBuffer(process_handle, total_size) as remote:
+        remote_text_address = remote.address + ctypes.sizeof(TVITEMW)
+        item = TVITEMW()
+        item.mask = TVIF_TEXT
+        item.hItem = item_handle
+        item.pszText = remote_text_address
+        item.cchTextMax = max_chars
+        write_remote(process_handle, remote.address, item)
+        if not win32gui.SendMessage(tree_hwnd, TVM_GETITEMW, 0, remote.address):
+            raise RuntimeError(f"Unable to read tree item 0x{item_handle:X}.")
+        raw_text = read_remote(process_handle, remote_text_address, text_bytes)
+        return raw_text.decode("utf-16-le", errors="ignore").split("\x00", 1)[0]
+
+
+def iter_tree_siblings(tree_hwnd: int, first_item: int):
+    """Yields a tree-view item and each of its following siblings."""
+
+    current = first_item
+    while current:
+        yield current
+        current = win32gui.SendMessage(tree_hwnd, TVM_GETNEXTITEM, TVGN_NEXT, current)
+
+
+def expand_tree_item(tree_hwnd: int, item_handle: int) -> None:
+    """Expands one tree-view item and gives lazy child population a short turn."""
+
+    win32gui.SendMessage(tree_hwnd, TVM_EXPAND, TVE_EXPAND, item_handle)
+    time.sleep(0.2)
+
+
+def find_tree_child_by_component(process_handle: int, tree_hwnd: int, parent_item: int, component: str) -> int:
+    """Finds one direct child whose visible label matches a path component."""
+
+    expand_tree_item(tree_hwnd, parent_item)
+    target = component.rstrip("\\").lower()
+
+    def label_matches(label: str) -> bool:
+        normalized = label.rstrip("\\").lower()
+        if normalized == target:
+            return True
+        if target.endswith(":"):
+            return normalized.startswith(target)
+        return normalized.startswith(target + " ")
+
+    def resolve() -> int | None:
+        first_child = win32gui.SendMessage(tree_hwnd, TVM_GETNEXTITEM, TVGN_CHILD, parent_item)
+        if not first_child:
+            return None
+        for child in iter_tree_siblings(tree_hwnd, first_child):
+            if label_matches(get_tree_item_text(process_handle, tree_hwnd, child)):
+                return child
+        return None
+
+    return wait_for(resolve, 20.0, 0.25, f"tree component '{component}'")
+
+
+def find_drive_tree_item(process_handle: int, tree_hwnd: int, drive_component: str) -> int:
+    """Finds the drive node below the Shared Files tree's virtual roots."""
+
+    drive = drive_component.rstrip("\\").lower()
+
+    def label_matches_drive(label: str) -> bool:
+        return label.rstrip("\\").lower().startswith(drive)
+
+    def resolve() -> int | None:
+        root = win32gui.SendMessage(tree_hwnd, TVM_GETNEXTITEM, TVGN_ROOT, 0)
+        for root_item in iter_tree_siblings(tree_hwnd, root):
+            expand_tree_item(tree_hwnd, root_item)
+            first_child = win32gui.SendMessage(tree_hwnd, TVM_GETNEXTITEM, TVGN_CHILD, root_item)
+            if not first_child:
+                continue
+            for child in iter_tree_siblings(tree_hwnd, first_child):
+                if label_matches_drive(get_tree_item_text(process_handle, tree_hwnd, child)):
+                    return child
+        return None
+
+    return wait_for(resolve, 30.0, 0.25, f"drive tree node '{drive_component}'")
+
+
+def select_directory_tree_item(process_handle: int, tree_hwnd: int, directory_path: Path) -> int:
+    """Expands the Shared Files tree by path and selects the target directory item."""
+
+    parts = list(directory_path.resolve().parts)
+    if not parts:
+        raise RuntimeError(f"Cannot select empty directory path: {directory_path}")
+    current_item = find_drive_tree_item(process_handle, tree_hwnd, parts[0])
+    for component in parts[1:]:
+        current_item = find_tree_child_by_component(process_handle, tree_hwnd, current_item, component)
+    win32gui.SendMessage(tree_hwnd, TVM_SELECTITEM, TVGN_CARET, current_item)
+    return current_item
+
+
+def send_shared_dirs_tree_command(tree_hwnd: int, command_id: int) -> None:
+    """Sends one menu command directly to the Shared Files directory tree control."""
+
+    win32gui.SendMessage(tree_hwnd, WM_COMMAND, command_id, 0)
+    time.sleep(0.5)
 
 
 def get_remote_rect(process_handle: int, hwnd: int, message: int, index: int, left_seed: int = 0) -> RECT:
@@ -752,6 +990,90 @@ def wait_for_list_names(process_handle: int, list_hwnd: int, expected_names: lis
     return wait_for(resolve, timeout=30.0, interval=0.5, description=description)
 
 
+def wait_for_list_name_set(process_handle: int, list_hwnd: int, expected_names: list[str], description: str) -> list[str]:
+    """Waits until the visible Shared Files rows match the expected unordered name set."""
+
+    expected = sorted(expected_names, key=str.lower)
+
+    def resolve():
+        count = win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0)
+        if count != len(expected_names):
+            return None
+        names = get_all_list_names(process_handle, list_hwnd)
+        return {"names": names} if sorted(names, key=str.lower) == expected else None
+
+    result = wait_for(resolve, timeout=45.0, interval=0.5, description=description)
+    return list(result["names"])
+
+
+def http_request(base_url: str, path: str, *, api_key: str, request_timeout_seconds: float = 5.0) -> dict[str, object]:
+    """Performs one JSON REST GET request against the live WebServer API."""
+
+    request = urllib.request.Request(base_url + path, method="GET", headers={"X-API-Key": api_key})
+    with urllib.request.urlopen(request, timeout=request_timeout_seconds) as response:
+        body_text = response.read().decode("utf-8", errors="replace")
+        payload = None
+        if "application/json" in response.headers.get("Content-Type", ""):
+            payload = json.loads(body_text)
+        return {
+            "status": int(response.status),
+            "body_text": body_text,
+            "json": payload,
+        }
+
+
+def require_json_array(result: dict[str, object], expected_status: int) -> list[object]:
+    """Asserts a REST response is the expected JSON array payload."""
+
+    if int(result["status"]) != expected_status:
+        raise RuntimeError(f"Unexpected REST status {result['status']}: {result['body_text']!r}")
+    payload = result["json"]
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        return list(payload["items"])
+    if isinstance(payload, list):
+        return list(payload)
+    raise RuntimeError(f"Expected JSON array REST payload, got {payload!r}.")
+
+
+def wait_for_rest_ready(base_url: str, api_key: str) -> dict[str, object]:
+    """Waits until the live REST API accepts authenticated localhost requests."""
+
+    return wait_for(
+        lambda: http_request(base_url, "/api/v1/app", api_key=api_key),
+        timeout=30.0,
+        interval=0.5,
+        description="REST API readiness",
+    )
+
+
+def get_rest_shared_names(base_url: str, api_key: str) -> list[str]:
+    """Returns the current shared-file names exposed by the REST read model."""
+
+    rows = require_json_array(http_request(base_url, "/api/v1/shared-files", api_key=api_key), 200)
+    names = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RuntimeError(f"Unexpected shared-files REST row shape: {row!r}")
+        name = row.get("name")
+        if not isinstance(name, str):
+            raise RuntimeError(f"Shared-files REST row has no string name: {row!r}")
+        names.append(name)
+    return names
+
+
+def wait_for_rest_shared_name_set(base_url: str, api_key: str, expected_names: list[str], description: str) -> list[str]:
+    """Waits until REST shared-files rows match the expected unordered name set."""
+
+    expected = sorted(expected_names, key=str.lower)
+
+    def resolve():
+        names = get_rest_shared_names(base_url, api_key)
+        return {"names": names} if sorted(names, key=str.lower) == expected else None
+
+    result = wait_for(resolve, timeout=45.0, interval=0.5, description=description)
+    return list(result["names"])
+
+
 def wait_for_list_names_one_of(
     process_handle: int,
     list_hwnd: int,
@@ -837,6 +1159,18 @@ def open_shared_files_page(main_hwnd: int) -> tuple[int, int]:
         return (list_hwnd, static_hwnd)
 
     return wait_for(resolve, 30.0, 0.5, "visible Shared Files details controls")
+
+
+def open_shared_files_tree_page(main_hwnd: int) -> tuple[int, int]:
+    """Opens the Shared Files page and returns the visible list and directory-tree handles."""
+
+    list_hwnd = open_shared_files_list_page(main_hwnd)
+
+    def resolve() -> tuple[int, int] | None:
+        tree_hwnd = get_control_handle(main_hwnd, IDC_SHAREDDIRSTREE, "SysTreeView32", visible_only=True)
+        return (list_hwnd, tree_hwnd)
+
+    return wait_for(resolve, 30.0, 0.5, "visible Shared Files directory tree controls")
 
 
 def close_app_cleanly(app: Application) -> None:
@@ -1044,6 +1378,158 @@ def run_shared_files_e2e(
         summary["status"] = "passed"
         summary["error"] = None
 
+        write_json(artifacts_dir / "result.json", summary)
+    except Exception as exc:
+        summary["error"] = str(exc)
+        if app is not None:
+            try:
+                main_window = app.top_window()
+                dump_window_tree(main_window.handle, artifacts_dir / "window-tree-failure.json")
+                try:
+                    image = main_window.capture_as_image()
+                    image.save(artifacts_dir / "failure.png")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        write_json(artifacts_dir / "result.json", summary)
+        raise
+    finally:
+        if process_handle:
+            close_process(process_handle)
+        if app is not None:
+            try:
+                live_common.close_app_cleanly(app)
+            except Exception:
+                try:
+                    app.kill()
+                except Exception:
+                    pass
+
+
+def run_dynamic_folder_lifecycle_e2e(
+    app_exe: Path,
+    seed_config_dir: Path,
+    artifacts_dir: Path,
+    *,
+    require_startup_profile: bool,
+) -> None:
+    """Exercises live share, rescan, file removal, and unshare through the Shared Files UI."""
+
+    fixture = prepare_dynamic_folder_lifecycle_fixture(seed_config_dir, artifacts_dir, app_exe)
+    summary = {
+        "name": "dynamic-folder-lifecycle",
+        "status": "failed",
+        "app_exe": str(app_exe),
+        "profile_base": str(fixture["profile_base"]),
+        "candidate_dir": live_common.win_path(Path(str(fixture["candidate_dir"])), trailing_slash=True),
+        "rest_base_url": fixture["rest_base_url"],
+        "expected_initial_names": fixture["initial_names"],
+        "expected_after_add_names": fixture["after_add_names"],
+        "expected_after_delete_names": fixture["after_delete_names"],
+        "command_line": subprocess.list2cmdline(
+            [str(app_exe), "-ignoreinstances", "-c", str(fixture["profile_base"])]
+        ),
+        "steps": [],
+    }
+
+    app = None
+    process_handle = 0
+    try:
+        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        main_window = live_common.wait_for_main_window(app)
+        main_hwnd = main_window.handle
+        live_common.bring_window_to_front(main_window)
+        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        summary["process_id"] = process_id
+        summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
+        summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
+
+        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
+            fixture["startup_profile_path"],
+            require_startup_profile=require_startup_profile,
+        )
+        summary.update(startup_profile_summary)
+        if startup_profile_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+
+        process_handle = open_process(process_id)
+        dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
+        list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
+        wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
+
+        ui_names = wait_for_list_name_set(process_handle, list_hwnd, [], "initial empty Shared Files UI list")
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            [],
+            "initial empty REST shared-files list",
+        )
+        summary["steps"].append({"name": "initial_empty", "ui_names": ui_names, "rest_names": rest_names})
+
+        select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["candidate_dir"])))
+        send_shared_dirs_tree_command(tree_hwnd, MP_SHAREDIR)
+        click_reload_button(main_hwnd)
+        ui_names = wait_for_list_name_set(
+            process_handle,
+            list_hwnd,
+            list(fixture["initial_names"]),
+            "Shared Files UI list after UI share",
+        )
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            list(fixture["initial_names"]),
+            "REST shared-files list after UI share",
+        )
+        summary["steps"].append({"name": "after_share", "ui_names": ui_names, "rest_names": rest_names})
+
+        Path(str(fixture["late_file"])).write_bytes(b"late dynamic file\r\n")
+        click_reload_button(main_hwnd)
+        ui_names = wait_for_list_name_set(
+            process_handle,
+            list_hwnd,
+            list(fixture["after_add_names"]),
+            "Shared Files UI list after adding a file",
+        )
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            list(fixture["after_add_names"]),
+            "REST shared-files list after adding a file",
+        )
+        summary["steps"].append({"name": "after_add_file", "ui_names": ui_names, "rest_names": rest_names})
+
+        Path(str(fixture["deleted_file"])).unlink()
+        click_reload_button(main_hwnd)
+        ui_names = wait_for_list_name_set(
+            process_handle,
+            list_hwnd,
+            list(fixture["after_delete_names"]),
+            "Shared Files UI list after deleting a file",
+        )
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            list(fixture["after_delete_names"]),
+            "REST shared-files list after deleting a file",
+        )
+        summary["steps"].append({"name": "after_delete_file", "ui_names": ui_names, "rest_names": rest_names})
+
+        select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["candidate_dir"])))
+        send_shared_dirs_tree_command(tree_hwnd, MP_UNSHAREDIR)
+        click_reload_button(main_hwnd)
+        ui_names = wait_for_list_name_set(process_handle, list_hwnd, [], "Shared Files UI list after UI unshare")
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            [],
+            "REST shared-files list after UI unshare",
+        )
+        summary["steps"].append({"name": "after_unshare", "ui_names": ui_names, "rest_names": rest_names})
+
+        summary["status"] = "passed"
+        summary["error"] = None
         write_json(artifacts_dir / "result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
@@ -1435,6 +1921,13 @@ def run_shared_files_ui_suite(
                     scenario_dir,
                     require_startup_profile=require_startup_profile,
                 )
+            elif scenario_name == "dynamic-folder-lifecycle":
+                run_dynamic_folder_lifecycle_e2e(
+                    app_exe,
+                    seed_config_dir,
+                    scenario_dir,
+                    require_startup_profile=require_startup_profile,
+                )
             else:
                 raise RuntimeError(f"Unknown Shared Files UI scenario: {scenario_name}")
         except Exception:
@@ -1474,7 +1967,12 @@ def main(argv: list[str]) -> int:
         "--scenario",
         dest="scenarios",
         action="append",
-        choices=["fixture-three-files", "generated-robustness-recursive", "duplicate-startup-reuse"],
+        choices=[
+            "fixture-three-files",
+            "generated-robustness-recursive",
+            "duplicate-startup-reuse",
+            "dynamic-folder-lifecycle",
+        ],
     )
     args = parser.parse_args(argv)
 
