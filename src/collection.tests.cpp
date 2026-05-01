@@ -37,6 +37,26 @@ TEST_CASE("Collection seam keeps malformed single-entry imports skippable")
 	CHECK(ShouldContinueAfterCollectionEntryFailure());
 }
 
+#if defined(EMULE_TEST_HAVE_COLLECTION_FILE_IMPORT_SEAMS)
+TEST_CASE("Collection seam rejects hostile collection-file entry tag counts")
+{
+	CHECK(HasSaneCollectionFileTagCount(4u, 5u, 1u));
+	CHECK(HasSaneCollectionFileTagCount(4u, 260u, COLLECTION_FILE_MAX_ENTRY_TAGS));
+
+	CHECK_FALSE(HasSaneCollectionFileTagCount(6u, 5u, 0u));
+	CHECK_FALSE(HasSaneCollectionFileTagCount(4u, 4u, 1u));
+	CHECK_FALSE(HasSaneCollectionFileTagCount(4u, 300u, COLLECTION_FILE_MAX_ENTRY_TAGS + 1u));
+	CHECK_FALSE(HasSaneCollectionFileTagCount(4u, 10u, 7u));
+}
+
+TEST_CASE("Collection seam makes collection-file entry failure policy explicit")
+{
+	CHECK(ShouldSkipMalformedCollectionFileTag());
+	CHECK(ShouldRejectCollectionFileWithoutHash());
+	CHECK(ShouldIgnoreInvalidCollectionAICHHash());
+}
+#endif
+
 #if defined(EMULE_TEST_HAVE_COLLECTION_REJECTED_IMPORT_SEAM)
 TEST_CASE("Collection seam treats rejected imported entries as caller-owned")
 {
