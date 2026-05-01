@@ -123,6 +123,13 @@ Canonical live REST E2E lane:
 - `scripts\rest-api-smoke.py` is the operator-facing entrypoint for the canonical isolated REST live E2E lane
 - the Python runner is intentionally strict pass/fail and owns app resolution, report publication, and latest-report mirroring directly
 - the lane launches `emule.exe` with explicit `-ignoreinstances -c <profile-base>` and enables WebServer REST against one per-run localhost port
+- the default REST coverage profile is `contract`, which records safe coverage
+  for the broadband `/api/v1` contract; `--rest-coverage-profile smoke` keeps
+  the older lighter pass, while `contract-stress` also enables stress unless a
+  stress profile is supplied explicitly
+- `--rest-stress-profile smoke` runs the bounded release-gate stress pass used
+  by the aggregate live E2E lane; `off` disables stress and `soak` is reserved
+  for longer operator-driven runs with explicit duration/concurrency knobs
 - each run refreshes `server.met` and `nodes.dat` in the isolated profile from `https://emule-security.org/` / `https://upd.emule-security.org/` before launch, and records file sizes plus SHA-256 hashes in the report; `--skip-live-seed-refresh` keeps the checked-in seed files for offline diagnosis
 - the lane requires real server-connect activity, Kad running state, network readiness, and one real live search lifecycle through the first usable network path
 - `-ServerSearchCount <N>` and `-KadSearchCount <N>` upgrade the run into one stricter mixed-network scenario with exact per-network live search counts
@@ -135,6 +142,9 @@ Aggregate live E2E lane:
 - the default run sequences Preferences UI, Shared Files UI, config-stability UI, shared-hash UI, startup-profile scenarios, REST live smoke, and auto-browse live coverage
 - Shared Files UI is always expanded to include `fixture-three-files`, `generated-robustness-recursive`, and `duplicate-startup-reuse`; config-stability and startup-profile scenarios are also passed explicitly
 - REST live smoke defaults to one server search and one Kad search and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
+- REST live smoke is invoked with `--rest-coverage-profile contract` and
+  `--rest-stress-profile smoke` by default; use the aggregate runner's REST
+  profile flags to reduce or expand that budget for a specific run
 - REST and auto-browse child runs refresh `server.met` and `nodes.dat` from `https://emule-security.org/` / `https://upd.emule-security.org/` unless `--skip-live-seed-refresh` is supplied
 - the aggregate runner continues after child-suite failures by default to expose multiple breaking points in one pass; use `--fail-fast` only when a short diagnostic run is needed
 - each child suite keeps its normal report directory, while the aggregate run also writes `reports\live-e2e-suite\...\result.json` and refreshes `reports\live-e2e-suite-latest`

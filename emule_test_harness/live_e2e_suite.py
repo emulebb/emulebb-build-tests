@@ -134,6 +134,10 @@ def build_suite_command(
     skip_live_seed_refresh: bool = False,
     rest_server_search_count: int = 1,
     rest_kad_search_count: int = 1,
+    rest_coverage_profile: str = "contract",
+    rest_stress_profile: str = "smoke",
+    rest_stress_duration_seconds: float = 30.0,
+    rest_stress_concurrency: int = 4,
     enable_upnp: bool = True,
     auto_browse_p2p_bind_interface_name: str = "hide.me",
 ) -> list[str]:
@@ -168,6 +172,10 @@ def build_suite_command(
     if spec.is_rest_api:
         command.extend(["--server-search-count", str(rest_server_search_count)])
         command.extend(["--kad-search-count", str(rest_kad_search_count)])
+        command.extend(["--rest-coverage-profile", rest_coverage_profile])
+        command.extend(["--rest-stress-profile", rest_stress_profile])
+        command.extend(["--rest-stress-duration-seconds", str(rest_stress_duration_seconds)])
+        command.extend(["--rest-stress-concurrency", str(rest_stress_concurrency)])
         if enable_upnp:
             command.append("--enable-upnp")
     if spec.is_auto_browse and auto_browse_p2p_bind_interface_name:
@@ -210,6 +218,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--rest-server-search-count", type=int, default=1)
     parser.add_argument("--rest-kad-search-count", type=int, default=1)
+    parser.add_argument("--rest-coverage-profile", choices=["smoke", "contract", "contract-stress"], default="contract")
+    parser.add_argument("--rest-stress-profile", choices=["off", "smoke", "soak"], default="smoke")
+    parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
+    parser.add_argument("--rest-stress-concurrency", type=int, default=4)
     parser.add_argument("--disable-upnp", action="store_true")
     parser.add_argument("--auto-browse-p2p-bind-interface-name", default="hide.me")
     return parser
@@ -220,6 +232,10 @@ def validate_args(args: argparse.Namespace) -> None:
 
     if args.rest_server_search_count < 0 or args.rest_kad_search_count < 0:
         raise ValueError("REST live search counts must be zero or greater.")
+    if args.rest_stress_duration_seconds <= 0:
+        raise ValueError("REST stress duration must be greater than zero.")
+    if args.rest_stress_concurrency <= 0:
+        raise ValueError("REST stress concurrency must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -255,6 +271,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "source_artifact_dir": str(paths.source_artifacts_dir),
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
+        "rest_coverage_profile": args.rest_coverage_profile,
+        "rest_stress_profile": args.rest_stress_profile,
         "fail_fast": bool(args.fail_fast),
         "has_inconclusive_suites": False,
         "suites": [],
@@ -277,6 +295,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             rest_server_search_count=args.rest_server_search_count,
             rest_kad_search_count=args.rest_kad_search_count,
+            rest_coverage_profile=args.rest_coverage_profile,
+            rest_stress_profile=args.rest_stress_profile,
+            rest_stress_duration_seconds=args.rest_stress_duration_seconds,
+            rest_stress_concurrency=args.rest_stress_concurrency,
             enable_upnp=not args.disable_upnp,
             auto_browse_p2p_bind_interface_name=args.auto_browse_p2p_bind_interface_name,
         )
@@ -294,6 +316,15 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "scenario_names": list(spec.scenarios),
             "uses_live_seed_refresh": bool(spec.uses_live_seed_refresh and not args.skip_live_seed_refresh),
         }
+        if spec.is_rest_api:
+            result.update(
+                {
+                    "rest_coverage_profile": args.rest_coverage_profile,
+                    "rest_stress_profile": args.rest_stress_profile,
+                    "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
+                    "rest_stress_concurrency": args.rest_stress_concurrency,
+                }
+            )
         summary["suites"].append(result)  # type: ignore[index]
         if suite_status == "inconclusive":
             summary["has_inconclusive_suites"] = True

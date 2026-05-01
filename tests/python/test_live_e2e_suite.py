@@ -96,7 +96,12 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert "--enable-upnp" in rest_command
     assert option_values(rest_command, "--server-search-count") == ["1"]
     assert option_values(rest_command, "--kad-search-count") == ["1"]
+    assert option_values(rest_command, "--rest-coverage-profile") == ["contract"]
+    assert option_values(rest_command, "--rest-stress-profile") == ["smoke"]
+    assert option_values(rest_command, "--rest-stress-concurrency") == ["4"]
     assert "--skip-live-seed-refresh" not in rest_command
+    assert summary["suites"][5]["rest_coverage_profile"] == "contract"
+    assert summary["suites"][5]["rest_stress_profile"] == "smoke"
 
     auto_browse_command = commands[6]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
@@ -153,6 +158,43 @@ def test_fail_fast_stops_after_first_failed_suite(tmp_path: Path, monkeypatch) -
 
     assert summary["status"] == "failed"
     assert [script_name(command) for command in commands] == ["preference-ui-e2e.py"]
+
+
+def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--suite",
+            "rest-api",
+            "--rest-coverage-profile",
+            "contract-stress",
+            "--rest-stress-profile",
+            "soak",
+            "--rest-stress-duration-seconds",
+            "45",
+            "--rest-stress-concurrency",
+            "2",
+            "--disable-upnp",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    rest_command = commands[0]
+    assert "--enable-upnp" not in rest_command
+    assert option_values(rest_command, "--rest-coverage-profile") == ["contract-stress"]
+    assert option_values(rest_command, "--rest-stress-profile") == ["soak"]
+    assert option_values(rest_command, "--rest-stress-duration-seconds") == ["45.0"]
+    assert option_values(rest_command, "--rest-stress-concurrency") == ["2"]
+    assert summary["suites"][0]["rest_coverage_profile"] == "contract-stress"
+    assert summary["suites"][0]["rest_stress_profile"] == "soak"
 
 
 def test_operator_script_help_loads_hyphenated_helpers() -> None:

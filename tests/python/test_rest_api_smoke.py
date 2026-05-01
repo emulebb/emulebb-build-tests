@@ -100,3 +100,84 @@ def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
                 },
             }
         )
+
+
+def test_rest_contract_registry_covers_release_families() -> None:
+    module = load_rest_api_smoke_module()
+
+    families = {route["family"] for route in module.REST_CONTRACT_ROUTES}
+
+    assert families == {
+        "app",
+        "status",
+        "categories",
+        "transfers",
+        "shared",
+        "uploads",
+        "servers",
+        "kad",
+        "searches",
+        "logs",
+    }
+    assert any(route["name"] == "app_shutdown" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
+
+
+def test_rest_stress_config_rejects_invalid_values() -> None:
+    module = load_rest_api_smoke_module()
+
+    with pytest.raises(ValueError, match="duration"):
+        module.validate_rest_stress_config(
+            profile="smoke",
+            duration_seconds=0,
+            concurrency=1,
+            max_failures=0,
+            request_timeout_seconds=1,
+        )
+    with pytest.raises(ValueError, match="concurrency"):
+        module.validate_rest_stress_config(
+            profile="smoke",
+            duration_seconds=1,
+            concurrency=0,
+            max_failures=0,
+            request_timeout_seconds=1,
+        )
+
+
+def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.summarize_rest_stress_results(
+        [
+            {"path": "/ok", "status": 200, "ok": True, "duration_ms": 1.0},
+            {"path": "/missing", "status": 404, "ok": True, "duration_ms": 4.0},
+            {"path": "/boom", "status": "exception", "ok": False, "duration_ms": 9.0, "error": "timeout"},
+        ],
+        profile="smoke",
+        duration_seconds=30.0,
+        concurrency=4,
+        max_failures=1,
+    )
+
+    assert summary["ok"] is True
+    assert summary["requests_completed"] == 3
+    assert summary["status_counts"] == {"200": 1, "404": 1, "exception": 1}
+    assert summary["error_counts"] == {"timeout": 1}
+    assert summary["latency_ms"]["max"] == 9.0
+    assert len(summary["failures_sample"]) == 1
+
+
+def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    observed_paths: list[tuple[str, str]] = []
+
+    def fake_http_request(_base_url, path, *, method="GET", **_kwargs):
+        observed_paths.append((method, path))
+        return {"status": 200, "content_type": "application/json", "json": {"ok": True}, "body_text": "{}"}
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
+
+    assert summary["ok"] is True
+    assert ("POST", "/api/v1/app/shutdown") not in observed_paths
+    assert any(route["name"] == "app_shutdown" and route["skipped"] for route in summary["routes"])

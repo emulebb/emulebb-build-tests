@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -23,6 +24,10 @@ class CommunityCoreCoverageConfig:
     configuration: str
     platform: str
     preferred_coverage_root: Path | None = None
+    include_live_rest_e2e: bool = False
+    rest_coverage_profile: str = "contract"
+    rest_stress_profile: str = "off"
+    rest_app_scope: str = "main-only"
 
 
 def get_latest_coverage_summary_path(test_repo_root: Path) -> Path:
@@ -88,6 +93,10 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
         return live_diff_result
 
     live_diff_summary_path = config.test_repo_root / "reports" / "live-diff-summary.json"
+    live_rest_e2e = None
+    if config.include_live_rest_e2e:
+        live_rest_e2e = run_live_rest_e2e_for_community_summary(config, run_report_dir)
+
     combined_summary_path = run_report_dir / "community-core-coverage-summary.json"
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -99,9 +108,12 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
         "main_coverage_summary": str(main_coverage_summary_path),
         "community_coverage_summary": str(community_coverage_summary_path),
         "live_diff_summary": str(live_diff_summary_path),
+        "live_rest_e2e": live_rest_e2e,
     }
     combined_summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     print(f"Community core coverage summary: {combined_summary_path}")
+    if isinstance(live_rest_e2e, dict) and live_rest_e2e.get("return_code") not in (None, 0):
+        return int(live_rest_e2e["return_code"])
     return 0
 
 
@@ -114,6 +126,10 @@ def build_config(
     configuration: str,
     platform: str,
     preferred_coverage_root: Path | None,
+    include_live_rest_e2e: bool = False,
+    rest_coverage_profile: str = "contract",
+    rest_stress_profile: str = "off",
+    rest_app_scope: str = "main-only",
 ) -> CommunityCoreCoverageConfig:
     """Builds a resolved community-core coverage config from CLI inputs."""
 
@@ -148,7 +164,48 @@ def build_config(
         configuration=configuration,
         platform=platform,
         preferred_coverage_root=preferred_coverage_root.resolve() if preferred_coverage_root is not None else None,
+        include_live_rest_e2e=include_live_rest_e2e,
+        rest_coverage_profile=rest_coverage_profile,
+        rest_stress_profile=rest_stress_profile,
+        rest_app_scope=rest_app_scope,
     )
+
+
+def run_live_rest_e2e_for_community_summary(
+    config: CommunityCoreCoverageConfig,
+    run_report_dir: Path,
+) -> dict[str, object]:
+    """Runs optional main-scoped REST live E2E and returns summary metadata."""
+
+    if config.rest_app_scope != "main-only":
+        raise ValueError("Community REST E2E currently supports only main-only app scope.")
+    artifacts_dir = run_report_dir / "live-rest-e2e"
+    command = [
+        sys.executable,
+        str(config.test_repo_root / "scripts" / "rest-api-smoke.py"),
+        "--workspace-root",
+        str(config.workspace_root),
+        "--app-root",
+        str(config.main_app_root),
+        "--configuration",
+        config.configuration,
+        "--artifacts-dir",
+        str(artifacts_dir),
+        "--rest-coverage-profile",
+        config.rest_coverage_profile,
+        "--rest-stress-profile",
+        config.rest_stress_profile,
+    ]
+    completed = subprocess.run(command, check=False)
+    return {
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "return_code": completed.returncode,
+        "summary_path": str(artifacts_dir),
+        "app_scope": config.rest_app_scope,
+        "profile": config.rest_coverage_profile,
+        "stress_profile": config.rest_stress_profile,
+        "command": command,
+    }
 
 
 def invoke_script(argv: list[str]) -> int:
@@ -164,6 +221,10 @@ def invoke_script(argv: list[str]) -> int:
     parser.add_argument("--configuration", choices=("Debug", "Release"), default="Debug")
     parser.add_argument("--platform", choices=("x64",), default="x64")
     parser.add_argument("--preferred-coverage-root", type=Path)
+    parser.add_argument("--include-live-rest-e2e", action="store_true")
+    parser.add_argument("--rest-coverage-profile", choices=("smoke", "contract", "contract-stress"), default="contract")
+    parser.add_argument("--rest-stress-profile", choices=("off", "smoke", "soak"), default="off")
+    parser.add_argument("--rest-app-scope", choices=("main-only",), default="main-only")
     args = parser.parse_args(argv)
     return run_community_core_coverage(
         build_config(
@@ -174,6 +235,10 @@ def invoke_script(argv: list[str]) -> int:
             configuration=args.configuration,
             platform=args.platform,
             preferred_coverage_root=args.preferred_coverage_root,
+            include_live_rest_e2e=args.include_live_rest_e2e,
+            rest_coverage_profile=args.rest_coverage_profile,
+            rest_stress_profile=args.rest_stress_profile,
+            rest_app_scope=args.rest_app_scope,
         )
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
 import json
 import socket
@@ -74,6 +75,65 @@ REST_PREFERENCE_KEYS = {
     "networkKademlia",
     "networkEd2k",
 }
+REST_COVERAGE_PROFILES = ("smoke", "contract", "contract-stress")
+REST_STRESS_PROFILES = ("off", "smoke", "soak")
+REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
+    {"name": "app", "family": "app", "method": "GET", "path": "/api/v1/app", "safe": True},
+    {"name": "app_preferences_get", "family": "app", "method": "GET", "path": "/api/v1/app/preferences", "safe": True},
+    {"name": "app_preferences_patch", "family": "app", "method": "PATCH", "path": "/api/v1/app/preferences", "safe": True},
+    {"name": "app_shutdown", "family": "app", "method": "POST", "path": "/api/v1/app/shutdown", "safe": False},
+    {"name": "status", "family": "status", "method": "GET", "path": "/api/v1/status", "safe": True},
+    {"name": "snapshot", "family": "status", "method": "GET", "path": "/api/v1/snapshot?limit=7", "safe": True},
+    {"name": "categories", "family": "categories", "method": "GET", "path": "/api/v1/categories", "safe": True},
+    {"name": "transfers_list", "family": "transfers", "method": "GET", "path": "/api/v1/transfers", "safe": True},
+    {"name": "transfers_add_link", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
+    {"name": "transfers_add_links", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
+    {"name": "transfers_get", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "transfers_patch_action", "family": "transfers", "method": "PATCH", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "transfers_delete", "family": "transfers", "method": "DELETE", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "transfers_sources", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources", "safe": True},
+    {"name": "transfers_source_browse", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/browse", "safe": True},
+    {"name": "shared_files_list", "family": "shared", "method": "GET", "path": "/api/v1/shared-files", "safe": True},
+    {"name": "shared_files_add", "family": "shared", "method": "POST", "path": "/api/v1/shared-files", "safe": True},
+    {"name": "shared_files_get", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "shared_files_patch", "family": "shared", "method": "PATCH", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "shared_files_delete_body", "family": "shared", "method": "DELETE", "path": "/api/v1/shared-files", "safe": True},
+    {"name": "shared_files_delete_route", "family": "shared", "method": "DELETE", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "uploads", "family": "uploads", "method": "GET", "path": "/api/v1/uploads", "safe": True},
+    {"name": "upload_queue", "family": "uploads", "method": "GET", "path": "/api/v1/upload-queue", "safe": True},
+    {"name": "uploads_remove", "family": "uploads", "method": "DELETE", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "uploads_release_slot", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/release-slot", "safe": True},
+    {"name": "servers_list", "family": "servers", "method": "GET", "path": "/api/v1/servers", "safe": True},
+    {"name": "servers_add", "family": "servers", "method": "POST", "path": "/api/v1/servers", "safe": True},
+    {"name": "servers_patch", "family": "servers", "method": "PATCH", "path": "/api/v1/servers/current:1", "safe": True},
+    {"name": "servers_delete", "family": "servers", "method": "DELETE", "path": "/api/v1/servers/192.0.2.254:4669", "safe": True},
+    {"name": "kad_status", "family": "kad", "method": "GET", "path": "/api/v1/kad", "safe": True},
+    {"name": "kad_patch", "family": "kad", "method": "PATCH", "path": "/api/v1/kad", "safe": True},
+    {"name": "searches_start", "family": "searches", "method": "POST", "path": "/api/v1/searches", "safe": True},
+    {"name": "searches_get", "family": "searches", "method": "GET", "path": "/api/v1/searches/123", "safe": True},
+    {"name": "searches_delete", "family": "searches", "method": "DELETE", "path": "/api/v1/searches/123", "safe": True},
+    {"name": "logs", "family": "logs", "method": "GET", "path": "/api/v1/logs?limit=9", "safe": True},
+)
+REST_STRESS_READ_PATHS = (
+    "/api/v1/app",
+    "/api/v1/status",
+    "/api/v1/snapshot?limit=10",
+    "/api/v1/categories",
+    "/api/v1/transfers",
+    "/api/v1/shared-files",
+    "/api/v1/uploads",
+    "/api/v1/upload-queue",
+    "/api/v1/servers",
+    "/api/v1/kad",
+    "/api/v1/logs?limit=20",
+)
+REST_INTENTIONALLY_UNSUPPORTED = (
+    "category_crud",
+    "shared_file_rename",
+    "completed_transfer_rename",
+    "custom_save_path",
+    "broad_preferences",
+)
 
 
 class LiveNetworkUnavailableError(RuntimeError):
@@ -340,6 +400,282 @@ def compact_http_result(result: dict[str, object]) -> dict[str, object]:
     elif isinstance(result.get("body_text"), str):
         compact["body_text"] = result["body_text"]
     return compact
+
+
+def validate_rest_stress_config(
+    *,
+    profile: str,
+    duration_seconds: float,
+    concurrency: int,
+    max_failures: int,
+    request_timeout_seconds: float,
+) -> None:
+    """Validates REST stress knobs before the live app is launched."""
+
+    if profile not in REST_STRESS_PROFILES:
+        raise ValueError(f"Unsupported REST stress profile: {profile}")
+    if duration_seconds <= 0:
+        raise ValueError("REST stress duration must be greater than zero.")
+    if concurrency <= 0:
+        raise ValueError("REST stress concurrency must be greater than zero.")
+    if max_failures < 0:
+        raise ValueError("REST stress max failures must be zero or greater.")
+    if request_timeout_seconds <= 0:
+        raise ValueError("REST stress request timeout must be greater than zero.")
+
+
+def percentile(values: list[float], percentile_value: float) -> float:
+    """Returns a nearest-rank percentile from an already collected sample."""
+
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, round((percentile_value / 100.0) * (len(ordered) - 1))))
+    return round(ordered[index], 3)
+
+
+def summarize_rest_stress_results(
+    rows: list[dict[str, object]],
+    *,
+    profile: str,
+    duration_seconds: float,
+    concurrency: int,
+    max_failures: int,
+) -> dict[str, object]:
+    """Builds a compact deterministic summary for one REST stress run."""
+
+    status_counts: dict[str, int] = {}
+    error_counts: dict[str, int] = {}
+    durations = []
+    failures = []
+    for row in rows:
+        status = str(row.get("status", "exception"))
+        status_counts[status] = status_counts.get(status, 0) + 1
+        duration_ms = row.get("duration_ms")
+        if isinstance(duration_ms, int | float):
+            durations.append(float(duration_ms))
+        if not row.get("ok"):
+            error_key = str(row.get("error") or status)
+            error_counts[error_key] = error_counts.get(error_key, 0) + 1
+            if len(failures) < 10:
+                failures.append(row)
+    failure_count = len([row for row in rows if not row.get("ok")])
+    return {
+        "profile": profile,
+        "duration_seconds": duration_seconds,
+        "concurrency": concurrency,
+        "max_failures": max_failures,
+        "requests_started": len(rows),
+        "requests_completed": len(rows),
+        "failure_count": failure_count,
+        "ok": failure_count <= max_failures,
+        "status_counts": status_counts,
+        "error_counts": error_counts,
+        "latency_ms": {
+            "min": round(min(durations), 3) if durations else 0.0,
+            "p50": percentile(durations, 50.0),
+            "p95": percentile(durations, 95.0),
+            "max": round(max(durations), 3) if durations else 0.0,
+        },
+        "failures_sample": failures,
+    }
+
+
+def build_contract_coverage_summary(routes: list[dict[str, object]], profile: str) -> dict[str, object]:
+    """Summarizes exercised REST route coverage by contract family."""
+
+    coverage_by_family: dict[str, dict[str, int]] = {}
+    for route in routes:
+        family = str(route["family"])
+        family_summary = coverage_by_family.setdefault(family, {"total": 0, "exercised": 0, "skipped": 0, "failed": 0})
+        family_summary["total"] += 1
+        if route.get("skipped"):
+            family_summary["skipped"] += 1
+        elif route.get("ok"):
+            family_summary["exercised"] += 1
+        else:
+            family_summary["failed"] += 1
+    failed_routes = [route["name"] for route in routes if not route.get("ok") and not route.get("skipped")]
+    return {
+        "profile": profile,
+        "route_count": len(routes),
+        "routes": routes,
+        "coverage_by_family": coverage_by_family,
+        "intentionally_unsupported": list(REST_INTENTIONALLY_UNSUPPORTED),
+        "failed_routes": failed_routes,
+        "ok": not failed_routes,
+    }
+
+
+def exercise_rest_contract_completeness(base_url: str, api_key: str, profile: str) -> dict[str, object]:
+    """Exercises and reports the safe broadband REST contract surface."""
+
+    routes: list[dict[str, object]] = []
+    for route in REST_CONTRACT_ROUTES:
+        row = {
+            "name": route["name"],
+            "family": route["family"],
+            "method": route["method"],
+            "path": route["path"],
+            "safe": route["safe"],
+            "skipped": False,
+            "ok": False,
+        }
+        if route["safe"] is False:
+            row.update({"skipped": True, "ok": True, "reason": "unsafe during smoke run"})
+            routes.append(row)
+            continue
+        start = time.monotonic()
+        try:
+            result = http_request(
+                base_url,
+                str(route["path"]),
+                method=str(route["method"]),
+                api_key=api_key,
+                json_body=get_contract_route_body(str(route["name"])),
+            )
+            status = int(result["status"])
+            row.update(
+                {
+                    "status": status,
+                    "ok": 200 <= status < 500,
+                    "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
+                }
+            )
+        except Exception as exc:
+            row.update(
+                {
+                    "status": "exception",
+                    "ok": False,
+                    "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
+                    "error": str(exc),
+                }
+            )
+        routes.append(row)
+    return build_contract_coverage_summary(routes, profile)
+
+
+def get_contract_route_body(route_name: str) -> dict[str, object] | None:
+    """Returns the safe payload used to exercise one REST contract route."""
+
+    if route_name == "app_preferences_patch":
+        return {"safeServerConnect": True}
+    if route_name == "transfers_add_link":
+        return {"link": "not-an-ed2k-link"}
+    if route_name == "transfers_add_links":
+        return {"links": ["not-an-ed2k-link"]}
+    if route_name == "transfers_patch_action":
+        return {"action": "pause"}
+    if route_name == "transfers_delete":
+        return {"delete_files": False}
+    if route_name == "transfers_source_browse":
+        return {"userHash": REST_SURFACE_MISSING_HASH}
+    if route_name == "shared_files_add":
+        return {}
+    if route_name == "shared_files_patch":
+        return {"comment": "rest contract", "rating": 4}
+    if route_name == "shared_files_delete_body":
+        return {}
+    if route_name in {"uploads_remove", "uploads_release_slot"}:
+        return {}
+    if route_name == "servers_add":
+        return dict(REST_SURFACE_TEST_SERVER)
+    if route_name == "servers_patch":
+        return {"action": "disconnect"}
+    if route_name == "servers_delete":
+        return {}
+    if route_name == "kad_patch":
+        return {"action": "recheck_firewall"}
+    if route_name == "searches_start":
+        return {"query": "", "method": "automatic", "type": "any"}
+    if route_name == "searches_delete":
+        return {}
+    return None
+
+
+def exercise_rest_stress(
+    base_url: str,
+    api_key: str,
+    *,
+    profile: str,
+    duration_seconds: float,
+    concurrency: int,
+    max_failures: int,
+    request_timeout_seconds: float,
+) -> dict[str, object]:
+    """Runs a bounded read-heavy REST stress pass against the isolated app."""
+
+    validate_rest_stress_config(
+        profile=profile,
+        duration_seconds=duration_seconds,
+        concurrency=concurrency,
+        max_failures=max_failures,
+        request_timeout_seconds=request_timeout_seconds,
+    )
+    if profile == "off":
+        return {
+            "profile": profile,
+            "enabled": False,
+            "ok": True,
+            "requests_started": 0,
+            "requests_completed": 0,
+        }
+
+    deadline = time.monotonic() + duration_seconds
+    paths = list(REST_STRESS_READ_PATHS)
+    rows: list[dict[str, object]] = []
+    next_index = 0
+
+    def run_one(index: int) -> dict[str, object]:
+        path = paths[index % len(paths)]
+        start = time.monotonic()
+        try:
+            result = http_request(
+                base_url,
+                path,
+                api_key=api_key,
+                request_timeout_seconds=request_timeout_seconds,
+            )
+            status = int(result["status"])
+            return {
+                "path": path,
+                "status": status,
+                "ok": 200 <= status < 500,
+                "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
+            }
+        except Exception as exc:
+            return {
+                "path": path,
+                "status": "exception",
+                "ok": False,
+                "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
+                "error": str(exc),
+            }
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = {}
+        while time.monotonic() < deadline and len(futures) < concurrency:
+            futures[executor.submit(run_one, next_index)] = next_index
+            next_index += 1
+        while futures:
+            for future in as_completed(list(futures)):
+                futures.pop(future)
+                rows.append(future.result())
+                if time.monotonic() < deadline:
+                    futures[executor.submit(run_one, next_index)] = next_index
+                    next_index += 1
+                break
+
+    summary = summarize_rest_stress_results(
+        rows,
+        profile=profile,
+        duration_seconds=duration_seconds,
+        concurrency=concurrency,
+        max_failures=max_failures,
+    )
+    if not summary["ok"]:
+        raise AssertionError(f"REST stress failures exceeded budget: {summary}")
+    return summary
 
 
 def extract_log_messages(log_entries: list[object]) -> list[str]:
@@ -1332,12 +1668,31 @@ def main() -> int:
     parser.add_argument("--server-search-count", type=int, default=0)
     parser.add_argument("--kad-search-count", type=int, default=0)
     parser.add_argument("--search-method-override", choices=["automatic", "server", "global", "kad"])
+    parser.add_argument("--rest-coverage-profile", choices=REST_COVERAGE_PROFILES, default="contract")
+    parser.add_argument("--skip-rest-contract-completeness", action="store_true")
+    parser.add_argument("--rest-stress-profile", choices=REST_STRESS_PROFILES, default="off")
+    parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
+    parser.add_argument("--rest-stress-concurrency", type=int, default=4)
+    parser.add_argument("--rest-stress-max-failures", type=int, default=1)
+    parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
     args = parser.parse_args()
     if args.server_search_count < 0 or args.kad_search_count < 0:
         raise ValueError("Search counts must be zero or greater.")
+    effective_stress_profile = (
+        "smoke"
+        if args.rest_coverage_profile == "contract-stress" and args.rest_stress_profile == "off"
+        else args.rest_stress_profile
+    )
+    validate_rest_stress_config(
+        profile=effective_stress_profile,
+        duration_seconds=args.rest_stress_duration_seconds,
+        concurrency=args.rest_stress_concurrency,
+        max_failures=args.rest_stress_max_failures,
+        request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+    )
 
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -1402,6 +1757,11 @@ def main() -> int:
             "server_search_count": args.server_search_count,
             "kad_search_count": args.kad_search_count,
             "search_method_override": args.search_method_override,
+            "rest_coverage_profile": args.rest_coverage_profile,
+            "rest_contract_completeness_enabled": not args.skip_rest_contract_completeness,
+            "rest_stress_profile": effective_stress_profile,
+            "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
+            "rest_stress_concurrency": args.rest_stress_concurrency,
             "timeouts": {
                 "rest_ready_seconds": args.rest_ready_timeout_seconds,
                 "server_activity_seconds": args.server_activity_timeout_seconds,
@@ -1409,6 +1769,7 @@ def main() -> int:
                 "network_ready_seconds": args.network_ready_timeout_seconds,
                 "search_observation_seconds": args.search_observation_timeout_seconds,
                 "seed_download_seconds": args.seed_download_timeout_seconds,
+                "rest_stress_request_seconds": args.rest_stress_request_timeout_seconds,
             },
         },
         "checks": {},
@@ -1467,6 +1828,28 @@ def main() -> int:
 
         current_phase = set_phase(report, "rest_surface")
         report["checks"]["rest_surface"] = exercise_rest_surface_smoke(base_url, args.api_key)
+
+        if args.rest_coverage_profile != "smoke" and not args.skip_rest_contract_completeness:
+            current_phase = set_phase(report, "rest_contract")
+            rest_contract = exercise_rest_contract_completeness(
+                base_url,
+                args.api_key,
+                args.rest_coverage_profile,
+            )
+            assert rest_contract["ok"], rest_contract
+            report["checks"]["rest_contract"] = rest_contract
+
+        if effective_stress_profile != "off":
+            current_phase = set_phase(report, "rest_stress")
+            report["checks"]["rest_stress"] = exercise_rest_stress(
+                base_url,
+                args.api_key,
+                profile=effective_stress_profile,
+                duration_seconds=args.rest_stress_duration_seconds,
+                concurrency=args.rest_stress_concurrency,
+                max_failures=args.rest_stress_max_failures,
+                request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+            )
 
         current_phase = set_phase(report, "servers_list")
         servers = http_request(base_url, "/api/v1/servers", api_key=args.api_key)
