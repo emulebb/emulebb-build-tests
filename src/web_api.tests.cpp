@@ -320,8 +320,8 @@ TEST_CASE("Web API accepts both delete-file aliases and rejects missing hash arr
 TEST_CASE("Web API recognizes REST request targets without disturbing legacy HTML paths")
 {
 	CHECK(WebServerJsonSeams::IsApiRequestTarget("/api/v1"));
-	CHECK(WebServerJsonSeams::IsApiRequestTarget("/api/v1/app/version"));
-	CHECK(WebServerJsonSeams::IsApiRequestTarget("/API/V1/log?limit=2"));
+	CHECK(WebServerJsonSeams::IsApiRequestTarget("/api/v1/app"));
+	CHECK(WebServerJsonSeams::IsApiRequestTarget("/API/V1/logs?limit=2"));
 	CHECK_FALSE(WebServerJsonSeams::IsApiRequestTarget("/"));
 	CHECK_FALSE(WebServerJsonSeams::IsApiRequestTarget("/serverlist"));
 }
@@ -332,7 +332,7 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	std::string errorCode;
 	std::string errorMessage;
 
-	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/app/version", "", route, errorCode, errorMessage));
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/app", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "app/version");
 	CHECK(route.params.is_object());
 
@@ -340,10 +340,12 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK_EQ(route.strCommand, "transfers/list");
 	CHECK_EQ(route.params["filter"].get<std::string>(), "Downloading");
 	CHECK_EQ(route.params["category"].get<uint64_t>(), 3u);
+	CHECK(route.params["_items_envelope"].get<bool>());
 
-	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/log?limit=999999999999", "", route, errorCode, errorMessage));
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=999999999999", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "log/get");
 	CHECK_EQ(route.params["limit"].get<int>(), INT_MAX);
+	CHECK(route.params["_items_envelope"].get<bool>());
 }
 
 TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes")
@@ -353,8 +355,8 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	std::string errorMessage;
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
-		"POST",
-		"/api/v1/transfers/0123456789abcdef0123456789abcdef/priority",
+		"PATCH",
+		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
 		R"({"priority":"high"})",
 		route,
 		errorCode,
@@ -365,7 +367,7 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"GET",
-		"/api/v1/search/results?search_id=123",
+		"/api/v1/searches/123",
 		"",
 		route,
 		errorCode,
@@ -389,67 +391,85 @@ TEST_CASE("Web API maps every current REST route family to a command")
 		CHECK_EQ(route.strCommand, pszCommand);
 	};
 
-	assertRoute("GET", "/api/v1/app/version", "", "app/version");
+	assertRoute("GET", "/api/v1/app", "", "app/version");
 	assertRoute("GET", "/api/v1/app/preferences", "", "app/preferences/get");
-	assertRoute("POST", "/api/v1/app/preferences", R"({"safeServerConnect":true})", "app/preferences/set");
+	assertRoute("PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":true})", "app/preferences/set");
 	CHECK(route.params.contains("prefs"));
 	CHECK(route.params["prefs"].contains("safeServerConnect"));
 	assertRoute("POST", "/api/v1/app/shutdown", R"({})", "app/shutdown");
-	assertRoute("GET", "/api/v1/stats/global", "", "stats/global");
+	assertRoute("GET", "/api/v1/status", "", "status/get");
+	assertRoute("GET", "/api/v1/snapshot?limit=7", "", "snapshot/get");
+	CHECK_EQ(route.params["limit"].get<int>(), 7);
 
 	assertRoute("GET", "/api/v1/transfers?filter=paused&category=2", "", "transfers/list");
 	CHECK_EQ(route.params["filter"].get<std::string>(), "paused");
 	CHECK_EQ(route.params["category"].get<uint64_t>(), 2u);
-	assertRoute("POST", "/api/v1/transfers/add", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/"})", "transfers/add");
-	assertRoute("POST", "/api/v1/transfers/pause", R"({"hashes":[]})", "transfers/pause");
-	assertRoute("POST", "/api/v1/transfers/resume", R"({"hashes":[]})", "transfers/resume");
-	assertRoute("POST", "/api/v1/transfers/stop", R"({"hashes":[]})", "transfers/stop");
-	assertRoute("POST", "/api/v1/transfers/delete", R"({"hashes":[],"delete_files":true})", "transfers/delete");
+	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/"})", "transfers/add");
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"pause"})", "transfers/pause");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"resume"})", "transfers/resume");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"stop"})", "transfers/stop");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	assertRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"delete_files":true})", "transfers/delete");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", "transfers/get");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources", "", "transfers/sources");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/browse", R"({"userHash":"fedcba9876543210fedcba9876543210"})", "transfers/source_browse");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
-	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/recheck", R"({})", "transfers/recheck");
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"recheck"})", "transfers/recheck");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
-	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/priority", R"({"priority":"high"})", "transfers/set_priority");
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"priority":"high"})", "transfers/set_priority");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
-	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/category", R"({"category":0})", "transfers/set_category");
-	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
-
-	assertRoute("GET", "/api/v1/uploads/list", "", "uploads/list");
-	assertRoute("GET", "/api/v1/uploads/queue", "", "uploads/queue");
-	assertRoute("POST", "/api/v1/uploads/remove", R"({"ip":"1.2.3.4","port":4662})", "uploads/remove");
-	assertRoute("POST", "/api/v1/uploads/release_slot", R"({"userHash":"0123456789abcdef0123456789abcdef"})", "uploads/release_slot");
-
-	assertRoute("GET", "/api/v1/servers/list", "", "servers/list");
-	assertRoute("GET", "/api/v1/servers/status", "", "servers/status");
-	assertRoute("POST", "/api/v1/servers/connect", R"({"addr":"1.2.3.4","port":4661})", "servers/connect");
-	assertRoute("POST", "/api/v1/servers/disconnect", R"({})", "servers/disconnect");
-	assertRoute("POST", "/api/v1/servers/add", R"({"addr":"1.2.3.4","port":4661,"name":"test"})", "servers/add");
-	assertRoute("POST", "/api/v1/servers/remove", R"({"addr":"1.2.3.4","port":4661})", "servers/remove");
-
-	assertRoute("GET", "/api/v1/kad/status", "", "kad/status");
-	assertRoute("POST", "/api/v1/kad/connect", R"({})", "kad/connect");
-	assertRoute("POST", "/api/v1/kad/disconnect", R"({})", "kad/disconnect");
-	assertRoute("POST", "/api/v1/kad/recheck_firewall", R"({})", "kad/recheck_firewall");
-
-	assertRoute("GET", "/api/v1/shared/list", "", "shared/list");
-	assertRoute("POST", "/api/v1/shared/add", R"({"path":"C:\\share\\file.txt"})", "shared/add");
-	assertRoute("POST", "/api/v1/shared/remove", R"({"path":"C:\\share\\file.txt"})", "shared/remove");
-	assertRoute("GET", "/api/v1/shared/0123456789abcdef0123456789abcdef", "", "shared/get");
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"category":0})", "transfers/set_category");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 
-	assertRoute("POST", "/api/v1/search/start", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
-	assertRoute("GET", "/api/v1/search/results?search_id=123", "", "search/results");
+	assertRoute("GET", "/api/v1/uploads", "", "uploads/list");
+	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("GET", "/api/v1/upload-queue", "", "uploads/queue");
+	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("DELETE", "/api/v1/uploads/0123456789abcdef0123456789abcdef", R"({})", "uploads/remove");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/release-slot", R"({})", "uploads/release_slot");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+
+	assertRoute("GET", "/api/v1/servers", "", "servers/list");
+	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("POST", "/api/v1/servers", R"({"addr":"1.2.3.4","port":4661,"name":"test"})", "servers/add");
+	assertRoute("PATCH", "/api/v1/servers/1.2.3.4:4661", R"({"action":"connect"})", "servers/connect");
+	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
+	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
+	assertRoute("PATCH", "/api/v1/servers/current:1", R"({"action":"disconnect"})", "servers/disconnect");
+	assertRoute("DELETE", "/api/v1/servers/1.2.3.4:4661", R"({})", "servers/remove");
+	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
+	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
+
+	assertRoute("GET", "/api/v1/kad", "", "kad/status");
+	assertRoute("PATCH", "/api/v1/kad", R"({"action":"connect"})", "kad/connect");
+	assertRoute("PATCH", "/api/v1/kad", R"({"action":"disconnect"})", "kad/disconnect");
+	assertRoute("PATCH", "/api/v1/kad", R"({"action":"recheck_firewall"})", "kad/recheck_firewall");
+
+	assertRoute("GET", "/api/v1/shared-files", "", "shared/list");
+	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("POST", "/api/v1/shared-files", R"({"path":"C:\\share\\file.txt"})", "shared/add");
+	assertRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", "", "shared/get");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({})", "shared/remove");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+
+	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
+	assertRoute("GET", "/api/v1/searches/123", "", "search/results");
 	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
-	assertRoute("POST", "/api/v1/search/stop", R"({"search_id":"123"})", "search/stop");
-	assertRoute("GET", "/api/v1/log?limit=9", "", "log/get");
+	assertRoute("DELETE", "/api/v1/searches/123", R"({})", "search/stop");
+	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	assertRoute("GET", "/api/v1/logs?limit=9", "", "log/get");
 	CHECK_EQ(route.params["limit"].get<int>(), 9);
-	assertRoute("GET", "/api/v1/log/get?limit=11", "", "log/get");
-	CHECK_EQ(route.params["limit"].get<int>(), 11);
+	CHECK(route.params["_items_envelope"].get<bool>());
 }
 
 TEST_CASE("Web API carries server and search payloads into live-capable routes")
@@ -459,9 +479,9 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 	std::string errorMessage;
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
-		"POST",
-		"/api/v1/servers/connect",
-		R"({"addr":"1.2.3.4","port":4661})",
+		"PATCH",
+		"/api/v1/servers/1.2.3.4:4661",
+		R"({"action":"connect"})",
 		route,
 		errorCode,
 		errorMessage));
@@ -470,9 +490,9 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 	CHECK_EQ(route.params["port"].get<uint64_t>(), 4661u);
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
-		"POST",
-		"/api/v1/kad/connect",
-		R"({})",
+		"PATCH",
+		"/api/v1/kad",
+		R"({"action":"connect"})",
 		route,
 		errorCode,
 		errorMessage));
@@ -481,7 +501,7 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"POST",
-		"/api/v1/search/start",
+		"/api/v1/searches",
 		R"({"query":"ubuntu","method":"automatic","type":"program"})",
 		route,
 		errorCode,
@@ -492,9 +512,9 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 	CHECK_EQ(route.params["type"].get<std::string>(), "program");
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
-		"POST",
-		"/api/v1/search/stop",
-		R"({"search_id":"123"})",
+		"DELETE",
+		"/api/v1/searches/123",
+		R"({})",
 		route,
 		errorCode,
 		errorMessage));
@@ -508,13 +528,13 @@ TEST_CASE("Web API rejects malformed JSON and non-object request bodies")
 	std::string errorCode;
 	std::string errorMessage;
 
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/search/start", "{", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", "{", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK(errorMessage.rfind("invalid JSON body:", 0) == 0);
 
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/search/start", R"([])", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"([])", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "JSON body must be an object");
 }
@@ -525,15 +545,15 @@ TEST_CASE("Web API rejects unknown routes and unsupported HTTP methods")
 	std::string errorCode;
 	std::string errorMessage;
 
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/uploads", "", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/app/version", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "NOT_FOUND");
 	CHECK_EQ(errorMessage, "API route not found");
 
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/app/version", "", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PUT", "/api/v1/app", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "only GET and POST are supported");
+	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
 }
 
 TEST_CASE("Web API maps stable error codes onto HTTP status codes")

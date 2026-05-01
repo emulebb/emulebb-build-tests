@@ -230,8 +230,11 @@ def require_json_array(result: dict[str, object], expected_status: int) -> list[
     """Asserts one REST response is the expected JSON array payload."""
 
     assert int(result["status"]) == expected_status, compact_http_result(result)
-    assert isinstance(result["json"], list), compact_http_result(result)
-    return list(result["json"])
+    payload = result["json"]
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        return list(payload["items"])
+    assert isinstance(payload, list), compact_http_result(result)
+    return list(payload)
 
 
 def require_error_response(
@@ -283,6 +286,7 @@ def get_app_process_id(app: object) -> int | None:
 def compact_server_status(payload: dict[str, Any]) -> dict[str, Any]:
     """Keeps the server-status timeline compact and stable in artifacts."""
 
+    payload = get_server_status_payload(payload)
     current_server = payload.get("currentServer")
     compact_current = None
     if isinstance(current_server, dict):
@@ -302,6 +306,13 @@ def compact_server_status(payload: dict[str, Any]) -> dict[str, Any]:
         "serverCount": payload.get("serverCount"),
         "currentServer": compact_current,
     }
+
+
+def get_server_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Returns the eD2K server-status object from a status or server payload."""
+
+    nested = payload.get("servers")
+    return nested if isinstance(nested, dict) else payload
 
 
 def compact_kad_status(payload: dict[str, Any]) -> dict[str, Any]:
@@ -387,13 +398,14 @@ def wait_for_upnp_backend_order(base_url: str, api_key: str, timeout_seconds: fl
     """Waits until the live log exposes NAT backend ordering and asserts UPnP is first."""
 
     def resolve():
-        result = http_request(base_url, "/api/v1/log?limit=400", api_key=api_key)
-        if int(result["status"]) != 200 or not isinstance(result["json"], list):
+        result = http_request(base_url, "/api/v1/logs?limit=400", api_key=api_key)
+        if int(result["status"]) != 200:
             return None
-        summary = summarize_nat_backend_order(list(result["json"]))
+        entries = require_json_array(result, 200)
+        summary = summarize_nat_backend_order(entries)
         if not summary["backend_names"]:
             return None
-        return assert_upnp_backend_order(list(result["json"]))
+        return assert_upnp_backend_order(entries)
 
     return wait_for(resolve, timeout=timeout_seconds, interval=0.5, description="UPnP NAT backend order")
 
@@ -415,7 +427,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     invalid_preference = http_request(
         base_url,
         "/api/v1/app/preferences",
-        method="POST",
+        method="PATCH",
         api_key=api_key,
         json_body={"unsupportedPreference": True},
     )
@@ -435,7 +447,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     preference_set = http_request(
         base_url,
         "/api/v1/app/preferences",
-        method="POST",
+        method="PATCH",
         api_key=api_key,
         json_body=safe_preference_update,
     )
@@ -465,64 +477,64 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     transfer_pause = http_request(
         base_url,
-        "/api/v1/transfers/pause",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
         api_key=api_key,
-        json_body={"hashes": [REST_SURFACE_MISSING_HASH]},
+        json_body={"action": "pause"},
     )
     transfer_resume = http_request(
         base_url,
-        "/api/v1/transfers/resume",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
         api_key=api_key,
-        json_body={"hashes": [REST_SURFACE_MISSING_HASH]},
+        json_body={"action": "resume"},
     )
     transfer_stop = http_request(
         base_url,
-        "/api/v1/transfers/stop",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
         api_key=api_key,
-        json_body={"hashes": [REST_SURFACE_MISSING_HASH]},
+        json_body={"action": "stop"},
     )
     transfer_delete_missing = http_request(
         base_url,
-        "/api/v1/transfers/delete",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="DELETE",
         api_key=api_key,
-        json_body={"hashes": [REST_SURFACE_MISSING_HASH], "delete_files": True},
+        json_body={"delete_files": True},
     )
     transfer_delete_bad = http_request(
         base_url,
-        "/api/v1/transfers/delete",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="DELETE",
         api_key=api_key,
-        json_body={},
+        json_body={"delete_files": False},
     )
     transfer_add_bad = http_request(
         base_url,
-        "/api/v1/transfers/add",
+        "/api/v1/transfers",
         method="POST",
         api_key=api_key,
         json_body={"link": "not-an-ed2k-link"},
     )
     transfer_recheck_missing = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/recheck",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
         api_key=api_key,
-        json_body={},
+        json_body={"action": "recheck"},
     )
     transfer_priority_missing = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/priority",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
         api_key=api_key,
         json_body={"priority": "high"},
     )
     transfer_category_missing = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/category",
-        method="POST",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
         api_key=api_key,
         json_body={"category": 0},
     )
@@ -537,12 +549,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "resume_missing_item": require_missing_transfer_bulk_result(transfer_resume),
         "stop_missing_item": require_missing_transfer_bulk_result(transfer_stop),
         "delete_missing_item": require_missing_transfer_bulk_result(transfer_delete_missing),
-        "delete_bad_payload": require_error_response(
-            transfer_delete_bad,
-            400,
-            "INVALID_ARGUMENT",
-            message_contains="hashes must be a string array",
-        ),
+        "delete_without_files": require_missing_transfer_bulk_result(transfer_delete_bad),
         "add_bad_payload": require_error_response(
             transfer_add_bad,
             400,
@@ -554,18 +561,18 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "category_missing": require_error_response(transfer_category_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
     }
 
-    upload_list = http_request(base_url, "/api/v1/uploads/list", api_key=api_key)
-    upload_queue = http_request(base_url, "/api/v1/uploads/queue", api_key=api_key)
+    upload_list = http_request(base_url, "/api/v1/uploads", api_key=api_key)
+    upload_queue = http_request(base_url, "/api/v1/upload-queue", api_key=api_key)
     upload_remove_bad = http_request(
         base_url,
-        "/api/v1/uploads/remove",
-        method="POST",
+        "/api/v1/uploads/unknown",
+        method="DELETE",
         api_key=api_key,
         json_body={},
     )
     upload_release_bad = http_request(
         base_url,
-        "/api/v1/uploads/release_slot",
+        "/api/v1/uploads/unknown/release-slot",
         method="POST",
         api_key=api_key,
         json_body={},
@@ -587,20 +594,20 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         ),
     }
 
-    shared = http_request(base_url, "/api/v1/shared/list", api_key=api_key)
+    shared = http_request(base_url, "/api/v1/shared-files", api_key=api_key)
     shared_rows = require_json_array(shared, 200)
-    missing_shared = http_request(base_url, f"/api/v1/shared/{REST_SURFACE_MISSING_HASH}", api_key=api_key)
+    missing_shared = http_request(base_url, f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", api_key=api_key)
     shared_add_bad = http_request(
         base_url,
-        "/api/v1/shared/add",
+        "/api/v1/shared-files",
         method="POST",
         api_key=api_key,
         json_body={},
     )
     shared_remove_bad = http_request(
         base_url,
-        "/api/v1/shared/remove",
-        method="POST",
+        "/api/v1/shared-files",
+        method="DELETE",
         api_key=api_key,
         json_body={},
     )
@@ -622,10 +629,10 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     }
 
     missing_route = http_request(base_url, "/api/v1/not-a-route", api_key=api_key)
-    invalid_method = http_request(base_url, "/api/v1/app/version", method="POST", api_key=api_key, json_body={})
+    invalid_method = http_request(base_url, "/api/v1/app", method="POST", api_key=api_key, json_body={})
     invalid_json_shape = http_request(
         base_url,
-        "/api/v1/search/start",
+        "/api/v1/searches",
         method="POST",
         api_key=api_key,
         json_body=[],
@@ -649,13 +656,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     server_payload = dict(REST_SURFACE_TEST_SERVER)
     server_add = http_request(
         base_url,
-        "/api/v1/servers/add",
+        "/api/v1/servers",
         method="POST",
         api_key=api_key,
         json_body=server_payload,
     )
     server_add_payload = require_json_object(server_add, 200)
-    servers_after_add = http_request(base_url, "/api/v1/servers/list", api_key=api_key)
+    servers_after_add = http_request(base_url, "/api/v1/servers", api_key=api_key)
     servers_after_add_rows = require_json_array(servers_after_add, 200)
     added_servers = [
         row
@@ -667,13 +674,10 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     assert added_servers, compact_http_result(servers_after_add)
     server_remove = http_request(
         base_url,
-        "/api/v1/servers/remove",
-        method="POST",
+        f"/api/v1/servers/{REST_SURFACE_TEST_SERVER['addr']}:{REST_SURFACE_TEST_SERVER['port']}",
+        method="DELETE",
         api_key=api_key,
-        json_body={
-            "addr": REST_SURFACE_TEST_SERVER["addr"],
-            "port": REST_SURFACE_TEST_SERVER["port"],
-        },
+        json_body={},
     )
     server_remove_payload = require_json_object(server_remove, 200)
     surface["servers_mutation"] = {
@@ -692,10 +696,10 @@ def wait_for_server_activity(base_url: str, api_key: str, timeout_seconds: float
     observations: list[dict[str, Any]] = []
 
     def resolve():
-        result = http_request(base_url, "/api/v1/servers/status", api_key=api_key)
+        result = http_request(base_url, "/api/v1/status", api_key=api_key)
         if int(result["status"]) != 200 or not isinstance(result["json"], dict):
             return None
-        payload = require_json_object(result, 200)
+        payload = get_server_status_payload(require_json_object(result, 200))
         snapshot = compact_server_status(payload)
         snapshot["observed_at"] = round(time.time(), 3)
         observations.append(snapshot)
@@ -723,10 +727,10 @@ def wait_for_server_connected(
     expected_port = None if expected_server is None else int(expected_server.get("port") or 0)
 
     def resolve():
-        result = http_request(base_url, "/api/v1/servers/status", api_key=api_key)
+        result = http_request(base_url, "/api/v1/status", api_key=api_key)
         if int(result["status"]) != 200 or not isinstance(result["json"], dict):
             return None
-        payload = require_json_object(result, 200)
+        payload = get_server_status_payload(require_json_object(result, 200))
         snapshot = compact_server_status(payload)
         snapshot["observed_at"] = round(time.time(), 3)
         observations.append(snapshot)
@@ -763,7 +767,7 @@ def observe_server_connect_attempt(
 
     while time.time() < deadline:
         try:
-            result = http_request(base_url, "/api/v1/servers/status", api_key=api_key)
+            result = http_request(base_url, "/api/v1/status", api_key=api_key)
         except Exception as exc:
             observations.append(
                 {
@@ -787,7 +791,7 @@ def observe_server_connect_attempt(
             time.sleep(2.0)
             continue
 
-        payload = require_json_object(result, 200)
+        payload = get_server_status_payload(require_json_object(result, 200))
         last_result = result
         snapshot = compact_server_status(payload)
         snapshot["observed_at"] = round(time.time(), 3)
@@ -826,7 +830,7 @@ def wait_for_kad_running(base_url: str, api_key: str, timeout_seconds: float) ->
     observations: list[dict[str, Any]] = []
 
     def resolve():
-        result = http_request(base_url, "/api/v1/kad/status", api_key=api_key)
+        result = http_request(base_url, "/api/v1/kad", api_key=api_key)
         if int(result["status"]) != 200 or not isinstance(result["json"], dict):
             return None
         payload = require_json_object(result, 200)
@@ -871,8 +875,8 @@ def wait_for_requested_networks(
     deadline = time.time() + timeout_seconds
 
     while time.time() < deadline:
-        server_result = http_request(base_url, "/api/v1/servers/status", api_key=api_key)
-        kad_result = http_request(base_url, "/api/v1/kad/status", api_key=api_key)
+        server_result = http_request(base_url, "/api/v1/status", api_key=api_key)
+        kad_result = http_request(base_url, "/api/v1/kad", api_key=api_key)
         if int(server_result["status"]) != 200 or int(kad_result["status"]) != 200:
             time.sleep(2.0)
             continue
@@ -880,7 +884,7 @@ def wait_for_requested_networks(
             time.sleep(2.0)
             continue
 
-        server_payload = require_json_object(server_result, 200)
+        server_payload = get_server_status_payload(require_json_object(server_result, 200))
         kad_payload = require_json_object(kad_result, 200)
         last_server_result = server_result
         last_kad_result = kad_result
@@ -986,7 +990,7 @@ def start_live_search(
     for method_name in method_candidates:
         response = http_request(
             base_url,
-            "/api/v1/search/start",
+            "/api/v1/searches",
             method="POST",
             api_key=api_key,
             json_body={
@@ -1053,10 +1057,10 @@ def connect_to_live_server(
         try:
             connect_response = http_request(
                 base_url,
-                "/api/v1/servers/connect",
-                method="POST",
+                f"/api/v1/servers/{candidate['address']}:{candidate['port']}",
+                method="PATCH",
                 api_key=api_key,
-                json_body={"addr": candidate["address"], "port": candidate["port"]},
+                json_body={"action": "connect"},
                 request_timeout_seconds=15.0,
             )
             attempt["connect_response"] = compact_http_result(connect_response)
@@ -1102,7 +1106,7 @@ def wait_for_search_observation(
     observations: list[dict[str, Any]] = []
 
     def resolve():
-        result = http_request(base_url, f"/api/v1/search/results?search_id={search_id}", api_key=api_key)
+        result = http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
         if int(result["status"]) != 200 or not isinstance(result["json"], dict):
             return None
         payload = require_json_object(result, 200)
@@ -1142,10 +1146,10 @@ def stop_live_search(base_url: str, api_key: str, search_id: str) -> dict[str, o
 
     return http_request(
         base_url,
-        "/api/v1/search/stop",
-        method="POST",
+        f"/api/v1/searches/{search_id}",
+        method="DELETE",
         api_key=api_key,
-        json_body={"search_id": search_id},
+        json_body={},
     )
 
 
@@ -1220,7 +1224,7 @@ def wait_for_rest_ready(base_url: str, api_key: str, timeout_seconds: float) -> 
 
     def resolve():
         try:
-            result = http_request(base_url, "/api/v1/app/version", api_key=api_key)
+            result = http_request(base_url, "/api/v1/app", api_key=api_key)
         except OSError:
             return None
         if int(result["status"]) != 200:
@@ -1372,20 +1376,20 @@ def main() -> int:
             )
 
         current_phase = set_phase(report, "auth_checks")
-        no_key = http_request(base_url, "/api/v1/app/version")
+        no_key = http_request(base_url, "/api/v1/app")
         assert no_key["status"] == 401
         assert isinstance(no_key["json"], dict)
         assert no_key["json"]["error"] == "UNAUTHORIZED"
         report["checks"]["missing_key"] = compact_http_result(no_key)
 
-        wrong_key = http_request(base_url, "/api/v1/app/version", api_key="wrong-key")
+        wrong_key = http_request(base_url, "/api/v1/app", api_key="wrong-key")
         assert wrong_key["status"] == 401
         assert isinstance(wrong_key["json"], dict)
         assert wrong_key["json"]["error"] == "UNAUTHORIZED"
         report["checks"]["wrong_key"] = compact_http_result(wrong_key)
 
         current_phase = set_phase(report, "app_version")
-        version = http_request(base_url, "/api/v1/app/version", api_key=args.api_key)
+        version = http_request(base_url, "/api/v1/app", api_key=args.api_key)
         assert version["status"] == 200
         assert isinstance(version["json"], dict)
         assert version["json"]["appName"] == "eMule"
@@ -1393,25 +1397,26 @@ def main() -> int:
         report["checks"]["app_version"] = compact_http_result(version)
 
         current_phase = set_phase(report, "stats_global")
-        stats = http_request(base_url, "/api/v1/stats/global", api_key=args.api_key)
+        stats = http_request(base_url, "/api/v1/status", api_key=args.api_key)
         assert stats["status"] == 200
         assert isinstance(stats["json"], dict)
-        assert "connected" in stats["json"]
+        assert isinstance(stats["json"].get("stats"), dict)
+        assert "connected" in stats["json"]["stats"]
         report["checks"]["stats_global"] = compact_http_result(stats)
 
         current_phase = set_phase(report, "rest_surface")
         report["checks"]["rest_surface"] = exercise_rest_surface_smoke(base_url, args.api_key)
 
         current_phase = set_phase(report, "servers_list")
-        servers = http_request(base_url, "/api/v1/servers/list", api_key=args.api_key)
+        servers = http_request(base_url, "/api/v1/servers", api_key=args.api_key)
         assert servers["status"] == 200
-        assert isinstance(servers["json"], list)
-        assert len(servers["json"]) > 0
-        first_server = servers["json"][0]
+        server_rows = require_json_array(servers, 200)
+        assert len(server_rows) > 0
+        first_server = server_rows[0]
         assert isinstance(first_server, dict)
         assert "address" in first_server and "port" in first_server
         report["checks"]["servers_list"] = {
-            "count": len(servers["json"]),
+            "count": len(server_rows),
             "first_server": {
                 "name": first_server.get("name"),
                 "address": first_server.get("address"),
@@ -1421,7 +1426,7 @@ def main() -> int:
         }
 
         current_phase = set_phase(report, "servers_status_initial")
-        initial_server_status = http_request(base_url, "/api/v1/servers/status", api_key=args.api_key)
+        initial_server_status = http_request(base_url, "/api/v1/status", api_key=args.api_key)
         assert initial_server_status["status"] == 200
         assert isinstance(initial_server_status["json"], dict)
         report["checks"]["servers_status_initial"] = compact_http_result(initial_server_status)
@@ -1430,20 +1435,26 @@ def main() -> int:
         server_connect = connect_to_live_server(
             base_url,
             api_key=args.api_key,
-            server_rows=list(servers["json"]),
+            server_rows=server_rows,
             timeout_seconds=args.network_ready_timeout_seconds,
         )
         report["checks"]["servers_connect"] = server_connect
         report["selected_server_target"] = dict(server_connect["selected_server"])
 
         current_phase = set_phase(report, "kad_status_initial")
-        initial_kad_status = http_request(base_url, "/api/v1/kad/status", api_key=args.api_key)
+        initial_kad_status = http_request(base_url, "/api/v1/kad", api_key=args.api_key)
         assert initial_kad_status["status"] == 200
         assert isinstance(initial_kad_status["json"], dict)
         report["checks"]["kad_status_initial"] = compact_http_result(initial_kad_status)
 
         current_phase = set_phase(report, "kad_connect")
-        kad_connect = http_request(base_url, "/api/v1/kad/connect", method="POST", api_key=args.api_key, json_body={})
+        kad_connect = http_request(
+            base_url,
+            "/api/v1/kad",
+            method="PATCH",
+            api_key=args.api_key,
+            json_body={"action": "connect"},
+        )
         assert kad_connect["status"] == 200
         assert isinstance(kad_connect["json"], dict)
         report["checks"]["kad_connect"] = compact_http_result(kad_connect)
@@ -1453,7 +1464,13 @@ def main() -> int:
         report["checks"]["kad_running"] = kad_running
 
         current_phase = set_phase(report, "kad_recheck_firewall")
-        kad_recheck = http_request(base_url, "/api/v1/kad/recheck_firewall", method="POST", api_key=args.api_key, json_body={})
+        kad_recheck = http_request(
+            base_url,
+            "/api/v1/kad",
+            method="PATCH",
+            api_key=args.api_key,
+            json_body={"action": "recheck_firewall"},
+        )
         assert kad_recheck["status"] == 200
         assert isinstance(kad_recheck["json"], dict)
         report["checks"]["kad_recheck_firewall"] = compact_http_result(kad_recheck)
@@ -1492,20 +1509,31 @@ def main() -> int:
         search_id = None
 
         current_phase = set_phase(report, "log_limit")
-        log_entries = http_request(base_url, "/api/v1/log?limit=1", api_key=args.api_key)
+        log_entries = http_request(base_url, "/api/v1/logs?limit=1", api_key=args.api_key)
         assert log_entries["status"] == 200
-        assert isinstance(log_entries["json"], list)
-        assert len(log_entries["json"]) <= 1
+        assert len(require_json_array(log_entries, 200)) <= 1
         report["checks"]["log_limit"] = compact_http_result(log_entries)
 
         current_phase = set_phase(report, "servers_disconnect")
-        server_disconnect = http_request(base_url, "/api/v1/servers/disconnect", method="POST", api_key=args.api_key, json_body={})
+        server_disconnect = http_request(
+            base_url,
+            "/api/v1/servers/current:1",
+            method="PATCH",
+            api_key=args.api_key,
+            json_body={"action": "disconnect"},
+        )
         assert server_disconnect["status"] == 200
         assert isinstance(server_disconnect["json"], dict)
         report["checks"]["servers_disconnect"] = compact_http_result(server_disconnect)
 
         current_phase = set_phase(report, "kad_disconnect")
-        kad_disconnect = http_request(base_url, "/api/v1/kad/disconnect", method="POST", api_key=args.api_key, json_body={})
+        kad_disconnect = http_request(
+            base_url,
+            "/api/v1/kad",
+            method="PATCH",
+            api_key=args.api_key,
+            json_body={"action": "disconnect"},
+        )
         assert kad_disconnect["status"] == 200
         assert isinstance(kad_disconnect["json"], dict)
         assert "running" in kad_disconnect["json"]

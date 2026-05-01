@@ -51,7 +51,7 @@ def test_transfer_search_uses_file_oriented_iso_filter(monkeypatch) -> None:
     result = module.start_transfer_search("http://127.0.0.1:1", "key", "server", "ubuntu")
 
     assert result["ok"]
-    assert requests[0]["path"] == "/api/v1/search/start"
+    assert requests[0]["path"] == "/api/v1/searches"
     assert requests[0]["json_body"] == {
         "query": "ubuntu",
         "method": "server",

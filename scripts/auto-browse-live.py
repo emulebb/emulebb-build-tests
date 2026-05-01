@@ -220,7 +220,7 @@ def is_safe_download_result(result_row: dict[str, Any]) -> bool:
 def fetch_search_results(base_url: str, api_key: str, search_id: str) -> dict[str, Any]:
     """Fetches one search-results payload and validates the response shape."""
 
-    result = rest_smoke.http_request(base_url, f"/api/v1/search/results?search_id={search_id}", api_key=api_key)
+    result = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
     return require_json_object(result, 200)
 
 
@@ -229,7 +229,7 @@ def start_transfer_search(base_url: str, api_key: str, method: str, query: str) 
 
     response = rest_smoke.http_request(
         base_url,
-        "/api/v1/search/start",
+        "/api/v1/searches",
         method="POST",
         api_key=api_key,
         json_body={
@@ -270,7 +270,7 @@ def wait_for_transfer_search_results(
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, f"/api/v1/search/results?search_id={search_id}", api_key=api_key)
+        result = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
         payload = require_json_object(result, 200)
         rows = payload.get("results")
         assert isinstance(rows, list), compact_http_result(result)
@@ -624,7 +624,7 @@ def wait_for_source_browse_results(
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, f"/api/v1/search/results?search_id={search_id}", api_key=api_key)
+        result = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
         if int(result["status"]) == 404:
             payload = result.get("json")
             if isinstance(payload, dict) and payload.get("error") == "NOT_FOUND":
@@ -727,7 +727,7 @@ def add_transfer_from_search_result(base_url: str, api_key: str, result_row: dic
 
     add_result = rest_smoke.http_request(
         base_url,
-        "/api/v1/transfers/add",
+        "/api/v1/transfers",
         method="POST",
         api_key=api_key,
         json_body={"link": build_ed2k_link(result_row)},
@@ -871,10 +871,9 @@ def wait_for_auto_browse_success(
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, "/api/v1/log?limit=400", api_key=api_key)
+        result = rest_smoke.http_request(base_url, "/api/v1/logs?limit=400", api_key=api_key)
         assert int(result["status"]) == 200, compact_http_result(result)
-        payload = result.get("json")
-        assert isinstance(payload, list), compact_http_result(result)
+        payload = rest_smoke.require_json_array(result, 200)
 
         messages = [
             entry.get("message")
@@ -1088,8 +1087,8 @@ def main() -> int:
         report["checks"]["ready"] = compact_http_result(ready)
 
         record_phase(artifacts_dir, report, "auth")
-        no_key = rest_smoke.http_request(base_url, "/api/v1/app/version")
-        wrong_key = rest_smoke.http_request(base_url, "/api/v1/app/version", api_key="wrong-key")
+        no_key = rest_smoke.http_request(base_url, "/api/v1/app")
+        wrong_key = rest_smoke.http_request(base_url, "/api/v1/app", api_key="wrong-key")
         assert int(no_key["status"]) == 401
         assert int(wrong_key["status"]) == 401
         report["checks"]["auth"] = {
@@ -1098,10 +1097,10 @@ def main() -> int:
         }
 
         record_phase(artifacts_dir, report, "servers_list")
-        servers = rest_smoke.http_request(base_url, "/api/v1/servers/list", api_key=args.api_key)
+        servers = rest_smoke.http_request(base_url, "/api/v1/servers", api_key=args.api_key)
         assert int(servers["status"]) == 200, compact_http_result(servers)
-        server_rows = servers.get("json")
-        assert isinstance(server_rows, list) and server_rows, compact_http_result(servers)
+        server_rows = rest_smoke.require_json_array(servers, 200)
+        assert server_rows, compact_http_result(servers)
         ordered_server_rows = reorder_server_rows(list(server_rows))
         report["checks"]["servers_list"] = {
             "count": len(ordered_server_rows),
