@@ -346,6 +346,10 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK_EQ(route.strCommand, "log/get");
 	CHECK_EQ(route.params["limit"].get<int>(), INT_MAX);
 	CHECK(route.params["_items_envelope"].get<bool>());
+
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/categories", "", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "categories/list");
+	CHECK(route.params["_items_envelope"].get<bool>());
 }
 
 TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes")
@@ -364,6 +368,17 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	CHECK_EQ(route.strCommand, "transfers/set_priority");
 	CHECK_EQ(route.params["hash"].get<std::string>(), "0123456789abcdef0123456789abcdef");
 	CHECK_EQ(route.params["priority"].get<std::string>(), "high");
+
+	CHECK(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
+		R"({"categoryName":"Default"})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(route.strCommand, "transfers/set_category");
+	CHECK_EQ(route.params["hash"].get<std::string>(), "0123456789abcdef0123456789abcdef");
+	CHECK_EQ(route.params["categoryName"].get<std::string>(), "Default");
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"GET",
@@ -400,6 +415,8 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("GET", "/api/v1/status", "", "status/get");
 	assertRoute("GET", "/api/v1/snapshot?limit=7", "", "snapshot/get");
 	CHECK_EQ(route.params["limit"].get<int>(), 7);
+	assertRoute("GET", "/api/v1/categories", "", "categories/list");
+	CHECK(route.params["_items_envelope"].get<bool>());
 
 	assertRoute("GET", "/api/v1/transfers?filter=paused&category=2", "", "transfers/list");
 	CHECK_EQ(route.params["filter"].get<std::string>(), "paused");
@@ -428,6 +445,8 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"category":0})", "transfers/set_category");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"categoryName":"Default"})", "transfers/set_category");
+	CHECK_EQ(route.params["categoryName"].get<std::string>(), "Default");
 
 	assertRoute("GET", "/api/v1/uploads", "", "uploads/list");
 	CHECK(route.params["_items_envelope"].get<bool>());

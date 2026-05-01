@@ -415,6 +415,19 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
 
     surface: dict[str, object] = {}
 
+    app = http_request(base_url, "/api/v1/app", api_key=api_key)
+    app_payload = require_json_object(app, 200)
+    capabilities = app_payload.get("capabilities")
+    assert isinstance(capabilities, dict), compact_http_result(app)
+    for capability in ("transfers", "searches", "categoriesRead", "categoryAssignment"):
+        assert capabilities.get(capability) is True, compact_http_result(app)
+    assert capabilities.get("categoryCrud") is False, compact_http_result(app)
+    surface["app"] = {
+        "status": app["status"],
+        "apiVersion": app_payload.get("apiVersion"),
+        "capabilities": capabilities,
+    }
+
     preferences = http_request(base_url, "/api/v1/app/preferences", api_key=api_key)
     preference_payload = require_json_object(preferences, 200)
     missing_preference_keys = sorted(REST_PREFERENCE_KEYS.difference(preference_payload.keys()))
@@ -462,6 +475,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     transfer_rows = require_json_array(transfers, 200)
     transfers_by_filter = http_request(base_url, "/api/v1/transfers?filter=downloading&category=0", api_key=api_key)
     require_json_array(transfers_by_filter, 200)
+    categories = http_request(base_url, "/api/v1/categories", api_key=api_key)
+    category_rows = require_json_array(categories, 200)
+    assert any(
+        isinstance(row, dict) and row.get("id") == 0 and row.get("name") == "Default"
+        for row in category_rows
+    ), compact_http_result(categories)
     missing_transfer = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", api_key=api_key)
     missing_transfer_sources = http_request(
         base_url,
@@ -542,6 +561,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "list_count": len(transfer_rows),
         "list_status": transfers["status"],
         "filter_status": transfers_by_filter["status"],
+        "category_count": len(category_rows),
         "missing_get": require_error_response(missing_transfer, 404, "NOT_FOUND", message_contains="transfer not found"),
         "missing_sources": require_error_response(missing_transfer_sources, 404, "NOT_FOUND", message_contains="transfer not found"),
         "missing_source_browse": require_error_response(missing_transfer_source_browse, 404, "NOT_FOUND", message_contains="transfer not found"),
