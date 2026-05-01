@@ -128,6 +128,56 @@ REST_STRESS_READ_PATHS = (
     "/api/v1/kad",
     "/api/v1/logs?limit=20",
 )
+REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
+    {
+        "method": "PATCH",
+        "path": "/api/v1/app/preferences",
+        "json_body": {"safeServerConnect": True},
+        "family": "app",
+    },
+    {
+        "method": "POST",
+        "path": "/api/v1/transfers",
+        "json_body": {"link": "not-an-ed2k-link"},
+        "family": "transfers",
+    },
+    {
+        "method": "PATCH",
+        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        "json_body": {"action": "pause"},
+        "family": "transfers",
+    },
+    {
+        "method": "DELETE",
+        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        "json_body": {"delete_files": False},
+        "family": "transfers",
+    },
+    {
+        "method": "POST",
+        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/browse",
+        "json_body": {"userHash": REST_SURFACE_MISSING_HASH},
+        "family": "transfers",
+    },
+    {
+        "method": "PATCH",
+        "path": "/api/v1/kad",
+        "json_body": {"action": "recheck_firewall"},
+        "family": "kad",
+    },
+    {
+        "method": "POST",
+        "path": "/api/v1/searches",
+        "json_body": {"query": "", "method": "automatic", "type": "any"},
+        "family": "searches",
+    },
+    {
+        "method": "DELETE",
+        "path": "/api/v1/searches/123",
+        "json_body": {},
+        "family": "searches",
+    },
+)
 REST_INTENTIONALLY_UNSUPPORTED = (
     "category_crud",
     "shared_file_rename",
@@ -425,6 +475,23 @@ def validate_rest_stress_config(
         raise ValueError("REST stress request timeout must be greater than zero.")
 
 
+def build_rest_stress_operations(profile: str) -> list[dict[str, object]]:
+    """Builds the REST operation mix used by one bounded stress profile."""
+
+    operations = [
+        {
+            "method": "GET",
+            "path": path,
+            "json_body": None,
+            "family": path.split("/")[3].split("?")[0] if len(path.split("/")) > 3 else "root",
+        }
+        for path in REST_STRESS_READ_PATHS
+    ]
+    if profile in {"smoke", "soak"}:
+        operations.extend(dict(operation) for operation in REST_STRESS_SAFE_MUTATION_OPERATIONS)
+    return operations
+
+
 def percentile(values: list[float], percentile_value: float) -> float:
     """Returns a nearest-rank percentile from an already collected sample."""
 
@@ -446,12 +513,18 @@ def summarize_rest_stress_results(
     """Builds a compact deterministic summary for one REST stress run."""
 
     status_counts: dict[str, int] = {}
+    method_counts: dict[str, int] = {}
+    family_counts: dict[str, int] = {}
     error_counts: dict[str, int] = {}
     durations = []
     failures = []
     for row in rows:
         status = str(row.get("status", "exception"))
         status_counts[status] = status_counts.get(status, 0) + 1
+        method = str(row.get("method") or "UNKNOWN")
+        method_counts[method] = method_counts.get(method, 0) + 1
+        family = str(row.get("family") or "unknown")
+        family_counts[family] = family_counts.get(family, 0) + 1
         duration_ms = row.get("duration_ms")
         if isinstance(duration_ms, int | float):
             durations.append(float(duration_ms))
@@ -471,6 +544,8 @@ def summarize_rest_stress_results(
         "failure_count": failure_count,
         "ok": failure_count <= max_failures,
         "status_counts": status_counts,
+        "method_counts": method_counts,
+        "family_counts": family_counts,
         "error_counts": error_counts,
         "latency_ms": {
             "min": round(min(durations), 3) if durations else 0.0,
@@ -623,30 +698,40 @@ def exercise_rest_stress(
         }
 
     deadline = time.monotonic() + duration_seconds
-    paths = list(REST_STRESS_READ_PATHS)
+    operations = build_rest_stress_operations(profile)
     rows: list[dict[str, object]] = []
     next_index = 0
 
     def run_one(index: int) -> dict[str, object]:
-        path = paths[index % len(paths)]
+        operation = operations[index % len(operations)]
+        method = str(operation["method"])
+        path = str(operation["path"])
+        json_body = operation.get("json_body")
+        family = str(operation.get("family") or "unknown")
         start = time.monotonic()
         try:
             result = http_request(
                 base_url,
                 path,
+                method=method,
                 api_key=api_key,
+                json_body=json_body,
                 request_timeout_seconds=request_timeout_seconds,
             )
             status = int(result["status"])
             return {
+                "method": method,
                 "path": path,
+                "family": family,
                 "status": status,
                 "ok": 200 <= status < 500,
                 "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
             }
         except Exception as exc:
             return {
+                "method": method,
                 "path": path,
+                "family": family,
                 "status": "exception",
                 "ok": False,
                 "duration_ms": round((time.monotonic() - start) * 1000.0, 3),

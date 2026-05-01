@@ -128,7 +128,9 @@ Canonical live REST E2E lane:
   the older lighter pass, while `contract-stress` also enables stress unless a
   stress profile is supplied explicitly
 - `--rest-stress-profile smoke` runs the bounded release-gate stress pass used
-  by the aggregate live E2E lane; `off` disables stress and `soak` is reserved
+  by the aggregate live E2E lane; it mixes read routes with safe no-op mutation
+  routes for preferences, missing transfers, source browse, Kad recheck, and
+  search start/stop validation; `off` disables stress and `soak` is reserved
   for longer operator-driven runs with explicit duration/concurrency knobs
 - each run refreshes `server.met` and `nodes.dat` in the isolated profile from `https://emule-security.org/` / `https://upd.emule-security.org/` before launch, and records file sizes plus SHA-256 hashes in the report; `--skip-live-seed-refresh` keeps the checked-in seed files for offline diagnosis
 - the lane requires real server-connect activity, Kad running state, network readiness, and one or more real live search lifecycles through the requested network paths; release-corpus searches use REST `type=any` so OS and eMule terms are not incorrectly constrained to program-only results

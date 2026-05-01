@@ -183,6 +183,23 @@ def test_rest_stress_config_rejects_invalid_values() -> None:
         )
 
 
+def test_rest_stress_operations_include_safe_mutation_routes() -> None:
+    module = load_rest_api_smoke_module()
+
+    operations = module.build_rest_stress_operations("smoke")
+    method_path_pairs = {(operation["method"], operation["path"]) for operation in operations}
+
+    assert ("GET", "/api/v1/status") in method_path_pairs
+    assert ("PATCH", "/api/v1/app/preferences") in method_path_pairs
+    assert ("POST", "/api/v1/transfers") in method_path_pairs
+    assert ("PATCH", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}") in method_path_pairs
+    assert ("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}") in method_path_pairs
+    assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/browse") in method_path_pairs
+    assert ("PATCH", "/api/v1/kad") in method_path_pairs
+    assert ("POST", "/api/v1/searches") in method_path_pairs
+    assert ("DELETE", "/api/v1/searches/123") in method_path_pairs
+
+
 def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     module = load_rest_api_smoke_module()
 
@@ -201,6 +218,7 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["ok"] is True
     assert summary["requests_completed"] == 3
     assert summary["status_counts"] == {"200": 1, "404": 1, "exception": 1}
+    assert summary["method_counts"] == {"UNKNOWN": 3}
     assert summary["error_counts"] == {"timeout": 1}
     assert summary["latency_ms"]["max"] == 9.0
     assert len(summary["failures_sample"]) == 1
