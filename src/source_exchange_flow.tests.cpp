@@ -13,7 +13,11 @@ TEST_CASE("Source flow keeps buddy advertisement and hostname dispatch decisions
 {
 	const BuddyHelloSnapshot buddySnapshot = BuildBuddyHelloSnapshot(true, true, 0x01020304u, 4662u);
 	CHECK(buddySnapshot.bShouldAdvertise);
+#ifdef MOD_CLIENT_MOD_VERSION_TEXT
+	CHECK_EQ(GetHelloTagCount(buddySnapshot), static_cast<uint32>(9u));
+#else
 	CHECK_EQ(GetHelloTagCount(buddySnapshot), static_cast<uint32>(8u));
+#endif
 
 	const EDownloadHostnameResolveDispatch firstDispatch = GetDownloadHostnameResolveDispatch(true, true, true, false);
 	const EDownloadHostnameResolveDispatch secondDispatch = GetDownloadHostnameResolveDispatch(true, true, true, true);
