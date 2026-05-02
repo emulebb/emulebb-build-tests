@@ -115,9 +115,12 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "servers_list", "family": "servers", "method": "GET", "path": "/api/v1/servers", "safe": True},
     {"name": "servers_add", "family": "servers", "method": "POST", "path": "/api/v1/servers", "safe": True},
     {"name": "servers_patch", "family": "servers", "method": "POST", "path": "/api/v1/servers/operations/disconnect", "safe": True},
+    {"name": "servers_patch_properties", "family": "servers", "method": "PATCH", "path": "/api/v1/servers/192.0.2.254:4669", "safe": True},
+    {"name": "servers_import_met_url", "family": "servers", "method": "POST", "path": "/api/v1/servers/met-url-imports", "safe": True},
     {"name": "servers_delete", "family": "servers", "method": "DELETE", "path": "/api/v1/servers/192.0.2.254:4669", "safe": True},
     {"name": "kad_status", "family": "kad", "method": "GET", "path": "/api/v1/kad", "safe": True},
     {"name": "kad_patch", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/recheck-firewall", "safe": True},
+    {"name": "kad_bootstrap", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/bootstrap", "safe": True},
     {"name": "searches_start", "family": "searches", "method": "POST", "path": "/api/v1/searches", "safe": True},
     {"name": "searches_get", "family": "searches", "method": "GET", "path": "/api/v1/searches/123", "safe": True},
     {"name": "searches_delete", "family": "searches", "method": "DELETE", "path": "/api/v1/searches/123", "safe": True},
@@ -167,6 +170,12 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
         "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse",
         "json_body": {"userHash": REST_SURFACE_MISSING_HASH},
         "family": "transfers",
+    },
+    {
+        "method": "PATCH",
+        "path": "/api/v1/servers/192.0.2.254:4669",
+        "json_body": {"priority": "high"},
+        "family": "servers",
     },
     {
         "method": "POST",
@@ -697,9 +706,13 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return dict(REST_SURFACE_TEST_SERVER)
     if route_name == "servers_patch":
         return {}
+    if route_name == "servers_patch_properties":
+        return {"priority": "high"}
+    if route_name == "servers_import_met_url":
+        return {}
     if route_name == "servers_delete":
         return {}
-    if route_name == "kad_patch":
+    if route_name in {"kad_patch", "kad_bootstrap"}:
         return {}
     if route_name == "searches_start":
         return {"query": "", "method": "automatic", "type": "any"}

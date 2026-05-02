@@ -51,6 +51,10 @@
         "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/0123456789abcdef0123456789abcdef/operations/browse"
       },
       {
+        "method": "PATCH",
+        "path": "/api/v1/servers/192.0.2.254:4669"
+      },
+      {
         "method": "POST",
         "path": "/api/v1/kad/operations/recheck-firewall"
       },
