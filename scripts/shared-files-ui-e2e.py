@@ -1119,8 +1119,17 @@ def http_request(base_url: str, path: str, *, api_key: str, request_timeout_seco
         return {
             "status": int(response.status),
             "body_text": body_text,
-            "json": payload,
+            "json": unwrap_rest_payload(payload),
+            "raw_json": payload,
         }
+
+
+def unwrap_rest_payload(payload: object) -> object:
+    """Returns the payload body inside the final REST envelope."""
+
+    if isinstance(payload, dict) and "data" in payload and "meta" in payload:
+        return payload["data"]
+    return payload
 
 
 def require_json_array(result: dict[str, object], expected_status: int) -> list[object]:

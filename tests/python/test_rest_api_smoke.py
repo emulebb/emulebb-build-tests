@@ -83,6 +83,25 @@ def test_missing_transfer_bulk_result_requires_per_item_error() -> None:
     assert result["hash"] == module.REST_SURFACE_MISSING_HASH
 
 
+def test_rest_payload_unwraps_success_and_error_envelopes() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.unwrap_rest_payload(
+        {
+            "data": {"items": [{"name": "file.bin"}]},
+            "meta": {"apiVersion": "v1"},
+        }
+    ) == {"items": [{"name": "file.bin"}]}
+    assert module.unwrap_rest_payload(
+        {
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "transfer not found",
+            }
+        }
+    ) == {"error": "NOT_FOUND", "message": "transfer not found"}
+
+
 def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
     module = load_rest_api_smoke_module()
 

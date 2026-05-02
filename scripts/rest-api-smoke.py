@@ -321,7 +321,8 @@ def http_request(
                 "status": int(response.status),
                 "content_type": content_type,
                 "body_text": body_text,
-                "json": payload,
+                "json": unwrap_rest_payload(payload),
+                "raw_json": payload,
             }
     except urllib.error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
@@ -333,8 +334,31 @@ def http_request(
             "status": int(exc.code),
             "content_type": content_type,
             "body_text": body_text,
-            "json": payload,
+            "json": unwrap_rest_payload(payload),
+            "raw_json": payload,
         }
+
+
+def unwrap_rest_payload(payload: object) -> object:
+    """Returns the payload body inside the final REST envelope."""
+
+    if not isinstance(payload, dict):
+        return payload
+
+    error = payload.get("error")
+    if isinstance(error, dict):
+        normalized = {
+            "error": error.get("code"),
+            "message": error.get("message"),
+        }
+        if "details" in error:
+            normalized["details"] = error["details"]
+        return normalized
+
+    if "data" in payload and "meta" in payload:
+        return payload["data"]
+
+    return payload
 
 
 def require_json_object(result: dict[str, object], expected_status: int) -> dict[str, Any]:
@@ -456,6 +480,8 @@ def compact_http_result(result: dict[str, object]) -> dict[str, object]:
     }
     if isinstance(result.get("json"), dict | list):
         compact["json"] = result["json"]
+    if isinstance(result.get("raw_json"), dict | list):
+        compact["raw_json"] = result["raw_json"]
     elif isinstance(result.get("body_text"), str):
         compact["body_text"] = result["body_text"]
     return compact
