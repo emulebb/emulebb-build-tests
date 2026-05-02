@@ -85,6 +85,11 @@ SUITE_SPECS = (
         accepts_shared_root=True,
     ),
     SuiteSpec(
+        name="shared-directories-rest",
+        script_name="shared-directories-rest-e2e.py",
+        category="rest",
+    ),
+    SuiteSpec(
         name="rest-api",
         script_name="rest-api-smoke.py",
         category="rest",

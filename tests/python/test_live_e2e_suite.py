@@ -82,6 +82,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
         "config-stability-ui-e2e.py",
         "shared-hash-ui-e2e.py",
         "startup-profile-scenarios.py",
+        "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "auto-browse-live.py",
     ]
@@ -94,7 +95,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     startup_command = commands[4]
     assert option_values(startup_command, "--scenario") == list(live_e2e_suite.STARTUP_PROFILE_SCENARIOS)
 
-    rest_command = commands[5]
+    rest_command = commands[6]
     assert "--enable-upnp" in rest_command
     assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
@@ -102,10 +103,10 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-stress-profile") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["4"]
     assert "--skip-live-seed-refresh" not in rest_command
-    assert summary["suites"][5]["rest_coverage_profile"] == "contract"
-    assert summary["suites"][5]["rest_stress_profile"] == "smoke"
+    assert summary["suites"][6]["rest_coverage_profile"] == "contract"
+    assert summary["suites"][6]["rest_stress_profile"] == "smoke"
 
-    auto_browse_command = commands[6]
+    auto_browse_command = commands[7]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
 
 
