@@ -188,6 +188,7 @@
     <ClCompile Include="src\part_file_numeric.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h')" />
     <ClCompile Include="src\perf_log.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PerfLogSeams.h')" />
     <ClCompile Include="src\preference_ui_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PreferenceUiSeams.h')" />
+    <ClCompile Include="src\pro_user_menu_copy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProUserMenuCopySeams.h')" />
     <ClCompile Include="src\part_status_ownership.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartStatusOwnershipSeams.h')" />
     <ClCompile Include="src\protocol_receive_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h')" />
     <ClCompile Include="src\protocol.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProtocolGuards.h')" />
@@ -267,6 +268,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\PartFileNumericSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PreferenceUiSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PreferenceUiSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\ProUserMenuCopySeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProUserMenuCopySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ResourceOwnershipSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ResourceOwnershipSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SearchListViewSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SearchListViewSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ServerSocketSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ServerSocketSeams.h')" />
