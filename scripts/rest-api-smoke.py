@@ -95,6 +95,7 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "transfers_add_links", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
     {"name": "transfers_get", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "transfers_patch_action", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/pause", "safe": True},
+    {"name": "transfers_clear_completed", "family": "transfers", "method": "POST", "path": "/api/v1/transfers/operations/clear-completed", "safe": True},
     {"name": "transfers_delete", "family": "transfers", "method": "DELETE", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "transfers_sources", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources", "safe": True},
     {"name": "transfers_details", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/details", "safe": True},
@@ -106,6 +107,8 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "shared_files_add", "family": "shared", "method": "POST", "path": "/api/v1/shared-files", "safe": True},
     {"name": "shared_files_get", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "shared_files_patch", "family": "shared", "method": "PATCH", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "shared_files_ed2k_link", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}/ed2k-link", "safe": True},
+    {"name": "shared_files_comments", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}/comments", "safe": True},
     {"name": "shared_files_delete_body", "family": "shared", "method": "DELETE", "path": "/api/v1/shared-files", "safe": True},
     {"name": "shared_files_delete_route", "family": "shared", "method": "DELETE", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "uploads", "family": "uploads", "method": "GET", "path": "/api/v1/uploads", "safe": True},
@@ -123,7 +126,9 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "kad_bootstrap", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/bootstrap", "safe": True},
     {"name": "searches_start", "family": "searches", "method": "POST", "path": "/api/v1/searches", "safe": True},
     {"name": "searches_get", "family": "searches", "method": "GET", "path": "/api/v1/searches/123", "safe": True},
+    {"name": "searches_download_result", "family": "searches", "method": "POST", "path": f"/api/v1/searches/123/results/{REST_SURFACE_MISSING_HASH}/operations/download", "safe": True},
     {"name": "searches_delete", "family": "searches", "method": "DELETE", "path": "/api/v1/searches/123", "safe": True},
+    {"name": "searches_delete_all", "family": "searches", "method": "DELETE", "path": "/api/v1/searches", "safe": True},
     {"name": "logs", "family": "logs", "method": "GET", "path": "/api/v1/logs?limit=9", "safe": True},
 )
 REST_STRESS_READ_PATHS = (
@@ -690,6 +695,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {"links": ["not-an-ed2k-link"]}
     if route_name == "transfers_patch_action":
         return {"action": "pause"}
+    if route_name == "transfers_clear_completed":
+        return {}
     if route_name == "transfers_delete":
         return {"delete_files": False}
     if route_name == "transfers_source_browse":
@@ -716,7 +723,9 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {}
     if route_name == "searches_start":
         return {"query": "", "method": "automatic", "type": "any"}
-    if route_name == "searches_delete":
+    if route_name == "searches_download_result":
+        return {"paused": True}
+    if route_name in {"searches_delete", "searches_delete_all"}:
         return {}
     return None
 

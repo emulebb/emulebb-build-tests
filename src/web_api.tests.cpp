@@ -544,6 +544,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", "transfers/get");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/transfers/operations/clear-completed", R"({})", "transfers/clear_completed");
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/details", "", "transfers/details");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources", "", "transfers/sources");
@@ -633,14 +634,27 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK_EQ(route.params["comment"].get<std::string>(), "good release");
 	CHECK_EQ(route.params["rating"].get<int>(), 4);
+	assertRoute("PATCH", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({"priority":"release"})", "shared/set_rating_comment");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK_EQ(route.params["priority"].get<std::string>(), "release");
+	assertRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef/ed2k-link", "", "shared/ed2k_link");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef/comments", "", "shared/comments");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({})", "shared/remove");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
 	assertRoute("GET", "/api/v1/searches/123", "", "search/results");
 	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	assertRoute("POST", "/api/v1/searches/123/results/0123456789abcdef0123456789abcdef/operations/download", R"({"paused":true})", "search/download_result");
+	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK(route.params["paused"].get<bool>());
 	assertRoute("DELETE", "/api/v1/searches/123", R"({})", "search/stop");
 	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	assertRoute("DELETE", "/api/v1/searches", R"({})", "search/clear");
 	assertRoute("GET", "/api/v1/logs?limit=9", "", "log/get");
 	CHECK_EQ(route.params["limit"].get<int>(), 9);
 	CHECK(route.params["_items_envelope"].get<bool>());
