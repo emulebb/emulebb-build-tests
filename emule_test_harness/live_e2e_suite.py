@@ -97,6 +97,11 @@ SUITE_SPECS = (
         is_rest_api=True,
     ),
     SuiteSpec(
+        name="amutorrent-browser-smoke",
+        script_name="amutorrent-browser-smoke.py",
+        category="rest",
+    ),
+    SuiteSpec(
         name="auto-browse-live",
         script_name="auto-browse-live.py",
         category="live-wire",

@@ -490,6 +490,40 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	CHECK_EQ(route.params["rating"].get<int>(), 4);
 }
 
+TEST_CASE("Web API exposes a strict route schema registry")
+{
+	const std::vector<WebServerJsonSeams::SApiRouteSpec> &specs = WebServerJsonSeams::GetApiRouteSpecs();
+	CHECK(specs.size() > 50);
+	CHECK(WebServerJsonSeams::FindRouteSpec("GET", "/transfers") != NULL);
+	CHECK(WebServerJsonSeams::FindRouteSpec("PATCH", "/transfers/0123456789abcdef0123456789abcdef") != NULL);
+	CHECK(WebServerJsonSeams::FindRouteSpec("POST", "/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/ban") != NULL);
+	CHECK(WebServerJsonSeams::FindRouteSpec("GET", "/app/version") == NULL);
+	CHECK(WebServerJsonSeams::FindRouteSpec("PUT", "/app") == NULL);
+}
+
+TEST_CASE("Web API rejects unknown body fields and malformed query parameters before dispatch")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"priority":"high","legacy":true})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown JSON field: legacy");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?categoryId=abc", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "categoryId must be an unsigned number");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=10&legacy=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: legacy");
+}
+
 TEST_CASE("Web API maps every current REST route family to a command")
 {
 	WebServerJsonSeams::SApiRoute route;

@@ -84,6 +84,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
         "startup-profile-scenarios.py",
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
+        "amutorrent-browser-smoke.py",
         "auto-browse-live.py",
     ]
 
@@ -106,7 +107,10 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["suites"][6]["rest_coverage_profile"] == "contract"
     assert summary["suites"][6]["rest_stress_profile"] == "smoke"
 
-    auto_browse_command = commands[7]
+    browser_command = commands[7]
+    assert script_name(browser_command) == "amutorrent-browser-smoke.py"
+
+    auto_browse_command = commands[8]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
 
 

@@ -243,12 +243,29 @@ def test_source_browse_candidate_wait_prefers_handshaken_sources(monkeypatch) ->
     module = load_auto_browse_module()
     responses = iter(
         [
-            {
-                "status": 200,
-                "content_type": "application/json; charset=utf-8",
-                "json": [
-                    {
-                        "userHash": "a" * 32,
+                {
+                    "status": 200,
+                    "content_type": "application/json; charset=utf-8",
+                    "raw_json": {
+                        "data": {
+                            "items": [
+                                {
+                                    "userHash": "a" * 32,
+                                    "ip": "1.2.3.4",
+                                    "port": 4662,
+                                    "downloadState": "Connecting",
+                                    "viewSharedFiles": True,
+                                }
+                            ],
+                            "total": 1,
+                            "offset": 0,
+                            "limit": 100,
+                        },
+                        "meta": {"apiVersion": "v1"},
+                    },
+                    "json": [
+                        {
+                            "userHash": "a" * 32,
                         "ip": "1.2.3.4",
                         "port": 4662,
                         "downloadState": "Connecting",
@@ -257,12 +274,30 @@ def test_source_browse_candidate_wait_prefers_handshaken_sources(monkeypatch) ->
                 ],
                 "body_text": "{}",
             },
-            {
-                "status": 200,
-                "content_type": "application/json; charset=utf-8",
-                "json": [
-                    {
-                        "userHash": "b" * 32,
+                {
+                    "status": 200,
+                    "content_type": "application/json; charset=utf-8",
+                    "raw_json": {
+                        "data": {
+                            "items": [
+                                {
+                                    "userHash": "b" * 32,
+                                    "ip": "5.6.7.8",
+                                    "port": 4662,
+                                    "clientSoftware": "eMule v0.50a",
+                                    "downloadState": "OnQueue",
+                                    "viewSharedFiles": True,
+                                }
+                            ],
+                            "total": 1,
+                            "offset": 0,
+                            "limit": 100,
+                        },
+                        "meta": {"apiVersion": "v1"},
+                    },
+                    "json": [
+                        {
+                            "userHash": "b" * 32,
                         "ip": "5.6.7.8",
                         "port": 4662,
                         "clientSoftware": "eMule v0.50a",
@@ -289,18 +324,35 @@ def test_transfer_source_wait_accepts_items_envelope(monkeypatch) -> None:
     module = load_auto_browse_module()
     responses = iter(
         [
-            {
-                "status": 200,
-                "content_type": "application/json; charset=utf-8",
-                "json": {"items": []},
-                "body_text": "{\"items\":[]}",
-            },
-            {
-                "status": 200,
-                "content_type": "application/json; charset=utf-8",
-                "json": {
-                    "items": [
-                        {
+                {
+                    "status": 200,
+                    "content_type": "application/json; charset=utf-8",
+                    "raw_json": {"data": {"items": [], "total": 0, "offset": 0, "limit": 100}, "meta": {"apiVersion": "v1"}},
+                    "json": {"items": []},
+                    "body_text": "{\"items\":[]}",
+                },
+                {
+                    "status": 200,
+                    "content_type": "application/json; charset=utf-8",
+                    "raw_json": {
+                        "data": {
+                            "items": [
+                                {
+                                    "userHash": "b" * 32,
+                                    "ip": "5.6.7.8",
+                                    "port": 4662,
+                                    "viewSharedFiles": True,
+                                }
+                            ],
+                            "total": 1,
+                            "offset": 0,
+                            "limit": 100,
+                        },
+                        "meta": {"apiVersion": "v1"},
+                    },
+                    "json": {
+                        "items": [
+                            {
                             "userHash": "b" * 32,
                             "ip": "5.6.7.8",
                             "port": 4662,

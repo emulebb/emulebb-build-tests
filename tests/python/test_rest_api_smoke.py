@@ -68,6 +68,18 @@ def test_missing_transfer_bulk_result_requires_per_item_error() -> None:
     result = module.require_missing_transfer_bulk_result(
         {
             "status": 200,
+            "raw_json": {
+                "data": {
+                    "items": [
+                        {
+                            "hash": module.REST_SURFACE_MISSING_HASH,
+                            "ok": False,
+                            "error": "transfer not found",
+                        },
+                    ],
+                },
+                "meta": {"apiVersion": "v1"},
+            },
             "json": {
                 "items": [
                     {
@@ -109,6 +121,17 @@ def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
         module.require_missing_transfer_bulk_result(
             {
                 "status": 200,
+                "raw_json": {
+                    "data": {
+                        "items": [
+                            {
+                                "hash": module.REST_SURFACE_MISSING_HASH,
+                                "ok": True,
+                            },
+                        ],
+                    },
+                    "meta": {"apiVersion": "v1"},
+                },
                 "json": {
                     "items": [
                         {
@@ -262,7 +285,13 @@ def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
 
     def fake_http_request(_base_url, path, *, method="GET", **_kwargs):
         observed_paths.append((method, path))
-        return {"status": 200, "content_type": "application/json", "json": {"ok": True}, "body_text": "{}"}
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {"ok": True},
+            "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
+            "body_text": "{}",
+        }
 
     monkeypatch.setattr(module, "http_request", fake_http_request)
 

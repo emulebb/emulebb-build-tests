@@ -476,6 +476,8 @@ def require_json_object(result: dict[str, object], expected_status: int) -> dict
     """Asserts one REST response is the expected JSON object payload."""
 
     assert int(result["status"]) == expected_status
+    if 200 <= expected_status < 300:
+        require_success_envelope(result)
     assert isinstance(result["json"], dict)
     return result["json"]
 
@@ -484,11 +486,24 @@ def require_json_array(result: dict[str, object], expected_status: int) -> list[
     """Asserts one REST response is the expected JSON array payload."""
 
     assert int(result["status"]) == expected_status, compact_http_result(result)
+    if 200 <= expected_status < 300:
+        require_success_envelope(result)
     payload = result["json"]
     if isinstance(payload, dict) and isinstance(payload.get("items"), list):
         return list(payload["items"])
     assert isinstance(payload, list), compact_http_result(result)
     return list(payload)
+
+
+def require_success_envelope(result: dict[str, object]) -> dict[str, Any]:
+    """Asserts one successful REST response uses the strict `{data, meta}` envelope."""
+
+    raw = result.get("raw_json")
+    assert isinstance(raw, dict), compact_http_result(result)
+    assert "data" in raw and "meta" in raw, compact_http_result(result)
+    assert isinstance(raw["meta"], dict), compact_http_result(result)
+    assert raw["meta"].get("apiVersion") == "v1", compact_http_result(result)
+    return raw
 
 
 def require_error_response(
@@ -502,6 +517,12 @@ def require_error_response(
 
     payload = require_json_object(result, expected_status)
     assert payload.get("error") == expected_code, compact_http_result(result)
+    raw = result.get("raw_json")
+    assert isinstance(raw, dict), compact_http_result(result)
+    error = raw.get("error")
+    assert isinstance(error, dict), compact_http_result(result)
+    assert error.get("code") == expected_code, compact_http_result(result)
+    assert isinstance(error.get("details"), dict), compact_http_result(result)
     message = payload.get("message")
     assert isinstance(message, str), compact_http_result(result)
     if message_contains is not None:
@@ -760,6 +781,10 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, profile: st
                 json_body=get_contract_route_body(str(route["name"])),
             )
             status = int(result["status"])
+            if 200 <= status < 300:
+                require_success_envelope(result)
+            elif status >= 400:
+                require_error_response(result, status, str(require_json_object(result, status).get("error") or ""))
             row.update(
                 {
                     "status": status,
@@ -1362,6 +1387,23 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body=[],
     )
+    unknown_json_field = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"priority": "high", "legacy": True},
+    )
+    malformed_query = http_request(
+        base_url,
+        "/api/v1/transfers?categoryId=abc",
+        api_key=api_key,
+    )
+    unknown_query = http_request(
+        base_url,
+        "/api/v1/logs?limit=1&legacy=1",
+        api_key=api_key,
+    )
     surface["errors"] = {
         "missing_route": require_error_response(missing_route, 404, "NOT_FOUND", message_contains="API route not found"),
         "invalid_method": require_error_response(
@@ -1375,6 +1417,24 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="JSON body must be an object",
+        ),
+        "unknown_json_field": require_error_response(
+            unknown_json_field,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="unknown JSON field: legacy",
+        ),
+        "malformed_query": require_error_response(
+            malformed_query,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="categoryId must be an unsigned number",
+        ),
+        "unknown_query": require_error_response(
+            unknown_query,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="unknown query parameter: legacy",
         ),
     }
 
