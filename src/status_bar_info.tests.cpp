@@ -8,10 +8,43 @@
 
 TEST_SUITE_BEGIN("status_bar");
 
+namespace
+{
+	CString FormatNetworkAddressPaneTextForTest(const CString &strBindAddress, uint32 dwPublicIp)
+	{
+#ifdef EMULE_STATUS_BAR_INFO_USES_EXTERNAL_TEXT
+		return StatusBarInfo::FormatNetworkAddressPaneText(strBindAddress
+			, dwPublicIp
+			, CString(_T("B"))
+			, CString(_T("P"))
+			, CString(_T("Any"))
+			, CString(_T("?"))
+			, CString(_T("%s:%s|%s:%s")));
+#else
+		return StatusBarInfo::FormatNetworkAddressPaneText(strBindAddress, dwPublicIp);
+#endif
+	}
+
+	CString FormatNetworkAddressPaneToolTipForTest(const CString &strBindAddress, uint32 dwPublicIp)
+	{
+#ifdef EMULE_STATUS_BAR_INFO_USES_EXTERNAL_TEXT
+		return StatusBarInfo::FormatNetworkAddressPaneToolTip(strBindAddress
+			, dwPublicIp
+			, CString(_T("Bind IP"))
+			, CString(_T("Public IP"))
+			, CString(_T("Any interface"))
+			, CString(_T("Unknown"))
+			, CString(_T("%s: %s | %s: %s")));
+#else
+		return StatusBarInfo::FormatNetworkAddressPaneToolTip(strBindAddress, dwPublicIp);
+#endif
+	}
+}
+
 TEST_CASE("Status bar IP pane uses compact placeholders for default bind and unknown public IP")
 {
-	CHECK(StatusBarInfo::FormatNetworkAddressPaneText(CString(), 0) == CString(_T("B:Any|P:?")));
-	CHECK(StatusBarInfo::FormatNetworkAddressPaneToolTip(CString(), 0) == CString(_T("Bind IP: Any interface | Public IP: Unknown")));
+	CHECK(FormatNetworkAddressPaneTextForTest(CString(), 0) == CString(_T("B:Any|P:?")));
+	CHECK(FormatNetworkAddressPaneToolTipForTest(CString(), 0) == CString(_T("Bind IP: Any interface | Public IP: Unknown")));
 }
 
 TEST_CASE("Status bar IP pane formats both bind and public IPv4 addresses")
@@ -20,14 +53,14 @@ TEST_CASE("Status bar IP pane formats both bind and public IPv4 addresses")
 	const uint32 dwPublicIp = 203u | (0u << 8) | (113u << 16) | (7u << 24);
 
 	CHECK(StatusBarInfo::Detail::FormatStoredIPv4Address(dwPublicIp) == CString(_T("203.0.113.7")));
-	CHECK(StatusBarInfo::FormatNetworkAddressPaneText(strBindAddress, dwPublicIp) == CString(_T("B:10.54.218.144|P:203.0.113.7")));
-	CHECK(StatusBarInfo::FormatNetworkAddressPaneToolTip(strBindAddress, dwPublicIp) == CString(_T("Bind IP: 10.54.218.144 | Public IP: 203.0.113.7")));
+	CHECK(FormatNetworkAddressPaneTextForTest(strBindAddress, dwPublicIp) == CString(_T("B:10.54.218.144|P:203.0.113.7")));
+	CHECK(FormatNetworkAddressPaneToolTipForTest(strBindAddress, dwPublicIp) == CString(_T("Bind IP: 10.54.218.144 | Public IP: 203.0.113.7")));
 }
 
 TEST_CASE("Status bar IP pane keeps a known bind address when public IP is still pending")
 {
 	const CString strBindAddress(_T("192.168.50.12"));
 
-	CHECK(StatusBarInfo::FormatNetworkAddressPaneText(strBindAddress, 0) == CString(_T("B:192.168.50.12|P:?")));
-	CHECK(StatusBarInfo::FormatNetworkAddressPaneToolTip(strBindAddress, 0) == CString(_T("Bind IP: 192.168.50.12 | Public IP: Unknown")));
+	CHECK(FormatNetworkAddressPaneTextForTest(strBindAddress, 0) == CString(_T("B:192.168.50.12|P:?")));
+	CHECK(FormatNetworkAddressPaneToolTipForTest(strBindAddress, 0) == CString(_T("Bind IP: 192.168.50.12 | Public IP: Unknown")));
 }
