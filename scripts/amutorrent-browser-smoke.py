@@ -11,6 +11,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
+DEFAULT_WINDOWS_NODE22 = Path(r"C:\bin\nodejs-v22-old\node.exe")
+
 
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
@@ -64,6 +67,82 @@ def wait_for_http_ok(url: str, timeout_seconds: float) -> None:
             return False
 
     wait_for(probe, timeout=timeout_seconds, interval=0.5, description=f"HTTP readiness for {url}")
+
+
+def parse_node_major(version_text: str) -> int:
+    """Parses a Node.js version string such as 'v22.14.0'."""
+
+    version = version_text.strip()
+    if version.startswith("v"):
+        version = version[1:]
+    major = version.split(".", 1)[0]
+    if not major.isdigit():
+        raise RuntimeError(f"Could not parse Node.js version from '{version_text}'.")
+    return int(major)
+
+
+def describe_install_command(node_exe: Path) -> str:
+    """Returns the dependency install command matching the selected Node runtime."""
+
+    npm_cmd = node_exe.with_name("npm.cmd" if os.name == "nt" else "npm")
+    npm = str(npm_cmd) if npm_cmd.exists() else "npm"
+    if os.name == "nt" and node_exe.is_absolute():
+        return f'$env:PATH = "{node_exe.parent};" + $env:PATH; & "{npm}" ci --prefix server --omit=dev'
+    return f'"{npm}" ci --prefix server --omit=dev'
+
+
+def resolve_amutorrent_node() -> dict[str, Any]:
+    """Selects the Node.js runtime used for the aMuTorrent browser smoke."""
+
+    configured = os.environ.get(AMUTORRENT_NODE_ENV)
+    if configured:
+        node_exe = Path(configured)
+    elif DEFAULT_WINDOWS_NODE22.exists():
+        node_exe = DEFAULT_WINDOWS_NODE22
+    else:
+        node_exe = Path("node")
+
+    try:
+        completed = subprocess.run(
+            [str(node_exe), "-v"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"Unable to run Node.js executable '{node_exe}'. Set {AMUTORRENT_NODE_ENV} to a Node 20-22 runtime.") from exc
+
+    version = completed.stdout.strip()
+    major = parse_node_major(version)
+    if major < 20 or major > 22:
+        raise RuntimeError(
+            f"aMuTorrent browser smoke requires Node.js 20-22 because its locked server dependencies include native addons; "
+            f"'{node_exe}' reports {version}. Set {AMUTORRENT_NODE_ENV} to a Node 22 executable."
+        )
+
+    return {
+        "path": str(node_exe),
+        "version": version,
+        "major": major,
+        "install_command": describe_install_command(node_exe),
+    }
+
+
+def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dict[str, Any]) -> None:
+    """Fails early if the server dependency tree required by server/server.js is missing."""
+
+    required_paths = [
+        amutorrent_root / "server" / "node_modules" / "express",
+        amutorrent_root / "server" / "node_modules" / "better-sqlite3",
+    ]
+    missing = [path for path in required_paths if not path.exists()]
+    if missing:
+        missing_display = ", ".join(str(path.relative_to(amutorrent_root)) for path in missing)
+        raise RuntimeError(
+            "aMuTorrent server dependencies are not installed. "
+            f"Missing: {missing_display}. "
+            f"Run from {amutorrent_root}: {node_info['install_command']}"
+        )
 
 
 def run_browser_workflows(base_url: str, instance_id: str) -> dict[str, Any]:
@@ -160,6 +239,7 @@ def main() -> int:
     amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
     artifacts_dir = paths.source_artifacts_dir
     seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    node_info = resolve_amutorrent_node()
 
     emule_port = choose_listen_port()
     amutorrent_port = choose_listen_port()
@@ -167,7 +247,7 @@ def main() -> int:
         amutorrent_port = choose_listen_port()
     emule_base_url = f"http://127.0.0.1:{emule_port}"
     amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
-    instance_id = "emulebb-browser-smoke"
+    instance_id = f"emulebb-127.0.0.1-{emule_port}"
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
     configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, args.bind_addr, False)
@@ -180,14 +260,18 @@ def main() -> int:
         "profile_base": str(profile["profile_base"]),
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
+        "node": node_info,
         "checks": {},
         "cleanup": {},
     }
 
     app = None
     amutorrent: subprocess.Popen[str] | None = None
+    amutorrent_output = None
+    amutorrent_log_path = artifacts_dir / "amutorrent-server.log"
     pending_error: Exception | None = None
     try:
+        require_amutorrent_server_dependencies(amutorrent_root, node_info)
         app = launch_app(paths.app_exe, Path(profile["profile_base"]))
         report["emule_process_id"] = get_app_process_id(app)
         main_window = wait_for_main_window(app)
@@ -210,13 +294,16 @@ def main() -> int:
                 "EMULEBB_NAME": "eMule BB Browser Smoke",
             }
         )
+        node_path = Path(str(node_info["path"]))
+        if node_path.is_absolute():
+            env["PATH"] = str(node_path.parent) + os.pathsep + env.get("PATH", "")
+        amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
         amutorrent = subprocess.Popen(
-            ["node", "server/server.js"],
+            [str(node_path), "server/server.js"],
             cwd=str(amutorrent_root),
             env=env,
-            stdout=subprocess.PIPE,
+            stdout=amutorrent_output,
             stderr=subprocess.STDOUT,
-            text=True,
         )
         wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.ready_timeout_seconds)
         report["amutorrent_process_id"] = amutorrent.pid
@@ -230,11 +317,15 @@ def main() -> int:
         if amutorrent is not None:
             amutorrent.terminate()
             try:
-                stdout, _ = amutorrent.communicate(timeout=10)
+                amutorrent.communicate(timeout=10)
             except subprocess.TimeoutExpired:
                 amutorrent.kill()
-                stdout, _ = amutorrent.communicate(timeout=10)
-            report["cleanup"]["amutorrent_output_tail"] = (stdout or "")[-4000:]
+                amutorrent.communicate(timeout=10)
+        if amutorrent_output is not None:
+            amutorrent_output.close()
+            report["cleanup"]["amutorrent_log"] = str(amutorrent_log_path)
+            if amutorrent_log_path.exists():
+                report["cleanup"]["amutorrent_output_tail"] = amutorrent_log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
         if app is not None:
             try:
                 close_app_cleanly(app)
