@@ -10,9 +10,9 @@ end_of_line = lf
 indent_style = tab
 tab_width = 4
 
-[*.{idl,def,sln,vcxproj,vcxproj.filters,props,targets,txt,ini}]
+[*.{idl,def,sln,slnx,vcxproj,vcproj,vcxproj.filters,props,targets,txt,ini}]
 charset = utf-8
-end_of_line = crlf
+end_of_line = lf
 indent_style = tab
 tab_width = 4
 
@@ -30,11 +30,17 @@ indent_size = 2
 
 [*.manifest]
 charset = utf-8
-end_of_line = crlf
+end_of_line = lf
 indent_style = space
 indent_size = 2
 
-[*.ps1]
+[*.{ps1,psm1,psd1,ps1xml}]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+
+[*.{bat,cmd}]
 charset = utf-8
 end_of_line = crlf
 indent_style = space
