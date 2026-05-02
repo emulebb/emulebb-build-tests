@@ -39,8 +39,8 @@
         "path": "/api/v1/transfers"
       },
       {
-        "method": "PATCH",
-        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef"
+        "method": "POST",
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/pause"
       },
       {
         "method": "DELETE",
@@ -48,11 +48,11 @@
       },
       {
         "method": "POST",
-        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/browse"
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/0123456789abcdef0123456789abcdef/operations/browse"
       },
       {
-        "method": "PATCH",
-        "path": "/api/v1/kad"
+        "method": "POST",
+        "path": "/api/v1/kad/operations/recheck-firewall"
       },
       {
         "method": "POST",

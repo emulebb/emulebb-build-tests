@@ -530,13 +530,21 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/"})", "transfers/add");
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"pause"})", "transfers/pause");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/pause", R"({})", "transfers/pause");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"resume"})", "transfers/resume");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/resume", R"({})", "transfers/resume");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"stop"})", "transfers/stop");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/stop", R"({})", "transfers/stop");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"delete_files":true})", "transfers/delete");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", "transfers/get");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/details", "", "transfers/details");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources", "", "transfers/sources");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
@@ -544,7 +552,14 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/browse", R"({"userHash":"fedcba9876543210fedcba9876543210"})", "transfers/source_browse");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
+	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/browse", R"({})", "transfers/source_browse");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"recheck"})", "transfers/recheck");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/recheck", R"({})", "transfers/recheck");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/preview", R"({})", "transfers/preview");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"priority":"high"})", "transfers/set_priority");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
@@ -564,11 +579,18 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/release-slot", R"({})", "uploads/release_slot");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/release-slot", R"({})", "uploads/release_slot");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 
 	assertRoute("GET", "/api/v1/servers", "", "servers/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("POST", "/api/v1/servers", R"({"addr":"1.2.3.4","port":4661,"name":"test"})", "servers/add");
+	assertRoute("POST", "/api/v1/servers/operations/connect", R"({})", "servers/connect");
+	assertRoute("POST", "/api/v1/servers/operations/disconnect", R"({})", "servers/disconnect");
 	assertRoute("PATCH", "/api/v1/servers/1.2.3.4:4661", R"({"action":"connect"})", "servers/connect");
+	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
+	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
+	assertRoute("POST", "/api/v1/servers/1.2.3.4:4661/operations/connect", R"({})", "servers/connect");
 	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
 	assertRoute("PATCH", "/api/v1/servers/current:1", R"({"action":"disconnect"})", "servers/disconnect");
@@ -578,17 +600,23 @@ TEST_CASE("Web API maps every current REST route family to a command")
 
 	assertRoute("GET", "/api/v1/kad", "", "kad/status");
 	assertRoute("PATCH", "/api/v1/kad", R"({"action":"connect"})", "kad/connect");
+	assertRoute("POST", "/api/v1/kad/operations/start", R"({})", "kad/connect");
+	assertRoute("POST", "/api/v1/kad/operations/bootstrap", R"({})", "kad/connect");
 	assertRoute("PATCH", "/api/v1/kad", R"({"action":"disconnect"})", "kad/disconnect");
+	assertRoute("POST", "/api/v1/kad/operations/stop", R"({})", "kad/disconnect");
 	assertRoute("PATCH", "/api/v1/kad", R"({"action":"recheck_firewall"})", "kad/recheck_firewall");
+	assertRoute("POST", "/api/v1/kad/operations/recheck-firewall", R"({})", "kad/recheck_firewall");
 
 	assertRoute("GET", "/api/v1/shared-directories", "", "shared_directories/get");
 	assertRoute("PATCH", "/api/v1/shared-directories", R"({"roots":[{"path":"C:\\share","recursive":true}]})", "shared_directories/set");
 	CHECK(route.params["roots"][0]["recursive"].get<bool>());
 	assertRoute("POST", "/api/v1/shared-directories/reload", R"({})", "shared_directories/reload");
+	assertRoute("POST", "/api/v1/shared-directories/operations/reload", R"({})", "shared_directories/reload");
 
 	assertRoute("GET", "/api/v1/shared-files", "", "shared/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("POST", "/api/v1/shared-files", R"({"path":"C:\\share\\file.txt"})", "shared/add");
+	assertRoute("POST", "/api/v1/shared-files/operations/reload", R"({})", "shared_directories/reload");
 	assertRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", "", "shared/get");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({"comment":"good release","rating":4})", "shared/set_rating_comment");

@@ -94,13 +94,14 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "transfers_add_link", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
     {"name": "transfers_add_links", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
     {"name": "transfers_get", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
-    {"name": "transfers_patch_action", "family": "transfers", "method": "PATCH", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "transfers_patch_action", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/pause", "safe": True},
     {"name": "transfers_delete", "family": "transfers", "method": "DELETE", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "transfers_sources", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources", "safe": True},
-    {"name": "transfers_source_browse", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/browse", "safe": True},
+    {"name": "transfers_details", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/details", "safe": True},
+    {"name": "transfers_source_browse", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse", "safe": True},
     {"name": "shared_directories_get", "family": "shared-directories", "method": "GET", "path": "/api/v1/shared-directories", "safe": True},
     {"name": "shared_directories_patch", "family": "shared-directories", "method": "PATCH", "path": "/api/v1/shared-directories", "safe": True},
-    {"name": "shared_directories_reload", "family": "shared-directories", "method": "POST", "path": "/api/v1/shared-directories/reload", "safe": True},
+    {"name": "shared_directories_reload", "family": "shared-directories", "method": "POST", "path": "/api/v1/shared-directories/operations/reload", "safe": True},
     {"name": "shared_files_list", "family": "shared", "method": "GET", "path": "/api/v1/shared-files", "safe": True},
     {"name": "shared_files_add", "family": "shared", "method": "POST", "path": "/api/v1/shared-files", "safe": True},
     {"name": "shared_files_get", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
@@ -110,13 +111,13 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "uploads", "family": "uploads", "method": "GET", "path": "/api/v1/uploads", "safe": True},
     {"name": "upload_queue", "family": "uploads", "method": "GET", "path": "/api/v1/upload-queue", "safe": True},
     {"name": "uploads_remove", "family": "uploads", "method": "DELETE", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}", "safe": True},
-    {"name": "uploads_release_slot", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/release-slot", "safe": True},
+    {"name": "uploads_release_slot", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/release-slot", "safe": True},
     {"name": "servers_list", "family": "servers", "method": "GET", "path": "/api/v1/servers", "safe": True},
     {"name": "servers_add", "family": "servers", "method": "POST", "path": "/api/v1/servers", "safe": True},
-    {"name": "servers_patch", "family": "servers", "method": "PATCH", "path": "/api/v1/servers/current:1", "safe": True},
+    {"name": "servers_patch", "family": "servers", "method": "POST", "path": "/api/v1/servers/operations/disconnect", "safe": True},
     {"name": "servers_delete", "family": "servers", "method": "DELETE", "path": "/api/v1/servers/192.0.2.254:4669", "safe": True},
     {"name": "kad_status", "family": "kad", "method": "GET", "path": "/api/v1/kad", "safe": True},
-    {"name": "kad_patch", "family": "kad", "method": "PATCH", "path": "/api/v1/kad", "safe": True},
+    {"name": "kad_patch", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/recheck-firewall", "safe": True},
     {"name": "searches_start", "family": "searches", "method": "POST", "path": "/api/v1/searches", "safe": True},
     {"name": "searches_get", "family": "searches", "method": "GET", "path": "/api/v1/searches/123", "safe": True},
     {"name": "searches_delete", "family": "searches", "method": "DELETE", "path": "/api/v1/searches/123", "safe": True},
@@ -150,9 +151,9 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
         "family": "transfers",
     },
     {
-        "method": "PATCH",
-        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
-        "json_body": {"action": "pause"},
+        "method": "POST",
+        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/pause",
+        "json_body": {},
         "family": "transfers",
     },
     {
@@ -163,14 +164,14 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     },
     {
         "method": "POST",
-        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/browse",
+        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse",
         "json_body": {"userHash": REST_SURFACE_MISSING_HASH},
         "family": "transfers",
     },
     {
-        "method": "PATCH",
-        "path": "/api/v1/kad",
-        "json_body": {"action": "recheck_firewall"},
+        "method": "POST",
+        "path": "/api/v1/kad/operations/recheck-firewall",
+        "json_body": {},
         "family": "kad",
     },
     {
@@ -695,11 +696,11 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name == "servers_add":
         return dict(REST_SURFACE_TEST_SERVER)
     if route_name == "servers_patch":
-        return {"action": "disconnect"}
+        return {}
     if route_name == "servers_delete":
         return {}
     if route_name == "kad_patch":
-        return {"action": "recheck_firewall"}
+        return {}
     if route_name == "searches_start":
         return {"query": "", "method": "automatic", "type": "any"}
     if route_name == "searches_delete":
@@ -979,31 +980,31 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     missing_transfer_source_browse = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/browse",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse",
         method="POST",
         api_key=api_key,
-        json_body={"userHash": REST_SURFACE_MISSING_HASH},
+        json_body={},
     )
     transfer_pause = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
-        method="PATCH",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/pause",
+        method="POST",
         api_key=api_key,
-        json_body={"action": "pause"},
+        json_body={},
     )
     transfer_resume = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
-        method="PATCH",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/resume",
+        method="POST",
         api_key=api_key,
-        json_body={"action": "resume"},
+        json_body={},
     )
     transfer_stop = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
-        method="PATCH",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/stop",
+        method="POST",
         api_key=api_key,
-        json_body={"action": "stop"},
+        json_body={},
     )
     transfer_delete_missing = http_request(
         base_url,
@@ -1028,10 +1029,10 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     transfer_recheck_missing = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
-        method="PATCH",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/recheck",
+        method="POST",
         api_key=api_key,
-        json_body={"action": "recheck"},
+        json_body={},
     )
     transfer_priority_missing = http_request(
         base_url,
@@ -1096,7 +1097,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     shared_directories_reload = http_request(
         base_url,
-        "/api/v1/shared-directories/reload",
+        "/api/v1/shared-directories/operations/reload",
         method="POST",
         api_key=api_key,
         json_body={},
@@ -1125,7 +1126,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     upload_release_bad = http_request(
         base_url,
-        "/api/v1/uploads/unknown/release-slot",
+        "/api/v1/uploads/unknown/operations/release-slot",
         method="POST",
         api_key=api_key,
         json_body={},
@@ -1643,10 +1644,10 @@ def connect_to_live_server(
         try:
             connect_response = http_request(
                 base_url,
-                f"/api/v1/servers/{candidate['address']}:{candidate['port']}",
-                method="PATCH",
+                f"/api/v1/servers/{candidate['address']}:{candidate['port']}/operations/connect",
+                method="POST",
                 api_key=api_key,
-                json_body={"action": "connect"},
+                json_body={},
                 request_timeout_seconds=15.0,
             )
             attempt["connect_response"] = compact_http_result(connect_response)
@@ -2084,10 +2085,10 @@ def main() -> int:
         current_phase = set_phase(report, "kad_connect")
         kad_connect = http_request(
             base_url,
-            "/api/v1/kad",
-            method="PATCH",
+            "/api/v1/kad/operations/start",
+            method="POST",
             api_key=args.api_key,
-            json_body={"action": "connect"},
+            json_body={},
         )
         assert kad_connect["status"] == 200
         assert isinstance(kad_connect["json"], dict)
@@ -2100,10 +2101,10 @@ def main() -> int:
         current_phase = set_phase(report, "kad_recheck_firewall")
         kad_recheck = http_request(
             base_url,
-            "/api/v1/kad",
-            method="PATCH",
+            "/api/v1/kad/operations/recheck-firewall",
+            method="POST",
             api_key=args.api_key,
-            json_body={"action": "recheck_firewall"},
+            json_body={},
         )
         assert kad_recheck["status"] == 200
         assert isinstance(kad_recheck["json"], dict)
@@ -2151,10 +2152,10 @@ def main() -> int:
         current_phase = set_phase(report, "servers_disconnect")
         server_disconnect = http_request(
             base_url,
-            "/api/v1/servers/current:1",
-            method="PATCH",
+            "/api/v1/servers/operations/disconnect",
+            method="POST",
             api_key=args.api_key,
-            json_body={"action": "disconnect"},
+            json_body={},
         )
         assert server_disconnect["status"] == 200
         assert isinstance(server_disconnect["json"], dict)
@@ -2163,10 +2164,10 @@ def main() -> int:
         current_phase = set_phase(report, "kad_disconnect")
         kad_disconnect = http_request(
             base_url,
-            "/api/v1/kad",
-            method="PATCH",
+            "/api/v1/kad/operations/stop",
+            method="POST",
             api_key=args.api_key,
-            json_body={"action": "disconnect"},
+            json_body={},
         )
         assert kad_disconnect["status"] == 200
         assert isinstance(kad_disconnect["json"], dict)
