@@ -54,16 +54,16 @@ UPNP_IGD_BACKEND_NAME = "UPnP IGD (MiniUPnP)"
 PCP_NATPMP_BACKEND_NAME = "PCP/NAT-PMP"
 LIVE_NETWORK_UNAVAILABLE_EXIT_CODE = 2
 REST_SURFACE_TEST_SERVER = {
-    "addr": "192.0.2.254",
+    "address": "192.0.2.254",
     "port": 4669,
     "name": "REST surface smoke disposable",
 }
 REST_SURFACE_MISSING_HASH = "0123456789abcdef0123456789abcdef"
 REST_PREFERENCE_KEYS = {
-    "maxUploadKiB",
-    "maxDownloadKiB",
+    "uploadLimitKiBps",
+    "downloadLimitKiBps",
     "maxConnections",
-    "maxConPerFive",
+    "maxConnectionsPerFiveSeconds",
     "maxSourcesPerFile",
     "uploadClientDataRate",
     "maxUploadSlots",
@@ -78,12 +78,14 @@ REST_PREFERENCE_KEYS = {
 }
 REST_COVERAGE_PROFILES = ("smoke", "contract", "contract-stress")
 REST_STRESS_PROFILES = ("off", "smoke", "soak")
+OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "REST-API-OPENAPI.yaml"
 REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "app", "family": "app", "method": "GET", "path": "/api/v1/app", "safe": True},
     {"name": "app_preferences_get", "family": "app", "method": "GET", "path": "/api/v1/app/preferences", "safe": True},
     {"name": "app_preferences_patch", "family": "app", "method": "PATCH", "path": "/api/v1/app/preferences", "safe": True},
     {"name": "app_shutdown", "family": "app", "method": "POST", "path": "/api/v1/app/shutdown", "safe": False},
     {"name": "status", "family": "status", "method": "GET", "path": "/api/v1/status", "safe": True},
+    {"name": "stats", "family": "status", "method": "GET", "path": "/api/v1/stats", "safe": True},
     {"name": "snapshot", "family": "status", "method": "GET", "path": "/api/v1/snapshot?limit=7", "safe": True},
     {"name": "categories", "family": "categories", "method": "GET", "path": "/api/v1/categories", "safe": True},
     {"name": "categories_create", "family": "categories", "method": "POST", "path": "/api/v1/categories", "safe": True},
@@ -94,12 +96,23 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "transfers_add_link", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
     {"name": "transfers_add_links", "family": "transfers", "method": "POST", "path": "/api/v1/transfers", "safe": True},
     {"name": "transfers_get", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
-    {"name": "transfers_patch_action", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/pause", "safe": True},
+    {"name": "transfers_patch", "family": "transfers", "method": "PATCH", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "transfers_pause", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/pause", "safe": True},
+    {"name": "transfers_resume", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/resume", "safe": True},
+    {"name": "transfers_stop", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/stop", "safe": True},
+    {"name": "transfers_recheck", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/recheck", "safe": True},
+    {"name": "transfers_preview", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/preview", "safe": True},
     {"name": "transfers_clear_completed", "family": "transfers", "method": "POST", "path": "/api/v1/transfers/operations/clear-completed", "safe": True},
     {"name": "transfers_delete", "family": "transfers", "method": "DELETE", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "transfers_sources", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources", "safe": True},
     {"name": "transfers_details", "family": "transfers", "method": "GET", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/details", "safe": True},
     {"name": "transfers_source_browse", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse", "safe": True},
+    {"name": "transfers_source_add_friend", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/add-friend", "safe": True},
+    {"name": "transfers_source_remove_friend", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/remove-friend", "safe": True},
+    {"name": "transfers_source_remove", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/remove", "safe": True},
+    {"name": "transfers_source_ban", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/ban", "safe": True},
+    {"name": "transfers_source_unban", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/unban", "safe": True},
+    {"name": "transfers_source_release_slot", "family": "transfers", "method": "POST", "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/release-slot", "safe": True},
     {"name": "shared_directories_get", "family": "shared-directories", "method": "GET", "path": "/api/v1/shared-directories", "safe": True},
     {"name": "shared_directories_patch", "family": "shared-directories", "method": "PATCH", "path": "/api/v1/shared-directories", "safe": True},
     {"name": "shared_directories_reload", "family": "shared-directories", "method": "POST", "path": "/api/v1/shared-directories/operations/reload", "safe": True},
@@ -109,19 +122,35 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "shared_files_patch", "family": "shared", "method": "PATCH", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "shared_files_ed2k_link", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}/ed2k-link", "safe": True},
     {"name": "shared_files_comments", "family": "shared", "method": "GET", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}/comments", "safe": True},
-    {"name": "shared_files_delete_body", "family": "shared", "method": "DELETE", "path": "/api/v1/shared-files", "safe": True},
+    {"name": "shared_files_reload", "family": "shared", "method": "POST", "path": "/api/v1/shared-files/operations/reload", "safe": True},
     {"name": "shared_files_delete_route", "family": "shared", "method": "DELETE", "path": f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "uploads", "family": "uploads", "method": "GET", "path": "/api/v1/uploads", "safe": True},
     {"name": "upload_queue", "family": "uploads", "method": "GET", "path": "/api/v1/upload-queue", "safe": True},
     {"name": "uploads_remove", "family": "uploads", "method": "DELETE", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}", "safe": True},
+    {"name": "uploads_remove_operation", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/remove", "safe": True},
     {"name": "uploads_release_slot", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/release-slot", "safe": True},
+    {"name": "uploads_add_friend", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/add-friend", "safe": True},
+    {"name": "uploads_remove_friend", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/remove-friend", "safe": True},
+    {"name": "uploads_ban", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/ban", "safe": True},
+    {"name": "uploads_unban", "family": "uploads", "method": "POST", "path": f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/unban", "safe": True},
+    {"name": "upload_queue_remove", "family": "uploads", "method": "POST", "path": f"/api/v1/upload-queue/{REST_SURFACE_MISSING_HASH}/operations/remove", "safe": True},
+    {"name": "upload_queue_release_slot", "family": "uploads", "method": "POST", "path": f"/api/v1/upload-queue/{REST_SURFACE_MISSING_HASH}/operations/release-slot", "safe": True},
+    {"name": "upload_queue_add_friend", "family": "uploads", "method": "POST", "path": f"/api/v1/upload-queue/{REST_SURFACE_MISSING_HASH}/operations/add-friend", "safe": True},
+    {"name": "upload_queue_remove_friend", "family": "uploads", "method": "POST", "path": f"/api/v1/upload-queue/{REST_SURFACE_MISSING_HASH}/operations/remove-friend", "safe": True},
+    {"name": "upload_queue_ban", "family": "uploads", "method": "POST", "path": f"/api/v1/upload-queue/{REST_SURFACE_MISSING_HASH}/operations/ban", "safe": True},
+    {"name": "upload_queue_unban", "family": "uploads", "method": "POST", "path": f"/api/v1/upload-queue/{REST_SURFACE_MISSING_HASH}/operations/unban", "safe": True},
     {"name": "servers_list", "family": "servers", "method": "GET", "path": "/api/v1/servers", "safe": True},
     {"name": "servers_add", "family": "servers", "method": "POST", "path": "/api/v1/servers", "safe": True},
+    {"name": "servers_connect", "family": "servers", "method": "POST", "path": "/api/v1/servers/operations/connect", "safe": True},
     {"name": "servers_patch", "family": "servers", "method": "POST", "path": "/api/v1/servers/operations/disconnect", "safe": True},
+    {"name": "servers_get", "family": "servers", "method": "GET", "path": "/api/v1/servers/192.0.2.254:4669", "safe": True},
     {"name": "servers_patch_properties", "family": "servers", "method": "PATCH", "path": "/api/v1/servers/192.0.2.254:4669", "safe": True},
     {"name": "servers_import_met_url", "family": "servers", "method": "POST", "path": "/api/v1/servers/met-url-imports", "safe": True},
+    {"name": "servers_connect_specific", "family": "servers", "method": "POST", "path": "/api/v1/servers/192.0.2.254:4669/operations/connect", "safe": True},
     {"name": "servers_delete", "family": "servers", "method": "DELETE", "path": "/api/v1/servers/192.0.2.254:4669", "safe": True},
     {"name": "kad_status", "family": "kad", "method": "GET", "path": "/api/v1/kad", "safe": True},
+    {"name": "kad_start", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/start", "safe": True},
+    {"name": "kad_stop", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/stop", "safe": True},
     {"name": "kad_patch", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/recheck-firewall", "safe": True},
     {"name": "kad_bootstrap", "family": "kad", "method": "POST", "path": "/api/v1/kad/operations/bootstrap", "safe": True},
     {"name": "searches_start", "family": "searches", "method": "POST", "path": "/api/v1/searches", "safe": True},
@@ -129,11 +158,78 @@ REST_CONTRACT_ROUTES: tuple[dict[str, object], ...] = (
     {"name": "searches_download_result", "family": "searches", "method": "POST", "path": f"/api/v1/searches/123/results/{REST_SURFACE_MISSING_HASH}/operations/download", "safe": True},
     {"name": "searches_delete", "family": "searches", "method": "DELETE", "path": "/api/v1/searches/123", "safe": True},
     {"name": "searches_delete_all", "family": "searches", "method": "DELETE", "path": "/api/v1/searches", "safe": True},
+    {"name": "friends_list", "family": "friends", "method": "GET", "path": "/api/v1/friends", "safe": True},
+    {"name": "friends_create", "family": "friends", "method": "POST", "path": "/api/v1/friends", "safe": True},
+    {"name": "friends_delete", "family": "friends", "method": "DELETE", "path": f"/api/v1/friends/{REST_SURFACE_MISSING_HASH}", "safe": True},
     {"name": "logs", "family": "logs", "method": "GET", "path": "/api/v1/logs?limit=9", "safe": True},
 )
+
+
+def load_openapi_method_paths(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> set[tuple[str, str]]:
+    """Extracts method/path pairs from the source OpenAPI YAML without extra dependencies."""
+
+    method_paths: set[tuple[str, str]] = set()
+    current_path: str | None = None
+    in_paths = False
+    for raw_line in openapi_path.read_text(encoding="utf-8").splitlines():
+        if raw_line == "paths:":
+            in_paths = True
+            continue
+        if not in_paths:
+            continue
+        if raw_line.startswith("components:"):
+            break
+        if raw_line.startswith("  /") and raw_line.rstrip().endswith(":"):
+            current_path = raw_line.strip()[:-1]
+            continue
+        if current_path is None:
+            continue
+        stripped = raw_line.strip()
+        if stripped in {"get:", "post:", "patch:", "delete:"}:
+            method_paths.add((stripped[:-1].upper(), current_path))
+    return method_paths
+
+
+def normalize_contract_path_for_openapi(path: str) -> str:
+    """Converts one concrete smoke path back to its OpenAPI template form."""
+
+    normalized = path.split("?", 1)[0]
+    normalized = normalized.replace(REST_SURFACE_MISSING_HASH, "{hash}")
+    normalized = normalized.replace("/api/v1", "", 1) or "/"
+    normalized = normalized.replace("/categories/999999", "/categories/{categoryId}")
+    normalized = normalized.replace("/servers/192.0.2.254:4669", "/servers/{serverId}")
+    normalized = normalized.replace("/searches/123/results/{hash}", "/searches/{searchId}/results/{hash}")
+    normalized = normalized.replace("/searches/123", "/searches/{searchId}")
+    normalized = normalized.replace("/uploads/{hash}", "/uploads/{clientId}")
+    normalized = normalized.replace("/upload-queue/{hash}", "/upload-queue/{clientId}")
+    normalized = normalized.replace("/sources/{hash}", "/sources/{clientId}")
+    normalized = normalized.replace("/friends/{hash}", "/friends/{userHash}")
+    return normalized
+
+
+def assert_contract_routes_match_openapi() -> dict[str, object]:
+    """Verifies the smoke route registry and OpenAPI path table stay in lockstep."""
+
+    openapi_routes = load_openapi_method_paths()
+    registry_routes = {
+        (str(route["method"]), normalize_contract_path_for_openapi(str(route["path"])))
+        for route in REST_CONTRACT_ROUTES
+        if route.get("safe") is not False
+    }
+    ignored_openapi = {("POST", "/app/shutdown")}
+    missing_from_registry = sorted(openapi_routes - registry_routes - ignored_openapi)
+    missing_from_openapi = sorted(registry_routes - openapi_routes)
+    return {
+        "openapi_route_count": len(openapi_routes),
+        "registry_route_count": len(registry_routes),
+        "missing_from_registry": missing_from_registry,
+        "missing_from_openapi": missing_from_openapi,
+        "ok": not missing_from_registry and not missing_from_openapi,
+    }
 REST_STRESS_READ_PATHS = (
     "/api/v1/app",
     "/api/v1/status",
+    "/api/v1/stats",
     "/api/v1/snapshot?limit=10",
     "/api/v1/categories",
     "/api/v1/transfers",
@@ -167,7 +263,7 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     {
         "method": "DELETE",
         "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
-        "json_body": {"delete_files": False},
+        "json_body": {"deleteFiles": False},
         "family": "transfers",
     },
     {
@@ -417,7 +513,7 @@ def require_missing_transfer_bulk_result(result: dict[str, object]) -> dict[str,
     """Asserts one bulk transfer mutation reports a per-item missing-transfer result."""
 
     payload = require_json_object(result, 200)
-    rows = payload.get("results")
+    rows = payload.get("items") or payload.get("results")
     assert isinstance(rows, list) and rows, compact_http_result(result)
     first = rows[0]
     assert isinstance(first, dict), compact_http_result(result)
@@ -609,6 +705,7 @@ def summarize_rest_stress_results(
 def build_contract_coverage_summary(routes: list[dict[str, object]], profile: str) -> dict[str, object]:
     """Summarizes exercised REST route coverage by contract family."""
 
+    openapi_coverage = assert_contract_routes_match_openapi()
     coverage_by_family: dict[str, dict[str, int]] = {}
     for route in routes:
         family = str(route["family"])
@@ -621,11 +718,14 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], profile: st
         else:
             family_summary["failed"] += 1
     failed_routes = [route["name"] for route in routes if not route.get("ok") and not route.get("skipped")]
+    if not bool(openapi_coverage["ok"]):
+        failed_routes.append("openapi_registry_consistency")
     return {
         "profile": profile,
         "route_count": len(routes),
         "routes": routes,
         "coverage_by_family": coverage_by_family,
+        "openapi": openapi_coverage,
         "intentionally_unsupported": list(REST_INTENTIONALLY_UNSUPPORTED),
         "failed_routes": failed_routes,
         "ok": not failed_routes,
@@ -693,25 +793,27 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {"link": "not-an-ed2k-link"}
     if route_name == "transfers_add_links":
         return {"links": ["not-an-ed2k-link"]}
-    if route_name == "transfers_patch_action":
-        return {"action": "pause"}
+    if route_name == "transfers_patch":
+        return {"priority": "high"}
+    if route_name in {"transfers_pause", "transfers_resume", "transfers_stop", "transfers_recheck", "transfers_preview"}:
+        return {}
     if route_name == "transfers_clear_completed":
         return {}
     if route_name == "transfers_delete":
-        return {"delete_files": False}
-    if route_name == "transfers_source_browse":
-        return {"userHash": REST_SURFACE_MISSING_HASH}
+        return {"deleteFiles": False}
+    if route_name.startswith("transfers_source_"):
+        return {}
     if route_name == "shared_files_add":
         return {}
     if route_name == "shared_files_patch":
         return {"comment": "rest contract", "rating": 4}
-    if route_name == "shared_files_delete_body":
+    if route_name == "shared_files_reload":
         return {}
-    if route_name in {"uploads_remove", "uploads_release_slot"}:
+    if route_name.startswith("uploads_") or route_name.startswith("upload_queue_"):
         return {}
     if route_name == "servers_add":
         return dict(REST_SURFACE_TEST_SERVER)
-    if route_name == "servers_patch":
+    if route_name in {"servers_connect", "servers_patch", "servers_connect_specific"}:
         return {}
     if route_name == "servers_patch_properties":
         return {"priority": "high"}
@@ -719,13 +821,17 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {}
     if route_name == "servers_delete":
         return {}
-    if route_name in {"kad_patch", "kad_bootstrap"}:
+    if route_name in {"kad_start", "kad_patch", "kad_stop", "kad_bootstrap"}:
         return {}
     if route_name == "searches_start":
         return {"query": "", "method": "automatic", "type": "any"}
     if route_name == "searches_download_result":
-        return {"paused": True}
+        return {"paused": True, "categoryId": 0}
     if route_name in {"searches_delete", "searches_delete_all"}:
+        return {}
+    if route_name == "friends_create":
+        return {"userHash": REST_SURFACE_MISSING_HASH, "name": "REST contract"}
+    if route_name == "friends_delete":
         return {}
     return None
 
@@ -956,7 +1062,8 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         json_body=safe_preference_update,
     )
     preference_set_payload = require_json_object(preference_set, 200)
-    assert preference_set_payload.get("ok") is True
+    for key, expected_value in safe_preference_update.items():
+        assert preference_set_payload.get(key) == expected_value, compact_http_result(preference_set)
     surface["app_preferences_set_noop"] = {
         "status": preference_set["status"],
         "updated": safe_preference_update,
@@ -964,7 +1071,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
 
     transfers = http_request(base_url, "/api/v1/transfers", api_key=api_key)
     transfer_rows = require_json_array(transfers, 200)
-    transfers_by_filter = http_request(base_url, "/api/v1/transfers?filter=downloading&category=0", api_key=api_key)
+    transfers_by_filter = http_request(base_url, "/api/v1/transfers?state=downloading&categoryId=0", api_key=api_key)
     require_json_array(transfers_by_filter, 200)
     categories = http_request(base_url, "/api/v1/categories", api_key=api_key)
     category_rows = require_json_array(categories, 200)
@@ -1033,14 +1140,14 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
         method="DELETE",
         api_key=api_key,
-        json_body={"delete_files": True},
+        json_body={"deleteFiles": True},
     )
     transfer_delete_bad = http_request(
         base_url,
         f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
         method="DELETE",
         api_key=api_key,
-        json_body={"delete_files": False},
+        json_body={"deleteFiles": False},
     )
     transfer_add_bad = http_request(
         base_url,
@@ -1068,7 +1175,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
         method="PATCH",
         api_key=api_key,
-        json_body={"category": 0},
+        json_body={"categoryId": 0},
     )
     transfer_rename_missing = http_request(
         base_url,
@@ -1153,6 +1260,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={},
     )
+    upload_queue_remove_bad = http_request(
+        base_url,
+        "/api/v1/upload-queue/unknown/operations/remove",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
     surface["uploads"] = {
         "list_count": len(require_json_array(upload_list, 200)),
         "queue_count": len(require_json_array(upload_queue, 200)),
@@ -1164,6 +1278,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         ),
         "release_slot_bad_payload": require_error_response(
             upload_release_bad,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="userHash or ip and port are required",
+        ),
+        "queue_remove_bad_payload": require_error_response(
+            upload_queue_remove_bad,
             400,
             "INVALID_ARGUMENT",
             message_contains="userHash or ip and port are required",
@@ -1202,10 +1322,10 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={},
     )
-    shared_remove_bad = http_request(
+    shared_reload = http_request(
         base_url,
-        "/api/v1/shared-files",
-        method="DELETE",
+        "/api/v1/shared-files/operations/reload",
+        method="POST",
         api_key=api_key,
         json_body={},
     )
@@ -1229,13 +1349,9 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "INVALID_ARGUMENT",
             message_contains="path must be a non-empty string path",
         ),
-        "remove_bad_payload": require_error_response(
-            shared_remove_bad,
-            400,
-            "INVALID_ARGUMENT",
-            message_contains="exactly one of hash or path is required",
-        ),
+        "reload": compact_http_result(shared_reload),
     }
+    assert shared_reload["status"] == 200, compact_http_result(shared_reload)
 
     missing_route = http_request(base_url, "/api/v1/not-a-route", api_key=api_key)
     invalid_method = http_request(base_url, "/api/v1/app", method="POST", api_key=api_key, json_body={})
@@ -1277,7 +1393,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         row
         for row in servers_after_add_rows
         if isinstance(row, dict)
-        and str(row.get("address") or "") == REST_SURFACE_TEST_SERVER["addr"]
+        and str(row.get("address") or "") == REST_SURFACE_TEST_SERVER["address"]
         and int(row.get("port") or 0) == REST_SURFACE_TEST_SERVER["port"]
     ]
     assert added_servers, compact_http_result(servers_after_add)
@@ -1613,7 +1729,7 @@ def start_live_search(
             "response": response,
         }
         attempts.append(attempt)
-        if int(response["status"]) == 200 and isinstance(response["json"], dict) and response["json"].get("search_id"):
+        if int(response["status"]) == 200 and isinstance(response["json"], dict) and response["json"].get("id"):
             return {
                 "ok": True,
                 "attempts": attempts,
@@ -1801,8 +1917,8 @@ def execute_search_plan(
 
             assert isinstance(live_search["response"], dict)
             search_payload = require_json_object(live_search["response"], 200)
-            active_search_id = str(search_payload["search_id"])
-            cycle_report["search_id"] = active_search_id
+            active_search_id = str(search_payload["id"])
+            cycle_report["searchId"] = active_search_id
             cycle_report["selected_method"] = live_search["selected_method"]
 
             try:

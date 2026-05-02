@@ -237,11 +237,11 @@ def start_transfer_search(base_url: str, api_key: str, method: str, query: str) 
             "query": query,
             "method": method,
             "type": "iso",
-            "ext": "iso",
+            "extension": "iso",
         },
     )
     return {
-        "ok": int(response["status"]) == 200 and isinstance(response.get("json"), dict) and response["json"].get("search_id"),
+        "ok": int(response["status"]) == 200 and isinstance(response.get("json"), dict) and response["json"].get("id"),
         "attempts": [
             {
                 "method": method,
@@ -249,7 +249,7 @@ def start_transfer_search(base_url: str, api_key: str, method: str, query: str) 
                     "query": query,
                     "method": method,
                     "type": "iso",
-                    "ext": "iso",
+                    "extension": "iso",
                 },
                 "response": response,
             }
@@ -320,8 +320,8 @@ def find_transfer_candidate(
         if not bool(search["ok"]):
             continue
 
-        search_id = str(require_json_object(search["response"], 200)["search_id"])
-        attempt["search_id"] = search_id
+        search_id = str(require_json_object(search["response"], 200)["id"])
+        attempt["searchId"] = search_id
         try:
             attempt["activity"] = wait_for_transfer_search_results(
                 base_url,
@@ -336,7 +336,7 @@ def find_transfer_candidate(
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                if row.get("hash") and row.get("name") and row.get("size") and is_safe_download_result(row):
+                if row.get("hash") and row.get("name") and (row.get("sizeBytes") or row.get("size")) and is_safe_download_result(row):
                     attempt["result"] = row
                     return {
                         "selected": attempt,
@@ -385,14 +385,14 @@ def summarize_selected_transfer_sources(acquisition_attempts: list[dict[str, obj
         summary: dict[str, object] = {
             "query": selected.get("query"),
             "method": selected.get("method"),
-            "search_id": selected.get("search_id"),
+            "searchId": selected.get("searchId"),
             "source_count": len(sources),
             "sources": sources[:5],
         }
         if isinstance(result_row, dict):
             summary["hash"] = result_row.get("hash")
             summary["name"] = result_row.get("name")
-            summary["size"] = result_row.get("size")
+            summary["size"] = result_row.get("sizeBytes") or result_row.get("size")
         return summary
     return {
         "source_count": 0,
@@ -604,12 +604,21 @@ def request_source_browse(
 ) -> dict[str, Any]:
     """Requests one manual shared-file browse against a selected transfer source."""
 
+    client_id = str(selector.get("userHash") or "").strip()
+    if not client_id:
+        address = str(selector.get("address") or selector.get("ip") or "").strip()
+        port = selector.get("port")
+        if address and port:
+            client_id = f"{address}:{port}"
+    if not client_id:
+        raise ValueError("source selector must include userHash or address/ip and port")
+
     result = rest_smoke.http_request(
         base_url,
-        f"/api/v1/transfers/{transfer_hash}/sources/browse",
+        f"/api/v1/transfers/{transfer_hash}/sources/{client_id}/operations/browse",
         method="POST",
         api_key=api_key,
-        json_body=selector,
+        json_body={},
     )
     return require_json_object(result, 200)
 
@@ -649,7 +658,7 @@ def wait_for_source_browse_results(
         if rows:
             return {
                 "observations": observations,
-                "search_id": search_id,
+                "searchId": search_id,
                 "result_count": len(rows),
                 "sample_results": rows[:5],
             }
@@ -694,7 +703,7 @@ def wait_for_source_browse_success(
             try:
                 response = request_source_browse(base_url, api_key, transfer_hash, selector)
                 attempt["response"] = response
-                search_id = str(response["search_id"])
+                search_id = str(response["searchId"])
                 attempt["results"] = wait_for_source_browse_results(
                     base_url,
                     api_key,

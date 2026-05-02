@@ -69,7 +69,7 @@ def test_missing_transfer_bulk_result_requires_per_item_error() -> None:
         {
             "status": 200,
             "json": {
-                "results": [
+                "items": [
                     {
                         "hash": module.REST_SURFACE_MISSING_HASH,
                         "ok": False,
@@ -110,7 +110,7 @@ def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
             {
                 "status": 200,
                 "json": {
-                    "results": [
+                    "items": [
                         {
                             "hash": module.REST_SURFACE_MISSING_HASH,
                             "ok": True,
@@ -119,6 +119,16 @@ def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
                 },
             }
         )
+
+
+def test_rest_contract_registry_matches_openapi() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.assert_contract_routes_match_openapi()
+
+    assert summary["ok"] is True
+    assert summary["missing_from_registry"] == []
+    assert summary["missing_from_openapi"] == []
 
 
 def test_rest_contract_registry_covers_release_families() -> None:
@@ -130,15 +140,16 @@ def test_rest_contract_registry_covers_release_families() -> None:
         "app",
         "status",
         "categories",
-        "transfers",
-        "shared-directories",
-        "shared",
-        "uploads",
-        "servers",
-        "kad",
-        "searches",
-        "logs",
-    }
+                    "transfers",
+                    "shared-directories",
+                    "shared",
+                    "uploads",
+                    "servers",
+                    "kad",
+                    "searches",
+                    "friends",
+                    "logs",
+                }
     assert any(route["name"] == "app_shutdown" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
 
 
@@ -165,7 +176,7 @@ def test_live_search_start_uses_broad_file_type_for_release_terms(monkeypatch) -
         return {
             "status": 200,
             "content_type": "application/json; charset=utf-8",
-            "json": {"search_id": "42"},
+            "json": {"id": "42"},
             "body_text": "{}",
         }
 

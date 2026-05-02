@@ -80,21 +80,21 @@ TEST_CASE("Web API exposes stable upload state names for the REST surface")
 TEST_CASE("Web API parses the final transfer priority vocabulary")
 {
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("auto"), WebApiSurfaceSeams::ETransferPriority::Auto);
-	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("very_low"), WebApiSurfaceSeams::ETransferPriority::VeryLow);
+	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("veryLow"), WebApiSurfaceSeams::ETransferPriority::VeryLow);
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("low"), WebApiSurfaceSeams::ETransferPriority::Low);
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("normal"), WebApiSurfaceSeams::ETransferPriority::Normal);
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("high"), WebApiSurfaceSeams::ETransferPriority::High);
-	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("very_high"), WebApiSurfaceSeams::ETransferPriority::VeryHigh);
+	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("veryHigh"), WebApiSurfaceSeams::ETransferPriority::VeryHigh);
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("invalid"), WebApiSurfaceSeams::ETransferPriority::Invalid);
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName(nullptr), WebApiSurfaceSeams::ETransferPriority::Invalid);
 }
 
 TEST_CASE("Web API parses the expanded mutable preference vocabulary")
 {
-	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxUploadKiB"), WebApiSurfaceSeams::EMutablePreference::MaxUploadKiB);
-	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxDownloadKiB"), WebApiSurfaceSeams::EMutablePreference::MaxDownloadKiB);
+	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("uploadLimitKiBps"), WebApiSurfaceSeams::EMutablePreference::MaxUploadKiB);
+	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("downloadLimitKiBps"), WebApiSurfaceSeams::EMutablePreference::MaxDownloadKiB);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxConnections"), WebApiSurfaceSeams::EMutablePreference::MaxConnections);
-	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxConPerFive"), WebApiSurfaceSeams::EMutablePreference::MaxConPerFive);
+	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxConnectionsPerFiveSeconds"), WebApiSurfaceSeams::EMutablePreference::MaxConPerFive);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxSourcesPerFile"), WebApiSurfaceSeams::EMutablePreference::MaxSourcesPerFile);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("uploadClientDataRate"), WebApiSurfaceSeams::EMutablePreference::UploadClientDataRate);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxUploadSlots"), WebApiSurfaceSeams::EMutablePreference::MaxUploadSlots);
@@ -136,9 +136,9 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 		{"query", " 1080p "},
 		{"method", "KaD"},
 		{"type", "ISO"},
-		{"ext", ".mkv"},
-		{"min_size", 700u},
-		{"max_size", 4096u}
+		{"extension", ".mkv"},
+		{"minSizeBytes", 700u},
+		{"maxSizeBytes", 4096u}
 	};
 
 	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(params, request, error));
@@ -170,8 +170,8 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 	CHECK_EQ(error, "type is not supported");
 
 	error.clear();
-	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"min_size", -1}}, request, error));
-	CHECK_EQ(error, "min_size must be an unsigned number");
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"minSizeBytes", -1}}, request, error));
+	CHECK_EQ(error, "minSizeBytes must be an unsigned number");
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", 7}}, request, error));
@@ -186,12 +186,12 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 	CHECK_EQ(error, "type must be a string");
 
 	error.clear();
-	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"ext", 7}}, request, error));
-	CHECK_EQ(error, "ext must be a string");
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"extension", 7}}, request, error));
+	CHECK_EQ(error, "extension must be a string");
 
 	error.clear();
-	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"max_size", -1}}, request, error));
-	CHECK_EQ(error, "max_size must be an unsigned number");
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"maxSizeBytes", -1}}, request, error));
+	CHECK_EQ(error, "maxSizeBytes must be an unsigned number");
 }
 
 TEST_CASE("Web API parses search identifiers as decimal uint32 strings")
@@ -204,19 +204,19 @@ TEST_CASE("Web API parses search identifiers as decimal uint32 strings")
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchId(WebApiCommandSeams::json(""), uSearchID, error));
-	CHECK_EQ(error, "search_id must not be empty");
+	CHECK_EQ(error, "searchId must not be empty");
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchId(WebApiCommandSeams::json("12x"), uSearchID, error));
-	CHECK_EQ(error, "search_id must be a valid uint32 decimal string");
+	CHECK_EQ(error, "searchId must be a valid uint32 decimal string");
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchId(WebApiCommandSeams::json(7), uSearchID, error));
-	CHECK_EQ(error, "search_id must be a decimal string");
+	CHECK_EQ(error, "searchId must be a decimal string");
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchId(WebApiCommandSeams::json("4294967296"), uSearchID, error));
-	CHECK_EQ(error, "search_id must be a valid uint32 decimal string");
+	CHECK_EQ(error, "searchId must be a valid uint32 decimal string");
 }
 
 TEST_CASE("Web API parses transfer list filters and validates categories")
@@ -224,7 +224,7 @@ TEST_CASE("Web API parses transfer list filters and validates categories")
 	WebApiCommandSeams::STransfersListRequest request;
 	std::string error;
 
-	CHECK(WebApiCommandSeams::TryParseTransfersListRequest(WebApiCommandSeams::json{{"filter", "DoWnLoAdInG"}, {"category", 3}}, request, error));
+	CHECK(WebApiCommandSeams::TryParseTransfersListRequest(WebApiCommandSeams::json{{"filter", "DoWnLoAdInG"}, {"categoryId", 3}}, request, error));
 	CHECK_EQ(request.strFilterLower, "downloading");
 	CHECK(request.bHasCategory);
 	CHECK_EQ(request.uCategory, 3u);
@@ -234,8 +234,8 @@ TEST_CASE("Web API parses transfer list filters and validates categories")
 	CHECK_EQ(error, "filter must be a string when provided");
 
 	error.clear();
-	CHECK_FALSE(WebApiCommandSeams::TryParseTransfersListRequest(WebApiCommandSeams::json{{"category", -1}}, request, error));
-	CHECK_EQ(error, "category must be an unsigned number");
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransfersListRequest(WebApiCommandSeams::json{{"categoryId", -1}}, request, error));
+	CHECK_EQ(error, "categoryId must be an unsigned number");
 }
 
 TEST_CASE("Web API trims transfer add links and rejects empty payloads")
@@ -275,7 +275,7 @@ TEST_CASE("Web API preserves source-oriented ed2k links after trimming transport
 	CHECK_EQ(link, "ed2k://|file|ubuntu.iso|1|0123456789abcdef0123456789abcdef|sources,1.2.3.4:4662|/");
 }
 
-TEST_CASE("Web API parses bulk transfer mutations and the delete-files aliases")
+TEST_CASE("Web API parses bulk transfer mutations with the final deleteFiles spelling")
 {
 	WebApiCommandSeams::STransferBulkMutationRequest request;
 	std::string error;
@@ -283,7 +283,7 @@ TEST_CASE("Web API parses bulk transfer mutations and the delete-files aliases")
 	CHECK(WebApiCommandSeams::TryParseTransferBulkMutationRequest(
 		WebApiCommandSeams::json{
 			{"hashes", WebApiCommandSeams::json::array({"a", "b"})},
-			{"delete_files", true}
+			{"deleteFiles", true}
 		},
 		request,
 		error));
@@ -297,7 +297,7 @@ TEST_CASE("Web API parses bulk transfer mutations and the delete-files aliases")
 	CHECK_EQ(error, "hashes must be a string array");
 }
 
-TEST_CASE("Web API accepts both delete-file aliases and rejects missing hash arrays")
+TEST_CASE("Web API accepts empty hash arrays and rejects missing hash arrays")
 {
 	WebApiCommandSeams::STransferBulkMutationRequest request;
 	std::string error;
@@ -407,10 +407,12 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK_EQ(route.strCommand, "app/version");
 	CHECK(route.params.is_object());
 
-	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?filter=Downloading&category=3", "", route, errorCode, errorMessage));
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?state=Downloading&categoryId=3&offset=2&limit=25", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "transfers/list");
 	CHECK_EQ(route.params["filter"].get<std::string>(), "Downloading");
-	CHECK_EQ(route.params["category"].get<uint64_t>(), 3u);
+	CHECK_EQ(route.params["categoryId"].get<uint64_t>(), 3u);
+	CHECK_EQ(route.params["_offset"].get<int>(), 2);
+	CHECK_EQ(route.params["_limit"].get<int>(), 25);
 	CHECK(route.params["_items_envelope"].get<bool>());
 
 	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=999999999999", "", route, errorCode, errorMessage));
@@ -462,7 +464,7 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 		errorCode,
 		errorMessage));
 	CHECK_EQ(route.strCommand, "search/results");
-	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"PATCH",
@@ -510,6 +512,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK(route.params["prefs"].contains("safeServerConnect"));
 	assertRoute("POST", "/api/v1/app/shutdown", R"({})", "app/shutdown");
 	assertRoute("GET", "/api/v1/status", "", "status/get");
+	assertRoute("GET", "/api/v1/stats", "", "stats/global");
 	assertRoute("GET", "/api/v1/snapshot?limit=7", "", "snapshot/get");
 	CHECK_EQ(route.params["limit"].get<int>(), 7);
 	assertRoute("GET", "/api/v1/categories", "", "categories/list");
@@ -523,24 +526,18 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("DELETE", "/api/v1/categories/2", "", "categories/delete");
 	CHECK_EQ(route.params["id"].get<std::string>(), "2");
 
-	assertRoute("GET", "/api/v1/transfers?filter=paused&category=2", "", "transfers/list");
+	assertRoute("GET", "/api/v1/transfers?state=paused&categoryId=2", "", "transfers/list");
 	CHECK_EQ(route.params["filter"].get<std::string>(), "paused");
-	CHECK_EQ(route.params["category"].get<uint64_t>(), 2u);
+	CHECK_EQ(route.params["categoryId"].get<uint64_t>(), 2u);
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/"})", "transfers/add");
-	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"pause"})", "transfers/pause");
-	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/pause", R"({})", "transfers/pause");
-	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
-	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"resume"})", "transfers/resume");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/resume", R"({})", "transfers/resume");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
-	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"stop"})", "transfers/stop");
-	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/stop", R"({})", "transfers/stop");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
-	assertRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"delete_files":true})", "transfers/delete");
+	assertRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":true})", "transfers/delete");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", "transfers/get");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
@@ -550,21 +547,19 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources", "", "transfers/sources");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK(route.params["_items_envelope"].get<bool>());
-	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/browse", R"({"userHash":"fedcba9876543210fedcba9876543210"})", "transfers/source_browse");
-	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
-	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/browse", R"({})", "transfers/source_browse");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
-	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"action":"recheck"})", "transfers/recheck");
+	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/remove", R"({})", "peers/remove");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/recheck", R"({})", "transfers/recheck");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/preview", R"({})", "transfers/preview");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"priority":"high"})", "transfers/set_priority");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
-	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"category":0})", "transfers/set_category");
+	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"categoryId":0})", "transfers/set_category");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"categoryName":"Default"})", "transfers/set_category");
 	CHECK_EQ(route.params["categoryName"].get<std::string>(), "Default");
@@ -578,21 +573,23 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("DELETE", "/api/v1/uploads/0123456789abcdef0123456789abcdef", R"({})", "uploads/remove");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
-	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/release-slot", R"({})", "uploads/release_slot");
-	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/release-slot", R"({})", "uploads/release_slot");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/remove", R"({})", "uploads/remove");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/ban", R"({})", "peers/ban");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/upload-queue/0123456789abcdef0123456789abcdef/operations/unban", R"({})", "peers/unban");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 
 	assertRoute("GET", "/api/v1/servers", "", "servers/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
-	assertRoute("POST", "/api/v1/servers", R"({"addr":"1.2.3.4","port":4661,"name":"test"})", "servers/add");
+	assertRoute("POST", "/api/v1/servers", R"({"address":"1.2.3.4","port":4661,"name":"test"})", "servers/add");
+	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	assertRoute("POST", "/api/v1/servers/met-url-imports", R"({"url":"https://example.invalid/server.met"})", "servers/import_met_url");
 	CHECK_EQ(route.params["url"].get<std::string>(), "https://example.invalid/server.met");
 	assertRoute("POST", "/api/v1/servers/operations/connect", R"({})", "servers/connect");
 	assertRoute("POST", "/api/v1/servers/operations/disconnect", R"({})", "servers/disconnect");
-	assertRoute("PATCH", "/api/v1/servers/1.2.3.4:4661", R"({"action":"connect"})", "servers/connect");
-	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
-	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
 	assertRoute("PATCH", "/api/v1/servers/1.2.3.4:4661", R"({"name":"Pinned","priority":"high","static":true})", "servers/update");
 	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
@@ -602,26 +599,24 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/servers/1.2.3.4:4661/operations/connect", R"({})", "servers/connect");
 	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
-	assertRoute("PATCH", "/api/v1/servers/current:1", R"({"action":"disconnect"})", "servers/disconnect");
+	assertRoute("GET", "/api/v1/servers/1.2.3.4:4661", "", "servers/get");
+	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
+	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
 	assertRoute("DELETE", "/api/v1/servers/1.2.3.4:4661", R"({})", "servers/remove");
 	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
 
 	assertRoute("GET", "/api/v1/kad", "", "kad/status");
-	assertRoute("PATCH", "/api/v1/kad", R"({"action":"connect"})", "kad/connect");
 	assertRoute("POST", "/api/v1/kad/operations/start", R"({})", "kad/connect");
 	assertRoute("POST", "/api/v1/kad/operations/bootstrap", R"({"address":"bootstrap.example.invalid","port":4672})", "kad/bootstrap");
 	CHECK_EQ(route.params["address"].get<std::string>(), "bootstrap.example.invalid");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4672u);
-	assertRoute("PATCH", "/api/v1/kad", R"({"action":"disconnect"})", "kad/disconnect");
 	assertRoute("POST", "/api/v1/kad/operations/stop", R"({})", "kad/disconnect");
-	assertRoute("PATCH", "/api/v1/kad", R"({"action":"recheck_firewall"})", "kad/recheck_firewall");
 	assertRoute("POST", "/api/v1/kad/operations/recheck-firewall", R"({})", "kad/recheck_firewall");
 
 	assertRoute("GET", "/api/v1/shared-directories", "", "shared_directories/get");
 	assertRoute("PATCH", "/api/v1/shared-directories", R"({"roots":[{"path":"C:\\share","recursive":true}]})", "shared_directories/set");
 	CHECK(route.params["roots"][0]["recursive"].get<bool>());
-	assertRoute("POST", "/api/v1/shared-directories/reload", R"({})", "shared_directories/reload");
 	assertRoute("POST", "/api/v1/shared-directories/operations/reload", R"({})", "shared_directories/reload");
 
 	assertRoute("GET", "/api/v1/shared-files", "", "shared/list");
@@ -647,14 +642,22 @@ TEST_CASE("Web API maps every current REST route family to a command")
 
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
 	assertRoute("GET", "/api/v1/searches/123", "", "search/results");
-	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
-	assertRoute("POST", "/api/v1/searches/123/results/0123456789abcdef0123456789abcdef/operations/download", R"({"paused":true})", "search/download_result");
-	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
+	assertRoute("POST", "/api/v1/searches/123/results/0123456789abcdef0123456789abcdef/operations/download", R"({"paused":true,"categoryId":0})", "search/download_result");
+	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK(route.params["paused"].get<bool>());
+	CHECK_EQ(route.params["categoryId"].get<int>(), 0);
 	assertRoute("DELETE", "/api/v1/searches/123", R"({})", "search/stop");
-	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
 	assertRoute("DELETE", "/api/v1/searches", R"({})", "search/clear");
+	assertRoute("GET", "/api/v1/friends", "", "friends/list");
+	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("POST", "/api/v1/friends", R"({"userHash":"0123456789abcdef0123456789abcdef","name":"peer"})", "friends/add");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	CHECK_EQ(route.params["name"].get<std::string>(), "peer");
+	assertRoute("DELETE", "/api/v1/friends/0123456789abcdef0123456789abcdef", R"({})", "friends/remove");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/logs?limit=9", "", "log/get");
 	CHECK_EQ(route.params["limit"].get<int>(), 9);
 	CHECK(route.params["_items_envelope"].get<bool>());
@@ -667,9 +670,9 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 	std::string errorMessage;
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
-		"PATCH",
-		"/api/v1/servers/1.2.3.4:4661",
-		R"({"action":"connect"})",
+		"POST",
+		"/api/v1/servers/1.2.3.4:4661/operations/connect",
+		R"({})",
 		route,
 		errorCode,
 		errorMessage));
@@ -678,9 +681,9 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 	CHECK_EQ(route.params["port"].get<uint64_t>(), 4661u);
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
-		"PATCH",
-		"/api/v1/kad",
-		R"({"action":"connect"})",
+		"POST",
+		"/api/v1/kad/operations/start",
+		R"({})",
 		route,
 		errorCode,
 		errorMessage));
@@ -707,7 +710,7 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 		errorCode,
 		errorMessage));
 	CHECK_EQ(route.strCommand, "search/stop");
-	CHECK_EQ(route.params["search_id"].get<std::string>(), "123");
+	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
 }
 
 TEST_CASE("Web API rejects malformed JSON and non-object request bodies")

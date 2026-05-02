@@ -43,7 +43,7 @@ def test_transfer_search_uses_file_oriented_iso_filter(monkeypatch) -> None:
         return {
             "status": 200,
             "content_type": "application/json; charset=utf-8",
-            "json": {"search_id": "123"},
+            "json": {"id": "123"},
             "body_text": "{}",
         }
 
@@ -57,7 +57,7 @@ def test_transfer_search_uses_file_oriented_iso_filter(monkeypatch) -> None:
         "query": "ubuntu",
         "method": "server",
         "type": "iso",
-        "ext": "iso",
+        "extension": "iso",
     }
 
 
@@ -113,7 +113,7 @@ def test_selected_transfer_source_summary_is_compact() -> None:
                 "selected": {
                     "query": "linux",
                     "method": "automatic",
-                    "search_id": "6",
+                    "searchId": "6",
                     "result": {
                         "hash": "b05c1075089e1de58a13de1b77ba4b2a",
                         "name": "linux.tar.gz",
@@ -329,7 +329,7 @@ def test_source_browse_success_tries_selector_variants(monkeypatch) -> None:
     def fake_request(_base_url, _api_key, _transfer_hash, selector):
         attempted_selectors.append(selector)
         if selector == {"userHash": "b" * 32}:
-            return {"ok": True, "search_id": "42"}
+            return {"ok": True, "searchId": "42"}
         raise AssertionError("source not found")
 
     monkeypatch.setattr(module, "request_source_browse", fake_request)
