@@ -55,6 +55,7 @@ MK_LBUTTON = 0x0001
 MP_HM_FILES = 10213
 MP_SHAREDIR = 10346
 MP_UNSHAREDIR = 10348
+MP_SHAREDIRMONITOR = 10350
 IDC_RELOADSHAREDFILES = 2049
 IDC_SFLIST = 2167
 IDC_SF_FNAME = 3038
@@ -483,6 +484,69 @@ def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_di
             "initial_names": ["alpha_dynamic.txt", "beta_dynamic.bin"],
             "after_add_names": ["alpha_dynamic.txt", "beta_dynamic.bin", "gamma_late.txt"],
             "after_delete_names": ["beta_dynamic.bin", "gamma_late.txt"],
+            "rest_api_key": rest_api_key,
+            "rest_port": rest_port,
+            "rest_base_url": f"http://127.0.0.1:{rest_port}",
+        }
+    )
+    return fixture
+
+
+def prepare_monitored_folder_events_fixture(seed_config_dir: Path, artifacts_dir: Path, app_exe: Path) -> dict:
+    """Creates an initially unshared tree used for monitored filesystem event coverage."""
+
+    incoming_dir = artifacts_dir / "incoming"
+    temp_dir = artifacts_dir / "temp"
+    monitor_root = artifacts_dir / "monitored-share-root"
+    existing_child_dir = monitor_root / "existing-child"
+
+    incoming_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    existing_child_dir.mkdir(parents=True, exist_ok=True)
+
+    root_initial_file = monitor_root / "monitor_root_initial.txt"
+    child_initial_file = existing_child_dir / "existing_child_initial.txt"
+    root_late_file = monitor_root / "monitor_root_late.txt"
+    child_late_file = existing_child_dir / "existing_child_late.txt"
+    new_child_dir = monitor_root / "new-child"
+    new_child_file = new_child_dir / "new_child_discovered.txt"
+
+    root_initial_file.write_bytes(b"monitor root initial\r\n")
+    child_initial_file.write_bytes(b"existing child initial\r\n")
+
+    initial_names = [root_initial_file.name, child_initial_file.name]
+    after_file_event_names = initial_names + [root_late_file.name, child_late_file.name]
+    after_directory_event_names = after_file_event_names + [new_child_file.name]
+    after_delete_names = [
+        child_initial_file.name,
+        root_late_file.name,
+        child_late_file.name,
+        new_child_file.name,
+    ]
+
+    fixture = live_common.prepare_profile_base(
+        seed_config_dir=seed_config_dir,
+        artifacts_dir=artifacts_dir,
+        shared_dirs=[],
+        incoming_dir=incoming_dir,
+        temp_dir=temp_dir,
+    )
+    rest_api_key = "shared-files-ui-monitor-key"
+    rest_port = choose_rest_listen_port()
+    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port)
+    fixture.update(
+        {
+            "monitor_root": monitor_root,
+            "existing_child_dir": existing_child_dir,
+            "root_late_file": root_late_file,
+            "child_late_file": child_late_file,
+            "new_child_dir": new_child_dir,
+            "new_child_file": new_child_file,
+            "deleted_file": root_initial_file,
+            "initial_names": initial_names,
+            "after_file_event_names": after_file_event_names,
+            "after_directory_event_names": after_directory_event_names,
+            "after_delete_names": after_delete_names,
             "rest_api_key": rest_api_key,
             "rest_port": rest_port,
             "rest_base_url": f"http://127.0.0.1:{rest_port}",
@@ -1020,7 +1084,14 @@ def wait_for_list_names(process_handle: int, list_hwnd: int, expected_names: lis
     return wait_for(resolve, timeout=30.0, interval=0.5, description=description)
 
 
-def wait_for_list_name_set(process_handle: int, list_hwnd: int, expected_names: list[str], description: str) -> list[str]:
+def wait_for_list_name_set(
+    process_handle: int,
+    list_hwnd: int,
+    expected_names: list[str],
+    description: str,
+    *,
+    timeout: float = 45.0,
+) -> list[str]:
     """Waits until the visible Shared Files rows match the expected unordered name set."""
 
     expected = sorted(expected_names, key=str.lower)
@@ -1032,7 +1103,7 @@ def wait_for_list_name_set(process_handle: int, list_hwnd: int, expected_names: 
         names = get_all_list_names(process_handle, list_hwnd)
         return {"names": names} if sorted(names, key=str.lower) == expected else None
 
-    result = wait_for(resolve, timeout=45.0, interval=0.5, description=description)
+    result = wait_for(resolve, timeout=timeout, interval=0.5, description=description)
     return list(result["names"])
 
 
@@ -1091,7 +1162,76 @@ def get_rest_shared_names(base_url: str, api_key: str) -> list[str]:
     return names
 
 
-def wait_for_rest_shared_name_set(base_url: str, api_key: str, expected_names: list[str], description: str) -> list[str]:
+def get_rest_shared_directory_model(base_url: str, api_key: str) -> dict[str, object]:
+    """Returns the current shared-directory REST model."""
+
+    result = http_request(base_url, "/api/v1/shared-directories", api_key=api_key)
+    if int(result["status"]) != 200:
+        raise RuntimeError(f"Unexpected shared-directories REST status {result['status']}: {result['body_text']!r}")
+    payload = result["json"]
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Expected shared-directories JSON object, got {payload!r}.")
+    return payload
+
+
+def get_rest_shared_directory_paths(base_url: str, api_key: str) -> dict[str, list[str]]:
+    """Returns normalized path lists from the shared-directory REST model."""
+
+    payload = get_rest_shared_directory_model(base_url, api_key)
+    items = payload.get("items")
+    monitor_owned = payload.get("monitorOwned")
+    roots = payload.get("roots")
+    if not isinstance(items, list) or not isinstance(monitor_owned, list) or not isinstance(roots, list):
+        raise RuntimeError(f"Unexpected shared-directories REST shape: {payload!r}")
+
+    def row_paths(rows: list[object]) -> list[str]:
+        paths = []
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+                raise RuntimeError(f"Unexpected shared-directory row shape: {row!r}")
+            paths.append(row["path"])
+        return paths
+
+    return {
+        "items": row_paths(items),
+        "monitor_owned": [path for path in monitor_owned if isinstance(path, str)],
+        "roots": row_paths(roots),
+    }
+
+
+def wait_for_rest_shared_directory_paths(
+    base_url: str,
+    api_key: str,
+    *,
+    expected_items: list[str],
+    expected_monitor_owned: list[str],
+    description: str,
+    timeout: float = 45.0,
+) -> dict[str, list[str]]:
+    """Waits until REST shared-directory paths contain the expected monitored tree state."""
+
+    expected_item_set = {path.lower() for path in expected_items}
+    expected_monitor_owned_set = {path.lower() for path in expected_monitor_owned}
+
+    def resolve():
+        paths = get_rest_shared_directory_paths(base_url, api_key)
+        item_set = {path.lower() for path in paths["items"]}
+        monitor_owned_set = {path.lower() for path in paths["monitor_owned"]}
+        if expected_item_set.issubset(item_set) and expected_monitor_owned_set.issubset(monitor_owned_set):
+            return paths
+        return None
+
+    return wait_for(resolve, timeout=timeout, interval=0.5, description=description)
+
+
+def wait_for_rest_shared_name_set(
+    base_url: str,
+    api_key: str,
+    expected_names: list[str],
+    description: str,
+    *,
+    timeout: float = 45.0,
+) -> list[str]:
     """Waits until REST shared-files rows match the expected unordered name set."""
 
     expected = sorted(expected_names, key=str.lower)
@@ -1100,7 +1240,7 @@ def wait_for_rest_shared_name_set(base_url: str, api_key: str, expected_names: l
         names = get_rest_shared_names(base_url, api_key)
         return {"names": names} if sorted(names, key=str.lower) == expected else None
 
-    result = wait_for(resolve, timeout=45.0, interval=0.5, description=description)
+    result = wait_for(resolve, timeout=timeout, interval=0.5, description=description)
     return list(result["names"])
 
 
@@ -1593,6 +1733,224 @@ def run_dynamic_folder_lifecycle_e2e(
                     pass
 
 
+def run_monitored_folder_events_e2e(
+    app_exe: Path,
+    seed_config_dir: Path,
+    artifacts_dir: Path,
+    *,
+    require_startup_profile: bool,
+) -> None:
+    """Exercises live monitored-share file and directory events without manual reloads."""
+
+    fixture = prepare_monitored_folder_events_fixture(seed_config_dir, artifacts_dir, app_exe)
+    monitor_root = Path(str(fixture["monitor_root"]))
+    existing_child_dir = Path(str(fixture["existing_child_dir"]))
+    new_child_dir = Path(str(fixture["new_child_dir"]))
+    summary = {
+        "name": "monitored-folder-events",
+        "status": "failed",
+        "app_exe": str(app_exe),
+        "profile_base": str(fixture["profile_base"]),
+        "monitor_root": live_common.win_path(monitor_root, trailing_slash=True),
+        "existing_child_dir": live_common.win_path(existing_child_dir, trailing_slash=True),
+        "new_child_dir": live_common.win_path(new_child_dir, trailing_slash=True),
+        "rest_base_url": fixture["rest_base_url"],
+        "expected_initial_names": fixture["initial_names"],
+        "expected_after_file_event_names": fixture["after_file_event_names"],
+        "expected_after_directory_event_names": fixture["after_directory_event_names"],
+        "expected_after_delete_names": fixture["after_delete_names"],
+        "command_line": subprocess.list2cmdline(
+            [str(app_exe), "-ignoreinstances", "-c", str(fixture["profile_base"])]
+        ),
+        "steps": [],
+    }
+
+    app = None
+    process_handle = 0
+    try:
+        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        main_window = live_common.wait_for_main_window(app)
+        main_hwnd = main_window.handle
+        live_common.bring_window_to_front(main_window)
+        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        summary["process_id"] = process_id
+        summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
+        summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
+
+        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
+            fixture["startup_profile_path"],
+            require_startup_profile=require_startup_profile,
+        )
+        summary.update(startup_profile_summary)
+        if startup_profile_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+
+        process_handle = open_process(process_id)
+        dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
+        list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
+        wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
+
+        ui_names = wait_for_list_name_set(process_handle, list_hwnd, [], "initial empty monitored Shared Files UI list")
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            [],
+            "initial empty monitored REST shared-files list",
+        )
+        summary["steps"].append({"name": "initial_empty", "ui_names": ui_names, "rest_names": rest_names})
+
+        select_directory_tree_item(process_handle, tree_hwnd, monitor_root)
+        send_shared_dirs_tree_command(tree_hwnd, MP_SHAREDIRMONITOR)
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
+        ui_names = wait_for_list_name_set(
+            process_handle,
+            list_hwnd,
+            list(fixture["initial_names"]),
+            "Shared Files UI list after monitor share",
+        )
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            list(fixture["initial_names"]),
+            "REST shared-files list after monitor share",
+        )
+        directory_paths = wait_for_rest_shared_directory_paths(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            expected_items=[
+                live_common.win_path(monitor_root, trailing_slash=True),
+                live_common.win_path(existing_child_dir, trailing_slash=True),
+            ],
+            expected_monitor_owned=[live_common.win_path(existing_child_dir, trailing_slash=True)],
+            description="REST shared-directory model after monitor share",
+        )
+        summary["steps"].append(
+            {
+                "name": "after_monitor_share",
+                "ui_names": ui_names,
+                "rest_names": rest_names,
+                "directory_paths": directory_paths,
+            }
+        )
+
+        Path(str(fixture["root_late_file"])).write_bytes(b"monitor root late\r\n")
+        Path(str(fixture["child_late_file"])).write_bytes(b"existing child late\r\n")
+        ui_names = wait_for_list_name_set(
+            process_handle,
+            list_hwnd,
+            list(fixture["after_file_event_names"]),
+            "Shared Files UI list after monitored file create events",
+            timeout=90.0,
+        )
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            list(fixture["after_file_event_names"]),
+            "REST shared-files list after monitored file create events",
+            timeout=90.0,
+        )
+        summary["steps"].append({"name": "after_monitored_file_creates", "ui_names": ui_names, "rest_names": rest_names})
+
+        new_child_dir.mkdir(parents=True, exist_ok=True)
+        Path(str(fixture["new_child_file"])).write_bytes(b"new monitored child file\r\n")
+        ui_names = wait_for_list_name_set(
+            process_handle,
+            list_hwnd,
+            list(fixture["after_directory_event_names"]),
+            "Shared Files UI list after monitored directory create event",
+            timeout=90.0,
+        )
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            list(fixture["after_directory_event_names"]),
+            "REST shared-files list after monitored directory create event",
+            timeout=90.0,
+        )
+        directory_paths = wait_for_rest_shared_directory_paths(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            expected_items=[
+                live_common.win_path(monitor_root, trailing_slash=True),
+                live_common.win_path(existing_child_dir, trailing_slash=True),
+                live_common.win_path(new_child_dir, trailing_slash=True),
+            ],
+            expected_monitor_owned=[
+                live_common.win_path(existing_child_dir, trailing_slash=True),
+                live_common.win_path(new_child_dir, trailing_slash=True),
+            ],
+            description="REST shared-directory model after monitored directory create event",
+            timeout=90.0,
+        )
+        summary["steps"].append(
+            {
+                "name": "after_monitored_directory_create",
+                "ui_names": ui_names,
+                "rest_names": rest_names,
+                "directory_paths": directory_paths,
+            }
+        )
+
+        Path(str(fixture["deleted_file"])).unlink()
+        ui_names = wait_for_list_name_set(
+            process_handle,
+            list_hwnd,
+            list(fixture["after_delete_names"]),
+            "Shared Files UI list after monitored file delete event",
+            timeout=90.0,
+        )
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            list(fixture["after_delete_names"]),
+            "REST shared-files list after monitored file delete event",
+            timeout=90.0,
+        )
+        summary["steps"].append({"name": "after_monitored_file_delete", "ui_names": ui_names, "rest_names": rest_names})
+
+        select_directory_tree_item(process_handle, tree_hwnd, monitor_root)
+        send_shared_dirs_tree_command(tree_hwnd, MP_UNSHAREDIR)
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
+        ui_names = wait_for_list_name_set(process_handle, list_hwnd, [], "Shared Files UI list after monitor unshare")
+        rest_names = wait_for_rest_shared_name_set(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            [],
+            "REST shared-files list after monitor unshare",
+        )
+        summary["steps"].append({"name": "after_monitor_unshare", "ui_names": ui_names, "rest_names": rest_names})
+
+        summary["status"] = "passed"
+        summary["error"] = None
+        write_json(artifacts_dir / "result.json", summary)
+    except Exception as exc:
+        summary["error"] = str(exc)
+        if app is not None:
+            try:
+                main_window = app.top_window()
+                dump_window_tree(main_window.handle, artifacts_dir / "window-tree-failure.json")
+                try:
+                    image = main_window.capture_as_image()
+                    image.save(artifacts_dir / "failure.png")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        write_json(artifacts_dir / "result.json", summary)
+        raise
+    finally:
+        if process_handle:
+            close_process(process_handle)
+        if app is not None:
+            try:
+                live_common.close_app_cleanly(app)
+            except Exception:
+                try:
+                    app.kill()
+                except Exception:
+                    pass
+
+
 def run_generated_robustness_e2e(
     app_exe: Path,
     seed_config_dir: Path,
@@ -1962,6 +2320,13 @@ def run_shared_files_ui_suite(
                     scenario_dir,
                     require_startup_profile=require_startup_profile,
                 )
+            elif scenario_name == "monitored-folder-events":
+                run_monitored_folder_events_e2e(
+                    app_exe,
+                    seed_config_dir,
+                    scenario_dir,
+                    require_startup_profile=require_startup_profile,
+                )
             else:
                 raise RuntimeError(f"Unknown Shared Files UI scenario: {scenario_name}")
         except Exception:
@@ -2006,6 +2371,7 @@ def main(argv: list[str]) -> int:
             "generated-robustness-recursive",
             "duplicate-startup-reuse",
             "dynamic-folder-lifecycle",
+            "monitored-folder-events",
         ],
     )
     args = parser.parse_args(argv)

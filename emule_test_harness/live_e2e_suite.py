@@ -15,6 +15,7 @@ SHARED_FILES_UI_SCENARIOS = (
     "generated-robustness-recursive",
     "duplicate-startup-reuse",
     "dynamic-folder-lifecycle",
+    "monitored-folder-events",
 )
 CONFIG_STABILITY_UI_SCENARIOS = (
     "long-config-settings-roundtrip",
