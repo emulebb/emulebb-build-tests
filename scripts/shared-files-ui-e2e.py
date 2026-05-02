@@ -654,26 +654,43 @@ def expand_tree_item(tree_hwnd: int, item_handle: int) -> None:
     time.sleep(0.2)
 
 
+def normalize_tree_label(label: str) -> str:
+    """Normalizes one Shared Files tree label for path-component matching."""
+
+    return label.rstrip("\\").lower()
+
+
+def tree_label_matches_path_component(label: str, component: str) -> bool:
+    """Reports whether one tree label represents a path component."""
+
+    target = component.rstrip("\\").lower()
+    normalized = normalize_tree_label(label)
+    if normalized == target:
+        return True
+    if target.endswith(":"):
+        return normalized.startswith(target)
+    return normalized.startswith(target + " ")
+
+
+def tree_label_matches_drive(label: str, drive_component: str) -> bool:
+    """Reports whether one tree label represents a Windows drive root."""
+
+    drive = drive_component.rstrip("\\").lower()
+    normalized = normalize_tree_label(label)
+    return normalized.startswith(drive) or f"({drive})" in normalized
+
+
 def find_tree_child_by_component(process_handle: int, tree_hwnd: int, parent_item: int, component: str) -> int:
     """Finds one direct child whose visible label matches a path component."""
 
     expand_tree_item(tree_hwnd, parent_item)
-    target = component.rstrip("\\").lower()
-
-    def label_matches(label: str) -> bool:
-        normalized = label.rstrip("\\").lower()
-        if normalized == target:
-            return True
-        if target.endswith(":"):
-            return normalized.startswith(target)
-        return normalized.startswith(target + " ")
 
     def resolve() -> int | None:
         first_child = win32gui.SendMessage(tree_hwnd, TVM_GETNEXTITEM, TVGN_CHILD, parent_item)
         if not first_child:
             return None
         for child in iter_tree_siblings(tree_hwnd, first_child):
-            if label_matches(get_tree_item_text(process_handle, tree_hwnd, child)):
+            if tree_label_matches_path_component(get_tree_item_text(process_handle, tree_hwnd, child), component):
                 return child
         return None
 
@@ -683,11 +700,6 @@ def find_tree_child_by_component(process_handle: int, tree_hwnd: int, parent_ite
 def find_drive_tree_item(process_handle: int, tree_hwnd: int, drive_component: str) -> int:
     """Finds the drive node below the Shared Files tree's virtual roots."""
 
-    drive = drive_component.rstrip("\\").lower()
-
-    def label_matches_drive(label: str) -> bool:
-        return label.rstrip("\\").lower().startswith(drive)
-
     def resolve() -> int | None:
         root = win32gui.SendMessage(tree_hwnd, TVM_GETNEXTITEM, TVGN_ROOT, 0)
         for root_item in iter_tree_siblings(tree_hwnd, root):
@@ -696,11 +708,29 @@ def find_drive_tree_item(process_handle: int, tree_hwnd: int, drive_component: s
             if not first_child:
                 continue
             for child in iter_tree_siblings(tree_hwnd, first_child):
-                if label_matches_drive(get_tree_item_text(process_handle, tree_hwnd, child)):
+                if tree_label_matches_drive(get_tree_item_text(process_handle, tree_hwnd, child), drive_component):
                     return child
         return None
 
     return wait_for(resolve, 30.0, 0.25, f"drive tree node '{drive_component}'")
+
+
+def select_tree_root_by_label(process_handle: int, tree_hwnd: int, label: str) -> int:
+    """Selects one top-level Shared Files tree node by visible label."""
+
+    target = normalize_tree_label(label)
+
+    def resolve() -> int | None:
+        root = win32gui.SendMessage(tree_hwnd, TVM_GETNEXTITEM, TVGN_ROOT, 0)
+        for root_item in iter_tree_siblings(tree_hwnd, root):
+            if normalize_tree_label(get_tree_item_text(process_handle, tree_hwnd, root_item)) == target:
+                return root_item
+        return None
+
+    item = wait_for(resolve, 10.0, 0.25, f"tree root '{label}'")
+    win32gui.SendMessage(tree_hwnd, TVM_SELECTITEM, TVGN_CARET, item)
+    time.sleep(0.2)
+    return item
 
 
 def select_directory_tree_item(process_handle: int, tree_hwnd: int, directory_path: Path) -> int:
@@ -1470,6 +1500,7 @@ def run_dynamic_folder_lifecycle_e2e(
         select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["candidate_dir"])))
         send_shared_dirs_tree_command(tree_hwnd, MP_SHAREDIR)
         click_reload_button(main_hwnd)
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
         ui_names = wait_for_list_name_set(
             process_handle,
             list_hwnd,
@@ -1486,6 +1517,7 @@ def run_dynamic_folder_lifecycle_e2e(
 
         Path(str(fixture["late_file"])).write_bytes(b"late dynamic file\r\n")
         click_reload_button(main_hwnd)
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
         ui_names = wait_for_list_name_set(
             process_handle,
             list_hwnd,
@@ -1502,6 +1534,7 @@ def run_dynamic_folder_lifecycle_e2e(
 
         Path(str(fixture["deleted_file"])).unlink()
         click_reload_button(main_hwnd)
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
         ui_names = wait_for_list_name_set(
             process_handle,
             list_hwnd,
@@ -1519,6 +1552,7 @@ def run_dynamic_folder_lifecycle_e2e(
         select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["candidate_dir"])))
         send_shared_dirs_tree_command(tree_hwnd, MP_UNSHAREDIR)
         click_reload_button(main_hwnd)
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
         ui_names = wait_for_list_name_set(process_handle, list_hwnd, [], "Shared Files UI list after UI unshare")
         rest_names = wait_for_rest_shared_name_set(
             str(fixture["rest_base_url"]),
