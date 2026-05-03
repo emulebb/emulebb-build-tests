@@ -4,6 +4,7 @@
 #include "WebServerArrCompatSeams.h"
 #include "WebServerAuthStateSeams.h"
 #include "WebServerJsonSeams.h"
+#include "WebServerQBitCompatSeams.h"
 #include "WebServerStaticFileSeams.h"
 
 TEST_SUITE_BEGIN("web_api");
@@ -518,6 +519,47 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Audio, "release.mkv", 10));
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Book, "manual.pdf", 10));
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "manual.pdf", 10));
+}
+
+TEST_CASE("Web API recognizes qBittorrent compatibility routes")
+{
+	CHECK(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v2/app/webapiVersion"));
+	CHECK(WebServerQBitCompatSeams::IsQBitRequestTarget("/API/V2/torrents/add"));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v1/torrents/add"));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/indexer/emulebb/api"));
+}
+
+TEST_CASE("Web API decodes qBittorrent add forms into native eD2K links")
+{
+	std::map<std::string, std::string> form;
+	std::string error;
+	CHECK(WebServerQBitCompatSeams::TryParseFormBody("category=RADARR_ENG&stopped=true&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3DLa%2BDolce%2BVita.mkv%26xl%3D42", form, error));
+	CHECK_EQ(form["category"], "RADARR_ENG");
+	CHECK_EQ(form["urls"], "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=La Dolce Vita.mkv&xl=42");
+
+	WebServerQBitCompatSeams::SQBitTorrentAddRequest request;
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=RADARR_ENG&stopped=true&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3DLa%2BDolce%2BVita.mkv%26xl%3D42", request, error));
+	CHECK_EQ(request.strCategory, "RADARR_ENG");
+	CHECK(request.bPaused);
+	CHECK_EQ(request.strUrl, "ed2k://|file|La%20Dolce%20Vita.mkv|42|0123456789abcdef0123456789abcdef|/");
+}
+
+TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
+{
+	WebServerQBitCompatSeams::SQBitTorrentAddRequest request;
+	std::map<std::string, std::string> form;
+	std::string error;
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=http%3A%2F%2Fexample.invalid%2Ffile.torrent", request, error));
+	CHECK_EQ(error, "only magnet URLs are supported");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef11111111%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_EQ(error, "magnet btih does not carry an eD2K hash");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D0", request, error));
+	CHECK_EQ(error, "magnet size must be positive");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=a&category=b", form, error));
+	CHECK_EQ(error, "duplicate form field: category");
 }
 
 TEST_CASE("Web API builds representative REST routes and normalizes query parameters")
