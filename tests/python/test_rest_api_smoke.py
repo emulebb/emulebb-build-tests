@@ -150,8 +150,24 @@ def test_rest_contract_registry_matches_openapi() -> None:
     summary = module.assert_contract_routes_match_openapi()
 
     assert summary["ok"] is True
+    assert summary["operation_count"] == summary["openapi_route_count"]
+    assert summary["duplicate_operation_ids"] == []
     assert summary["missing_from_registry"] == []
     assert summary["missing_from_openapi"] == []
+
+
+def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
+    module = load_rest_api_smoke_module()
+
+    routes_by_operation = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+
+    assert routes_by_operation["getApp"]["path"] == "/api/v1/app"
+    assert routes_by_operation["getSnapshot"]["path"] == "/api/v1/snapshot?limit=7"
+    assert routes_by_operation["getTransfer"]["path"] == f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}"
+    assert routes_by_operation["downloadSearchResult"]["path"] == (
+        f"/api/v1/searches/123/results/{module.REST_SURFACE_MISSING_HASH}/operations/download"
+    )
+    assert routes_by_operation["shutdownApp"]["safe"] is False
 
 
 def test_rest_contract_registry_covers_release_families() -> None:
@@ -173,7 +189,7 @@ def test_rest_contract_registry_covers_release_families() -> None:
                     "friends",
                     "logs",
                 }
-    assert any(route["name"] == "app_shutdown" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
+    assert any(route["operationId"] == "shutdownApp" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
 
 
 def test_live_search_plan_covers_release_query_corpus() -> None:
@@ -224,13 +240,19 @@ def test_live_download_candidate_filter_rejects_unsafe_rows() -> None:
         "name": "linux.iso",
         "sizeBytes": 1024,
         "fileType": "cdimage",
+        "sources": module.MIN_SAFE_LIVE_DOWNLOAD_SOURCES,
+        "completeSources": 0,
     }
 
     assert module.is_safe_live_download_result(safe) is True
     assert module.is_safe_live_download_result({**safe, "name": "setup.exe"}) is False
+    assert module.is_safe_live_download_result({**safe, "name": "installer.msi"}) is False
+    assert module.is_safe_live_download_result({**safe, "name": "bundle.rar", "fileType": "Arc"}) is False
     assert module.is_safe_live_download_result({**safe, "fileType": "program"}) is False
     assert module.is_safe_live_download_result({**safe, "hash": "0123456789ABCDEF0123456789ABCDEF"}) is False
     assert module.is_safe_live_download_result({**safe, "sizeBytes": 0}) is False
+    assert module.is_safe_live_download_result({**safe, "sizeBytes": module.MAX_SAFE_LIVE_DOWNLOAD_BYTES + 1}) is False
+    assert module.is_safe_live_download_result({**safe, "sources": module.MIN_SAFE_LIVE_DOWNLOAD_SOURCES - 1}) is False
 
 
 def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
@@ -260,6 +282,8 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                         "name": "linux.iso",
                         "sizeBytes": 1024,
                         "fileType": "cdimage",
+                        "sources": 2,
+                        "completeSources": 0,
                     }
                 ],
             },
@@ -274,6 +298,8 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                             "name": "linux.iso",
                             "sizeBytes": 1024,
                             "fileType": "cdimage",
+                            "sources": 2,
+                            "completeSources": 0,
                         }
                     ],
                 },
@@ -289,6 +315,40 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
     assert result["ok"] is True
     assert requests[-1]["path"] == "/api/v1/searches/42/results/0123456789abcdef0123456789abcdef/operations/download"
     assert requests[-1]["json_body"] == {"paused": True, "categoryId": 0}
+
+
+def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    def fake_http_request(_base_url, _path, **_kwargs):
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {
+                "id": "42",
+                "query": "linux",
+                "status": "running",
+                "results": [],
+            },
+            "raw_json": {
+                "data": {
+                    "id": "42",
+                    "query": "linux",
+                    "status": "running",
+                    "results": [],
+                },
+                "meta": {"apiVersion": "v1"},
+            },
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.trigger_paused_download_from_search_result("http://127.0.0.1:1", "key", "42", 0.01)
+
+    assert result["ok"] is False
+    assert result["reason"] == "timed out without a safe download candidate"
+    assert result["observations"]
 
 
 def test_rest_stress_config_rejects_invalid_values() -> None:
@@ -354,6 +414,18 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert len(summary["failures_sample"]) == 1
 
 
+def test_server_connect_transport_loss_is_runtime_failure_signal() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.did_rest_listener_disappear(
+        [
+            {"connected": False},
+            {"transport_error": {"message": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>"}},
+        ]
+    )
+    assert not module.did_rest_listener_disappear([{"connected": False, "connecting": False}])
+
+
 def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
     module = load_rest_api_smoke_module()
     observed_paths: list[tuple[str, str]] = []
@@ -374,4 +446,4 @@ def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
 
     assert summary["ok"] is True
     assert ("POST", "/api/v1/app/shutdown") not in observed_paths
-    assert any(route["name"] == "app_shutdown" and route["skipped"] for route in summary["routes"])
+    assert any(route["operationId"] == "shutdownApp" and route["skipped"] for route in summary["routes"])

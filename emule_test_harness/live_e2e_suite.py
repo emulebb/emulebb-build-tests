@@ -162,6 +162,8 @@ def build_suite_command(
     rest_stress_profile: str = "smoke",
     rest_stress_duration_seconds: float = 30.0,
     rest_stress_concurrency: int = 4,
+    rest_stress_max_failures: int = 1,
+    rest_stress_request_timeout_seconds: float = 5.0,
     enable_upnp: bool = True,
     auto_browse_p2p_bind_interface_name: str = "hide.me",
 ) -> list[str]:
@@ -201,6 +203,8 @@ def build_suite_command(
         command.extend(["--rest-stress-profile", rest_stress_profile])
         command.extend(["--rest-stress-duration-seconds", str(rest_stress_duration_seconds)])
         command.extend(["--rest-stress-concurrency", str(rest_stress_concurrency)])
+        command.extend(["--rest-stress-max-failures", str(rest_stress_max_failures)])
+        command.extend(["--rest-stress-request-timeout-seconds", str(rest_stress_request_timeout_seconds)])
         if enable_upnp:
             command.append("--enable-upnp")
     if spec.is_auto_browse and auto_browse_p2p_bind_interface_name:
@@ -251,6 +255,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-stress-profile", choices=["off", "smoke", "soak"], default="smoke")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
     parser.add_argument("--rest-stress-concurrency", type=int, default=4)
+    parser.add_argument("--rest-stress-max-failures", type=int, default=1)
+    parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--disable-upnp", action="store_true")
     parser.add_argument("--auto-browse-p2p-bind-interface-name", default="hide.me")
     return parser
@@ -267,6 +273,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST stress duration must be greater than zero.")
     if args.rest_stress_concurrency <= 0:
         raise ValueError("REST stress concurrency must be greater than zero.")
+    if args.rest_stress_max_failures < 0:
+        raise ValueError("REST stress max failures must be zero or greater.")
+    if args.rest_stress_request_timeout_seconds <= 0:
+        raise ValueError("REST stress request timeout must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -305,6 +315,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
         "rest_coverage_profile": args.rest_coverage_profile,
         "rest_stress_profile": args.rest_stress_profile,
+        "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
+        "rest_stress_concurrency": args.rest_stress_concurrency,
+        "rest_stress_max_failures": args.rest_stress_max_failures,
+        "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "fail_fast": bool(args.fail_fast),
         "has_inconclusive_suites": False,
@@ -333,6 +347,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_stress_profile=args.rest_stress_profile,
             rest_stress_duration_seconds=args.rest_stress_duration_seconds,
             rest_stress_concurrency=args.rest_stress_concurrency,
+            rest_stress_max_failures=args.rest_stress_max_failures,
+            rest_stress_request_timeout_seconds=args.rest_stress_request_timeout_seconds,
             enable_upnp=not args.disable_upnp,
             auto_browse_p2p_bind_interface_name=args.auto_browse_p2p_bind_interface_name,
         )
@@ -355,9 +371,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 {
                     "rest_coverage_profile": args.rest_coverage_profile,
                     "rest_stress_profile": args.rest_stress_profile,
-                    "rest_download_trigger_count": args.rest_download_trigger_count,
                     "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
                     "rest_stress_concurrency": args.rest_stress_concurrency,
+                    "rest_stress_max_failures": args.rest_stress_max_failures,
+                    "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
+                    "rest_download_trigger_count": args.rest_download_trigger_count,
                 }
             )
         summary["suites"].append(result)  # type: ignore[index]

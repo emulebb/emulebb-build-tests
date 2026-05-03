@@ -105,9 +105,12 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-coverage-profile") == ["contract"]
     assert option_values(rest_command, "--rest-stress-profile") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["4"]
+    assert option_values(rest_command, "--rest-stress-max-failures") == ["1"]
+    assert option_values(rest_command, "--rest-stress-request-timeout-seconds") == ["5.0"]
     assert "--skip-live-seed-refresh" not in rest_command
     assert summary["suites"][6]["rest_coverage_profile"] == "contract"
     assert summary["suites"][6]["rest_stress_profile"] == "smoke"
+    assert summary["suites"][6]["rest_stress_max_failures"] == 1
     assert summary["suites"][6]["rest_download_trigger_count"] == live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT
 
     browser_command = commands[7]

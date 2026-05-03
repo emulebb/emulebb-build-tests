@@ -522,7 +522,26 @@ def close_app_cleanly(app: Application, window_timeout: float = 30.0, process_ti
     """Closes the app, rejects blocking shutdown dialogs, and waits for process exit."""
 
     process_id = getattr(app, "process", None)
-    main_window = app.top_window()
+    if callable(process_id):
+        try:
+            process_id = process_id()
+        except TypeError:
+            process_id = None
+    try:
+        main_window = app.top_window()
+    except Exception:
+        if not process_id:
+            return
+        try:
+            process_handle = win32api.OpenProcess(win32con.SYNCHRONIZE, False, int(process_id))
+        except Exception:
+            return
+        try:
+            if win32event.WaitForSingleObject(process_handle, 0) == win32event.WAIT_OBJECT_0:
+                return
+        finally:
+            win32api.CloseHandle(process_handle)
+        raise
     win32gui.PostMessage(main_window.handle, win32con.WM_CLOSE, 0, 0)
 
     def resolve() -> bool:
