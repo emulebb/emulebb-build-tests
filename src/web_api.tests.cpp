@@ -110,6 +110,29 @@ TEST_CASE("Web API parses the expanded mutable preference vocabulary")
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName(nullptr), WebApiSurfaceSeams::EMutablePreference::Invalid);
 }
 
+TEST_CASE("Web API preference bounds match UI and INI persistence ranges")
+{
+	CHECK_FALSE(WebApiSurfaceSeams::IsFiniteKiBpsPreferenceValue(0));
+	CHECK(WebApiSurfaceSeams::IsFiniteKiBpsPreferenceValue(1));
+	CHECK(WebApiSurfaceSeams::IsFiniteKiBpsPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxFiniteKiBps));
+	CHECK_FALSE(WebApiSurfaceSeams::IsFiniteKiBpsPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceUnlimitedSentinel));
+
+	CHECK_FALSE(WebApiSurfaceSeams::IsPositiveSignedIntPreferenceValue(0));
+	CHECK(WebApiSurfaceSeams::IsPositiveSignedIntPreferenceValue(1));
+	CHECK(WebApiSurfaceSeams::IsPositiveSignedIntPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxSignedInt));
+	CHECK_FALSE(WebApiSurfaceSeams::IsPositiveSignedIntPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxSignedInt + 1));
+
+	CHECK_FALSE(WebApiSurfaceSeams::IsQueueSizePreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMinQueueSize - 1));
+	CHECK(WebApiSurfaceSeams::IsQueueSizePreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMinQueueSize));
+	CHECK(WebApiSurfaceSeams::IsQueueSizePreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxQueueSize));
+	CHECK_FALSE(WebApiSurfaceSeams::IsQueueSizePreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxQueueSize + 1));
+
+	CHECK_FALSE(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(0));
+	CHECK(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMinUploadSlots));
+	CHECK(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxUploadSlots));
+	CHECK_FALSE(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxUploadSlots + 1));
+}
+
 TEST_CASE("Web API normalizes search method and type names case-insensitively")
 {
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName("AUTOMATIC"), WebApiCommandSeams::ESearchMethod::Automatic);
