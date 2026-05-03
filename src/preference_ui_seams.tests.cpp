@@ -2,6 +2,13 @@
 
 #include "PreferenceUiSeams.h"
 
+#if __has_include("PreferenceIniMap.h")
+#include "PreferenceIniMap.h"
+#define EMULE_TESTS_HAS_PREFERENCE_INI_MAP 1
+#else
+#define EMULE_TESTS_HAS_PREFERENCE_INI_MAP 0
+#endif
+
 #include <climits>
 #include <vector>
 
@@ -75,5 +82,28 @@ TEST_CASE("Preference UI seam bounds diagnostic numeric options")
 	CHECK(PreferenceUiSeams::NormalizePerfLogIntervalMinutes(0) == 5);
 	CHECK(PreferenceUiSeams::NormalizePerfLogIntervalMinutes(PreferenceUiSeams::kMaxPerfLogIntervalMinutes + 1) == 5);
 }
+
+#if EMULE_TESTS_HAS_PREFERENCE_INI_MAP
+TEST_CASE("Preference INI map uses dedicated BB-added sections without legacy BB key names")
+{
+	CHECK(CString(PreferenceIniMap::Sections::FileCompletion) == CString(_T("FileCompletion")));
+	CHECK(CString(PreferenceIniMap::Sections::UploadPolicy) == CString(_T("UploadPolicy")));
+
+	CHECK(CString(PreferenceIniMap::FileCompletionKeys::RunCommandOnFileCompletion) == CString(_T("RunCommandOnFileCompletion")));
+	CHECK(CString(PreferenceIniMap::FileCompletionKeys::Program) == CString(_T("FileCompletionProgram")));
+	CHECK(CString(PreferenceIniMap::FileCompletionKeys::Arguments) == CString(_T("FileCompletionArguments")));
+
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::MaxUploadClientsAllowed) == CString(_T("MaxUploadClientsAllowed")));
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SlowUploadThresholdFactor) == CString(_T("SlowUploadThresholdFactor")));
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::ZeroUploadRateGraceSeconds) == CString(_T("ZeroUploadRateGraceSeconds")));
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::LowRatioScoreBonus) == CString(_T("LowRatioScoreBonus")));
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SessionTransferLimitMode) == CString(_T("SessionTransferLimitMode")));
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SessionTransferLimitValue) == CString(_T("SessionTransferLimitValue")));
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SessionTimeLimitSeconds) == CString(_T("SessionTimeLimitSeconds")));
+
+	CHECK_FALSE(CString(PreferenceIniMap::UploadPolicyKeys::MaxUploadClientsAllowed).Left(2) == CString(_T("BB")));
+	CHECK_FALSE(CString(PreferenceIniMap::UploadPolicyKeys::SessionTransferLimitMode).Left(2) == CString(_T("BB")));
+}
+#endif
 
 TEST_SUITE_END;
