@@ -87,7 +87,12 @@ TEST_CASE("Preference UI seam bounds diagnostic numeric options")
 TEST_CASE("Preference INI map uses dedicated BB-added sections without legacy BB key names")
 {
 	CHECK(CString(PreferenceIniMap::Sections::FileCompletion) == CString(_T("FileCompletion")));
+	CHECK(CString(PreferenceIniMap::Sections::Proxy) == CString(_T("Proxy")));
+	CHECK(CString(PreferenceIniMap::Sections::Statistics) == CString(_T("Statistics")));
 	CHECK(CString(PreferenceIniMap::Sections::UploadPolicy) == CString(_T("UploadPolicy")));
+	CHECK(CString(PreferenceIniMap::Sections::UPnP) == CString(_T("UPnP")));
+	CHECK(CString(PreferenceIniMap::Sections::WebServer) == CString(_T("WebServer")));
+	CHECK(CString(PreferenceIniMap::Sections::eMule) == CString(_T("eMule")));
 
 	CHECK(CString(PreferenceIniMap::FileCompletionKeys::RunCommandOnFileCompletion) == CString(_T("RunCommandOnFileCompletion")));
 	CHECK(CString(PreferenceIniMap::FileCompletionKeys::Program) == CString(_T("FileCompletionProgram")));
