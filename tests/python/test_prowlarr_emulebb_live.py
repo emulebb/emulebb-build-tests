@@ -92,3 +92,76 @@ def test_upsert_creates_disabled_then_force_enables_when_prowlarr_create_test_ha
         "/api/v1/indexer?forceSave=true",
         "/api/v1/indexer/40?forceSave=true",
     ]
+
+
+def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[str] = []
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss><channel><item><title>Big Buck Bunny</title></item></channel></rss>"""
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(path)
+        return {"status": 200, "body_text": rss}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.stress_cached_direct_torznab_search("http://127.0.0.1:1", "secret key", "Big Buck Bunny", 3)
+
+    assert result["requests"] == 3
+    assert len(calls) == 3
+    assert all("apikey=secret%20key" in call for call in calls)
+
+
+def test_direct_auth_rejection_requires_401(monkeypatch) -> None:
+    module = load_prowlarr_module()
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        assert path == "/indexer/emulebb/api?t=caps"
+        return {"status": 401, "body_text": ""}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    assert module.check_direct_auth_rejection("http://127.0.0.1:1") == {"status": 401}
+
+
+def test_direct_rss_validation_requires_results(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss><channel><item><title>Linux</title></item></channel></rss>"""
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        assert path == "/indexer/emulebb/api?t=search&apikey=secret"
+        return {"status": 200, "body_text": rss}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    assert module.check_direct_rss_results("http://127.0.0.1:1", "secret") == {"status": 200, "count": 1}
+
+
+def test_prowlarr_search_attempts_capture_error_body(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    attempts: list[str] = []
+
+    def fake_prowlarr_request(
+        prowlarr_url: str,
+        api_key: str,
+        path: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        attempts.append(path)
+        if len(attempts) > 1:
+            raise RuntimeError("stop")
+        return {"status": 400, "json": {"error": "blocked"}, "body_text": " indexer   unavailable "}
+
+    monkeypatch.setattr(module, "prowlarr_request", fake_prowlarr_request)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(module.time, "monotonic", iter([0.0, 0.1, 2.0]).__next__)
+
+    try:
+        module.wait_for_prowlarr_results("http://prowlarr.test", "key", 40, ("linux",), 1.0)
+    except RuntimeError as exc:
+        assert "body_preview" in str(exc)
+        assert "indexer unavailable" in str(exc)
+    else:
+        raise AssertionError("Expected wait_for_prowlarr_results to fail")

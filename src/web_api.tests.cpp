@@ -486,6 +486,22 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Unknown&cat=9999", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Mixed&cat=2000,3000", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Any);
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Bad&season=x&ep=2", request, error));
+	CHECK_EQ(error, "season, ep, and year must be unsigned decimal values");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&t=movie&q=Dup", request, error));
+	CHECK_EQ(error, "duplicate query parameter: t");
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search", request, error));
+	const std::vector<std::string> rssQueries = WebServerArrCompatSeams::BuildNativeQueries(request);
+	REQUIRE_EQ(rssQueries.size(), 1u);
+	CHECK_EQ(rssQueries[0], "linux");
 }
 
 TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
@@ -497,8 +513,11 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 		WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "A&B.mkv", 42),
 		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=A%26B.mkv&xl=42");
 	CHECK_EQ(WebServerArrCompatSeams::XmlEscape("<tag attr=\"x\">A&B</tag>"), "&lt;tag attr=&quot;x&quot;&gt;A&amp;B&lt;/tag&gt;");
+	CHECK_EQ(WebServerArrCompatSeams::UrlEncodeUtf8("A B+100%"), "A%20B%2B100%25");
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "release.mkv", 10));
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Audio, "release.mkv", 10));
+	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Book, "manual.pdf", 10));
+	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "manual.pdf", 10));
 }
 
 TEST_CASE("Web API builds representative REST routes and normalizes query parameters")

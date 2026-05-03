@@ -21,7 +21,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-OPEN_LICENSED_VIDEO_QUERIES = ("Big Buck Bunny", "Sintel", "Tears of Steel", "Elephants Dream")
+TORZNAB_LIVE_CATEGORY = 7000
+OPEN_DOCUMENT_QUERIES = ("linux", "ubuntu", "debian", "python")
 
 
 def load_local_module(module_name: str, filename: str):
@@ -150,6 +151,13 @@ def is_no_results_validation_error(result: dict[str, Any]) -> bool:
         return False
     body_text = str(result.get("body_text") or "").lower()
     return "no results were returned from your indexer" in body_text
+
+
+def compact_body_preview(result: dict[str, Any], limit: int = 240) -> str:
+    """Returns a compact response body preview without logging credentials."""
+
+    body_text = str(result.get("body_text") or "")
+    return " ".join(body_text.split())[:limit]
 
 
 def get_generic_torznab_schema(prowlarr_url: str, api_key: str) -> dict[str, Any]:
@@ -303,7 +311,11 @@ def test_indexer(prowlarr_url: str, api_key: str, indexer_payload: dict[str, Any
         timeout_seconds=90.0,
     )
     if is_no_results_validation_error(result):
-        return {"status": "no_results_validation", "http_status": int(result.get("status") or 0)}
+        return {
+            "status": "no_results_validation",
+            "http_status": int(result.get("status") or 0),
+            "body_preview": compact_body_preview(result),
+        }
     require_success(result, "Prowlarr eMule BB indexer test")
     return {"status": "passed", "http_status": int(result.get("status") or 0)}
 
@@ -320,6 +332,29 @@ def check_direct_caps(base_url: str, emule_api_key: str) -> dict[str, object]:
     if root.tag != "caps":
         raise RuntimeError(f"Direct Torznab caps returned unexpected root: {root.tag}")
     return {"status": 200, "root": root.tag, "length": len(body_text)}
+
+
+def check_direct_rss_results(base_url: str, emule_api_key: str) -> dict[str, object]:
+    """Validates the qless Torznab RSS path used by Prowlarr indexer tests."""
+
+    path = "/indexer/emulebb/api?t=search&apikey=" + urllib.parse.quote(emule_api_key)
+    result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+    status = int(result.get("status") or 0)
+    body_text = str(result.get("body_text") or "")
+    count = count_torznab_items(body_text) if status == 200 and body_text else 0
+    if status != 200 or count <= 0:
+        raise RuntimeError(f"Direct Torznab RSS validation returned HTTP {status} with {count} item(s).")
+    return {"status": status, "count": count}
+
+
+def check_direct_auth_rejection(base_url: str) -> dict[str, object]:
+    """Validates that the direct Torznab endpoint rejects unauthenticated calls."""
+
+    result = rest_smoke.http_request(base_url, "/indexer/emulebb/api?t=caps", request_timeout_seconds=20.0)
+    status = int(result.get("status") or 0)
+    if status != 401:
+        raise RuntimeError(f"Direct Torznab auth rejection returned HTTP {status}, expected 401.")
+    return {"status": status}
 
 
 def count_torznab_items(body_text: str) -> int:
@@ -347,12 +382,16 @@ def wait_for_direct_torznab_results(
     while time.monotonic() < deadline:
         for query in queries:
             path = (
-                "/indexer/emulebb/api?t=search&cat=2000&q="
+                f"/indexer/emulebb/api?t=search&cat={TORZNAB_LIVE_CATEGORY}&q="
                 + urllib.parse.quote(query)
                 + "&apikey="
                 + urllib.parse.quote(emule_api_key)
             )
-            result = rest_smoke.http_request(base_url, path, request_timeout_seconds=90.0)
+            try:
+                result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+            except (ConnectionResetError, TimeoutError, OSError) as exc:
+                attempts.append({"query": query, "status": type(exc).__name__, "count": 0})
+                continue
             status = int(result.get("status") or 0)
             body_text = str(result.get("body_text") or "")
             count = count_torznab_items(body_text) if status == 200 and body_text else 0
@@ -361,6 +400,35 @@ def wait_for_direct_torznab_results(
                 return {"query": query, "count": count, "attempts": attempts}
         time.sleep(5.0)
     raise RuntimeError(f"Direct eMule BB Torznab search returned no results before timeout. Attempts: {attempts!r}")
+
+
+def stress_cached_direct_torznab_search(
+    base_url: str,
+    emule_api_key: str,
+    query: str,
+    count: int,
+) -> dict[str, object]:
+    """Repeatedly exercises one cached direct Torznab search result."""
+
+    attempts: list[dict[str, object]] = []
+    path = (
+        f"/indexer/emulebb/api?t=search&cat={TORZNAB_LIVE_CATEGORY}&q="
+        + urllib.parse.quote(query)
+        + "&apikey="
+        + urllib.parse.quote(emule_api_key)
+    )
+    for ordinal in range(1, count + 1):
+        started = time.monotonic()
+        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=20.0)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        status = int(result.get("status") or 0)
+        body_text = str(result.get("body_text") or "")
+        item_count = count_torznab_items(body_text) if status == 200 and body_text else 0
+        attempt = {"ordinal": ordinal, "status": status, "count": item_count, "elapsed_ms": elapsed_ms}
+        attempts.append(attempt)
+        if status != 200 or item_count <= 0:
+            raise RuntimeError(f"Cached direct Torznab search stress failed: {attempts!r}")
+    return {"query": query, "requests": count, "attempts": attempts}
 
 
 def choose_listen_port(bind_addr: str) -> int:
@@ -385,12 +453,15 @@ def wait_for_prowlarr_results(
     while time.monotonic() < deadline:
         for query in queries:
             encoded_query = urllib.parse.quote(query)
-            path = f"/api/v1/search?query={encoded_query}&categories=2000&indexerIds={indexer_id}"
+            path = f"/api/v1/search?query={encoded_query}&categories={TORZNAB_LIVE_CATEGORY}&indexerIds={indexer_id}"
             result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
             status = int(result.get("status") or 0)
             payload = result.get("json")
             count = len(payload) if isinstance(payload, list) else 0
-            attempts.append({"query": query, "status": status, "count": count})
+            attempt = {"query": query, "status": status, "count": count}
+            if status < 200 or status >= 300:
+                attempt["body_preview"] = compact_body_preview(result)
+            attempts.append(attempt)
             if status >= 200 and status < 300 and count > 0:
                 first = payload[0]
                 return {
@@ -423,6 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
+    parser.add_argument("--cached-search-stress-count", type=int, default=12)
     return parser
 
 
@@ -441,6 +513,8 @@ def main() -> int:
     """Runs the live Prowlarr eMule BB bridge test."""
 
     args = build_parser().parse_args()
+    if args.cached_search_stress_count <= 0:
+        raise ValueError("--cached-search-stress-count must be greater than zero.")
     env_path = Path(args.env_path).resolve()
     env_values = load_required_env(env_path)
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
@@ -491,7 +565,7 @@ def main() -> int:
         "api_key_length": len(args.emule_api_key),
         "prowlarr_api_key_length": len(prowlarr_api_key),
         "seed_refresh": seed_refresh,
-        "search_queries": list(OPEN_LICENSED_VIDEO_QUERIES),
+        "search_queries": list(OPEN_DOCUMENT_QUERIES),
         "checks": {},
     }
     result_path = artifacts_dir / "result.json"
@@ -501,12 +575,53 @@ def main() -> int:
         report["main_window_title"] = main_window.window_text()
         ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
         report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
-        report["checks"]["direct_caps"] = check_direct_caps(emule_base_url, args.emule_api_key)
-        report["checks"]["direct_search_results"] = wait_for_direct_torznab_results(
+        servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
+        server_rows = rest_smoke.require_json_array(servers, 200)
+        report["checks"]["servers_list"] = {"count": len(server_rows)}
+        report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(
             emule_base_url,
             args.emule_api_key,
-            OPEN_LICENSED_VIDEO_QUERIES,
+            server_rows,
             args.result_timeout_seconds,
+        )
+        kad_connect = rest_smoke.http_request(
+            emule_base_url,
+            "/api/v1/kad/operations/start",
+            method="POST",
+            api_key=args.emule_api_key,
+            json_body={},
+            request_timeout_seconds=20.0,
+        )
+        report["checks"]["kad_connect"] = rest_smoke.compact_http_result(kad_connect)
+        if int(kad_connect["status"]) != 200:
+            raise RuntimeError(f"Kad start returned HTTP {kad_connect['status']}")
+        report["checks"]["kad_running"] = rest_smoke.wait_for_kad_running(
+            emule_base_url,
+            args.emule_api_key,
+            args.rest_ready_timeout_seconds,
+        )
+        report["checks"]["network_ready"] = rest_smoke.wait_for_requested_networks(
+            emule_base_url,
+            args.emule_api_key,
+            args.result_timeout_seconds,
+            require_server_connected=False,
+            require_kad_connected=True,
+        )
+        report["checks"]["direct_auth_rejection"] = check_direct_auth_rejection(emule_base_url)
+        report["checks"]["direct_caps"] = check_direct_caps(emule_base_url, args.emule_api_key)
+        report["checks"]["direct_rss_results"] = check_direct_rss_results(emule_base_url, args.emule_api_key)
+        direct_results = wait_for_direct_torznab_results(
+            emule_base_url,
+            args.emule_api_key,
+            OPEN_DOCUMENT_QUERIES,
+            args.result_timeout_seconds,
+        )
+        report["checks"]["direct_search_results"] = direct_results
+        report["checks"]["direct_cached_search_stress"] = stress_cached_direct_torznab_search(
+            emule_base_url,
+            args.emule_api_key,
+            str(direct_results["query"]),
+            args.cached_search_stress_count,
         )
 
         status_payload = require_success(
@@ -532,12 +647,26 @@ def main() -> int:
             "enable": bool(saved_indexer.get("enable")),
             "forcedSave": bool(saved_indexer.get("_emulebbForcedSave")),
         }
+        indexer_statuses = require_success(
+            prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/indexerstatus"),
+            "Prowlarr indexer status",
+        )
+        if isinstance(indexer_statuses, list):
+            report["checks"]["indexer_status"] = [
+                {
+                    "indexerId": status.get("indexerId"),
+                    "disabledTill": status.get("disabledTill"),
+                    "mostRecentFailure": status.get("mostRecentFailure"),
+                }
+                for status in indexer_statuses
+                if isinstance(status, dict) and status.get("indexerId") == int(saved_indexer["id"])
+            ]
         report["checks"]["indexer_test"] = test_indexer(prowlarr_url, prowlarr_api_key, saved_indexer)
         report["checks"]["search_results"] = wait_for_prowlarr_results(
             prowlarr_url,
             prowlarr_api_key,
             int(saved_indexer["id"]),
-            OPEN_LICENSED_VIDEO_QUERIES,
+            OPEN_DOCUMENT_QUERIES,
             args.result_timeout_seconds,
         )
         report["status"] = "passed"
