@@ -12,7 +12,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from http.cookiejar import CookieJar
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +22,9 @@ if str(REPO_ROOT) not in sys.path:
 OPEN_DOCUMENT_QUERIES = ("linux", "ubuntu", "debian", "python")
 ITALIAN_MEDIA_SEARCH_TERMS = ("La Dolce Vita", "Roma citta aperta", "Ladri di biciclette")
 SYNTHETIC_TRIGGER_MAGNET = (
-    "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000"
-    "&dn=eMuleBB-Live-Wire-Trigger.txt"
-    "&xl=1"
+    "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000"
+    "&dn=eMuleBB-Live-Wire-Trigger.bin"
+    "&xl=1048576"
 )
 
 
@@ -282,27 +281,135 @@ def get_first_direct_magnet(base_url: str, emule_api_key: str, query: str) -> di
     return {"query": query, "title": title, "magnet": link}
 
 
-def qbit_direct_add(base_url: str, emule_api_key: str, magnet: str, category: str) -> dict[str, object]:
+def qbit_request(
+    base_url: str,
+    path: str,
+    *,
+    cookie: str | None = None,
+    form: dict[str, object] | None = None,
+    method: str | None = None,
+    timeout_seconds: float = 20.0,
+) -> dict[str, object]:
+    """Performs one qBittorrent-compatible API request and captures HTTP errors."""
+
+    data = None
+    headers = {"Connection": "close"}
+    if cookie:
+        headers["Cookie"] = cookie
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    request = urllib.request.Request(base_url.rstrip("/") + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body_text = response.read().decode("utf-8", errors="replace")
+            return {"status": int(response.status), "body_text": body_text, "headers": dict(response.headers.items())}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        return {"status": int(exc.code), "body_text": body_text, "headers": dict(exc.headers.items())}
+
+
+def require_qbit_ok(result: dict[str, object], description: str) -> None:
+    """Requires one qBittorrent compatibility response to be HTTP 200 Ok."""
+
+    status = int(result.get("status") or 0)
+    body_text = str(result.get("body_text") or "")
+    if status != 200 or body_text != "Ok.":
+        raise RuntimeError(f"{description} failed with HTTP {status}: {body_text[:100]}")
+
+
+def qbit_login(base_url: str, emule_api_key: str) -> tuple[str, dict[str, object]]:
+    """Authenticates to the qBittorrent-compatible API and returns a SID cookie."""
+
+    login = qbit_request(
+        base_url,
+        "/api/v2/auth/login",
+        form={"username": "emule", "password": emule_api_key},
+        method="POST",
+    )
+    require_qbit_ok(login, "qBit login")
+    headers = login.get("headers") if isinstance(login.get("headers"), dict) else {}
+    set_cookie = str(headers.get("Set-Cookie") or "")
+    cookie = set_cookie.split(";", 1)[0]
+    if not cookie.startswith("SID="):
+        raise RuntimeError("qBit login did not return a SID cookie.")
+    return cookie, login
+
+
+def qbit_direct_add(
+    base_url: str,
+    emule_api_key: str,
+    magnet: str,
+    category: str,
+    *,
+    cookie: str | None = None,
+) -> dict[str, object]:
     """Exercises the qBittorrent add endpoint directly against eMule BB."""
 
-    cookie_jar = CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    login_data = urllib.parse.urlencode({"username": "emule", "password": emule_api_key}).encode("utf-8")
-    login_request = urllib.request.Request(base_url + "/api/v2/auth/login", data=login_data, method="POST")
-    with opener.open(login_request, timeout=20.0) as response:
-        login_body = response.read().decode("utf-8", errors="replace")
-        login_status = int(response.status)
-    if login_status != 200 or login_body != "Ok.":
-        raise RuntimeError(f"qBit login failed with HTTP {login_status}.")
+    login_status: int | None = None
+    if cookie is None:
+        cookie, login = qbit_login(base_url, emule_api_key)
+        login_status = int(login.get("status") or 0)
 
-    add_data = urllib.parse.urlencode({"urls": magnet, "category": category, "stopped": "true"}).encode("utf-8")
-    add_request = urllib.request.Request(base_url + "/api/v2/torrents/add", data=add_data, method="POST")
-    with opener.open(add_request, timeout=45.0) as response:
-        add_body = response.read().decode("utf-8", errors="replace")
-        add_status = int(response.status)
-    if add_status != 200 or add_body != "Ok.":
-        raise RuntimeError(f"qBit add failed with HTTP {add_status}: {add_body[:100]}")
-    return {"login_status": login_status, "add_status": add_status, "hash": ed2k_hash_from_magnet(magnet)}
+    add = qbit_request(
+        base_url,
+        "/api/v2/torrents/add",
+        cookie=cookie,
+        form={"urls": magnet, "category": category, "stopped": "true"},
+        method="POST",
+        timeout_seconds=45.0,
+    )
+    require_qbit_ok(add, "qBit add")
+    result: dict[str, object] = {"add_status": int(add.get("status") or 0), "hash": ed2k_hash_from_magnet(magnet)}
+    if login_status is not None:
+        result["login_status"] = login_status
+    return result
+
+
+def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, object]:
+    """Exercises unauthenticated and invalid qBittorrent compatibility paths."""
+
+    public_version = qbit_request(base_url, "/api/v2/app/webapiVersion")
+    if int(public_version.get("status") or 0) != 200 or str(public_version.get("body_text") or "") != "2.11.0":
+        raise RuntimeError(f"qBit public web API version check failed: {public_version!r}")
+
+    unauthenticated_info = qbit_request(base_url, "/api/v2/torrents/info")
+    if int(unauthenticated_info.get("status") or 0) != 403:
+        raise RuntimeError(f"qBit unauthenticated protected endpoint returned {unauthenticated_info!r}")
+
+    wrong_login = qbit_request(
+        base_url,
+        "/api/v2/auth/login",
+        form={"username": "emule", "password": emule_api_key + "-wrong"},
+        method="POST",
+    )
+    if int(wrong_login.get("status") or 0) != 200 or str(wrong_login.get("body_text") or "") != "Fails.":
+        raise RuntimeError(f"qBit wrong login was not rejected: {wrong_login!r}")
+
+    wrong_login_info = qbit_request(base_url, "/api/v2/torrents/info")
+    if int(wrong_login_info.get("status") or 0) != 403:
+        raise RuntimeError(f"qBit wrong-login session reached protected endpoint: {wrong_login_info!r}")
+
+    cookie, login = qbit_login(base_url, emule_api_key)
+    invalid_add = qbit_request(
+        base_url,
+        "/api/v2/torrents/add",
+        cookie=cookie,
+        form={"urls": "not-a-download-link", "category": "RADARR_ENG", "stopped": "true"},
+        method="POST",
+    )
+    if int(invalid_add.get("status") or 0) != 400:
+        raise RuntimeError(f"qBit invalid add was not rejected: {invalid_add!r}")
+
+    checks = {
+        "public_webapi_version": public_version,
+        "unauthenticated_info": unauthenticated_info,
+        "wrong_login": wrong_login,
+        "wrong_login_info": wrong_login_info,
+        "valid_login": login,
+        "invalid_add": invalid_add,
+    }
+    return checks
 
 
 def ed2k_hash_from_magnet(magnet: str) -> str:
@@ -323,7 +430,13 @@ def wait_for_transfer(base_url: str, emule_api_key: str, transfer_hash: str, tim
     expected_hash = transfer_hash.lower()
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        result = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=emule_api_key)
+        request_timeout = min(30.0, max(1.0, deadline - time.monotonic()))
+        result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/transfers",
+            api_key=emule_api_key,
+            request_timeout_seconds=request_timeout,
+        )
         transfers = rest_smoke.require_json_array(result, 200)
         for transfer in transfers:
             if isinstance(transfer, dict) and str(transfer.get("hash") or "").lower() == expected_hash:
@@ -335,6 +448,47 @@ def wait_for_transfer(base_url: str, emule_api_key: str, transfer_hash: str, tim
                 }
         time.sleep(2.0)
     raise RuntimeError(f"Added qBit transfer did not appear before timeout: {expected_hash}")
+
+
+def wait_for_transfer_category(
+    base_url: str,
+    emule_api_key: str,
+    transfer_hash: str,
+    category: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until a native transfer reports the expected category."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        last = wait_for_transfer(base_url, emule_api_key, transfer_hash, min(5.0, timeout_seconds))
+        if str(last.get("categoryName") or "") == category:
+            return last
+        time.sleep(1.0)
+    raise RuntimeError(f"Transfer {transfer_hash} did not report category {category!r}. Last: {last!r}")
+
+
+def wait_for_transfer_absent(base_url: str, emule_api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
+    """Waits until a native transfer hash disappears."""
+
+    expected_hash = transfer_hash.lower()
+    deadline = time.monotonic() + timeout_seconds
+    last_count = 0
+    while time.monotonic() < deadline:
+        request_timeout = min(30.0, max(1.0, deadline - time.monotonic()))
+        result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/transfers",
+            api_key=emule_api_key,
+            request_timeout_seconds=request_timeout,
+        )
+        transfers = rest_smoke.require_json_array(result, 200)
+        last_count = len(transfers)
+        if not any(isinstance(transfer, dict) and str(transfer.get("hash") or "").lower() == expected_hash for transfer in transfers):
+            return {"hash": expected_hash, "absent": True, "last_count": last_count}
+        time.sleep(1.0)
+    raise RuntimeError(f"Deleted qBit transfer still appeared before timeout: {expected_hash} ({last_count} transfers)")
 
 
 def delete_transfer(base_url: str, emule_api_key: str, transfer_hash: str) -> dict[str, object]:
@@ -349,6 +503,71 @@ def delete_transfer(base_url: str, emule_api_key: str, transfer_hash: str) -> di
         request_timeout_seconds=20.0,
     )
     return rest_smoke.compact_http_result(result)
+
+
+def qbit_direct_live_wire_roundtrip(
+    base_url: str,
+    emule_api_key: str,
+    magnet: str,
+    *,
+    initial_category: str,
+    updated_category: str,
+    timeout_seconds: float,
+    progress: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Exercises qBittorrent-compatible add, mutate, verify, and delete flow."""
+
+    report = progress if progress is not None else {}
+    cookie, login = qbit_login(base_url, emule_api_key)
+    report["login_status"] = int(login.get("status") or 0)
+    added = qbit_direct_add(base_url, emule_api_key, magnet, initial_category, cookie=cookie)
+    report["add"] = added
+    transfer_hash = str(added["hash"])
+
+    set_category = qbit_request(
+        base_url,
+        "/api/v2/torrents/setCategory",
+        cookie=cookie,
+        form={"hashes": transfer_hash, "category": updated_category},
+        method="POST",
+    )
+    require_qbit_ok(set_category, "qBit setCategory")
+    report["set_category_status"] = int(set_category.get("status") or 0)
+
+    resume = qbit_request(
+        base_url,
+        "/api/v2/torrents/resume",
+        cookie=cookie,
+        form={"hashes": transfer_hash},
+        method="POST",
+    )
+    require_qbit_ok(resume, "qBit resume")
+    report["resume_status"] = int(resume.get("status") or 0)
+
+    pause = qbit_request(
+        base_url,
+        "/api/v2/torrents/pause",
+        cookie=cookie,
+        form={"hashes": transfer_hash},
+        method="POST",
+    )
+    require_qbit_ok(pause, "qBit pause")
+    report["pause_status"] = int(pause.get("status") or 0)
+
+    delete = qbit_request(
+        base_url,
+        "/api/v2/torrents/delete",
+        cookie=cookie,
+        form={"hashes": transfer_hash, "deleteFiles": "true"},
+        method="POST",
+        timeout_seconds=30.0,
+    )
+    require_qbit_ok(delete, "qBit delete")
+    report["delete_status"] = int(delete.get("status") or 0)
+    deleted_seen = wait_for_transfer_absent(base_url, emule_api_key, transfer_hash, timeout_seconds)
+    report["deleted_transfer"] = deleted_seen
+
+    return report
 
 
 def wait_for_arr_release_results(
@@ -516,6 +735,7 @@ def main() -> int:
     )
 
     app = None
+    main_window = None
     cleanup_clients: list[tuple[str, str, int]] = []
     forced_trigger_added = False
     report: dict[str, object] = {
@@ -566,6 +786,27 @@ def main() -> int:
         )
         report["checks"]["direct_search_results"] = direct_results
 
+        magnet = get_first_direct_magnet(emule_base_url, args.emule_api_key, str(direct_results["query"]))
+        report["checks"]["direct_qbit_magnet"] = {"query": magnet["query"], "title": magnet["title"]}
+        report["checks"]["qbit_safety"] = qbit_direct_safety_checks(emule_base_url, args.emule_api_key)
+        report["checks"]["direct_qbit_trigger"] = {
+            "title": magnet["title"],
+            "hash": ed2k_hash_from_magnet(str(magnet["magnet"])),
+        }
+        forced_trigger_added = True
+        direct_qbit_live_wire: dict[str, object] = {}
+        report["checks"]["direct_qbit_live_wire"] = direct_qbit_live_wire
+        qbit_direct_live_wire_roundtrip(
+            emule_base_url,
+            args.emule_api_key,
+            str(magnet["magnet"]),
+            initial_category="RADARR_ENG",
+            updated_category="SONARR_ENG",
+            timeout_seconds=args.result_timeout_seconds,
+            progress=direct_qbit_live_wire,
+        )
+        forced_trigger_added = False
+
         eng_tag_id = get_tag_id(prowlarr_url, prowlarr_api_key, "eng")
         saved_indexer = prowlarr_live.upsert_indexer(
             prowlarr_url,
@@ -612,24 +853,32 @@ def main() -> int:
         cleanup_clients.append((env_values["SONARR_URL"].rstrip("/"), env_values["SONARR_API_KEY"], sonarr_client_id))
         report["checks"]["sonarr"] = sonarr_report
 
-        magnet = get_first_direct_magnet(emule_base_url, args.emule_api_key, str(direct_results["query"]))
-        report["checks"]["direct_qbit_magnet"] = {"query": magnet["query"], "title": magnet["title"]}
-        report["checks"]["synthetic_qbit_trigger"] = {
-            "title": "eMuleBB-Live-Wire-Trigger.txt",
-            "hash": ed2k_hash_from_magnet(SYNTHETIC_TRIGGER_MAGNET),
-        }
-        report["checks"]["direct_qbit_add"] = qbit_direct_add(
-            emule_base_url,
-            args.emule_api_key,
-            SYNTHETIC_TRIGGER_MAGNET,
-            "RADARR_ENG",
-        )
-        forced_trigger_added = True
         report["status"] = "passed"
         return 0
     except Exception as exc:
         report["status"] = "failed"
         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        if app is not None:
+            try:
+                windows = []
+                for window in app.windows():
+                    windows.append(
+                        {
+                            "handle": int(window.handle),
+                            "class_name": window.class_name(),
+                            "text": window.window_text(),
+                            "visible": window.is_visible(),
+                        }
+                    )
+                report["failure_windows"] = windows
+            except Exception as window_exc:
+                report["failure_windows_error"] = str(window_exc)
+        if main_window is not None:
+            try:
+                live_common.dump_window_tree(main_window.handle, artifacts_dir / "window-tree-failure.json")
+                report["failure_window_tree"] = "window-tree-failure.json"
+            except Exception as tree_exc:
+                report["failure_window_tree_error"] = str(tree_exc)
         return 1
     finally:
         cleanup_report: list[dict[str, object]] = []
