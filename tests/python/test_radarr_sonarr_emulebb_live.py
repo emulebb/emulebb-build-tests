@@ -95,6 +95,8 @@ def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pyte
 
     def fake_qbit_request(_base_url, path, **_kwargs):
         calls.append(path.rsplit("/", 1)[-1])
+        if path == "/api/v2/torrents/info":
+            return {"status": 200, "body_text": f'[{{"hash":"{transfer_hash}"}}]'}
         return {"status": 200, "body_text": "Ok."}
 
     monkeypatch.setattr(module, "qbit_request", fake_qbit_request)
@@ -110,6 +112,7 @@ def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pyte
 
     assert calls == [
         "add",
+        "info",
         "setCategory",
         "resume",
         "pause",

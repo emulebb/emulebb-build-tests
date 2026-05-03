@@ -318,6 +318,19 @@ def require_qbit_ok(result: dict[str, object], description: str) -> None:
         raise RuntimeError(f"{description} failed with HTTP {status}: {body_text[:100]}")
 
 
+def require_qbit_json(result: dict[str, object], description: str) -> Any:
+    """Returns the JSON body from one successful qBittorrent response."""
+
+    status = int(result.get("status") or 0)
+    body_text = str(result.get("body_text") or "")
+    if status != 200:
+        raise RuntimeError(f"{description} failed with HTTP {status}: {body_text[:100]}")
+    try:
+        return json.loads(body_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{description} returned invalid JSON: {exc}") from exc
+
+
 def qbit_login(base_url: str, emule_api_key: str) -> tuple[str, dict[str, object]]:
     """Authenticates to the qBittorrent-compatible API and returns a SID cookie."""
 
@@ -523,6 +536,14 @@ def qbit_direct_live_wire_roundtrip(
     added = qbit_direct_add(base_url, emule_api_key, magnet, initial_category, cookie=cookie)
     report["add"] = added
     transfer_hash = str(added["hash"])
+    info_after_add = qbit_request(base_url, "/api/v2/torrents/info", cookie=cookie, timeout_seconds=30.0)
+    info_rows = require_qbit_json(info_after_add, "qBit torrents info after add")
+    if not isinstance(info_rows, list):
+        raise RuntimeError("qBit torrents info after add did not return a list.")
+    matching_info_rows = [row for row in info_rows if isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash]
+    if not matching_info_rows:
+        raise RuntimeError(f"qBit torrents info after add did not include {transfer_hash}.")
+    report["info_after_add"] = {"status": int(info_after_add.get("status") or 0), "count": len(info_rows)}
 
     set_category = qbit_request(
         base_url,
