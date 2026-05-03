@@ -158,6 +158,7 @@ def build_suite_command(
     rest_server_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_kad_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_download_trigger_count: int = DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT,
+    rest_search_method_override: str | None = None,
     rest_coverage_profile: str = "contract",
     rest_stress_profile: str = "smoke",
     rest_stress_duration_seconds: float = 30.0,
@@ -199,6 +200,8 @@ def build_suite_command(
         command.extend(["--server-search-count", str(rest_server_search_count)])
         command.extend(["--kad-search-count", str(rest_kad_search_count)])
         command.extend(["--live-download-trigger-count", str(rest_download_trigger_count)])
+        if rest_search_method_override:
+            command.extend(["--search-method-override", rest_search_method_override])
         command.extend(["--rest-coverage-profile", rest_coverage_profile])
         command.extend(["--rest-stress-profile", rest_stress_profile])
         command.extend(["--rest-stress-duration-seconds", str(rest_stress_duration_seconds)])
@@ -251,6 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-server-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-kad-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-download-trigger-count", type=int, default=DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)
+    parser.add_argument("--rest-search-method-override", choices=["automatic", "server", "global", "kad"])
     parser.add_argument("--rest-coverage-profile", choices=["smoke", "contract", "contract-stress"], default="contract")
     parser.add_argument("--rest-stress-profile", choices=["off", "smoke", "soak"], default="smoke")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
@@ -320,6 +324,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_stress_max_failures": args.rest_stress_max_failures,
         "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
         "rest_download_trigger_count": args.rest_download_trigger_count,
+        "rest_search_method_override": args.rest_search_method_override,
         "fail_fast": bool(args.fail_fast),
         "has_inconclusive_suites": False,
         "suites": [],
@@ -343,6 +348,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_server_search_count=args.rest_server_search_count,
             rest_kad_search_count=args.rest_kad_search_count,
             rest_download_trigger_count=args.rest_download_trigger_count,
+            rest_search_method_override=args.rest_search_method_override,
             rest_coverage_profile=args.rest_coverage_profile,
             rest_stress_profile=args.rest_stress_profile,
             rest_stress_duration_seconds=args.rest_stress_duration_seconds,
@@ -376,6 +382,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                     "rest_stress_max_failures": args.rest_stress_max_failures,
                     "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
                     "rest_download_trigger_count": args.rest_download_trigger_count,
+                    "rest_search_method_override": args.rest_search_method_override,
                 }
             )
         summary["suites"].append(result)  # type: ignore[index]

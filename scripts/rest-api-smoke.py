@@ -80,6 +80,7 @@ REST_SURFACE_TEST_SERVER = {
     "name": "REST surface smoke disposable",
 }
 REST_SURFACE_MISSING_HASH = "0123456789abcdef0123456789abcdef"
+REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
 REST_PREFERENCE_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
@@ -627,6 +628,19 @@ def require_missing_transfer_bulk_result(result: dict[str, object]) -> dict[str,
     assert first.get("ok") is False, compact_http_result(result)
     assert str(first.get("hash") or "").lower() == REST_SURFACE_MISSING_HASH
     assert "transfer not found" in str(first.get("error") or "")
+    return first
+
+
+def require_transfer_bulk_result(result: dict[str, object], expected_hash: str, expected_ok: bool) -> dict[str, object]:
+    """Asserts one bulk transfer mutation reports the expected per-item outcome."""
+
+    payload = require_json_object(result, 200)
+    rows = payload.get("items") or payload.get("results")
+    assert isinstance(rows, list) and rows, compact_http_result(result)
+    first = rows[0]
+    assert isinstance(first, dict), compact_http_result(result)
+    assert first.get("ok") is expected_ok, compact_http_result(result)
+    assert str(first.get("hash") or "").lower() == expected_hash
     return first
 
 
@@ -1301,6 +1315,29 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={"link": "not-an-ed2k-link"},
     )
+    transfer_add_valid = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={
+            "link": f"ed2k://|file|rest-api-smoke.bin|1024|{REST_SURFACE_VALID_DOWNLOAD_HASH}|/",
+            "paused": True,
+            "categoryId": 0,
+        },
+        request_timeout_seconds=30.0,
+    )
+    transfer_add_valid_payload = require_json_object(transfer_add_valid, 200)
+    transfer_added = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}", api_key=api_key)
+    transfer_added_payload = require_json_object(transfer_added, 200)
+    transfer_delete_added = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"deleteFiles": True},
+        request_timeout_seconds=30.0,
+    )
     transfer_recheck_missing = http_request(
         base_url,
         f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/recheck",
@@ -1352,6 +1389,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "INVALID_ARGUMENT",
             message_contains="Not an eD2K server or file link",
         ),
+        "add_valid_paused": {
+            "status": transfer_add_valid["status"],
+            "hash": transfer_add_valid_payload.get("hash"),
+            "state": transfer_added_payload.get("state"),
+            "delete": require_transfer_bulk_result(transfer_delete_added, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+        },
         "recheck_missing": require_error_response(transfer_recheck_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "priority_missing": require_error_response(transfer_priority_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "category_missing": require_error_response(transfer_category_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
@@ -2187,8 +2230,6 @@ def trigger_paused_download_from_search_result(
             }
         )
         if candidate is None:
-            if payload.get("status") == "complete":
-                return {"ok": False, "reason": "search completed without a safe download candidate", "observations": observations}
             return None
         selected_candidate = {
             "hash": candidate.get("hash"),

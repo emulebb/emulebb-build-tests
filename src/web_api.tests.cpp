@@ -711,7 +711,8 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["filter"].get<std::string>(), "paused");
 	CHECK_EQ(route.params["categoryId"].get<uint64_t>(), 2u);
 	CHECK(route.params["_items_envelope"].get<bool>());
-	assertRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/"})", "transfers/add");
+	assertRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","paused":true})", "transfers/add");
+	CHECK(route.params["paused"].get<bool>());
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/pause", R"({})", "transfers/pause");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/resume", R"({})", "transfers/resume");
