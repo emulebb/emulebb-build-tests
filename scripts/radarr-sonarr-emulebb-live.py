@@ -1,0 +1,678 @@
+"""Runs live Radarr and Sonarr checks through Prowlarr and eMule BB qBit APIs."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import socket
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from http.cookiejar import CookieJar
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+OPEN_DOCUMENT_QUERIES = ("linux", "ubuntu", "debian", "python")
+ITALIAN_MEDIA_SEARCH_TERMS = ("La Dolce Vita", "Roma citta aperta", "Ladri di biciclette")
+SYNTHETIC_TRIGGER_MAGNET = (
+    "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000"
+    "&dn=eMuleBB-Live-Wire-Trigger.txt"
+    "&xl=1"
+)
+
+
+def load_local_module(module_name: str, filename: str):
+    """Loads one sibling helper module from a hyphenated script filename."""
+
+    module_path = Path(__file__).resolve().with_name(filename)
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+prowlarr_live = load_local_module("prowlarr_emulebb_live", "prowlarr-emulebb-live.py")
+harness_cli_common = prowlarr_live.harness_cli_common
+rest_smoke = prowlarr_live.rest_smoke
+live_common = prowlarr_live.live_common
+
+
+def arr_request(
+    arr_url: str,
+    api_key: str,
+    path: str,
+    *,
+    method: str = "GET",
+    json_body: object | None = None,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Performs one Radarr/Sonarr API request without logging credentials."""
+
+    data = None
+    headers = {"X-Api-Key": api_key}
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    request = urllib.request.Request(arr_url.rstrip("/") + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body_text = response.read().decode("utf-8", errors="replace")
+            payload = json.loads(body_text) if body_text else None
+            return {"status": int(response.status), "json": payload, "body_text": body_text}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        payload = None
+        if body_text:
+            try:
+                payload = json.loads(body_text)
+            except json.JSONDecodeError:
+                payload = None
+        return {"status": int(exc.code), "json": payload, "body_text": body_text}
+
+
+def require_success(result: dict[str, Any], description: str) -> Any:
+    """Returns the JSON payload from one successful Arr response."""
+
+    status = int(result.get("status") or 0)
+    if status < 200 or status >= 300:
+        body = str(result.get("body_text") or "")
+        raise RuntimeError(f"{description} failed with HTTP {status}: {body[:500]}")
+    return result.get("json")
+
+
+def set_field_value(provider: dict[str, Any], field_name: str, value: object) -> None:
+    """Updates one provider field by name."""
+
+    fields = provider.get("fields")
+    if not isinstance(fields, list):
+        raise RuntimeError("Provider payload does not contain a fields array.")
+    for field in fields:
+        if isinstance(field, dict) and field.get("name") == field_name:
+            field["value"] = value
+            return
+    raise RuntimeError(f"Provider payload is missing field: {field_name}")
+
+
+def get_tag_id(prowlarr_url: str, api_key: str, label: str) -> int | None:
+    """Returns a Prowlarr tag id by label when the tag exists."""
+
+    tags = require_success(
+        prowlarr_live.prowlarr_request(prowlarr_url, api_key, "/api/v1/tag"),
+        "Prowlarr tag list",
+    )
+    if not isinstance(tags, list):
+        return None
+    for tag in tags:
+        if isinstance(tag, dict) and str(tag.get("label") or "").lower() == label.lower():
+            return int(tag["id"])
+    return None
+
+
+def force_prowlarr_application_sync(prowlarr_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
+    """Starts and waits for a Prowlarr application-indexer sync command."""
+
+    result = prowlarr_live.prowlarr_request(
+        prowlarr_url,
+        api_key,
+        "/api/v1/command",
+        method="POST",
+        json_body={"name": "ApplicationIndexerSync", "forceSync": True},
+    )
+    command = require_success(result, "Prowlarr application indexer sync command")
+    command_id = int(command.get("id") or 0) if isinstance(command, dict) else 0
+    if command_id <= 0:
+        return {"id": command_id, "status": "submitted_without_id"}
+
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        last = require_success(
+            prowlarr_live.prowlarr_request(prowlarr_url, api_key, f"/api/v1/command/{command_id}"),
+            "Prowlarr application indexer sync command status",
+        )
+        status = str(last.get("status") or "").lower() if isinstance(last, dict) else ""
+        if status in ("completed", "failed"):
+            return {"id": command_id, "status": status}
+        time.sleep(2.0)
+    return {"id": command_id, "status": "timeout", "last": last}
+
+
+def wait_for_synced_indexer(arr_url: str, api_key: str, indexer_name: str, timeout_seconds: float) -> dict[str, Any]:
+    """Waits until Radarr/Sonarr exposes the synced eMule BB indexer."""
+
+    attempts: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        indexers = require_success(arr_request(arr_url, api_key, "/api/v3/indexer"), "Arr indexer list")
+        if not isinstance(indexers, list):
+            raise RuntimeError("Arr indexer list was not a list.")
+        names = [str(indexer.get("name") or "") for indexer in indexers if isinstance(indexer, dict)]
+        for indexer in indexers:
+            if not isinstance(indexer, dict):
+                continue
+            name = str(indexer.get("name") or "")
+            if indexer_name.lower() in name.lower() or "emule bb" in name.lower():
+                return indexer
+        attempts.append({"names": names})
+        time.sleep(5.0)
+    raise RuntimeError(f"Synced eMule BB indexer did not appear before timeout: {attempts!r}")
+
+
+def get_qbit_schema(arr_url: str, api_key: str) -> dict[str, Any]:
+    """Loads the qBittorrent download-client schema from Radarr/Sonarr."""
+
+    schemas = require_success(arr_request(arr_url, api_key, "/api/v3/downloadclient/schema"), "Arr download client schema")
+    if not isinstance(schemas, list):
+        raise RuntimeError("Arr download client schema response was not a list.")
+    for schema in schemas:
+        if isinstance(schema, dict) and schema.get("implementation") == "QBittorrent":
+            return schema
+    raise RuntimeError("Arr did not expose the qBittorrent download client schema.")
+
+
+def build_qbit_client_payload(
+    schema: dict[str, Any],
+    *,
+    name: str,
+    host: str,
+    port: int,
+    api_key: str,
+    category_field: str,
+    category: str,
+) -> dict[str, Any]:
+    """Builds a temporary qBittorrent client payload for eMule BB."""
+
+    payload = json.loads(json.dumps(schema))
+    payload["name"] = name
+    payload["enable"] = True
+    payload["priority"] = int(payload.get("priority") or 1)
+    payload["implementation"] = "QBittorrent"
+    payload["implementationName"] = "qBittorrent"
+    payload["configContract"] = "QBittorrentSettings"
+    payload["protocol"] = "torrent"
+    payload["removeCompletedDownloads"] = False
+    payload["removeFailedDownloads"] = False
+    set_field_value(payload, "host", host)
+    set_field_value(payload, "port", port)
+    set_field_value(payload, "useSsl", False)
+    set_field_value(payload, "urlBase", "")
+    set_field_value(payload, "username", "emule")
+    set_field_value(payload, "password", api_key)
+    set_field_value(payload, category_field, category)
+    set_field_value(payload, "initialState", 2)
+    return payload
+
+
+def create_temp_qbit_client(
+    arr_url: str,
+    api_key: str,
+    *,
+    name: str,
+    host: str,
+    port: int,
+    emule_api_key: str,
+    category_field: str,
+    category: str,
+) -> dict[str, Any]:
+    """Creates a temporary qBittorrent client and validates it."""
+
+    schema = get_qbit_schema(arr_url, api_key)
+    payload = build_qbit_client_payload(
+        schema,
+        name=name,
+        host=host,
+        port=port,
+        api_key=emule_api_key,
+        category_field=category_field,
+        category=category,
+    )
+    created = require_success(
+        arr_request(arr_url, api_key, "/api/v3/downloadclient?forceSave=true", method="POST", json_body=payload),
+        "Arr eMule BB qBittorrent client create",
+    )
+    if not isinstance(created, dict) or not created.get("id"):
+        raise RuntimeError("Arr did not return a created qBittorrent client id.")
+
+    test_payload = json.loads(json.dumps(created))
+    test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
+    require_success(test_result, "Arr eMule BB qBittorrent client test")
+    return created
+
+
+def delete_download_client(arr_url: str, api_key: str, client_id: int) -> dict[str, object]:
+    """Deletes one temporary Arr download client."""
+
+    result = arr_request(arr_url, api_key, f"/api/v3/downloadclient/{client_id}", method="DELETE")
+    return {"id": client_id, "status": int(result.get("status") or 0)}
+
+
+def get_first_direct_magnet(base_url: str, emule_api_key: str, query: str) -> dict[str, object]:
+    """Returns the first direct Torznab magnet for a safe open-document query."""
+
+    path = (
+        "/indexer/emulebb/api?t=search&cat=7000&q="
+        + urllib.parse.quote(query)
+        + "&apikey="
+        + urllib.parse.quote(emule_api_key)
+    )
+    result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+    status = int(result.get("status") or 0)
+    body_text = str(result.get("body_text") or "")
+    if status != 200:
+        raise RuntimeError(f"Direct Torznab magnet lookup returned HTTP {status}")
+    root = ET.fromstring(body_text)
+    item = root.find("./channel/item")
+    if item is None:
+        raise RuntimeError("Direct Torznab magnet lookup returned no items.")
+    title = item.findtext("title") or ""
+    link = item.findtext("link") or ""
+    if not link.startswith("magnet:?"):
+        raise RuntimeError("Direct Torznab first item did not include a magnet link.")
+    return {"query": query, "title": title, "magnet": link}
+
+
+def qbit_direct_add(base_url: str, emule_api_key: str, magnet: str, category: str) -> dict[str, object]:
+    """Exercises the qBittorrent add endpoint directly against eMule BB."""
+
+    cookie_jar = CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    login_data = urllib.parse.urlencode({"username": "emule", "password": emule_api_key}).encode("utf-8")
+    login_request = urllib.request.Request(base_url + "/api/v2/auth/login", data=login_data, method="POST")
+    with opener.open(login_request, timeout=20.0) as response:
+        login_body = response.read().decode("utf-8", errors="replace")
+        login_status = int(response.status)
+    if login_status != 200 or login_body != "Ok.":
+        raise RuntimeError(f"qBit login failed with HTTP {login_status}.")
+
+    add_data = urllib.parse.urlencode({"urls": magnet, "category": category, "stopped": "true"}).encode("utf-8")
+    add_request = urllib.request.Request(base_url + "/api/v2/torrents/add", data=add_data, method="POST")
+    with opener.open(add_request, timeout=45.0) as response:
+        add_body = response.read().decode("utf-8", errors="replace")
+        add_status = int(response.status)
+    if add_status != 200 or add_body != "Ok.":
+        raise RuntimeError(f"qBit add failed with HTTP {add_status}: {add_body[:100]}")
+    return {"login_status": login_status, "add_status": add_status, "hash": ed2k_hash_from_magnet(magnet)}
+
+
+def ed2k_hash_from_magnet(magnet: str) -> str:
+    """Extracts the eD2K hash carried by an eMule BB fake BTIH magnet."""
+
+    parsed = urllib.parse.urlparse(magnet)
+    query = urllib.parse.parse_qs(parsed.query)
+    xt = query.get("xt", [""])[0].lower()
+    prefix = "urn:btih:"
+    if not xt.startswith(prefix) or len(xt) < len(prefix) + 40:
+        raise RuntimeError("Magnet does not contain an eMule BB fake BTIH hash.")
+    return xt[len(prefix) : len(prefix) + 32]
+
+
+def wait_for_transfer(base_url: str, emule_api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
+    """Waits until the direct qBit add appears in native eMule transfers."""
+
+    expected_hash = transfer_hash.lower()
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        result = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=emule_api_key)
+        transfers = rest_smoke.require_json_array(result, 200)
+        for transfer in transfers:
+            if isinstance(transfer, dict) and str(transfer.get("hash") or "").lower() == expected_hash:
+                return {
+                    "hash": transfer.get("hash"),
+                    "name": transfer.get("name"),
+                    "state": transfer.get("state"),
+                    "categoryName": transfer.get("categoryName"),
+                }
+        time.sleep(2.0)
+    raise RuntimeError(f"Added qBit transfer did not appear before timeout: {expected_hash}")
+
+
+def delete_transfer(base_url: str, emule_api_key: str, transfer_hash: str) -> dict[str, object]:
+    """Removes one temporary transfer from the native eMule profile."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        f"/api/v1/transfers/{transfer_hash}",
+        method="DELETE",
+        api_key=emule_api_key,
+        json_body={"deleteFiles": True},
+        request_timeout_seconds=20.0,
+    )
+    return rest_smoke.compact_http_result(result)
+
+
+def wait_for_arr_release_results(
+    arr_url: str,
+    api_key: str,
+    indexer_id: int,
+    terms: tuple[str, ...],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Polls Radarr/Sonarr release RSS/search until the synced indexer appears."""
+
+    attempts: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        for term in terms:
+            path = f"/api/v3/release?term={urllib.parse.quote(term)}&indexerIds={indexer_id}"
+            result = arr_request(arr_url, api_key, path, timeout_seconds=90.0)
+            payload = result.get("json")
+            rows = payload if isinstance(payload, list) else []
+            matches = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and (int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower())
+            ]
+            attempts.append({"term": term, "status": int(result.get("status") or 0), "count": len(rows), "matches": len(matches)})
+            if matches:
+                first = matches[0]
+                return {
+                    "term": term,
+                    "count": len(matches),
+                    "first_title": first.get("title"),
+                    "indexer": first.get("indexer"),
+                }
+        time.sleep(5.0)
+    raise RuntimeError(f"Arr release searches returned no eMule BB rows before timeout. Attempts: {attempts!r}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Builds the Radarr/Sonarr eMule BB live test argument parser."""
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--workspace-root")
+    parser.add_argument("--app-root")
+    parser.add_argument("--app-exe")
+    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--artifacts-dir")
+    parser.add_argument("--keep-artifacts", action="store_true")
+    parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
+    parser.add_argument("--env-path", default=str((REPO_ROOT / ".env.local").resolve()))
+    parser.add_argument("--emule-api-key", default="arr-emulebb-live-key")
+    parser.add_argument("--bind-addr")
+    parser.add_argument("--enable-upnp", action="store_true")
+    parser.add_argument("--skip-live-seed-refresh", action="store_true")
+    parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
+    parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
+    parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
+    return parser
+
+
+def run_arr_checks(
+    *,
+    kind: str,
+    arr_url: str,
+    arr_api_key: str,
+    bind_addr: str,
+    port: int,
+    emule_api_key: str,
+    indexer_name: str,
+    timeout_seconds: float,
+) -> tuple[dict[str, object], int | None]:
+    """Runs one Radarr or Sonarr live integration check."""
+
+    category = "RADARR_ENG" if kind == "radarr" else "SONARR_ENG"
+    category_field = "movieCategory" if kind == "radarr" else "tvCategory"
+    temp_client_name = f"eMule BB Live {kind} {port}"
+    status_payload = require_success(arr_request(arr_url, arr_api_key, "/api/v3/system/status"), f"{kind} status")
+    synced_indexer = wait_for_synced_indexer(arr_url, arr_api_key, indexer_name, timeout_seconds)
+    client = create_temp_qbit_client(
+        arr_url,
+        arr_api_key,
+        name=temp_client_name,
+        host=bind_addr,
+        port=port,
+        emule_api_key=emule_api_key,
+        category_field=category_field,
+        category=category,
+    )
+    report: dict[str, object] = {
+        "status": {
+            "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
+            "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
+        },
+        "synced_indexer": {
+            "id": int(synced_indexer.get("id") or 0),
+            "name": synced_indexer.get("name"),
+            "enable": bool(synced_indexer.get("enable")),
+        },
+        "download_client": {
+            "id": int(client["id"]),
+            "name": client.get("name"),
+            "implementation": client.get("implementation"),
+            "enable": bool(client.get("enable")),
+            "category": category,
+        },
+    }
+    try:
+        report["release_search"] = wait_for_arr_release_results(
+            arr_url,
+            arr_api_key,
+            int(synced_indexer.get("id") or 0),
+            ITALIAN_MEDIA_SEARCH_TERMS + OPEN_DOCUMENT_QUERIES,
+            timeout_seconds,
+        )
+    except Exception as exc:
+        report["release_search"] = {"status": "inconclusive", "error": str(exc)}
+    return report, int(client["id"])
+
+
+def main() -> int:
+    """Runs the live Radarr/Sonarr eMule BB bridge test."""
+
+    args = build_parser().parse_args()
+    env_values = prowlarr_live.load_required_env(Path(args.env_path).resolve())
+    required = ("RADARR_URL", "RADARR_API_KEY", "SONARR_URL", "SONARR_API_KEY")
+    missing = [name for name in required if not env_values.get(name)]
+    if missing:
+        raise RuntimeError(f"Local env file is missing required key(s): {', '.join(missing)}")
+
+    prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
+    prowlarr_api_key = env_values["PROWLARR_API_KEY"]
+    indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
+    bind_addr = prowlarr_live.resolve_bind_addr(prowlarr_url, args.bind_addr)
+    port = prowlarr_live.choose_listen_port(bind_addr)
+    emule_base_url = f"http://{bind_addr}:{port}"
+    torznab_base_url = f"{emule_base_url}/indexer/emulebb"
+
+    paths = harness_cli_common.prepare_run_paths(
+        script_file=__file__,
+        suite_name="radarr-sonarr-emulebb-live",
+        configuration=args.configuration,
+        workspace_root=args.workspace_root,
+        app_root=args.app_root,
+        app_exe=args.app_exe,
+        artifacts_dir=args.artifacts_dir,
+        keep_artifacts=args.keep_artifacts,
+    )
+    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    artifacts_dir = paths.source_artifacts_dir
+    result_path = artifacts_dir / "result.json"
+    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    seed_refresh = None
+    if not args.skip_live_seed_refresh:
+        seed_refresh = rest_smoke.refresh_seed_files(
+            Path(profile["config_dir"]),
+            timeout_seconds=args.seed_download_timeout_seconds,
+        )
+    rest_smoke.configure_webserver_profile(
+        Path(profile["config_dir"]),
+        paths.app_exe,
+        args.emule_api_key,
+        port,
+        bind_addr,
+        args.enable_upnp,
+    )
+
+    app = None
+    cleanup_clients: list[tuple[str, str, int]] = []
+    forced_trigger_added = False
+    report: dict[str, object] = {
+        "suite": "radarr-sonarr-emulebb-live",
+        "status": "running",
+        "emule_base_url": emule_base_url,
+        "torznab_base_url": torznab_base_url,
+        "indexer_name": indexer_name,
+        "seed_refresh": seed_refresh,
+        "checks": {},
+    }
+    try:
+        app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
+        main_window = live_common.wait_for_main_window(app)
+        report["main_window_title"] = main_window.window_text()
+        ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
+        report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
+        servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
+        server_rows = rest_smoke.require_json_array(servers, 200)
+        report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(
+            emule_base_url,
+            args.emule_api_key,
+            server_rows,
+            args.result_timeout_seconds,
+        )
+        kad_connect = rest_smoke.http_request(
+            emule_base_url,
+            "/api/v1/kad/operations/start",
+            method="POST",
+            api_key=args.emule_api_key,
+            json_body={},
+            request_timeout_seconds=20.0,
+        )
+        if int(kad_connect["status"]) != 200:
+            raise RuntimeError(f"Kad start returned HTTP {kad_connect['status']}")
+        report["checks"]["network_ready"] = rest_smoke.wait_for_requested_networks(
+            emule_base_url,
+            args.emule_api_key,
+            args.result_timeout_seconds,
+            require_server_connected=False,
+            require_kad_connected=True,
+        )
+        direct_results = prowlarr_live.wait_for_direct_torznab_results(
+            emule_base_url,
+            args.emule_api_key,
+            OPEN_DOCUMENT_QUERIES,
+            args.result_timeout_seconds,
+        )
+        report["checks"]["direct_search_results"] = direct_results
+
+        eng_tag_id = get_tag_id(prowlarr_url, prowlarr_api_key, "eng")
+        saved_indexer = prowlarr_live.upsert_indexer(
+            prowlarr_url,
+            prowlarr_api_key,
+            indexer_name=indexer_name,
+            torznab_base_url=torznab_base_url,
+            emule_api_key=args.emule_api_key,
+            tags=[eng_tag_id] if eng_tag_id is not None else None,
+        )
+        report["checks"]["prowlarr_indexer"] = {
+            "id": int(saved_indexer["id"]),
+            "name": saved_indexer.get("name"),
+            "tags": saved_indexer.get("tags"),
+        }
+        report["checks"]["prowlarr_sync"] = force_prowlarr_application_sync(
+            prowlarr_url,
+            prowlarr_api_key,
+            args.result_timeout_seconds,
+        )
+
+        radarr_report, radarr_client_id = run_arr_checks(
+            kind="radarr",
+            arr_url=env_values["RADARR_URL"].rstrip("/"),
+            arr_api_key=env_values["RADARR_API_KEY"],
+            bind_addr=bind_addr,
+            port=port,
+            emule_api_key=args.emule_api_key,
+            indexer_name=indexer_name,
+            timeout_seconds=args.result_timeout_seconds,
+        )
+        cleanup_clients.append((env_values["RADARR_URL"].rstrip("/"), env_values["RADARR_API_KEY"], radarr_client_id))
+        report["checks"]["radarr"] = radarr_report
+
+        sonarr_report, sonarr_client_id = run_arr_checks(
+            kind="sonarr",
+            arr_url=env_values["SONARR_URL"].rstrip("/"),
+            arr_api_key=env_values["SONARR_API_KEY"],
+            bind_addr=bind_addr,
+            port=port,
+            emule_api_key=args.emule_api_key,
+            indexer_name=indexer_name,
+            timeout_seconds=args.result_timeout_seconds,
+        )
+        cleanup_clients.append((env_values["SONARR_URL"].rstrip("/"), env_values["SONARR_API_KEY"], sonarr_client_id))
+        report["checks"]["sonarr"] = sonarr_report
+
+        magnet = get_first_direct_magnet(emule_base_url, args.emule_api_key, str(direct_results["query"]))
+        report["checks"]["direct_qbit_magnet"] = {"query": magnet["query"], "title": magnet["title"]}
+        report["checks"]["synthetic_qbit_trigger"] = {
+            "title": "eMuleBB-Live-Wire-Trigger.txt",
+            "hash": ed2k_hash_from_magnet(SYNTHETIC_TRIGGER_MAGNET),
+        }
+        report["checks"]["direct_qbit_add"] = qbit_direct_add(
+            emule_base_url,
+            args.emule_api_key,
+            SYNTHETIC_TRIGGER_MAGNET,
+            "RADARR_ENG",
+        )
+        forced_trigger_added = True
+        report["status"] = "passed"
+        return 0
+    except Exception as exc:
+        report["status"] = "failed"
+        report["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        return 1
+    finally:
+        cleanup_report: list[dict[str, object]] = []
+        for arr_url, arr_api_key, client_id in cleanup_clients:
+            try:
+                cleanup_report.append(delete_download_client(arr_url, arr_api_key, client_id))
+            except Exception as exc:
+                cleanup_report.append({"id": client_id, "status": "cleanup_failed", "error": str(exc)})
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+        if cleanup_report:
+            report["cleanup_download_clients"] = cleanup_report
+        if app is not None:
+            try:
+                live_common.close_app_cleanly(app)
+                report["cleanup"] = {"closed_app": True}
+            except Exception as exc:
+                if forced_trigger_added:
+                    try:
+                        app.kill()
+                        report["cleanup"] = {"closed_app": False, "forced_kill": True, "clean_error": str(exc)}
+                    except Exception as kill_exc:
+                        report["cleanup"] = {
+                            "closed_app": False,
+                            "forced_kill": False,
+                            "clean_error": str(exc),
+                            "kill_error": str(kill_exc),
+                        }
+                        if report.get("status") == "passed":
+                            report["status"] = "failed"
+                else:
+                    report["cleanup"] = {"closed_app": False, "error": str(exc)}
+                    if report.get("status") == "passed":
+                        report["status"] = "failed"
+                if report.get("cleanup", {}).get("forced_kill") is False and report.get("status") == "passed":
+                    report["status"] = "failed"
+        live_common.write_json(result_path, report)
+        paths.run_report_dir.parent.mkdir(parents=True, exist_ok=True)
+        harness_cli_common.publish_run_artifacts(paths)
+        harness_cli_common.publish_latest_report(paths)
+        harness_cli_common.cleanup_source_artifacts(paths)
+        print(f"Radarr/Sonarr eMule BB live test {report['status']}. Report directory: {paths.run_report_dir}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -153,6 +153,13 @@ def is_no_results_validation_error(result: dict[str, Any]) -> bool:
     return "no results were returned from your indexer" in body_text
 
 
+def should_force_save_indexer_validation(result: dict[str, Any]) -> bool:
+    """Returns true when a live-validated indexer should be force-saved."""
+
+    status = int(result.get("status") or 0)
+    return is_no_results_validation_error(result) or (status >= 400 and status < 500)
+
+
 def compact_body_preview(result: dict[str, Any], limit: int = 240) -> str:
     """Returns a compact response body preview without logging credentials."""
 
@@ -194,6 +201,7 @@ def build_indexer_payload(
     name: str,
     torznab_base_url: str,
     emule_api_key: str,
+    tags: list[int] | None = None,
 ) -> dict[str, Any]:
     """Builds the persistent Generic Torznab indexer payload for eMule BB."""
 
@@ -206,6 +214,8 @@ def build_indexer_payload(
     payload["implementation"] = "Torznab"
     payload["implementationName"] = "Torznab"
     payload["configContract"] = "TorznabSettings"
+    if tags is not None:
+        payload["tags"] = tags
     set_field_value(payload, "baseUrl", torznab_base_url.rstrip("/"))
     set_field_value(payload, "apiPath", "/api")
     set_field_value(payload, "apiKey", emule_api_key)
@@ -247,6 +257,7 @@ def upsert_indexer(
     indexer_name: str,
     torznab_base_url: str,
     emule_api_key: str,
+    tags: list[int] | None = None,
 ) -> dict[str, Any]:
     """Creates or updates the persistent Prowlarr indexer and returns it."""
 
@@ -257,17 +268,18 @@ def upsert_indexer(
         name=indexer_name,
         torznab_base_url=torznab_base_url,
         emule_api_key=emule_api_key,
+        tags=tags,
     )
     forced_save = False
     if existing is not None and existing.get("id"):
         path = f"/api/v1/indexer/{int(existing['id'])}"
         result = prowlarr_request(prowlarr_url, api_key, path, method="PUT", json_body=payload)
-        if is_no_results_validation_error(result):
+        if should_force_save_indexer_validation(result):
             forced_save = True
             result = prowlarr_request(prowlarr_url, api_key, path + "?forceSave=true", method="PUT", json_body=payload)
     else:
         result = prowlarr_request(prowlarr_url, api_key, "/api/v1/indexer", method="POST", json_body=payload)
-        if is_no_results_validation_error(result):
+        if should_force_save_indexer_validation(result):
             forced_save = True
             disabled_payload = json.loads(json.dumps(payload))
             disabled_payload["enable"] = False
