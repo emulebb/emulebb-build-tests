@@ -19,6 +19,22 @@ CString RepeatCString(LPCTSTR pszFragment, const int nCount)
 		strRepeated += pszFragment;
 	return strRepeated;
 }
+
+CString PolishNickSample()
+{
+	const wchar_t wszValue[] = { L'z', L'a', 0x017C, 0x00F3, 0x0142, 0x0107, L'\0' };
+	return CString(wszValue);
+}
+
+CString PolishCommentSample()
+{
+	const wchar_t wszValue[] = {
+		L'z', L'a', 0x017C, 0x00F3, 0x0142, 0x0107,
+		L' ', L'g', 0x0119, 0x015B, L'l', 0x0105,
+		L' ', L'j', L'a', 0x017A, 0x0144, L'\0'
+	};
+	return CString(wszValue);
+}
 }
 
 TEST_CASE("Ini2 seam prefixes relative ini paths from long base directories without truncation")
@@ -114,7 +130,7 @@ TEST_CASE("Ini2 seam grows TCHAR profile-string buffers past the old 256 charact
 	CHECK(strActual.GetLength() > 256);
 }
 
-TEST_CASE("Ini2 seam grows UTF-8 profile-string buffers past the old 256 character limit")
+TEST_CASE("Ini2 seam grows narrow profile-string buffers past the old 256 character limit")
 {
 	const CStringA strExpected("Category-");
 	CStringA strRepeated;
@@ -152,13 +168,50 @@ TEST_CASE("Ini2 seam falls back to file-backed profile IO for long ini paths")
 	REQUIRE(Ini2Helpers::WriteProfileStringLongPath(_T("eMule"), _T("Nick"), _T("LongPathTester"), strLongIniPath));
 	CHECK(Ini2Helpers::ReadProfileStringLongPath(_T("eMule"), _T("Nick"), _T("missing"), strLongIniPath) == CString(_T("LongPathTester")));
 
-	REQUIRE(Ini2Helpers::WriteProfileUtf8StringLongPath(_T("eMule"), _T("Comment"), _T("zażółć gęślą jaźń"), strLongIniPath));
-	CHECK(Ini2Helpers::ReadProfileUtf8StringLongPath(_T("eMule"), _T("Comment"), _T("missing"), strLongIniPath) == CString(_T("zażółć gęślą jaźń")));
+	const CString strPolishComment = PolishCommentSample();
+	REQUIRE(Ini2Helpers::WriteProfileStringLongPath(_T("eMule"), _T("Comment"), strPolishComment, strLongIniPath));
+	CHECK(Ini2Helpers::ReadProfileStringLongPath(_T("eMule"), _T("Comment"), _T("missing"), strLongIniPath) == strPolishComment);
 
 	REQUIRE(Ini2Helpers::DeleteProfileKeyLongPath(_T("eMule"), _T("Nick"), strLongIniPath));
 	CHECK(Ini2Helpers::ReadProfileStringLongPath(_T("eMule"), _T("Nick"), _T("missing"), strLongIniPath) == CString(_T("missing")));
 
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(std::wstring(strLongIniPath.GetString())));
+	REQUIRE(::RemoveDirectoryW(LongPathTestSupport::PreparePathForLongPath(iniDirectory).c_str()) != FALSE);
+}
+
+TEST_CASE("Ini2 seam normalizes legacy preferences to UTF-16LE and salvages prior UTF-8 nick")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x554E4932u));
+
+	const CString strIniPath(fixture.MakeDirectoryChildPath(L"config\\preferences.ini").c_str());
+	const std::wstring iniDirectory = fixture.MakeDirectoryChildPath(L"config");
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::EnsureDirectoryTree(fixture.DirectoryPath(), iniDirectory));
+
+	CStringA strLegacy("[eMule]\r\nNick=");
+	const unsigned char abyUtf8Nick[] = {
+		'z', 'a', 0xC5u, 0xBCu, 0xC3u, 0xB3u, 0xC5u, 0x82u, 0xC4u, 0x87u
+	};
+	strLegacy.Append(reinterpret_cast<LPCSTR>(abyUtf8Nick), static_cast<int>(_countof(abyUtf8Nick)));
+	strLegacy += "\r\nMaxUpload=42\r\n";
+	std::vector<BYTE> legacyBytes(
+		reinterpret_cast<const BYTE *>(static_cast<LPCSTR>(strLegacy)),
+		reinterpret_cast<const BYTE *>(static_cast<LPCSTR>(strLegacy)) + strLegacy.GetLength());
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(std::wstring(strIniPath.GetString()), legacyBytes));
+
+	REQUIRE(Ini2Helpers::NormalizeProfileFileToUtf16Le(strIniPath));
+	const CString strMigratedNick = Ini2Helpers::ReadProfileStringLongPath(_T("eMule"), _T("Nick"), _T("missing"), strIniPath);
+	CHECK(strMigratedNick == PolishNickSample());
+	CHECK(Ini2Helpers::ReadProfileStringLongPath(_T("eMule"), _T("MaxUpload"), _T("missing"), strIniPath) == CString(_T("42")));
+
+	std::vector<BYTE> normalizedBytes;
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::ReadBytes(std::wstring(strIniPath.GetString()), normalizedBytes));
+	REQUIRE(normalizedBytes.size() >= 2u);
+	CHECK(normalizedBytes[0] == 0xFFu);
+	CHECK(normalizedBytes[1] == 0xFEu);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(std::wstring(strIniPath.GetString())));
 	REQUIRE(::RemoveDirectoryW(LongPathTestSupport::PreparePathForLongPath(iniDirectory).c_str()) != FALSE);
 }
 
