@@ -281,6 +281,52 @@ def get_first_direct_magnet(base_url: str, emule_api_key: str, query: str) -> di
     return {"query": query, "title": title, "magnet": link}
 
 
+def collect_direct_magnets(
+    base_url: str,
+    emule_api_key: str,
+    queries: tuple[str, ...],
+    max_magnets: int,
+) -> dict[str, object]:
+    """Collects unique direct Torznab magnets across multiple search terms."""
+
+    magnets: list[dict[str, str]] = []
+    attempts: list[dict[str, object]] = []
+    seen_hashes: set[str] = set()
+    for query in queries:
+        path = (
+            "/indexer/emulebb/api?t=search&cat=7000&q="
+            + urllib.parse.quote(query)
+            + "&apikey="
+            + urllib.parse.quote(emule_api_key)
+        )
+        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+        status = int(result.get("status") or 0)
+        body_text = str(result.get("body_text") or "")
+        item_count = 0
+        if status == 200:
+            root = ET.fromstring(body_text)
+            for item in root.findall("./channel/item"):
+                item_count += 1
+                title = item.findtext("title") or ""
+                link = item.findtext("link") or ""
+                if not link.startswith("magnet:?"):
+                    continue
+                transfer_hash = ed2k_hash_from_magnet(link)
+                if transfer_hash in seen_hashes:
+                    continue
+                seen_hashes.add(transfer_hash)
+                magnets.append({"query": query, "title": title, "magnet": link, "hash": transfer_hash})
+                if len(magnets) >= max_magnets:
+                    break
+        attempts.append({"query": query, "status": status, "items": item_count, "magnets": len(magnets)})
+        if len(magnets) >= max_magnets:
+            break
+
+    if not magnets:
+        raise RuntimeError(f"Direct Torznab magnet collection returned no magnets. Attempts: {attempts!r}")
+    return {"magnets": magnets, "attempts": attempts}
+
+
 def qbit_request(
     base_url: str,
     path: str,
@@ -414,6 +460,46 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
     if int(invalid_add.get("status") or 0) != 400:
         raise RuntimeError(f"qBit invalid add was not rejected: {invalid_add!r}")
 
+    invalid_mutations = {
+        "delete_all": qbit_request(
+            base_url,
+            "/api/v2/torrents/delete",
+            cookie=cookie,
+            form={"hashes": "all", "deleteFiles": "true"},
+            method="POST",
+        ),
+        "delete_bad_hash": qbit_request(
+            base_url,
+            "/api/v2/torrents/delete",
+            cookie=cookie,
+            form={"hashes": "bad"},
+            method="POST",
+        ),
+        "set_category_missing_category": qbit_request(
+            base_url,
+            "/api/v2/torrents/setCategory",
+            cookie=cookie,
+            form={"hashes": "0123456789abcdef0123456789abcdef"},
+            method="POST",
+        ),
+        "pause_missing_hashes": qbit_request(
+            base_url,
+            "/api/v2/torrents/pause",
+            cookie=cookie,
+            form={},
+            method="POST",
+        ),
+        "properties_missing_hash": qbit_request(base_url, "/api/v2/torrents/properties", cookie=cookie),
+        "files_bad_hash": qbit_request(base_url, "/api/v2/torrents/files?hash=bad", cookie=cookie),
+    }
+    unexpected_successes = {
+        name: result
+        for name, result in invalid_mutations.items()
+        if int(result.get("status") or 0) != 400
+    }
+    if unexpected_successes:
+        raise RuntimeError(f"qBit invalid mutation checks were not rejected: {unexpected_successes!r}")
+
     checks = {
         "public_webapi_version": public_version,
         "unauthenticated_info": unauthenticated_info,
@@ -421,6 +507,7 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
         "wrong_login_info": wrong_login_info,
         "valid_login": login,
         "invalid_add": invalid_add,
+        "invalid_mutations": invalid_mutations,
     }
     return checks
 
@@ -545,6 +632,44 @@ def qbit_direct_live_wire_roundtrip(
         raise RuntimeError(f"qBit torrents info after add did not include {transfer_hash}.")
     report["info_after_add"] = {"status": int(info_after_add.get("status") or 0), "count": len(info_rows)}
 
+    filtered_info = qbit_request(
+        base_url,
+        "/api/v2/torrents/info?category=" + urllib.parse.quote(initial_category),
+        cookie=cookie,
+        timeout_seconds=30.0,
+    )
+    filtered_rows = require_qbit_json(filtered_info, "qBit category-filtered torrents info after add")
+    if not isinstance(filtered_rows, list) or not any(
+        isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash
+        for row in filtered_rows
+    ):
+        raise RuntimeError(f"qBit category-filtered info did not include {transfer_hash}.")
+
+    properties = qbit_request(
+        base_url,
+        "/api/v2/torrents/properties?hash=" + urllib.parse.quote(transfer_hash),
+        cookie=cookie,
+        timeout_seconds=30.0,
+    )
+    properties_body = require_qbit_json(properties, "qBit torrent properties after add")
+    if not isinstance(properties_body, dict):
+        raise RuntimeError("qBit torrent properties after add did not return an object.")
+
+    files = qbit_request(
+        base_url,
+        "/api/v2/torrents/files?hash=" + urllib.parse.quote(transfer_hash),
+        cookie=cookie,
+        timeout_seconds=30.0,
+    )
+    files_body = require_qbit_json(files, "qBit torrent files after add")
+    if not isinstance(files_body, list):
+        raise RuntimeError("qBit torrent files after add did not return a list.")
+    report["active_metadata"] = {
+        "filtered_info_count": len(filtered_rows),
+        "properties_status": int(properties.get("status") or 0),
+        "files_count": len(files_body),
+    }
+
     set_category = qbit_request(
         base_url,
         "/api/v2/torrents/setCategory",
@@ -554,6 +679,13 @@ def qbit_direct_live_wire_roundtrip(
     )
     require_qbit_ok(set_category, "qBit setCategory")
     report["set_category_status"] = int(set_category.get("status") or 0)
+    report["updated_native_category"] = wait_for_transfer_category(
+        base_url,
+        emule_api_key,
+        transfer_hash,
+        updated_category,
+        timeout_seconds,
+    )
 
     resume = qbit_request(
         base_url,
@@ -589,6 +721,38 @@ def qbit_direct_live_wire_roundtrip(
     report["deleted_transfer"] = deleted_seen
 
     return report
+
+
+def qbit_direct_live_wire_stress(
+    base_url: str,
+    emule_api_key: str,
+    magnets: list[dict[str, str]],
+    *,
+    rounds: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Runs repeated qBittorrent add/mutate/delete live-wire rounds."""
+
+    runs: list[dict[str, object]] = []
+    for index, magnet in enumerate(magnets[:rounds]):
+        run_report: dict[str, object] = {
+            "query": magnet.get("query"),
+            "title": magnet.get("title"),
+            "expected_hash": magnet.get("hash"),
+        }
+        qbit_direct_live_wire_roundtrip(
+            base_url,
+            emule_api_key,
+            magnet["magnet"],
+            initial_category="RADARR_ENG",
+            updated_category="SONARR_ENG",
+            timeout_seconds=timeout_seconds,
+            progress=run_report,
+        )
+        runs.append(run_report)
+        if index + 1 >= rounds:
+            break
+    return {"rounds": len(runs), "runs": runs}
 
 
 def wait_for_arr_release_results(
@@ -646,6 +810,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
+    parser.add_argument("--qbit-live-wire-rounds", type=int, default=2)
     return parser
 
 
@@ -712,6 +877,8 @@ def main() -> int:
     """Runs the live Radarr/Sonarr eMule BB bridge test."""
 
     args = build_parser().parse_args()
+    if args.qbit_live_wire_rounds <= 0:
+        raise ValueError("--qbit-live-wire-rounds must be greater than zero.")
     env_values = prowlarr_live.load_required_env(Path(args.env_path).resolve())
     required = ("RADARR_URL", "RADARR_API_KEY", "SONARR_URL", "SONARR_API_KEY")
     missing = [name for name in required if not env_values.get(name)]
@@ -810,21 +977,24 @@ def main() -> int:
         magnet = get_first_direct_magnet(emule_base_url, args.emule_api_key, str(direct_results["query"]))
         report["checks"]["direct_qbit_magnet"] = {"query": magnet["query"], "title": magnet["title"]}
         report["checks"]["qbit_safety"] = qbit_direct_safety_checks(emule_base_url, args.emule_api_key)
+        direct_magnets = collect_direct_magnets(
+            emule_base_url,
+            args.emule_api_key,
+            ITALIAN_MEDIA_SEARCH_TERMS + OPEN_DOCUMENT_QUERIES,
+            args.qbit_live_wire_rounds,
+        )
+        report["checks"]["direct_qbit_search_stress"] = direct_magnets
         report["checks"]["direct_qbit_trigger"] = {
             "title": magnet["title"],
             "hash": ed2k_hash_from_magnet(str(magnet["magnet"])),
         }
         forced_trigger_added = True
-        direct_qbit_live_wire: dict[str, object] = {}
-        report["checks"]["direct_qbit_live_wire"] = direct_qbit_live_wire
-        qbit_direct_live_wire_roundtrip(
+        report["checks"]["direct_qbit_live_wire"] = qbit_direct_live_wire_stress(
             emule_base_url,
             args.emule_api_key,
-            str(magnet["magnet"]),
-            initial_category="RADARR_ENG",
-            updated_category="SONARR_ENG",
+            direct_magnets["magnets"],
+            rounds=args.qbit_live_wire_rounds,
             timeout_seconds=args.result_timeout_seconds,
-            progress=direct_qbit_live_wire,
         )
         forced_trigger_added = False
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,32 @@ def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> 
     assert result["requests"] == 3
     assert len(calls) == 3
     assert all("apikey=secret%20key" in call for call in calls)
+
+
+def test_secret_ignore_check_uses_secret_file_git_worktree(tmp_path: Path, monkeypatch) -> None:
+    module = load_prowlarr_module()
+    secret_root = tmp_path / "bountarr"
+    secret_root.mkdir()
+    secret_path = secret_root / ".env"
+    secret_path.write_text("PROWLARR_URL=http://localhost\n", encoding="utf-8")
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs.get("cwd")))
+        if "rev-parse" in args:
+            return SimpleNamespace(returncode=0, stdout=str(secret_root) + "\n")
+        if "check-ignore" in args:
+            assert kwargs.get("cwd") == secret_root.resolve()
+            assert args[-1] == ".env"
+            return SimpleNamespace(returncode=0)
+        raise AssertionError(f"Unexpected subprocess call: {args}")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    module.ensure_secret_file_is_ignored(secret_path)
+
+    assert calls[0][0][:3] == ["git", "-C", str(secret_root)]
+    assert calls[1][0][:3] == ["git", "check-ignore", "-q"]
 
 
 def test_direct_auth_rejection_requires_401(monkeypatch) -> None:

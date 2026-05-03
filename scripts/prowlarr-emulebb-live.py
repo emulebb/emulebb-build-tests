@@ -71,9 +71,26 @@ def parse_env_file(path: Path) -> dict[str, str]:
 def ensure_secret_file_is_ignored(path: Path) -> None:
     """Fails if the selected dotenv path could be tracked by Git."""
 
+    path = path.resolve()
+    root_probe = subprocess.run(
+        ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if root_probe.returncode != 0:
+        raise RuntimeError(f"Secret file is not inside a Git worktree: {path}")
+
+    git_root = Path(root_probe.stdout.strip()).resolve()
+    try:
+        git_path = path.relative_to(git_root)
+    except ValueError as exc:
+        raise RuntimeError(f"Secret file is outside its detected Git worktree: {path}") from exc
+
     completed = subprocess.run(
-        ["git", "check-ignore", "-q", "--", str(path.resolve())],
-        cwd=REPO_ROOT,
+        ["git", "check-ignore", "-q", "--", str(git_path)],
+        cwd=git_root,
         check=False,
     )
     if completed.returncode != 0:
