@@ -83,6 +83,24 @@ TEST_CASE("Preference UI seam bounds diagnostic numeric options")
 	CHECK(PreferenceUiSeams::NormalizePerfLogIntervalMinutes(PreferenceUiSeams::kMaxPerfLogIntervalMinutes + 1) == 5);
 }
 
+TEST_CASE("Preference UI seam normalizes broadband session transfer policy")
+{
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(PreferenceUiSeams::kBBSessionTransferModeDisabled) == PreferenceUiSeams::kBBSessionTransferModeDisabled);
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(PreferenceUiSeams::kBBSessionTransferModePercentOfFile) == PreferenceUiSeams::kBBSessionTransferModePercentOfFile);
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB) == PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB);
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(9) == PreferenceUiSeams::kBBSessionTransferModePercentOfFile);
+
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModePercentOfFile, 0) == PreferenceUiSeams::kMinBBSessionTransferPercent);
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModePercentOfFile, 55) == 55);
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModePercentOfFile, 101) == PreferenceUiSeams::kMaxBBSessionTransferPercent);
+
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB, 0) == PreferenceUiSeams::kMinBBSessionTransferMiB);
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB, 512) == 512);
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB, 4097) == PreferenceUiSeams::kMaxBBSessionTransferMiB);
+
+	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeDisabled, 5000) == PreferenceUiSeams::kMaxBBSessionTransferMiB);
+}
+
 #if EMULE_TESTS_HAS_PREFERENCE_INI_MAP
 TEST_CASE("Preference INI map uses dedicated BB-added sections without legacy BB key names")
 {
