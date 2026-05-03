@@ -1,6 +1,7 @@
 build/
 reports/
 tools/
+LastCoverageResults.log
 .pydeps/
 __pycache__/
 .env

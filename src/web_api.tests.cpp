@@ -562,6 +562,33 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	CHECK_EQ(error, "duplicate form field: category");
 }
 
+TEST_CASE("Web API parses qBittorrent hash mutations safely")
+{
+	WebServerQBitCompatSeams::SQBitHashMutationRequest request;
+	std::string error;
+
+	CHECK(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789ABCDEF0123456789ABCDEF%7Cfedcba9876543210fedcba9876543210&deleteFiles=true", request, error));
+	REQUIRE_EQ(request.hashes.size(), 2u);
+	CHECK_EQ(request.hashes[0], "0123456789abcdef0123456789abcdef");
+	CHECK_EQ(request.hashes[1], "fedcba9876543210fedcba9876543210");
+	CHECK(request.bDeleteFiles);
+
+	CHECK(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef&category=SONARR_ENG", request, error));
+	CHECK_EQ(request.strCategory, "SONARR_ENG");
+
+	CHECK(WebServerQBitCompatSeams::TryParseHashesOnlyRequest("hashes=0123456789abcdef0123456789abcdef", request, error));
+	CHECK_EQ(request.hashes[0], "0123456789abcdef0123456789abcdef");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=all&deleteFiles=true", request, error));
+	CHECK_EQ(error, "hashes=all is not supported");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=bad", request, error));
+	CHECK_EQ(error, "hashes must contain only 32-character eD2K hashes");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef", request, error));
+	CHECK_EQ(error, "category form field is required");
+}
+
 TEST_CASE("Web API builds representative REST routes and normalizes query parameters")
 {
 	WebServerJsonSeams::SApiRoute route;
