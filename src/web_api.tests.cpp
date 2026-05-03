@@ -1,6 +1,7 @@
 #include "../third_party/doctest/doctest.h"
 #include "WebApiCommandSeams.h"
 #include "WebApiSurfaceSeams.h"
+#include "WebServerArrCompatSeams.h"
 #include "WebServerAuthStateSeams.h"
 #include "WebServerJsonSeams.h"
 #include "WebServerStaticFileSeams.h"
@@ -434,6 +435,47 @@ TEST_CASE("Web API recognizes REST request targets without disturbing legacy HTM
 	CHECK(WebServerJsonSeams::IsApiRequestTarget("/API/V1/logs?limit=2"));
 	CHECK_FALSE(WebServerJsonSeams::IsApiRequestTarget("/"));
 	CHECK_FALSE(WebServerJsonSeams::IsApiRequestTarget("/serverlist"));
+}
+
+TEST_CASE("Web API recognizes the Prowlarr Torznab compatibility endpoint")
+{
+	CHECK(WebServerArrCompatSeams::IsArrCompatRequestTarget("/indexer/emulebb/api"));
+	CHECK(WebServerArrCompatSeams::IsArrCompatRequestTarget("/INDEXER/EMULEBB/API?t=caps"));
+	CHECK_FALSE(WebServerArrCompatSeams::IsArrCompatRequestTarget("/api/v1/indexer/emulebb/api"));
+	CHECK_FALSE(WebServerArrCompatSeams::IsArrCompatRequestTarget("/indexer/emulebb"));
+}
+
+TEST_CASE("Web API maps Torznab requests to native eMule search hints")
+{
+	WebServerArrCompatSeams::STorznabRequest request;
+	std::string error;
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Example&season=1&ep=2&cat=5000", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Tv);
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "video");
+	const std::vector<std::string> queries = WebServerArrCompatSeams::BuildNativeQueries(request);
+	CHECK(std::find(queries.begin(), queries.end(), "Example S01E02") != queries.end());
+	CHECK(std::find(queries.begin(), queries.end(), "Example 1x02") != queries.end());
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Album&cat=3000", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "audio");
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Unknown&cat=9999", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
+}
+
+TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
+{
+	CHECK_EQ(
+		WebServerArrCompatSeams::BuildFakeBtihHash("0123456789ABCDEF0123456789ABCDEF"),
+		"0123456789abcdef0123456789abcdef00000000");
+	CHECK_EQ(
+		WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "A&B.mkv", 42),
+		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=A%26B.mkv&xl=42");
+	CHECK_EQ(WebServerArrCompatSeams::XmlEscape("<tag attr=\"x\">A&B</tag>"), "&lt;tag attr=&quot;x&quot;&gt;A&amp;B&lt;/tag&gt;");
+	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "release.mkv", 10));
+	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Audio, "release.mkv", 10));
 }
 
 TEST_CASE("Web API builds representative REST routes and normalizes query parameters")

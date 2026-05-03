@@ -85,6 +85,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "amutorrent-browser-smoke.py",
+        "prowlarr-emulebb-live.py",
         "auto-browse-live.py",
     ]
 
@@ -112,7 +113,12 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     browser_command = commands[7]
     assert script_name(browser_command) == "amutorrent-browser-smoke.py"
 
-    auto_browse_command = commands[8]
+    prowlarr_command = commands[8]
+    assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"
+    assert "--enable-upnp" in prowlarr_command
+    assert "--skip-live-seed-refresh" not in prowlarr_command
+
+    auto_browse_command = commands[9]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
 
 

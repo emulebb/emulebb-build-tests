@@ -1,0 +1,567 @@
+"""Runs a live Prowlarr check against the eMule BB Torznab bridge."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+OPEN_LICENSED_VIDEO_QUERIES = ("Big Buck Bunny", "Sintel", "Tears of Steel", "Elephants Dream")
+
+
+def load_local_module(module_name: str, filename: str):
+    """Loads one sibling helper module from a hyphenated script filename."""
+
+    module_path = Path(__file__).resolve().with_name(filename)
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
+rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
+live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
+
+
+def get_default_source_env_path() -> Path:
+    """Returns the local bountarr `.env` path without hardcoding the machine root."""
+
+    workspace_root = harness_cli_common.get_emule_workspace_root(REPO_ROOT)
+    return (workspace_root.parent.parent / "bountarr" / ".env").resolve()
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parses one simple dotenv file without logging values."""
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        if name:
+            values[name] = value
+    return values
+
+
+def ensure_secret_file_is_ignored(path: Path) -> None:
+    """Fails if the selected dotenv path could be tracked by Git."""
+
+    completed = subprocess.run(
+        ["git", "check-ignore", "-q", "--", str(path.resolve())],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"Secret file is not git-ignored: {path}")
+
+
+def load_required_env(path: Path) -> dict[str, str]:
+    """Loads Prowlarr credentials and validates required keys."""
+
+    if not path.is_file():
+        raise RuntimeError(f"Local env file was not found: {path}")
+    ensure_secret_file_is_ignored(path)
+    values = parse_env_file(path)
+    required = ("PROWLARR_URL", "PROWLARR_API_KEY")
+    missing = [name for name in required if not values.get(name)]
+    if missing:
+        raise RuntimeError(f"Local env file is missing required key(s): {', '.join(missing)}")
+    values.setdefault("PROWLARR_EMULEBB_INDEXER_NAME", "eMule BB Local")
+    return values
+
+
+def prowlarr_request(
+    prowlarr_url: str,
+    api_key: str,
+    path: str,
+    *,
+    method: str = "GET",
+    json_body: object | None = None,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Performs one Prowlarr API request without exposing credentials."""
+
+    data = None
+    headers = {"X-Api-Key": api_key}
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    request = urllib.request.Request(
+        prowlarr_url.rstrip("/") + path,
+        data=data,
+        method=method,
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body_text = response.read().decode("utf-8", errors="replace")
+            payload = json.loads(body_text) if body_text else None
+            return {"status": int(response.status), "json": payload, "body_text": body_text}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        payload = None
+        if body_text:
+            try:
+                payload = json.loads(body_text)
+            except json.JSONDecodeError:
+                payload = None
+        return {"status": int(exc.code), "json": payload, "body_text": body_text}
+
+
+def require_success(result: dict[str, Any], description: str) -> Any:
+    """Returns a JSON payload from a successful Prowlarr response."""
+
+    status = int(result.get("status") or 0)
+    if status < 200 or status >= 300:
+        body = str(result.get("body_text") or "")
+        raise RuntimeError(f"{description} failed with HTTP {status}: {body[:500]}")
+    return result.get("json")
+
+
+def is_no_results_validation_error(result: dict[str, Any]) -> bool:
+    """Returns true when Prowlarr rejected a valid indexer only for no results."""
+
+    status = int(result.get("status") or 0)
+    if status < 400 or status >= 500:
+        return False
+    body_text = str(result.get("body_text") or "").lower()
+    return "no results were returned from your indexer" in body_text
+
+
+def get_generic_torznab_schema(prowlarr_url: str, api_key: str) -> dict[str, Any]:
+    """Loads the Generic Torznab indexer schema from Prowlarr."""
+
+    schemas = require_success(
+        prowlarr_request(prowlarr_url, api_key, "/api/v1/indexer/schema"),
+        "Prowlarr indexer schema lookup",
+    )
+    if not isinstance(schemas, list):
+        raise RuntimeError("Prowlarr indexer schema response was not a list.")
+    for schema in schemas:
+        if isinstance(schema, dict) and schema.get("implementation") == "Torznab" and schema.get("name") == "Generic Torznab":
+            return schema
+    raise RuntimeError("Prowlarr did not expose the Generic Torznab indexer schema.")
+
+
+def set_field_value(indexer: dict[str, Any], field_name: str, value: object) -> None:
+    """Updates one Prowlarr indexer field by name."""
+
+    fields = indexer.get("fields")
+    if not isinstance(fields, list):
+        raise RuntimeError("Prowlarr indexer payload does not contain a fields array.")
+    for field in fields:
+        if isinstance(field, dict) and field.get("name") == field_name:
+            field["value"] = value
+            return
+    raise RuntimeError(f"Prowlarr indexer payload is missing field: {field_name}")
+
+
+def build_indexer_payload(
+    base_payload: dict[str, Any],
+    *,
+    name: str,
+    torznab_base_url: str,
+    emule_api_key: str,
+) -> dict[str, Any]:
+    """Builds the persistent Generic Torznab indexer payload for eMule BB."""
+
+    payload = json.loads(json.dumps(base_payload))
+    payload["name"] = name
+    payload["enable"] = True
+    payload["appProfileId"] = int(payload.get("appProfileId") or 1)
+    payload["priority"] = int(payload.get("priority") or 25)
+    payload["downloadClientId"] = int(payload.get("downloadClientId") or 0)
+    payload["implementation"] = "Torznab"
+    payload["implementationName"] = "Torznab"
+    payload["configContract"] = "TorznabSettings"
+    set_field_value(payload, "baseUrl", torznab_base_url.rstrip("/"))
+    set_field_value(payload, "apiPath", "/api")
+    set_field_value(payload, "apiKey", emule_api_key)
+    set_field_value(payload, "torrentBaseSettings.preferMagnetUrl", True)
+    return payload
+
+
+def get_existing_indexer(prowlarr_url: str, api_key: str, indexer_name: str) -> dict[str, Any] | None:
+    """Finds the configured Prowlarr indexer by exact name."""
+
+    indexers = require_success(
+        prowlarr_request(prowlarr_url, api_key, "/api/v1/indexer"),
+        "Prowlarr indexer list",
+    )
+    if not isinstance(indexers, list):
+        raise RuntimeError("Prowlarr indexer list response was not a list.")
+    for indexer in indexers:
+        if isinstance(indexer, dict) and indexer.get("name") == indexer_name:
+            return indexer
+    return None
+
+
+def get_indexer_by_id(prowlarr_url: str, api_key: str, indexer_id: int) -> dict[str, Any]:
+    """Loads one saved Prowlarr indexer by id."""
+
+    payload = require_success(
+        prowlarr_request(prowlarr_url, api_key, f"/api/v1/indexer/{indexer_id}"),
+        "Prowlarr saved indexer lookup",
+    )
+    if not isinstance(payload, dict) or not payload.get("id"):
+        raise RuntimeError(f"Prowlarr did not return saved indexer id {indexer_id}.")
+    return payload
+
+
+def upsert_indexer(
+    prowlarr_url: str,
+    api_key: str,
+    *,
+    indexer_name: str,
+    torznab_base_url: str,
+    emule_api_key: str,
+) -> dict[str, Any]:
+    """Creates or updates the persistent Prowlarr indexer and returns it."""
+
+    existing = get_existing_indexer(prowlarr_url, api_key, indexer_name)
+    base_payload = existing if existing is not None else get_generic_torznab_schema(prowlarr_url, api_key)
+    payload = build_indexer_payload(
+        base_payload,
+        name=indexer_name,
+        torznab_base_url=torznab_base_url,
+        emule_api_key=emule_api_key,
+    )
+    forced_save = False
+    if existing is not None and existing.get("id"):
+        path = f"/api/v1/indexer/{int(existing['id'])}"
+        result = prowlarr_request(prowlarr_url, api_key, path, method="PUT", json_body=payload)
+        if is_no_results_validation_error(result):
+            forced_save = True
+            result = prowlarr_request(prowlarr_url, api_key, path + "?forceSave=true", method="PUT", json_body=payload)
+    else:
+        result = prowlarr_request(prowlarr_url, api_key, "/api/v1/indexer", method="POST", json_body=payload)
+        if is_no_results_validation_error(result):
+            forced_save = True
+            disabled_payload = json.loads(json.dumps(payload))
+            disabled_payload["enable"] = False
+            create_result = prowlarr_request(
+                prowlarr_url,
+                api_key,
+                "/api/v1/indexer?forceSave=true",
+                method="POST",
+                json_body=disabled_payload,
+            )
+            created = require_success(create_result, "Prowlarr disabled eMule BB indexer create")
+            if not isinstance(created, dict) or not created.get("id"):
+                raise RuntimeError("Prowlarr did not return a created indexer id.")
+            payload["id"] = int(created["id"])
+            result = prowlarr_request(
+                prowlarr_url,
+                api_key,
+                f"/api/v1/indexer/{int(created['id'])}?forceSave=true",
+                method="PUT",
+                json_body=payload,
+            )
+    saved = require_success(result, "Prowlarr eMule BB indexer upsert")
+    if not isinstance(saved, dict) or not saved.get("id"):
+        if payload.get("id"):
+            saved = get_indexer_by_id(prowlarr_url, api_key, int(payload["id"]))
+        else:
+            raise RuntimeError("Prowlarr did not return a saved indexer id.")
+    saved["_emulebbForcedSave"] = forced_save
+    return saved
+
+
+def test_indexer(prowlarr_url: str, api_key: str, indexer_payload: dict[str, Any]) -> dict[str, object]:
+    """Runs Prowlarr's indexer test endpoint for the eMule BB indexer."""
+
+    result = prowlarr_request(
+        prowlarr_url,
+        api_key,
+        "/api/v1/indexer/test",
+        method="POST",
+        json_body=indexer_payload,
+        timeout_seconds=90.0,
+    )
+    if is_no_results_validation_error(result):
+        return {"status": "no_results_validation", "http_status": int(result.get("status") or 0)}
+    require_success(result, "Prowlarr eMule BB indexer test")
+    return {"status": "passed", "http_status": int(result.get("status") or 0)}
+
+
+def check_direct_caps(base_url: str, emule_api_key: str) -> dict[str, object]:
+    """Validates the direct eMule BB Torznab caps endpoint."""
+
+    path = "/indexer/emulebb/api?t=caps&apikey=" + urllib.parse.quote(emule_api_key)
+    result = rest_smoke.http_request(base_url, path, request_timeout_seconds=20.0)
+    if int(result.get("status") or 0) != 200:
+        raise RuntimeError(f"Direct Torznab caps returned HTTP {result.get('status')}")
+    body_text = str(result.get("body_text") or "")
+    root = ET.fromstring(body_text)
+    if root.tag != "caps":
+        raise RuntimeError(f"Direct Torznab caps returned unexpected root: {root.tag}")
+    return {"status": 200, "root": root.tag, "length": len(body_text)}
+
+
+def count_torznab_items(body_text: str) -> int:
+    """Counts RSS items in a Torznab XML response."""
+
+    root = ET.fromstring(body_text)
+    if root.tag.lower() != "rss":
+        raise RuntimeError(f"Direct Torznab search returned unexpected root: {root.tag}")
+    channel = root.find("channel")
+    if channel is None:
+        return 0
+    return len(channel.findall("item"))
+
+
+def wait_for_direct_torznab_results(
+    base_url: str,
+    emule_api_key: str,
+    queries: tuple[str, ...],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Polls direct Torznab searches until the eMule bridge returns at least one item."""
+
+    attempts: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        for query in queries:
+            path = (
+                "/indexer/emulebb/api?t=search&cat=2000&q="
+                + urllib.parse.quote(query)
+                + "&apikey="
+                + urllib.parse.quote(emule_api_key)
+            )
+            result = rest_smoke.http_request(base_url, path, request_timeout_seconds=90.0)
+            status = int(result.get("status") or 0)
+            body_text = str(result.get("body_text") or "")
+            count = count_torznab_items(body_text) if status == 200 and body_text else 0
+            attempts.append({"query": query, "status": status, "count": count})
+            if status == 200 and count > 0:
+                return {"query": query, "count": count, "attempts": attempts}
+        time.sleep(5.0)
+    raise RuntimeError(f"Direct eMule BB Torznab search returned no results before timeout. Attempts: {attempts!r}")
+
+
+def choose_listen_port(bind_addr: str) -> int:
+    """Returns one free TCP port on the actual eMule web bind address."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind((bind_addr, 0))
+        return int(probe.getsockname()[1])
+
+
+def wait_for_prowlarr_results(
+    prowlarr_url: str,
+    api_key: str,
+    indexer_id: int,
+    queries: tuple[str, ...],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Polls Prowlarr searches until one query returns at least one item."""
+
+    attempts: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        for query in queries:
+            encoded_query = urllib.parse.quote(query)
+            path = f"/api/v1/search?query={encoded_query}&categories=2000&indexerIds={indexer_id}"
+            result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
+            status = int(result.get("status") or 0)
+            payload = result.get("json")
+            count = len(payload) if isinstance(payload, list) else 0
+            attempts.append({"query": query, "status": status, "count": count})
+            if status >= 200 and status < 300 and count > 0:
+                first = payload[0]
+                return {
+                    "query": query,
+                    "count": count,
+                    "first_title": first.get("title") if isinstance(first, dict) else None,
+                    "attempts": attempts,
+                }
+        time.sleep(5.0)
+    raise RuntimeError(f"Prowlarr did not return eMule BB results before timeout. Attempts: {attempts!r}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Builds the Prowlarr eMule BB live test argument parser."""
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--workspace-root")
+    parser.add_argument("--app-root")
+    parser.add_argument("--app-exe")
+    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--artifacts-dir")
+    parser.add_argument("--keep-artifacts", action="store_true")
+    parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
+    parser.add_argument("--env-path", default=str((REPO_ROOT / ".env.local").resolve()))
+    parser.add_argument("--env-source", default=str(get_default_source_env_path()))
+    parser.add_argument("--emule-api-key", default="prowlarr-emulebb-live-key")
+    parser.add_argument("--bind-addr")
+    parser.add_argument("--enable-upnp", action="store_true")
+    parser.add_argument("--skip-live-seed-refresh", action="store_true")
+    parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
+    parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
+    parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
+    return parser
+
+
+def resolve_bind_addr(prowlarr_url: str, explicit_bind_addr: str | None) -> str:
+    """Chooses the eMule web bind address reachable by local Prowlarr."""
+
+    if explicit_bind_addr:
+        return explicit_bind_addr
+    parsed = urllib.parse.urlparse(prowlarr_url)
+    if parsed.hostname and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        return parsed.hostname
+    return "127.0.0.1"
+
+
+def main() -> int:
+    """Runs the live Prowlarr eMule BB bridge test."""
+
+    args = build_parser().parse_args()
+    env_path = Path(args.env_path).resolve()
+    env_values = load_required_env(env_path)
+    prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
+    prowlarr_api_key = env_values["PROWLARR_API_KEY"]
+    indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
+
+    paths = harness_cli_common.prepare_run_paths(
+        script_file=__file__,
+        suite_name="prowlarr-emulebb-live",
+        configuration=args.configuration,
+        workspace_root=args.workspace_root,
+        app_root=args.app_root,
+        app_exe=args.app_exe,
+        artifacts_dir=args.artifacts_dir,
+        keep_artifacts=args.keep_artifacts,
+    )
+    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    artifacts_dir = paths.source_artifacts_dir
+    bind_addr = resolve_bind_addr(prowlarr_url, args.bind_addr)
+    port = choose_listen_port(bind_addr)
+    emule_base_url = f"http://{bind_addr}:{port}"
+    torznab_base_url = f"{emule_base_url}/indexer/emulebb"
+
+    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    seed_refresh = None
+    if not args.skip_live_seed_refresh:
+        seed_refresh = rest_smoke.refresh_seed_files(
+            Path(profile["config_dir"]),
+            timeout_seconds=args.seed_download_timeout_seconds,
+        )
+    rest_smoke.configure_webserver_profile(
+        Path(profile["config_dir"]),
+        paths.app_exe,
+        args.emule_api_key,
+        port,
+        bind_addr,
+        args.enable_upnp,
+    )
+
+    app = None
+    report: dict[str, object] = {
+        "suite": "prowlarr-emulebb-live",
+        "status": "running",
+        "prowlarr_url": prowlarr_url,
+        "indexer_name": indexer_name,
+        "emule_base_url": emule_base_url,
+        "torznab_base_url": torznab_base_url,
+        "api_key_length": len(args.emule_api_key),
+        "prowlarr_api_key_length": len(prowlarr_api_key),
+        "seed_refresh": seed_refresh,
+        "search_queries": list(OPEN_LICENSED_VIDEO_QUERIES),
+        "checks": {},
+    }
+    result_path = artifacts_dir / "result.json"
+    try:
+        app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
+        main_window = live_common.wait_for_main_window(app)
+        report["main_window_title"] = main_window.window_text()
+        ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
+        report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
+        report["checks"]["direct_caps"] = check_direct_caps(emule_base_url, args.emule_api_key)
+        report["checks"]["direct_search_results"] = wait_for_direct_torznab_results(
+            emule_base_url,
+            args.emule_api_key,
+            OPEN_LICENSED_VIDEO_QUERIES,
+            args.result_timeout_seconds,
+        )
+
+        status_payload = require_success(
+            prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/system/status"),
+            "Prowlarr system status",
+        )
+        report["checks"]["prowlarr_status"] = {
+            "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
+            "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
+        }
+
+        saved_indexer = upsert_indexer(
+            prowlarr_url,
+            prowlarr_api_key,
+            indexer_name=indexer_name,
+            torznab_base_url=torznab_base_url,
+            emule_api_key=args.emule_api_key,
+        )
+        report["checks"]["indexer_upsert"] = {
+            "id": int(saved_indexer["id"]),
+            "name": saved_indexer.get("name"),
+            "implementation": saved_indexer.get("implementation"),
+            "enable": bool(saved_indexer.get("enable")),
+            "forcedSave": bool(saved_indexer.get("_emulebbForcedSave")),
+        }
+        report["checks"]["indexer_test"] = test_indexer(prowlarr_url, prowlarr_api_key, saved_indexer)
+        report["checks"]["search_results"] = wait_for_prowlarr_results(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            OPEN_LICENSED_VIDEO_QUERIES,
+            args.result_timeout_seconds,
+        )
+        report["status"] = "passed"
+        return 0
+    except Exception as exc:
+        report["status"] = "failed"
+        report["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        return 1
+    finally:
+        if app is not None:
+            try:
+                live_common.close_app_cleanly(app)
+                report["cleanup"] = {"closed_app": True}
+            except Exception as exc:
+                report["cleanup"] = {"closed_app": False, "error": str(exc)}
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+        live_common.write_json(result_path, report)
+        paths.run_report_dir.parent.mkdir(parents=True, exist_ok=True)
+        harness_cli_common.publish_run_artifacts(paths)
+        harness_cli_common.publish_latest_report(paths)
+        harness_cli_common.cleanup_source_artifacts(paths)
+        print(f"Prowlarr eMule BB live test {report['status']}. Report directory: {paths.run_report_dir}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

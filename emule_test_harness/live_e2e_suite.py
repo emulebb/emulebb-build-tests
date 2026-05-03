@@ -51,6 +51,7 @@ class SuiteSpec:
     uses_live_seed_refresh: bool = False
     is_rest_api: bool = False
     is_auto_browse: bool = False
+    is_prowlarr_emulebb: bool = False
 
 
 SUITE_SPECS = (
@@ -101,6 +102,13 @@ SUITE_SPECS = (
         name="amutorrent-browser-smoke",
         script_name="amutorrent-browser-smoke.py",
         category="rest",
+    ),
+    SuiteSpec(
+        name="prowlarr-emulebb",
+        script_name="prowlarr-emulebb-live.py",
+        category="rest",
+        uses_live_seed_refresh=True,
+        is_prowlarr_emulebb=True,
     ),
     SuiteSpec(
         name="auto-browse-live",
@@ -197,6 +205,9 @@ def build_suite_command(
             command.append("--enable-upnp")
     if spec.is_auto_browse and auto_browse_p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", auto_browse_p2p_bind_interface_name])
+    if spec.is_prowlarr_emulebb:
+        if enable_upnp:
+            command.append("--enable-upnp")
     return command
 
 

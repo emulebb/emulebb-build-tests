@@ -3,4 +3,7 @@ reports/
 tools/
 .pydeps/
 __pycache__/
+.env
+.env.local
+.env.*
 .tracked-file-privacy-identifiers.local.json
