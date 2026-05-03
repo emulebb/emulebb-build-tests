@@ -5,9 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import socket
-import subprocess
 import sys
 import time
 import urllib.error
@@ -20,6 +18,8 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness import live_env
 
 TORZNAB_LIVE_CATEGORY = 7000
 OPEN_DOCUMENT_QUERIES = ("linux", "ubuntu", "debian", "python")
@@ -41,75 +41,6 @@ def load_local_module(module_name: str, filename: str):
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
 rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
-
-
-def get_default_source_env_path() -> Path:
-    """Returns the local bountarr `.env` path without hardcoding the machine root."""
-
-    workspace_root = harness_cli_common.get_emule_workspace_root(REPO_ROOT)
-    return (workspace_root.parent.parent / "bountarr" / ".env").resolve()
-
-
-def parse_env_file(path: Path) -> dict[str, str]:
-    """Parses one simple dotenv file without logging values."""
-
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        name = name.strip()
-        value = value.strip()
-        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-            value = value[1:-1]
-        if name:
-            values[name] = value
-    return values
-
-
-def ensure_secret_file_is_ignored(path: Path) -> None:
-    """Fails if the selected dotenv path could be tracked by Git."""
-
-    path = path.resolve()
-    root_probe = subprocess.run(
-        ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    if root_probe.returncode != 0:
-        raise RuntimeError(f"Secret file is not inside a Git worktree: {path}")
-
-    git_root = Path(root_probe.stdout.strip()).resolve()
-    try:
-        git_path = path.relative_to(git_root)
-    except ValueError as exc:
-        raise RuntimeError(f"Secret file is outside its detected Git worktree: {path}") from exc
-
-    completed = subprocess.run(
-        ["git", "check-ignore", "-q", "--", str(git_path)],
-        cwd=git_root,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(f"Secret file is not git-ignored: {path}")
-
-
-def load_required_env(path: Path) -> dict[str, str]:
-    """Loads Prowlarr credentials and validates required keys."""
-
-    if not path.is_file():
-        raise RuntimeError(f"Local env file was not found: {path}")
-    ensure_secret_file_is_ignored(path)
-    values = parse_env_file(path)
-    required = ("PROWLARR_URL", "PROWLARR_API_KEY")
-    missing = [name for name in required if not values.get(name)]
-    if missing:
-        raise RuntimeError(f"Local env file is missing required key(s): {', '.join(missing)}")
-    values.setdefault("PROWLARR_EMULEBB_INDEXER_NAME", "eMule BB Local")
-    return values
 
 
 def prowlarr_request(
@@ -510,12 +441,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
-    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
-    parser.add_argument("--env-path", default=str((REPO_ROOT / ".env.local").resolve()))
-    parser.add_argument("--env-source", default=str(get_default_source_env_path()))
+    parser.add_argument("--env-file", default=str((REPO_ROOT / live_env.DEFAULT_ENV_FILE_NAME).resolve()))
     parser.add_argument("--emule-api-key", default="prowlarr-emulebb-live-key")
     parser.add_argument("--bind-addr")
     parser.add_argument("--enable-upnp", action="store_true")
@@ -544,8 +474,11 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.cached_search_stress_count <= 0:
         raise ValueError("--cached-search-stress-count must be greater than zero.")
-    env_path = Path(args.env_path).resolve()
-    env_values = load_required_env(env_path)
+    env_values = live_env.load_env_values(
+        ("PROWLARR_URL", "PROWLARR_API_KEY"),
+        env_file=Path(args.env_file).resolve(),
+        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMule BB Local"},
+    )
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
     indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
@@ -560,7 +493,7 @@ def main() -> int:
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
     )
-    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     artifacts_dir = paths.source_artifacts_dir
     bind_addr = resolve_bind_addr(prowlarr_url, args.bind_addr)
     port = choose_listen_port(bind_addr)

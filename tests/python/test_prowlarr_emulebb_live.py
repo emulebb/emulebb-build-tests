@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness import live_env
+
 
 def load_prowlarr_module():
     """Loads the hyphenated Prowlarr live script for focused unit tests."""
@@ -115,7 +117,6 @@ def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> 
 
 
 def test_secret_ignore_check_uses_secret_file_git_worktree(tmp_path: Path, monkeypatch) -> None:
-    module = load_prowlarr_module()
     secret_root = tmp_path / "bountarr"
     secret_root.mkdir()
     secret_path = secret_root / ".env"
@@ -132,9 +133,9 @@ def test_secret_ignore_check_uses_secret_file_git_worktree(tmp_path: Path, monke
             return SimpleNamespace(returncode=0)
         raise AssertionError(f"Unexpected subprocess call: {args}")
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(live_env.subprocess, "run", fake_run)
 
-    module.ensure_secret_file_is_ignored(secret_path)
+    live_env.ensure_secret_file_is_ignored(secret_path)
 
     assert calls[0][0][:3] == ["git", "-C", str(secret_root)]
     assert calls[1][0][:3] == ["git", "check-ignore", "-q"]

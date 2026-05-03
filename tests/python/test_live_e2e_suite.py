@@ -221,6 +221,32 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
     assert summary["suites"][0]["rest_stress_profile"] == "soak"
 
 
+def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    profile_seed_dir = tmp_path / "seed" / "config"
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--suite",
+            "rest-api",
+            "--profile-seed-dir",
+            str(profile_seed_dir),
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    removed_flag_name = "--seed" + "-config-dir"
+    assert option_values(commands[0], "--profile-seed-dir") == [str(profile_seed_dir.resolve())]
+    assert removed_flag_name not in commands[0]
+
+
 def test_operator_script_help_loads_hyphenated_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     completed = subprocess.run(
@@ -233,3 +259,5 @@ def test_operator_script_help_loads_hyphenated_helpers() -> None:
 
     assert completed.returncode == 0
     assert "--skip-live-seed-refresh" in completed.stdout
+    assert "--profile-seed-dir" in completed.stdout
+    assert "--seed" + "-config-dir" not in completed.stdout

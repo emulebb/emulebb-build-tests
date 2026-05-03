@@ -195,7 +195,7 @@ def build_suite_command(
     if app_exe is not None:
         command.extend(["--app-exe", str(app_exe.resolve())])
     if seed_config_dir is not None:
-        command.extend(["--seed-config-dir", str(seed_config_dir.resolve())])
+        command.extend(["--profile-seed-dir", str(seed_config_dir.resolve())])
     if spec.accepts_startup_profile_mode:
         command.extend(["--startup-profile-mode", startup_profile_mode])
     if spec.accepts_shared_root and shared_root is not None:
@@ -253,7 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
-    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
@@ -311,7 +311,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     selected_specs = resolve_suite_specs(args.suite)
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
     python_executable = harness_cli_common.find_python_executable()
-    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else None
+    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
     shared_root = Path(args.shared_root).resolve() if args.shared_root else None
 
     summary: dict[str, object] = {

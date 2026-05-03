@@ -490,7 +490,7 @@ def assert_ini_values(preferences_path: Path, expected: dict[str, dict[str, str]
 
 def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: argparse.Namespace) -> dict[str, object]:
     require_pywinauto()
-    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     artifacts_dir = paths.source_artifacts_dir
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
     rest_port = rest_smoke.choose_listen_port()
@@ -631,7 +631,7 @@ def main() -> None:
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
-    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--keep-running", action="store_true")

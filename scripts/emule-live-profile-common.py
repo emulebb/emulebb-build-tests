@@ -8,6 +8,7 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -15,6 +16,12 @@ import win32con
 import win32api
 import win32event
 import win32gui
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.live_profile_seed import ensure_seed_profile_initialized, validate_seed_config_dir
 
 try:
     from pywinauto import Application
@@ -43,27 +50,6 @@ STARTUP_PROFILE_SHARED_LIST_RELOAD_PHASE_NAME = "CSharedFilesCtrl::ReloadFileLis
 STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID = "shared.hashing.deferred_start"
 STARTUP_PROFILE_DEFERRED_SHARED_HASHING_MAX_LEAD_MS = 250.0
 STARTUP_PROFILE_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN = 1
-
-REQUIRED_SEED_KEYS = (
-    "AppVersion",
-    "Nick",
-    "Port",
-    "UDPPort",
-    "ServerUDPPort",
-    "Language",
-    "StartupMinimized",
-    "BringToFront",
-    "ConfirmExit",
-    "RestoreLastMainWndDlg",
-    "Splashscreen",
-    "Autoconnect",
-    "Reconnect",
-    "NetworkED2K",
-    "NetworkKademlia",
-    "ShowSharedFilesDetails",
-    "IgnoreInstances",
-)
-
 
 def require_pywinauto() -> None:
     """Raises one actionable error when the live/UI runtime dependency is missing."""
@@ -142,33 +128,6 @@ def configure_profile_upnp(config_dir: Path, *, enable_upnp: bool, close_on_exit
     preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
 
 
-def parse_ini_values(text: str) -> dict[str, str]:
-    """Parses one simple INI text blob into key/value pairs for seed validation."""
-
-    values: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("[") or line.startswith(";"):
-            continue
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
-
-
-def ensure_seed_profile_initialized(text: str) -> None:
-    """Fails fast when the checked-in test seed stops being a fully initialized profile."""
-
-    values = parse_ini_values(text)
-    missing_keys = [key for key in REQUIRED_SEED_KEYS if not values.get(key, "").strip()]
-    if missing_keys:
-        raise RuntimeError(
-            "Seed preferences.ini is missing required initialized keys: "
-            + ", ".join(missing_keys)
-        )
-
-
 def win_path(path: Path, trailing_slash: bool = False) -> str:
     """Formats a path as an absolute Windows string, optionally with a trailing separator."""
 
@@ -224,6 +183,7 @@ def prepare_profile_base(
     incoming_dir = incoming_dir or (artifacts_dir / "incoming")
     temp_dir = temp_dir or (artifacts_dir / "temp")
 
+    validate_seed_config_dir(seed_config_dir)
     shutil.copytree(seed_config_dir, config_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     incoming_dir.mkdir(parents=True, exist_ok=True)

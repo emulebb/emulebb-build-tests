@@ -16,6 +16,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness.live_profile_seed import validate_seed_config_dir
 from emule_test_harness.workspace_layout import get_default_workspace_root, resolve_workspace_app_root
 
 
@@ -26,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--app-root", type=Path)
     parser.add_argument("--emule-exe", type=Path)
-    parser.add_argument("--seed-config-dir", type=Path)
+    parser.add_argument("--profile-seed-dir", type=Path)
     parser.add_argument("--profile-root", type=Path)
     parser.add_argument("--report-root", type=Path)
     parser.add_argument("--timeout-seconds", type=int, default=180)
@@ -60,6 +61,7 @@ def copy_seed_profile(seed_config_directory: Path, profile_base_path: Path) -> N
 
     if not seed_config_directory.is_dir():
         raise RuntimeError(f"Seed config directory '{seed_config_directory}' does not exist.")
+    validate_seed_config_dir(seed_config_directory)
     config_directory = profile_base_path / "config"
     logs_directory = profile_base_path / "logs"
     config_directory.mkdir(parents=True, exist_ok=True)
@@ -87,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     emule_exe = (args.emule_exe or (app_root / "srchybrid" / "x64" / "Debug" / "emule.exe")).resolve()
     report_root = (args.report_root or (test_repo_root / "reports" / "diag-hash")).resolve()
     latest_report_dir = report_root.parent / "diag-hash-latest"
-    seed_config_dir = (args.seed_config_dir or (test_repo_root / "manifests" / "live-profile-seed" / "config")).resolve()
+    seed_config_dir = (args.profile_seed_dir or (test_repo_root / "manifests" / "live-profile-seed" / "config")).resolve()
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     run_dir = report_root / timestamp

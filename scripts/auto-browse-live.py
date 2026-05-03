@@ -971,7 +971,7 @@ def main() -> int:
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
-    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
@@ -1010,7 +1010,7 @@ def main() -> int:
         keep_artifacts=(args.keep_artifacts or args.keep_running),
     )
 
-    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     artifacts_dir = paths.source_artifacts_dir
     port = rest_smoke.choose_listen_port()
     base_url = f"http://127.0.0.1:{port}"

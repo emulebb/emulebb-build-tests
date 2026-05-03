@@ -216,7 +216,7 @@ def main() -> int:
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
-    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
@@ -238,7 +238,7 @@ def main() -> int:
     workspace_repo_root = find_workspace_repo_root(paths.workspace_root)
     amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
     artifacts_dir = paths.source_artifacts_dir
-    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     node_info = resolve_amutorrent_node()
 
     emule_port = choose_listen_port()

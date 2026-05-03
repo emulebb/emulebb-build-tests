@@ -113,10 +113,30 @@ Deterministic live-profile seed:
 
 - `manifests\live-profile-seed\config` stores the canonical test-only profile inputs for live REST E2E and live named-pipe runs
 - the seed is intentionally minimal and vendors only the config files the live harness truly depends on: `preferences.ini`, `preferences.dat`, `nodes.dat`, and `server.met`
+- the harness validates that exact file allowlist before copying the seed; runtime files such as logs, `shareddir.dat`, caches, and history files belong only in per-run artifacts
 - `preferences.ini` is an initialized profile seed; it must already carry the startup-silencing keys needed to avoid first-run UI such as the language prompt and runtime wizard
 - `preferences.dat` carries the deterministic maximized main-window placement used by the live UI and startup-profile harnesses
 - the helper injects only runtime-specific transport, logging, bind, temp, working-folder, and shared-directory settings per run
 - runtime working folders are copied from that seed and then expanded with per-run logs, temp files, and other mutable state
+- use `--profile-seed-dir <path>` on live harness entrypoints when diagnosing against an alternate seed
+
+Live Arr environment:
+
+- Prowlarr-only live checks require `PROWLARR_URL` and `PROWLARR_API_KEY`
+- Radarr/Sonarr live-wire checks additionally require `RADARR_URL`, `RADARR_API_KEY`, `SONARR_URL`, and `SONARR_API_KEY`
+- live scripts load process environment variables first, then fall back to an ignored dotenv file selected by `--env-file`; the default fallback is `.env.local`
+- `.env.local`, `.env`, and `.env.*` are ignored; do not commit real API keys
+- redacted template:
+
+```dotenv
+PROWLARR_URL=http://127.0.0.1:9696
+PROWLARR_API_KEY=<redacted>
+PROWLARR_EMULEBB_INDEXER_NAME=eMule BB Local
+RADARR_URL=http://127.0.0.1:7878
+RADARR_API_KEY=<redacted>
+SONARR_URL=http://127.0.0.1:8989
+SONARR_API_KEY=<redacted>
+```
 
 Canonical live REST E2E lane:
 

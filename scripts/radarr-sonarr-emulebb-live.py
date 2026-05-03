@@ -19,6 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import live_env
+
 OPEN_DOCUMENT_QUERIES = ("linux", "ubuntu", "debian", "python")
 ITALIAN_MEDIA_SEARCH_TERMS = ("La Dolce Vita", "Roma citta aperta", "Ladri di biciclette")
 SYNTHETIC_TRIGGER_MAGNET = (
@@ -798,11 +800,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
-    parser.add_argument("--seed-config-dir")
+    parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
-    parser.add_argument("--env-path", default=str((REPO_ROOT / ".env.local").resolve()))
+    parser.add_argument("--env-file", default=str((REPO_ROOT / live_env.DEFAULT_ENV_FILE_NAME).resolve()))
     parser.add_argument("--emule-api-key", default="arr-emulebb-live-key")
     parser.add_argument("--bind-addr")
     parser.add_argument("--enable-upnp", action="store_true")
@@ -879,11 +881,18 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.qbit_live_wire_rounds <= 0:
         raise ValueError("--qbit-live-wire-rounds must be greater than zero.")
-    env_values = prowlarr_live.load_required_env(Path(args.env_path).resolve())
-    required = ("RADARR_URL", "RADARR_API_KEY", "SONARR_URL", "SONARR_API_KEY")
-    missing = [name for name in required if not env_values.get(name)]
-    if missing:
-        raise RuntimeError(f"Local env file is missing required key(s): {', '.join(missing)}")
+    env_values = live_env.load_env_values(
+        (
+            "PROWLARR_URL",
+            "PROWLARR_API_KEY",
+            "RADARR_URL",
+            "RADARR_API_KEY",
+            "SONARR_URL",
+            "SONARR_API_KEY",
+        ),
+        env_file=Path(args.env_file).resolve(),
+        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMule BB Local"},
+    )
 
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
@@ -903,7 +912,7 @@ def main() -> int:
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
     )
-    seed_config_dir = Path(args.seed_config_dir).resolve() if args.seed_config_dir else paths.seed_config_dir
+    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     artifacts_dir = paths.source_artifacts_dir
     result_path = artifacts_dir / "result.json"
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
