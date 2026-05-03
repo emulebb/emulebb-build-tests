@@ -1,5 +1,4 @@
 #include "../third_party/doctest/doctest.h"
-#include <climits>
 #include "WebApiCommandSeams.h"
 #include "WebApiSurfaceSeams.h"
 #include "WebServerAuthStateSeams.h"
@@ -192,6 +191,18 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"maxSizeBytes", -1}}, request, error));
 	CHECK_EQ(error, "maxSizeBytes must be an unsigned number");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"minSizeBytes", 4096}, {"maxSizeBytes", 700}}, request, error));
+	CHECK_EQ(error, "maxSizeBytes must be greater than or equal to minSizeBytes");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"minAvailability", 1000001}}, request, error));
+	CHECK_EQ(error, "minAvailability must be an unsigned number in the range 0..1000000");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"clearExisting", 1}}, request, error));
+	CHECK_EQ(error, "clearExisting must be a boolean");
 }
 
 TEST_CASE("Web API parses search identifiers as decimal uint32 strings")
@@ -208,6 +219,14 @@ TEST_CASE("Web API parses search identifiers as decimal uint32 strings")
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchId(WebApiCommandSeams::json("12x"), uSearchID, error));
+	CHECK_EQ(error, "searchId must be a valid uint32 decimal string");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchId(WebApiCommandSeams::json("+12"), uSearchID, error));
+	CHECK_EQ(error, "searchId must be a valid uint32 decimal string");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchId(WebApiCommandSeams::json(" 12"), uSearchID, error));
 	CHECK_EQ(error, "searchId must be a valid uint32 decimal string");
 
 	error.clear();
@@ -282,22 +301,22 @@ TEST_CASE("Web API parses bulk transfer mutations with the final deleteFiles spe
 
 	CHECK(WebApiCommandSeams::TryParseTransferBulkMutationRequest(
 		WebApiCommandSeams::json{
-			{"hashes", WebApiCommandSeams::json::array({"a", "b"})},
+			{"hashes", WebApiCommandSeams::json::array({"0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"})},
 			{"deleteFiles", true}
 		},
 		request,
 		error));
 	CHECK_EQ(request.hashes.size(), 2u);
 	CHECK(request.bDeleteFiles);
-	CHECK_EQ(request.hashes[0].get<std::string>(), "a");
-	CHECK_EQ(request.hashes[1].get<std::string>(), "b");
+	CHECK_EQ(request.hashes[0].get<std::string>(), "0123456789abcdef0123456789abcdef");
+	CHECK_EQ(request.hashes[1].get<std::string>(), "fedcba9876543210fedcba9876543210");
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseTransferBulkMutationRequest(WebApiCommandSeams::json{{"hashes", "abc"}}, request, error));
 	CHECK_EQ(error, "hashes must be a string array");
 }
 
-TEST_CASE("Web API accepts empty hash arrays and rejects missing hash arrays")
+TEST_CASE("Web API validates bulk transfer hash arrays and delete flags")
 {
 	WebApiCommandSeams::STransferBulkMutationRequest request;
 	std::string error;
@@ -315,6 +334,26 @@ TEST_CASE("Web API accepts empty hash arrays and rejects missing hash arrays")
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseTransferBulkMutationRequest(WebApiCommandSeams::json::object(), request, error));
 	CHECK_EQ(error, "hashes must be a string array");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferBulkMutationRequest(
+		WebApiCommandSeams::json{
+			{"hashes", WebApiCommandSeams::json::array({"0123456789abcdef0123456789abcdeg"})},
+			{"deleteFiles", true}
+		},
+		request,
+		error));
+	CHECK_EQ(error, "hashes must be a string array of 32-character lowercase hex strings");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferBulkMutationRequest(
+		WebApiCommandSeams::json{
+			{"hashes", WebApiCommandSeams::json::array({"0123456789abcdef0123456789abcdef"})},
+			{"deleteFiles", "yes"}
+		},
+		request,
+		error));
+	CHECK_EQ(error, "deleteFiles must be a boolean");
 }
 
 TEST_CASE("Web API validates transfer rename payloads")
@@ -415,10 +454,11 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK_EQ(route.params["_limit"].get<int>(), 25);
 	CHECK(route.params["_items_envelope"].get<bool>());
 
-	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=999999999999", "", route, errorCode, errorMessage));
-	CHECK_EQ(route.strCommand, "log/get");
-	CHECK_EQ(route.params["limit"].get<int>(), INT_MAX);
-	CHECK(route.params["_items_envelope"].get<bool>());
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=999999999999", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "limit is out of range");
 
 	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/categories", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "categories/list");
@@ -494,11 +534,11 @@ TEST_CASE("Web API exposes a strict route schema registry")
 {
 	const std::vector<WebServerJsonSeams::SApiRouteSpec> &specs = WebServerJsonSeams::GetApiRouteSpecs();
 	CHECK(specs.size() > 50);
-	CHECK(WebServerJsonSeams::FindRouteSpec("GET", "/transfers") != NULL);
-	CHECK(WebServerJsonSeams::FindRouteSpec("PATCH", "/transfers/0123456789abcdef0123456789abcdef") != NULL);
-	CHECK(WebServerJsonSeams::FindRouteSpec("POST", "/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/ban") != NULL);
-	CHECK(WebServerJsonSeams::FindRouteSpec("GET", "/app/version") == NULL);
-	CHECK(WebServerJsonSeams::FindRouteSpec("PUT", "/app") == NULL);
+	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("GET", "/transfers") != NULL));
+	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("PATCH", "/transfers/0123456789abcdef0123456789abcdef") != NULL));
+	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("POST", "/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/ban") != NULL));
+	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("GET", "/app/version") == NULL));
+	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("PUT", "/app") == NULL));
 }
 
 TEST_CASE("Web API rejects unknown body fields and malformed query parameters before dispatch")
@@ -519,9 +559,74 @@ TEST_CASE("Web API rejects unknown body fields and malformed query parameters be
 
 	errorCode.clear();
 	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?categoryId=+1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "categoryId must be an unsigned number");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?categoryId=4294967296", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "categoryId is out of range");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=0", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "limit is out of range");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=10&limit=20", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "duplicate query parameter: limit");
+
+	errorCode.clear();
+	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=10&legacy=1", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "unknown query parameter: legacy");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","categoryId":0,"categoryName":"Default"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "categoryId and categoryName are mutually exclusive");
+}
+
+TEST_CASE("Web API rejects malformed path identifiers before dispatch")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "hash must be a 32-character lowercase hex string");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/categories/+1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "categoryId must be an unsigned decimal string");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/searches/4294967296", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "searchId is out of range");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/servers/192.0.2.1:0", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "serverId must use address:port with a port in the range 1..65535");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/uploads/not-a-client/operations/remove", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "clientId must be a 32-character lowercase hex string or address:port");
 }
 
 TEST_CASE("Web API maps every current REST route family to a command")
@@ -675,6 +780,9 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
+	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"any","minAvailability":5,"clearExisting":true})", "search/start");
+	CHECK_EQ(route.params["minAvailability"].get<int>(), 5);
+	CHECK(route.params["clearExisting"].get<bool>());
 	assertRoute("GET", "/api/v1/searches/123", "", "search/results");
 	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
 	assertRoute("POST", "/api/v1/searches/123/results/0123456789abcdef0123456789abcdef/operations/download", R"({"paused":true,"categoryId":0})", "search/download_result");

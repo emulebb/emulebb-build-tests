@@ -216,6 +216,81 @@ def test_live_search_start_uses_broad_file_type_for_release_terms(monkeypatch) -
     }
 
 
+def test_live_download_candidate_filter_rejects_unsafe_rows() -> None:
+    module = load_rest_api_smoke_module()
+
+    safe = {
+        "hash": "0123456789abcdef0123456789abcdef",
+        "name": "linux.iso",
+        "sizeBytes": 1024,
+        "fileType": "cdimage",
+    }
+
+    assert module.is_safe_live_download_result(safe) is True
+    assert module.is_safe_live_download_result({**safe, "name": "setup.exe"}) is False
+    assert module.is_safe_live_download_result({**safe, "fileType": "program"}) is False
+    assert module.is_safe_live_download_result({**safe, "hash": "0123456789ABCDEF0123456789ABCDEF"}) is False
+    assert module.is_safe_live_download_result({**safe, "sizeBytes": 0}) is False
+
+
+def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    requests: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        requests.append({"path": path, **kwargs})
+        if path.endswith("/operations/download"):
+            return {
+                "status": 200,
+                "content_type": "application/json",
+                "json": {"ok": True},
+                "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
+                "body_text": "{}",
+            }
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {
+                "id": "42",
+                "query": "linux",
+                "status": "running",
+                "results": [
+                    {
+                        "hash": "0123456789abcdef0123456789abcdef",
+                        "name": "linux.iso",
+                        "sizeBytes": 1024,
+                        "fileType": "cdimage",
+                    }
+                ],
+            },
+            "raw_json": {
+                "data": {
+                    "id": "42",
+                    "query": "linux",
+                    "status": "running",
+                    "results": [
+                        {
+                            "hash": "0123456789abcdef0123456789abcdef",
+                            "name": "linux.iso",
+                            "sizeBytes": 1024,
+                            "fileType": "cdimage",
+                        }
+                    ],
+                },
+                "meta": {"apiVersion": "v1"},
+            },
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.trigger_paused_download_from_search_result("http://127.0.0.1:1", "key", "42", 1.0)
+
+    assert result["ok"] is True
+    assert requests[-1]["path"] == "/api/v1/searches/42/results/0123456789abcdef0123456789abcdef/operations/download"
+    assert requests[-1]["json_body"] == {"paused": True, "categoryId": 0}
+
+
 def test_rest_stress_config_rejects_invalid_values() -> None:
     module = load_rest_api_smoke_module()
 

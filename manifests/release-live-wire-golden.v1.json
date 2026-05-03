@@ -28,6 +28,7 @@
   "rest": {
     "server_search_count": 6,
     "kad_search_count": 6,
+    "download_trigger_count": 1,
     "search_type": "any",
     "safe_stress_operations": [
       {

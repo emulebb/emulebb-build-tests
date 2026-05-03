@@ -236,7 +236,16 @@ def cleanup_source_artifacts(paths: HarnessRunPaths) -> None:
     if paths.keep_source_artifacts:
         return
     if paths.source_artifacts_dir.exists():
-        shutil.rmtree(paths.source_artifacts_dir)
+        deadline = time.monotonic() + 10.0
+        last_error: OSError | None = None
+        while time.monotonic() < deadline:
+            try:
+                shutil.rmtree(paths.source_artifacts_dir)
+                return
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.5)
+        print(f"Warning: leaving source artifacts after cleanup failed: {paths.source_artifacts_dir} ({last_error})")
 
 
 def build_live_ui_summary(

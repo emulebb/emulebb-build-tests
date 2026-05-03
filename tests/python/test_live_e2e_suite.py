@@ -100,12 +100,14 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert "--enable-upnp" in rest_command
     assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
+    assert option_values(rest_command, "--live-download-trigger-count") == [str(live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)]
     assert option_values(rest_command, "--rest-coverage-profile") == ["contract"]
     assert option_values(rest_command, "--rest-stress-profile") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["4"]
     assert "--skip-live-seed-refresh" not in rest_command
     assert summary["suites"][6]["rest_coverage_profile"] == "contract"
     assert summary["suites"][6]["rest_stress_profile"] == "smoke"
+    assert summary["suites"][6]["rest_download_trigger_count"] == live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT
 
     browser_command = commands[7]
     assert script_name(browser_command) == "amutorrent-browser-smoke.py"

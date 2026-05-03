@@ -49,6 +49,7 @@ write_json = live_common.write_json
 LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
 DEFAULT_SERVER_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
 DEFAULT_KAD_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
+DEFAULT_LIVE_DOWNLOAD_TRIGGER_COUNT = 1
 NAT_BACKEND_ATTEMPT_PREFIX = "Attempting NAT mapping backend "
 UPNP_IGD_BACKEND_NAME = "UPnP IGD (MiniUPnP)"
 PCP_NATPMP_BACKEND_NAME = "PCP/NAT-PMP"
@@ -1072,7 +1073,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             invalid_preference,
             400,
             "INVALID_ARGUMENT",
-            message_contains="unsupported preference key",
+            message_contains="unknown JSON field: unsupportedPreference",
         ),
     }
 
@@ -1299,19 +1300,19 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             upload_remove_bad,
             400,
             "INVALID_ARGUMENT",
-            message_contains="userHash or ip and port are required",
+            message_contains="clientId must be a 32-character lowercase hex string or address:port",
         ),
         "release_slot_bad_payload": require_error_response(
             upload_release_bad,
             400,
             "INVALID_ARGUMENT",
-            message_contains="userHash or ip and port are required",
+            message_contains="clientId must be a 32-character lowercase hex string or address:port",
         ),
         "queue_remove_bad_payload": require_error_response(
             upload_queue_remove_bad,
             400,
             "INVALID_ARGUMENT",
-            message_contains="userHash or ip and port are required",
+            message_contains="clientId must be a 32-character lowercase hex string or address:port",
         ),
     }
 
@@ -1347,6 +1348,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={},
     )
+    shared_delete_bad = http_request(
+        base_url,
+        f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"deleteFiles": "yes"},
+    )
     shared_reload = http_request(
         base_url,
         "/api/v1/shared-files/operations/reload",
@@ -1374,6 +1382,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "INVALID_ARGUMENT",
             message_contains="path must be a non-empty string path",
         ),
+        "delete_bad_payload": require_error_response(
+            shared_delete_bad,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="deleteFiles must be a boolean",
+        ),
         "reload": compact_http_result(shared_reload),
     }
     assert shared_reload["status"] == 200, compact_http_result(shared_reload)
@@ -1399,10 +1413,31 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "/api/v1/transfers?categoryId=abc",
         api_key=api_key,
     )
+    duplicate_query = http_request(
+        base_url,
+        "/api/v1/logs?limit=10&limit=20",
+        api_key=api_key,
+    )
+    out_of_range_limit = http_request(
+        base_url,
+        "/api/v1/logs?limit=0",
+        api_key=api_key,
+    )
     unknown_query = http_request(
         base_url,
         "/api/v1/logs?limit=1&legacy=1",
         api_key=api_key,
+    )
+    ambiguous_category_selector = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={
+            "link": "ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/",
+            "categoryId": 0,
+            "categoryName": "Default",
+        },
     )
     surface["errors"] = {
         "missing_route": require_error_response(missing_route, 404, "NOT_FOUND", message_contains="API route not found"),
@@ -1430,11 +1465,29 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "INVALID_ARGUMENT",
             message_contains="categoryId must be an unsigned number",
         ),
+        "duplicate_query": require_error_response(
+            duplicate_query,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="duplicate query parameter: limit",
+        ),
+        "out_of_range_limit": require_error_response(
+            out_of_range_limit,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="limit is out of range",
+        ),
         "unknown_query": require_error_response(
             unknown_query,
             400,
             "INVALID_ARGUMENT",
             message_contains="unknown query parameter: legacy",
+        ),
+        "ambiguous_category_selector": require_error_response(
+            ambiguous_category_selector,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="categoryId and categoryName are mutually exclusive",
         ),
     }
 
@@ -1459,7 +1512,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     assert added_servers, compact_http_result(servers_after_add)
     server_remove = http_request(
         base_url,
-        f"/api/v1/servers/{REST_SURFACE_TEST_SERVER['addr']}:{REST_SURFACE_TEST_SERVER['port']}",
+        f"/api/v1/servers/{REST_SURFACE_TEST_SERVER['address']}:{REST_SURFACE_TEST_SERVER['port']}",
         method="DELETE",
         api_key=api_key,
         json_body={},
@@ -1926,6 +1979,96 @@ def wait_for_search_observation(
     return wait_for(resolve, timeout=timeout_seconds, interval=2.0, description="live search activity")
 
 
+def is_lowercase_md4_hash(value: object) -> bool:
+    """Returns true when one public hash token is the strict REST lowercase MD4 shape."""
+
+    if not isinstance(value, str) or len(value) != 32:
+        return False
+    return all(("0" <= ch <= "9") or ("a" <= ch <= "f") for ch in value)
+
+
+def is_safe_live_download_result(result_row: object) -> bool:
+    """Rejects unsafe or incomplete live search rows before triggering a paused download."""
+
+    if not isinstance(result_row, dict):
+        return False
+    file_name = str(result_row.get("name") or "").strip().lower()
+    file_type = str(result_row.get("fileType") or "").strip().lower()
+    size_bytes = result_row.get("sizeBytes", result_row.get("size"))
+    if not file_name or file_name.endswith(".exe") or file_type == "program":
+        return False
+    if not is_lowercase_md4_hash(result_row.get("hash")):
+        return False
+    return isinstance(size_bytes, int) and size_bytes > 0
+
+
+def find_safe_live_download_result(search_payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Selects the first search result safe enough for the paused-download trigger."""
+
+    results = search_payload.get("results")
+    if not isinstance(results, list):
+        return None
+    for result_row in results:
+        if is_safe_live_download_result(result_row):
+            assert isinstance(result_row, dict)
+            return result_row
+    return None
+
+
+def trigger_paused_download_from_search_result(
+    base_url: str,
+    api_key: str,
+    search_id: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Polls for one safe live search result and triggers it as a paused download."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        result = http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
+        if int(result["status"]) != 200 or not isinstance(result["json"], dict):
+            return None
+        payload = require_json_object(result, 200)
+        candidate = find_safe_live_download_result(payload)
+        observations.append(
+            {
+                "observed_at": round(time.time(), 3),
+                "status": payload.get("status"),
+                "result_count": len(payload.get("results") or []),
+                "has_candidate": candidate is not None,
+            }
+        )
+        if candidate is None:
+            if payload.get("status") == "complete":
+                return {"ok": False, "reason": "search completed without a safe download candidate", "observations": observations}
+            return None
+        download = http_request(
+            base_url,
+            f"/api/v1/searches/{search_id}/results/{candidate['hash']}/operations/download",
+            method="POST",
+            api_key=api_key,
+            json_body={"paused": True, "categoryId": 0},
+        )
+        require_json_object(download, 200)
+        return {
+            "ok": int(download["status"]) == 200,
+            "searchId": search_id,
+            "candidate": {
+                "hash": candidate.get("hash"),
+                "name": candidate.get("name"),
+                "sizeBytes": candidate.get("sizeBytes", candidate.get("size")),
+                "fileType": candidate.get("fileType"),
+            },
+            "download": compact_http_result(download),
+            "observations": observations,
+        }
+
+    result = wait_for(resolve, timeout=timeout_seconds, interval=2.0, description="safe live download candidate")
+    assert isinstance(result, dict)
+    return result
+
+
 def stop_live_search(base_url: str, api_key: str, search_id: str) -> dict[str, object]:
     """Stops one live search and returns the raw REST response."""
 
@@ -1945,11 +2088,13 @@ def execute_search_plan(
     observation_timeout_seconds: float,
     *,
     search_method_override: str | None,
+    live_download_trigger_count: int,
 ) -> tuple[list[dict[str, object]], str | None]:
     """Runs one deterministic search plan and returns completed cycle artifacts."""
 
     completed_cycles: list[dict[str, object]] = []
     active_search_id: str | None = None
+    remaining_download_triggers = live_download_trigger_count
 
     for cycle_index, cycle_plan in enumerate(search_plan, start=1):
         network = str(cycle_plan["network"])
@@ -1988,6 +2133,16 @@ def execute_search_plan(
                     active_search_id,
                     observation_timeout_seconds,
                 )
+                if remaining_download_triggers > 0:
+                    download_trigger = trigger_paused_download_from_search_result(
+                        base_url,
+                        api_key,
+                        active_search_id,
+                        observation_timeout_seconds,
+                    )
+                    cycle_report["download_trigger"] = download_trigger
+                    if bool(download_trigger.get("ok")):
+                        remaining_download_triggers -= 1
             finally:
                 if active_search_id is not None:
                     stop_result = stop_live_search(base_url, api_key, active_search_id)
@@ -2056,6 +2211,7 @@ def main() -> int:
     parser.add_argument("--server-search-count", type=int, default=0)
     parser.add_argument("--kad-search-count", type=int, default=0)
     parser.add_argument("--search-method-override", choices=["automatic", "server", "global", "kad"])
+    parser.add_argument("--live-download-trigger-count", type=int, default=DEFAULT_LIVE_DOWNLOAD_TRIGGER_COUNT)
     parser.add_argument("--rest-coverage-profile", choices=REST_COVERAGE_PROFILES, default="contract")
     parser.add_argument("--skip-rest-contract-completeness", action="store_true")
     parser.add_argument("--rest-stress-profile", choices=REST_STRESS_PROFILES, default="off")
@@ -2069,6 +2225,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.server_search_count < 0 or args.kad_search_count < 0:
         raise ValueError("Search counts must be zero or greater.")
+    if args.live_download_trigger_count < 0:
+        raise ValueError("Live download trigger count must be zero or greater.")
     effective_stress_profile = (
         "smoke"
         if args.rest_coverage_profile == "contract-stress" and args.rest_stress_profile == "off"
@@ -2144,6 +2302,7 @@ def main() -> int:
             "keep_running": bool(args.keep_running),
             "server_search_count": args.server_search_count,
             "kad_search_count": args.kad_search_count,
+            "live_download_trigger_count": args.live_download_trigger_count,
             "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
             "search_method_override": args.search_method_override,
             "rest_coverage_profile": args.rest_coverage_profile,
@@ -2203,7 +2362,7 @@ def main() -> int:
         version = http_request(base_url, "/api/v1/app", api_key=args.api_key)
         assert version["status"] == 200
         assert isinstance(version["json"], dict)
-        assert version["json"]["appName"] == "eMule"
+        assert version["json"]["name"] == "eMule"
         assert "version" in version["json"]
         report["checks"]["app_version"] = compact_http_result(version)
 
@@ -2337,8 +2496,20 @@ def main() -> int:
             search_plan,
             args.search_observation_timeout_seconds,
             search_method_override=args.search_method_override,
+            live_download_trigger_count=args.live_download_trigger_count,
         )
         report["checks"]["search_cycles"] = completed_cycles
+        completed_download_triggers = sum(
+            1
+            for cycle in completed_cycles
+            if isinstance(cycle.get("download_trigger"), dict) and bool(cycle["download_trigger"].get("ok"))
+        )
+        report["checks"]["live_download_triggers"] = {
+            "requested": args.live_download_trigger_count,
+            "completed": completed_download_triggers,
+            "ok": completed_download_triggers >= args.live_download_trigger_count,
+        }
+        assert completed_download_triggers >= args.live_download_trigger_count, report["checks"]["live_download_triggers"]
         search_id = None
 
         current_phase = set_phase(report, "log_limit")

@@ -49,6 +49,7 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
     assert live_e2e_suite.LIVE_WIRE_SEARCH_QUERIES == search_terms
     assert live_e2e_suite.DEFAULT_REST_SEARCH_COUNT == golden["rest"]["server_search_count"]
     assert live_e2e_suite.DEFAULT_REST_SEARCH_COUNT == golden["rest"]["kad_search_count"]
+    assert live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT == golden["rest"]["download_trigger_count"]
 
     operations = rest_smoke.build_rest_stress_operations("smoke")
     method_path_pairs = {(operation["method"], operation["path"]) for operation in operations}

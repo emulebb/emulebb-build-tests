@@ -331,6 +331,9 @@ def main() -> int:
                 close_app_cleanly(app)
                 report["cleanup"]["emule_closed"] = True
             except Exception as exc:
+                app.kill()
+                report["cleanup"]["emule_closed"] = False
+                report["cleanup"]["emule_killed"] = True
                 report["cleanup"]["emule_close_error"] = repr(exc)
         write_json(artifacts_dir / "result.json", report)
         harness_cli_common.publish_run_artifacts(paths)

@@ -35,6 +35,7 @@ STARTUP_PROFILE_SCENARIOS = (
 )
 LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
 DEFAULT_REST_SEARCH_COUNT = len(LIVE_WIRE_SEARCH_QUERIES)
+DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT = 1
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,7 @@ def build_suite_command(
     skip_live_seed_refresh: bool = False,
     rest_server_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_kad_search_count: int = DEFAULT_REST_SEARCH_COUNT,
+    rest_download_trigger_count: int = DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT,
     rest_coverage_profile: str = "contract",
     rest_stress_profile: str = "smoke",
     rest_stress_duration_seconds: float = 30.0,
@@ -186,6 +188,7 @@ def build_suite_command(
     if spec.is_rest_api:
         command.extend(["--server-search-count", str(rest_server_search_count)])
         command.extend(["--kad-search-count", str(rest_kad_search_count)])
+        command.extend(["--live-download-trigger-count", str(rest_download_trigger_count)])
         command.extend(["--rest-coverage-profile", rest_coverage_profile])
         command.extend(["--rest-stress-profile", rest_stress_profile])
         command.extend(["--rest-stress-duration-seconds", str(rest_stress_duration_seconds)])
@@ -232,6 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--rest-server-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-kad-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
+    parser.add_argument("--rest-download-trigger-count", type=int, default=DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)
     parser.add_argument("--rest-coverage-profile", choices=["smoke", "contract", "contract-stress"], default="contract")
     parser.add_argument("--rest-stress-profile", choices=["off", "smoke", "soak"], default="smoke")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
@@ -246,6 +250,8 @@ def validate_args(args: argparse.Namespace) -> None:
 
     if args.rest_server_search_count < 0 or args.rest_kad_search_count < 0:
         raise ValueError("REST live search counts must be zero or greater.")
+    if args.rest_download_trigger_count < 0:
+        raise ValueError("REST live download trigger count must be zero or greater.")
     if args.rest_stress_duration_seconds <= 0:
         raise ValueError("REST stress duration must be greater than zero.")
     if args.rest_stress_concurrency <= 0:
@@ -288,6 +294,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
         "rest_coverage_profile": args.rest_coverage_profile,
         "rest_stress_profile": args.rest_stress_profile,
+        "rest_download_trigger_count": args.rest_download_trigger_count,
         "fail_fast": bool(args.fail_fast),
         "has_inconclusive_suites": False,
         "suites": [],
@@ -310,6 +317,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             rest_server_search_count=args.rest_server_search_count,
             rest_kad_search_count=args.rest_kad_search_count,
+            rest_download_trigger_count=args.rest_download_trigger_count,
             rest_coverage_profile=args.rest_coverage_profile,
             rest_stress_profile=args.rest_stress_profile,
             rest_stress_duration_seconds=args.rest_stress_duration_seconds,
@@ -336,6 +344,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 {
                     "rest_coverage_profile": args.rest_coverage_profile,
                     "rest_stress_profile": args.rest_stress_profile,
+                    "rest_download_trigger_count": args.rest_download_trigger_count,
                     "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
                     "rest_stress_concurrency": args.rest_stress_concurrency,
                 }

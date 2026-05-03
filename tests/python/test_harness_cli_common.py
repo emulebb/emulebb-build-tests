@@ -34,3 +34,38 @@ def test_publish_directory_snapshot_skips_generated_shared_hash_payloads(tmp_pat
     assert (destination / "suite-result.json").is_file()
     assert (destination / "scenario" / "result.json").is_file()
     assert not (destination / "scenario" / "shared-hash-root").exists()
+
+
+def test_cleanup_source_artifacts_leaves_locked_temp_payloads(monkeypatch, tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    source = tmp_path / "source"
+    source.mkdir()
+
+    attempts = {"count": 0}
+
+    def fake_rmtree(_path: Path) -> None:
+        attempts["count"] += 1
+        raise PermissionError("locked")
+
+    ticks = iter([0.0, 0.1, 10.1])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    paths = module.HarnessRunPaths(
+        repo_root=tmp_path,
+        workspace_root=tmp_path,
+        app_root=tmp_path,
+        app_exe=tmp_path / "emule.exe",
+        seed_config_dir=tmp_path,
+        configuration="Release",
+        suite_name="locked-cleanup",
+        source_artifacts_dir=source,
+        run_report_dir=tmp_path / "reports" / "run",
+        latest_report_dir=tmp_path / "reports" / "latest",
+        keep_source_artifacts=False,
+    )
+
+    module.cleanup_source_artifacts(paths)
+
+    assert attempts["count"] > 0
