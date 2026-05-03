@@ -136,6 +136,7 @@
     <ClCompile Include="src\async_datagram_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
     <ClCompile Include="src\aich_maintenance.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AICHMaintenanceSeams.h')" />
     <ClCompile Include="src\aich_sync_thread.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AICHSyncThreadSeams.h')" />
+    <ClCompile Include="src\app_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppKeyboardShortcutsSeams.h')" />
     <ClCompile Include="src\async_socket_ex.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncSocketExSeams.h')" />
     <ClCompile Include="src\atomic_state.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppStateSeams.h')" />
     <ClCompile Include="src\base_client_friend_buddy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h')" />
