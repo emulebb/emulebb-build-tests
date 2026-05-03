@@ -93,6 +93,16 @@ TEST_CASE("Preference INI map uses dedicated BB-added sections without legacy BB
 	CHECK(CString(PreferenceIniMap::FileCompletionKeys::Program) == CString(_T("FileCompletionProgram")));
 	CHECK(CString(PreferenceIniMap::FileCompletionKeys::Arguments) == CString(_T("FileCompletionArguments")));
 
+	CHECK(CString(PreferenceIniMap::GeoLocationKeys::LookupEnabled) == CString(_T("GeoLocationLookupEnabled")));
+	CHECK(CString(PreferenceIniMap::GeoLocationKeys::UpdatePeriodDays) == CString(_T("GeoLocationUpdatePeriodDays")));
+	CHECK(CString(PreferenceIniMap::GeoLocationKeys::LastUpdateTime) == CString(_T("GeoLocationLastUpdateTime")));
+	CHECK(CString(PreferenceIniMap::GeoLocationKeys::UpdateUrl) == CString(_T("GeoLocationUpdateUrl")));
+
+	CHECK(CString(PreferenceIniMap::IPFilterUpdateKeys::Enabled) == CString(_T("IPFilterUpdateEnabled")));
+	CHECK(CString(PreferenceIniMap::IPFilterUpdateKeys::PeriodDays) == CString(_T("IPFilterUpdatePeriodDays")));
+	CHECK(CString(PreferenceIniMap::IPFilterUpdateKeys::LastUpdateTime) == CString(_T("IPFilterLastUpdateTime")));
+	CHECK(CString(PreferenceIniMap::IPFilterUpdateKeys::Url) == CString(_T("IPFilterUpdateUrl")));
+
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::MaxUploadClientsAllowed) == CString(_T("MaxUploadClientsAllowed")));
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SlowUploadThresholdFactor) == CString(_T("SlowUploadThresholdFactor")));
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::ZeroUploadRateGraceSeconds) == CString(_T("ZeroUploadRateGraceSeconds")));
