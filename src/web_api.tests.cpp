@@ -676,6 +676,23 @@ TEST_CASE("Web API validates qBittorrent session cookies by exact pair")
 	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123", "", "abc123"));
 }
 
+TEST_CASE("Web API validates qBittorrent login form credentials exactly")
+{
+	std::map<std::string, std::string> form;
+	std::string error;
+	REQUIRE(WebServerQBitCompatSeams::TryParseFormBody("username=emule&password=secret", form, error));
+	CHECK(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "secret"));
+
+	CHECK_FALSE(WebServerQBitCompatSeams::IsValidLoginForm(form, "not-emule", "secret"));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "secret-wrong"));
+
+	REQUIRE(WebServerQBitCompatSeams::TryParseFormBody("password=secret", form, error));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "secret"));
+
+	REQUIRE(WebServerQBitCompatSeams::TryParseFormBody("username=emule", form, error));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "secret"));
+}
+
 TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams")
 {
 	const std::string encoded(WebServerJsonSeams::UrlEncodeUtf8("La Dolce Vita + [test].mkv"));

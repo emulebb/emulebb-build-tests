@@ -100,6 +100,8 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert result["public_webapi_version"]["status"] == 200
     assert result["unauthenticated_info"]["status"] == 403
     assert result["wrong_login"]["body_text"] == "Fails."
+    assert result["missing_username_login"]["body_text"] == "Fails."
+    assert result["wrong_username_login"]["body_text"] == "Fails."
     assert result["wrong_login_info"]["status"] == 403
     assert result["invalid_add"]["status"] == 400
     assert all(response["status"] == 404 for response in result["wrong_methods"].values())

@@ -636,6 +636,24 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
     if int(wrong_login.get("status") or 0) != 200 or str(wrong_login.get("body_text") or "") != "Fails.":
         raise RuntimeError(f"qBit wrong login was not rejected: {wrong_login!r}")
 
+    missing_username_login = qbit_request(
+        base_url,
+        "/api/v2/auth/login",
+        form={"password": emule_api_key},
+        method="POST",
+    )
+    if int(missing_username_login.get("status") or 0) != 200 or str(missing_username_login.get("body_text") or "") != "Fails.":
+        raise RuntimeError(f"qBit missing-username login was not rejected: {missing_username_login!r}")
+
+    wrong_username_login = qbit_request(
+        base_url,
+        "/api/v2/auth/login",
+        form={"username": "not-emule", "password": emule_api_key},
+        method="POST",
+    )
+    if int(wrong_username_login.get("status") or 0) != 200 or str(wrong_username_login.get("body_text") or "") != "Fails.":
+        raise RuntimeError(f"qBit wrong-username login was not rejected: {wrong_username_login!r}")
+
     wrong_login_info = qbit_request(base_url, "/api/v2/torrents/info")
     if int(wrong_login_info.get("status") or 0) != 403:
         raise RuntimeError(f"qBit wrong-login session reached protected endpoint: {wrong_login_info!r}")
@@ -740,6 +758,8 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
         "public_webapi_version": public_version,
         "unauthenticated_info": unauthenticated_info,
         "wrong_login": wrong_login,
+        "missing_username_login": missing_username_login,
+        "wrong_username_login": wrong_username_login,
         "wrong_login_info": wrong_login_info,
         "valid_login": login,
         "route_completeness": route_completeness,
