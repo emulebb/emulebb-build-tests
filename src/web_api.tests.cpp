@@ -560,6 +560,11 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=a&category=b", form, error));
 	CHECK_EQ(error, "duplicate form field: category");
+
+	CHECK(WebServerQBitCompatSeams::TryParseFormBody("category=", form, error));
+	std::string category;
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetRequiredNonEmptyFormField(form, "category", category, error));
+	CHECK_EQ(error, "category form field is required");
 }
 
 TEST_CASE("Web API parses qBittorrent hash mutations safely")
@@ -584,6 +589,22 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=bad", request, error));
 	CHECK_EQ(error, "hashes must contain only 32-character eD2K hashes");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789abcdef0123456789abcdef%7C0123456789ABCDEF0123456789ABCDEF", request, error));
+	CHECK_EQ(error, "hashes must not contain duplicates");
+
+	std::string manyHashes("hashes=");
+	const char hexDigits[] = "0123456789abcdef";
+	for (size_t i = 0; i <= WebServerQBitCompatSeams::kMaxHashMutationCount; ++i) {
+		if (i > 0)
+			manyHashes += "|";
+		std::string hash("00000000000000000000000000000000");
+		hash[30] = hexDigits[(i + 1) / 16];
+		hash[31] = hexDigits[(i + 1) % 16];
+		manyHashes += hash;
+	}
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest(manyHashes, request, error));
+	CHECK_EQ(error, "hashes form field exceeds the supported item limit");
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef", request, error));
 	CHECK_EQ(error, "category form field is required");
