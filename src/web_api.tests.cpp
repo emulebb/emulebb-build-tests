@@ -504,6 +504,17 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 {
 	CHECK_EQ(WebServerArrCompatSeams::kTorznabParseErrorHttpStatus, 400);
 
+	std::map<std::string, std::string> normalizedQuery;
+	std::string queryError;
+	CHECK(WebServerArrCompatSeams::TryParseTorznabQueryParameters("/indexer/emulebb/api?T=search&APIKEY=secret", normalizedQuery, queryError));
+	CHECK_EQ(normalizedQuery["t"], "search");
+	CHECK_EQ(normalizedQuery["apikey"], "secret");
+
+	queryError.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabQueryParameters("/indexer/emulebb/api?t=search&t=movie", normalizedQuery, queryError));
+	CHECK_EQ(queryError, "duplicate query parameter: t");
+	CHECK(normalizedQuery.empty());
+
 	WebServerArrCompatSeams::STorznabRequest request;
 	std::string error;
 
