@@ -607,6 +607,21 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	CHECK_FALSE(WebServerQBitCompatSeams::TryGetQBitRequestPathLower("/api/v2/torrents/files%2x?hash=bad", path, error));
 	CHECK_EQ(error, "malformed percent escape");
 	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v2/torrents/files%2x?hash=bad"));
+
+	std::string category;
+	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info", category, error));
+	CHECK(category.empty());
+	CHECK(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=Movies", category, error));
+	CHECK_EQ(category, "Movies");
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=%2x", category, error));
+	CHECK_EQ(error, "malformed percent escape");
+	CHECK(category.empty());
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=Movies&category=TV", category, error));
+	CHECK_EQ(error, "duplicate query parameter: category");
+	CHECK(category.empty());
 }
 
 TEST_CASE("Web API declares the qBittorrent compatibility endpoint contract")

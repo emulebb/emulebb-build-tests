@@ -80,6 +80,8 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
             "/api/v2/torrents/createCategory",
             "/api/v2/torrents/pause",
             "/api/v2/torrents/properties",
+            "/api/v2/torrents/info?category=%2x",
+            "/api/v2/torrents/info?category=Movies&category=TV",
             "/api/v2/torrents/files?hash=bad",
             "/api/v2/torrents/files?hash=%2x",
             "/api/v2/torrents/files%2x?hash=0123456789abcdef0123456789abcdef",
@@ -108,6 +110,8 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
         "delete_duplicate_hash",
         "pause_too_many_hashes",
         "create_category_empty",
+        "info_malformed_percent_category",
+        "info_duplicate_category",
         "files_malformed_percent_hash",
         "files_malformed_percent_path",
     } <= set(result["invalid_mutations"])
