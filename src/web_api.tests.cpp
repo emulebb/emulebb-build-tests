@@ -514,7 +514,7 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 		WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "A&B.mkv", 42),
 		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=A%26B.mkv&xl=42");
 	CHECK_EQ(WebServerArrCompatSeams::XmlEscape("<tag attr=\"x\">A&B</tag>"), "&lt;tag attr=&quot;x&quot;&gt;A&amp;B&lt;/tag&gt;");
-	CHECK_EQ(WebServerArrCompatSeams::UrlEncodeUtf8("A B+100%"), "A%20B%2B100%25");
+	CHECK_EQ(WebServerJsonSeams::UrlEncodeUtf8("A B+100%"), "A%20B%2B100%25");
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "release.mkv", 10));
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Audio, "release.mkv", 10));
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Book, "manual.pdf", 10));
@@ -527,6 +527,19 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	CHECK(WebServerQBitCompatSeams::IsQBitRequestTarget("/API/V2/torrents/add"));
 	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v1/torrents/add"));
 	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/indexer/emulebb/api"));
+}
+
+TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams")
+{
+	const std::string encoded(WebServerJsonSeams::UrlEncodeUtf8("La Dolce Vita + [test].mkv"));
+	CHECK_EQ(encoded, "La%20Dolce%20Vita%20%2B%20%5Btest%5D.mkv");
+	CHECK_EQ(WebServerJsonSeams::UrlDecodeUtf8(encoded), "La Dolce Vita + [test].mkv");
+
+	const std::string magnet(WebServerArrCompatSeams::BuildMagnetFromEd2k(
+		"0123456789abcdef0123456789abcdef",
+		"La Dolce Vita + [test].mkv",
+		42));
+	CHECK(magnet.find("&dn=" + encoded + "&xl=42") != std::string::npos);
 }
 
 TEST_CASE("Web API decodes qBittorrent add forms into native eD2K links")
