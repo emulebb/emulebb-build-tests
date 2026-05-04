@@ -21,8 +21,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import live_env
 
-OPEN_DOCUMENT_QUERIES = ("linux", "ubuntu", "debian", "python")
-ITALIAN_MEDIA_SEARCH_TERMS = ("La Dolce Vita", "Roma citta aperta", "Ladri di biciclette")
 SYNTHETIC_TRIGGER_MAGNET = (
     "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000"
     "&dn=eMuleBB-Live-Wire-Trigger.bin"
@@ -47,6 +45,7 @@ prowlarr_live = load_local_module("prowlarr_emulebb_live", "prowlarr-emulebb-liv
 harness_cli_common = prowlarr_live.harness_cli_common
 rest_smoke = prowlarr_live.rest_smoke
 live_common = prowlarr_live.live_common
+live_wire_inputs = prowlarr_live.live_wire_inputs
 
 
 def arr_request(
@@ -182,6 +181,36 @@ def get_qbit_schema(arr_url: str, api_key: str) -> dict[str, Any]:
     raise RuntimeError("Arr did not expose the qBittorrent download client schema.")
 
 
+def get_provider_field_names(provider: dict[str, Any]) -> set[str]:
+    """Returns provider field names from one Arr schema or saved provider."""
+
+    fields = provider.get("fields")
+    if not isinstance(fields, list):
+        return set()
+    return {
+        str(field.get("name"))
+        for field in fields
+        if isinstance(field, dict) and isinstance(field.get("name"), str)
+    }
+
+
+def summarize_qbit_schema(schema: dict[str, Any], *, category_field: str) -> dict[str, object]:
+    """Builds a report-safe qBittorrent schema readiness summary."""
+
+    field_names = get_provider_field_names(schema)
+    required_fields = {"host", "port", "username", "password", "initialState", category_field}
+    missing_fields = sorted(required_fields - field_names)
+    return {
+        "implementation": schema.get("implementation"),
+        "implementationName": schema.get("implementationName"),
+        "protocol": schema.get("protocol"),
+        "configContract": schema.get("configContract"),
+        "required_field_count": len(required_fields),
+        "missing_required_fields": missing_fields,
+        "ok": not missing_fields,
+    }
+
+
 def build_qbit_client_payload(
     schema: dict[str, Any],
     *,
@@ -193,6 +222,10 @@ def build_qbit_client_payload(
     category: str,
 ) -> dict[str, Any]:
     """Builds a temporary qBittorrent client payload for eMule BB."""
+
+    schema_summary = summarize_qbit_schema(schema, category_field=category_field)
+    if not bool(schema_summary["ok"]):
+        raise RuntimeError(f"Arr qBittorrent schema is missing required fields: {schema_summary['missing_required_fields']!r}")
 
     payload = json.loads(json.dumps(schema))
     payload["name"] = name
@@ -229,6 +262,7 @@ def create_temp_qbit_client(
     """Creates a temporary qBittorrent client and validates it."""
 
     schema = get_qbit_schema(arr_url, api_key)
+    schema_summary = summarize_qbit_schema(schema, category_field=category_field)
     payload = build_qbit_client_payload(
         schema,
         name=name,
@@ -248,7 +282,37 @@ def create_temp_qbit_client(
     test_payload = json.loads(json.dumps(created))
     test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
     require_success(test_result, "Arr eMule BB qBittorrent client test")
+    created["_emulebbSchemaSummary"] = schema_summary
+    created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
     return created
+
+
+def summarize_arr_indexer(indexer: dict[str, Any]) -> dict[str, object]:
+    """Builds a compact readiness summary for one synced Arr indexer."""
+
+    return {
+        "id": int(indexer.get("id") or 0),
+        "name": indexer.get("name"),
+        "implementation": indexer.get("implementation"),
+        "enable": bool(indexer.get("enable")),
+        "protocol": indexer.get("protocol"),
+        "priority": indexer.get("priority"),
+    }
+
+
+def summarize_arr_download_client(client: dict[str, Any], *, category: str) -> dict[str, object]:
+    """Builds a compact readiness summary for the temporary Arr qBit client."""
+
+    return {
+        "id": int(client["id"]),
+        "name": client.get("name"),
+        "implementation": client.get("implementation"),
+        "protocol": client.get("protocol"),
+        "enable": bool(client.get("enable")),
+        "category": category,
+        "schema": client.get("_emulebbSchemaSummary"),
+        "test_status": client.get("_emulebbTestStatus"),
+    }
 
 
 def delete_download_client(arr_url: str, api_key: str, client_id: int) -> dict[str, object]:
@@ -283,6 +347,48 @@ def get_first_direct_magnet(base_url: str, emule_api_key: str, query: str) -> di
     return {"query": query, "title": title, "magnet": link}
 
 
+def redact_direct_magnet(magnet: dict[str, object]) -> dict[str, object]:
+    """Reports one direct magnet lookup without exposing operator terms or links."""
+
+    redacted = {
+        "query_present": bool(magnet.get("query")),
+        "title_present": bool(magnet.get("title")),
+        "magnet_present": bool(magnet.get("magnet")),
+    }
+    try:
+        redacted["hash_present"] = bool(ed2k_hash_from_magnet(str(magnet.get("magnet") or "")))
+    except RuntimeError:
+        redacted["hash_present"] = False
+    return redacted
+
+
+def redact_collected_direct_magnets(result: dict[str, object]) -> dict[str, object]:
+    """Redacts collected live magnet search details for persisted reports."""
+
+    attempts = result.get("attempts") if isinstance(result.get("attempts"), list) else []
+    magnets = result.get("magnets") if isinstance(result.get("magnets"), list) else []
+    return {
+        "attempts": [
+            {
+                "query_present": bool(attempt.get("query_present") or attempt.get("query")) if isinstance(attempt, dict) else False,
+                "status": attempt.get("status") if isinstance(attempt, dict) else None,
+                "items": attempt.get("items") if isinstance(attempt, dict) else None,
+                "magnets": attempt.get("magnets") if isinstance(attempt, dict) else None,
+            }
+            for attempt in attempts
+        ],
+        "magnet_count": len(magnets),
+        "magnets": [
+            {
+                "query_present": bool(magnet.get("query")) if isinstance(magnet, dict) else False,
+                "title_present": bool(magnet.get("title")) if isinstance(magnet, dict) else False,
+                "hash_present": bool(magnet.get("hash")) if isinstance(magnet, dict) else False,
+            }
+            for magnet in magnets
+        ],
+    }
+
+
 def collect_direct_magnets(
     base_url: str,
     emule_api_key: str,
@@ -294,7 +400,7 @@ def collect_direct_magnets(
     magnets: list[dict[str, str]] = []
     attempts: list[dict[str, object]] = []
     seen_hashes: set[str] = set()
-    for query in queries:
+    for query_index, query in enumerate(queries):
         path = (
             "/indexer/emulebb/api?t=search&cat=7000&q="
             + urllib.parse.quote(query)
@@ -320,7 +426,15 @@ def collect_direct_magnets(
                 magnets.append({"query": query, "title": title, "magnet": link, "hash": transfer_hash})
                 if len(magnets) >= max_magnets:
                     break
-        attempts.append({"query": query, "status": status, "items": item_count, "magnets": len(magnets)})
+        attempts.append(
+            {
+                "query_index": query_index,
+                "query_present": bool(query),
+                "status": status,
+                "items": item_count,
+                "magnets": len(magnets),
+            }
+        )
         if len(magnets) >= max_magnets:
             break
 
@@ -549,7 +663,7 @@ def wait_for_transfer(base_url: str, emule_api_key: str, transfer_hash: str, tim
                     "categoryName": transfer.get("categoryName"),
                 }
         time.sleep(2.0)
-    raise RuntimeError(f"Added qBit transfer did not appear before timeout: {expected_hash}")
+    raise RuntimeError("Added qBit transfer did not appear before timeout.")
 
 
 def wait_for_transfer_category(
@@ -568,7 +682,7 @@ def wait_for_transfer_category(
         if str(last.get("categoryName") or "") == category:
             return last
         time.sleep(1.0)
-    raise RuntimeError(f"Transfer {transfer_hash} did not report category {category!r}. Last: {last!r}")
+    raise RuntimeError(f"Selected qBit transfer did not report category {category!r}. Last: {last!r}")
 
 
 def wait_for_transfer_absent(base_url: str, emule_api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
@@ -590,7 +704,7 @@ def wait_for_transfer_absent(base_url: str, emule_api_key: str, transfer_hash: s
         if not any(isinstance(transfer, dict) and str(transfer.get("hash") or "").lower() == expected_hash for transfer in transfers):
             return {"hash": expected_hash, "absent": True, "last_count": last_count}
         time.sleep(1.0)
-    raise RuntimeError(f"Deleted qBit transfer still appeared before timeout: {expected_hash} ({last_count} transfers)")
+    raise RuntimeError(f"Deleted qBit transfer still appeared before timeout ({last_count} transfers).")
 
 
 def delete_transfer(base_url: str, emule_api_key: str, transfer_hash: str) -> dict[str, object]:
@@ -631,7 +745,7 @@ def qbit_direct_live_wire_roundtrip(
         raise RuntimeError("qBit torrents info after add did not return a list.")
     matching_info_rows = [row for row in info_rows if isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash]
     if not matching_info_rows:
-        raise RuntimeError(f"qBit torrents info after add did not include {transfer_hash}.")
+        raise RuntimeError("qBit torrents info after add did not include the selected transfer.")
     report["info_after_add"] = {"status": int(info_after_add.get("status") or 0), "count": len(info_rows)}
 
     filtered_info = qbit_request(
@@ -645,7 +759,7 @@ def qbit_direct_live_wire_roundtrip(
         isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash
         for row in filtered_rows
     ):
-        raise RuntimeError(f"qBit category-filtered info did not include {transfer_hash}.")
+        raise RuntimeError("qBit category-filtered info did not include the selected transfer.")
 
     properties = qbit_request(
         base_url,
@@ -725,6 +839,50 @@ def qbit_direct_live_wire_roundtrip(
     return report
 
 
+def redact_qbit_roundtrip_report(report: dict[str, object]) -> dict[str, object]:
+    """Redacts exact qBit live-wire transfer identifiers from one round report."""
+
+    redacted: dict[str, object] = {
+        "query_present": bool(report.get("query")),
+        "title_present": bool(report.get("title")),
+        "expected_hash_present": bool(report.get("expected_hash")),
+    }
+    for key in (
+        "login_status",
+        "info_after_add",
+        "active_metadata",
+        "set_category_status",
+        "resume_status",
+        "pause_status",
+        "delete_status",
+    ):
+        if key in report:
+            redacted[key] = report[key]
+    add = report.get("add")
+    if isinstance(add, dict):
+        redacted["add"] = {
+            "add_status": add.get("add_status"),
+            "login_status": add.get("login_status"),
+            "hash_present": bool(add.get("hash")),
+        }
+    updated = report.get("updated_native_category")
+    if isinstance(updated, dict):
+        redacted["updated_native_category"] = {
+            "hash_present": bool(updated.get("hash")),
+            "name_present": bool(updated.get("name")),
+            "state": updated.get("state"),
+            "categoryName": updated.get("categoryName"),
+        }
+    deleted = report.get("deleted_transfer")
+    if isinstance(deleted, dict):
+        redacted["deleted_transfer"] = {
+            "hash_present": bool(deleted.get("hash")),
+            "absent": deleted.get("absent"),
+            "last_count": deleted.get("last_count"),
+        }
+    return redacted
+
+
 def qbit_direct_live_wire_stress(
     base_url: str,
     emule_api_key: str,
@@ -751,7 +909,7 @@ def qbit_direct_live_wire_stress(
             timeout_seconds=timeout_seconds,
             progress=run_report,
         )
-        runs.append(run_report)
+        runs.append(redact_qbit_roundtrip_report(run_report))
         if index + 1 >= rounds:
             break
     return {"rounds": len(runs), "runs": runs}
@@ -769,7 +927,7 @@ def wait_for_arr_release_results(
     attempts: list[dict[str, object]] = []
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        for term in terms:
+        for term_index, term in enumerate(terms):
             path = f"/api/v3/release?term={urllib.parse.quote(term)}&indexerIds={indexer_id}"
             result = arr_request(arr_url, api_key, path, timeout_seconds=90.0)
             payload = result.get("json")
@@ -780,14 +938,24 @@ def wait_for_arr_release_results(
                 if isinstance(row, dict)
                 and (int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower())
             ]
-            attempts.append({"term": term, "status": int(result.get("status") or 0), "count": len(rows), "matches": len(matches)})
+            attempts.append(
+                {
+                    "term_index": term_index,
+                    "term_present": bool(term),
+                    "status": int(result.get("status") or 0),
+                    "count": len(rows),
+                    "matches": len(matches),
+                }
+            )
             if matches:
                 first = matches[0]
                 return {
-                    "term": term,
+                    "term_index": term_index,
+                    "term_present": bool(term),
                     "count": len(matches),
-                    "first_title": first.get("title"),
+                    "first_title_present": bool(first.get("title")) if isinstance(first, dict) else False,
                     "indexer": first.get("indexer"),
+                    "attempt_count": len(attempts),
                 }
         time.sleep(5.0)
     raise RuntimeError(f"Arr release searches returned no eMule BB rows before timeout. Attempts: {attempts!r}")
@@ -813,6 +981,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--qbit-live-wire-rounds", type=int, default=2)
+    parser.add_argument(
+        "--live-wire-inputs-file",
+        default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)),
+    )
     return parser
 
 
@@ -825,6 +997,7 @@ def run_arr_checks(
     port: int,
     emule_api_key: str,
     indexer_name: str,
+    release_terms: tuple[str, ...],
     timeout_seconds: float,
 ) -> tuple[dict[str, object], int | None]:
     """Runs one Radarr or Sonarr live integration check."""
@@ -849,17 +1022,13 @@ def run_arr_checks(
             "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
             "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
         },
-        "synced_indexer": {
-            "id": int(synced_indexer.get("id") or 0),
-            "name": synced_indexer.get("name"),
-            "enable": bool(synced_indexer.get("enable")),
-        },
-        "download_client": {
-            "id": int(client["id"]),
-            "name": client.get("name"),
-            "implementation": client.get("implementation"),
-            "enable": bool(client.get("enable")),
-            "category": category,
+        "synced_indexer": summarize_arr_indexer(synced_indexer),
+        "download_client": summarize_arr_download_client(client, category=category),
+        "readiness": {
+            "indexer_synced": int(synced_indexer.get("id") or 0) > 0 and bool(synced_indexer.get("enable")),
+            "download_client_created": int(client["id"]) > 0,
+            "download_client_tested": int(client.get("_emulebbTestStatus") or 0) >= 200
+            and int(client.get("_emulebbTestStatus") or 0) < 300,
         },
     }
     try:
@@ -867,7 +1036,7 @@ def run_arr_checks(
             arr_url,
             arr_api_key,
             int(synced_indexer.get("id") or 0),
-            ITALIAN_MEDIA_SEARCH_TERMS + OPEN_DOCUMENT_QUERIES,
+            release_terms,
             timeout_seconds,
         )
     except Exception as exc:
@@ -893,6 +1062,12 @@ def main() -> int:
         env_file=Path(args.env_file).resolve(),
         defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMule BB Local"},
     )
+    inputs = live_wire_inputs.load_live_wire_inputs(
+        live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
+    )
+    document_terms = inputs.document_terms
+    radarr_movie_terms = inputs.radarr_movie_terms
+    qbit_search_terms = tuple(dict.fromkeys(radarr_movie_terms + document_terms))
 
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
@@ -942,6 +1117,11 @@ def main() -> int:
         "torznab_base_url": torznab_base_url,
         "indexer_name": indexer_name,
         "seed_refresh": seed_refresh,
+        "live_wire_inputs_file": str(inputs.path),
+        "live_wire_search_terms": {
+            "documents": live_wire_inputs.summarize_terms(document_terms),
+            "radarr_movies": live_wire_inputs.summarize_terms(radarr_movie_terms),
+        },
         "checks": {},
     }
     try:
@@ -978,24 +1158,28 @@ def main() -> int:
         direct_results = prowlarr_live.wait_for_direct_torznab_results(
             emule_base_url,
             args.emule_api_key,
-            OPEN_DOCUMENT_QUERIES,
+            document_terms,
             args.result_timeout_seconds,
         )
-        report["checks"]["direct_search_results"] = direct_results
+        report["checks"]["direct_search_results"] = prowlarr_live.redact_term_result(
+            direct_results,
+            source="documents",
+            term_count=len(document_terms),
+        )
 
         magnet = get_first_direct_magnet(emule_base_url, args.emule_api_key, str(direct_results["query"]))
-        report["checks"]["direct_qbit_magnet"] = {"query": magnet["query"], "title": magnet["title"]}
+        report["checks"]["direct_qbit_magnet"] = redact_direct_magnet(magnet)
         report["checks"]["qbit_safety"] = qbit_direct_safety_checks(emule_base_url, args.emule_api_key)
         direct_magnets = collect_direct_magnets(
             emule_base_url,
             args.emule_api_key,
-            ITALIAN_MEDIA_SEARCH_TERMS + OPEN_DOCUMENT_QUERIES,
+            qbit_search_terms,
             args.qbit_live_wire_rounds,
         )
-        report["checks"]["direct_qbit_search_stress"] = direct_magnets
+        report["checks"]["direct_qbit_search_stress"] = redact_collected_direct_magnets(direct_magnets)
         report["checks"]["direct_qbit_trigger"] = {
-            "title": magnet["title"],
-            "hash": ed2k_hash_from_magnet(str(magnet["magnet"])),
+            "title_present": bool(magnet["title"]),
+            "hash_present": bool(ed2k_hash_from_magnet(str(magnet["magnet"]))),
         }
         forced_trigger_added = True
         report["checks"]["direct_qbit_live_wire"] = qbit_direct_live_wire_stress(
@@ -1035,6 +1219,7 @@ def main() -> int:
             port=port,
             emule_api_key=args.emule_api_key,
             indexer_name=indexer_name,
+            release_terms=radarr_movie_terms,
             timeout_seconds=args.result_timeout_seconds,
         )
         cleanup_clients.append((env_values["RADARR_URL"].rstrip("/"), env_values["RADARR_API_KEY"], radarr_client_id))
@@ -1048,6 +1233,7 @@ def main() -> int:
             port=port,
             emule_api_key=args.emule_api_key,
             indexer_name=indexer_name,
+            release_terms=document_terms,
             timeout_seconds=args.result_timeout_seconds,
         )
         cleanup_clients.append((env_values["SONARR_URL"].rstrip("/"), env_values["SONARR_API_KEY"], sonarr_client_id))

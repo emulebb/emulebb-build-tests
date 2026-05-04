@@ -543,7 +543,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
-    parser.add_argument("--startup-profile-mode", choices=["required", "optional"], default="required")
+    parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--warm-relaunch", action="store_true")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
     parser.add_argument(
@@ -618,7 +618,7 @@ def main(argv: list[str]) -> int:
             if generated_fixture_manifest is not None
             else None
         ),
-        "startup_profile_mode": args.startup_profile_mode,
+        "startup_trace_mode": args.startup_trace_mode,
         "scenarios": [],
     }
 
@@ -632,7 +632,7 @@ def main(argv: list[str]) -> int:
             scenario_dir=scenario_dir,
             shared_root=shared_root,
             name=name,
-            require_startup_profile=(args.startup_profile_mode == "required"),
+            require_startup_profile=(args.startup_trace_mode == "required"),
             warm_relaunch=args.warm_relaunch,
         )
         combined["scenarios"].append(result)

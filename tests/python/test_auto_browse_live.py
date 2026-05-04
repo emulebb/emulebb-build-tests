@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -18,18 +19,45 @@ def load_auto_browse_module():
     return module
 
 
+def make_inputs(module):
+    """Returns a validated live-wire input fixture for auto-browse tests."""
+
+    return module.live_wire_inputs.parse_live_wire_inputs(
+        {
+            "schema": module.live_wire_inputs.SCHEMA,
+            "search_terms": {
+                "generic_open": ["linux", "ubuntu", "fedora"],
+                "documents": ["debian"],
+                "radarr_movies": ["public domain movie"],
+            },
+            "auto_browse": {
+                "bootstrap_transfer_hashes": ["28EAB1A0AB1B9416AAF534E27A234941"],
+                "direct_bootstrap_transfers": [
+                    {
+                        "hash": "0031c9cba65c50dd2015c184b2ca2c88",
+                        "name": "ubuntu-24.04.4-desktop-amd64.iso",
+                        "size": 6655619072,
+                        "method": "direct_ed2k",
+                    }
+                ],
+            },
+        }
+    )
+
+
 def test_transfer_acquisition_plan_covers_bootstrap_and_public_queries() -> None:
     module = load_auto_browse_module()
+    inputs = make_inputs(module)
 
-    plan = module.build_transfer_acquisition_plan()
-    direct_plan = module.build_direct_bootstrap_transfer_plan()
+    plan = module.build_transfer_acquisition_plan(inputs)
+    direct_plan = module.build_direct_bootstrap_transfer_plan(inputs)
 
-    assert module.LIVE_WIRE_SEARCH_QUERIES == ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
-    assert plan[0] == (module.BOOTSTRAP_TRANSFER_HASH, list(module.BOOTSTRAP_SEARCH_METHODS))
-    assert [query for query, _methods in plan[1:]] == list(module.FALLBACK_SEARCH_QUERIES)
+    assert plan[0] == ("28EAB1A0AB1B9416AAF534E27A234941", list(module.BOOTSTRAP_SEARCH_METHODS))
+    assert [query for query, _methods in plan[1:]] == list(inputs.generic_open_terms)
     assert all("server" in methods and "kad" in methods for _query, methods in plan)
     assert direct_plan[0]["name"].endswith(".iso")
     assert module.is_safe_download_result(direct_plan[0])
+    assert module.summarize_transfer_acquisition_plan(inputs)["bootstrap_hash_count"] == 1
     assert module.LIVE_SOURCE_UNAVAILABLE_EXIT_CODE == 2
     assert module.DEFAULT_NATURAL_AUTO_BROWSE_TIMEOUT_SECONDS < module.DEFAULT_FALLBACK_AUTO_BROWSE_TIMEOUT_SECONDS
 
@@ -59,6 +87,58 @@ def test_transfer_search_uses_file_oriented_iso_filter(monkeypatch) -> None:
         "type": "iso",
         "extension": "iso",
     }
+
+
+def test_live_wire_inputs_update_writes_selected_safe_result(tmp_path: Path) -> None:
+    module = load_auto_browse_module()
+    path = tmp_path / "live-wire-inputs.local.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": module.live_wire_inputs.SCHEMA,
+                "search_terms": {
+                    "generic_open": ["linux"],
+                    "documents": ["debian"],
+                    "radarr_movies": ["public domain movie"],
+                },
+                "auto_browse": {
+                    "bootstrap_transfer_hashes": [module.live_wire_inputs.PLACEHOLDER_HASH],
+                    "direct_bootstrap_transfers": [
+                        {
+                            "hash": module.live_wire_inputs.PLACEHOLDER_HASH,
+                            "name": "placeholder.iso",
+                            "size": 1,
+                            "method": "direct_ed2k",
+                        }
+                    ],
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    inputs = module.live_wire_inputs.load_live_wire_inputs(path)
+
+    summary = module.update_live_wire_inputs_from_result(
+        inputs,
+        {
+            "hash": "ABCDEF0123456789ABCDEF0123456789",
+            "name": "live.iso",
+            "sizeBytes": 2048,
+        },
+    )
+    updated = json.loads(path.read_text(encoding="utf-8"))
+
+    assert summary == {
+        "enabled": True,
+        "updated": True,
+        "hash_present": True,
+        "bootstrap_hash_count": 1,
+        "direct_row_count": 1,
+    }
+    assert updated["auto_browse"]["bootstrap_transfer_hashes"] == ["abcdef0123456789abcdef0123456789"]
+    assert updated["auto_browse"]["direct_bootstrap_transfers"][0]["name"] == "live.iso"
 
 
 def test_transfer_search_result_wait_keeps_polling_running_empty_searches(monkeypatch) -> None:
@@ -127,11 +207,14 @@ def test_selected_transfer_source_summary_is_compact() -> None:
         ]
     )
 
-    assert summary["query"] == "linux"
+    assert summary["query_present"] is True
     assert summary["method"] == "automatic"
     assert summary["source_count"] == 6
     assert len(summary["sources"]) == 5
-    assert summary["hash"] == "b05c1075089e1de58a13de1b77ba4b2a"
+    assert summary["hash_present"] is True
+    assert summary["name_present"] is True
+    assert "query" not in summary
+    assert "hash" not in summary
 
 
 def test_selected_transfer_sources_returns_full_source_list() -> None:
@@ -194,7 +277,8 @@ def test_source_browse_probe_refreshes_selected_transfer_sources(monkeypatch) ->
     )
 
     assert result["ok"] is True
-    assert result["selected_transfer"]["hash"] == transfer_hash
+    assert result["selected_transfer"]["hash_present"] is True
+    assert "hash" not in result["selected_transfer"]
     assert result["source_refresh"]["sources"] == [refreshed_source]
     assert result["source_refresh"]["ready_candidate_count"] == 1
     assert observed_sources == [refreshed_source, original_source]
@@ -505,6 +589,7 @@ def test_wait_for_source_browse_results_tolerates_pending_search_tab(monkeypatch
 
 def test_direct_bootstrap_transfer_candidate_uses_known_safe_link(monkeypatch) -> None:
     module = load_auto_browse_module()
+    inputs = make_inputs(module)
     added_rows: list[dict[str, object]] = []
 
     def fake_add_transfer(_base_url, _api_key, result_row):
@@ -533,9 +618,10 @@ def test_direct_bootstrap_transfer_candidate_uses_known_safe_link(monkeypatch) -
     result = module.find_direct_bootstrap_transfer_candidate(
         "http://127.0.0.1:1",
         "key",
+        inputs,
         source_discovery_timeout_seconds=1.0,
     )
 
     assert result["selected"]["method"] == "direct_ed2k"
-    assert added_rows[0]["name"] == module.DIRECT_BOOTSTRAP_TRANSFERS[0]["name"]
+    assert added_rows[0]["name"] == inputs.direct_bootstrap_transfers[0]["name"]
     assert result["selected"]["sources_ready"]["sources"][0]["userHash"] == "b" * 32

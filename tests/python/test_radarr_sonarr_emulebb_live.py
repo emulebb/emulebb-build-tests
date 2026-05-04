@@ -74,6 +74,69 @@ def test_qbit_safety_checks_reject_unprotected_info(monkeypatch: pytest.MonkeyPa
         module.qbit_direct_safety_checks("http://127.0.0.1:4711", "secret")
 
 
+def test_qbit_schema_summary_requires_arr_fields() -> None:
+    module = load_radarr_sonarr_module()
+    schema = {
+        "implementation": "QBittorrent",
+        "implementationName": "qBittorrent",
+        "protocol": "torrent",
+        "configContract": "QBittorrentSettings",
+        "fields": [
+            {"name": "host"},
+            {"name": "port"},
+            {"name": "username"},
+            {"name": "password"},
+            {"name": "initialState"},
+            {"name": "movieCategory"},
+        ],
+    }
+
+    summary = module.summarize_qbit_schema(schema, category_field="movieCategory")
+
+    assert summary["ok"] is True
+    assert summary["missing_required_fields"] == []
+    assert module.summarize_qbit_schema(schema, category_field="tvCategory")["missing_required_fields"] == ["tvCategory"]
+
+
+def test_arr_readiness_summaries_are_compact() -> None:
+    module = load_radarr_sonarr_module()
+
+    indexer = module.summarize_arr_indexer(
+        {
+            "id": 40,
+            "name": "eMule BB Local",
+            "implementation": "Torznab",
+            "enable": True,
+            "protocol": "torrent",
+            "priority": 25,
+        }
+    )
+    client = module.summarize_arr_download_client(
+        {
+            "id": 50,
+            "name": "eMule BB Live radarr 4711",
+            "implementation": "QBittorrent",
+            "protocol": "torrent",
+            "enable": True,
+            "_emulebbSchemaSummary": {"ok": True},
+            "_emulebbTestStatus": 200,
+        },
+        category="RADARR_ENG",
+    )
+
+    assert indexer == {
+        "id": 40,
+        "name": "eMule BB Local",
+        "implementation": "Torznab",
+        "enable": True,
+        "protocol": "torrent",
+        "priority": 25,
+    }
+    assert client["test_status"] == 200
+    assert client["schema"] == {"ok": True}
+    assert "fields" not in client
+
+
 def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[str] = []
@@ -202,4 +265,7 @@ def test_qbit_live_wire_stress_runs_requested_rounds(monkeypatch: pytest.MonkeyP
 
     assert calls == ["magnet-a", "magnet-b"]
     assert result["rounds"] == 2
-    assert result["runs"][1]["expected_hash"] == "b"
+    assert result["runs"][1]["expected_hash_present"] is True
+    assert "expected_hash" not in result["runs"][1]
+    assert "query" not in result["runs"][1]
+    assert "title" not in result["runs"][1]

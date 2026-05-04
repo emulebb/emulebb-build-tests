@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import live_wire_inputs
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL, refresh_seed_files
 
 
@@ -46,9 +47,6 @@ wait_for = live_common.wait_for
 wait_for_main_window = live_common.wait_for_main_window
 write_json = live_common.write_json
 
-LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
-DEFAULT_SERVER_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
-DEFAULT_KAD_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
 DEFAULT_LIVE_DOWNLOAD_TRIGGER_COUNT = 1
 MAX_SAFE_LIVE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 MIN_SAFE_LIVE_DOWNLOAD_SOURCES = 2
@@ -98,8 +96,8 @@ REST_PREFERENCE_KEYS = {
     "networkKademlia",
     "networkEd2k",
 }
-REST_COVERAGE_PROFILES = ("smoke", "contract", "contract-stress")
-REST_STRESS_PROFILES = ("off", "smoke", "soak")
+REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
+REST_STRESS_BUDGETS = ("off", "smoke", "soak")
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "REST-API-OPENAPI.yaml"
 UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
 OPENAPI_TAG_FAMILIES = {
@@ -416,7 +414,7 @@ def configure_webserver_profile(
     """Enables the WebServer listener and REST API key inside the temp profile."""
 
     preferences_path = config_dir / "preferences.ini"
-    text = preferences_path.read_text(encoding="utf-8", errors="ignore")
+    text = live_common.read_ini_text(preferences_path)
     text = patch_ini_value(text, "ConfirmExit", "0")
     for key, value in (
         ("Autoconnect", "1"),
@@ -450,7 +448,7 @@ def configure_webserver_profile(
         text = upsert_ini_section_value(text, "WebServer", key, value)
     text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1" if enable_upnp else "0")
     text = patch_ini_value(text, "CloseUPnPOnExit", "0")
-    preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
+    live_common.write_utf16_ini_text(preferences_path, text)
 
 
 def apply_p2p_bindaddr_override(
@@ -721,7 +719,7 @@ def compact_http_result(result: dict[str, object]) -> dict[str, object]:
 
 def validate_rest_stress_config(
     *,
-    profile: str,
+    budget: str,
     duration_seconds: float,
     concurrency: int,
     max_failures: int,
@@ -729,8 +727,8 @@ def validate_rest_stress_config(
 ) -> None:
     """Validates REST stress knobs before the live app is launched."""
 
-    if profile not in REST_STRESS_PROFILES:
-        raise ValueError(f"Unsupported REST stress profile: {profile}")
+    if budget not in REST_STRESS_BUDGETS:
+        raise ValueError(f"Unsupported REST stress budget: {budget}")
     if duration_seconds <= 0:
         raise ValueError("REST stress duration must be greater than zero.")
     if concurrency <= 0:
@@ -741,8 +739,8 @@ def validate_rest_stress_config(
         raise ValueError("REST stress request timeout must be greater than zero.")
 
 
-def build_rest_stress_operations(profile: str) -> list[dict[str, object]]:
-    """Builds the REST operation mix used by one bounded stress profile."""
+def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
+    """Builds the REST operation mix used by one bounded stress budget."""
 
     operations = [
         {
@@ -753,7 +751,7 @@ def build_rest_stress_operations(profile: str) -> list[dict[str, object]]:
         }
         for path in REST_STRESS_READ_PATHS
     ]
-    if profile in {"smoke", "soak"}:
+    if budget in {"smoke", "soak"}:
         operations.extend(dict(operation) for operation in REST_STRESS_SAFE_MUTATION_OPERATIONS)
     return operations
 
@@ -771,7 +769,7 @@ def percentile(values: list[float], percentile_value: float) -> float:
 def summarize_rest_stress_results(
     rows: list[dict[str, object]],
     *,
-    profile: str,
+    budget: str,
     duration_seconds: float,
     concurrency: int,
     max_failures: int,
@@ -801,7 +799,7 @@ def summarize_rest_stress_results(
                 failures.append(row)
     failure_count = len([row for row in rows if not row.get("ok")])
     return {
-        "profile": profile,
+        "budget": budget,
         "duration_seconds": duration_seconds,
         "concurrency": concurrency,
         "max_failures": max_failures,
@@ -823,15 +821,21 @@ def summarize_rest_stress_results(
     }
 
 
-def build_contract_coverage_summary(routes: list[dict[str, object]], profile: str) -> dict[str, object]:
+def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str) -> dict[str, object]:
     """Summarizes exercised REST route coverage by contract family."""
 
     openapi_coverage = assert_contract_routes_match_openapi()
     coverage_by_family: dict[str, dict[str, int]] = {}
+    method_counts: dict[str, int] = {}
+    outcome_counts: dict[str, int] = {}
     for route in routes:
         family = str(route["family"])
         family_summary = coverage_by_family.setdefault(family, {"total": 0, "exercised": 0, "skipped": 0, "failed": 0})
         family_summary["total"] += 1
+        method = str(route.get("method") or "UNKNOWN")
+        method_counts[method] = method_counts.get(method, 0) + 1
+        outcome = str(route.get("outcome") or ("skipped" if route.get("skipped") else "unknown"))
+        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
         if route.get("skipped"):
             family_summary["skipped"] += 1
         elif route.get("ok"):
@@ -842,8 +846,15 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], profile: st
     if not bool(openapi_coverage["ok"]):
         failed_routes.append("openapi_registry_consistency")
     return {
-        "profile": profile,
+        "budget": budget,
         "route_count": len(routes),
+        "safe_route_count": len([route for route in routes if route.get("safe") is not False]),
+        "unsafe_route_count": len([route for route in routes if route.get("safe") is False]),
+        "exercised_route_count": len([route for route in routes if route.get("ok") and not route.get("skipped")]),
+        "expected_error_count": outcome_counts.get("expected_error", 0),
+        "success_count": outcome_counts.get("success", 0),
+        "method_counts": method_counts,
+        "outcome_counts": outcome_counts,
         "routes": routes,
         "coverage_by_family": coverage_by_family,
         "openapi": openapi_coverage,
@@ -853,7 +864,7 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], profile: st
     }
 
 
-def exercise_rest_contract_completeness(base_url: str, api_key: str, profile: str) -> dict[str, object]:
+def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str) -> dict[str, object]:
     """Exercises and reports the safe broadband REST contract surface."""
 
     routes: list[dict[str, object]] = []
@@ -869,7 +880,7 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, profile: st
             "ok": False,
         }
         if route["safe"] is False:
-            row.update({"skipped": True, "ok": True, "reason": "unsafe during smoke run"})
+            row.update({"skipped": True, "ok": True, "outcome": "skipped_unsafe", "reason": "unsafe during smoke run"})
             routes.append(row)
             continue
         start = time.monotonic()
@@ -884,12 +895,17 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, profile: st
             status = int(result["status"])
             if 200 <= status < 300:
                 require_success_envelope(result)
+                outcome = "success"
             elif status >= 400:
                 require_error_response(result, status, str(require_json_object(result, status).get("error") or ""))
+                outcome = "expected_error"
+            else:
+                outcome = "unexpected_status"
             row.update(
                 {
                     "status": status,
-                    "ok": 200 <= status < 500,
+                    "ok": outcome in {"success", "expected_error"},
+                    "outcome": outcome,
                     "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
                 }
             )
@@ -898,12 +914,13 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, profile: st
                 {
                     "status": "exception",
                     "ok": False,
+                    "outcome": "exception",
                     "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
                     "error": str(exc),
                 }
             )
         routes.append(row)
-    return build_contract_coverage_summary(routes, profile)
+    return build_contract_coverage_summary(routes, budget)
 
 
 def get_contract_route_body(route_name: str) -> dict[str, object] | None:
@@ -999,7 +1016,7 @@ def exercise_rest_stress(
     base_url: str,
     api_key: str,
     *,
-    profile: str,
+    budget: str,
     duration_seconds: float,
     concurrency: int,
     max_failures: int,
@@ -1008,15 +1025,15 @@ def exercise_rest_stress(
     """Runs a bounded read-heavy REST stress pass against the isolated app."""
 
     validate_rest_stress_config(
-        profile=profile,
+        budget=budget,
         duration_seconds=duration_seconds,
         concurrency=concurrency,
         max_failures=max_failures,
         request_timeout_seconds=request_timeout_seconds,
     )
-    if profile == "off":
+    if budget == "off":
         return {
-            "profile": profile,
+            "budget": budget,
             "enabled": False,
             "ok": True,
             "requests_started": 0,
@@ -1024,7 +1041,7 @@ def exercise_rest_stress(
         }
 
     deadline = time.monotonic() + duration_seconds
-    operations = build_rest_stress_operations(profile)
+    operations = build_rest_stress_operations(budget)
     rows: list[dict[str, object]] = []
     next_index = 0
 
@@ -1080,7 +1097,7 @@ def exercise_rest_stress(
 
     summary = summarize_rest_stress_results(
         rows,
-        profile=profile,
+        budget=budget,
         duration_seconds=duration_seconds,
         concurrency=concurrency,
         max_failures=max_failures,
@@ -1970,15 +1987,22 @@ def build_search_method_candidates(mode: str) -> list[str]:
     return ["automatic", "server", "kad"]
 
 
-def build_search_plan(server_search_count: int, kad_search_count: int) -> list[dict[str, object]]:
+def build_search_plan(
+    server_search_count: int,
+    kad_search_count: int,
+    search_terms: tuple[str, ...],
+) -> list[dict[str, object]]:
     """Builds one deterministic multi-search plan for the requested network counts."""
 
+    if not search_terms:
+        raise RuntimeError("Live search plan requires at least one configured search term.")
     plan: list[dict[str, object]] = []
     for index in range(server_search_count):
         plan.append(
             {
                 "network": "server",
-                "query": DEFAULT_SERVER_SEARCH_QUERIES[index % len(DEFAULT_SERVER_SEARCH_QUERIES)],
+                "query": search_terms[index % len(search_terms)],
+                "query_index": index % len(search_terms),
                 "ordinal": index + 1,
             }
         )
@@ -1986,11 +2010,25 @@ def build_search_plan(server_search_count: int, kad_search_count: int) -> list[d
         plan.append(
             {
                 "network": "kad",
-                "query": DEFAULT_KAD_SEARCH_QUERIES[index % len(DEFAULT_KAD_SEARCH_QUERIES)],
+                "query": search_terms[index % len(search_terms)],
+                "query_index": index % len(search_terms),
                 "ordinal": index + 1,
             }
         )
     return plan
+
+
+def summarize_search_plan(search_plan: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Returns a report-safe search plan summary without exact runtime terms."""
+
+    return [
+        {
+            "network": row.get("network"),
+            "query_index": row.get("query_index"),
+            "ordinal": row.get("ordinal"),
+        }
+        for row in search_plan
+    ]
 
 
 def start_live_search(
@@ -2232,8 +2270,8 @@ def trigger_paused_download_from_search_result(
         if candidate is None:
             return None
         selected_candidate = {
-            "hash": candidate.get("hash"),
-            "name": candidate.get("name"),
+            "hash_present": bool(candidate.get("hash")),
+            "name_present": bool(candidate.get("name")),
             "sizeBytes": candidate.get("sizeBytes", candidate.get("size")),
             "fileType": candidate.get("fileType"),
             "sources": candidate.get("sources"),
@@ -2252,7 +2290,7 @@ def trigger_paused_download_from_search_result(
             "ok": int(download["status"]) == 200,
             "searchId": search_id,
             "candidate": selected_candidate,
-            "download": compact_http_result(download),
+            "download": {"status": download.get("status")},
             "observations": observations,
         }
 
@@ -2303,10 +2341,11 @@ def execute_search_plan(
     for cycle_index, cycle_plan in enumerate(search_plan, start=1):
         network = str(cycle_plan["network"])
         query = str(cycle_plan["query"])
+        query_index = int(cycle_plan.get("query_index", cycle_index - 1))
         cycle_report: dict[str, object] = {
             "cycle_index": cycle_index,
             "network": network,
-            "query": query,
+            "query_index": query_index,
             "ordinal": int(cycle_plan["ordinal"]),
         }
         try:
@@ -2422,9 +2461,9 @@ def main() -> int:
     parser.add_argument("--kad-search-count", type=int, default=0)
     parser.add_argument("--search-method-override", choices=["automatic", "server", "global", "kad"])
     parser.add_argument("--live-download-trigger-count", type=int, default=DEFAULT_LIVE_DOWNLOAD_TRIGGER_COUNT)
-    parser.add_argument("--rest-coverage-profile", choices=REST_COVERAGE_PROFILES, default="contract")
+    parser.add_argument("--rest-coverage-budget", choices=REST_COVERAGE_BUDGETS, default="contract")
     parser.add_argument("--skip-rest-contract-completeness", action="store_true")
-    parser.add_argument("--rest-stress-profile", choices=REST_STRESS_PROFILES, default="off")
+    parser.add_argument("--rest-stress-budget", choices=REST_STRESS_BUDGETS, default="off")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
     parser.add_argument("--rest-stress-concurrency", type=int, default=4)
     parser.add_argument("--rest-stress-max-failures", type=int, default=1)
@@ -2432,23 +2471,31 @@ def main() -> int:
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
+    parser.add_argument(
+        "--live-wire-inputs-file",
+        default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)),
+    )
     args = parser.parse_args()
     if args.server_search_count < 0 or args.kad_search_count < 0:
         raise ValueError("Search counts must be zero or greater.")
     if args.live_download_trigger_count < 0:
         raise ValueError("Live download trigger count must be zero or greater.")
-    effective_stress_profile = (
+    effective_stress_budget = (
         "smoke"
-        if args.rest_coverage_profile == "contract-stress" and args.rest_stress_profile == "off"
-        else args.rest_stress_profile
+        if args.rest_coverage_budget == "contract-stress" and args.rest_stress_budget == "off"
+        else args.rest_stress_budget
     )
     validate_rest_stress_config(
-        profile=effective_stress_profile,
+        budget=effective_stress_budget,
         duration_seconds=args.rest_stress_duration_seconds,
         concurrency=args.rest_stress_concurrency,
         max_failures=args.rest_stress_max_failures,
         request_timeout_seconds=args.rest_stress_request_timeout_seconds,
     )
+    inputs = live_wire_inputs.load_live_wire_inputs(
+        live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
+    )
+    search_terms = inputs.generic_open_terms
 
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -2513,11 +2560,12 @@ def main() -> int:
             "server_search_count": args.server_search_count,
             "kad_search_count": args.kad_search_count,
             "live_download_trigger_count": args.live_download_trigger_count,
-            "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
+            "live_wire_inputs_file": str(inputs.path),
+            "live_wire_search_terms": live_wire_inputs.summarize_terms(search_terms),
             "search_method_override": args.search_method_override,
-            "rest_coverage_profile": args.rest_coverage_profile,
+            "rest_coverage_budget": args.rest_coverage_budget,
             "rest_contract_completeness_enabled": not args.skip_rest_contract_completeness,
-            "rest_stress_profile": effective_stress_profile,
+            "rest_stress_budget": effective_stress_budget,
             "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
             "rest_stress_concurrency": args.rest_stress_concurrency,
             "timeouts": {
@@ -2587,22 +2635,22 @@ def main() -> int:
         current_phase = set_phase(report, "rest_surface")
         report["checks"]["rest_surface"] = exercise_rest_surface_smoke(base_url, args.api_key)
 
-        if args.rest_coverage_profile != "smoke" and not args.skip_rest_contract_completeness:
+        if args.rest_coverage_budget != "smoke" and not args.skip_rest_contract_completeness:
             current_phase = set_phase(report, "rest_contract")
             rest_contract = exercise_rest_contract_completeness(
                 base_url,
                 args.api_key,
-                args.rest_coverage_profile,
+                args.rest_coverage_budget,
             )
             assert rest_contract["ok"], rest_contract
             report["checks"]["rest_contract"] = rest_contract
 
-        if effective_stress_profile != "off":
+        if effective_stress_budget != "off":
             current_phase = set_phase(report, "rest_stress")
             report["checks"]["rest_stress"] = exercise_rest_stress(
                 base_url,
                 args.api_key,
-                profile=effective_stress_profile,
+                budget=effective_stress_budget,
                 duration_seconds=args.rest_stress_duration_seconds,
                 concurrency=args.rest_stress_concurrency,
                 max_failures=args.rest_stress_max_failures,
@@ -2688,16 +2736,17 @@ def main() -> int:
         report["checks"]["network_ready"] = live_network
         assert bool(live_network.get("ready"))
 
-        search_plan = build_search_plan(args.server_search_count, args.kad_search_count)
+        search_plan = build_search_plan(args.server_search_count, args.kad_search_count, search_terms)
         if not search_plan:
             search_plan = [
                 {
                     "network": str(live_network["mode"]),
-                    "query": DEFAULT_SERVER_SEARCH_QUERIES[0],
+                    "query": search_terms[0],
+                    "query_index": 0,
                     "ordinal": 1,
                 }
             ]
-        report["checks"]["search_plan"] = search_plan
+        report["checks"]["search_plan"] = summarize_search_plan(search_plan)
 
         current_phase = set_phase(report, "search_cycles")
         completed_cycles, search_id = execute_search_plan(

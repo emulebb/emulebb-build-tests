@@ -40,11 +40,11 @@ Current suite model:
 
 Community core comparison workflow:
 
-- `scripts\run_community_core_coverage.py` is the operator-facing wrapper for the canonical `main` vs `release/v0.72a-community` comparison
+- `scripts\run-community-core-coverage.py` is the operator-facing wrapper for the canonical `main` vs `release/v0.72a-community` comparison
 - it runs native coverage for `app\eMule-main` with `parity` and `community-core-divergence`
 - it runs the focused `community-core-divergence` suite for main-only queue-scoring and persistence behavior
 - it runs native coverage for `app\eMule-v0.72a-community` with `parity`
-- it runs `scripts\run_live_diff.py` against those two app roots and keeps the suite-level pass/fail split explicit
+- it runs `scripts\run-live-diff.py` against those two app roots and keeps the suite-level pass/fail split explicit
 - the wrapper writes a combined summary under `reports\community-core-coverage`
 
 Current critical comparison slices:
@@ -62,17 +62,18 @@ Script inventory:
 - `python -m pip install -e .[dev,live]` also installs the Win32 live/UI automation dependencies
 - default pytest collection is intentionally fast and excludes `native` and `live` marked tests
 - Python 3 is the only tracked script runtime in this repo
-- canonical Python entrypoints are documented below; old PowerShell implementations were removed instead of kept as compatibility shims
+- operator-facing Python script filenames are hyphenated; importable Python implementation modules stay under `emule_test_harness` with normal snake_case names
+- canonical Python entrypoints are documented below; old PowerShell implementations and old underscore script names are not kept as compatibility shims
 
 | Path | Role | Status | Notes |
 | --- | --- | --- | --- |
-| `scripts\build_emule_tests.py` | operator-facing build wrapper | maintained | builds `emule-tests.exe`, optional run |
-| `scripts\guard_tracked_files.py` | operator-facing guard | maintained | privacy/path leak gate before builds |
-| `scripts\run_native_coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
-| `scripts\run_live_diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
-| `scripts\run_community_core_coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
-| `scripts\run_pipe_live_matrix.py` | operator-facing live harness wrapper | maintained | resolves the current helper from `repos\eMule-tooling` first, legacy path second |
-| `scripts\run_live_e2e_suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
+| `scripts\build-emule-tests.py` | operator-facing build wrapper | maintained | builds `emule-tests.exe`, optional run |
+| `scripts\guard-tracked-files.py` | operator-facing guard | maintained | privacy/path leak gate before builds |
+| `scripts\run-native-coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
+| `scripts\run-live-diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
+| `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
+| `scripts\run-pipe-live-matrix.py` | operator-facing live harness wrapper | maintained | resolves the current helper from `repos\eMule-tooling` first, legacy path second |
+| `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report resolution for Python-first live/UI harnesses |
 | `scripts\emule-live-profile-common.py` | internal Python helper | maintained | shared live-profile launch and trace helpers |
@@ -83,7 +84,7 @@ Script inventory:
 | `scripts\shared-files-ui-e2e.py` | operator-facing Python E2E | maintained | real Win32 Shared Files regression |
 | `scripts\startup-profile-scenarios.py` | operator-facing Python E2E | maintained | Chrome Trace startup-profile scenarios |
 | `scripts\create-long-paths-tree.py` | fixture generator | maintained | deterministic long-path tree materialization |
-| `scripts\diag_hash_launch.py` | targeted diagnostic | maintained | seeded profile + procdump launcher for hash stall investigations |
+| `scripts\diag-hash-launch.py` | targeted diagnostic | maintained | seeded profile + procdump launcher for hash stall investigations |
 | `scripts\parse-dump.py` | targeted diagnostic | maintained | parses `diag-hash` dumps, defaults to `diag-hash-latest` |
 | `scripts\resolve-rva.py` | targeted diagnostic | maintained | resolves caller-provided RVAs against a selected debug build |
 
@@ -114,7 +115,7 @@ Deterministic live-profile seed:
 - `manifests\live-profile-seed\config` stores the canonical test-only profile inputs for live REST E2E and live named-pipe runs
 - the seed is intentionally minimal and vendors only the config files the live harness truly depends on: `preferences.ini`, `preferences.dat`, `nodes.dat`, and `server.met`
 - the harness validates that exact file allowlist before copying the seed; runtime files such as logs, `shareddir.dat`, caches, and history files belong only in per-run artifacts
-- `preferences.ini` is an initialized profile seed; it must already carry the startup-silencing keys needed to avoid first-run UI such as the language prompt and runtime wizard
+- `preferences.ini` is an initialized UTF-16LE-with-BOM profile seed; it must already carry the startup-silencing keys needed to avoid first-run UI such as the language prompt and runtime wizard
 - `preferences.dat` carries the deterministic maximized main-window placement used by the live UI and startup-profile harnesses
 - the helper injects only runtime-specific transport, logging, bind, temp, working-folder, and shared-directory settings per run
 - runtime working folders are copied from that seed and then expanded with per-run logs, temp files, and other mutable state
@@ -126,47 +127,52 @@ Live Arr environment:
 - Radarr/Sonarr live-wire checks additionally require `RADARR_URL`, `RADARR_API_KEY`, `SONARR_URL`, and `SONARR_API_KEY`
 - live scripts load process environment variables first, then fall back to an ignored dotenv file selected by `--env-file`; the default fallback is `.env.local`
 - `.env.local`, `.env`, and `.env.*` are ignored; do not commit real API keys
-- redacted template:
+- `.env.example` is the tracked redacted template for live Arr/Prowlarr variables
+- live-wire runtime search terms, Radarr movie terms, bootstrap hashes, and direct ED2K bootstrap rows live in an ignored JSON file selected by `--live-wire-inputs-file`; the default is `live-wire-inputs.local.json`
+- `live-wire-inputs.example.json` is the tracked schema example; copy its shape into the ignored local file and replace the placeholder values with operator-owned current inputs
+- auto-browse live fallback automatically refreshes the ignored live-wire JSON when it discovers a safe live search result with usable hash, name, size, and source metadata
+- persisted live reports redact exact runtime terms, movie titles, magnets, and real transfer hashes, keeping counts, indexes, sizes, and presence flags instead
 
-```dotenv
-PROWLARR_URL=http://127.0.0.1:9696
-PROWLARR_API_KEY=<redacted>
-PROWLARR_EMULEBB_INDEXER_NAME=eMule BB Local
-RADARR_URL=http://127.0.0.1:7878
-RADARR_API_KEY=<redacted>
-SONARR_URL=http://127.0.0.1:8989
-SONARR_API_KEY=<redacted>
-```
+Terminology:
+
+- live profile seed: the tracked deterministic eMule config baseline under `manifests\live-profile-seed\config`
+- startup profile: runtime Chrome Trace output named `startup-profile.trace.json`
+- REST coverage/stress budget: a test-budget preset selected with `--rest-coverage-budget` or `--rest-stress-budget`
 
 Canonical live REST E2E lane:
 
 - `scripts\rest-api-smoke.py` is the operator-facing entrypoint for the canonical isolated REST live E2E lane
 - the Python runner is intentionally strict pass/fail and owns app resolution, report publication, and latest-report mirroring directly
 - the lane launches `emule.exe` with explicit `-ignoreinstances -c <profile-base>` and enables WebServer REST against one per-run localhost port
-- the default REST coverage profile is `contract`, which records safe coverage
-  for the broadband `/api/v1` contract; `--rest-coverage-profile smoke` keeps
+- the default REST coverage budget is `contract`, which records safe coverage
+  for the broadband `/api/v1` contract; `--rest-coverage-budget smoke` keeps
   the older lighter pass, while `contract-stress` also enables stress unless a
-  stress profile is supplied explicitly
-- `--rest-stress-profile smoke` runs the bounded release-gate stress pass used
+  stress budget is supplied explicitly
+- contract coverage is OpenAPI-driven and records safe route counts, method
+  counts, success/error outcomes, skipped unsafe operations, and per-family
+  coverage in the run report
+- `--rest-stress-budget smoke` runs the bounded release-gate stress pass used
   by the aggregate live E2E lane; it mixes read routes with safe no-op mutation
   routes for preferences, missing transfers, source browse, Kad recheck, and
   search start/stop validation; `off` disables stress and `soak` is reserved
   for longer operator-driven runs with explicit duration/concurrency knobs
 - each run refreshes `server.met` and `nodes.dat` in the isolated profile from `https://emule-security.org/` / `https://upd.emule-security.org/` before launch, and records file sizes plus SHA-256 hashes in the report; `--skip-live-seed-refresh` keeps the checked-in seed files for offline diagnosis
-- the lane requires real server-connect activity, Kad running state, network readiness, and one or more real live search lifecycles through the requested network paths; release-corpus searches use REST `type=any` so OS and eMule terms are not incorrectly constrained to program-only results
-- the canonical release search corpus is `linux`, `ubuntu`, `fedora`, `freebsd`, `debian`, and `emule`; `--server-search-count <N>` and `--kad-search-count <N>` cycle through that corpus for exact per-network live search counts
+- the lane requires real server-connect activity, Kad running state, network readiness, and one or more real live search lifecycles through the requested network paths; configured live-wire searches use REST `type=any` so operator-owned open terms are not incorrectly constrained to program-only results
+- `--server-search-count <N>` and `--kad-search-count <N>` cycle through the `search_terms.generic_open` values from the live-wire input file for exact per-network live search counts
 - `-KeepRunning` leaves the launched isolated eMule instance alive after a passing run and forces artifact retention so the profile can be inspected afterward
 - failure artifacts include the failing phase plus the last observed server/Kad state so live-network regressions are diagnosable
 
 Aggregate live E2E lane:
 
-- `scripts\run_live_e2e_suite.py` is the operator-facing aggregate runner for the maintained UI, REST API, and live-wire scenarios
+- `scripts\run-live-e2e-suite.py` is the operator-facing aggregate runner for the maintained UI, REST API, and live-wire scenarios
 - the default run sequences Preferences UI, Shared Files UI, config-stability UI, shared-hash UI, startup-profile scenarios, REST live smoke, and auto-browse live coverage
 - Shared Files UI is always expanded to include `fixture-three-files`, `generated-robustness-recursive`, and `duplicate-startup-reuse`; config-stability and startup-profile scenarios are also passed explicitly
-- REST live smoke defaults to the full six-term release search corpus on both server search and Kad search, and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
-- REST live smoke is invoked with `--rest-coverage-profile contract` and
-  `--rest-stress-profile smoke` by default; use the aggregate runner's REST
-  profile flags to reduce or expand that budget for a specific run
+- REST live smoke defaults to six server searches and six Kad searches using the configured live-wire open-term list, and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
+- aggregate reports mark whether REST contract completeness was expected and
+  which Arr/Prowlarr live-wire suites were included
+- REST live smoke is invoked with `--rest-coverage-budget contract` and
+  `--rest-stress-budget smoke` by default; use the aggregate runner's REST
+  budget flags to reduce or expand that budget for a specific run
 - REST and auto-browse child runs refresh `server.met` and `nodes.dat` from `https://emule-security.org/` / `https://upd.emule-security.org/` unless `--skip-live-seed-refresh` is supplied
 - the aggregate runner continues after child-suite failures by default to expose multiple breaking points in one pass; use `--fail-fast` only when a short diagnostic run is needed
 - each child suite keeps its normal report directory, while the aggregate run also writes `reports\live-e2e-suite\...\result.json` and refreshes `reports\live-e2e-suite-latest`
@@ -178,7 +184,8 @@ Canonical live auto-browse lane:
 - the default P2P bind target is the `hide.me` interface and the scenario always enables the main P2P `UPnP` setting
 - the scenario relies on `Autoconnect=1` in the isolated profile and intentionally does not issue overlapping REST connect requests for eD2K or Kad
 - the scenario first waits for real browse-capable clients to accumulate naturally after server+Kad autoconnect; transfer/source bootstrap is only a fallback if natural auto-browse never starts succeeding
-- the transfer bootstrap path uses the persisted hash `28EAB1A0AB1B9416AAF534E27A234941` first, then falls back through the same release search corpus, and refuses `.exe` candidates when selecting a downloadable result
+- the transfer bootstrap path tries configured `auto_browse.bootstrap_transfer_hashes` first, then falls back through the configured open-term list, and refuses `.exe` candidates when selecting a downloadable result
+- when the fallback search path finds a safe sourced result, it automatically updates the ignored live-wire input file so future runs can bootstrap from the discovered hash/direct ED2K row
 - like the REST smoke lane, each run refreshes `server.met` and `nodes.dat` in the isolated profile from eMule Security unless `--skip-live-seed-refresh` is supplied
 - the lane requires:
   - real eD2K server connectivity
@@ -190,7 +197,7 @@ Canonical live auto-browse lane:
 
 Canonical live harness:
 
-- `scripts\run_pipe_live_matrix.py` is the operator-facing entrypoint for launch-only and full live named-pipe harness runs
+- `scripts\run-pipe-live-matrix.py` is the operator-facing entrypoint for launch-only and full live named-pipe harness runs
 - the wrapper resolves `helper-runtime-pipe-live-session.ps1` from `repos\eMule-tooling\helpers` first and falls back to the legacy app-side helper path only when needed
 - the harness stages a renamed binary copy, `eMule_v072_harness.exe`, beside the debug build output and launches that copy so processes, dumps, and cleanup are easier to identify
 - the machine-readable session manifest can be requested through the shared wrapper with `-SessionManifestPath`
@@ -238,14 +245,14 @@ Startup-profile scenarios:
 
 Tracked-file privacy guard:
 
-- `scripts\guard_tracked_files.py` fails when tracked files contain local user-home paths or personal-identifier filename leaks derived from the current environment or an untracked local override file
-- `scripts\build_emule_tests.py` runs that guard by default before building
+- `scripts\guard-tracked-files.py` fails when tracked files contain local user-home paths or personal-identifier filename leaks derived from the current environment or an untracked local override file
+- `scripts\build-emule-tests.py` runs that guard by default before building
 - the same guard is enforced in GitHub Actions for pushes and pull requests
 
 Native seam coverage and shared reports:
 
-- `scripts\run_native_coverage.py` builds `emule-tests.exe`, runs the requested doctest suites under OpenCppCoverage, and writes Cobertura plus summary outputs under `reports\native-coverage`
-- `scripts\run_community_core_coverage.py` chains the canonical `main` and `community` native-coverage runs with the workspace live-diff pass and writes a combined summary under `reports\community-core-coverage`
+- `scripts\run-native-coverage.py` builds `emule-tests.exe`, runs the requested doctest suites under OpenCppCoverage, and writes Cobertura plus summary outputs under `reports\native-coverage`
+- `scripts\run-community-core-coverage.py` chains the canonical `main` and `community` native-coverage runs with the workspace live-diff pass and writes a combined summary under `reports\community-core-coverage`
 - Python OpenCppCoverage resolution uses an explicit install root when provided, otherwise discovers `OpenCppCoverage.exe` from `PATH`, and finally falls back to a repo-managed pinned install under `tools\OpenCppCoverage`
-- `scripts\run_live_diff.py` writes both text and JSON parity/divergence summaries under `reports`
+- `scripts\run-live-diff.py` writes both text and JSON parity/divergence summaries under `reports`
 - `scripts\publish-harness-summary.py` combines native coverage, parity, optional live-harness manifest data, optional live UI status, and optional startup-profile scenario status into one shared summary under `reports`

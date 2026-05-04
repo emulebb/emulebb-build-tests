@@ -70,7 +70,7 @@ def get_ini_value(path: Path, key: str) -> str | None:
 
     if not path.exists():
         return None
-    return parse_ini_values(path.read_text(encoding="utf-8", errors="ignore")).get(key)
+    return parse_ini_values(live_common.read_ini_text(path)).get(key)
 
 
 def build_long_artifacts_root(root: Path, scenario_name: str) -> Path:
@@ -625,7 +625,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
-    parser.add_argument("--startup-profile-mode", choices=["required", "optional"], default="required")
+    parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
     parser.add_argument(
         "--scenario",
@@ -666,7 +666,7 @@ def main(argv: list[str]) -> int:
         "seed_config_dir": str(seed_config_dir),
         "artifact_dir": str(artifacts_dir),
         "shared_root": live_common.win_path(shared_root, trailing_slash=True),
-        "startup_profile_mode": args.startup_profile_mode,
+        "startup_trace_mode": args.startup_trace_mode,
         "scenarios": [],
     }
 
@@ -680,7 +680,7 @@ def main(argv: list[str]) -> int:
             scenario_dir=scenario_dir,
             shared_root=shared_root,
             name=name,
-            require_startup_profile=(args.startup_profile_mode == "required"),
+            require_startup_profile=(args.startup_trace_mode == "required"),
         )
         combined["scenarios"].append(result)
         if result["status"] != "passed":

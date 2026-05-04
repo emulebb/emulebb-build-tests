@@ -51,7 +51,7 @@ def build_emule_tests_command(
 
     command = [
         sys.executable,
-        str((test_repo_root / "scripts" / "build_emule_tests.py").resolve()),
+        str((test_repo_root / "scripts" / "build-emule-tests.py").resolve()),
         "--test-repo-root",
         str(test_repo_root.resolve()),
         "--workspace-root",

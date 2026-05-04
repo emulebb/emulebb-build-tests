@@ -22,7 +22,6 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import live_env
 
 TORZNAB_LIVE_CATEGORY = 7000
-OPEN_DOCUMENT_QUERIES = ("linux", "ubuntu", "debian", "python")
 
 
 def load_local_module(module_name: str, filename: str):
@@ -41,6 +40,7 @@ def load_local_module(module_name: str, filename: str):
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
 rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
+live_wire_inputs = rest_smoke.live_wire_inputs
 
 
 def prowlarr_request(
@@ -340,7 +340,7 @@ def wait_for_direct_torznab_results(
     attempts: list[dict[str, object]] = []
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        for query in queries:
+        for query_index, query in enumerate(queries):
             path = (
                 f"/indexer/emulebb/api?t=search&cat={TORZNAB_LIVE_CATEGORY}&q="
                 + urllib.parse.quote(query)
@@ -350,12 +350,12 @@ def wait_for_direct_torznab_results(
             try:
                 result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
             except (ConnectionResetError, TimeoutError, OSError) as exc:
-                attempts.append({"query": query, "status": type(exc).__name__, "count": 0})
+                attempts.append({"query_index": query_index, "query_present": bool(query), "status": type(exc).__name__, "count": 0})
                 continue
             status = int(result.get("status") or 0)
             body_text = str(result.get("body_text") or "")
             count = count_torznab_items(body_text) if status == 200 and body_text else 0
-            attempts.append({"query": query, "status": status, "count": count})
+            attempts.append({"query_index": query_index, "query_present": bool(query), "status": status, "count": count})
             if status == 200 and count > 0:
                 return {"query": query, "count": count, "attempts": attempts}
         time.sleep(5.0)
@@ -388,7 +388,23 @@ def stress_cached_direct_torznab_search(
         attempts.append(attempt)
         if status != 200 or item_count <= 0:
             raise RuntimeError(f"Cached direct Torznab search stress failed: {attempts!r}")
-    return {"query": query, "requests": count, "attempts": attempts}
+    return {"query_present": bool(query), "requests": count, "attempts": attempts}
+
+
+def redact_term_result(result: dict[str, object], *, source: str, term_count: int) -> dict[str, object]:
+    """Redacts exact search terms and titles from one live-wire result."""
+
+    redacted: dict[str, object] = {
+        "source": source,
+        "term_count": term_count,
+        "count": result.get("count"),
+        "attempt_count": len(result.get("attempts", [])) if isinstance(result.get("attempts"), list) else 0,
+    }
+    if "query" in result:
+        redacted["query_present"] = bool(result.get("query"))
+    if "first_title" in result:
+        redacted["first_title_present"] = bool(result.get("first_title"))
+    return redacted
 
 
 def choose_listen_port(bind_addr: str) -> int:
@@ -411,14 +427,14 @@ def wait_for_prowlarr_results(
     attempts: list[dict[str, object]] = []
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        for query in queries:
+        for query_index, query in enumerate(queries):
             encoded_query = urllib.parse.quote(query)
             path = f"/api/v1/search?query={encoded_query}&categories={TORZNAB_LIVE_CATEGORY}&indexerIds={indexer_id}"
             result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
             status = int(result.get("status") or 0)
             payload = result.get("json")
             count = len(payload) if isinstance(payload, list) else 0
-            attempt = {"query": query, "status": status, "count": count}
+            attempt = {"query_index": query_index, "query_present": bool(query), "status": status, "count": count}
             if status < 200 or status >= 300:
                 attempt["body_preview"] = compact_body_preview(result)
             attempts.append(attempt)
@@ -454,6 +470,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--cached-search-stress-count", type=int, default=12)
+    parser.add_argument(
+        "--live-wire-inputs-file",
+        default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)),
+    )
     return parser
 
 
@@ -474,6 +494,10 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.cached_search_stress_count <= 0:
         raise ValueError("--cached-search-stress-count must be greater than zero.")
+    inputs = live_wire_inputs.load_live_wire_inputs(
+        live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
+    )
+    document_terms = inputs.document_terms
     env_values = live_env.load_env_values(
         ("PROWLARR_URL", "PROWLARR_API_KEY"),
         env_file=Path(args.env_file).resolve(),
@@ -527,7 +551,10 @@ def main() -> int:
         "api_key_length": len(args.emule_api_key),
         "prowlarr_api_key_length": len(prowlarr_api_key),
         "seed_refresh": seed_refresh,
-        "search_queries": list(OPEN_DOCUMENT_QUERIES),
+        "live_wire_inputs_file": str(inputs.path),
+        "search_terms": {
+            "documents": live_wire_inputs.summarize_terms(document_terms),
+        },
         "checks": {},
     }
     result_path = artifacts_dir / "result.json"
@@ -575,10 +602,14 @@ def main() -> int:
         direct_results = wait_for_direct_torznab_results(
             emule_base_url,
             args.emule_api_key,
-            OPEN_DOCUMENT_QUERIES,
+            document_terms,
             args.result_timeout_seconds,
         )
-        report["checks"]["direct_search_results"] = direct_results
+        report["checks"]["direct_search_results"] = redact_term_result(
+            direct_results,
+            source="documents",
+            term_count=len(document_terms),
+        )
         report["checks"]["direct_cached_search_stress"] = stress_cached_direct_torznab_search(
             emule_base_url,
             args.emule_api_key,
@@ -628,8 +659,13 @@ def main() -> int:
             prowlarr_url,
             prowlarr_api_key,
             int(saved_indexer["id"]),
-            OPEN_DOCUMENT_QUERIES,
+            document_terms,
             args.result_timeout_seconds,
+        )
+        report["checks"]["search_results"] = redact_term_result(
+            report["checks"]["search_results"],
+            source="documents",
+            term_count=len(document_terms),
         )
         report["status"] = "passed"
         return 0

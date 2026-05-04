@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
+from emule_test_harness import live_wire_inputs
 
 SHARED_FILES_UI_SCENARIOS = (
     "fixture-three-files",
@@ -33,8 +34,7 @@ STARTUP_PROFILE_SCENARIOS = (
     "shared-files-robustness-root-only",
     "shared-files-robustness-recursive",
 )
-LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
-DEFAULT_REST_SEARCH_COUNT = len(LIVE_WIRE_SEARCH_QUERIES)
+DEFAULT_REST_SEARCH_COUNT = 6
 DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT = 1
 
 
@@ -46,7 +46,7 @@ class SuiteSpec:
     script_name: str
     category: str
     scenarios: tuple[str, ...] = ()
-    accepts_startup_profile_mode: bool = False
+    accepts_startup_trace_mode: bool = False
     accepts_shared_root: bool = False
     uses_live_seed_refresh: bool = False
     is_rest_api: bool = False
@@ -62,7 +62,7 @@ SUITE_SPECS = (
         script_name="shared-files-ui-e2e.py",
         category="ui",
         scenarios=SHARED_FILES_UI_SCENARIOS,
-        accepts_startup_profile_mode=True,
+        accepts_startup_trace_mode=True,
         accepts_shared_root=True,
     ),
     SuiteSpec(
@@ -70,21 +70,21 @@ SUITE_SPECS = (
         script_name="config-stability-ui-e2e.py",
         category="ui",
         scenarios=CONFIG_STABILITY_UI_SCENARIOS,
-        accepts_startup_profile_mode=True,
+        accepts_startup_trace_mode=True,
         accepts_shared_root=True,
     ),
     SuiteSpec(
         name="shared-hash-ui",
         script_name="shared-hash-ui-e2e.py",
         category="ui",
-        accepts_startup_profile_mode=True,
+        accepts_startup_trace_mode=True,
     ),
     SuiteSpec(
         name="startup-profile",
         script_name="startup-profile-scenarios.py",
         category="ui",
         scenarios=STARTUP_PROFILE_SCENARIOS,
-        accepts_startup_profile_mode=True,
+        accepts_startup_trace_mode=True,
         accepts_shared_root=True,
     ),
     SuiteSpec(
@@ -160,21 +160,22 @@ def build_suite_command(
     app_root: Path | None = None,
     app_exe: Path | None = None,
     seed_config_dir: Path | None = None,
-    startup_profile_mode: str = "required",
+    startup_trace_mode: str = "required",
     shared_root: Path | None = None,
     skip_live_seed_refresh: bool = False,
     rest_server_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_kad_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_download_trigger_count: int = DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT,
     rest_search_method_override: str | None = None,
-    rest_coverage_profile: str = "contract",
-    rest_stress_profile: str = "smoke",
+    rest_coverage_budget: str = "contract",
+    rest_stress_budget: str = "smoke",
     rest_stress_duration_seconds: float = 30.0,
     rest_stress_concurrency: int = 4,
     rest_stress_max_failures: int = 1,
     rest_stress_request_timeout_seconds: float = 5.0,
     enable_upnp: bool = True,
     auto_browse_p2p_bind_interface_name: str = "hide.me",
+    live_wire_inputs_file: Path | None = None,
 ) -> list[str]:
     """Builds one child suite command line."""
 
@@ -196,8 +197,8 @@ def build_suite_command(
         command.extend(["--app-exe", str(app_exe.resolve())])
     if seed_config_dir is not None:
         command.extend(["--profile-seed-dir", str(seed_config_dir.resolve())])
-    if spec.accepts_startup_profile_mode:
-        command.extend(["--startup-profile-mode", startup_profile_mode])
+    if spec.accepts_startup_trace_mode:
+        command.extend(["--startup-trace-mode", startup_trace_mode])
     if spec.accepts_shared_root and shared_root is not None:
         command.extend(["--shared-root", str(shared_root.resolve())])
     for scenario in spec.scenarios:
@@ -205,25 +206,34 @@ def build_suite_command(
     if spec.uses_live_seed_refresh and skip_live_seed_refresh:
         command.append("--skip-live-seed-refresh")
     if spec.is_rest_api:
+        if live_wire_inputs_file is not None:
+            command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
         command.extend(["--server-search-count", str(rest_server_search_count)])
         command.extend(["--kad-search-count", str(rest_kad_search_count)])
         command.extend(["--live-download-trigger-count", str(rest_download_trigger_count)])
         if rest_search_method_override:
             command.extend(["--search-method-override", rest_search_method_override])
-        command.extend(["--rest-coverage-profile", rest_coverage_profile])
-        command.extend(["--rest-stress-profile", rest_stress_profile])
+        command.extend(["--rest-coverage-budget", rest_coverage_budget])
+        command.extend(["--rest-stress-budget", rest_stress_budget])
         command.extend(["--rest-stress-duration-seconds", str(rest_stress_duration_seconds)])
         command.extend(["--rest-stress-concurrency", str(rest_stress_concurrency)])
         command.extend(["--rest-stress-max-failures", str(rest_stress_max_failures)])
         command.extend(["--rest-stress-request-timeout-seconds", str(rest_stress_request_timeout_seconds)])
         if enable_upnp:
             command.append("--enable-upnp")
+    if spec.is_auto_browse:
+        if live_wire_inputs_file is not None:
+            command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
     if spec.is_auto_browse and auto_browse_p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", auto_browse_p2p_bind_interface_name])
     if spec.is_prowlarr_emulebb:
+        if live_wire_inputs_file is not None:
+            command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
         if enable_upnp:
             command.append("--enable-upnp")
     if spec.is_arr_emulebb:
+        if live_wire_inputs_file is not None:
+            command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
         if enable_upnp:
             command.append("--enable-upnp")
     return command
@@ -257,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
-    parser.add_argument("--startup-profile-mode", choices=["required", "optional"], default="required")
+    parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--fail-fast", action="store_true")
@@ -266,14 +276,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-kad-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-download-trigger-count", type=int, default=DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)
     parser.add_argument("--rest-search-method-override", choices=["automatic", "server", "global", "kad"])
-    parser.add_argument("--rest-coverage-profile", choices=["smoke", "contract", "contract-stress"], default="contract")
-    parser.add_argument("--rest-stress-profile", choices=["off", "smoke", "soak"], default="smoke")
+    parser.add_argument("--rest-coverage-budget", choices=["smoke", "contract", "contract-stress"], default="contract")
+    parser.add_argument("--rest-stress-budget", choices=["off", "smoke", "soak"], default="smoke")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
     parser.add_argument("--rest-stress-concurrency", type=int, default=4)
     parser.add_argument("--rest-stress-max-failures", type=int, default=1)
     parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--disable-upnp", action="store_true")
     parser.add_argument("--auto-browse-p2p-bind-interface-name", default="hide.me")
+    parser.add_argument(
+        "--live-wire-inputs-file",
+        default=str(live_wire_inputs.get_default_inputs_path(Path(__file__).resolve().parent.parent)),
+    )
     return parser
 
 
@@ -313,6 +327,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     python_executable = harness_cli_common.find_python_executable()
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
     shared_root = Path(args.shared_root).resolve() if args.shared_root else None
+    live_wire_inputs_file = live_wire_inputs.resolve_inputs_path(
+        Path(__file__).resolve().parent.parent,
+        args.live_wire_inputs_file,
+    )
 
     summary: dict[str, object] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -327,15 +345,21 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "source_artifact_dir": str(paths.source_artifacts_dir),
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
-        "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
-        "rest_coverage_profile": args.rest_coverage_profile,
-        "rest_stress_profile": args.rest_stress_profile,
+        "live_wire_inputs_file": str(live_wire_inputs_file),
+        "rest_coverage_budget": args.rest_coverage_budget,
+        "rest_stress_budget": args.rest_stress_budget,
         "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
         "rest_stress_concurrency": args.rest_stress_concurrency,
         "rest_stress_max_failures": args.rest_stress_max_failures,
         "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "rest_search_method_override": args.rest_search_method_override,
+        "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",
+        "arr_live_wire_suites": [
+            spec.name
+            for spec in selected_specs
+            if spec.is_prowlarr_emulebb or spec.is_arr_emulebb
+        ],
         "fail_fast": bool(args.fail_fast),
         "has_inconclusive_suites": False,
         "suites": [],
@@ -353,21 +377,22 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             app_root=paths.app_root,
             app_exe=paths.app_exe,
             seed_config_dir=seed_config_dir,
-            startup_profile_mode=args.startup_profile_mode,
+            startup_trace_mode=args.startup_trace_mode,
             shared_root=shared_root,
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             rest_server_search_count=args.rest_server_search_count,
             rest_kad_search_count=args.rest_kad_search_count,
             rest_download_trigger_count=args.rest_download_trigger_count,
             rest_search_method_override=args.rest_search_method_override,
-            rest_coverage_profile=args.rest_coverage_profile,
-            rest_stress_profile=args.rest_stress_profile,
+            rest_coverage_budget=args.rest_coverage_budget,
+            rest_stress_budget=args.rest_stress_budget,
             rest_stress_duration_seconds=args.rest_stress_duration_seconds,
             rest_stress_concurrency=args.rest_stress_concurrency,
             rest_stress_max_failures=args.rest_stress_max_failures,
             rest_stress_request_timeout_seconds=args.rest_stress_request_timeout_seconds,
             enable_upnp=not args.disable_upnp,
             auto_browse_p2p_bind_interface_name=args.auto_browse_p2p_bind_interface_name,
+            live_wire_inputs_file=live_wire_inputs_file,
         )
         started = time.monotonic()
         return_code = run_suite_command(command)
@@ -386,14 +411,22 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         if spec.is_rest_api:
             result.update(
                 {
-                    "rest_coverage_profile": args.rest_coverage_profile,
-                    "rest_stress_profile": args.rest_stress_profile,
+                    "rest_coverage_budget": args.rest_coverage_budget,
+                    "rest_stress_budget": args.rest_stress_budget,
                     "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
                     "rest_stress_concurrency": args.rest_stress_concurrency,
                     "rest_stress_max_failures": args.rest_stress_max_failures,
                     "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
                     "rest_download_trigger_count": args.rest_download_trigger_count,
                     "rest_search_method_override": args.rest_search_method_override,
+                    "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",
+                }
+            )
+        if spec.is_prowlarr_emulebb or spec.is_arr_emulebb:
+            result.update(
+                {
+                    "arr_integration": True,
+                    "live_wire_inputs_file": str(live_wire_inputs_file),
                 }
             )
         summary["suites"].append(result)  # type: ignore[index]

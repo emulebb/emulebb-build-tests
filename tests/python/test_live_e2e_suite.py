@@ -74,7 +74,9 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
 
     assert summary["status"] == "passed"
     assert summary["live_seed_source_url"] == EMULE_SECURITY_HOME_URL
-    assert summary["live_wire_search_queries"] == ["linux", "ubuntu", "fedora", "freebsd", "debian", "emule"]
+    assert summary["live_wire_inputs_file"].endswith("live-wire-inputs.local.json")
+    assert summary["rest_contract_completeness_expected"] is True
+    assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-sonarr-emulebb"]
     assert [suite["name"] for suite in summary["suites"]] == list(live_e2e_suite.SUITE_NAMES)
     assert [script_name(command) for command in commands] == [
         "preference-ui-e2e.py",
@@ -100,19 +102,21 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
 
     rest_command = commands[6]
     assert "--enable-upnp" in rest_command
+    assert option_values(rest_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--live-download-trigger-count") == [str(live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)]
-    assert option_values(rest_command, "--rest-coverage-profile") == ["contract"]
-    assert option_values(rest_command, "--rest-stress-profile") == ["smoke"]
+    assert option_values(rest_command, "--rest-coverage-budget") == ["contract"]
+    assert option_values(rest_command, "--rest-stress-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["4"]
     assert option_values(rest_command, "--rest-stress-max-failures") == ["1"]
     assert option_values(rest_command, "--rest-stress-request-timeout-seconds") == ["5.0"]
     assert "--skip-live-seed-refresh" not in rest_command
-    assert summary["suites"][6]["rest_coverage_profile"] == "contract"
-    assert summary["suites"][6]["rest_stress_profile"] == "smoke"
+    assert summary["suites"][6]["rest_coverage_budget"] == "contract"
+    assert summary["suites"][6]["rest_stress_budget"] == "smoke"
     assert summary["suites"][6]["rest_stress_max_failures"] == 1
     assert summary["suites"][6]["rest_download_trigger_count"] == live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT
+    assert summary["suites"][6]["rest_contract_completeness_expected"] is True
 
     browser_command = commands[7]
     assert script_name(browser_command) == "amutorrent-browser-smoke.py"
@@ -120,15 +124,21 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     prowlarr_command = commands[8]
     assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"
     assert "--enable-upnp" in prowlarr_command
+    assert option_values(prowlarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert "--skip-live-seed-refresh" not in prowlarr_command
+    assert summary["suites"][8]["arr_integration"] is True
 
     arr_command = commands[9]
     assert script_name(arr_command) == "radarr-sonarr-emulebb-live.py"
     assert "--enable-upnp" in arr_command
+    assert option_values(arr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert "--skip-live-seed-refresh" not in arr_command
+    assert summary["suites"][9]["arr_integration"] is True
 
     auto_browse_command = commands[10]
+    assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert "--update-live-wire-inputs" not in auto_browse_command
 
 
 def test_suite_continues_after_failures_by_default(tmp_path: Path, monkeypatch) -> None:
@@ -198,9 +208,9 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
             str(tmp_path / "workspaces" / "v0.72a"),
             "--suite",
             "rest-api",
-            "--rest-coverage-profile",
+            "--rest-coverage-budget",
             "contract-stress",
-            "--rest-stress-profile",
+            "--rest-stress-budget",
             "soak",
             "--rest-stress-duration-seconds",
             "45",
@@ -213,12 +223,12 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
 
     rest_command = commands[0]
     assert "--enable-upnp" not in rest_command
-    assert option_values(rest_command, "--rest-coverage-profile") == ["contract-stress"]
-    assert option_values(rest_command, "--rest-stress-profile") == ["soak"]
+    assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
+    assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-stress-duration-seconds") == ["45.0"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["2"]
-    assert summary["suites"][0]["rest_coverage_profile"] == "contract-stress"
-    assert summary["suites"][0]["rest_stress_profile"] == "soak"
+    assert summary["suites"][0]["rest_coverage_budget"] == "contract-stress"
+    assert summary["suites"][0]["rest_stress_budget"] == "soak"
 
 
 def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Path, monkeypatch) -> None:
@@ -250,7 +260,7 @@ def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Pat
 def test_operator_script_help_loads_hyphenated_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     completed = subprocess.run(
-        [sys.executable, str(repo_root / "scripts" / "run_live_e2e_suite.py"), "--help"],
+        [sys.executable, str(repo_root / "scripts" / "run-live-e2e-suite.py"), "--help"],
         cwd=repo_root,
         capture_output=True,
         text=True,

@@ -15,7 +15,9 @@ The live harness validates this exact allowlist before copying the seed. Adding
 logs, caches, `shareddir.dat`, downloaded state, or diagnostic leftovers here is
 a test setup error; those files belong in per-run artifacts.
 
-The seeded `preferences.ini` must stay limited to the non-default settings that the live harness truly needs before runtime overrides are applied.
+The seeded `preferences.ini` must stay UTF-16LE with BOM, matching eMule's
+profile-file write path, and limited to the non-default settings that the live
+harness truly needs before runtime overrides are applied.
 
 Required initialized `preferences.ini` keys are enforced by
 `emule_test_harness.live_profile_seed` so first-run UI prompts do not leak into
@@ -27,14 +29,5 @@ Mutable runtime state such as logs, temp files, downloads, and rolling history f
 
 Live Arr credentials are intentionally not stored beside this seed. Put local
 Prowlarr/Radarr/Sonarr values in process environment variables or an ignored
-`.env.local` selected with `--env-file`.
-
-```dotenv
-PROWLARR_URL=http://127.0.0.1:9696
-PROWLARR_API_KEY=<redacted>
-PROWLARR_EMULEBB_INDEXER_NAME=eMule BB Local
-RADARR_URL=http://127.0.0.1:7878
-RADARR_API_KEY=<redacted>
-SONARR_URL=http://127.0.0.1:8989
-SONARR_API_KEY=<redacted>
-```
+`.env.local` selected with `--env-file`. The tracked root `.env.example` file is
+the redacted template for those local values.

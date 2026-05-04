@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .ini import parse_ini_values, read_ini_text
+
 ALLOWED_SEED_FILES = frozenset({"preferences.ini", "preferences.dat", "server.met", "nodes.dat"})
 REQUIRED_SEED_KEYS = (
     "AppVersion",
@@ -24,22 +26,6 @@ REQUIRED_SEED_KEYS = (
     "ShowSharedFilesDetails",
     "IgnoreInstances",
 )
-
-
-def parse_ini_values(text: str) -> dict[str, str]:
-    """Parses simple INI key/value rows for live seed validation."""
-
-    values: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("[") or line.startswith(";"):
-            continue
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
-
 
 def ensure_seed_profile_initialized(text: str) -> None:
     """Fails fast when the checked-in seed no longer contains required settings."""
@@ -77,4 +63,4 @@ def validate_seed_config_dir(seed_config_dir: Path) -> None:
         )
 
     preferences_path = resolved_dir / "preferences.ini"
-    ensure_seed_profile_initialized(preferences_path.read_text(encoding="utf-8", errors="ignore"))
+    ensure_seed_profile_initialized(read_ini_text(preferences_path))

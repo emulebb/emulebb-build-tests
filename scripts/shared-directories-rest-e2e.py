@@ -64,7 +64,7 @@ def configure_rest_only_profile(
     """Enables localhost REST while keeping P2P networks disabled."""
 
     preferences_path = config_dir / "preferences.ini"
-    text = preferences_path.read_text(encoding="utf-8", errors="ignore")
+    text = live_common.read_ini_text(preferences_path)
     for key, value in (
         ("ConfirmExit", "0"),
         ("Autoconnect", "0"),
@@ -96,7 +96,7 @@ def configure_rest_only_profile(
     ):
         text = upsert_ini_section_value(text, "WebServer", key, value)
     text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "0")
-    preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
+    live_common.write_utf16_ini_text(preferences_path, text)
 
 
 def normalize_path_text(path: str) -> str:

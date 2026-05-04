@@ -192,18 +192,72 @@ def test_rest_contract_registry_covers_release_families() -> None:
     assert any(route["operationId"] == "shutdownApp" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
 
 
+def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.build_contract_coverage_summary(
+        [
+            {
+                "name": "getApp",
+                "operationId": "getApp",
+                "family": "app",
+                "method": "GET",
+                "path": "/api/v1/app",
+                "safe": True,
+                "skipped": False,
+                "ok": True,
+                "outcome": "success",
+            },
+            {
+                "name": "getTransfer",
+                "operationId": "getTransfer",
+                "family": "transfers",
+                "method": "GET",
+                "path": f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}",
+                "safe": True,
+                "skipped": False,
+                "ok": True,
+                "outcome": "expected_error",
+            },
+            {
+                "name": "shutdownApp",
+                "operationId": "shutdownApp",
+                "family": "app",
+                "method": "POST",
+                "path": "/api/v1/app/shutdown",
+                "safe": False,
+                "skipped": True,
+                "ok": True,
+                "outcome": "skipped_unsafe",
+            },
+        ],
+        "contract",
+    )
+
+    assert summary["safe_route_count"] == 2
+    assert summary["unsafe_route_count"] == 1
+    assert summary["exercised_route_count"] == 2
+    assert summary["success_count"] == 1
+    assert summary["expected_error_count"] == 1
+    assert summary["method_counts"] == {"GET": 2, "POST": 1}
+    assert summary["outcome_counts"]["skipped_unsafe"] == 1
+
+
 def test_live_search_plan_covers_release_query_corpus() -> None:
     module = load_rest_api_smoke_module()
 
-    server_count = len(module.LIVE_WIRE_SEARCH_QUERIES)
-    kad_count = len(module.LIVE_WIRE_SEARCH_QUERIES)
-    plan = module.build_search_plan(server_count, kad_count)
+    search_terms = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
+    server_count = len(search_terms)
+    kad_count = len(search_terms)
+    plan = module.build_search_plan(server_count, kad_count, search_terms)
 
-    assert module.LIVE_WIRE_SEARCH_QUERIES == ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
-    assert [row["query"] for row in plan[:server_count]] == list(module.LIVE_WIRE_SEARCH_QUERIES)
+    assert [row["query"] for row in plan[:server_count]] == list(search_terms)
+    assert [row["query_index"] for row in plan[:server_count]] == list(range(server_count))
     assert [row["network"] for row in plan[:server_count]] == ["server"] * server_count
-    assert [row["query"] for row in plan[server_count:]] == list(module.LIVE_WIRE_SEARCH_QUERIES)
+    assert [row["query"] for row in plan[server_count:]] == list(search_terms)
+    assert [row["query_index"] for row in plan[server_count:]] == list(range(kad_count))
     assert [row["network"] for row in plan[server_count:]] == ["kad"] * kad_count
+    assert all("query" not in row for row in module.summarize_search_plan(plan))
 
 
 def test_live_search_start_uses_broad_file_type_for_release_terms(monkeypatch) -> None:
@@ -356,7 +410,7 @@ def test_rest_stress_config_rejects_invalid_values() -> None:
 
     with pytest.raises(ValueError, match="duration"):
         module.validate_rest_stress_config(
-            profile="smoke",
+            budget="smoke",
             duration_seconds=0,
             concurrency=1,
             max_failures=0,
@@ -364,7 +418,7 @@ def test_rest_stress_config_rejects_invalid_values() -> None:
         )
     with pytest.raises(ValueError, match="concurrency"):
         module.validate_rest_stress_config(
-            profile="smoke",
+            budget="smoke",
             duration_seconds=1,
             concurrency=0,
             max_failures=0,
@@ -399,13 +453,14 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
             {"path": "/missing", "status": 404, "ok": True, "duration_ms": 4.0},
             {"path": "/boom", "status": "exception", "ok": False, "duration_ms": 9.0, "error": "timeout"},
         ],
-        profile="smoke",
+        budget="smoke",
         duration_seconds=30.0,
         concurrency=4,
         max_failures=1,
     )
 
     assert summary["ok"] is True
+    assert summary["budget"] == "smoke"
     assert summary["requests_completed"] == 3
     assert summary["status_counts"] == {"200": 1, "404": 1, "exception": 1}
     assert summary["method_counts"] == {"UNKNOWN": 3}

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import struct
 import subprocess
@@ -22,6 +21,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.live_profile_seed import ensure_seed_profile_initialized, validate_seed_config_dir
+from emule_test_harness.ini import (
+    patch_ini_value,
+    read_ini_text,
+    upsert_ini_section_value,
+    write_utf16_ini_text,
+)
 
 try:
     from pywinauto import Application
@@ -67,65 +72,14 @@ def write_json(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def patch_ini_value(text: str, key: str, value: str) -> str:
-    """Upserts one simple INI key in the eMule seed profile."""
-
-    pattern = re.compile(rf"(?im)^(?P<key>{re.escape(key)})=.*$")
-    replacement = f"{key}={value}"
-    if pattern.search(text):
-        return pattern.sub(replacement, text)
-    suffix = "" if text.endswith("\n") else "\r\n"
-    return f"{text}{suffix}{replacement}\r\n"
-
-
-def upsert_ini_section_value(text: str, section: str, key: str, value: str) -> str:
-    """Upserts one key/value pair inside a simple INI section."""
-
-    section_header = f"[{section}]"
-    lines = text.splitlines()
-    output: list[str] = []
-    inside_target = False
-    inserted = False
-    saw_section = False
-
-    for raw_line in lines:
-        stripped = raw_line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            if inside_target and not inserted:
-                output.append(f"{key}={value}")
-                inserted = True
-            inside_target = stripped == section_header
-            saw_section = saw_section or inside_target
-            output.append(raw_line)
-            continue
-
-        if inside_target and raw_line.partition("=")[0].strip().lower() == key.lower():
-            output.append(f"{key}={value}")
-            inserted = True
-            continue
-
-        output.append(raw_line)
-
-    if saw_section:
-        if inside_target and not inserted:
-            output.append(f"{key}={value}")
-    else:
-        if output and output[-1] != "":
-            output.append("")
-        output.append(section_header)
-        output.append(f"{key}={value}")
-
-    return "\r\n".join(output) + "\r\n"
-
-
 def configure_profile_upnp(config_dir: Path, *, enable_upnp: bool, close_on_exit: bool = False) -> None:
     """Writes deterministic UPnP preferences for one isolated live profile."""
 
     preferences_path = config_dir / "preferences.ini"
-    text = preferences_path.read_text(encoding="utf-8", errors="ignore")
+    text = read_ini_text(preferences_path)
     text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1" if enable_upnp else "0")
     text = patch_ini_value(text, "CloseUPnPOnExit", "1" if close_on_exit else "0")
-    preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
+    write_utf16_ini_text(preferences_path, text)
 
 
 def win_path(path: Path, trailing_slash: bool = False) -> str:
@@ -190,7 +144,7 @@ def prepare_profile_base(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     preferences_path = config_dir / "preferences.ini"
-    preferences_text = preferences_path.read_text(encoding="utf-8", errors="ignore")
+    preferences_text = read_ini_text(preferences_path)
     ensure_seed_profile_initialized(preferences_text)
     for key, value in (
         ("IncomingDir", win_path(incoming_dir, trailing_slash=True)),
@@ -198,7 +152,7 @@ def prepare_profile_base(
         ("TempDirs", win_path(temp_dir, trailing_slash=True)),
     ):
         preferences_text = patch_ini_value(preferences_text, key, value)
-    preferences_path.write_text(preferences_text, encoding="utf-8", newline="\r\n")
+    write_utf16_ini_text(preferences_path, preferences_text)
 
     write_preferences_dat(config_dir / "preferences.dat")
     write_shared_directories_file(config_dir / "shareddir.dat", shared_dirs)

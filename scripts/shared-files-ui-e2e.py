@@ -7,7 +7,6 @@ import ctypes
 import importlib.util
 import json
 import os
-import re
 import shutil
 import socket
 import struct
@@ -114,26 +113,6 @@ kernel32.ReadProcessMemory.restype = ctypes.c_int
 kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
 kernel32.CloseHandle.restype = ctypes.c_int
 
-REQUIRED_SEED_KEYS = (
-    "AppVersion",
-    "Nick",
-    "Port",
-    "UDPPort",
-    "ServerUDPPort",
-    "Language",
-    "StartupMinimized",
-    "BringToFront",
-    "ConfirmExit",
-    "RestoreLastMainWndDlg",
-    "Splashscreen",
-    "Autoconnect",
-    "Reconnect",
-    "NetworkED2K",
-    "NetworkKademlia",
-    "ShowSharedFilesDetails",
-    "IgnoreInstances",
-)
-
 SHARED_DUPLICATE_PATH_CACHE_MAGIC = 0x50554453
 SHARED_DUPLICATE_PATH_CACHE_VERSION = 1
 
@@ -238,44 +217,6 @@ def write_json(path: Path, payload) -> None:
     """Writes a UTF-8 JSON artifact with stable formatting."""
 
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-
-def patch_ini_value(text: str, key: str, value: str) -> str:
-    """Upserts one simple INI key in the eMule seed profile."""
-
-    pattern = re.compile(rf"(?im)^(?P<key>{re.escape(key)})=.*$")
-    replacement = f"{key}={value}"
-    if pattern.search(text):
-        return pattern.sub(replacement, text)
-    suffix = "" if text.endswith("\n") else "\r\n"
-    return f"{text}{suffix}{replacement}\r\n"
-
-
-def parse_ini_values(text: str) -> dict[str, str]:
-    """Parses one simple INI text blob into key/value pairs for seed validation."""
-
-    values: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("[") or line.startswith(";"):
-            continue
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
-
-
-def ensure_seed_profile_initialized(text: str) -> None:
-    """Fails fast when the checked-in test seed stops being a fully initialized profile."""
-
-    values = parse_ini_values(text)
-    missing_keys = [key for key in REQUIRED_SEED_KEYS if not values.get(key, "").strip()]
-    if missing_keys:
-        raise RuntimeError(
-            "Seed preferences.ini is missing required initialized keys: "
-            + ", ".join(missing_keys)
-        )
 
 
 def win_path(path: Path, trailing_slash: bool = False) -> str:
@@ -414,17 +355,17 @@ def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: 
     """Enables the WebServer REST listener inside one isolated Shared Files UI profile."""
 
     preferences_path = config_dir / "preferences.ini"
-    text = preferences_path.read_text(encoding="utf-8", errors="ignore")
-    text = patch_ini_value(text, "ConfirmExit", "0")
+    text = live_common.read_ini_text(preferences_path)
+    text = live_common.patch_ini_value(text, "ConfirmExit", "0")
     for key, value in (
         ("Autoconnect", "0"),
         ("Reconnect", "0"),
         ("NetworkED2K", "0"),
         ("NetworkKademlia", "0"),
     ):
-        text = patch_ini_value(text, key, value)
+        text = live_common.patch_ini_value(text, key, value)
     template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
-    text = patch_ini_value(text, "WebTemplateFile", str(template_path))
+    text = live_common.patch_ini_value(text, "WebTemplateFile", str(template_path))
     for key, value in (
         ("Password", ""),
         ("PasswordLow", ""),
@@ -444,8 +385,8 @@ def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: 
     ):
         text = live_common.upsert_ini_section_value(text, "WebServer", key, value)
     text = live_common.upsert_ini_section_value(text, "UPnP", "EnableUPnP", "0")
-    text = patch_ini_value(text, "CloseUPnPOnExit", "0")
-    preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
+    text = live_common.patch_ini_value(text, "CloseUPnPOnExit", "0")
+    live_common.write_utf16_ini_text(preferences_path, text)
 
 
 def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_dir: Path, app_exe: Path) -> dict:
@@ -2369,7 +2310,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
-    parser.add_argument("--startup-profile-mode", choices=["required", "optional"], default="required")
+    parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
     parser.add_argument(
         "--scenario",
@@ -2409,7 +2350,7 @@ def main(argv: list[str]) -> int:
             artifacts_dir=artifacts_dir,
             shared_root=Path(args.shared_root).resolve(),
             scenario_names=scenario_names,
-            require_startup_profile=(args.startup_profile_mode == "required"),
+            require_startup_profile=(args.startup_trace_mode == "required"),
         )
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="passed", paths=paths)

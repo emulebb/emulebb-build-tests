@@ -134,11 +134,12 @@ def test_configure_profile_upnp_disables_mapping_and_exit_cleanup(tmp_path: Path
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
-    preferences_path.write_text("[eMule]\r\nNick=CodexE2E\r\n", encoding="utf-8")
+    module.live_common.write_utf16_ini_text(preferences_path, "[eMule]\r\nNick=CodexE2E\r\n")
 
     module.live_common.configure_profile_upnp(config_dir, enable_upnp=False)
 
-    text = preferences_path.read_text(encoding="utf-8")
+    assert preferences_path.read_bytes().startswith(b"\xff\xfe")
+    text = module.live_common.read_ini_text(preferences_path)
     assert "[UPnP]" in text
     assert "EnableUPnP=0" in text
     assert "CloseUPnPOnExit=0" in text

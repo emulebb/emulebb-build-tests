@@ -75,8 +75,8 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
         platform="x64",
         preferred_coverage_root=None,
         include_live_rest_e2e=True,
-        rest_coverage_profile="contract",
-        rest_stress_profile="smoke",
+        rest_coverage_budget="contract",
+        rest_stress_budget="smoke",
         rest_app_scope="main-only",
     )
 
@@ -87,7 +87,9 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     assert summary["status"] == "passed"
     assert "--app-root" in command
     assert str(main_app_root) in command
-    assert "--rest-coverage-profile" in command
+    assert "--rest-coverage-budget" in command
     assert "contract" in command
-    assert "--rest-stress-profile" in command
+    assert "--rest-stress-budget" in command
     assert "smoke" in command
+    assert summary["rest_coverage_budget"] == "contract"
+    assert summary["rest_stress_budget"] == "smoke"

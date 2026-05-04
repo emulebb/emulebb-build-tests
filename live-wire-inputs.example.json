@@ -1,0 +1,35 @@
+{
+  "schema": "emule-build-tests.live-wire-inputs.v1",
+  "search_terms": {
+    "generic_open": [
+      "linux",
+      "ubuntu",
+      "fedora",
+      "freebsd",
+      "debian",
+      "emule"
+    ],
+    "documents": [
+      "linux",
+      "ubuntu",
+      "debian",
+      "python"
+    ],
+    "radarr_movies": [
+      "Example Public Movie Title"
+    ]
+  },
+  "auto_browse": {
+    "bootstrap_transfer_hashes": [
+      "0123456789abcdef0123456789abcdef"
+    ],
+    "direct_bootstrap_transfers": [
+      {
+        "hash": "0123456789abcdef0123456789abcdef",
+        "name": "example-live-bootstrap.iso",
+        "size": 1048576,
+        "method": "direct_ed2k"
+      }
+    ]
+  }
+}

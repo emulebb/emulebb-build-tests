@@ -8,7 +8,7 @@ from emule_test_harness.live_seed_sources import (
     EMULE_SECURITY_HOME_URL,
     default_seed_sources,
 )
-from emule_test_harness import live_e2e_suite
+from emule_test_harness import live_e2e_suite, live_wire_inputs
 from emule_test_harness.release_golden import load_release_live_wire_golden
 
 
@@ -43,10 +43,10 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
     golden = load_release_live_wire_golden(repo_root)
     rest_smoke = load_script_module("rest_api_smoke_golden_test", "rest-api-smoke.py")
 
-    search_terms = tuple(golden["search_terms"])
-
-    assert rest_smoke.LIVE_WIRE_SEARCH_QUERIES == search_terms
-    assert live_e2e_suite.LIVE_WIRE_SEARCH_QUERIES == search_terms
+    runtime_inputs = golden["operator_runtime_inputs"]
+    assert runtime_inputs["schema"] == live_wire_inputs.SCHEMA
+    assert runtime_inputs["default_file"] == live_wire_inputs.DEFAULT_INPUTS_FILE_NAME
+    assert runtime_inputs["example_file"] == "live-wire-inputs.example.json"
     assert live_e2e_suite.DEFAULT_REST_SEARCH_COUNT == golden["rest"]["server_search_count"]
     assert live_e2e_suite.DEFAULT_REST_SEARCH_COUNT == golden["rest"]["kad_search_count"]
     assert live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT == golden["rest"]["download_trigger_count"]
@@ -59,11 +59,9 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
     }.issubset(method_path_pairs)
 
 
-def test_release_live_wire_golden_manifest_matches_auto_browse_runner() -> None:
+def test_release_live_wire_golden_manifest_keeps_runtime_values_external() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     golden = load_release_live_wire_golden(repo_root)
-    auto_browse = load_script_module("auto_browse_live_golden_test", "auto-browse-live.py")
 
-    assert auto_browse.LIVE_WIRE_SEARCH_QUERIES == tuple(golden["search_terms"])
-    assert auto_browse.BOOTSTRAP_TRANSFER_HASH == golden["auto_browse"]["bootstrap_transfer_hash"]
-    assert auto_browse.build_direct_bootstrap_transfer_plan() == golden["auto_browse"]["direct_bootstrap_transfers"]
+    assert "search_terms" not in golden
+    assert "auto_browse" not in golden

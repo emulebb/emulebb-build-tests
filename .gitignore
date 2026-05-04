@@ -8,4 +8,6 @@ __pycache__/
 .env
 .env.local
 .env.*
+!.env.example
 .tracked-file-privacy-identifiers.local.json
+live-wire-inputs.local.json

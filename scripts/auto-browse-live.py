@@ -34,20 +34,10 @@ launch_app = live_common.launch_app
 prepare_profile_base = live_common.prepare_profile_base
 wait_for_main_window = live_common.wait_for_main_window
 write_json = live_common.write_json
+live_wire_inputs = rest_smoke.live_wire_inputs
 
-BOOTSTRAP_TRANSFER_HASH = "28EAB1A0AB1B9416AAF534E27A234941"
-LIVE_WIRE_SEARCH_QUERIES = ("linux", "ubuntu", "fedora", "freebsd", "debian", "emule")
-FALLBACK_SEARCH_QUERIES = LIVE_WIRE_SEARCH_QUERIES
 BOOTSTRAP_SEARCH_METHODS = ("server", "global", "automatic", "kad")
 FALLBACK_SEARCH_METHODS = ("server", "global", "kad", "automatic")
-DIRECT_BOOTSTRAP_TRANSFERS = (
-    {
-        "hash": "0031c9cba65c50dd2015c184b2ca2c88",
-        "name": "ubuntu-24.04.4-desktop-amd64.iso",
-        "size": 6655619072,
-        "method": "direct_ed2k",
-    },
-)
 LIVE_SOURCE_UNAVAILABLE_EXIT_CODE = 2
 PREFERRED_SERVER_ADDRESSES = ("91.148.135.252", "45.82.80.155", "91.148.135.254")
 DEFAULT_NATURAL_AUTO_BROWSE_TIMEOUT_SECONDS = 180.0
@@ -173,7 +163,7 @@ def configure_auto_browse_profile(
     )
 
     preferences_path = config_dir / "preferences.ini"
-    text = preferences_path.read_text(encoding="utf-8", errors="ignore")
+    text = live_common.read_ini_text(preferences_path)
     for key, value in (
         ("Autoconnect", "1"),
         ("Reconnect", "1"),
@@ -185,7 +175,7 @@ def configure_auto_browse_profile(
         ("FullVerbose", "1"),
     ):
         text = rest_smoke.upsert_ini_section_value(text, "eMule", key, value)
-    preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
+    live_common.write_utf16_ini_text(preferences_path, text)
 
 
 def reorder_server_rows(server_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -351,23 +341,23 @@ def find_transfer_candidate(
             attempt["stop"] = compact_http_result(rest_smoke.stop_live_search(base_url, api_key, search_id))
 
     raise TransferCandidateUnavailableError(
-        f"No downloadable search result found for {query!r} via {method_candidates!r}.",
+        f"No downloadable search result found via {method_candidates!r}.",
         attempts,
     )
 
 
-def build_transfer_acquisition_plan() -> list[tuple[str, list[str]]]:
+def build_transfer_acquisition_plan(inputs) -> list[tuple[str, list[str]]]:
     """Returns the live-search plan used to find one safe sourced transfer."""
 
-    plan = [(BOOTSTRAP_TRANSFER_HASH, list(BOOTSTRAP_SEARCH_METHODS))]
-    plan.extend((query, list(FALLBACK_SEARCH_METHODS)) for query in FALLBACK_SEARCH_QUERIES)
+    plan = [(transfer_hash, list(BOOTSTRAP_SEARCH_METHODS)) for transfer_hash in inputs.bootstrap_transfer_hashes]
+    plan.extend((query, list(FALLBACK_SEARCH_METHODS)) for query in inputs.generic_open_terms)
     return plan
 
 
-def build_direct_bootstrap_transfer_plan() -> list[dict[str, Any]]:
+def build_direct_bootstrap_transfer_plan(inputs) -> list[dict[str, Any]]:
     """Returns known safe ED2K links used when live keyword search is empty."""
 
-    return [dict(candidate) for candidate in DIRECT_BOOTSTRAP_TRANSFERS]
+    return [dict(candidate) for candidate in inputs.direct_bootstrap_transfers]
 
 
 def summarize_selected_transfer_sources(acquisition_attempts: list[dict[str, object]]) -> dict[str, object]:
@@ -383,15 +373,15 @@ def summarize_selected_transfer_sources(acquisition_attempts: list[dict[str, obj
         if isinstance(sources_ready, dict) and isinstance(sources_ready.get("sources"), list):
             sources = list(sources_ready["sources"])
         summary: dict[str, object] = {
-            "query": selected.get("query"),
+            "query_present": bool(selected.get("query")),
             "method": selected.get("method"),
             "searchId": selected.get("searchId"),
             "source_count": len(sources),
             "sources": sources[:5],
         }
         if isinstance(result_row, dict):
-            summary["hash"] = result_row.get("hash")
-            summary["name"] = result_row.get("name")
+            summary["hash_present"] = bool(result_row.get("hash"))
+            summary["name_present"] = bool(result_row.get("name"))
             summary["size"] = result_row.get("sizeBytes") or result_row.get("size")
         return summary
     return {
@@ -428,6 +418,52 @@ def get_selected_transfer_hash(acquisition_attempt: dict[str, object]) -> str | 
         if isinstance(transfer_hash, str) and transfer_hash.strip():
             return transfer_hash.strip().lower()
     return None
+
+
+def summarize_transfer_acquisition_plan(inputs) -> dict[str, object]:
+    """Returns a report-safe summary for configured transfer acquisition inputs."""
+
+    return {
+        "bootstrap_hash_count": len(inputs.bootstrap_transfer_hashes),
+        "fallback_search_terms": live_wire_inputs.summarize_terms(inputs.generic_open_terms),
+        "direct_bootstrap_transfers": live_wire_inputs.summarize_direct_transfers(inputs.direct_bootstrap_transfers),
+    }
+
+
+def update_live_wire_inputs_from_result(inputs, result_row: dict[str, Any]) -> dict[str, object]:
+    """Refreshes operator live-wire bootstrap inputs from one selected result."""
+
+    summary = live_wire_inputs.update_live_wire_bootstrap_inputs(inputs.path, result_row)
+    return {
+        "enabled": True,
+        **summary,
+    }
+
+
+def redact_acquisition_attempts(attempts: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Redacts exact runtime terms and hashes from transfer acquisition attempts."""
+
+    redacted: list[dict[str, object]] = []
+    for item in attempts:
+        row: dict[str, object] = {
+            "method": item.get("method"),
+            "methods": item.get("methods"),
+            "query_present": bool(item.get("query")),
+        }
+        if isinstance(item.get("error"), dict):
+            error = item["error"]
+            row["error"] = {
+                "type": error.get("type"),
+                "message_present": bool(error.get("message")),
+            }
+        if isinstance(item.get("selected"), dict):
+            row["selected_transfer"] = summarize_selected_transfer_sources([item])
+        if isinstance(item.get("attempts"), list):
+            row["attempt_count"] = len(item["attempts"])  # type: ignore[arg-type]
+        if isinstance(item.get("candidates"), list):
+            row["candidate_count"] = len(item["candidates"])  # type: ignore[arg-type]
+        redacted.append(row)
+    return redacted
 
 
 def positive_source_counter(value: object) -> bool:
@@ -771,7 +807,7 @@ def wait_for_transfer_sources(
             }
         time.sleep(5.0)
 
-    raise RuntimeError(f"Timed out waiting for sources on transfer '{transfer_hash}'.")
+    raise RuntimeError("Timed out waiting for sources on selected transfer.")
 
 
 def wait_for_source_browse_candidates(
@@ -821,28 +857,34 @@ def wait_for_source_browse_candidates(
     if best_candidate_result is not None:
         best_candidate_result["fallback_unready_candidates"] = True
         return best_candidate_result
-    raise RuntimeError(f"Timed out waiting for browse-capable sources on transfer '{transfer_hash}'.")
+    raise RuntimeError("Timed out waiting for browse-capable sources on selected transfer.")
 
 
 def find_direct_bootstrap_transfer_candidate(
     base_url: str,
     api_key: str,
+    inputs,
     *,
     source_discovery_timeout_seconds: float,
 ) -> dict[str, object]:
     """Adds known safe ED2K transfers until one yields browse-capable live sources."""
 
     attempts: list[dict[str, object]] = []
-    for result_row in build_direct_bootstrap_transfer_plan():
+    for result_row in build_direct_bootstrap_transfer_plan(inputs):
         attempt: dict[str, object] = {
-            "query": result_row["name"],
+            "query_present": bool(result_row.get("name")),
             "method": result_row.get("method", "direct_ed2k"),
-            "result": result_row,
+            "result": {
+                "hash_present": bool(result_row.get("hash")),
+                "name_present": bool(result_row.get("name")),
+                "size": result_row.get("size"),
+                "method": result_row.get("method"),
+            },
         }
         attempts.append(attempt)
         try:
             if not is_safe_download_result(result_row):
-                raise RuntimeError(f"Direct bootstrap transfer is not safe to download: {result_row['name']!r}.")
+                raise RuntimeError("Direct bootstrap transfer is not safe to download.")
             add_payload = add_transfer_from_search_result(base_url, api_key, result_row)
             attempt["add_response"] = add_payload
             attempt["sources_ready"] = wait_for_transfer_sources(
@@ -997,7 +1039,14 @@ def main() -> int:
     )
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
+    parser.add_argument(
+        "--live-wire-inputs-file",
+        default=str(live_wire_inputs.get_default_inputs_path(rest_smoke.REPO_ROOT)),
+    )
     args = parser.parse_args()
+    inputs = live_wire_inputs.load_live_wire_inputs(
+        live_wire_inputs.resolve_inputs_path(rest_smoke.REPO_ROOT, args.live_wire_inputs_file)
+    )
 
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -1057,10 +1106,14 @@ def main() -> int:
             "bind_updater_script": str(bind_updater_script),
             "enable_upnp": True,
             "autoconnect_via_preferences": True,
-            "bootstrap_transfer_hash": BOOTSTRAP_TRANSFER_HASH,
-            "live_wire_search_queries": list(LIVE_WIRE_SEARCH_QUERIES),
+            "live_wire_inputs_file": str(inputs.path),
+            "transfer_acquisition_inputs": summarize_transfer_acquisition_plan(inputs),
             "reject_exe_results": True,
             "keep_running": bool(args.keep_running),
+            "live_wire_inputs_update": {
+                "enabled": True,
+                "target": str(inputs.path),
+            },
             "timeouts": {
                 "rest_ready_seconds": args.rest_ready_timeout_seconds,
                 "server_connect_seconds": args.server_connect_timeout_seconds,
@@ -1174,6 +1227,7 @@ def main() -> int:
                 direct_selection = find_direct_bootstrap_transfer_candidate(
                     base_url,
                     args.api_key,
+                    inputs,
                     source_discovery_timeout_seconds=direct_source_timeout,
                 )
                 acquisition_attempts.append(direct_selection)
@@ -1199,7 +1253,7 @@ def main() -> int:
                     {
                         "query": "direct_ed2k_bootstrap",
                         "methods": ["direct_ed2k"],
-                        "candidates": build_direct_bootstrap_transfer_plan(),
+                        "candidate_count": len(build_direct_bootstrap_transfer_plan(inputs)),
                         "source_discovery_timeout_seconds": direct_source_timeout,
                         "error": {
                             "type": type(exc).__name__,
@@ -1207,7 +1261,7 @@ def main() -> int:
                         },
                     }
                 )
-            for query, methods in build_transfer_acquisition_plan():
+            for query, methods in build_transfer_acquisition_plan(inputs):
                 if selected_source_browse is not None:
                     break
                 try:
@@ -1240,6 +1294,8 @@ def main() -> int:
                     if transfer_hash in browsed_transfer_hashes:
                         continue
                     browsed_transfer_hashes.add(transfer_hash)
+                    report["checks"]["live_wire_inputs_update"] = update_live_wire_inputs_from_result(inputs, result_row)
+                    checkpoint_report(artifacts_dir, report)
                     record_phase(artifacts_dir, report, "source_browse")
                     source_browse_attempt = probe_selected_transfer_source_browse(
                         base_url,
@@ -1267,13 +1323,12 @@ def main() -> int:
                     if isinstance(exc, TransferCandidateUnavailableError):
                         failed_attempt["attempts"] = exc.attempts
                     acquisition_attempts.append(failed_attempt)
-            report["checks"]["transfer_acquisition"] = acquisition_attempts
+            report["checks"]["transfer_acquisition"] = redact_acquisition_attempts(acquisition_attempts)
             selected_acquisition_count = sum(1 for item in acquisition_attempts if isinstance(item, dict) and item.get("selected"))
             if selected_acquisition_count == 0:
                 report["checks"]["live_source_availability"] = {
                     "status": "unavailable",
-                    "queries_attempted": [query for query, _methods in build_transfer_acquisition_plan()],
-                    "direct_candidates_attempted": build_direct_bootstrap_transfer_plan(),
+                    "transfer_acquisition_inputs": summarize_transfer_acquisition_plan(inputs),
                     "blocking": False,
                 }
                 raise LiveSourceUnavailableError(
@@ -1285,8 +1340,7 @@ def main() -> int:
                 selected_transfer = selected_source_browse.get("selected_transfer", {})
                 report["checks"]["live_source_availability"] = {
                     "status": "available",
-                    "queries_attempted": [query for query, _methods in build_transfer_acquisition_plan()],
-                    "direct_candidates_attempted": build_direct_bootstrap_transfer_plan(),
+                    "transfer_acquisition_inputs": summarize_transfer_acquisition_plan(inputs),
                     "blocking": False,
                     "selected_transfer": selected_transfer,
                 }
@@ -1308,8 +1362,7 @@ def main() -> int:
                     selected_transfer = summarize_selected_transfer_sources(acquisition_attempts)
                 report["checks"]["live_source_availability"] = {
                     "status": "shared_file_response_unavailable",
-                    "queries_attempted": [query for query, _methods in build_transfer_acquisition_plan()],
-                    "direct_candidates_attempted": build_direct_bootstrap_transfer_plan(),
+                    "transfer_acquisition_inputs": summarize_transfer_acquisition_plan(inputs),
                     "blocking": False,
                     "selected_transfer": selected_transfer,
                     "selected_transfer_count": selected_acquisition_count,

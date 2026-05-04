@@ -1,5 +1,7 @@
 * text=auto eol=lf
 
+manifests/live-profile-seed/config/preferences.ini binary -eol
+
 .editorconfig text eol=lf
 .gitattributes text eol=lf
 .gitignore text eol=lf

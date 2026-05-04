@@ -1227,7 +1227,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
-    parser.add_argument("--startup-profile-mode", choices=["required", "optional"], default="required")
+    parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--scenario", dest="scenarios", action="append", choices=SCENARIO_NAMES)
     args = parser.parse_args(argv)
 
@@ -1254,7 +1254,7 @@ def main(argv: list[str]) -> int:
             seed_config_dir=seed_config_dir,
             artifacts_dir=artifacts_dir,
             scenario_names=scenario_names,
-            require_startup_profile=(args.startup_profile_mode == "required"),
+            require_startup_profile=(args.startup_trace_mode == "required"),
         )
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="passed", paths=paths)

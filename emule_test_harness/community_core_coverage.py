@@ -25,8 +25,8 @@ class CommunityCoreCoverageConfig:
     platform: str
     preferred_coverage_root: Path | None = None
     include_live_rest_e2e: bool = False
-    rest_coverage_profile: str = "contract"
-    rest_stress_profile: str = "off"
+    rest_coverage_budget: str = "contract"
+    rest_stress_budget: str = "off"
     rest_app_scope: str = "main-only"
 
 
@@ -127,8 +127,8 @@ def build_config(
     platform: str,
     preferred_coverage_root: Path | None,
     include_live_rest_e2e: bool = False,
-    rest_coverage_profile: str = "contract",
-    rest_stress_profile: str = "off",
+    rest_coverage_budget: str = "contract",
+    rest_stress_budget: str = "off",
     rest_app_scope: str = "main-only",
 ) -> CommunityCoreCoverageConfig:
     """Builds a resolved community-core coverage config from CLI inputs."""
@@ -165,8 +165,8 @@ def build_config(
         platform=platform,
         preferred_coverage_root=preferred_coverage_root.resolve() if preferred_coverage_root is not None else None,
         include_live_rest_e2e=include_live_rest_e2e,
-        rest_coverage_profile=rest_coverage_profile,
-        rest_stress_profile=rest_stress_profile,
+        rest_coverage_budget=rest_coverage_budget,
+        rest_stress_budget=rest_stress_budget,
         rest_app_scope=rest_app_scope,
     )
 
@@ -191,10 +191,10 @@ def run_live_rest_e2e_for_community_summary(
         config.configuration,
         "--artifacts-dir",
         str(artifacts_dir),
-        "--rest-coverage-profile",
-        config.rest_coverage_profile,
-        "--rest-stress-profile",
-        config.rest_stress_profile,
+        "--rest-coverage-budget",
+        config.rest_coverage_budget,
+        "--rest-stress-budget",
+        config.rest_stress_budget,
     ]
     completed = subprocess.run(command, check=False)
     return {
@@ -202,8 +202,8 @@ def run_live_rest_e2e_for_community_summary(
         "return_code": completed.returncode,
         "summary_path": str(artifacts_dir),
         "app_scope": config.rest_app_scope,
-        "profile": config.rest_coverage_profile,
-        "stress_profile": config.rest_stress_profile,
+        "rest_coverage_budget": config.rest_coverage_budget,
+        "rest_stress_budget": config.rest_stress_budget,
         "command": command,
     }
 
@@ -222,8 +222,8 @@ def invoke_script(argv: list[str]) -> int:
     parser.add_argument("--platform", choices=("x64",), default="x64")
     parser.add_argument("--preferred-coverage-root", type=Path)
     parser.add_argument("--include-live-rest-e2e", action="store_true")
-    parser.add_argument("--rest-coverage-profile", choices=("smoke", "contract", "contract-stress"), default="contract")
-    parser.add_argument("--rest-stress-profile", choices=("off", "smoke", "soak"), default="off")
+    parser.add_argument("--rest-coverage-budget", choices=("smoke", "contract", "contract-stress"), default="contract")
+    parser.add_argument("--rest-stress-budget", choices=("off", "smoke", "soak"), default="off")
     parser.add_argument("--rest-app-scope", choices=("main-only",), default="main-only")
     args = parser.parse_args(argv)
     return run_community_core_coverage(
@@ -236,8 +236,8 @@ def invoke_script(argv: list[str]) -> int:
             platform=args.platform,
             preferred_coverage_root=args.preferred_coverage_root,
             include_live_rest_e2e=args.include_live_rest_e2e,
-            rest_coverage_profile=args.rest_coverage_profile,
-            rest_stress_profile=args.rest_stress_profile,
+            rest_coverage_budget=args.rest_coverage_budget,
+            rest_stress_budget=args.rest_stress_budget,
             rest_app_scope=args.rest_app_scope,
         )
     )

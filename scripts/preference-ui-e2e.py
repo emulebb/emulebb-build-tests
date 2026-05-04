@@ -399,7 +399,7 @@ def activate_tree_item(tree_hwnd: int, label: str) -> None:
 
 def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
     preferences_path = config_dir / "preferences.ini"
-    text = preferences_path.read_text(encoding="utf-8", errors="ignore")
+    text = live_common.read_ini_text(preferences_path)
     template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
 
     for key, value in (
@@ -454,13 +454,13 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
         text = rest_smoke.upsert_ini_section_value(text, "PerfLog", key, value)
 
     text = live_common.patch_ini_value(text, "WebTemplateFile", str(template_path))
-    preferences_path.write_text(text, encoding="utf-8", newline="\r\n")
+    live_common.write_utf16_ini_text(preferences_path, text)
 
 
 def parse_ini_sections(path: Path) -> dict[str, dict[str, str]]:
     sections: dict[str, dict[str, str]] = {}
     current_section = ""
-    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+    for raw_line in live_common.read_ini_text(path).splitlines():
         line = raw_line.strip()
         if not line or line.startswith(";"):
             continue

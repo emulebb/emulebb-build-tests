@@ -29,7 +29,7 @@ def test_build_emule_tests_command_uses_python_build_wrapper() -> None:
     )
 
     assert command[0] == sys.executable
-    assert command[1].endswith("scripts\\build_emule_tests.py")
+    assert command[1].endswith("scripts\\build-emule-tests.py")
     assert "--app-root" in command
     assert "tag" in command
 
