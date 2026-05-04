@@ -6,8 +6,32 @@
 #include "WebServerJsonSeams.h"
 #include "WebServerQBitCompatSeams.h"
 #include "WebServerStaticFileSeams.h"
+#include "WebSocketHttpSeams.h"
 
 TEST_SUITE_BEGIN("web_api");
+
+TEST_CASE("WebSocket HTTP seams parse Content-Length strictly")
+{
+	uint32_t value = 0;
+	CHECK(WebSocketHttpSeams::TryParseContentLengthValue("42", value));
+	CHECK_EQ(value, 42u);
+	CHECK(WebSocketHttpSeams::TryParseContentLengthValue(" 42 ", value));
+	CHECK_EQ(value, 42u);
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthValue("-1", value));
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthValue("10x", value));
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthValue("999999999999999999999", value));
+
+	CHECK(WebSocketHttpSeams::TryParseContentLengthValue("16777216", value));
+	CHECK_EQ(value, 16777216u);
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthValue("16777217", value));
+
+	CHECK(WebSocketHttpSeams::ParseContentLengthHeaderLine("Content-Length: 12\r", value) == WebSocketHttpSeams::EContentLengthHeader::Valid);
+	CHECK_EQ(value, 12u);
+	CHECK(WebSocketHttpSeams::ParseContentLengthHeaderLine("content-length: 0", value) == WebSocketHttpSeams::EContentLengthHeader::Valid);
+	CHECK_EQ(value, 0u);
+	CHECK(WebSocketHttpSeams::ParseContentLengthHeaderLine("Content-Length-Extra: 12", value) == WebSocketHttpSeams::EContentLengthHeader::NotContentLength);
+	CHECK(WebSocketHttpSeams::ParseContentLengthHeaderLine("Content-Length: -1", value) == WebSocketHttpSeams::EContentLengthHeader::Invalid);
+}
 
 TEST_CASE("WebServer static file seam contains requests under the web root")
 {
