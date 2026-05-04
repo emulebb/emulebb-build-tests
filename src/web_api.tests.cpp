@@ -156,8 +156,9 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 {
 	WebApiCommandSeams::SSearchStartRequest request;
 	std::string error;
+	const std::string strUnicodeQuery(std::string("linux ") + std::string("\xC3\xBC", 2) + "ber");
 	const WebApiCommandSeams::json params = {
-		{"query", " 1080p "},
+		{"query", "\t 1080p \n"},
 		{"method", "KaD"},
 		{"type", "ISO"},
 		{"extension", ".mkv"},
@@ -175,6 +176,10 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 	CHECK(request.bHasMaxSize);
 	CHECK_EQ(request.ullMinSize, 700u);
 	CHECK_EQ(request.ullMaxSize, 4096u);
+
+	error.clear();
+	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", strUnicodeQuery}}, request, error));
+	CHECK_EQ(request.strQuery, strUnicodeQuery);
 }
 
 TEST_CASE("Web API rejects invalid search start payloads before they touch the UI")
@@ -228,6 +233,19 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"clearExisting", 1}}, request, error));
 	CHECK_EQ(error, "clearExisting must be a boolean");
+
+	error.clear();
+	const std::string strInvalidUtf8(std::string("bad ") + std::string("\xC3\x28", 2));
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", strInvalidUtf8}}, request, error));
+	CHECK_EQ(error, "query must be valid UTF-8 without control characters");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", std::string("bad\x01query", 9)}}, request, error));
+	CHECK_EQ(error, "query must be valid UTF-8 without control characters");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", std::string(WebServerJsonSeams::kMaxSearchQueryLength + 1, 'x')}}, request, error));
+	CHECK_EQ(error, "query must be at most 160 characters");
 }
 
 TEST_CASE("Web API parses search identifiers as decimal uint32 strings")
@@ -474,12 +492,13 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	WebServerArrCompatSeams::STorznabRequest request;
 	std::string error;
 
-	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Example&season=1&ep=2&cat=5000", request, error));
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Example+++Name&season=1&ep=2&cat=5000", request, error));
+	CHECK_EQ(request.strQuery, "Example Name");
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Tv);
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "video");
 	const std::vector<std::string> queries = WebServerArrCompatSeams::BuildNativeQueries(request);
-	CHECK(std::find(queries.begin(), queries.end(), "Example S01E02") != queries.end());
-	CHECK(std::find(queries.begin(), queries.end(), "Example 1x02") != queries.end());
+	CHECK(std::find(queries.begin(), queries.end(), "Example Name S01E02") != queries.end());
+	CHECK(std::find(queries.begin(), queries.end(), "Example Name 1x02") != queries.end());
 
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Album&cat=3000", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
@@ -512,6 +531,10 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=" + longQuery, request, error));
 	CHECK_EQ(error, "q must be at most 160 characters");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=bad%C3%28", request, error));
+	CHECK_EQ(error, "q must be valid UTF-8 without control characters");
 
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&t=movie&q=Dup", request, error));
@@ -599,7 +622,7 @@ TEST_CASE("Web API decodes qBittorrent add forms into native eD2K links")
 	std::string error;
 	CHECK(WebServerQBitCompatSeams::TryParseFormBody("category=RADARR_ENG&stopped=true&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3DLa%2BDolce%2BVita.mkv%26xl%3D42", form, error));
 	CHECK_EQ(form["category"], "RADARR_ENG");
-	CHECK_EQ(form["urls"], "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=La Dolce Vita.mkv&xl=42");
+	CHECK_EQ(form["urls"], "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=La+Dolce+Vita.mkv&xl=42");
 
 	WebServerQBitCompatSeams::SQBitTorrentAddRequest request;
 	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=RADARR_ENG&stopped=true&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3DLa%2BDolce%2BVita.mkv%26xl%3D42", request, error));
