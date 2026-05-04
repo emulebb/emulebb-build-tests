@@ -502,6 +502,8 @@ TEST_CASE("Web API recognizes the Prowlarr Torznab compatibility endpoint")
 
 TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 {
+	CHECK_EQ(WebServerArrCompatSeams::kTorznabParseErrorHttpStatus, 400);
+
 	WebServerArrCompatSeams::STorznabRequest request;
 	std::string error;
 
