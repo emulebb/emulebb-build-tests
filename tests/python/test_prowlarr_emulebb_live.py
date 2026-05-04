@@ -116,6 +116,46 @@ def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> 
     assert all("apikey=secret%20key" in call for call in calls)
 
 
+def test_direct_torznab_search_stress_cycles_terms(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[str] = []
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss><channel><item><title>Linux</title></item></channel></rss>"""
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(path)
+        return {"status": 200, "body_text": rss}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.stress_direct_torznab_search_terms("http://127.0.0.1:1", "secret", ("alpha", "beta"), 3)
+
+    assert result["requests"] == 3
+    assert result["term_count"] == 2
+    assert result["item_total"] == 3
+    assert "q=alpha" in calls[0]
+    assert "q=beta" in calls[1]
+    assert "q=alpha" in calls[2]
+
+
+def test_prowlarr_search_stress_requires_result_rows(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[str] = []
+
+    def fake_prowlarr_request(prowlarr_url: str, api_key: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(path)
+        return {"status": 200, "json": [{"title": "Linux"}], "body_text": "[]"}
+
+    monkeypatch.setattr(module, "prowlarr_request", fake_prowlarr_request)
+
+    result = module.stress_prowlarr_search_terms("http://prowlarr.test", "key", 40, ("alpha", "beta"), 2)
+
+    assert result["requests"] == 2
+    assert result["row_total"] == 2
+    assert "query=alpha" in calls[0]
+    assert "query=beta" in calls[1]
+
+
 def test_secret_ignore_check_uses_secret_file_git_worktree(tmp_path: Path, monkeypatch) -> None:
     secret_root = tmp_path / "bountarr"
     secret_root.mkdir()

@@ -391,6 +391,90 @@ def stress_cached_direct_torznab_search(
     return {"query_present": bool(query), "requests": count, "attempts": attempts}
 
 
+def stress_direct_torznab_search_terms(
+    base_url: str,
+    emule_api_key: str,
+    queries: tuple[str, ...],
+    count: int,
+) -> dict[str, object]:
+    """Exercises direct Torznab searches across configured live-wire terms."""
+
+    if not queries:
+        raise RuntimeError("Direct Torznab search stress requires at least one query.")
+    attempts: list[dict[str, object]] = []
+    item_total = 0
+    for ordinal in range(1, count + 1):
+        query_index = (ordinal - 1) % len(queries)
+        query = queries[query_index]
+        path = (
+            f"/indexer/emulebb/api?t=search&cat={TORZNAB_LIVE_CATEGORY}&q="
+            + urllib.parse.quote(query)
+            + "&apikey="
+            + urllib.parse.quote(emule_api_key)
+        )
+        started = time.monotonic()
+        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        status = int(result.get("status") or 0)
+        body_text = str(result.get("body_text") or "")
+        item_count = count_torznab_items(body_text) if status == 200 and body_text else 0
+        item_total += item_count
+        attempt = {
+            "ordinal": ordinal,
+            "query_index": query_index,
+            "query_present": bool(query),
+            "status": status,
+            "count": item_count,
+            "elapsed_ms": elapsed_ms,
+        }
+        attempts.append(attempt)
+        if status != 200:
+            raise RuntimeError(f"Direct Torznab search stress failed: {attempts!r}")
+    if item_total <= 0:
+        raise RuntimeError(f"Direct Torznab search stress returned no items: {attempts!r}")
+    return {"requests": count, "term_count": len(queries), "item_total": item_total, "attempts": attempts}
+
+
+def stress_prowlarr_search_terms(
+    prowlarr_url: str,
+    api_key: str,
+    indexer_id: int,
+    queries: tuple[str, ...],
+    count: int,
+) -> dict[str, object]:
+    """Exercises Prowlarr release searches across configured live-wire terms."""
+
+    if not queries:
+        raise RuntimeError("Prowlarr search stress requires at least one query.")
+    attempts: list[dict[str, object]] = []
+    row_total = 0
+    for ordinal in range(1, count + 1):
+        query_index = (ordinal - 1) % len(queries)
+        query = queries[query_index]
+        encoded_query = urllib.parse.quote(query)
+        path = f"/api/v1/search?query={encoded_query}&categories={TORZNAB_LIVE_CATEGORY}&indexerIds={indexer_id}"
+        result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
+        status = int(result.get("status") or 0)
+        payload = result.get("json")
+        count_rows = len(payload) if isinstance(payload, list) else 0
+        row_total += count_rows
+        attempt = {
+            "ordinal": ordinal,
+            "query_index": query_index,
+            "query_present": bool(query),
+            "status": status,
+            "count": count_rows,
+        }
+        if status < 200 or status >= 300:
+            attempt["body_preview"] = compact_body_preview(result)
+        attempts.append(attempt)
+        if status < 200 or status >= 300 or not isinstance(payload, list):
+            raise RuntimeError(f"Prowlarr search stress failed: {attempts!r}")
+    if row_total <= 0:
+        raise RuntimeError(f"Prowlarr search stress returned no rows: {attempts!r}")
+    return {"requests": count, "term_count": len(queries), "row_total": row_total, "attempts": attempts}
+
+
 def redact_term_result(result: dict[str, object], *, source: str, term_count: int) -> dict[str, object]:
     """Redacts exact search terms and titles from one live-wire result."""
 
@@ -470,6 +554,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--cached-search-stress-count", type=int, default=12)
+    parser.add_argument("--direct-search-stress-count", type=int, default=6)
+    parser.add_argument("--prowlarr-search-stress-count", type=int, default=4)
     parser.add_argument(
         "--live-wire-inputs-file",
         default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)),
@@ -494,6 +580,10 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.cached_search_stress_count <= 0:
         raise ValueError("--cached-search-stress-count must be greater than zero.")
+    if args.direct_search_stress_count <= 0:
+        raise ValueError("--direct-search-stress-count must be greater than zero.")
+    if args.prowlarr_search_stress_count <= 0:
+        raise ValueError("--prowlarr-search-stress-count must be greater than zero.")
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
@@ -616,6 +706,12 @@ def main() -> int:
             str(direct_results["query"]),
             args.cached_search_stress_count,
         )
+        report["checks"]["direct_search_stress"] = stress_direct_torznab_search_terms(
+            emule_base_url,
+            args.emule_api_key,
+            document_terms,
+            args.direct_search_stress_count,
+        )
 
         status_payload = require_success(
             prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/system/status"),
@@ -666,6 +762,13 @@ def main() -> int:
             report["checks"]["search_results"],
             source="documents",
             term_count=len(document_terms),
+        )
+        report["checks"]["prowlarr_search_stress"] = stress_prowlarr_search_terms(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            document_terms,
+            args.prowlarr_search_stress_count,
         )
         report["status"] = "passed"
         return 0

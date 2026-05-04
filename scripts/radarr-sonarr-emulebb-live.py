@@ -544,6 +544,7 @@ def qbit_direct_add(
 def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, object]:
     """Exercises unauthenticated and invalid qBittorrent compatibility paths."""
 
+    too_many_hashes = "|".join(f"{index + 1:032x}" for index in range(101))
     public_version = qbit_request(base_url, "/api/v2/app/webapiVersion")
     if int(public_version.get("status") or 0) != 200 or str(public_version.get("body_text") or "") != "2.11.0":
         raise RuntimeError(f"qBit public web API version check failed: {public_version!r}")
@@ -589,6 +590,32 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
             "/api/v2/torrents/delete",
             cookie=cookie,
             form={"hashes": "bad"},
+            method="POST",
+        ),
+        "delete_duplicate_hash": qbit_request(
+            base_url,
+            "/api/v2/torrents/delete",
+            cookie=cookie,
+            form={
+                "hashes": (
+                    "0123456789abcdef0123456789abcdef|"
+                    "0123456789ABCDEF0123456789ABCDEF"
+                )
+            },
+            method="POST",
+        ),
+        "pause_too_many_hashes": qbit_request(
+            base_url,
+            "/api/v2/torrents/pause",
+            cookie=cookie,
+            form={"hashes": too_many_hashes},
+            method="POST",
+        ),
+        "create_category_empty": qbit_request(
+            base_url,
+            "/api/v2/torrents/createCategory",
+            cookie=cookie,
+            form={"category": ""},
             method="POST",
         ),
         "set_category_missing_category": qbit_request(
@@ -893,6 +920,10 @@ def qbit_direct_live_wire_stress(
 ) -> dict[str, object]:
     """Runs repeated qBittorrent add/mutate/delete live-wire rounds."""
 
+    if rounds <= 0:
+        raise RuntimeError("qBit live-wire stress requires at least one round.")
+    if len(magnets) < rounds:
+        raise RuntimeError(f"qBit live-wire stress needs {rounds} unique magnet(s), got {len(magnets)}.")
     runs: list[dict[str, object]] = []
     for index, magnet in enumerate(magnets[:rounds]):
         run_report: dict[str, object] = {

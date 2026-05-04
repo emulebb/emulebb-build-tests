@@ -35,6 +35,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
         if path in {
             "/api/v2/torrents/delete",
             "/api/v2/torrents/setCategory",
+            "/api/v2/torrents/createCategory",
             "/api/v2/torrents/pause",
             "/api/v2/torrents/properties",
             "/api/v2/torrents/files?hash=bad",
@@ -56,6 +57,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert result["wrong_login_info"]["status"] == 403
     assert result["invalid_add"]["status"] == 400
     assert all(response["status"] == 400 for response in result["invalid_mutations"].values())
+    assert {"delete_duplicate_hash", "pause_too_many_hashes", "create_category_empty"} <= set(result["invalid_mutations"])
 
 
 def test_qbit_safety_checks_reject_unprotected_info(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,3 +271,16 @@ def test_qbit_live_wire_stress_runs_requested_rounds(monkeypatch: pytest.MonkeyP
     assert "expected_hash" not in result["runs"][1]
     assert "query" not in result["runs"][1]
     assert "title" not in result["runs"][1]
+
+
+def test_qbit_live_wire_stress_requires_enough_unique_magnets() -> None:
+    module = load_radarr_sonarr_module()
+
+    with pytest.raises(RuntimeError, match="needs 2 unique magnet"):
+        module.qbit_direct_live_wire_stress(
+            "http://127.0.0.1:4711",
+            "secret",
+            [{"query": "La Dolce Vita", "title": "A", "magnet": "magnet-a", "hash": "a"}],
+            rounds=2,
+            timeout_seconds=30.0,
+        )

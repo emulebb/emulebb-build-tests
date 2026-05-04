@@ -36,6 +36,9 @@ STARTUP_PROFILE_SCENARIOS = (
 )
 DEFAULT_REST_SEARCH_COUNT = 6
 DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT = 1
+DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT = 6
+DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT = 4
+DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS = 2
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,9 @@ def build_suite_command(
     enable_upnp: bool = True,
     auto_browse_p2p_bind_interface_name: str = "hide.me",
     live_wire_inputs_file: Path | None = None,
+    arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
+    arr_prowlarr_search_stress_count: int = DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT,
+    arr_qbit_live_wire_rounds: int = DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS,
 ) -> list[str]:
     """Builds one child suite command line."""
 
@@ -229,11 +235,14 @@ def build_suite_command(
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
+        command.extend(["--direct-search-stress-count", str(arr_direct_search_stress_count)])
+        command.extend(["--prowlarr-search-stress-count", str(arr_prowlarr_search_stress_count)])
         if enable_upnp:
             command.append("--enable-upnp")
     if spec.is_arr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
+        command.extend(["--qbit-live-wire-rounds", str(arr_qbit_live_wire_rounds)])
         if enable_upnp:
             command.append("--enable-upnp")
     return command
@@ -282,6 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-stress-concurrency", type=int, default=4)
     parser.add_argument("--rest-stress-max-failures", type=int, default=1)
     parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
+    parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
+    parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
+    parser.add_argument("--arr-qbit-live-wire-rounds", type=int, default=DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)
     parser.add_argument("--disable-upnp", action="store_true")
     parser.add_argument("--auto-browse-p2p-bind-interface-name", default="hide.me")
     parser.add_argument(
@@ -306,6 +318,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST stress max failures must be zero or greater.")
     if args.rest_stress_request_timeout_seconds <= 0:
         raise ValueError("REST stress request timeout must be greater than zero.")
+    if args.arr_direct_search_stress_count <= 0:
+        raise ValueError("Arr direct search stress count must be greater than zero.")
+    if args.arr_prowlarr_search_stress_count <= 0:
+        raise ValueError("Arr Prowlarr search stress count must be greater than zero.")
+    if args.arr_qbit_live_wire_rounds <= 0:
+        raise ValueError("Arr qBit live-wire rounds must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -354,6 +372,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "rest_search_method_override": args.rest_search_method_override,
+        "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
+        "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
+        "arr_qbit_live_wire_rounds": args.arr_qbit_live_wire_rounds,
         "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",
         "arr_live_wire_suites": [
             spec.name
@@ -393,6 +414,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             enable_upnp=not args.disable_upnp,
             auto_browse_p2p_bind_interface_name=args.auto_browse_p2p_bind_interface_name,
             live_wire_inputs_file=live_wire_inputs_file,
+            arr_direct_search_stress_count=args.arr_direct_search_stress_count,
+            arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
+            arr_qbit_live_wire_rounds=args.arr_qbit_live_wire_rounds,
         )
         started = time.monotonic()
         return_code = run_suite_command(command)
@@ -423,12 +447,20 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 }
             )
         if spec.is_prowlarr_emulebb or spec.is_arr_emulebb:
-            result.update(
-                {
-                    "arr_integration": True,
-                    "live_wire_inputs_file": str(live_wire_inputs_file),
-                }
-            )
+            arr_result = {
+                "arr_integration": True,
+                "live_wire_inputs_file": str(live_wire_inputs_file),
+            }
+            if spec.is_prowlarr_emulebb:
+                arr_result.update(
+                    {
+                        "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
+                        "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
+                    }
+                )
+            if spec.is_arr_emulebb:
+                arr_result["arr_qbit_live_wire_rounds"] = args.arr_qbit_live_wire_rounds
+            result.update(arr_result)
         summary["suites"].append(result)  # type: ignore[index]
         if suite_status == "inconclusive":
             summary["has_inconclusive_suites"] = True

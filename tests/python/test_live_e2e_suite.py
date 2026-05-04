@@ -116,6 +116,9 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["suites"][6]["rest_stress_budget"] == "smoke"
     assert summary["suites"][6]["rest_stress_max_failures"] == 1
     assert summary["suites"][6]["rest_download_trigger_count"] == live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT
+    assert summary["arr_direct_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT
+    assert summary["arr_prowlarr_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT
+    assert summary["arr_qbit_live_wire_rounds"] == live_e2e_suite.DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS
     assert summary["suites"][6]["rest_contract_completeness_expected"] is True
 
     browser_command = commands[7]
@@ -125,15 +128,20 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"
     assert "--enable-upnp" in prowlarr_command
     assert option_values(prowlarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
+    assert option_values(prowlarr_command, "--direct-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)]
+    assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)]
     assert "--skip-live-seed-refresh" not in prowlarr_command
     assert summary["suites"][8]["arr_integration"] is True
+    assert summary["suites"][8]["arr_direct_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT
 
     arr_command = commands[9]
     assert script_name(arr_command) == "radarr-sonarr-emulebb-live.py"
     assert "--enable-upnp" in arr_command
     assert option_values(arr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
+    assert option_values(arr_command, "--qbit-live-wire-rounds") == [str(live_e2e_suite.DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)]
     assert "--skip-live-seed-refresh" not in arr_command
     assert summary["suites"][9]["arr_integration"] is True
+    assert summary["suites"][9]["arr_qbit_live_wire_rounds"] == live_e2e_suite.DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS
 
     auto_browse_command = commands[10]
     assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
