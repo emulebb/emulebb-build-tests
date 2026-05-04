@@ -27,7 +27,6 @@ SYNTHETIC_TRIGGER_MAGNET = (
     "&xl=1048576"
 )
 
-
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
 
@@ -46,6 +45,50 @@ harness_cli_common = prowlarr_live.harness_cli_common
 rest_smoke = prowlarr_live.rest_smoke
 live_common = prowlarr_live.live_common
 live_wire_inputs = prowlarr_live.live_wire_inputs
+
+QBIT_ROUTE_COMPLETENESS_SCENARIOS: tuple[dict[str, object], ...] = (
+    {"name": "public_webapi_version", "method": "GET", "path": "/api/v2/app/webapiVersion", "auth": False, "expected_statuses": (200,)},
+    {"name": "login", "method": "POST", "path": "/api/v2/auth/login", "auth": False, "form": {"username": "emule"}, "expected_statuses": (200,)},
+    {"name": "app_version", "method": "GET", "path": "/api/v2/app/version", "expected_statuses": (200,)},
+    {"name": "app_preferences", "method": "GET", "path": "/api/v2/app/preferences", "expected_statuses": (200,)},
+    {"name": "categories", "method": "GET", "path": "/api/v2/torrents/categories", "expected_statuses": (200,)},
+    {
+        "name": "create_category",
+        "method": "POST",
+        "path": "/api/v2/torrents/createCategory",
+        "form": {"category": "LIVE_WIRE_ROUTE_CHECK"},
+        "expected_statuses": (200,),
+    },
+    {"name": "info", "method": "GET", "path": "/api/v2/torrents/info", "expected_statuses": (200,)},
+    {
+        "name": "properties_missing_transfer",
+        "method": "GET",
+        "path": f"/api/v2/torrents/properties?hash={rest_smoke.REST_SURFACE_MISSING_HASH}",
+        "expected_statuses": (404,),
+    },
+    {
+        "name": "files_missing_transfer",
+        "method": "GET",
+        "path": f"/api/v2/torrents/files?hash={rest_smoke.REST_SURFACE_MISSING_HASH}",
+        "expected_statuses": (404,),
+    },
+    {"name": "add_invalid_link", "method": "POST", "path": "/api/v2/torrents/add", "form": {"urls": "not-a-download-link"}, "expected_statuses": (400,)},
+    {"name": "delete_missing_transfer", "method": "POST", "path": "/api/v2/torrents/delete", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH}, "expected_statuses": (200, 400)},
+    {
+        "name": "set_category_missing_transfer",
+        "method": "POST",
+        "path": "/api/v2/torrents/setCategory",
+        "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH, "category": "LIVE_WIRE_ROUTE_CHECK"},
+        "expected_statuses": (200, 400),
+    },
+    {"name": "pause_missing_transfer", "method": "POST", "path": "/api/v2/torrents/pause", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH}, "expected_statuses": (200, 400)},
+    {"name": "stop_missing_transfer", "method": "POST", "path": "/api/v2/torrents/stop", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH}, "expected_statuses": (200, 400)},
+    {"name": "resume_missing_transfer", "method": "POST", "path": "/api/v2/torrents/resume", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH}, "expected_statuses": (200, 400)},
+    {"name": "start_missing_transfer", "method": "POST", "path": "/api/v2/torrents/start", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH}, "expected_statuses": (200, 400)},
+    {"name": "set_share_limits", "method": "POST", "path": "/api/v2/torrents/setShareLimits", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH}, "expected_statuses": (200,)},
+    {"name": "top_priority", "method": "POST", "path": "/api/v2/torrents/topPrio", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH}, "expected_statuses": (200,)},
+    {"name": "set_force_start", "method": "POST", "path": "/api/v2/torrents/setForceStart", "form": {"hashes": rest_smoke.REST_SURFACE_MISSING_HASH, "value": "false"}, "expected_statuses": (200,)},
+)
 
 
 def arr_request(
@@ -511,6 +554,37 @@ def qbit_login(base_url: str, emule_api_key: str) -> tuple[str, dict[str, object
     return cookie, login
 
 
+def qbit_route_completeness_checks(base_url: str, emule_api_key: str, cookie: str) -> dict[str, object]:
+    """Exercises every qBittorrent-compatible route with bounded live-wire inputs."""
+
+    checks: dict[str, object] = {}
+    for scenario in QBIT_ROUTE_COMPLETENESS_SCENARIOS:
+        form = dict(scenario.get("form") or {})
+        if scenario["name"] == "login":
+            form["password"] = emule_api_key
+        result = qbit_request(
+            base_url,
+            str(scenario["path"]),
+            cookie=cookie if scenario.get("auth", True) else None,
+            method=str(scenario["method"]),
+            form=form or None,
+        )
+        expected_statuses = tuple(int(value) for value in scenario["expected_statuses"])
+        status = int(result.get("status") or 0)
+        if status not in expected_statuses:
+            raise RuntimeError(
+                f"qBit route completeness {scenario['name']} returned HTTP {status}, "
+                f"expected one of {expected_statuses}: {str(result.get('body_text') or '')[:100]}"
+            )
+        checks[str(scenario["name"])] = {
+            "method": scenario["method"],
+            "path": scenario["path"],
+            "status": status,
+            "expected_statuses": list(expected_statuses),
+        }
+    return checks
+
+
 def qbit_direct_add(
     base_url: str,
     emule_api_key: str,
@@ -567,6 +641,7 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
         raise RuntimeError(f"qBit wrong-login session reached protected endpoint: {wrong_login_info!r}")
 
     cookie, login = qbit_login(base_url, emule_api_key)
+    route_completeness = qbit_route_completeness_checks(base_url, emule_api_key, cookie)
     invalid_add = qbit_request(
         base_url,
         "/api/v2/torrents/add",
@@ -665,6 +740,7 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
         "wrong_login": wrong_login,
         "wrong_login_info": wrong_login_info,
         "valid_login": login,
+        "route_completeness": route_completeness,
         "invalid_add": invalid_add,
         "wrong_methods": wrong_methods,
         "invalid_mutations": invalid_mutations,

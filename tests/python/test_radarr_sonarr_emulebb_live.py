@@ -33,6 +33,41 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
 
     def fake_qbit_request(_base_url, path, **kwargs):
         method = str(kwargs.get("method") or "GET").upper()
+        if kwargs.get("cookie") is not None:
+            if method == "GET" and path in {
+                "/api/v2/app/version",
+                "/api/v2/app/preferences",
+                "/api/v2/torrents/categories",
+                "/api/v2/torrents/info",
+            }:
+                return {"status": 200, "body_text": "Ok."}
+            if method == "POST" and path in {
+                "/api/v2/torrents/setShareLimits",
+                "/api/v2/torrents/topPrio",
+                "/api/v2/torrents/setForceStart",
+            }:
+                return {"status": 200, "body_text": "Ok."}
+            if path == "/api/v2/torrents/createCategory" and kwargs.get("form", {}).get("category") == "LIVE_WIRE_ROUTE_CHECK":
+                return {"status": 200, "body_text": "Ok."}
+            if path in {
+                f"/api/v2/torrents/properties?hash={module.rest_smoke.REST_SURFACE_MISSING_HASH}",
+                f"/api/v2/torrents/files?hash={module.rest_smoke.REST_SURFACE_MISSING_HASH}",
+            }:
+                return {"status": 404, "body_text": "Not found"}
+            if path in {
+                "/api/v2/torrents/delete",
+                "/api/v2/torrents/pause",
+                "/api/v2/torrents/stop",
+                "/api/v2/torrents/resume",
+                "/api/v2/torrents/start",
+            } and kwargs.get("form", {}).get("hashes") == module.rest_smoke.REST_SURFACE_MISSING_HASH:
+                return {"status": 200, "body_text": "Ok."}
+            if (
+                path == "/api/v2/torrents/setCategory"
+                and kwargs.get("form", {}).get("hashes") == module.rest_smoke.REST_SURFACE_MISSING_HASH
+                and kwargs.get("form", {}).get("category") == "LIVE_WIRE_ROUTE_CHECK"
+            ):
+                return {"status": 200, "body_text": "Ok."}
         if path == "/api/v2/app/webapiVersion" and method == "POST":
             return {"status": 404, "body_text": "Not found"}
         if path == "/api/v2/app/version" and method == "POST":
@@ -67,6 +102,8 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert result["invalid_add"]["status"] == 400
     assert all(response["status"] == 404 for response in result["wrong_methods"].values())
     assert all(response["status"] == 400 for response in result["invalid_mutations"].values())
+    assert set(result["route_completeness"]) == {scenario["name"] for scenario in module.QBIT_ROUTE_COMPLETENESS_SCENARIOS}
+    assert result["route_completeness"]["set_force_start"]["status"] == 200
     assert {
         "delete_duplicate_hash",
         "pause_too_many_hashes",
