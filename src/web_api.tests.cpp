@@ -33,6 +33,26 @@ TEST_CASE("WebSocket HTTP seams parse Content-Length strictly")
 	CHECK(WebSocketHttpSeams::ParseContentLengthHeaderLine("Content-Length: -1", value) == WebSocketHttpSeams::EContentLengthHeader::Invalid);
 }
 
+TEST_CASE("WebSocket HTTP seams parse request methods exactly")
+{
+	std::string method;
+	std::string target;
+
+	CHECK(WebSocketHttpSeams::TryParseRequestLine("GET /api/v1/app HTTP/1.1\r\nHost: local\r\n", method, target));
+	CHECK_EQ(method, "GET");
+	CHECK_EQ(target, "/api/v1/app");
+	CHECK(WebSocketHttpSeams::IsSupportedDispatchMethod(method));
+
+	CHECK(WebSocketHttpSeams::TryParseRequestLine("GETTING /api/v1/app HTTP/1.1\r\n", method, target));
+	CHECK_EQ(method, "GETTING");
+	CHECK_EQ(target, "/api/v1/app");
+	CHECK_FALSE(WebSocketHttpSeams::IsSupportedDispatchMethod(method));
+
+	CHECK_FALSE(WebSocketHttpSeams::TryParseRequestLine("GET\r\n", method, target));
+	CHECK(method.empty());
+	CHECK(target.empty());
+}
+
 TEST_CASE("WebServer static file seam contains requests under the web root")
 {
 	CString path;
@@ -1307,6 +1327,18 @@ TEST_CASE("Web API rejects unknown routes and unsupported HTTP methods")
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PUT", "/api/v1/app", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("get", "/api/v1/app", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GETTING", "/api/v1/app", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
 }

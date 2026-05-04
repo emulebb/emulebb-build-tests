@@ -195,11 +195,12 @@ def test_direct_auth_rejection_requires_401(monkeypatch) -> None:
 
 def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
     module = load_prowlarr_module()
-    calls: list[str] = []
+    calls: list[tuple[str, str]] = []
 
     def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        calls.append(path)
-        return {"status": 400, "body_text": ""}
+        method = str(kwargs.get("method") or "GET")
+        calls.append((method, path))
+        return {"status": 404 if method == "POST" else 400, "body_text": ""}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
 
@@ -209,14 +210,16 @@ def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
     assert [scenario["name"] for scenario in result["scenarios"]] == [
         "malformed_percent_escape",
         "malformed_path_escape",
+        "unsupported_method",
         "duplicate_t_parameter",
         "unicode_query_length_rejected",
     ]
-    assert all("apikey=secret%20key" in call for call in calls)
-    assert "q=bad%2xescape" in calls[0]
-    assert "/api%2x" in calls[1]
-    assert "t=search&t=movie" in calls[2]
-    assert "%CE%BB" in calls[3]
+    assert all("apikey=secret%20key" in path for _method, path in calls)
+    assert calls[2][0] == "POST"
+    assert "q=bad%2xescape" in calls[0][1]
+    assert "/api%2x" in calls[1][1]
+    assert "t=search&t=movie" in calls[3][1]
+    assert "%CE%BB" in calls[4][1]
 
 
 def test_direct_rss_validation_requires_results(monkeypatch) -> None:

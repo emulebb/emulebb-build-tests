@@ -334,6 +334,12 @@ def check_direct_torznab_error_edges(base_url: str, emule_api_key: str) -> dict[
             "expected_status": 400,
         },
         {
+            "name": "unsupported_method",
+            "path": f"/indexer/emulebb/api?t=search&q=linux&apikey={api_key}",
+            "method": "POST",
+            "expected_status": 404,
+        },
+        {
             "name": "duplicate_t_parameter",
             "path": f"/indexer/emulebb/api?t=search&t=movie&q=linux&apikey={api_key}",
             "expected_status": 400,
@@ -346,7 +352,12 @@ def check_direct_torznab_error_edges(base_url: str, emule_api_key: str) -> dict[
     )
     results = []
     for scenario in scenarios:
-        result = rest_smoke.http_request(base_url, scenario["path"], request_timeout_seconds=20.0)
+        result = rest_smoke.http_request(
+            base_url,
+            scenario["path"],
+            method=str(scenario.get("method") or "GET"),
+            request_timeout_seconds=20.0,
+        )
         status = int(result.get("status") or 0)
         if status != scenario["expected_status"]:
             raise RuntimeError(
