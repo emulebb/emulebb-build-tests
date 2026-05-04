@@ -42,6 +42,7 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
     repo_root = Path(__file__).resolve().parents[2]
     golden = load_release_live_wire_golden(repo_root)
     rest_smoke = load_script_module("rest_api_smoke_golden_test", "rest-api-smoke.py")
+    arr_live = load_script_module("radarr_sonarr_emulebb_live_golden_test", "radarr-sonarr-emulebb-live.py")
 
     runtime_inputs = golden["operator_runtime_inputs"]
     assert runtime_inputs["schema"] == live_wire_inputs.SCHEMA
@@ -67,6 +68,17 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         assert live_operation["method"] == operation["method"]
         assert live_operation["path"] == operation["path"]
         assert list(live_operation["expected_statuses"]) == operation["expected_statuses"]
+
+    qbit_scenarios = [
+        {
+            "name": scenario["name"],
+            "method": scenario["method"],
+            "path": scenario["path"],
+            "expected_statuses": list(scenario["expected_statuses"]),
+        }
+        for scenario in arr_live.QBIT_ROUTE_COMPLETENESS_SCENARIOS
+    ]
+    assert qbit_scenarios == golden["arr"]["qbit_route_completeness"]
 
 
 def test_release_live_wire_golden_manifest_keeps_runtime_values_external() -> None:

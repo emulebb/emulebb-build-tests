@@ -123,5 +123,167 @@
         ]
       }
     ]
+  },
+  "arr": {
+    "qbit_route_completeness": [
+      {
+        "name": "public_webapi_version",
+        "method": "GET",
+        "path": "/api/v2/app/webapiVersion",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "login",
+        "method": "POST",
+        "path": "/api/v2/auth/login",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "app_version",
+        "method": "GET",
+        "path": "/api/v2/app/version",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "app_preferences",
+        "method": "GET",
+        "path": "/api/v2/app/preferences",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "categories",
+        "method": "GET",
+        "path": "/api/v2/torrents/categories",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "create_category",
+        "method": "POST",
+        "path": "/api/v2/torrents/createCategory",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "info",
+        "method": "GET",
+        "path": "/api/v2/torrents/info",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "properties_missing_transfer",
+        "method": "GET",
+        "path": "/api/v2/torrents/properties?hash=0123456789abcdef0123456789abcdef",
+        "expected_statuses": [
+          404
+        ]
+      },
+      {
+        "name": "files_missing_transfer",
+        "method": "GET",
+        "path": "/api/v2/torrents/files?hash=0123456789abcdef0123456789abcdef",
+        "expected_statuses": [
+          404
+        ]
+      },
+      {
+        "name": "add_invalid_link",
+        "method": "POST",
+        "path": "/api/v2/torrents/add",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
+        "name": "delete_missing_transfer",
+        "method": "POST",
+        "path": "/api/v2/torrents/delete",
+        "expected_statuses": [
+          200,
+          400
+        ]
+      },
+      {
+        "name": "set_category_missing_transfer",
+        "method": "POST",
+        "path": "/api/v2/torrents/setCategory",
+        "expected_statuses": [
+          200,
+          400
+        ]
+      },
+      {
+        "name": "pause_missing_transfer",
+        "method": "POST",
+        "path": "/api/v2/torrents/pause",
+        "expected_statuses": [
+          200,
+          400
+        ]
+      },
+      {
+        "name": "stop_missing_transfer",
+        "method": "POST",
+        "path": "/api/v2/torrents/stop",
+        "expected_statuses": [
+          200,
+          400
+        ]
+      },
+      {
+        "name": "resume_missing_transfer",
+        "method": "POST",
+        "path": "/api/v2/torrents/resume",
+        "expected_statuses": [
+          200,
+          400
+        ]
+      },
+      {
+        "name": "start_missing_transfer",
+        "method": "POST",
+        "path": "/api/v2/torrents/start",
+        "expected_statuses": [
+          200,
+          400
+        ]
+      },
+      {
+        "name": "set_share_limits",
+        "method": "POST",
+        "path": "/api/v2/torrents/setShareLimits",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "top_priority",
+        "method": "POST",
+        "path": "/api/v2/torrents/topPrio",
+        "expected_statuses": [
+          200
+        ]
+      },
+      {
+        "name": "set_force_start",
+        "method": "POST",
+        "path": "/api/v2/torrents/setForceStart",
+        "expected_statuses": [
+          200
+        ]
+      }
+    ]
   }
 }
