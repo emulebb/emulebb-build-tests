@@ -537,6 +537,10 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK_EQ(error, "q must be valid UTF-8 without control characters");
 
 	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=bad%2xescape", request, error));
+	CHECK_EQ(error, "malformed percent escape");
+
+	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&t=movie&q=Dup", request, error));
 	CHECK_EQ(error, "duplicate query parameter: t");
 
@@ -608,6 +612,12 @@ TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams
 	const std::string encoded(WebServerJsonSeams::UrlEncodeUtf8("La Dolce Vita + [test].mkv"));
 	CHECK_EQ(encoded, "La%20Dolce%20Vita%20%2B%20%5Btest%5D.mkv");
 	CHECK_EQ(WebServerJsonSeams::UrlDecodeUtf8(encoded), "La Dolce Vita + [test].mkv");
+	std::string decoded;
+	std::string error;
+	CHECK(WebServerJsonSeams::TryUrlDecodeUtf8(encoded, decoded, error));
+	CHECK_EQ(decoded, "La Dolce Vita + [test].mkv");
+	CHECK_FALSE(WebServerJsonSeams::TryUrlDecodeUtf8("bad%2xescape", decoded, error));
+	CHECK_EQ(error, "malformed percent escape");
 
 	const std::string magnet(WebServerArrCompatSeams::BuildMagnetFromEd2k(
 		"0123456789abcdef0123456789abcdef",
@@ -647,6 +657,10 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=a&category=b", form, error));
 	CHECK_EQ(error, "duplicate form field: category");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=bad%2xescape", form, error));
+	CHECK_EQ(error, "malformed percent escape");
 
 	CHECK(WebServerQBitCompatSeams::TryParseFormBody("category=", form, error));
 	std::string category;
@@ -847,6 +861,18 @@ TEST_CASE("Web API rejects unknown body fields and malformed query parameters be
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=10&legacy=1", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "unknown query parameter: legacy");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=%2x", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "malformed percent escape");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs%2x?limit=10", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "malformed percent escape");
 
 	errorCode.clear();
 	errorMessage.clear();
