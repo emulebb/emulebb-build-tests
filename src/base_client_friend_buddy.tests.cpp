@@ -59,7 +59,7 @@ TEST_CASE("Hello tag count stays aligned with the buddy advertisement snapshot")
 #ifdef MOD_CLIENT_MOD_VERSION_TEXT
 TEST_CASE("Hello mod identity advertises the eMule BB release")
 {
-	CHECK(GetAdvertisedClientModIdentity() == CString(_T("eMule BB 1.1.0")));
+	CHECK(GetAdvertisedClientModIdentity() == CString(_T("eMule BB 1.0.0")));
 }
 
 TEST_CASE("Client software display appends a non-empty mod identity")
