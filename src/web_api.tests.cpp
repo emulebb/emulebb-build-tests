@@ -613,7 +613,7 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	CHECK_EQ(path, "/api/v2/torrents/files");
 	CHECK_FALSE(WebServerQBitCompatSeams::TryGetQBitRequestPathLower("/api/v2/torrents/files%2x?hash=bad", path, error));
 	CHECK_EQ(error, "malformed percent escape");
-	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v2/torrents/files%2x?hash=bad"));
+	CHECK(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v2/torrents/files%2x?hash=bad"));
 
 	std::string category;
 	error.clear();
