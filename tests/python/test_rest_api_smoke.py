@@ -431,9 +431,11 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
 
     operations = module.build_rest_stress_operations("smoke")
     method_path_pairs = {(operation["method"], operation["path"]) for operation in operations}
+    operations_by_pair = {(operation["method"], operation["path"]): operation for operation in operations}
 
     assert ("GET", "/api/v1/status") in method_path_pairs
     assert ("GET", "/api/v1/shared-directories") in method_path_pairs
+    assert operations_by_pair[("GET", "/api/v1/status")]["expected_statuses"] == (200,)
     assert ("PATCH", "/api/v1/app/preferences") in method_path_pairs
     assert ("POST", "/api/v1/transfers") in method_path_pairs
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/operations/pause") in method_path_pairs
@@ -444,14 +446,41 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert ("DELETE", "/api/v1/searches/123") in method_path_pairs
 
 
+def test_rest_stress_operations_include_expected_error_edges() -> None:
+    module = load_rest_api_smoke_module()
+
+    operations = module.build_rest_stress_operations("smoke")
+    operations_by_pair = {(operation["method"], operation["path"]): operation for operation in operations}
+
+    assert operations_by_pair[("GET", "/api/v1/logs?limit=%2x")]["scenario"] == "malformed_percent_escape"
+    assert operations_by_pair[("GET", "/api/v1/logs?limit=%2x")]["expected_statuses"] == (400,)
+    assert operations_by_pair[("GET", "/api/v1/logs%2x?limit=10")]["scenario"] == "malformed_route_escape"
+    assert operations_by_pair[("GET", "/api/v1/logs?limit=10&limit=20")]["scenario"] == "duplicate_query_parameter"
+    assert operations_by_pair[
+        ("GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF")
+    ]["scenario"] == "uppercase_hash_rejected"
+    assert operations_by_pair[("POST", "/api/v1/transfers")]["expected_statuses"] == (400,)
+    assert any(
+        operation["scenario"] == "conflicting_category_fields"
+        and operation["expected_statuses"] == (400,)
+        for operation in operations
+    )
+    assert any(
+        operation["scenario"] == "unicode_query_length_rejected"
+        and operation["expected_statuses"] == (400,)
+        and "λ" in operation["json_body"]["query"]
+        for operation in operations
+    )
+
+
 def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     module = load_rest_api_smoke_module()
 
     summary = module.summarize_rest_stress_results(
         [
-            {"path": "/ok", "status": 200, "ok": True, "duration_ms": 1.0},
-            {"path": "/missing", "status": 404, "ok": True, "duration_ms": 4.0},
-            {"path": "/boom", "status": "exception", "ok": False, "duration_ms": 9.0, "error": "timeout"},
+            {"path": "/ok", "status": 200, "ok": True, "duration_ms": 1.0, "scenario": "read"},
+            {"path": "/missing", "status": 404, "ok": True, "duration_ms": 4.0, "scenario": "safe_mutation"},
+            {"path": "/boom", "status": "exception", "ok": False, "duration_ms": 9.0, "error": "timeout", "scenario": "read"},
         ],
         budget="smoke",
         duration_seconds=30.0,
@@ -464,6 +493,7 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["requests_completed"] == 3
     assert summary["status_counts"] == {"200": 1, "404": 1, "exception": 1}
     assert summary["method_counts"] == {"UNKNOWN": 3}
+    assert summary["scenario_counts"] == {"read": 2, "safe_mutation": 1}
     assert summary["error_counts"] == {"timeout": 1}
     assert summary["latency_ms"]["max"] == 9.0
     assert len(summary["failures_sample"]) == 1

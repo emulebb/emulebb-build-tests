@@ -648,6 +648,7 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
         ),
         "properties_missing_hash": qbit_request(base_url, "/api/v2/torrents/properties", cookie=cookie),
         "files_bad_hash": qbit_request(base_url, "/api/v2/torrents/files?hash=bad", cookie=cookie),
+        "files_malformed_percent_hash": qbit_request(base_url, "/api/v2/torrents/files?hash=%2x", cookie=cookie),
     }
     unexpected_successes = {
         name: result

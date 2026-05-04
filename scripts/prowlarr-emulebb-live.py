@@ -317,6 +317,47 @@ def check_direct_auth_rejection(base_url: str) -> dict[str, object]:
     return {"status": status}
 
 
+def check_direct_torznab_error_edges(base_url: str, emule_api_key: str) -> dict[str, object]:
+    """Validates strict Torznab parser rejections used by Arr live-wire runs."""
+
+    api_key = urllib.parse.quote(emule_api_key)
+    long_query = urllib.parse.quote("unicode-lambda-" + ("λ" * 161))
+    scenarios = (
+        {
+            "name": "malformed_percent_escape",
+            "path": f"/indexer/emulebb/api?t=search&q=bad%2xescape&apikey={api_key}",
+            "expected_status": 400,
+        },
+        {
+            "name": "duplicate_t_parameter",
+            "path": f"/indexer/emulebb/api?t=search&t=movie&q=linux&apikey={api_key}",
+            "expected_status": 400,
+        },
+        {
+            "name": "unicode_query_length_rejected",
+            "path": f"/indexer/emulebb/api?t=search&q={long_query}&apikey={api_key}",
+            "expected_status": 400,
+        },
+    )
+    results = []
+    for scenario in scenarios:
+        result = rest_smoke.http_request(base_url, scenario["path"], request_timeout_seconds=20.0)
+        status = int(result.get("status") or 0)
+        if status != scenario["expected_status"]:
+            raise RuntimeError(
+                f"Direct Torznab {scenario['name']} returned HTTP {status}, "
+                f"expected {scenario['expected_status']}."
+            )
+        results.append(
+            {
+                "name": scenario["name"],
+                "status": status,
+                "expected_status": scenario["expected_status"],
+            }
+        )
+    return {"ok": True, "scenarios": results}
+
+
 def count_torznab_items(body_text: str) -> int:
     """Counts RSS items in a Torznab XML response."""
 
@@ -687,6 +728,7 @@ def main() -> int:
             require_kad_connected=True,
         )
         report["checks"]["direct_auth_rejection"] = check_direct_auth_rejection(emule_base_url)
+        report["checks"]["direct_torznab_error_edges"] = check_direct_torznab_error_edges(emule_base_url, args.emule_api_key)
         report["checks"]["direct_caps"] = check_direct_caps(emule_base_url, args.emule_api_key)
         report["checks"]["direct_rss_results"] = check_direct_rss_results(emule_base_url, args.emule_api_key)
         direct_results = wait_for_direct_torznab_results(

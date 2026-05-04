@@ -46,6 +46,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
             "/api/v2/torrents/pause",
             "/api/v2/torrents/properties",
             "/api/v2/torrents/files?hash=bad",
+            "/api/v2/torrents/files?hash=%2x",
         }:
             return {"status": 400, "body_text": "Fails."}
         value = responses[path]
@@ -65,7 +66,12 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert result["invalid_add"]["status"] == 400
     assert all(response["status"] == 404 for response in result["wrong_methods"].values())
     assert all(response["status"] == 400 for response in result["invalid_mutations"].values())
-    assert {"delete_duplicate_hash", "pause_too_many_hashes", "create_category_empty"} <= set(result["invalid_mutations"])
+    assert {
+        "delete_duplicate_hash",
+        "pause_too_many_hashes",
+        "create_category_empty",
+        "files_malformed_percent_hash",
+    } <= set(result["invalid_mutations"])
 
 
 def test_qbit_safety_checks_reject_unprotected_info(monkeypatch: pytest.MonkeyPatch) -> None:

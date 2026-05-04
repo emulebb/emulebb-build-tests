@@ -98,6 +98,7 @@ REST_PREFERENCE_KEYS = {
 }
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
+REST_STRESS_LONG_SEARCH_QUERY = "unicode-lambda-" + ("λ" * 161)
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "REST-API-OPENAPI.yaml"
 UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
 OPENAPI_TAG_FAMILIES = {
@@ -332,54 +333,123 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
         "path": "/api/v1/app/preferences",
         "json_body": {"safeServerConnect": True},
         "family": "app",
+        "scenario": "safe_mutation",
+        "expected_statuses": (200,),
     },
     {
         "method": "POST",
         "path": "/api/v1/transfers",
         "json_body": {"link": "not-an-ed2k-link"},
         "family": "transfers",
+        "scenario": "safe_mutation",
+        "expected_statuses": (400,),
     },
     {
         "method": "POST",
         "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/operations/pause",
         "json_body": {},
         "family": "transfers",
+        "scenario": "safe_mutation",
+        "expected_statuses": (200,),
     },
     {
         "method": "DELETE",
         "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
         "json_body": {"deleteFiles": False},
         "family": "transfers",
+        "scenario": "safe_mutation",
+        "expected_statuses": (200,),
     },
     {
         "method": "POST",
         "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse",
         "json_body": {"userHash": REST_SURFACE_MISSING_HASH},
         "family": "transfers",
+        "scenario": "safe_mutation",
+        "expected_statuses": (404,),
     },
     {
         "method": "PATCH",
         "path": "/api/v1/servers/192.0.2.254:4669",
         "json_body": {"priority": "high"},
         "family": "servers",
+        "scenario": "safe_mutation",
     },
     {
         "method": "POST",
         "path": "/api/v1/kad/operations/recheck-firewall",
         "json_body": {},
         "family": "kad",
+        "scenario": "safe_mutation",
     },
     {
         "method": "POST",
         "path": "/api/v1/searches",
         "json_body": {"query": "", "method": "automatic", "type": "any"},
         "family": "searches",
+        "scenario": "safe_mutation",
+        "expected_statuses": (400,),
     },
     {
         "method": "DELETE",
         "path": "/api/v1/searches/123",
         "json_body": {},
         "family": "searches",
+        "scenario": "safe_mutation",
+    },
+)
+REST_STRESS_EDGE_OPERATIONS: tuple[dict[str, object], ...] = (
+    {
+        "method": "GET",
+        "path": "/api/v1/logs?limit=%2x",
+        "json_body": None,
+        "family": "logs",
+        "scenario": "malformed_percent_escape",
+        "expected_statuses": (400,),
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/logs%2x?limit=10",
+        "json_body": None,
+        "family": "logs",
+        "scenario": "malformed_route_escape",
+        "expected_statuses": (400,),
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/logs?limit=10&limit=20",
+        "json_body": None,
+        "family": "logs",
+        "scenario": "duplicate_query_parameter",
+        "expected_statuses": (400,),
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF",
+        "json_body": None,
+        "family": "transfers",
+        "scenario": "uppercase_hash_rejected",
+        "expected_statuses": (400,),
+    },
+    {
+        "method": "POST",
+        "path": "/api/v1/transfers",
+        "json_body": {
+            "link": f"ed2k://|file|rest-stress.bin|1024|{REST_SURFACE_MISSING_HASH}|/",
+            "categoryId": 0,
+            "categoryName": "Default",
+        },
+        "family": "transfers",
+        "scenario": "conflicting_category_fields",
+        "expected_statuses": (400,),
+    },
+    {
+        "method": "POST",
+        "path": "/api/v1/searches",
+        "json_body": {"query": REST_STRESS_LONG_SEARCH_QUERY, "method": "automatic", "type": "any"},
+        "family": "searches",
+        "scenario": "unicode_query_length_rejected",
+        "expected_statuses": (400,),
     },
 )
 REST_INTENTIONALLY_UNSUPPORTED = (
@@ -748,11 +818,14 @@ def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
             "path": path,
             "json_body": None,
             "family": path.split("/")[3].split("?")[0] if len(path.split("/")) > 3 else "root",
+            "scenario": "read",
+            "expected_statuses": (200,),
         }
         for path in REST_STRESS_READ_PATHS
     ]
     if budget in {"smoke", "soak"}:
         operations.extend(dict(operation) for operation in REST_STRESS_SAFE_MUTATION_OPERATIONS)
+        operations.extend(dict(operation) for operation in REST_STRESS_EDGE_OPERATIONS)
     return operations
 
 
@@ -779,6 +852,7 @@ def summarize_rest_stress_results(
     status_counts: dict[str, int] = {}
     method_counts: dict[str, int] = {}
     family_counts: dict[str, int] = {}
+    scenario_counts: dict[str, int] = {}
     error_counts: dict[str, int] = {}
     durations = []
     failures = []
@@ -789,6 +863,8 @@ def summarize_rest_stress_results(
         method_counts[method] = method_counts.get(method, 0) + 1
         family = str(row.get("family") or "unknown")
         family_counts[family] = family_counts.get(family, 0) + 1
+        scenario = str(row.get("scenario") or "unknown")
+        scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
         duration_ms = row.get("duration_ms")
         if isinstance(duration_ms, int | float):
             durations.append(float(duration_ms))
@@ -810,6 +886,7 @@ def summarize_rest_stress_results(
         "status_counts": status_counts,
         "method_counts": method_counts,
         "family_counts": family_counts,
+        "scenario_counts": scenario_counts,
         "error_counts": error_counts,
         "latency_ms": {
             "min": round(min(durations), 3) if durations else 0.0,
@@ -1051,6 +1128,8 @@ def exercise_rest_stress(
         path = str(operation["path"])
         json_body = operation.get("json_body")
         family = str(operation.get("family") or "unknown")
+        scenario = str(operation.get("scenario") or "unknown")
+        expected_statuses = tuple(int(value) for value in operation.get("expected_statuses", ()))
         start = time.monotonic()
         try:
             result = http_request(
@@ -1062,12 +1141,15 @@ def exercise_rest_stress(
                 request_timeout_seconds=request_timeout_seconds,
             )
             status = int(result["status"])
+            expected_match = not expected_statuses or status in expected_statuses
             return {
                 "method": method,
                 "path": path,
                 "family": family,
+                "scenario": scenario,
                 "status": status,
-                "ok": 200 <= status < 500,
+                "ok": expected_match if expected_statuses else 200 <= status < 500,
+                "expected_statuses": list(expected_statuses),
                 "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
             }
         except Exception as exc:
@@ -1075,8 +1157,10 @@ def exercise_rest_stress(
                 "method": method,
                 "path": path,
                 "family": family,
+                "scenario": scenario,
                 "status": "exception",
                 "ok": False,
+                "expected_statuses": list(expected_statuses),
                 "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
                 "error": str(exc),
             }

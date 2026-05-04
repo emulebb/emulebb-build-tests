@@ -57,6 +57,16 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         (operation["method"], operation["path"])
         for operation in golden["rest"]["safe_stress_operations"]
     }.issubset(method_path_pairs)
+    operations_by_scenario = {
+        str(operation.get("scenario")): operation
+        for operation in operations
+        if operation.get("scenario") is not None
+    }
+    for operation in golden["rest"]["expected_error_stress_operations"]:
+        live_operation = operations_by_scenario[operation["scenario"]]
+        assert live_operation["method"] == operation["method"]
+        assert live_operation["path"] == operation["path"]
+        assert list(live_operation["expected_statuses"]) == operation["expected_statuses"]
 
 
 def test_release_live_wire_golden_manifest_keeps_runtime_values_external() -> None:

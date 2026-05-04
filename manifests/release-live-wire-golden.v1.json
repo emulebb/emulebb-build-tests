@@ -64,6 +64,56 @@
         "method": "DELETE",
         "path": "/api/v1/searches/123"
       }
+    ],
+    "expected_error_stress_operations": [
+      {
+        "method": "GET",
+        "path": "/api/v1/logs?limit=%2x",
+        "scenario": "malformed_percent_escape",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/logs%2x?limit=10",
+        "scenario": "malformed_route_escape",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/logs?limit=10&limit=20",
+        "scenario": "duplicate_query_parameter",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF",
+        "scenario": "uppercase_hash_rejected",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/transfers",
+        "scenario": "conflicting_category_fields",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/searches",
+        "scenario": "unicode_query_length_rejected",
+        "expected_statuses": [
+          400
+        ]
+      }
     ]
   }
 }

@@ -193,6 +193,30 @@ def test_direct_auth_rejection_requires_401(monkeypatch) -> None:
     assert module.check_direct_auth_rejection("http://127.0.0.1:1") == {"status": 401}
 
 
+def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[str] = []
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(path)
+        return {"status": 400, "body_text": ""}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.check_direct_torznab_error_edges("http://127.0.0.1:1", "secret key")
+
+    assert result["ok"] is True
+    assert [scenario["name"] for scenario in result["scenarios"]] == [
+        "malformed_percent_escape",
+        "duplicate_t_parameter",
+        "unicode_query_length_rejected",
+    ]
+    assert all("apikey=secret%20key" in call for call in calls)
+    assert "q=bad%2xescape" in calls[0]
+    assert "t=search&t=movie" in calls[1]
+    assert "%CE%BB" in calls[2]
+
+
 def test_direct_rss_validation_requires_results(monkeypatch) -> None:
     module = load_prowlarr_module()
     rss = """<?xml version="1.0" encoding="UTF-8"?>
