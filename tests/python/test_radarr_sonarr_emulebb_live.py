@@ -31,7 +31,14 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
         "/api/v2/torrents/add": {"status": 400, "body_text": "Fails."},
     }
 
-    def fake_qbit_request(_base_url, path, **_kwargs):
+    def fake_qbit_request(_base_url, path, **kwargs):
+        method = str(kwargs.get("method") or "GET").upper()
+        if path == "/api/v2/app/webapiVersion" and method == "POST":
+            return {"status": 404, "body_text": "Not found"}
+        if path == "/api/v2/app/version" and method == "POST":
+            return {"status": 404, "body_text": "Not found"}
+        if path in {"/api/v2/torrents/add", "/api/v2/torrents/delete"} and method == "GET":
+            return {"status": 404, "body_text": "Not found"}
         if path in {
             "/api/v2/torrents/delete",
             "/api/v2/torrents/setCategory",
@@ -56,6 +63,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert result["wrong_login"]["body_text"] == "Fails."
     assert result["wrong_login_info"]["status"] == 403
     assert result["invalid_add"]["status"] == 400
+    assert all(response["status"] == 404 for response in result["wrong_methods"].values())
     assert all(response["status"] == 400 for response in result["invalid_mutations"].values())
     assert {"delete_duplicate_hash", "pause_too_many_hashes", "create_category_empty"} <= set(result["invalid_mutations"])
 

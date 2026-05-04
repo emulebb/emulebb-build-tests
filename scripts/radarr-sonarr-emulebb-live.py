@@ -577,6 +577,20 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
     if int(invalid_add.get("status") or 0) != 400:
         raise RuntimeError(f"qBit invalid add was not rejected: {invalid_add!r}")
 
+    wrong_methods = {
+        "post_app_version": qbit_request(base_url, "/api/v2/app/version", cookie=cookie, method="POST"),
+        "get_torrents_add": qbit_request(base_url, "/api/v2/torrents/add", cookie=cookie),
+        "get_torrents_delete": qbit_request(base_url, "/api/v2/torrents/delete", cookie=cookie),
+        "post_webapi_version": qbit_request(base_url, "/api/v2/app/webapiVersion", method="POST"),
+    }
+    unexpected_method_matches = {
+        name: result
+        for name, result in wrong_methods.items()
+        if int(result.get("status") or 0) != 404
+    }
+    if unexpected_method_matches:
+        raise RuntimeError(f"qBit wrong-method checks were not rejected: {unexpected_method_matches!r}")
+
     invalid_mutations = {
         "delete_all": qbit_request(
             base_url,
@@ -650,6 +664,7 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
         "wrong_login_info": wrong_login_info,
         "valid_login": login,
         "invalid_add": invalid_add,
+        "wrong_methods": wrong_methods,
         "invalid_mutations": invalid_mutations,
     }
     return checks

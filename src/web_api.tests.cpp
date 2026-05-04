@@ -529,6 +529,39 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/indexer/emulebb/api"));
 }
 
+TEST_CASE("Web API declares the qBittorrent compatibility endpoint contract")
+{
+	const std::vector<WebServerQBitCompatSeams::SQBitRouteSpec> &specs = WebServerQBitCompatSeams::GetQBitRouteSpecs();
+	CHECK_EQ(specs.size(), 19u);
+
+	size_t unauthenticatedCount = 0;
+	for (size_t i = 0; i < specs.size(); ++i) {
+		const bool bCanResolveSpec = WebServerQBitCompatSeams::FindQBitRouteSpec(specs[i].pszMethod, specs[i].pszPath) == &specs[i];
+		CHECK(bCanResolveSpec);
+		if (!specs[i].bRequiresAuth)
+			++unauthenticatedCount;
+		for (size_t j = i + 1; j < specs.size(); ++j) {
+			const bool bDuplicateRoute = std::string(specs[i].pszMethod) == specs[j].pszMethod
+				&& std::string(specs[i].pszPath) == specs[j].pszPath;
+			CHECK_FALSE(bDuplicateRoute);
+		}
+	}
+	CHECK_EQ(unauthenticatedCount, 2u);
+
+	const bool bRejectsPostAppVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("post", "/api/v2/app/version") == NULL;
+	const bool bRejectsGetAdd = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/torrents/add") == NULL;
+	const bool bRejectsGetDelete = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/torrents/delete") == NULL;
+	const bool bRejectsUnknown = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/unknown") == NULL;
+	const bool bAcceptsPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/app/webapiversion") != NULL;
+	const bool bRejectsPostPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("post", "/api/v2/app/webapiversion") == NULL;
+	CHECK(bRejectsPostAppVersion);
+	CHECK(bRejectsGetAdd);
+	CHECK(bRejectsGetDelete);
+	CHECK(bRejectsUnknown);
+	CHECK(bAcceptsPublicVersion);
+	CHECK(bRejectsPostPublicVersion);
+}
+
 TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams")
 {
 	const std::string encoded(WebServerJsonSeams::UrlEncodeUtf8("La Dolce Vita + [test].mkv"));
