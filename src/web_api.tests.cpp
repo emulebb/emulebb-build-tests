@@ -703,17 +703,25 @@ TEST_CASE("Web API declares the qBittorrent compatibility endpoint contract")
 	}
 	CHECK_EQ(unauthenticatedCount, 2u);
 
-	const bool bRejectsPostAppVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("post", "/api/v2/app/version") == NULL;
-	const bool bRejectsGetAdd = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/torrents/add") == NULL;
-	const bool bRejectsGetDelete = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/torrents/delete") == NULL;
-	const bool bRejectsUnknown = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/unknown") == NULL;
-	const bool bAcceptsPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/app/webapiversion") != NULL;
-	const bool bRejectsPostPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("post", "/api/v2/app/webapiversion") == NULL;
+	const bool bRejectsLowerGetPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("get", "/api/v2/app/webapiversion") == NULL;
+	const bool bRejectsPostAppVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("POST", "/api/v2/app/version") == NULL;
+	const bool bRejectsGetAdd = WebServerQBitCompatSeams::FindQBitRouteSpec("GET", "/api/v2/torrents/add") == NULL;
+	const bool bRejectsGetDelete = WebServerQBitCompatSeams::FindQBitRouteSpec("GET", "/api/v2/torrents/delete") == NULL;
+	const bool bRejectsUnknown = WebServerQBitCompatSeams::FindQBitRouteSpec("GET", "/api/v2/unknown") == NULL;
+	const bool bAcceptsPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("GET", "/api/v2/app/webapiversion") != NULL;
+	const WebServerQBitCompatSeams::SQBitRouteSpec *const pPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("GET", "/api/v2/app/webapiversion");
+	const WebServerQBitCompatSeams::SQBitRouteSpec *const pTorrentsInfo = WebServerQBitCompatSeams::FindQBitRouteSpec("GET", "/api/v2/torrents/info");
+	const bool bRejectsPostPublicVersion = WebServerQBitCompatSeams::FindQBitRouteSpec("POST", "/api/v2/app/webapiversion") == NULL;
+	CHECK(bRejectsLowerGetPublicVersion);
 	CHECK(bRejectsPostAppVersion);
 	CHECK(bRejectsGetAdd);
 	CHECK(bRejectsGetDelete);
 	CHECK(bRejectsUnknown);
 	CHECK(bAcceptsPublicVersion);
+	REQUIRE(pPublicVersion != NULL);
+	CHECK_FALSE(pPublicVersion->bRequiresAuth);
+	REQUIRE(pTorrentsInfo != NULL);
+	CHECK(pTorrentsInfo->bRequiresAuth);
 	CHECK(bRejectsPostPublicVersion);
 }
 
