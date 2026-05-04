@@ -329,6 +329,11 @@ def check_direct_torznab_error_edges(base_url: str, emule_api_key: str) -> dict[
             "expected_status": 400,
         },
         {
+            "name": "malformed_path_escape",
+            "path": f"/indexer/emulebb/api%2x?t=search&q=linux&apikey={api_key}",
+            "expected_status": 400,
+        },
+        {
             "name": "duplicate_t_parameter",
             "path": f"/indexer/emulebb/api?t=search&t=movie&q=linux&apikey={api_key}",
             "expected_status": 400,

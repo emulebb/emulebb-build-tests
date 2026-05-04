@@ -208,13 +208,15 @@ def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
     assert result["ok"] is True
     assert [scenario["name"] for scenario in result["scenarios"]] == [
         "malformed_percent_escape",
+        "malformed_path_escape",
         "duplicate_t_parameter",
         "unicode_query_length_rejected",
     ]
     assert all("apikey=secret%20key" in call for call in calls)
     assert "q=bad%2xescape" in calls[0]
-    assert "t=search&t=movie" in calls[1]
-    assert "%CE%BB" in calls[2]
+    assert "/api%2x" in calls[1]
+    assert "t=search&t=movie" in calls[2]
+    assert "%CE%BB" in calls[3]
 
 
 def test_direct_rss_validation_requires_results(monkeypatch) -> None:

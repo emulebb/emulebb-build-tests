@@ -494,10 +494,19 @@ TEST_CASE("Web API recognizes REST request targets without disturbing legacy HTM
 
 TEST_CASE("Web API recognizes the Prowlarr Torznab compatibility endpoint")
 {
+	std::string path;
+	std::string error;
+
 	CHECK(WebServerArrCompatSeams::IsArrCompatRequestTarget("/indexer/emulebb/api"));
 	CHECK(WebServerArrCompatSeams::IsArrCompatRequestTarget("/INDEXER/EMULEBB/API?t=caps"));
+	CHECK(WebServerArrCompatSeams::IsArrCompatRequestTarget("/indexer/emulebb/api%2x?t=caps"));
 	CHECK_FALSE(WebServerArrCompatSeams::IsArrCompatRequestTarget("/api/v1/indexer/emulebb/api"));
 	CHECK_FALSE(WebServerArrCompatSeams::IsArrCompatRequestTarget("/indexer/emulebb"));
+
+	CHECK(WebServerArrCompatSeams::TryGetArrCompatRequestPathLower("/INDEXER/EMULEBB/API?t=caps", path, error));
+	CHECK_EQ(path, "/indexer/emulebb/api");
+	CHECK_FALSE(WebServerArrCompatSeams::TryGetArrCompatRequestPathLower("/indexer/emulebb/api%2x?t=caps", path, error));
+	CHECK_EQ(error, "malformed percent escape");
 }
 
 TEST_CASE("Web API maps Torznab requests to native eMule search hints")
