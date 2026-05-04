@@ -533,6 +533,9 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Unknown&cat=9999", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
 
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Overflow&cat=999999999999999999999", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
+
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Mixed&cat=2000,3000", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Any);
 
@@ -543,6 +546,10 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Bad&season=10000&ep=2", request, error));
+	CHECK_EQ(error, "season must be an unsigned decimal value in the range 0..9999");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Bad&season=999999999999999999999&ep=2", request, error));
 	CHECK_EQ(error, "season must be an unsigned decimal value in the range 0..9999");
 
 	error.clear();
@@ -704,6 +711,9 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D0", request, error));
 	CHECK_EQ(error, "magnet size must be positive");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D999999999999999999999", request, error));
+	CHECK_EQ(error, "magnet size must be an unsigned decimal value");
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=a&category=b", form, error));
 	CHECK_EQ(error, "duplicate form field: category");
