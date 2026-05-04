@@ -110,6 +110,14 @@
         ]
       },
       {
+        "method": "get",
+        "path": "/api/v1/app",
+        "scenario": "lowercase_method_rejected",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
         "method": "GET",
         "path": "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF",
         "scenario": "uppercase_hash_rejected",

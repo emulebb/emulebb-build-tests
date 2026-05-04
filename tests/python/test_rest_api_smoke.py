@@ -456,6 +456,8 @@ def test_rest_stress_operations_include_expected_error_edges() -> None:
     assert operations_by_pair[("GET", "/api/v1/logs?limit=%2x")]["expected_statuses"] == (400,)
     assert operations_by_pair[("GET", "/api/v1/logs%2x?limit=10")]["scenario"] == "malformed_route_escape"
     assert operations_by_pair[("GET", "/api/v1/logs?limit=10&limit=20")]["scenario"] == "duplicate_query_parameter"
+    assert operations_by_pair[("get", "/api/v1/app")]["scenario"] == "lowercase_method_rejected"
+    assert operations_by_pair[("get", "/api/v1/app")]["expected_statuses"] == (400,)
     assert operations_by_pair[
         ("GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF")
     ]["scenario"] == "uppercase_hash_rejected"
