@@ -145,6 +145,19 @@ TEST_CASE("Web API normalizes search method and type names case-insensitively")
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName(nullptr), WebApiCommandSeams::ESearchFileType::Invalid);
 }
 
+TEST_CASE("Web API command helpers share REST parser primitives")
+{
+	uint64_t uValue = 0;
+	CHECK(WebApiCommandSeams::TryParseUnsignedDecimalString("18446744073709551615", uValue));
+	CHECK_EQ(uValue, 18446744073709551615ull);
+	CHECK_FALSE(WebApiCommandSeams::TryParseUnsignedDecimalString("18446744073709551616", uValue));
+	CHECK_FALSE(WebApiCommandSeams::TryParseUnsignedDecimalString("+1", uValue));
+	CHECK_EQ(WebApiCommandSeams::TrimAsciiWhitespace("\t linux \r\n"), "linux");
+	CHECK_EQ(WebApiCommandSeams::ToLowerAscii("LiNuX"), "linux");
+	CHECK(WebApiCommandSeams::IsLowercaseMd4HexString("0123456789abcdef0123456789abcdef"));
+	CHECK_FALSE(WebApiCommandSeams::IsLowercaseMd4HexString("0123456789ABCDEF0123456789ABCDEF"));
+}
+
 TEST_CASE("Web API only allows shared-file removal for files that are shared and not mandatory")
 {
 	CHECK(WebApiSurfaceSeams::CanRemoveSharedFile(true, false));
