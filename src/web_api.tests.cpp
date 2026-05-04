@@ -583,10 +583,19 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 
 TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 {
+	std::string path;
+	std::string error;
+
 	CHECK(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v2/app/webapiVersion"));
 	CHECK(WebServerQBitCompatSeams::IsQBitRequestTarget("/API/V2/torrents/add"));
 	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v1/torrents/add"));
 	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/indexer/emulebb/api"));
+
+	CHECK(WebServerQBitCompatSeams::TryGetQBitRequestPathLower("/API/V2/torrents/files?hash=bad", path, error));
+	CHECK_EQ(path, "/api/v2/torrents/files");
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetQBitRequestPathLower("/api/v2/torrents/files%2x?hash=bad", path, error));
+	CHECK_EQ(error, "malformed percent escape");
+	CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget("/api/v2/torrents/files%2x?hash=bad"));
 }
 
 TEST_CASE("Web API declares the qBittorrent compatibility endpoint contract")
