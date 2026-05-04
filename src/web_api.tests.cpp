@@ -493,7 +493,25 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Bad&season=x&ep=2", request, error));
-	CHECK_EQ(error, "season, ep, and year must be unsigned decimal values");
+	CHECK_EQ(error, "season must be an unsigned decimal value in the range 0..9999");
+	CHECK(request.strQuery.empty());
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Bad&season=10000&ep=2", request, error));
+	CHECK_EQ(error, "season must be an unsigned decimal value in the range 0..9999");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Bad&season=1&ep=10000", request, error));
+	CHECK_EQ(error, "ep must be an unsigned decimal value in the range 0..9999");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Bad&year=10000", request, error));
+	CHECK_EQ(error, "year must be an unsigned decimal value in the range 0..9999");
+
+	std::string longQuery(WebServerArrCompatSeams::kMaxTorznabQueryLength + 1, 'x');
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=" + longQuery, request, error));
+	CHECK_EQ(error, "q must be at most 160 characters");
 
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&t=movie&q=Dup", request, error));
