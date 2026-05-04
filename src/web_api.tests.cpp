@@ -664,6 +664,18 @@ TEST_CASE("Web API declares the qBittorrent compatibility endpoint contract")
 	CHECK(bRejectsPostPublicVersion);
 }
 
+TEST_CASE("Web API validates qBittorrent session cookies by exact pair")
+{
+	CHECK(WebServerQBitCompatSeams::HasCookiePair("SID=abc123", "SID", "abc123"));
+	CHECK(WebServerQBitCompatSeams::HasCookiePair("theme=dark; SID=abc123; other=1", "SID", "abc123"));
+	CHECK(WebServerQBitCompatSeams::HasCookiePair("theme=dark;SID=abc123", "SID", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("XSID=abc123", "SID", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("theme=dark; XSID=abc123", "SID", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc1234", "SID", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=", "SID", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123", "", "abc123"));
+}
+
 TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams")
 {
 	const std::string encoded(WebServerJsonSeams::UrlEncodeUtf8("La Dolce Vita + [test].mkv"));
