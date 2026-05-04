@@ -27,6 +27,25 @@
     "kad_search_count": 6,
     "download_trigger_count": 1,
     "search_type": "any",
+    "contract_route_count": 81,
+    "safe_contract_route_count": 80,
+    "unsafe_contract_operations": [
+      "shutdownApp"
+    ],
+    "contract_family_counts": {
+      "app": 4,
+      "status": 3,
+      "categories": 5,
+      "transfers": 20,
+      "shared": 8,
+      "shared-directories": 3,
+      "uploads": 15,
+      "servers": 9,
+      "kad": 5,
+      "searches": 5,
+      "friends": 3,
+      "logs": 1
+    },
     "safe_stress_operations": [
       {
         "method": "PATCH",

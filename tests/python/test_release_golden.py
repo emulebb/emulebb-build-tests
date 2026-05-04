@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from collections import Counter
 from pathlib import Path
 
 from emule_test_harness.live_seed_sources import (
@@ -51,6 +52,12 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
     assert live_e2e_suite.DEFAULT_REST_SEARCH_COUNT == golden["rest"]["server_search_count"]
     assert live_e2e_suite.DEFAULT_REST_SEARCH_COUNT == golden["rest"]["kad_search_count"]
     assert live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT == golden["rest"]["download_trigger_count"]
+
+    contract_routes = rest_smoke.REST_CONTRACT_ROUTES
+    assert len(contract_routes) == golden["rest"]["contract_route_count"]
+    assert len([route for route in contract_routes if route["safe"]]) == golden["rest"]["safe_contract_route_count"]
+    assert [route["operationId"] for route in contract_routes if not route["safe"]] == golden["rest"]["unsafe_contract_operations"]
+    assert dict(Counter(route["family"] for route in contract_routes)) == golden["rest"]["contract_family_counts"]
 
     operations = rest_smoke.build_rest_stress_operations("smoke")
     method_path_pairs = {(operation["method"], operation["path"]) for operation in operations}
