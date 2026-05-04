@@ -1009,6 +1009,18 @@ TEST_CASE("Web API rejects malformed path identifiers before dispatch")
 
 	errorCode.clear();
 	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/servers/192.0.2.1:65536", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "serverId must use address:port with a port in the range 1..65535");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/servers/192.0.2.1:999999999999999999999", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "serverId must use address:port with a port in the range 1..65535");
+
+	errorCode.clear();
+	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/uploads/not-a-client/operations/remove", R"({})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "clientId must be a 32-character lowercase hex string or address:port");
