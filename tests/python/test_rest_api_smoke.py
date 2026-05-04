@@ -471,6 +471,13 @@ def test_rest_stress_operations_include_expected_error_edges() -> None:
         and "λ" in operation["json_body"]["query"]
         for operation in operations
     )
+    assert any(
+        operation["scenario"] == "long_unicode_shared_file_path_rejected"
+        and operation["expected_statuses"] == (400,)
+        and "λ" in operation["json_body"]["path"]
+        and "例" in operation["json_body"]["path"]
+        for operation in operations
+    )
 
 
 def test_rest_stress_summary_is_bounded_and_deterministic() -> None:

@@ -99,6 +99,11 @@ REST_PREFERENCE_KEYS = {
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
 REST_STRESS_LONG_SEARCH_QUERY = "unicode-lambda-" + ("λ" * 161)
+REST_STRESS_LONG_UNICODE_PATH = (
+    "C:\\not-shared\\"
+    + ("deep_unicode_λ_例\\" * 12)
+    + "linux-iso-library-Ω-例.mkv"
+)
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "REST-API-OPENAPI.yaml"
 UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
 OPENAPI_TAG_FAMILIES = {
@@ -449,6 +454,14 @@ REST_STRESS_EDGE_OPERATIONS: tuple[dict[str, object], ...] = (
         "json_body": {"query": REST_STRESS_LONG_SEARCH_QUERY, "method": "automatic", "type": "any"},
         "family": "searches",
         "scenario": "unicode_query_length_rejected",
+        "expected_statuses": (400,),
+    },
+    {
+        "method": "POST",
+        "path": "/api/v1/shared-files",
+        "json_body": {"path": REST_STRESS_LONG_UNICODE_PATH},
+        "family": "shared",
+        "scenario": "long_unicode_shared_file_path_rejected",
         "expected_statuses": (400,),
     },
 )

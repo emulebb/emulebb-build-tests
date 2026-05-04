@@ -113,6 +113,14 @@
         "expected_statuses": [
           400
         ]
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/shared-files",
+        "scenario": "long_unicode_shared_file_path_rejected",
+        "expected_statuses": [
+          400
+        ]
       }
     ]
   }
