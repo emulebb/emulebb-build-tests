@@ -145,7 +145,7 @@ def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dic
         )
 
 
-def run_browser_workflows(base_url: str, instance_id: str) -> dict[str, Any]:
+def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -> dict[str, Any]:
     """Drives the critical aMuTorrent workflows through a browser page."""
 
     try:
@@ -217,6 +217,23 @@ def run_browser_workflows(base_url: str, instance_id: str) -> dict[str, Any]:
             checks["snapshot"] = snapshot
 
             checks["categories"] = fetch_json("/api/v1/categories")
+            smoke_category = f"amutorrent-smoke-{int(time.time())}"
+            checks["category_create"] = fetch_json(
+                "/api/v1/categories",
+                "POST",
+                {
+                    "title": smoke_category,
+                    "path": category_path,
+                    "comment": "aMuTorrent browser smoke",
+                    "color": 255,
+                    "priority": 0,
+                },
+            )
+            checks["category_delete"] = fetch_json(
+                "/api/v1/categories",
+                "DELETE",
+                {"name": smoke_category},
+            )
             checks["add_ed2k"] = fetch_json(
                 "/api/v1/downloads/ed2k",
                 "POST",
@@ -247,6 +264,12 @@ def run_browser_workflows(base_url: str, instance_id: str) -> dict[str, Any]:
             for name, result in checks.items():
                 if isinstance(result, dict) and "status" in result and int(result["status"]) >= 500:
                     raise RuntimeError(f"aMuTorrent browser workflow '{name}' failed: {result}")
+                if (
+                    isinstance(result, dict)
+                    and isinstance(result.get("payload"), dict)
+                    and result["payload"].get("type") == "error"
+                ):
+                    raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
             if any(diagnostics.values()):
                 raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {diagnostics}")
         finally:
@@ -350,7 +373,8 @@ def main() -> int:
         )
         wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.ready_timeout_seconds)
         report["amutorrent_process_id"] = amutorrent.pid
-        report["checks"]["browser_workflows"] = run_browser_workflows(amutorrent_base_url, instance_id)
+        category_path = live_common.win_path(Path(profile["incoming_dir"]), trailing_slash=True)
+        report["checks"]["browser_workflows"] = run_browser_workflows(amutorrent_base_url, instance_id, category_path)
         report["status"] = "passed"
     except Exception as exc:
         pending_error = exc
