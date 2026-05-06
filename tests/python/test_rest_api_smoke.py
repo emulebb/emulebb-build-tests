@@ -158,6 +158,28 @@ def test_rest_error_response_requires_json_not_html() -> None:
 
     assert module.require_error_response(error_result, 404, "NOT_FOUND")["error"] == "NOT_FOUND"
 
+    method_not_allowed = {
+        **error_result,
+        "status": 405,
+        "body_text": (
+            '{"error":{"code":"METHOD_NOT_ALLOWED",'
+            '"message":"HTTP method is not allowed for this API route","details":{}}}'
+        ),
+        "raw_json": {
+            "error": {
+                "code": "METHOD_NOT_ALLOWED",
+                "message": "HTTP method is not allowed for this API route",
+                "details": {},
+            },
+        },
+        "json": {
+            "error": "METHOD_NOT_ALLOWED",
+            "message": "HTTP method is not allowed for this API route",
+            "details": {},
+        },
+    }
+    assert module.require_error_response(method_not_allowed, 405, "METHOD_NOT_ALLOWED")["error"] == "METHOD_NOT_ALLOWED"
+
     html_content_type = {**error_result, "content_type": "text/html; charset=utf-8"}
     with pytest.raises(AssertionError):
         module.require_error_response(html_content_type, 404, "NOT_FOUND")

@@ -1877,9 +1877,9 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "missing_route": require_error_response(missing_route, 404, "NOT_FOUND", message_contains="API route not found"),
         "invalid_method": require_error_response(
             invalid_method,
-            404,
-            "NOT_FOUND",
-            message_contains="API route not found",
+            405,
+            "METHOD_NOT_ALLOWED",
+            message_contains="HTTP method is not allowed",
         ),
         "invalid_json_shape": require_error_response(
             invalid_json_shape,
