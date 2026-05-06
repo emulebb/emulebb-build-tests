@@ -70,6 +70,36 @@ TEST_CASE("WebSocket HTTP seams reject duplicate or invalid Content-Length heade
 		value));
 }
 
+TEST_CASE("WebSocket HTTP seams bound incomplete header buffering")
+{
+	uint32_t headerLength = 0;
+	CHECK(WebSocketHttpSeams::ScanHttpHeaderLength(
+		"GET /api/v1/app HTTP/1.1\r\nHost: local\r\n\r\n",
+		41,
+		headerLength) == WebSocketHttpSeams::EHttpHeaderScanResult::Complete);
+	CHECK_EQ(headerLength, 41u);
+
+	CHECK(WebSocketHttpSeams::ScanHttpHeaderLength(
+		"GET /api/v1/app HTTP/1.1\nHost: local\n\n",
+		38,
+		headerLength) == WebSocketHttpSeams::EHttpHeaderScanResult::Complete);
+	CHECK_EQ(headerLength, 38u);
+
+	const std::string incompleteHeader(static_cast<size_t>(WebSocketHttpSeams::kMaxHttpHeaderLength), 'A');
+	CHECK(WebSocketHttpSeams::ScanHttpHeaderLength(
+		incompleteHeader.data(),
+		incompleteHeader.size(),
+		headerLength) == WebSocketHttpSeams::EHttpHeaderScanResult::Incomplete);
+	CHECK_EQ(headerLength, 0u);
+
+	const std::string oversizedHeader(static_cast<size_t>(WebSocketHttpSeams::kMaxHttpHeaderLength + 1u), 'A');
+	CHECK(WebSocketHttpSeams::ScanHttpHeaderLength(
+		oversizedHeader.data(),
+		oversizedHeader.size(),
+		headerLength) == WebSocketHttpSeams::EHttpHeaderScanResult::TooLarge);
+	CHECK_EQ(headerLength, 0u);
+}
+
 TEST_CASE("WebSocket HTTP seams parse request methods exactly")
 {
 	std::string method;
