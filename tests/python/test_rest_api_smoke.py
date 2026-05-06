@@ -157,6 +157,8 @@ def test_rest_error_response_requires_json_not_html() -> None:
     }
 
     assert module.is_native_rest_json_response(error_result) is True
+    assert module.response_matches_kind(error_result, "native-json") is True
+    assert module.response_matches_kind(error_result, "json") is True
     assert module.require_error_response(error_result, 404, "NOT_FOUND")["error"] == "NOT_FOUND"
 
     method_not_allowed = {
@@ -183,6 +185,7 @@ def test_rest_error_response_requires_json_not_html() -> None:
 
     html_content_type = {**error_result, "content_type": "text/html; charset=utf-8"}
     assert module.is_native_rest_json_response(html_content_type) is False
+    assert module.response_matches_kind({**html_content_type, "body_text": "<html></html>"}, "html") is True
     with pytest.raises(AssertionError):
         module.require_error_response(html_content_type, 404, "NOT_FOUND")
 
@@ -818,6 +821,26 @@ def test_rest_stress_operations_include_expected_error_edges() -> None:
         and "\\" not in operation["json_body"]["path"]
         for operation in operations
     )
+
+
+def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
+    module = load_rest_api_smoke_module()
+
+    operations = module.build_rest_stress_operations("smoke")
+    operations_by_pair = {(operation["method"], operation["path"]): operation for operation in operations}
+
+    assert operations_by_pair[("GET", "/indexer/emulebb/api?t=caps")]["response_kind"] == "xml"
+    assert operations_by_pair[("GET", "/indexer/emulebb/api?t=caps&t=search")]["expected_statuses"] == (400,)
+    assert operations_by_pair[
+        ("GET", "/indexer/emulebb/api?t=search&cat=999999&q=linux&apikey={api_key}")
+    ]["api_key"] is False
+    assert operations_by_pair[("GET", "/api/v2/app/webapiVersion")]["response_kind"] == "text"
+    assert operations_by_pair[("GET", "/api/v2/torrents/categories")]["extra_headers"] == {"Cookie": "{qbit_session_cookie}"}
+    assert operations_by_pair[
+        ("GET", f"/api/v2/torrents/properties?hash={module.REST_SURFACE_MISSING_HASH}")
+    ]["expected_statuses"] == (404,)
+    assert operations_by_pair[("POST", "/api/v2/torrents/pause")]["raw_body"] == f"hashes={module.REST_SURFACE_MISSING_HASH}"
+    assert operations_by_pair[("GET", "/")]["response_kind"] == "html"
 
 
 def test_rest_stress_summary_is_bounded_and_deterministic() -> None:

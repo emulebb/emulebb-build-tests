@@ -535,6 +535,89 @@ REST_STRESS_EDGE_OPERATIONS: tuple[dict[str, object], ...] = (
         "expected_statuses": (400,),
     },
 )
+REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
+    {
+        "method": "GET",
+        "path": "/indexer/emulebb/api?t=caps",
+        "family": "torznab",
+        "scenario": "torznab_caps",
+        "expected_statuses": (200,),
+        "response_kind": "xml",
+        "expected_body_contains": "<caps>",
+    },
+    {
+        "method": "GET",
+        "path": "/indexer/emulebb/api?t=caps&t=search",
+        "family": "torznab",
+        "scenario": "torznab_duplicate_query_rejected",
+        "expected_statuses": (400,),
+        "response_kind": "xml",
+    },
+    {
+        "method": "GET",
+        "path": "/indexer/emulebb/api?t=search&cat=999999&q=linux&apikey={api_key}",
+        "family": "torznab",
+        "scenario": "torznab_search_validation_rejected",
+        "expected_statuses": (400,),
+        "response_kind": "xml",
+        "api_key": False,
+    },
+    {
+        "method": "GET",
+        "path": "/api/v2/app/webapiVersion",
+        "family": "qbit",
+        "scenario": "qbit_public_version",
+        "expected_statuses": (200,),
+        "response_kind": "text",
+        "expected_body_contains": "2.",
+        "api_key": False,
+    },
+    {
+        "method": "GET",
+        "path": "/api/v2/torrents/categories",
+        "family": "qbit",
+        "scenario": "qbit_categories",
+        "expected_statuses": (200,),
+        "response_kind": "json",
+        "extra_headers": {"Cookie": "{qbit_session_cookie}"},
+        "api_key": False,
+    },
+    {
+        "method": "GET",
+        "path": f"/api/v2/torrents/properties?hash={REST_SURFACE_MISSING_HASH}",
+        "family": "qbit",
+        "scenario": "qbit_missing_hash_read",
+        "expected_statuses": (404,),
+        "response_kind": "text",
+        "extra_headers": {"Cookie": "{qbit_session_cookie}"},
+        "api_key": False,
+    },
+    {
+        "method": "POST",
+        "path": "/api/v2/torrents/pause",
+        "raw_body": f"hashes={REST_SURFACE_MISSING_HASH}",
+        "content_type": "application/x-www-form-urlencoded",
+        "family": "qbit",
+        "scenario": "qbit_missing_hash_mutation",
+        "expected_statuses": (200,),
+        "response_kind": "text",
+        "expected_body_contains": "Ok.",
+        "extra_headers": {"Cookie": "{qbit_session_cookie}"},
+        "api_key": False,
+    },
+)
+REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = (
+    {
+        "method": "GET",
+        "path": "/",
+        "family": "legacy-html",
+        "scenario": "legacy_html_get",
+        "expected_statuses": (200,),
+        "response_kind": "html",
+        "expected_body_contains": "<html",
+        "api_key": False,
+    },
+)
 REST_INTENTIONALLY_UNSUPPORTED = (
     "category_crud",
     "shared_file_rename",
@@ -794,6 +877,24 @@ def is_native_rest_json_response(result: dict[str, object]) -> bool:
     return "application/json" in content_type and "text/html" not in content_type and "<html" not in body_text
 
 
+def response_matches_kind(result: dict[str, object], response_kind: str) -> bool:
+    """Returns whether one stress response matches its expected adapter shape."""
+
+    content_type = str(result.get("content_type") or "").lower()
+    body_text = str(result.get("body_text") or "").lower()
+    if response_kind == "native-json":
+        return is_native_rest_json_response(result)
+    if response_kind == "json":
+        return "application/json" in content_type
+    if response_kind == "xml":
+        return "application/xml" in content_type
+    if response_kind == "html":
+        return "text/html" in content_type and "<html" in body_text
+    if response_kind == "text":
+        return "application/json" not in content_type and "text/html" not in content_type
+    return True
+
+
 def require_legacy_non_json_response(result: dict[str, object], expected_status: int) -> None:
     """Asserts one legacy WebServer response did not enter the native REST envelope path."""
 
@@ -945,6 +1046,8 @@ def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
     if budget in {"smoke", "soak"}:
         operations.extend(dict(operation) for operation in REST_STRESS_SAFE_MUTATION_OPERATIONS)
         operations.extend(dict(operation) for operation in REST_STRESS_EDGE_OPERATIONS)
+        operations.extend(dict(operation) for operation in REST_STRESS_ADAPTER_OPERATIONS)
+        operations.extend(dict(operation) for operation in REST_STRESS_LEGACY_OPERATIONS)
     return operations
 
 
@@ -1267,16 +1370,32 @@ def exercise_rest_stress(
 
     deadline = time.monotonic() + duration_seconds
     operations = build_rest_stress_operations(budget)
+    qbit_session_cookie = ""
+    if any(
+        "{qbit_session_cookie}" in str(operation.get("extra_headers", {}).get("Cookie", ""))
+        for operation in operations
+        if isinstance(operation.get("extra_headers"), dict)
+    ):
+        qbit_session_cookie = create_qbit_session_cookie(base_url, api_key)
     rows: list[dict[str, object]] = []
     next_index = 0
 
     def run_one(index: int) -> dict[str, object]:
         operation = operations[index % len(operations)]
         method = str(operation["method"])
-        path = str(operation["path"])
+        path = str(operation["path"]).replace("{api_key}", urllib.parse.quote(api_key, safe=""))
         json_body = operation.get("json_body")
+        raw_body = operation.get("raw_body")
+        if isinstance(raw_body, str):
+            raw_body = raw_body.replace("{api_key}", urllib.parse.quote(api_key, safe=""))
+        content_type = operation.get("content_type")
+        extra_headers = dict(operation.get("extra_headers") or {})
+        if extra_headers.get("Cookie") == "{qbit_session_cookie}":
+            extra_headers["Cookie"] = qbit_session_cookie
         family = str(operation.get("family") or "unknown")
         scenario = str(operation.get("scenario") or "unknown")
+        response_kind = str(operation.get("response_kind") or "native-json")
+        expected_body_contains = operation.get("expected_body_contains")
         expected_statuses = tuple(int(value) for value in operation.get("expected_statuses", ()))
         start = time.monotonic()
         try:
@@ -1284,24 +1403,30 @@ def exercise_rest_stress(
                 base_url,
                 path,
                 method=method,
-                api_key=api_key,
+                api_key=api_key if bool(operation.get("api_key", True)) else None,
                 json_body=json_body,
+                raw_body=raw_body if isinstance(raw_body, bytes | str) else None,
+                content_type=str(content_type) if content_type is not None else None,
+                extra_headers=extra_headers,
                 request_timeout_seconds=request_timeout_seconds,
             )
             status = int(result["status"])
             expected_match = not expected_statuses or status in expected_statuses
-            native_rest_json = is_native_rest_json_response(result)
+            response_kind_match = response_matches_kind(result, response_kind)
+            body_match = expected_body_contains is None or str(expected_body_contains).lower() in str(result.get("body_text") or "").lower()
+            native_rest_json = response_kind != "native-json" or is_native_rest_json_response(result)
             return {
                 "method": method,
                 "path": path,
                 "family": family,
                 "scenario": scenario,
                 "status": status,
-                "ok": (expected_match if expected_statuses else 200 <= status < 500) and native_rest_json,
+                "ok": (expected_match if expected_statuses else 200 <= status < 500) and response_kind_match and body_match and native_rest_json,
                 "expected_statuses": list(expected_statuses),
                 "content_type": str(result.get("content_type") or ""),
+                "response_kind": response_kind,
                 "native_rest_json": native_rest_json,
-                "error": None if native_rest_json else "native REST response was not JSON",
+                "error": None if native_rest_json and response_kind_match and body_match else "response shape mismatch",
                 "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
             }
         except Exception as exc:
@@ -2019,6 +2144,23 @@ def get_response_header(result: dict[str, object], header_name: str) -> str:
         if str(name).lower() == header_name.lower():
             return str(value)
     return ""
+
+
+def create_qbit_session_cookie(base_url: str, api_key: str) -> str:
+    """Authenticates once against qBit compatibility and returns the SID pair."""
+
+    login_form = urllib.parse.urlencode({"username": "emule", "password": api_key})
+    qbit_login = http_request(
+        base_url,
+        "/api/v2/auth/login",
+        method="POST",
+        raw_body=login_form,
+        content_type="application/x-www-form-urlencoded",
+    )
+    assert int(qbit_login["status"]) == 200, compact_http_result(qbit_login)
+    session_cookie = get_response_header(qbit_login, "Set-Cookie")
+    assert "SID=" in session_cookie, compact_http_result(qbit_login)
+    return session_cookie.split(";", 1)[0]
 
 
 def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]:
