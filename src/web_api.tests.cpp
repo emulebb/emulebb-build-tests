@@ -33,6 +33,43 @@ TEST_CASE("WebSocket HTTP seams parse Content-Length strictly")
 	CHECK(WebSocketHttpSeams::ParseContentLengthHeaderLine("Content-Length: -1", value) == WebSocketHttpSeams::EContentLengthHeader::Invalid);
 }
 
+TEST_CASE("WebSocket HTTP seams reject duplicate or invalid Content-Length headers")
+{
+	bool hasContentLength = false;
+	uint32_t value = 0;
+
+	CHECK(WebSocketHttpSeams::TryParseContentLengthHeaders(
+		"POST /api/v1/searches HTTP/1.1\r\nHost: local\r\n\r\n",
+		hasContentLength,
+		value));
+	CHECK_FALSE(hasContentLength);
+	CHECK_EQ(value, 0u);
+
+	CHECK(WebSocketHttpSeams::TryParseContentLengthHeaders(
+		"POST /api/v1/searches HTTP/1.1\r\nContent-Length: 2\r\nContent-Type: application/json\r\n\r\n",
+		hasContentLength,
+		value));
+	CHECK(hasContentLength);
+	CHECK_EQ(value, 2u);
+
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthHeaders(
+		"POST /api/v1/searches HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n",
+		hasContentLength,
+		value));
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthHeaders(
+		"POST /api/v1/searches HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\n",
+		hasContentLength,
+		value));
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthHeaders(
+		"POST /api/v1/searches HTTP/1.1\r\nContent-Length: 16777217\r\n\r\n",
+		hasContentLength,
+		value));
+	CHECK_FALSE(WebSocketHttpSeams::TryParseContentLengthHeaders(
+		"POST /api/v1/searches HTTP/1.1\r\nContent-Length: 2x\r\n\r\n",
+		hasContentLength,
+		value));
+}
+
 TEST_CASE("WebSocket HTTP seams parse request methods exactly")
 {
 	std::string method;
