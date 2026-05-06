@@ -202,6 +202,36 @@ TEST_CASE("Web API command helpers share REST parser primitives")
 	CHECK_FALSE(WebApiCommandSeams::IsLowercaseMd4HexString("0123456789ABCDEF0123456789ABCDEF"));
 }
 
+TEST_CASE("Web API shares strict bounded unsigned parsing across native REST and Arr adapters")
+{
+	uint64_t ullValue = 0;
+	CHECK(WebServerJsonSeams::TryParseUnsignedDecimalValue("42", ullValue));
+	CHECK_EQ(ullValue, 42u);
+	CHECK_FALSE(WebServerJsonSeams::TryParseUnsignedDecimalValue("+42", ullValue));
+	CHECK_FALSE(WebServerJsonSeams::TryParseUnsignedDecimalValue(" 42", ullValue));
+	CHECK_FALSE(WebServerJsonSeams::TryParseUnsignedDecimalValue("18446744073709551616", ullValue));
+
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=+42", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "limit must be an unsigned number");
+
+	WebServerArrCompatSeams::STorznabRequest torznabRequest;
+	std::string error;
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Show&season=+1&ep=2", torznabRequest, error));
+	CHECK_EQ(error, "season must be an unsigned decimal value in the range 0..9999");
+
+	std::string ed2k;
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryBuildEd2kLinkFromMagnet(
+		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=x&xl=+42",
+		ed2k,
+		error));
+	CHECK_EQ(error, "magnet size must be an unsigned decimal value");
+}
+
 TEST_CASE("Web API only allows shared-file removal for files that are shared and not mandatory")
 {
 	CHECK(WebApiSurfaceSeams::CanRemoveSharedFile(true, false));
