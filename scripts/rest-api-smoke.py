@@ -555,7 +555,7 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
     },
     {
         "method": "GET",
-        "path": "/indexer/emulebb/api?t=search&cat=999999&q=linux&apikey={api_key}",
+        "path": "/indexer/emulebb/api?t=search&season=abc&q=linux&apikey={api_key}",
         "family": "torznab",
         "scenario": "torznab_search_validation_rejected",
         "expected_statuses": (400,),
