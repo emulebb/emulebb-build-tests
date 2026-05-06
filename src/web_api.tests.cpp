@@ -1472,6 +1472,32 @@ TEST_CASE("Web API maps stable error codes onto HTTP status codes")
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("EMULE_ERROR"), 500);
 }
 
+TEST_CASE("Web API classifies native REST API key failures without exposing wrong keys")
+{
+	WebServerJsonSeams::SApiAuthResult auth = WebServerJsonSeams::ValidateApiKey("", "");
+	CHECK_FALSE(auth.bAllowed);
+	CHECK_EQ(auth.strErrorCode, "EMULE_UNAVAILABLE");
+	CHECK_EQ(auth.strErrorMessage, "REST API key is not configured");
+	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError(auth.strErrorCode), 503);
+
+	auth = WebServerJsonSeams::ValidateApiKey("secret", "");
+	CHECK_FALSE(auth.bAllowed);
+	CHECK_EQ(auth.strErrorCode, "UNAUTHORIZED");
+	CHECK_EQ(auth.strErrorMessage, "missing or invalid X-API-Key");
+	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError(auth.strErrorCode), 401);
+
+	auth = WebServerJsonSeams::ValidateApiKey("secret", "wrong");
+	CHECK_FALSE(auth.bAllowed);
+	CHECK_EQ(auth.strErrorCode, "UNAUTHORIZED");
+	CHECK_EQ(auth.strErrorMessage, "missing or invalid X-API-Key");
+	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError(auth.strErrorCode), 401);
+
+	auth = WebServerJsonSeams::ValidateApiKey("secret", "secret");
+	CHECK(auth.bAllowed);
+	CHECK(auth.strErrorCode.empty());
+	CHECK(auth.strErrorMessage.empty());
+}
+
 TEST_CASE("Web API builds stable native REST error envelopes")
 {
 	const WebServerJsonSeams::json envelope =
