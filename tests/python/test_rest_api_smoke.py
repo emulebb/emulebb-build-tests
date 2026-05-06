@@ -454,12 +454,22 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     routes_by_operation = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
 
     assert routes_by_operation["getApp"]["path"] == "/api/v1/app"
+    assert routes_by_operation["getApp"]["safety"] == "safe"
+    assert routes_by_operation["getApp"]["successResponseStatuses"] == ["200"]
+    assert routes_by_operation["getApp"]["successResponseRefs"] == ["AppResponse"]
+    assert routes_by_operation["getApp"]["responseEnvelope"] == "AppResponse"
     assert routes_by_operation["getSnapshot"]["path"] == "/api/v1/snapshot?limit=7"
     assert routes_by_operation["getTransfer"]["path"] == f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}"
+    assert routes_by_operation["getTransfer"]["responseEnvelope"] == "TransferResponse"
     assert routes_by_operation["downloadSearchResult"]["path"] == (
         f"/api/v1/searches/123/results/{module.REST_SURFACE_MISSING_HASH}/operations/download"
     )
     assert routes_by_operation["shutdownApp"]["safe"] is False
+    assert routes_by_operation["shutdownApp"]["safety"] == "unsafe"
+    assert routes_by_operation["shutdownApp"]["successResponseStatuses"] == ["202"]
+    assert routes_by_operation["shutdownApp"]["responseEnvelope"] == "OkAcceptedResponse"
+    assert all(len(route["successResponseRefs"]) == 1 for route in module.REST_CONTRACT_ROUTES)
+    assert all(route["responseEnvelope"] == route["successResponseRefs"][0] for route in module.REST_CONTRACT_ROUTES)
 
 
 def test_rest_contract_registry_covers_release_families() -> None:
@@ -496,6 +506,8 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
                 "method": "GET",
                 "path": "/api/v1/app",
                 "safe": True,
+                "safety": "safe",
+                "responseEnvelope": "AppResponse",
                 "skipped": False,
                 "ok": True,
                 "outcome": "success",
@@ -507,6 +519,8 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
                 "method": "GET",
                 "path": f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}",
                 "safe": True,
+                "safety": "safe",
+                "responseEnvelope": "TransferResponse",
                 "skipped": False,
                 "ok": True,
                 "outcome": "expected_error",
@@ -518,6 +532,8 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
                 "method": "POST",
                 "path": "/api/v1/app/shutdown",
                 "safe": False,
+                "safety": "unsafe",
+                "responseEnvelope": "OkAcceptedResponse",
                 "skipped": True,
                 "ok": True,
                 "outcome": "skipped_unsafe",
@@ -532,6 +548,8 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
     assert summary["success_count"] == 1
     assert summary["expected_error_count"] == 1
     assert summary["method_counts"] == {"GET": 2, "POST": 1}
+    assert summary["response_envelope_counts"] == {"AppResponse": 1, "TransferResponse": 1, "OkAcceptedResponse": 1}
+    assert summary["safety_counts"] == {"safe": 2, "unsafe": 1}
     assert summary["outcome_counts"]["skipped_unsafe"] == 1
 
 

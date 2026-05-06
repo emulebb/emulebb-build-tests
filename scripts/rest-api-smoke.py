@@ -157,6 +157,8 @@ def _commit_openapi_operation(
     tag: str | None,
     has_request_body: bool,
     request_body_required: bool,
+    success_response_statuses: list[str],
+    success_response_refs: list[str],
 ) -> None:
     """Appends one parsed OpenAPI operation when all required fields are present."""
 
@@ -174,6 +176,8 @@ def _commit_openapi_operation(
             "tag": tag,
             "hasRequestBody": has_request_body,
             "requestBodyRequired": request_body_required,
+            "successResponseStatuses": list(success_response_statuses),
+            "successResponseRefs": list(success_response_refs),
         }
     )
 
@@ -188,6 +192,9 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
     current_tag: str | None = None
     current_has_request_body = False
     current_request_body_required = False
+    current_success_response_statuses: list[str] = []
+    current_success_response_refs: list[str] = []
+    current_response_status: str | None = None
     in_paths = False
     for raw_line in openapi_path.read_text(encoding="utf-8").splitlines():
         if raw_line == "paths:":
@@ -206,6 +213,8 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
                 tag=current_tag,
                 has_request_body=current_has_request_body,
                 request_body_required=current_request_body_required,
+                success_response_statuses=current_success_response_statuses,
+                success_response_refs=current_success_response_refs,
             )
             current_path = raw_line.strip()[:-1]
             current_method = None
@@ -213,6 +222,9 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
             current_tag = None
             current_has_request_body = False
             current_request_body_required = False
+            current_success_response_statuses = []
+            current_success_response_refs = []
+            current_response_status = None
             continue
         stripped = raw_line.strip()
         if stripped in {"get:", "post:", "patch:", "delete:"}:
@@ -224,12 +236,17 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
                 tag=current_tag,
                 has_request_body=current_has_request_body,
                 request_body_required=current_request_body_required,
+                success_response_statuses=current_success_response_statuses,
+                success_response_refs=current_success_response_refs,
             )
             current_method = stripped[:-1]
             current_operation_id = None
             current_tag = None
             current_has_request_body = False
             current_request_body_required = False
+            current_success_response_statuses = []
+            current_success_response_refs = []
+            current_response_status = None
             continue
         if current_method is None:
             continue
@@ -243,6 +260,13 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
             current_has_request_body = True
         elif current_has_request_body and stripped.startswith("required:"):
             current_request_body_required = stripped.split(":", 1)[1].strip().lower() == "true"
+        elif stripped.startswith('"2') and stripped.endswith('":'):
+            current_response_status = stripped.split(":", 1)[0].strip('"')
+        elif current_response_status is not None and stripped.startswith("$ref:"):
+            response_ref = stripped.rsplit("/", 1)[-1].strip('"')
+            current_success_response_statuses.append(current_response_status)
+            current_success_response_refs.append(response_ref)
+            current_response_status = None
     _commit_openapi_operation(
         operations,
         path=current_path,
@@ -251,6 +275,8 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
         tag=current_tag,
         has_request_body=current_has_request_body,
         request_body_required=current_request_body_required,
+        success_response_statuses=current_success_response_statuses,
+        success_response_refs=current_success_response_refs,
     )
     return operations
 
@@ -283,6 +309,10 @@ def build_openapi_contract_routes(openapi_path: Path = OPENAPI_CONTRACT_PATH) ->
             raise RuntimeError(f"OpenAPI tag is not mapped to a REST family: {tag}")
         operation_id = operation["operationId"]
         openapi_path_value = operation["openapiPath"]
+        safe = operation_id not in UNSAFE_OPENAPI_OPERATIONS
+        success_response_refs = list(operation["successResponseRefs"])
+        if not success_response_refs:
+            raise RuntimeError(f"OpenAPI operation is missing a 2xx response envelope: {operation_id}")
         routes.append(
             {
                 "name": operation_id,
@@ -291,9 +321,13 @@ def build_openapi_contract_routes(openapi_path: Path = OPENAPI_CONTRACT_PATH) ->
                 "method": operation["method"],
                 "path": concrete_contract_path(openapi_path_value, operation_id),
                 "openapiPath": openapi_path_value,
-                "safe": operation_id not in UNSAFE_OPENAPI_OPERATIONS,
+                "safe": safe,
+                "safety": "safe" if safe else "unsafe",
                 "hasRequestBody": bool(operation["hasRequestBody"]),
                 "requestBodyRequired": bool(operation["requestBodyRequired"]),
+                "successResponseStatuses": operation["successResponseStatuses"],
+                "successResponseRefs": success_response_refs,
+                "responseEnvelope": success_response_refs[0],
             }
         )
     return tuple(routes)
@@ -983,12 +1017,18 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str
     coverage_by_family: dict[str, dict[str, int]] = {}
     method_counts: dict[str, int] = {}
     outcome_counts: dict[str, int] = {}
+    response_envelope_counts: dict[str, int] = {}
+    safety_counts: dict[str, int] = {}
     for route in routes:
         family = str(route["family"])
         family_summary = coverage_by_family.setdefault(family, {"total": 0, "exercised": 0, "skipped": 0, "failed": 0})
         family_summary["total"] += 1
         method = str(route.get("method") or "UNKNOWN")
         method_counts[method] = method_counts.get(method, 0) + 1
+        response_envelope = str(route.get("responseEnvelope") or "UNKNOWN")
+        response_envelope_counts[response_envelope] = response_envelope_counts.get(response_envelope, 0) + 1
+        safety = str(route.get("safety") or ("unsafe" if route.get("safe") is False else "safe"))
+        safety_counts[safety] = safety_counts.get(safety, 0) + 1
         outcome = str(route.get("outcome") or ("skipped" if route.get("skipped") else "unknown"))
         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
         if route.get("skipped"):
@@ -1009,6 +1049,8 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str
         "expected_error_count": outcome_counts.get("expected_error", 0),
         "success_count": outcome_counts.get("success", 0),
         "method_counts": method_counts,
+        "response_envelope_counts": response_envelope_counts,
+        "safety_counts": safety_counts,
         "outcome_counts": outcome_counts,
         "routes": routes,
         "coverage_by_family": coverage_by_family,
@@ -1031,8 +1073,12 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             "method": route["method"],
             "path": route["path"],
             "safe": route["safe"],
+            "safety": route["safety"],
             "hasRequestBody": route["hasRequestBody"],
             "requestBodyRequired": route["requestBodyRequired"],
+            "successResponseStatuses": route["successResponseStatuses"],
+            "successResponseRefs": route["successResponseRefs"],
+            "responseEnvelope": route["responseEnvelope"],
             "skipped": False,
             "ok": False,
         }
