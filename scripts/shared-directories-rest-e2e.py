@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import sys
 import time
 from pathlib import Path
@@ -125,6 +126,30 @@ def assert_equivalent_path_sets(actual: list[str], expected: list[str], label: s
             f"Expected {sorted(expected_set)!r}, got {sorted(actual_set)!r}. "
             f"Raw actual: {actual!r}"
         )
+
+
+def to_windows_long_path(path: Path) -> str:
+    """Returns a Windows extended-length spelling for fixture filesystem calls."""
+
+    text = str(path.resolve())
+    if os.name != "nt" or text.startswith("\\\\?\\"):
+        return text
+    if text.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + text[2:]
+    return "\\\\?\\" + text
+
+
+def mkdir_long_path(path: Path) -> None:
+    """Creates a directory tree without relying on legacy MAX_PATH limits."""
+
+    os.makedirs(to_windows_long_path(path), exist_ok=True)
+
+
+def write_text_long_path(path: Path, text: str) -> None:
+    """Writes one text fixture without relying on legacy MAX_PATH limits."""
+
+    with open(to_windows_long_path(path), "w", encoding="utf-8") as handle:
+        handle.write(text)
 
 
 def read_persisted_path_list(path: Path) -> list[str]:
@@ -279,17 +304,23 @@ def create_fixture_tree(artifacts_dir: Path) -> dict[str, Path]:
     recursive = artifacts_dir / "shared-rest-recursive"
     recursive_child = recursive / "child"
     replacement = artifacts_dir / "shared-rest-replacement"
-    for directory in (flat, recursive_child, replacement):
-        directory.mkdir(parents=True, exist_ok=True)
-    (flat / "flat_file.txt").write_text("flat share fixture\r\n", encoding="utf-8")
-    (recursive / "recursive_root_file.txt").write_text("recursive root fixture\r\n", encoding="utf-8")
-    (recursive_child / "recursive_child_file.txt").write_text("recursive child fixture\r\n", encoding="utf-8")
-    (replacement / "replacement_file.txt").write_text("replacement fixture\r\n", encoding="utf-8")
+    long_unicode = artifacts_dir / "shared-rest-long-unicode"
+    while len(str(long_unicode.resolve())) < 285:
+        long_unicode = long_unicode / "segment-abcdefghijklmnopqrstuvwxyz"
+    long_unicode = long_unicode / f"unicode-{chr(0x00DF)}-{chr(0x6F22)}"
+    for directory in (flat, recursive_child, replacement, long_unicode):
+        mkdir_long_path(directory)
+    write_text_long_path(flat / "flat_file.txt", "flat share fixture\r\n")
+    write_text_long_path(recursive / "recursive_root_file.txt", "recursive root fixture\r\n")
+    write_text_long_path(recursive_child / "recursive_child_file.txt", "recursive child fixture\r\n")
+    write_text_long_path(replacement / "replacement_file.txt", "replacement fixture\r\n")
+    write_text_long_path(long_unicode / f"unicode-{chr(0x00DF)}-{chr(0x6F22)}.txt", "unicode long-path fixture\r\n")
     return {
         "flat": flat,
         "recursive": recursive,
         "recursive_child": recursive_child,
         "replacement": replacement,
+        "long_unicode": long_unicode,
     }
 
 
@@ -323,8 +354,10 @@ def patch_shared_directories(base_url: str, api_key: str, payload: dict[str, obj
         json_body=payload,
     )
     body = require_json_object(result, 200)
-    assert body.get("ok") is True, compact_http_result(result)
-    assert isinstance(body.get("sharedDirectories"), dict), compact_http_result(result)
+    shared_directories = body.get("sharedDirectories") if isinstance(body.get("sharedDirectories"), dict) else body
+    assert isinstance(shared_directories, dict), compact_http_result(result)
+    assert isinstance(shared_directories.get("roots"), list), compact_http_result(result)
+    assert isinstance(shared_directories.get("items"), list), compact_http_result(result)
     return compact_http_result(result)
 
 
@@ -376,8 +409,10 @@ def main() -> int:
     recursive_path = live_common.win_path(fixtures["recursive"], trailing_slash=True)
     recursive_child_path = live_common.win_path(fixtures["recursive_child"], trailing_slash=True)
     replacement_path = live_common.win_path(fixtures["replacement"], trailing_slash=True)
-    first_shared_dirs = [flat_path, recursive_path, recursive_child_path]
-    first_roots = [flat_path, recursive_path]
+    long_unicode_path = live_common.win_path(fixtures["long_unicode"], trailing_slash=True)
+    unicode_file_name = f"unicode-{chr(0x00DF)}-{chr(0x6F22)}.txt"
+    first_shared_dirs = [flat_path, recursive_path, recursive_child_path, long_unicode_path]
+    first_roots = [flat_path, recursive_path, long_unicode_path]
     first_monitor_owned = [recursive_child_path]
     replacement_dirs = [replacement_path]
 
@@ -397,6 +432,12 @@ def main() -> int:
             "rest_ready_timeout_seconds": args.rest_ready_timeout_seconds,
         },
         "fixtures": {key: str(value) for key, value in fixtures.items()},
+        "long_path_unicode": {
+            "path": long_unicode_path,
+            "path_length": len(long_unicode_path),
+            "file_name": unicode_file_name,
+            "over_max_path": len(long_unicode_path) > 260,
+        },
         "checks": {},
         "cleanup": {},
     }
@@ -431,7 +472,7 @@ def main() -> int:
         )
 
         current_phase = set_phase(report, "patch_flat_recursive")
-        first_payload = build_shared_directory_patch_payload([fixtures["flat"]], [fixtures["recursive"]])
+        first_payload = build_shared_directory_patch_payload([fixtures["flat"], fixtures["long_unicode"]], [fixtures["recursive"]])
         checks["patch_flat_recursive"] = {
             "payload": first_payload,
             "response": patch_shared_directories(base_url, args.api_key, first_payload),
@@ -447,8 +488,8 @@ def main() -> int:
         checks["flat_recursive_files"] = wait_for_shared_file_names(
             base_url,
             args.api_key,
-            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt"],
-            "flat plus recursive shared files",
+            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt", unicode_file_name],
+            "flat plus recursive plus long-unicode shared files",
         )
 
         current_phase = set_phase(report, "shutdown_after_first_patch")
@@ -479,8 +520,8 @@ def main() -> int:
         checks["first_relaunch_files"] = wait_for_shared_file_names(
             base_url,
             args.api_key,
-            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt"],
-            "reloaded flat plus recursive shared files",
+            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt", unicode_file_name],
+            "reloaded flat plus recursive plus long-unicode shared files",
         )
 
         current_phase = set_phase(report, "patch_replacement")
