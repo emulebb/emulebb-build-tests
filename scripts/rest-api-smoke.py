@@ -1927,6 +1927,20 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={},
     )
+    shared_add_traversal = http_request(
+        base_url,
+        "/api/v1/shared-files",
+        method="POST",
+        api_key=api_key,
+        json_body={"path": "..\\outside\\traversal.bin"},
+    )
+    shared_add_long_unicode = http_request(
+        base_url,
+        "/api/v1/shared-files",
+        method="POST",
+        api_key=api_key,
+        json_body={"path": REST_STRESS_LONG_UNICODE_PATH},
+    )
     shared_delete_bad = http_request(
         base_url,
         f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}",
@@ -1960,6 +1974,18 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="path must be a non-empty string path",
+        ),
+        "add_traversal_path": require_error_response(
+            shared_add_traversal,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="path must point to a file inside a shareable directory",
+        ),
+        "add_long_unicode_path": require_error_response(
+            shared_add_long_unicode,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="path must point to a file inside a shareable directory",
         ),
         "delete_bad_payload": require_error_response(
             shared_delete_bad,
