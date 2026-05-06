@@ -966,7 +966,9 @@ TEST_CASE("Web API exposes a strict route schema registry")
 	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("GET", "/transfers") != NULL));
 	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("PATCH", "/transfers/0123456789abcdef0123456789abcdef") != NULL));
 	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("POST", "/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/ban") != NULL));
+	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpecForAnyMethod("/app") != NULL));
 	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("GET", "/app/version") == NULL));
+	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpecForAnyMethod("/app/version") == NULL));
 	CHECK(static_cast<bool>(WebServerJsonSeams::FindRouteSpec("PUT", "/app") == NULL));
 }
 
@@ -1436,6 +1438,12 @@ TEST_CASE("Web API rejects unknown routes and unsupported HTTP methods")
 
 	errorCode.clear();
 	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/app", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "METHOD_NOT_ALLOWED");
+	CHECK_EQ(errorMessage, "HTTP method is not allowed for this API route");
+
+	errorCode.clear();
+	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PUT", "/api/v1/app", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
@@ -1457,6 +1465,7 @@ TEST_CASE("Web API maps stable error codes onto HTTP status codes")
 {
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("INVALID_ARGUMENT"), 400);
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("UNAUTHORIZED"), 401);
+	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("METHOD_NOT_ALLOWED"), 405);
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("NOT_FOUND"), 404);
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("INVALID_STATE"), 409);
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("EMULE_UNAVAILABLE"), 503);
