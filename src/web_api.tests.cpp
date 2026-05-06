@@ -1646,6 +1646,51 @@ TEST_CASE("Web API classifies malformed version-root paths as native REST reques
 	CHECK_EQ(errorMessage, "path segment must not contain encoded slash");
 }
 
+TEST_CASE("Web API rejects malformed native REST requests before command dispatch")
+{
+	struct SMalformedCase
+	{
+		const char *pszMethod;
+		const char *pszTarget;
+		const char *pszBody;
+		const char *pszContentType;
+		const char *pszErrorCode;
+		const char *pszErrorMessagePrefix;
+	};
+
+	const SMalformedCase cases[] = {
+		{"POST", "/api/v1/searches", "{", "application/json", "INVALID_ARGUMENT", "invalid JSON body:"},
+		{"POST", "/api/v1/searches", R"([])", "application/json", "INVALID_ARGUMENT", "JSON body must be an object"},
+		{"POST", "/api/v1/searches", R"("linux")", "application/json", "INVALID_ARGUMENT", "JSON body must be an object"},
+		{"POST", "/api/v1/searches", "7", "application/json", "INVALID_ARGUMENT", "JSON body must be an object"},
+		{"PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":true})", "text/plain", "INVALID_ARGUMENT", "Content-Type must be application/json for JSON request bodies"},
+		{"PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":true})", "", "INVALID_ARGUMENT", "Content-Type must be application/json for JSON request bodies"},
+		{"GET", "/api/v1/logs?limit=%2x", "", "application/json", "INVALID_ARGUMENT", "malformed percent escape"},
+		{"GET", "/api/v1/logs?limit=10&limit=20", "", "application/json", "INVALID_ARGUMENT", "duplicate query parameter: limit"},
+		{"GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF", "", "application/json", "INVALID_ARGUMENT", "hash must be a 32-character lowercase hex string"},
+		{"GET", "/api/v1/categories/999999999999999999999", "", "application/json", "INVALID_ARGUMENT", "categoryId must be an unsigned decimal string"},
+		{"GET", "/api/v1/unsupported", "", "application/json", "NOT_FOUND", "API route not found"},
+	};
+
+	for (const SMalformedCase &rCase : cases) {
+		WebServerJsonSeams::SApiRoute route;
+		std::string errorCode;
+		std::string errorMessage;
+		CAPTURE(rCase.pszMethod);
+		CAPTURE(rCase.pszTarget);
+		CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+			rCase.pszMethod,
+			rCase.pszTarget,
+			rCase.pszBody,
+			route,
+			errorCode,
+			errorMessage,
+			rCase.pszContentType));
+		CHECK_EQ(errorCode, rCase.pszErrorCode);
+		CHECK(errorMessage.rfind(rCase.pszErrorMessagePrefix, 0) == 0);
+	}
+}
+
 TEST_CASE("Web API maps representative native REST route failures to status codes")
 {
 	struct SFailureCase
