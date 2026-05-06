@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -148,12 +149,14 @@ def load_openapi_method_paths(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> set
 
 
 def _commit_openapi_operation(
-    operations: list[dict[str, str]],
+    operations: list[dict[str, object]],
     *,
     path: str | None,
     method: str | None,
     operation_id: str | None,
     tag: str | None,
+    has_request_body: bool,
+    request_body_required: bool,
 ) -> None:
     """Appends one parsed OpenAPI operation when all required fields are present."""
 
@@ -169,18 +172,22 @@ def _commit_openapi_operation(
             "method": method.upper(),
             "openapiPath": path,
             "tag": tag,
+            "hasRequestBody": has_request_body,
+            "requestBodyRequired": request_body_required,
         }
     )
 
 
-def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[dict[str, str]]:
+def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[dict[str, object]]:
     """Extracts operation metadata from the source OpenAPI YAML without extra dependencies."""
 
-    operations: list[dict[str, str]] = []
+    operations: list[dict[str, object]] = []
     current_path: str | None = None
     current_method: str | None = None
     current_operation_id: str | None = None
     current_tag: str | None = None
+    current_has_request_body = False
+    current_request_body_required = False
     in_paths = False
     for raw_line in openapi_path.read_text(encoding="utf-8").splitlines():
         if raw_line == "paths:":
@@ -197,11 +204,15 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
                 method=current_method,
                 operation_id=current_operation_id,
                 tag=current_tag,
+                has_request_body=current_has_request_body,
+                request_body_required=current_request_body_required,
             )
             current_path = raw_line.strip()[:-1]
             current_method = None
             current_operation_id = None
             current_tag = None
+            current_has_request_body = False
+            current_request_body_required = False
             continue
         stripped = raw_line.strip()
         if stripped in {"get:", "post:", "patch:", "delete:"}:
@@ -211,10 +222,14 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
                 method=current_method,
                 operation_id=current_operation_id,
                 tag=current_tag,
+                has_request_body=current_has_request_body,
+                request_body_required=current_request_body_required,
             )
             current_method = stripped[:-1]
             current_operation_id = None
             current_tag = None
+            current_has_request_body = False
+            current_request_body_required = False
             continue
         if current_method is None:
             continue
@@ -224,12 +239,18 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
             tag_text = stripped.split(":", 1)[1].strip()
             if tag_text.startswith("[") and tag_text.endswith("]"):
                 current_tag = tag_text[1:-1].split(",", 1)[0].strip()
+        elif stripped == "requestBody:":
+            current_has_request_body = True
+        elif current_has_request_body and stripped.startswith("required:"):
+            current_request_body_required = stripped.split(":", 1)[1].strip().lower() == "true"
     _commit_openapi_operation(
         operations,
         path=current_path,
         method=current_method,
         operation_id=current_operation_id,
         tag=current_tag,
+        has_request_body=current_has_request_body,
+        request_body_required=current_request_body_required,
     )
     return operations
 
@@ -271,6 +292,8 @@ def build_openapi_contract_routes(openapi_path: Path = OPENAPI_CONTRACT_PATH) ->
                 "path": concrete_contract_path(openapi_path_value, operation_id),
                 "openapiPath": openapi_path_value,
                 "safe": operation_id not in UNSAFE_OPENAPI_OPERATIONS,
+                "hasRequestBody": bool(operation["hasRequestBody"]),
+                "requestBodyRequired": bool(operation["requestBodyRequired"]),
             }
         )
     return tuple(routes)
@@ -308,6 +331,11 @@ def assert_contract_routes_match_openapi() -> dict[str, object]:
     duplicate_operation_ids = sorted({operation_id for operation_id in operation_ids if operation_ids.count(operation_id) > 1})
     missing_from_registry = sorted(openapi_routes - registry_routes)
     missing_from_openapi = sorted(registry_routes - openapi_routes)
+    missing_required_body_payloads = sorted(
+        str(route["operationId"])
+        for route in REST_CONTRACT_ROUTES
+        if bool(route["requestBodyRequired"]) and get_contract_route_body(str(route["operationId"])) is None
+    )
     return {
         "openapi_route_count": len(openapi_routes),
         "registry_route_count": len(registry_routes),
@@ -315,7 +343,8 @@ def assert_contract_routes_match_openapi() -> dict[str, object]:
         "duplicate_operation_ids": duplicate_operation_ids,
         "missing_from_registry": missing_from_registry,
         "missing_from_openapi": missing_from_openapi,
-        "ok": not missing_from_registry and not missing_from_openapi and not duplicate_operation_ids,
+        "missing_required_body_payloads": missing_required_body_payloads,
+        "ok": not missing_from_registry and not missing_from_openapi and not duplicate_operation_ids and not missing_required_body_payloads,
     }
 REST_STRESS_READ_PATHS = (
     "/api/v1/app",
@@ -583,6 +612,9 @@ def http_request(
     method: str = "GET",
     api_key: str | None = None,
     json_body=None,
+    raw_body: bytes | str | None = None,
+    content_type: str | None = None,
+    extra_headers: dict[str, str] | None = None,
     request_timeout_seconds: float = 5.0,
 ) -> dict[str, object]:
     """Performs one HTTP request and returns a compact structured result."""
@@ -591,9 +623,17 @@ def http_request(
     headers: dict[str, str] = {}
     if api_key is not None:
         headers["X-API-Key"] = api_key
+    if extra_headers:
+        headers.update(extra_headers)
+    if json_body is not None and raw_body is not None:
+        raise ValueError("json_body and raw_body are mutually exclusive")
     if json_body is not None:
         data = json.dumps(json_body).encode("utf-8")
-        headers["Content-Type"] = "application/json; charset=utf-8"
+        headers["Content-Type"] = content_type or "application/json; charset=utf-8"
+    elif raw_body is not None:
+        data = raw_body.encode("utf-8") if isinstance(raw_body, str) else raw_body
+        if content_type is not None:
+            headers["Content-Type"] = content_type
 
     request = urllib.request.Request(base_url + path, data=data, method=method, headers=headers)
     try:
@@ -607,6 +647,7 @@ def http_request(
             return {
                 "status": int(response.status),
                 "content_type": content_type,
+                "headers": dict(response.headers.items()),
                 "body_text": body_text,
                 "json": unwrap_rest_payload(payload),
                 "raw_json": payload,
@@ -620,6 +661,7 @@ def http_request(
         return {
             "status": int(exc.code),
             "content_type": content_type,
+            "headers": dict(exc.headers.items()),
             "body_text": body_text,
             "json": unwrap_rest_payload(payload),
             "raw_json": payload,
@@ -974,6 +1016,8 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             "method": route["method"],
             "path": route["path"],
             "safe": route["safe"],
+            "hasRequestBody": route["hasRequestBody"],
+            "requestBodyRequired": route["requestBodyRequired"],
             "skipped": False,
             "ok": False,
         }
@@ -983,12 +1027,15 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             continue
         start = time.monotonic()
         try:
+            request_body = get_contract_route_body(str(route["name"])) if bool(route["hasRequestBody"]) else None
+            if bool(route["requestBodyRequired"]) and request_body is None:
+                raise RuntimeError(f"OpenAPI operation requires a request body but no safe contract payload is registered: {route['name']}")
             result = http_request(
                 base_url,
                 str(route["path"]),
                 method=str(route["method"]),
                 api_key=api_key,
-                json_body=get_contract_route_body(str(route["name"])),
+                json_body=request_body,
             )
             status = int(result["status"])
             if 200 <= status < 300:
@@ -1024,6 +1071,8 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
 def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     """Returns the safe payload used to exercise one REST contract route."""
 
+    if route_name in {"app_shutdown", "shutdownApp"}:
+        return {"confirmShutdown": True}
     if route_name in {"app_preferences_patch", "patchPreferences"}:
         return {"safeServerConnect": True}
     if route_name in {"categories_create", "createCategory"}:
@@ -1050,7 +1099,7 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     }:
         return {}
     if route_name in {"transfers_clear_completed", "clearCompletedTransfers"}:
-        return {}
+        return {"confirmClearCompleted": True}
     if route_name in {"transfers_delete", "deleteTransfer"}:
         return {"deleteFiles": False}
     if route_name.startswith("transfers_source_") or route_name in {
@@ -1067,6 +1116,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {}
     if route_name in {"shared_files_patch", "patchSharedFile"}:
         return {"comment": "rest contract", "rating": 4}
+    if route_name in {"shared_files_delete", "deleteSharedFile"}:
+        return {"deleteFiles": False}
     if route_name in {"shared_files_reload", "reloadSharedFiles", "replaceSharedDirectories", "reloadSharedDirectories"}:
         return {}
     if route_name.startswith("uploads_") or route_name.startswith("upload_queue_") or route_name in {
@@ -1101,7 +1152,9 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {"query": "", "method": "automatic", "type": "any"}
     if route_name in {"searches_download_result", "downloadSearchResult"}:
         return {"paused": True, "categoryId": 0}
-    if route_name in {"searches_delete", "searches_delete_all", "deleteSearch", "deleteSearches"}:
+    if route_name in {"searches_delete_all", "deleteSearches"}:
+        return {"confirmDeleteAllSearches": True}
+    if route_name in {"searches_delete", "deleteSearch"}:
         return {}
     if route_name in {"friends_create", "createFriend"}:
         return {"userHash": REST_SURFACE_MISSING_HASH, "name": "REST contract"}
@@ -1670,7 +1723,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             shared_delete_bad,
             400,
             "INVALID_ARGUMENT",
-            message_contains="deleteFiles must be a boolean",
+            message_contains="deleteFiles must be an explicit boolean",
         ),
         "reload": compact_http_result(shared_reload),
     }
@@ -1723,6 +1776,42 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "categoryName": "Default",
         },
     )
+    missing_delete_confirmation = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={},
+    )
+    missing_clear_completed_confirmation = http_request(
+        base_url,
+        "/api/v1/transfers/operations/clear-completed",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
+    missing_shutdown_confirmation = http_request(
+        base_url,
+        "/api/v1/app/shutdown",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
+    missing_delete_all_searches_confirmation = http_request(
+        base_url,
+        "/api/v1/searches",
+        method="DELETE",
+        api_key=api_key,
+        json_body={},
+    )
+    bad_json_content_type = http_request(
+        base_url,
+        "/api/v1/app/preferences",
+        method="PATCH",
+        api_key=api_key,
+        raw_body=json.dumps({"safeServerConnect": True}),
+        content_type="text/plain",
+    )
     surface["errors"] = {
         "missing_route": require_error_response(missing_route, 404, "NOT_FOUND", message_contains="API route not found"),
         "invalid_method": require_error_response(
@@ -1773,6 +1862,36 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "INVALID_ARGUMENT",
             message_contains="categoryId and categoryName are mutually exclusive",
         ),
+        "missing_delete_confirmation": require_error_response(
+            missing_delete_confirmation,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="deleteFiles must be an explicit boolean",
+        ),
+        "missing_clear_completed_confirmation": require_error_response(
+            missing_clear_completed_confirmation,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="confirmClearCompleted must be true",
+        ),
+        "missing_shutdown_confirmation": require_error_response(
+            missing_shutdown_confirmation,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="confirmShutdown must be true",
+        ),
+        "missing_delete_all_searches_confirmation": require_error_response(
+            missing_delete_all_searches_confirmation,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="confirmDeleteAllSearches must be true",
+        ),
+        "bad_json_content_type": require_error_response(
+            bad_json_content_type,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="Content-Type must be application/json",
+        ),
     }
 
     server_payload = dict(REST_SURFACE_TEST_SERVER)
@@ -1810,6 +1929,112 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     }
 
     return surface
+
+
+def get_response_header(result: dict[str, object], header_name: str) -> str:
+    """Returns one response header case-insensitively from an http_request result."""
+
+    headers = result.get("headers")
+    if not isinstance(headers, dict):
+        return ""
+    for name, value in headers.items():
+        if str(name).lower() == header_name.lower():
+            return str(value)
+    return ""
+
+
+def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]:
+    """Exercises low-risk qBit/Torznab adapter flows without triggering live downloads."""
+
+    smoke: dict[str, object] = {}
+
+    torznab_unauthorized = http_request(base_url, "/indexer/emulebb/api?t=caps")
+    assert int(torznab_unauthorized["status"]) == 401, compact_http_result(torznab_unauthorized)
+
+    torznab_caps_header = http_request(base_url, "/indexer/emulebb/api?t=caps", api_key=api_key)
+    assert int(torznab_caps_header["status"]) == 200, compact_http_result(torznab_caps_header)
+    assert "<caps>" in str(torznab_caps_header.get("body_text") or ""), compact_http_result(torznab_caps_header)
+
+    torznab_caps_query = http_request(
+        base_url,
+        "/indexer/emulebb/api?t=caps&apikey=" + urllib.parse.quote(api_key, safe=""),
+    )
+    assert int(torznab_caps_query["status"]) == 200, compact_http_result(torznab_caps_query)
+
+    torznab_duplicate_query = http_request(
+        base_url,
+        "/indexer/emulebb/api?t=caps&t=search",
+        api_key=api_key,
+    )
+    assert int(torznab_duplicate_query["status"]) == 400, compact_http_result(torznab_duplicate_query)
+    smoke["torznab"] = {
+        "unauthorized": compact_http_result(torznab_unauthorized),
+        "caps_header_auth": compact_http_result(torznab_caps_header),
+        "caps_query_auth": compact_http_result(torznab_caps_query),
+        "duplicate_query": compact_http_result(torznab_duplicate_query),
+    }
+
+    qbit_public_version = http_request(base_url, "/api/v2/app/webapiVersion")
+    assert int(qbit_public_version["status"]) == 200, compact_http_result(qbit_public_version)
+    assert str(qbit_public_version.get("body_text") or "").startswith("2."), compact_http_result(qbit_public_version)
+
+    qbit_categories_unauthenticated = http_request(base_url, "/api/v2/torrents/categories")
+    assert int(qbit_categories_unauthenticated["status"]) == 403, compact_http_result(qbit_categories_unauthenticated)
+
+    login_form = urllib.parse.urlencode({"username": "emule", "password": api_key})
+    qbit_login = http_request(
+        base_url,
+        "/api/v2/auth/login",
+        method="POST",
+        raw_body=login_form,
+        content_type="application/x-www-form-urlencoded",
+    )
+    assert int(qbit_login["status"]) == 200, compact_http_result(qbit_login)
+    assert str(qbit_login.get("body_text") or "") == "Ok.", compact_http_result(qbit_login)
+    session_cookie = get_response_header(qbit_login, "Set-Cookie")
+    assert "SID=" in session_cookie, compact_http_result(qbit_login)
+    cookie_pair = session_cookie.split(";", 1)[0]
+
+    qbit_categories = http_request(
+        base_url,
+        "/api/v2/torrents/categories",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_categories["status"]) == 200, compact_http_result(qbit_categories)
+    assert isinstance(qbit_categories.get("json"), dict), compact_http_result(qbit_categories)
+    assert "Default" in qbit_categories["json"], compact_http_result(qbit_categories)
+
+    qbit_duplicate_query = http_request(
+        base_url,
+        "/api/v2/torrents/info?category=Movies&category=TV",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_duplicate_query["status"]) == 400, compact_http_result(qbit_duplicate_query)
+
+    qbit_bad_form = http_request(
+        base_url,
+        "/api/v2/torrents/createCategory",
+        method="POST",
+        raw_body="=bad",
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_bad_form["status"]) == 400, compact_http_result(qbit_bad_form)
+
+    smoke["qbit"] = {
+        "public_version": compact_http_result(qbit_public_version),
+        "categories_unauthenticated": compact_http_result(qbit_categories_unauthenticated),
+        "login": {
+            "status": qbit_login["status"],
+            "content_type": qbit_login.get("content_type"),
+            "has_session_cookie": bool(cookie_pair),
+        },
+        "categories": compact_http_result(qbit_categories),
+        "duplicate_query": compact_http_result(qbit_duplicate_query),
+        "bad_form": compact_http_result(qbit_bad_form),
+    }
+
+    return smoke
 
 
 def wait_for_server_activity(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
@@ -2739,6 +2964,9 @@ def main() -> int:
 
         current_phase = set_phase(report, "rest_surface")
         report["checks"]["rest_surface"] = exercise_rest_surface_smoke(base_url, args.api_key)
+
+        current_phase = set_phase(report, "arr_adapters")
+        report["checks"]["arr_adapters"] = exercise_arr_adapter_smoke(base_url, args.api_key)
 
         if args.rest_coverage_budget != "smoke" and not args.skip_rest_contract_completeness:
             current_phase = set_phase(report, "rest_contract")
