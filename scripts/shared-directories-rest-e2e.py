@@ -49,6 +49,7 @@ wait_for_rest_ready = rest_api_smoke.wait_for_rest_ready
 SUITE_NAME = "shared-directories-rest-e2e"
 SHARED_DIRECTORIES_ROUTE = "/api/v1/shared-directories"
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
+CATEGORIES_ROUTE = "/api/v1/categories"
 PATH_LIST_FILES = {
     "shared": "shareddir.dat",
     "monitored": "shareddir.monitored.dat",
@@ -405,6 +406,39 @@ def patch_shared_directories_error(
     return compact_http_result(result)
 
 
+def create_category(base_url: str, api_key: str, name: str, path: str) -> dict[str, object]:
+    """Creates one category and returns the compact response plus parsed id."""
+
+    result = http_request(
+        base_url,
+        CATEGORIES_ROUTE,
+        method="POST",
+        api_key=api_key,
+        json_body={"name": name, "path": path},
+    )
+    body = require_json_object(result, 200)
+    assert isinstance(body.get("id"), int), compact_http_result(result)
+    assert body.get("name") == name, compact_http_result(result)
+    assert body.get("path") == path, compact_http_result(result)
+    compact = compact_http_result(result)
+    compact["category_id"] = body["id"]
+    return compact
+
+
+def delete_category(base_url: str, api_key: str, category_id: int) -> dict[str, object]:
+    """Deletes one non-default category created during the live scenario."""
+
+    result = http_request(
+        base_url,
+        f"{CATEGORIES_ROUTE}/{category_id}",
+        method="DELETE",
+        api_key=api_key,
+    )
+    body = require_json_object(result, 200)
+    assert body.get("ok") is True, compact_http_result(result)
+    return compact_http_result(result)
+
+
 def main() -> int:
     """Runs the shared-directory REST persistence scenario."""
 
@@ -582,6 +616,14 @@ def main() -> int:
             description="empty shared-directory model after missing-parent clear",
             timeout_seconds=15.0,
         )
+
+        current_phase = set_phase(report, "category_long_unicode_path")
+        category_name = "REST long Unicode path"
+        category_create = create_category(base_url, args.api_key, category_name, long_unicode_path)
+        checks["category_long_unicode_create"] = category_create
+        category_id = category_create["category_id"]
+        assert isinstance(category_id, int), category_create
+        checks["category_long_unicode_delete"] = delete_category(base_url, args.api_key, category_id)
 
         current_phase = set_phase(report, "patch_flat_recursive")
         first_payload = build_shared_directory_patch_payload([fixtures["flat"], fixtures["long_unicode"]], [fixtures["recursive"]])
