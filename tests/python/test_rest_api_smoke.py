@@ -156,6 +156,7 @@ def test_rest_error_response_requires_json_not_html() -> None:
         },
     }
 
+    assert module.is_native_rest_json_response(error_result) is True
     assert module.require_error_response(error_result, 404, "NOT_FOUND")["error"] == "NOT_FOUND"
 
     method_not_allowed = {
@@ -181,6 +182,7 @@ def test_rest_error_response_requires_json_not_html() -> None:
     assert module.require_error_response(method_not_allowed, 405, "METHOD_NOT_ALLOWED")["error"] == "METHOD_NOT_ALLOWED"
 
     html_content_type = {**error_result, "content_type": "text/html; charset=utf-8"}
+    assert module.is_native_rest_json_response(html_content_type) is False
     with pytest.raises(AssertionError):
         module.require_error_response(html_content_type, 404, "NOT_FOUND")
 
@@ -823,9 +825,34 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
 
     summary = module.summarize_rest_stress_results(
         [
-            {"path": "/ok", "status": 200, "ok": True, "duration_ms": 1.0, "scenario": "read"},
-            {"path": "/missing", "status": 404, "ok": True, "duration_ms": 4.0, "scenario": "safe_mutation"},
-            {"path": "/boom", "status": "exception", "ok": False, "duration_ms": 9.0, "error": "timeout", "scenario": "read"},
+            {
+                "path": "/ok",
+                "status": 200,
+                "ok": True,
+                "duration_ms": 1.0,
+                "scenario": "read",
+                "content_type": "application/json; charset=utf-8",
+                "native_rest_json": True,
+            },
+            {
+                "path": "/missing",
+                "status": 404,
+                "ok": True,
+                "duration_ms": 4.0,
+                "scenario": "safe_mutation",
+                "content_type": "application/json; charset=utf-8",
+                "native_rest_json": True,
+            },
+            {
+                "path": "/boom",
+                "status": "exception",
+                "ok": False,
+                "duration_ms": 9.0,
+                "error": "timeout",
+                "scenario": "read",
+                "content_type": "text/html",
+                "native_rest_json": False,
+            },
         ],
         budget="smoke",
         duration_seconds=30.0,
@@ -839,7 +866,10 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["status_counts"] == {"200": 1, "404": 1, "exception": 1}
     assert summary["method_counts"] == {"UNKNOWN": 3}
     assert summary["scenario_counts"] == {"read": 2, "safe_mutation": 1}
+    assert summary["content_type_counts"] == {"application/json; charset=utf-8": 2, "text/html": 1}
     assert summary["error_counts"] == {"timeout": 1}
+    assert summary["timeout_count"] == 1
+    assert summary["native_rest_non_json_count"] == 1
     assert summary["latency_ms"]["max"] == 9.0
     assert len(summary["failures_sample"]) == 1
 

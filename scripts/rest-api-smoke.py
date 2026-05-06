@@ -786,6 +786,14 @@ def require_error_response(
     return payload
 
 
+def is_native_rest_json_response(result: dict[str, object]) -> bool:
+    """Returns whether one native REST response stayed on the JSON envelope path."""
+
+    content_type = str(result.get("content_type") or "").lower()
+    body_text = str(result.get("body_text") or "").lower()
+    return "application/json" in content_type and "text/html" not in content_type and "<html" not in body_text
+
+
 def require_legacy_non_json_response(result: dict[str, object], expected_status: int) -> None:
     """Asserts one legacy WebServer response did not enter the native REST envelope path."""
 
@@ -964,6 +972,7 @@ def summarize_rest_stress_results(
     method_counts: dict[str, int] = {}
     family_counts: dict[str, int] = {}
     scenario_counts: dict[str, int] = {}
+    content_type_counts: dict[str, int] = {}
     error_counts: dict[str, int] = {}
     durations = []
     failures = []
@@ -976,6 +985,8 @@ def summarize_rest_stress_results(
         family_counts[family] = family_counts.get(family, 0) + 1
         scenario = str(row.get("scenario") or "unknown")
         scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
+        content_type = str(row.get("content_type") or "unknown")
+        content_type_counts[content_type] = content_type_counts.get(content_type, 0) + 1
         duration_ms = row.get("duration_ms")
         if isinstance(duration_ms, int | float):
             durations.append(float(duration_ms))
@@ -998,7 +1009,10 @@ def summarize_rest_stress_results(
         "method_counts": method_counts,
         "family_counts": family_counts,
         "scenario_counts": scenario_counts,
+        "content_type_counts": content_type_counts,
         "error_counts": error_counts,
+        "timeout_count": len([row for row in rows if row.get("status") == "exception" and "timeout" in str(row.get("error") or "").lower()]),
+        "native_rest_non_json_count": len([row for row in rows if not bool(row.get("native_rest_json", True))]),
         "latency_ms": {
             "min": round(min(durations), 3) if durations else 0.0,
             "p50": percentile(durations, 50.0),
@@ -1276,14 +1290,18 @@ def exercise_rest_stress(
             )
             status = int(result["status"])
             expected_match = not expected_statuses or status in expected_statuses
+            native_rest_json = is_native_rest_json_response(result)
             return {
                 "method": method,
                 "path": path,
                 "family": family,
                 "scenario": scenario,
                 "status": status,
-                "ok": expected_match if expected_statuses else 200 <= status < 500,
+                "ok": (expected_match if expected_statuses else 200 <= status < 500) and native_rest_json,
                 "expected_statuses": list(expected_statuses),
+                "content_type": str(result.get("content_type") or ""),
+                "native_rest_json": native_rest_json,
+                "error": None if native_rest_json else "native REST response was not JSON",
                 "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
             }
         except Exception as exc:
