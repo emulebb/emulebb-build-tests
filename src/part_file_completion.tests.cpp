@@ -6,6 +6,7 @@
 #include "PartFileCompletionSeams.h"
 
 #include <vector>
+#include <windows.h>
 
 TEST_SUITE_BEGIN("parity");
 
@@ -121,6 +122,40 @@ TEST_CASE("File completion command seam accepts only executable program extensio
 	CHECK_FALSE(FileCompletionCommandSeams::HasSupportedProgramExtension(CString(_T("C:\\Tools\\complete.bat"))));
 	CHECK_FALSE(FileCompletionCommandSeams::HasSupportedProgramExtension(CString(_T("C:\\Tools\\complete"))));
 	CHECK(FileCompletionCommandSeams::QuoteCommandLineArgument(CString(_T("C:\\Incoming\\"))) == CString(_T("\"C:\\Incoming\\\\\"")));
+}
+
+TEST_CASE("File completion command seam preserves shell metacharacters as literal arguments")
+{
+	FileCompletionCommandSeams::CompletionCommandContext context;
+	context.enabled = true;
+	context.completionSucceeded = true;
+	context.knownFileAdded = true;
+	context.programPath = _T("C:\\Tools\\complete.exe");
+	context.argumentTemplate = _T("--literal %TEMP% --pipe | --amp & --file %F");
+	context.filePath = _T("C:\\Incoming\\literal test.bin");
+	context.directory = _T("C:\\Incoming");
+
+	FileCompletionCommandSeams::CompletionCommandLaunchRequest request;
+	REQUIRE(FileCompletionCommandSeams::TryBuildLaunchRequest(context, request));
+
+	CHECK(request.commandLine == CString(_T("\"C:\\Tools\\complete.exe\" --literal %TEMP% --pipe | --amp & --file \"C:\\Incoming\\literal test.bin\"")));
+}
+
+TEST_CASE("File completion command seam validates existing executable configuration")
+{
+	TCHAR systemDirectory[MAX_PATH] = {};
+	REQUIRE(::GetSystemDirectory(systemDirectory, _countof(systemDirectory)) > 0);
+	CString cmdPath(systemDirectory);
+	cmdPath += _T("\\cmd.exe");
+	CString missingExe(systemDirectory);
+	missingExe += _T("\\missing-emule-completion-command.exe");
+	CString scriptPath(systemDirectory);
+	scriptPath += _T("\\WindowsPowerShell\\v1.0\\powershell.ps1");
+
+	CHECK(FileCompletionCommandSeams::IsValidConfiguredProgramPath(cmdPath));
+	CHECK_FALSE(FileCompletionCommandSeams::IsValidConfiguredProgramPath(missingExe));
+	CHECK_FALSE(FileCompletionCommandSeams::IsValidConfiguredProgramPath(scriptPath));
+	CHECK_FALSE(FileCompletionCommandSeams::IsValidConfiguredProgramPath(CString()));
 }
 
 TEST_SUITE_END;
