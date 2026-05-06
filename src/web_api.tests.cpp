@@ -682,6 +682,26 @@ TEST_CASE("Web API recognizes REST request targets without disturbing legacy HTM
 	CHECK_FALSE(WebServerJsonSeams::IsApiRequestTarget("/serverlist"));
 }
 
+TEST_CASE("Web API leaves legacy HTML GET targets outside REST and compat dispatch")
+{
+	const char *const pszLegacyTargets[] = {
+		"/",
+		"/serverlist",
+		"/serverlist?ses=123",
+		"/transfer",
+		"/search?ses=123",
+		"/graphs",
+		"/emule.tmpl"
+	};
+
+	for (const char *const pszTarget : pszLegacyTargets) {
+		CAPTURE(pszTarget);
+		CHECK_FALSE(WebServerJsonSeams::IsApiRequestTarget(pszTarget));
+		CHECK_FALSE(WebServerArrCompatSeams::IsArrCompatRequestTarget(pszTarget));
+		CHECK_FALSE(WebServerQBitCompatSeams::IsQBitRequestTarget(pszTarget));
+	}
+}
+
 TEST_CASE("Web API recognizes the Prowlarr Torznab compatibility endpoint")
 {
 	std::string path;
