@@ -80,6 +80,7 @@ REST_SURFACE_TEST_SERVER = {
 }
 REST_SURFACE_MISSING_HASH = "0123456789abcdef0123456789abcdef"
 REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
+REST_SURFACE_UNICODE_DOWNLOAD_HASH = "abcdef0123456789fedcba9876543210"
 REST_PREFERENCE_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
@@ -1708,9 +1709,40 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     transfer_add_valid_payload = require_json_object(transfer_add_valid, 200)
     transfer_added = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}", api_key=api_key)
     transfer_added_payload = require_json_object(transfer_added, 200)
+    unicode_transfer_name = "rest-api-unicode-ß-漢.bin"
+    unicode_transfer_link = (
+        "ed2k://|file|"
+        f"{urllib.parse.quote(unicode_transfer_name, safe='')}"
+        f"|2048|{REST_SURFACE_UNICODE_DOWNLOAD_HASH}|/"
+    )
+    transfer_add_unicode = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={
+            "link": unicode_transfer_link,
+            "paused": True,
+            "categoryId": 0,
+        },
+        request_timeout_seconds=30.0,
+    )
+    transfer_add_unicode_payload = require_json_object(transfer_add_unicode, 200)
+    transfer_added_unicode = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_UNICODE_DOWNLOAD_HASH}", api_key=api_key)
+    transfer_added_unicode_payload = require_json_object(transfer_added_unicode, 200)
+    assert transfer_add_unicode_payload.get("hash") == REST_SURFACE_UNICODE_DOWNLOAD_HASH, compact_http_result(transfer_add_unicode)
+    assert transfer_added_unicode_payload.get("name") == unicode_transfer_name, compact_http_result(transfer_added_unicode)
     transfer_delete_added = http_request(
         base_url,
         f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"deleteFiles": True},
+        request_timeout_seconds=30.0,
+    )
+    transfer_delete_unicode = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_UNICODE_DOWNLOAD_HASH}",
         method="DELETE",
         api_key=api_key,
         json_body={"deleteFiles": True},
@@ -1772,6 +1804,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "hash": transfer_add_valid_payload.get("hash"),
             "state": transfer_added_payload.get("state"),
             "delete": require_transfer_bulk_result(transfer_delete_added, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+        },
+        "add_unicode_filename": {
+            "status": transfer_add_unicode["status"],
+            "hash": transfer_add_unicode_payload.get("hash"),
+            "name": transfer_added_unicode_payload.get("name"),
+            "state": transfer_added_unicode_payload.get("state"),
+            "delete": require_transfer_bulk_result(transfer_delete_unicode, REST_SURFACE_UNICODE_DOWNLOAD_HASH, True),
         },
         "recheck_missing": require_error_response(transfer_recheck_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "priority_missing": require_error_response(transfer_priority_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
