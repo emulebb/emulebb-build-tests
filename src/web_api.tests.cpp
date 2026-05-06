@@ -1462,3 +1462,27 @@ TEST_CASE("Web API maps stable error codes onto HTTP status codes")
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("EMULE_UNAVAILABLE"), 503);
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("EMULE_ERROR"), 500);
 }
+
+TEST_CASE("Web API builds stable native REST error envelopes")
+{
+	const WebServerJsonSeams::json envelope =
+		WebServerJsonSeams::BuildErrorEnvelopeJson("INVALID_ARGUMENT", "bad input");
+
+	REQUIRE(envelope.contains("error"));
+	const WebServerJsonSeams::json &error = envelope["error"];
+	CHECK_EQ(error["code"].get<std::string>(), "INVALID_ARGUMENT");
+	CHECK_EQ(error["message"].get<std::string>(), "bad input");
+	CHECK(error["details"].is_object());
+	CHECK(error["details"].empty());
+
+	const WebServerJsonSeams::json details = WebServerJsonSeams::json{{"field", "limit"}};
+	const WebServerJsonSeams::json fallback =
+		WebServerJsonSeams::BuildErrorEnvelopeJson("", "failed", details);
+	CHECK_EQ(fallback["error"]["code"].get<std::string>(), "EMULE_ERROR");
+	CHECK_EQ(fallback["error"]["details"]["field"].get<std::string>(), "limit");
+
+	const WebServerJsonSeams::json boundedDetails =
+		WebServerJsonSeams::BuildErrorEnvelopeJson("EMULE_ERROR", "failed", WebServerJsonSeams::json::array());
+	CHECK(boundedDetails["error"]["details"].is_object());
+	CHECK(boundedDetails["error"]["details"].empty());
+}
