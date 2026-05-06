@@ -43,6 +43,7 @@ get_app_process_id = rest_api_smoke.get_app_process_id
 http_request = rest_api_smoke.http_request
 require_json_array = rest_api_smoke.require_json_array
 require_json_object = rest_api_smoke.require_json_object
+require_error_response = rest_api_smoke.require_error_response
 wait_for_rest_ready = rest_api_smoke.wait_for_rest_ready
 
 SUITE_NAME = "shared-directories-rest-e2e"
@@ -254,6 +255,25 @@ def wait_for_shared_directory_paths(
     return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=description)
 
 
+def assert_directory_accessibility(check: dict[str, object], path: str, expected_accessible: bool) -> None:
+    """Asserts one reported shared-directory row has the expected accessibility."""
+
+    model = check.get("model")
+    assert isinstance(model, dict), check
+    items = model.get("items")
+    assert isinstance(items, list), check
+    expected_path = normalize_path_text(path)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_path = item.get("path")
+        if isinstance(item_path, str) and normalize_path_text(item_path) == expected_path:
+            if item.get("accessible") != expected_accessible:
+                raise AssertionError(f"Expected {path!r} accessible={expected_accessible}, got {item!r}")
+            return
+    raise AssertionError(f"Shared directory {path!r} not found in {items!r}")
+
+
 def wait_for_shared_file_names(
     base_url: str,
     api_key: str,
@@ -358,6 +378,30 @@ def patch_shared_directories(base_url: str, api_key: str, payload: dict[str, obj
     assert isinstance(shared_directories, dict), compact_http_result(result)
     assert isinstance(shared_directories.get("roots"), list), compact_http_result(result)
     assert isinstance(shared_directories.get("items"), list), compact_http_result(result)
+    return compact_http_result(result)
+
+
+def patch_shared_directories_error(
+    base_url: str,
+    api_key: str,
+    payload: dict[str, object],
+    message_contains: str,
+) -> dict[str, object]:
+    """Asserts one invalid shared-directory PATCH fails as native REST JSON."""
+
+    result = http_request(
+        base_url,
+        SHARED_DIRECTORIES_ROUTE,
+        method="PATCH",
+        api_key=api_key,
+        json_body=payload,
+    )
+    require_error_response(
+        result,
+        400,
+        "INVALID_ARGUMENT",
+        message_contains=message_contains,
+    )
     return compact_http_result(result)
 
 
@@ -468,6 +512,74 @@ def main() -> int:
             args.api_key,
             [],
             "initial empty shared-file list",
+            timeout_seconds=15.0,
+        )
+
+        current_phase = set_phase(report, "invalid_patch_checks")
+        missing_parent_path = live_common.win_path(artifacts_dir / "missing-parent" / "child", trailing_slash=True)
+        checks["invalid_patch_blank_path"] = {
+            "payload": {"roots": ["   "]},
+            "response": patch_shared_directories_error(
+                base_url,
+                args.api_key,
+                {"roots": ["   "]},
+                "path must not be empty",
+            ),
+        }
+        checks["invalid_patch_recursive_type"] = {
+            "payload": {"roots": [{"path": flat_path, "recursive": "true"}]},
+            "response": patch_shared_directories_error(
+                base_url,
+                args.api_key,
+                {"roots": [{"path": flat_path, "recursive": "true"}]},
+                "recursive must be a boolean",
+            ),
+        }
+        checks["invalid_patch_state"] = wait_for_shared_directory_paths(
+            base_url,
+            args.api_key,
+            expected_roots=[],
+            expected_items=[],
+            expected_monitor_owned=[],
+            description="empty shared-directory model after invalid patches",
+            timeout_seconds=15.0,
+        )
+
+        current_phase = set_phase(report, "missing_parent_patch")
+        missing_parent_payload = {"roots": [missing_parent_path]}
+        checks["patch_missing_parent"] = {
+            "payload": missing_parent_payload,
+            "response": patch_shared_directories(base_url, args.api_key, missing_parent_payload),
+        }
+        checks["missing_parent_directories"] = wait_for_shared_directory_paths(
+            base_url,
+            args.api_key,
+            expected_roots=[missing_parent_path],
+            expected_items=[missing_parent_path],
+            expected_monitor_owned=[],
+            description="missing-parent shared-directory model",
+            timeout_seconds=15.0,
+        )
+        assert_directory_accessibility(checks["missing_parent_directories"], missing_parent_path, False)
+        checks["missing_parent_files"] = wait_for_shared_file_names(
+            base_url,
+            args.api_key,
+            [],
+            "missing-parent shared-file list",
+            timeout_seconds=15.0,
+        )
+        clear_missing_parent_payload: dict[str, object] = {"roots": []}
+        checks["patch_clear_missing_parent"] = {
+            "payload": clear_missing_parent_payload,
+            "response": patch_shared_directories(base_url, args.api_key, clear_missing_parent_payload),
+        }
+        checks["after_missing_parent_clear"] = wait_for_shared_directory_paths(
+            base_url,
+            args.api_key,
+            expected_roots=[],
+            expected_items=[],
+            expected_monitor_owned=[],
+            description="empty shared-directory model after missing-parent clear",
             timeout_seconds=15.0,
         )
 
