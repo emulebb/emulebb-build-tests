@@ -753,6 +753,16 @@ def require_error_response(
     return payload
 
 
+def require_legacy_non_json_response(result: dict[str, object], expected_status: int) -> None:
+    """Asserts one legacy WebServer response did not enter the native REST envelope path."""
+
+    content_type = str(result.get("content_type") or "").lower()
+    assert int(result["status"]) == expected_status, compact_http_result(result)
+    assert "application/json" not in content_type, compact_http_result(result)
+    assert result.get("raw_json") is None, compact_http_result(result)
+    assert result.get("json") is None, compact_http_result(result)
+
+
 def require_missing_transfer_bulk_result(result: dict[str, object]) -> dict[str, object]:
     """Asserts one bulk transfer mutation reports a per-item missing-transfer result."""
 
@@ -3139,6 +3149,7 @@ def main() -> int:
         current_phase = set_phase(report, "html_root")
         html_root = http_request(base_url, "/")
         assert html_root["status"] == 200
+        require_legacy_non_json_response(html_root, 200)
         assert "text/html" in str(html_root["content_type"]).lower()
         assert "<html" in str(html_root["body_text"]).lower()
         report["checks"]["html_root"] = {

@@ -166,6 +166,43 @@ def test_rest_error_response_requires_json_not_html() -> None:
         module.require_error_response(html_body, 404, "NOT_FOUND")
 
 
+def test_legacy_response_helper_rejects_native_json_envelopes() -> None:
+    module = load_rest_api_smoke_module()
+
+    module.require_legacy_non_json_response(
+        {
+            "status": 200,
+            "content_type": "text/html",
+            "body_text": "<html></html>",
+            "raw_json": None,
+            "json": None,
+        },
+        200,
+    )
+
+    with pytest.raises(AssertionError):
+        module.require_legacy_non_json_response(
+            {
+                "status": 404,
+                "content_type": "application/json; charset=utf-8",
+                "body_text": '{"error":{"code":"NOT_FOUND","message":"API route not found","details":{}}}',
+                "raw_json": {
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "API route not found",
+                        "details": {},
+                    },
+                },
+                "json": {
+                    "error": "NOT_FOUND",
+                    "message": "API route not found",
+                    "details": {},
+                },
+            },
+            404,
+        )
+
+
 def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
     module = load_rest_api_smoke_module()
 
