@@ -1461,6 +1461,49 @@ TEST_CASE("Web API rejects unknown routes and unsupported HTTP methods")
 	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
 }
 
+TEST_CASE("Web API maps representative native REST route failures to status codes")
+{
+	struct SFailureCase
+	{
+		const char *pszMethod;
+		const char *pszTarget;
+		const char *pszBody;
+		const char *pszContentType;
+		const char *pszErrorCode;
+		int iStatus;
+	};
+
+	const SFailureCase cases[] = {
+		{"GET", "/api/v1/app/version", "", "application/json", "NOT_FOUND", 404},
+		{"POST", "/api/v1/app", R"({})", "application/json", "METHOD_NOT_ALLOWED", 405},
+		{"GET", "/api/v1/logs?limit=%2x", "", "application/json", "INVALID_ARGUMENT", 400},
+		{"GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF", "", "application/json", "INVALID_ARGUMENT", 400},
+		{"POST", "/api/v1/searches", "{", "application/json", "INVALID_ARGUMENT", 400},
+		{"POST", "/api/v1/searches", R"([])", "application/json", "INVALID_ARGUMENT", 400},
+		{"PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":true})", "text/plain", "INVALID_ARGUMENT", 400},
+		{"PATCH", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"priority":"high","legacy":true})", "application/json", "INVALID_ARGUMENT", 400},
+		{"DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({})", "application/json", "INVALID_ARGUMENT", 400},
+	};
+
+	for (const SFailureCase &failure : cases) {
+		WebServerJsonSeams::SApiRoute route;
+		std::string errorCode;
+		std::string errorMessage;
+		CAPTURE(failure.pszMethod);
+		CAPTURE(failure.pszTarget);
+		CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+			failure.pszMethod,
+			failure.pszTarget,
+			failure.pszBody,
+			route,
+			errorCode,
+			errorMessage,
+			failure.pszContentType));
+		CHECK_EQ(errorCode, failure.pszErrorCode);
+		CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError(errorCode), failure.iStatus);
+	}
+}
+
 TEST_CASE("Web API maps stable error codes onto HTTP status codes")
 {
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("INVALID_ARGUMENT"), 400);
