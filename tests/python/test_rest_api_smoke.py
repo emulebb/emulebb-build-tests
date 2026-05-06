@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 
 import pytest
 
@@ -243,6 +244,22 @@ def test_rest_contract_registry_matches_openapi() -> None:
     assert summary["duplicate_operation_ids"] == []
     assert summary["missing_from_registry"] == []
     assert summary["missing_from_openapi"] == []
+
+
+def test_native_route_specs_match_openapi_methods_and_paths() -> None:
+    module = load_rest_api_smoke_module()
+    workspace_root = Path(__file__).resolve().parents[4]
+    route_header = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJsonSeams.h"
+    route_specs = re.findall(
+        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*"[^"]*"\s*\}',
+        route_header.read_text(encoding="utf-8"),
+    )
+
+    native_pairs = {(method, path) for method, path in route_specs}
+    openapi_pairs = module.load_openapi_method_paths()
+
+    assert len(route_specs) == len(native_pairs)
+    assert native_pairs == openapi_pairs
 
 
 def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
