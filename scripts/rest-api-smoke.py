@@ -1538,6 +1538,40 @@ def wait_for_upnp_backend_order(base_url: str, api_key: str, timeout_seconds: fl
     return wait_for(resolve, timeout=timeout_seconds, interval=0.5, description="UPnP NAT backend order")
 
 
+def wait_for_log_message_containing(
+    base_url: str,
+    api_key: str,
+    fragment: str,
+    *,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until REST logs expose one message containing the expected text."""
+
+    def resolve():
+        result = http_request(base_url, "/api/v1/logs?limit=400", api_key=api_key)
+        if int(result["status"]) != 200:
+            return None
+        entries = require_json_array(result, 200)
+        messages = extract_log_messages(entries)
+        matched_message = next((message for message in messages if fragment in message), None)
+        if matched_message is None:
+            return None
+        return {
+            "status": int(result["status"]),
+            "matched": True,
+            "fragment": fragment,
+            "message": matched_message,
+            "message_count": len(messages),
+        }
+
+    return wait_for(
+        resolve,
+        timeout=timeout_seconds,
+        interval=0.5,
+        description=f"REST log message containing {fragment!r}",
+    )
+
+
 def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object]:
     """Exercises low-risk REST endpoints that do not depend on external live peers."""
 
@@ -1733,6 +1767,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     transfer_added_unicode_payload = require_json_object(transfer_added_unicode, 200)
     assert transfer_add_unicode_payload.get("hash") == REST_SURFACE_UNICODE_DOWNLOAD_HASH, compact_http_result(transfer_add_unicode)
     assert transfer_added_unicode_payload.get("name") == unicode_transfer_name, compact_http_result(transfer_added_unicode)
+    unicode_log_message = wait_for_log_message_containing(
+        base_url,
+        api_key,
+        unicode_transfer_name,
+        timeout_seconds=10.0,
+    )
     reserved_transfer_name = "NUL .txt"
     reserved_transfer_expected_name = "NUL_.txt"
     reserved_transfer_link = (
@@ -1843,6 +1883,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "hash": transfer_add_unicode_payload.get("hash"),
             "name": transfer_added_unicode_payload.get("name"),
             "state": transfer_added_unicode_payload.get("state"),
+            "log_message": unicode_log_message,
             "delete": require_transfer_bulk_result(transfer_delete_unicode, REST_SURFACE_UNICODE_DOWNLOAD_HASH, True),
         },
         "add_reserved_filename": {
