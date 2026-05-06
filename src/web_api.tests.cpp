@@ -865,6 +865,10 @@ TEST_CASE("Web API decodes qBittorrent add forms into native eD2K links")
 	CHECK_EQ(request.strCategory, "RADARR_ENG");
 	CHECK(request.bPaused);
 	CHECK_EQ(request.strUrl, "ed2k://|file|La%20Dolce%20Vita.mkv|42|0123456789abcdef0123456789abcdef|/");
+
+	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=++RADARR_ENG++&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_EQ(request.strCategory, "RADARR_ENG");
 }
 
 TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
@@ -899,6 +903,10 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	std::string category;
 	CHECK_FALSE(WebServerQBitCompatSeams::TryGetRequiredNonEmptyFormField(form, "category", category, error));
 	CHECK_EQ(error, "category form field is required");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=bad%01name&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_EQ(error, "category must be valid UTF-8 without control characters");
 }
 
 TEST_CASE("Web API parses qBittorrent hash mutations safely")
@@ -913,6 +921,9 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 	CHECK(request.bDeleteFiles);
 
 	CHECK(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef&category=SONARR_ENG", request, error));
+	CHECK_EQ(request.strCategory, "SONARR_ENG");
+
+	CHECK(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef&category=++SONARR_ENG++", request, error));
 	CHECK_EQ(request.strCategory, "SONARR_ENG");
 
 	CHECK(WebServerQBitCompatSeams::TryParseHashesOnlyRequest("hashes=0123456789abcdef0123456789abcdef", request, error));
@@ -942,6 +953,10 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef", request, error));
 	CHECK_EQ(error, "category form field is required");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef&category=", request, error));
+	CHECK_EQ(error, "category must not be empty");
 }
 
 TEST_CASE("Web API keeps native hashes strict while qBittorrent adapters normalize compatible hashes")
@@ -1137,6 +1152,23 @@ TEST_CASE("Web API rejects unknown body fields and malformed query parameters be
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","categoryId":0,"categoryName":"Default"})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "categoryId and categoryName are mutually exclusive");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","categoryName":"  Default  "})", route, errorCode, errorMessage));
+	CHECK_EQ(route.params["categoryName"].get<std::string>(), "Default");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","categoryName":7})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "categoryName must be a string");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", "{\"link\":\"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/\",\"categoryName\":\"bad\\u0001name\"}", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "categoryName must be valid UTF-8 without control characters");
 }
 
 TEST_CASE("Web API requires JSON content type for native request bodies")
