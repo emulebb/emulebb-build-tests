@@ -417,9 +417,9 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
         ("TxtEditor", "notepad.exe"),
         ("MaxChatHistoryLines", "100"),
         ("MaxMessageSessions", "50"),
-        ("AutoIPFilterUpdate", "0"),
+        ("IPFilterUpdateEnabled", "0"),
         ("IPFilterUpdatePeriodDays", "7"),
-        ("LastIPFilterUpdate", str(int(time.time()))),
+        ("IPFilterLastUpdateTime", str(int(time.time()))),
         ("IPFilterUpdateUrl", "http://upd.emule-security.org/ipfilter.zip"),
     ):
         text = live_common.patch_ini_value(text, key, value)
@@ -575,7 +575,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
                 "TxtEditor": "notepad.exe /A",
                 "MaxChatHistoryLines": "321",
                 "MaxMessageSessions": "61",
-                "AutoIPFilterUpdate": "1",
+                "IPFilterUpdateEnabled": "1",
                 "IPFilterUpdatePeriodDays": "11",
                 "IPFilterUpdateUrl": "http://upd.emule-security.org/ipfilter.zip",
             },
