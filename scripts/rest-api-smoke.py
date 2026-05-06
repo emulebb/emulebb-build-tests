@@ -733,6 +733,11 @@ def require_error_response(
 ) -> dict[str, Any]:
     """Asserts one REST error response carries the stable JSON error envelope."""
 
+    content_type = str(result.get("content_type") or "").lower()
+    body_text = str(result.get("body_text") or "")
+    assert "application/json" in content_type, compact_http_result(result)
+    assert "text/html" not in content_type, compact_http_result(result)
+    assert "<html" not in body_text.lower(), compact_http_result(result)
     payload = require_json_object(result, expected_status)
     assert payload.get("error") == expected_code, compact_http_result(result)
     raw = result.get("raw_json")
@@ -2935,15 +2940,11 @@ def main() -> int:
 
         current_phase = set_phase(report, "auth_checks")
         no_key = http_request(base_url, "/api/v1/app")
-        assert no_key["status"] == 401
-        assert isinstance(no_key["json"], dict)
-        assert no_key["json"]["error"] == "UNAUTHORIZED"
+        require_error_response(no_key, 401, "UNAUTHORIZED")
         report["checks"]["missing_key"] = compact_http_result(no_key)
 
         wrong_key = http_request(base_url, "/api/v1/app", api_key="wrong-key")
-        assert wrong_key["status"] == 401
-        assert isinstance(wrong_key["json"], dict)
-        assert wrong_key["json"]["error"] == "UNAUTHORIZED"
+        require_error_response(wrong_key, 401, "UNAUTHORIZED")
         report["checks"]["wrong_key"] = compact_http_result(wrong_key)
 
         current_phase = set_phase(report, "app_version")

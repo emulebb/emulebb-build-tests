@@ -114,6 +114,37 @@ def test_rest_payload_unwraps_success_and_error_envelopes() -> None:
     ) == {"error": "NOT_FOUND", "message": "transfer not found"}
 
 
+def test_rest_error_response_requires_json_not_html() -> None:
+    module = load_rest_api_smoke_module()
+    error_result = {
+        "status": 404,
+        "content_type": "application/json; charset=utf-8",
+        "body_text": '{"error":{"code":"NOT_FOUND","message":"transfer not found","details":{}}}',
+        "raw_json": {
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "transfer not found",
+                "details": {},
+            },
+        },
+        "json": {
+            "error": "NOT_FOUND",
+            "message": "transfer not found",
+            "details": {},
+        },
+    }
+
+    assert module.require_error_response(error_result, 404, "NOT_FOUND")["error"] == "NOT_FOUND"
+
+    html_content_type = {**error_result, "content_type": "text/html; charset=utf-8"}
+    with pytest.raises(AssertionError):
+        module.require_error_response(html_content_type, 404, "NOT_FOUND")
+
+    html_body = {**error_result, "body_text": "<html><body>login</body></html>"}
+    with pytest.raises(AssertionError):
+        module.require_error_response(html_body, 404, "NOT_FOUND")
+
+
 def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
     module = load_rest_api_smoke_module()
 
