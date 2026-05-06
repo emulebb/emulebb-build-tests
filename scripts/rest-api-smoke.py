@@ -2187,11 +2187,27 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         api_key=api_key,
     )
     assert int(torznab_duplicate_query["status"]) == 400, compact_http_result(torznab_duplicate_query)
+    torznab_search = http_request(
+        base_url,
+        "/indexer/emulebb/api?t=search&q=linux",
+        api_key=api_key,
+        request_timeout_seconds=10.0,
+    )
+    assert int(torznab_search["status"]) == 200, compact_http_result(torznab_search)
+    assert "<rss" in str(torznab_search.get("body_text") or ""), compact_http_result(torznab_search)
+    torznab_malformed_search = http_request(
+        base_url,
+        "/indexer/emulebb/api?t=search&season=abc&q=linux",
+        api_key=api_key,
+    )
+    assert int(torznab_malformed_search["status"]) == 400, compact_http_result(torznab_malformed_search)
     smoke["torznab"] = {
         "unauthorized": compact_http_result(torznab_unauthorized),
         "caps_header_auth": compact_http_result(torznab_caps_header),
         "caps_query_auth": compact_http_result(torznab_caps_query),
         "duplicate_query": compact_http_result(torznab_duplicate_query),
+        "search": compact_http_result(torznab_search),
+        "malformed_search": compact_http_result(torznab_malformed_search),
     }
 
     qbit_public_version = http_request(base_url, "/api/v2/app/webapiVersion")
@@ -2231,6 +2247,28 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_duplicate_query["status"]) == 400, compact_http_result(qbit_duplicate_query)
 
+    qbit_info = http_request(
+        base_url,
+        "/api/v2/torrents/info",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_info["status"]) == 200, compact_http_result(qbit_info)
+    assert isinstance(qbit_info.get("json"), list), compact_http_result(qbit_info)
+
+    qbit_properties_missing = http_request(
+        base_url,
+        f"/api/v2/torrents/properties?hash={REST_SURFACE_MISSING_HASH}",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_properties_missing["status"]) == 404, compact_http_result(qbit_properties_missing)
+
+    qbit_files_missing = http_request(
+        base_url,
+        f"/api/v2/torrents/files?hash={REST_SURFACE_MISSING_HASH}",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_files_missing["status"]) == 404, compact_http_result(qbit_files_missing)
+
     qbit_bad_form = http_request(
         base_url,
         "/api/v2/torrents/createCategory",
@@ -2240,6 +2278,57 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         extra_headers={"Cookie": cookie_pair},
     )
     assert int(qbit_bad_form["status"]) == 400, compact_http_result(qbit_bad_form)
+
+    qbit_bad_add = http_request(
+        base_url,
+        "/api/v2/torrents/add",
+        method="POST",
+        raw_body="urls=not-a-link",
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_bad_add["status"]) == 400, compact_http_result(qbit_bad_add)
+
+    qbit_missing_hash_form = f"hashes={REST_SURFACE_MISSING_HASH}"
+    qbit_pause_missing = http_request(
+        base_url,
+        "/api/v2/torrents/pause",
+        method="POST",
+        raw_body=qbit_missing_hash_form,
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_pause_missing["status"]) == 200, compact_http_result(qbit_pause_missing)
+
+    qbit_resume_missing = http_request(
+        base_url,
+        "/api/v2/torrents/resume",
+        method="POST",
+        raw_body=qbit_missing_hash_form,
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_resume_missing["status"]) == 200, compact_http_result(qbit_resume_missing)
+
+    qbit_delete_missing = http_request(
+        base_url,
+        "/api/v2/torrents/delete",
+        method="POST",
+        raw_body=f"{qbit_missing_hash_form}&deleteFiles=false",
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_delete_missing["status"]) == 200, compact_http_result(qbit_delete_missing)
+
+    qbit_set_category_missing = http_request(
+        base_url,
+        "/api/v2/torrents/setCategory",
+        method="POST",
+        raw_body=f"{qbit_missing_hash_form}&category=Default",
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_set_category_missing["status"]) == 400, compact_http_result(qbit_set_category_missing)
 
     smoke["qbit"] = {
         "public_version": compact_http_result(qbit_public_version),
@@ -2251,7 +2340,15 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         },
         "categories": compact_http_result(qbit_categories),
         "duplicate_query": compact_http_result(qbit_duplicate_query),
+        "info": compact_http_result(qbit_info),
+        "properties_missing": compact_http_result(qbit_properties_missing),
+        "files_missing": compact_http_result(qbit_files_missing),
         "bad_form": compact_http_result(qbit_bad_form),
+        "bad_add": compact_http_result(qbit_bad_add),
+        "pause_missing": compact_http_result(qbit_pause_missing),
+        "resume_missing": compact_http_result(qbit_resume_missing),
+        "delete_missing": compact_http_result(qbit_delete_missing),
+        "set_category_missing": compact_http_result(qbit_set_category_missing),
     }
 
     return smoke
