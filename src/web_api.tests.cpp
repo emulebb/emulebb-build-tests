@@ -305,6 +305,27 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 	CHECK_EQ(error, "query must be at most 160 characters");
 }
 
+TEST_CASE("Web API shares search text normalization between native REST and Torznab")
+{
+	WebApiCommandSeams::SSearchStartRequest nativeRequest;
+	WebServerArrCompatSeams::STorznabRequest torznabRequest;
+	std::string error;
+	const std::string strExpectedQuery(std::string("Example Name ") + std::string("\xC3\xBC", 2) + "ber");
+
+	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(
+		WebApiCommandSeams::json{{"query", std::string("\t Example \r\n  Name  ") + std::string("\xC3\xBC", 2) + "ber "}},
+		nativeRequest,
+		error));
+	CHECK_EQ(nativeRequest.strQuery, strExpectedQuery);
+
+	error.clear();
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest(
+		"/indexer/emulebb/api?t=search&q=++Example+%0D%0A++Name++%C3%BCber+",
+		torznabRequest,
+		error));
+	CHECK_EQ(torznabRequest.strQuery, strExpectedQuery);
+}
+
 TEST_CASE("Web API parses search identifiers as decimal uint32 strings")
 {
 	uint32_t uSearchID = 0;
