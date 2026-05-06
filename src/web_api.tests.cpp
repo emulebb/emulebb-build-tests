@@ -853,6 +853,21 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	CHECK(category.empty());
 }
 
+TEST_CASE("Web API keeps adapter error responses outside native JSON envelopes")
+{
+	const std::string torznabContentType(WebServerArrCompatSeams::kTorznabXmlContentTypeHeader);
+	CHECK(torznabContentType.find("application/xml") != std::string::npos);
+	CHECK(torznabContentType.find("application/json") == std::string::npos);
+	CHECK_EQ(WebServerArrCompatSeams::kTorznabParseErrorHttpStatus, 400);
+
+	const std::string qbitTextContentType(WebServerQBitCompatSeams::kQBitTextContentTypeHeader);
+	CHECK(qbitTextContentType.find("text/plain") != std::string::npos);
+	CHECK(qbitTextContentType.find("application/json") == std::string::npos);
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::kQBitFailureBody), "Fails.");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::kQBitNotFoundBody), "Not found");
+	CHECK(std::string(WebServerQBitCompatSeams::kQBitFailureBody).find("{\"error\"") == std::string::npos);
+}
+
 TEST_CASE("Web API declares the qBittorrent compatibility endpoint contract")
 {
 	const std::vector<WebServerQBitCompatSeams::SQBitRouteSpec> &specs = WebServerQBitCompatSeams::GetQBitRouteSpecs();
