@@ -773,6 +773,9 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/operations/pause") in method_path_pairs
     assert ("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}") in method_path_pairs
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse") in method_path_pairs
+    assert operations_by_pair[
+        ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse")
+    ]["json_body"] == {}
     assert ("POST", "/api/v1/kad/operations/recheck-firewall") in method_path_pairs
     assert ("POST", "/api/v1/searches") in method_path_pairs
     assert ("DELETE", "/api/v1/searches/123") in method_path_pairs
@@ -810,6 +813,7 @@ def test_rest_stress_operations_include_expected_error_edges() -> None:
         and operation["expected_statuses"] == (400,)
         and "λ" in operation["json_body"]["path"]
         and "例" in operation["json_body"]["path"]
+        and "\\" not in operation["json_body"]["path"]
         for operation in operations
     )
 

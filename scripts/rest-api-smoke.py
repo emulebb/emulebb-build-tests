@@ -101,9 +101,8 @@ REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
 REST_STRESS_LONG_SEARCH_QUERY = "unicode-lambda-" + ("λ" * 161)
 REST_STRESS_LONG_UNICODE_PATH = (
-    "C:\\not-shared\\"
-    + ("deep_unicode_λ_例\\" * 12)
-    + "linux-iso-library-Ω-例.mkv"
+    ("deep_unicode_λ_例" * 24)
+    + "-linux-iso-library-Ω-例.mkv"
 )
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "REST-API-OPENAPI.yaml"
 UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
@@ -431,7 +430,7 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     {
         "method": "POST",
         "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse",
-        "json_body": {"userHash": REST_SURFACE_MISSING_HASH},
+        "json_body": {},
         "family": "transfers",
         "scenario": "safe_mutation",
         "expected_statuses": (404,),
