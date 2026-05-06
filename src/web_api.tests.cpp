@@ -812,6 +812,10 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=bad%2xescape", form, error));
 	CHECK_EQ(error, "malformed percent escape");
 
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("=bad", form, error));
+	CHECK_EQ(error, "form field name must not be empty");
+
 	CHECK(WebServerQBitCompatSeams::TryParseFormBody("category=", form, error));
 	std::string category;
 	CHECK_FALSE(WebServerQBitCompatSeams::TryGetRequiredNonEmptyFormField(form, "category", category, error));
@@ -1031,6 +1035,103 @@ TEST_CASE("Web API rejects unknown body fields and malformed query parameters be
 	CHECK_EQ(errorMessage, "categoryId and categoryName are mutually exclusive");
 }
 
+TEST_CASE("Web API requires JSON content type for native request bodies")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+
+	CHECK(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/app/preferences",
+		R"({"safeServerConnect":true})",
+		route,
+		errorCode,
+		errorMessage,
+		"application/json; charset=utf-8"));
+	CHECK_EQ(route.strCommand, "app/preferences/set");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/app/preferences",
+		R"({"safeServerConnect":true})",
+		route,
+		errorCode,
+		errorMessage,
+		"text/plain"));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "Content-Type must be application/json for JSON request bodies");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/app", "", route, errorCode, errorMessage, ""));
+	CHECK_EQ(route.strCommand, "app/version");
+}
+
+TEST_CASE("Web API requires explicit confirmation for broad native operations")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/app/shutdown", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "confirmShutdown must be true");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/app/shutdown", R"({"confirmShutdown":true})", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "app/shutdown");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/searches", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "confirmDeleteAllSearches must be true");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/searches", R"({"confirmDeleteAllSearches":true})", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "search/clear");
+}
+
+TEST_CASE("Web API requires explicit confirmation for destructive native routes")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "deleteFiles must be an explicit boolean");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":false})", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "transfers/delete");
+	CHECK_FALSE(route.params["deleteFiles"].get<bool>());
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers/operations/clear-completed", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "confirmClearCompleted must be true");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers/operations/clear-completed", R"({"confirmClearCompleted":false})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "confirmClearCompleted must be true");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers/operations/clear-completed", R"({"confirmClearCompleted":true})", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "transfers/clear_completed");
+	CHECK(route.params["confirmClearCompleted"].get<bool>());
+}
+
 TEST_CASE("Web API rejects malformed path identifiers before dispatch")
 {
 	WebServerJsonSeams::SApiRoute route;
@@ -1098,7 +1199,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":true})", "app/preferences/set");
 	CHECK(route.params.contains("prefs"));
 	CHECK(route.params["prefs"].contains("safeServerConnect"));
-	assertRoute("POST", "/api/v1/app/shutdown", R"({})", "app/shutdown");
+	assertRoute("POST", "/api/v1/app/shutdown", R"({"confirmShutdown":true})", "app/shutdown");
 	assertRoute("GET", "/api/v1/status", "", "status/get");
 	assertRoute("GET", "/api/v1/stats", "", "stats/global");
 	assertRoute("GET", "/api/v1/snapshot?limit=7", "", "snapshot/get");
@@ -1130,7 +1231,8 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", "transfers/get");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
-	assertRoute("POST", "/api/v1/transfers/operations/clear-completed", R"({})", "transfers/clear_completed");
+	assertRoute("POST", "/api/v1/transfers/operations/clear-completed", R"({"confirmClearCompleted":true})", "transfers/clear_completed");
+	CHECK(route.params["confirmClearCompleted"].get<bool>());
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/details", "", "transfers/details");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources", "", "transfers/sources");
@@ -1226,7 +1328,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef/comments", "", "shared/comments");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK(route.params["_items_envelope"].get<bool>());
-	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({})", "shared/remove");
+	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({"deleteFiles":false})", "shared/remove");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
@@ -1242,7 +1344,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["categoryId"].get<int>(), 0);
 	assertRoute("DELETE", "/api/v1/searches/123", R"({})", "search/stop");
 	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
-	assertRoute("DELETE", "/api/v1/searches", R"({})", "search/clear");
+	assertRoute("DELETE", "/api/v1/searches", R"({"confirmDeleteAllSearches":true})", "search/clear");
 	assertRoute("GET", "/api/v1/friends", "", "friends/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("POST", "/api/v1/friends", R"({"userHash":"0123456789abcdef0123456789abcdef","name":"peer"})", "friends/add");
