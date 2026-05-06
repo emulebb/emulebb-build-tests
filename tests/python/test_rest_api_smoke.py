@@ -246,20 +246,206 @@ def test_rest_contract_registry_matches_openapi() -> None:
     assert summary["missing_from_openapi"] == []
 
 
-def test_native_route_specs_match_openapi_methods_and_paths() -> None:
-    module = load_rest_api_smoke_module()
+def _csv_fields(value: str) -> set[str]:
+    return {field for field in value.split(",") if field}
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _component_ref_name(line: str, kind: str) -> str | None:
+    match = re.search(rf"#/components/{kind}/([A-Za-z0-9_]+)", line)
+    return match.group(1) if match else None
+
+
+def _native_route_contracts() -> dict[tuple[str, str], dict[str, set[str]]]:
     workspace_root = Path(__file__).resolve().parents[4]
     route_header = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJsonSeams.h"
     route_specs = re.findall(
-        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*"[^"]*"\s*\}',
+        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\}',
         route_header.read_text(encoding="utf-8"),
     )
 
-    native_pairs = {(method, path) for method, path in route_specs}
-    openapi_pairs = module.load_openapi_method_paths()
+    return {
+        (method, path): {
+            "body": _csv_fields(body_fields),
+            "query": _csv_fields(query_fields),
+        }
+        for method, path, body_fields, query_fields in route_specs
+    }
 
-    assert len(route_specs) == len(native_pairs)
-    assert native_pairs == openapi_pairs
+
+def _openapi_component_parameters(lines: list[str]) -> dict[str, dict[str, str | None]]:
+    parameters: dict[str, dict[str, str | None]] = {}
+    in_components = False
+    in_parameters = False
+    current_name: str | None = None
+    current_block: list[str] = []
+
+    def commit() -> None:
+        if current_name is None:
+            return
+        name = None
+        location = None
+        for line in current_block:
+            stripped = line.strip()
+            if stripped.startswith("name:"):
+                name = stripped.split(":", 1)[1].strip()
+            elif stripped.startswith("in:"):
+                location = stripped.split(":", 1)[1].strip()
+        parameters[current_name] = {"name": name, "in": location}
+
+    for line in lines:
+        if line == "components:":
+            in_components = True
+            continue
+        if not in_components:
+            continue
+        if line.startswith("  parameters:"):
+            in_parameters = True
+            continue
+        if in_parameters and line.startswith("  ") and not line.startswith("    ") and not line.startswith("  parameters:"):
+            commit()
+            break
+        if not in_parameters:
+            continue
+        match = re.match(r"    ([A-Za-z0-9_]+):\s*$", line)
+        if match:
+            commit()
+            current_name = match.group(1)
+            current_block = []
+        elif current_name is not None:
+            current_block.append(line)
+    return parameters
+
+
+def _openapi_schema_properties(lines: list[str]) -> dict[str, set[str]]:
+    schemas: dict[str, set[str]] = {}
+    in_components = False
+    in_schemas = False
+    current_name: str | None = None
+    in_properties = False
+    properties: set[str] = set()
+
+    def commit() -> None:
+        if current_name is not None:
+            schemas[current_name] = set(properties)
+
+    for line in lines:
+        if line == "components:":
+            in_components = True
+            continue
+        if not in_components:
+            continue
+        if line.startswith("  schemas:"):
+            in_schemas = True
+            continue
+        if not in_schemas:
+            continue
+        schema_match = re.match(r"    ([A-Za-z0-9_]+):\s*$", line)
+        if schema_match:
+            commit()
+            current_name = schema_match.group(1)
+            in_properties = False
+            properties = set()
+            continue
+        if current_name is None:
+            continue
+        if line.startswith("      properties:"):
+            in_properties = True
+            continue
+        if in_properties:
+            prop_match = re.match(r"        ([A-Za-z0-9_]+):\s*$", line)
+            if prop_match:
+                properties.add(prop_match.group(1))
+            elif line and _indent(line) <= 6:
+                in_properties = False
+    commit()
+    return schemas
+
+
+def _openapi_operation_contracts(openapi_path: Path) -> dict[tuple[str, str], dict[str, set[str]]]:
+    lines = openapi_path.read_text(encoding="utf-8").splitlines()
+    component_parameters = _openapi_component_parameters(lines)
+    schema_properties = _openapi_schema_properties(lines)
+    operations: dict[tuple[str, str], dict[str, set[str]]] = {}
+    current_path: str | None = None
+    current_method: str | None = None
+    block: list[str] = []
+
+    def parse_operation_block() -> dict[str, set[str]]:
+        body_fields: set[str] = set()
+        query_fields: set[str] = set()
+        in_parameters = False
+        in_request_body = False
+        for index, line in enumerate(block):
+            stripped = line.strip()
+            if _indent(line) == 6 and stripped == "parameters:":
+                in_parameters = True
+                in_request_body = False
+                continue
+            if _indent(line) == 6 and stripped == "requestBody:":
+                in_request_body = True
+                in_parameters = False
+                continue
+            if _indent(line) <= 6 and stripped not in {"parameters:", "requestBody:"}:
+                in_parameters = False
+                in_request_body = False
+            if in_parameters:
+                parameter_ref = _component_ref_name(line, "parameters")
+                if parameter_ref is not None:
+                    parameter = component_parameters[parameter_ref]
+                    if parameter["in"] == "query":
+                        query_fields.add(str(parameter["name"]))
+                direct_name = re.match(r"        - name: (.+)$", line)
+                if direct_name:
+                    location = None
+                    for nested in block[index + 1 :]:
+                        if re.match(r"        - ", nested) or _indent(nested) <= 6:
+                            break
+                        if nested.strip().startswith("in:"):
+                            location = nested.strip().split(":", 1)[1].strip()
+                    if location == "query":
+                        query_fields.add(direct_name.group(1).strip())
+            if in_request_body:
+                schema_ref = _component_ref_name(line, "schemas")
+                if schema_ref is not None:
+                    body_fields.update(schema_properties.get(schema_ref, set()))
+        return {"body": body_fields, "query": query_fields}
+
+    def commit() -> None:
+        if current_path is not None and current_method is not None:
+            operations[(current_method, current_path)] = parse_operation_block()
+
+    for line in lines:
+        if line.startswith("components:"):
+            commit()
+            break
+        path_match = re.match(r"  (/[^:]+):\s*$", line)
+        if path_match:
+            commit()
+            current_path = path_match.group(1)
+            current_method = None
+            block = []
+            continue
+        method_match = re.match(r"    (get|post|patch|delete):\s*$", line)
+        if method_match:
+            commit()
+            current_method = method_match.group(1).upper()
+            block = []
+            continue
+        if current_method is not None:
+            block.append(line)
+    return operations
+
+
+def test_native_route_specs_match_openapi_methods_paths_and_fields() -> None:
+    module = load_rest_api_smoke_module()
+    native_contracts = _native_route_contracts()
+    openapi_contracts = _openapi_operation_contracts(module.OPENAPI_CONTRACT_PATH)
+
+    assert native_contracts == openapi_contracts
 
 
 def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
