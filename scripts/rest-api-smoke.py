@@ -2289,6 +2289,20 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_bad_add["status"]) == 400, compact_http_result(qbit_bad_add)
 
+    synthetic_magnet = (
+        "urls=magnet%3A%3Fxt%3Durn%3Abtih%3A"
+        f"{REST_SURFACE_MISSING_HASH}00000000%26dn%3Dlinux.iso%26xl%3D0"
+    )
+    qbit_bad_synthetic_magnet = http_request(
+        base_url,
+        "/api/v2/torrents/add",
+        method="POST",
+        raw_body=synthetic_magnet,
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_bad_synthetic_magnet["status"]) == 400, compact_http_result(qbit_bad_synthetic_magnet)
+
     qbit_missing_hash_form = f"hashes={REST_SURFACE_MISSING_HASH}"
     qbit_pause_missing = http_request(
         base_url,
@@ -2309,6 +2323,26 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         extra_headers={"Cookie": cookie_pair},
     )
     assert int(qbit_resume_missing["status"]) == 200, compact_http_result(qbit_resume_missing)
+
+    qbit_stop_missing = http_request(
+        base_url,
+        "/api/v2/torrents/stop",
+        method="POST",
+        raw_body=qbit_missing_hash_form,
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_stop_missing["status"]) == 200, compact_http_result(qbit_stop_missing)
+
+    qbit_start_missing = http_request(
+        base_url,
+        "/api/v2/torrents/start",
+        method="POST",
+        raw_body=qbit_missing_hash_form,
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_start_missing["status"]) == 200, compact_http_result(qbit_start_missing)
 
     qbit_delete_missing = http_request(
         base_url,
@@ -2345,8 +2379,11 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "files_missing": compact_http_result(qbit_files_missing),
         "bad_form": compact_http_result(qbit_bad_form),
         "bad_add": compact_http_result(qbit_bad_add),
+        "bad_synthetic_magnet": compact_http_result(qbit_bad_synthetic_magnet),
         "pause_missing": compact_http_result(qbit_pause_missing),
         "resume_missing": compact_http_result(qbit_resume_missing),
+        "stop_missing": compact_http_result(qbit_stop_missing),
+        "start_missing": compact_http_result(qbit_start_missing),
         "delete_missing": compact_http_result(qbit_delete_missing),
         "set_category_missing": compact_http_result(qbit_set_category_missing),
     }
