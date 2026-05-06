@@ -2266,6 +2266,17 @@ def did_rest_listener_disappear(observation_rows: object) -> bool:
     return False
 
 
+def close_app_cleanly_with_timing(app: object, close_func=close_app_cleanly) -> dict[str, object]:
+    """Closes the live app and returns bounded shutdown timing evidence."""
+
+    start = time.monotonic()
+    close_func(app)
+    return {
+        "app_closed": True,
+        "shutdown_duration_ms": round((time.monotonic() - start) * 1000.0, 3),
+    }
+
+
 def wait_for_kad_running(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
     """Waits until Kad reports a running state after the connect request."""
 
@@ -3257,8 +3268,7 @@ def main() -> int:
                 cleanup["app_left_running"] = True
             else:
                 try:
-                    close_app_cleanly(app)
-                    cleanup["app_closed"] = True
+                    cleanup.update(close_app_cleanly_with_timing(app))
                 except Exception as exc:
                     cleanup["app_closed"] = False
                     cleanup["app_close_error"] = repr(exc)

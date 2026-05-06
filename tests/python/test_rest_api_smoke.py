@@ -886,6 +886,18 @@ def test_server_connect_transport_loss_is_runtime_failure_signal() -> None:
     assert not module.did_rest_listener_disappear([{"connected": False, "connecting": False}])
 
 
+def test_close_app_cleanly_with_timing_records_shutdown_duration() -> None:
+    module = load_rest_api_smoke_module()
+    closed: list[object] = []
+
+    result = module.close_app_cleanly_with_timing("app", close_func=closed.append)
+
+    assert closed == ["app"]
+    assert result["app_closed"] is True
+    assert isinstance(result["shutdown_duration_ms"], float)
+    assert result["shutdown_duration_ms"] >= 0.0
+
+
 def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
     module = load_rest_api_smoke_module()
     observed_paths: list[tuple[str, str]] = []
