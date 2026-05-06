@@ -81,6 +81,7 @@ REST_SURFACE_TEST_SERVER = {
 REST_SURFACE_MISSING_HASH = "0123456789abcdef0123456789abcdef"
 REST_SURFACE_VALID_DOWNLOAD_HASH = "fedcba98765432100123456789abcdef"
 REST_SURFACE_UNICODE_DOWNLOAD_HASH = "abcdef0123456789fedcba9876543210"
+REST_SURFACE_RESERVED_DOWNLOAD_HASH = "00112233445566778899aabbccddeeff"
 REST_PREFERENCE_KEYS = {
     "uploadLimitKiBps",
     "downloadLimitKiBps",
@@ -1732,9 +1733,41 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     transfer_added_unicode_payload = require_json_object(transfer_added_unicode, 200)
     assert transfer_add_unicode_payload.get("hash") == REST_SURFACE_UNICODE_DOWNLOAD_HASH, compact_http_result(transfer_add_unicode)
     assert transfer_added_unicode_payload.get("name") == unicode_transfer_name, compact_http_result(transfer_added_unicode)
+    reserved_transfer_name = "NUL .txt"
+    reserved_transfer_expected_name = "NUL_.txt"
+    reserved_transfer_link = (
+        "ed2k://|file|"
+        f"{urllib.parse.quote(reserved_transfer_name, safe='')}"
+        f"|4096|{REST_SURFACE_RESERVED_DOWNLOAD_HASH}|/"
+    )
+    transfer_add_reserved = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={
+            "link": reserved_transfer_link,
+            "paused": True,
+            "categoryId": 0,
+        },
+        request_timeout_seconds=30.0,
+    )
+    transfer_add_reserved_payload = require_json_object(transfer_add_reserved, 200)
+    transfer_added_reserved = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_RESERVED_DOWNLOAD_HASH}", api_key=api_key)
+    transfer_added_reserved_payload = require_json_object(transfer_added_reserved, 200)
+    assert transfer_add_reserved_payload.get("hash") == REST_SURFACE_RESERVED_DOWNLOAD_HASH, compact_http_result(transfer_add_reserved)
+    assert transfer_added_reserved_payload.get("name") == reserved_transfer_expected_name, compact_http_result(transfer_added_reserved)
     transfer_delete_added = http_request(
         base_url,
         f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"deleteFiles": True},
+        request_timeout_seconds=30.0,
+    )
+    transfer_delete_reserved = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_RESERVED_DOWNLOAD_HASH}",
         method="DELETE",
         api_key=api_key,
         json_body={"deleteFiles": True},
@@ -1811,6 +1844,14 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "name": transfer_added_unicode_payload.get("name"),
             "state": transfer_added_unicode_payload.get("state"),
             "delete": require_transfer_bulk_result(transfer_delete_unicode, REST_SURFACE_UNICODE_DOWNLOAD_HASH, True),
+        },
+        "add_reserved_filename": {
+            "status": transfer_add_reserved["status"],
+            "hash": transfer_add_reserved_payload.get("hash"),
+            "input_name": reserved_transfer_name,
+            "name": transfer_added_reserved_payload.get("name"),
+            "state": transfer_added_reserved_payload.get("state"),
+            "delete": require_transfer_bulk_result(transfer_delete_reserved, REST_SURFACE_RESERVED_DOWNLOAD_HASH, True),
         },
         "recheck_missing": require_error_response(transfer_recheck_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "priority_missing": require_error_response(transfer_priority_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
