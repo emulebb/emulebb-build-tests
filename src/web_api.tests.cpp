@@ -1899,3 +1899,31 @@ TEST_CASE("Web API builds stable native REST error envelopes")
 	CHECK(boundedDetails["error"]["details"].is_object());
 	CHECK(boundedDetails["error"]["details"].empty());
 }
+
+TEST_CASE("Web API envelopes representative runtime REST failures")
+{
+	struct SRuntimeErrorCase
+	{
+		const char *pszCode;
+		const char *pszMessage;
+		int iStatus;
+	};
+
+	const SRuntimeErrorCase cases[] = {
+		{"NOT_FOUND", "transfer not found", 404},
+		{"INVALID_STATE", "transfer source does not support shared-file browsing", 409},
+		{"EMULE_UNAVAILABLE", "main window is not available", 503},
+		{"EMULE_ERROR", "REST UI command failed", 500},
+	};
+
+	for (const SRuntimeErrorCase &rCase : cases) {
+		const WebServerJsonSeams::json envelope =
+			WebServerJsonSeams::BuildErrorEnvelopeJson(rCase.pszCode, rCase.pszMessage);
+		CAPTURE(rCase.pszCode);
+		CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError(rCase.pszCode), rCase.iStatus);
+		REQUIRE(envelope.contains("error"));
+		CHECK_EQ(envelope["error"]["code"].get<std::string>(), rCase.pszCode);
+		CHECK_EQ(envelope["error"]["message"].get<std::string>(), rCase.pszMessage);
+		CHECK(envelope["error"]["details"].is_object());
+	}
+}
