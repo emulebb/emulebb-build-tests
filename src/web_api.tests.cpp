@@ -1604,6 +1604,32 @@ TEST_CASE("Web API rejects unknown routes and unsupported HTTP methods")
 	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
 }
 
+TEST_CASE("Web API classifies malformed version-root paths as native REST requests")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+
+	CHECK(WebServerJsonSeams::IsApiRequestTarget("/api/v1%2x"));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1%2x", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "malformed percent escape");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::IsApiRequestTarget("/API/V1%2Flogs"));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/API/V1%2Flogs", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "path segment must not contain encoded slash");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::IsApiRequestTarget("/api/v1%5Clogs"));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1%5Clogs", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "path segment must not contain encoded slash");
+}
+
 TEST_CASE("Web API maps representative native REST route failures to status codes")
 {
 	struct SFailureCase
