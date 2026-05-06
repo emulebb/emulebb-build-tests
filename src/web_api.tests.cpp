@@ -773,6 +773,34 @@ TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams
 	CHECK(magnet.find("&dn=" + encoded + "&xl=42") != std::string::npos);
 }
 
+TEST_CASE("Web API shares strict percent decoding across native and Arr adapters")
+{
+	std::map<std::string, std::string> fields;
+	std::string error;
+	CHECK_FALSE(WebServerJsonSeams::TryParseQueryString("/api/v1/logs?limit=%2x", fields, error));
+	CHECK_EQ(error, "malformed percent escape");
+	CHECK(fields.empty());
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabQueryParameters("/indexer/emulebb/api?t=search&q=%2x", fields, error));
+	CHECK_EQ(error, "malformed percent escape");
+	CHECK(fields.empty());
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("urls=%2x", fields, error));
+	CHECK_EQ(error, "malformed percent escape");
+	CHECK(fields.empty());
+
+	error.clear();
+	std::string ed2k;
+	CHECK_FALSE(WebServerQBitCompatSeams::TryBuildEd2kLinkFromMagnet(
+		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=%2x&xl=42",
+		ed2k,
+		error));
+	CHECK_EQ(error, "malformed percent escape");
+	CHECK(ed2k.empty());
+}
+
 TEST_CASE("Web API decodes qBittorrent add forms into native eD2K links")
 {
 	std::map<std::string, std::string> form;
