@@ -695,6 +695,9 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 	CHECK_EQ(
 		WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "A&B.mkv", 42),
 		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=A%26B.mkv&xl=42");
+	CHECK(WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "", 42).empty());
+	CHECK(WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "bad\x01name.mkv", 42).empty());
+	CHECK(WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "A&B.mkv", 0).empty());
 	CHECK_EQ(WebServerArrCompatSeams::XmlEscape("<tag attr=\"x\">A&B</tag>"), "&lt;tag attr=&quot;x&quot;&gt;A&amp;B&lt;/tag&gt;");
 	CHECK_EQ(WebServerJsonSeams::UrlEncodeUtf8("A B+100%"), "A%20B%2B100%25");
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "release.mkv", 10));
@@ -887,6 +890,12 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D999999999999999999999", request, error));
 	CHECK_EQ(error, "magnet size must be an unsigned decimal value");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3D%26xl%3D42", request, error));
+	CHECK_EQ(error, "magnet display name must not be empty");
+
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dbad%2501name%26xl%3D42", request, error));
+	CHECK_EQ(error, "magnet display name must be valid UTF-8 without control characters");
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=a&category=b", form, error));
 	CHECK_EQ(error, "duplicate form field: category");
