@@ -157,57 +157,100 @@ def run_browser_workflows(base_url: str, instance_id: str) -> dict[str, Any]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
-        checks["page_title"] = page.title()
+        diagnostics: dict[str, list[dict[str, Any]]] = {
+            "console_errors": [],
+            "page_errors": [],
+            "request_failures": [],
+        }
 
-        def fetch_json(path: str, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
-            return page.evaluate(
-                """async ({path, method, body}) => {
-                    const response = await fetch(path, {
-                        method,
-                        headers: {'Content-Type': 'application/json'},
-                        body: body == null ? undefined : JSON.stringify(body)
-                    });
-                    const text = await response.text();
-                    let payload = null;
-                    try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = {parseError: String(e), text}; }
-                    return {status: response.status, payload};
-                }""",
-                {"path": path, "method": method, "body": body},
+        def on_console_message(message: Any) -> None:
+            if message.type != "error":
+                return
+            diagnostics["console_errors"].append(
+                {
+                    "text": message.text,
+                    "type": message.type,
+                    "location": message.location,
+                }
             )
 
-        snapshot = fetch_json("/api/v1/data/snapshot")
-        if not (200 <= int(snapshot["status"]) < 300):
-            raise RuntimeError(f"aMuTorrent snapshot failed: {snapshot}")
-        checks["snapshot"] = snapshot
+        def on_page_error(error: Any) -> None:
+            diagnostics["page_errors"].append({"text": str(error)})
 
-        checks["categories"] = fetch_json("/api/v1/categories")
-        checks["add_ed2k"] = fetch_json(
-            "/api/v1/downloads/ed2k",
-            "POST",
-            {
-                "links": ["ed2k://|file|amutorrent-browser-smoke.bin|1|0123456789abcdef0123456789abcdef|/"],
-                "instanceId": instance_id,
-            },
-        )
-        checks["search_start"] = fetch_json(
-            "/api/v1/search?wait=false",
-            "POST",
-            {"query": "linux", "type": "automatic", "instanceId": instance_id},
-        )
-        checks["search_results"] = fetch_json("/api/v1/search/results")
-        checks["server_list"] = fetch_json("/api/v1/amule/servers")
-        checks["server_disconnect"] = fetch_json(
-            "/api/v1/amule/servers/action",
-            "POST",
-            {"ip": "127.0.0.1", "port": 4661, "serverAction": "disconnect", "instanceId": instance_id},
-        )
-        checks["shared_dirs_reload"] = fetch_json("/api/amule/shared-dirs/reload", "POST", {})
+        def on_request_failed(request: Any) -> None:
+            diagnostics["request_failures"].append(
+                {
+                    "failure": str(request.failure),
+                    "method": request.method,
+                    "resource_type": request.resource_type,
+                    "url": request.url,
+                }
+            )
 
-        for name, result in checks.items():
-            if isinstance(result, dict) and "status" in result and int(result["status"]) >= 500:
-                raise RuntimeError(f"aMuTorrent browser workflow '{name}' failed: {result}")
-        browser.close()
+        page.on("console", on_console_message)
+        page.on("pageerror", on_page_error)
+        page.on("requestfailed", on_request_failed)
+
+        try:
+            page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+            checks["page_title"] = page.title()
+
+            def fetch_json(path: str, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
+                return page.evaluate(
+                    """async ({path, method, body}) => {
+                        const response = await fetch(path, {
+                            method,
+                            headers: {'Content-Type': 'application/json'},
+                            body: body == null ? undefined : JSON.stringify(body)
+                        });
+                        const text = await response.text();
+                        let payload = null;
+                        try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = {parseError: String(e), text}; }
+                        return {status: response.status, payload};
+                    }""",
+                    {"path": path, "method": method, "body": body},
+                )
+
+            snapshot = fetch_json("/api/v1/data/snapshot")
+            if not (200 <= int(snapshot["status"]) < 300):
+                raise RuntimeError(f"aMuTorrent snapshot failed: {snapshot}")
+            checks["snapshot"] = snapshot
+
+            checks["categories"] = fetch_json("/api/v1/categories")
+            checks["add_ed2k"] = fetch_json(
+                "/api/v1/downloads/ed2k",
+                "POST",
+                {
+                    "links": ["ed2k://|file|amutorrent-browser-smoke.bin|1|0123456789abcdef0123456789abcdef|/"],
+                    "instanceId": instance_id,
+                },
+            )
+            checks["search_start"] = fetch_json(
+                "/api/v1/search?wait=false",
+                "POST",
+                {"query": "linux", "type": "automatic", "instanceId": instance_id},
+            )
+            checks["search_results"] = fetch_json("/api/v1/search/results")
+            checks["server_list"] = fetch_json("/api/v1/amule/servers")
+            checks["server_disconnect"] = fetch_json(
+                "/api/v1/amule/servers/action",
+                "POST",
+                {"ip": "127.0.0.1", "port": 4661, "serverAction": "disconnect", "instanceId": instance_id},
+            )
+            checks["shared_dirs_reload"] = fetch_json(
+                f"/api/amule/shared-dirs/reload?instanceId={instance_id}",
+                "POST",
+                {},
+            )
+            checks["browser_diagnostics"] = diagnostics
+
+            for name, result in checks.items():
+                if isinstance(result, dict) and "status" in result and int(result["status"]) >= 500:
+                    raise RuntimeError(f"aMuTorrent browser workflow '{name}' failed: {result}")
+            if any(diagnostics.values()):
+                raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {diagnostics}")
+        finally:
+            browser.close()
     return checks
 
 
