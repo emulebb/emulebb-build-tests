@@ -893,6 +893,29 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 	CHECK_EQ(error, "category form field is required");
 }
 
+TEST_CASE("Web API keeps native hashes strict while qBittorrent adapters normalize compatible hashes")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "hash must be a 32-character lowercase hex string");
+
+	WebServerQBitCompatSeams::SQBitHashMutationRequest mutation;
+	std::string error;
+	CHECK(WebServerQBitCompatSeams::TryParseHashesOnlyRequest("hashes=0123456789ABCDEF0123456789ABCDEF", mutation, error));
+	REQUIRE_EQ(mutation.hashes.size(), 1u);
+	CHECK_EQ(mutation.hashes[0], "0123456789abcdef0123456789abcdef");
+
+	std::string ed2k;
+	CHECK(WebServerQBitCompatSeams::TryBuildEd2kLinkFromMagnet(
+		"magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF00000000&dn=UpperHash.bin&xl=42",
+		ed2k,
+		error));
+	CHECK_EQ(ed2k, "ed2k://|file|UpperHash.bin|42|0123456789abcdef0123456789abcdef|/");
+}
+
 TEST_CASE("Web API builds representative REST routes and normalizes query parameters")
 {
 	WebServerJsonSeams::SApiRoute route;
