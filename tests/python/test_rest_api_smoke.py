@@ -114,6 +114,27 @@ def test_rest_payload_unwraps_success_and_error_envelopes() -> None:
     ) == {"error": "NOT_FOUND", "message": "transfer not found"}
 
 
+def test_openapi_error_envelope_documents_stable_error_codes() -> None:
+    openapi_path = Path(__file__).resolve().parents[3] / "eMule-tooling" / "docs" / "REST-API-OPENAPI.yaml"
+    text = openapi_path.read_text(encoding="utf-8")
+    error_schema = text[text.index("    ErrorEnvelope:\n") : text.index("    Collection:\n")]
+
+    assert "required: [error]" in error_schema
+    assert "required: [code, message]" in error_schema
+    for code in (
+        "INVALID_ARGUMENT",
+        "UNAUTHORIZED",
+        "METHOD_NOT_ALLOWED",
+        "NOT_FOUND",
+        "INVALID_STATE",
+        "EMULE_UNAVAILABLE",
+        "EMULE_ERROR",
+    ):
+        assert f"                - {code}" in error_schema
+    assert "details:" in error_schema
+    assert "additionalProperties: true" in error_schema
+
+
 def test_rest_error_response_requires_json_not_html() -> None:
     module = load_rest_api_smoke_module()
     error_result = {
