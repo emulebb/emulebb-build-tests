@@ -100,6 +100,24 @@ TEST_CASE("WebSocket HTTP seams bound incomplete header buffering")
 	CHECK_EQ(headerLength, 0u);
 }
 
+TEST_CASE("WebSocket HTTP seams wait for complete declared bodies")
+{
+	CHECK_FALSE(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(0u, 0u, 0u));
+	CHECK_FALSE(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(40u, 41u, 0u));
+	CHECK(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(41u, 41u, 0u));
+	CHECK(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(45u, 41u, 0u));
+
+	CHECK_FALSE(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(41u, 41u, 4u));
+	CHECK_FALSE(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(44u, 41u, 4u));
+	CHECK(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(45u, 41u, 4u));
+	CHECK(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(46u, 41u, 4u));
+
+	CHECK_FALSE(WebSocketHttpSeams::IsCompleteHttpRequestBuffered(
+		static_cast<size_t>(UINT32_MAX),
+		UINT32_MAX,
+		UINT32_MAX));
+}
+
 TEST_CASE("WebSocket HTTP seams parse request methods exactly")
 {
 	std::string method;
