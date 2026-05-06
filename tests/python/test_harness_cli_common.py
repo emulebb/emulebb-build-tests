@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 
 def load_harness_cli_common_module():
@@ -34,6 +37,27 @@ def test_publish_directory_snapshot_skips_generated_shared_hash_payloads(tmp_pat
     assert (destination / "suite-result.json").is_file()
     assert (destination / "scenario" / "result.json").is_file()
     assert not (destination / "scenario" / "shared-hash-root").exists()
+
+
+def test_publish_directory_snapshot_preserves_exact_trailing_dot_space_names(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("exact Win32 trailing dot/space names require Windows extended-length paths")
+
+    module = load_harness_cli_common_module()
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    exact_dir = Path(str(source / "exact-dir") + ". ")
+    exact_file = exact_dir / "payload. "
+    os.makedirs(module.to_windows_extended_path(exact_dir), exist_ok=True)
+    with open(module.to_windows_extended_path(exact_file), "wb") as handle:
+        handle.write(b"exact")
+
+    module.publish_directory_snapshot(source, destination)
+
+    copied_file = Path(str(destination / "exact-dir") + ". ") / "payload. "
+    assert os.path.exists(module.to_windows_extended_path(copied_file))
+    with open(module.to_windows_extended_path(copied_file), "rb") as handle:
+        assert handle.read() == b"exact"
 
 
 def test_cleanup_source_artifacts_leaves_locked_temp_payloads(monkeypatch, tmp_path: Path) -> None:

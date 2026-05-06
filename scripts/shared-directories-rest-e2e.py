@@ -141,16 +141,47 @@ def to_windows_long_path(path: Path) -> str:
     return "\\\\?\\" + text
 
 
+def to_windows_exact_long_path(path: Path) -> str:
+    """Returns an extended-length path spelling without normalizing exact names."""
+
+    text = str(path if path.is_absolute() else Path.cwd() / path)
+    if os.name != "nt" or text.startswith("\\\\?\\"):
+        return text
+    if text.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + text[2:]
+    return "\\\\?\\" + text
+
+
+def exact_win_path(path: Path, trailing_slash: bool = False) -> str:
+    """Formats an absolute Windows path while preserving exact final text."""
+
+    text = str(path if path.is_absolute() else Path.cwd() / path)
+    return text + ("\\" if trailing_slash and not text.endswith("\\") else "")
+
+
 def mkdir_long_path(path: Path) -> None:
     """Creates a directory tree without relying on legacy MAX_PATH limits."""
 
     os.makedirs(to_windows_long_path(path), exist_ok=True)
 
 
+def mkdir_exact_long_path(path: Path) -> None:
+    """Creates an exact-name directory tree without trimming dot/space suffixes."""
+
+    os.makedirs(to_windows_exact_long_path(path), exist_ok=True)
+
+
 def write_text_long_path(path: Path, text: str) -> None:
     """Writes one text fixture without relying on legacy MAX_PATH limits."""
 
     with open(to_windows_long_path(path), "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def write_text_exact_long_path(path: Path, text: str) -> None:
+    """Writes one exact-name text fixture without legacy path normalization."""
+
+    with open(to_windows_exact_long_path(path), "w", encoding="utf-8") as handle:
         handle.write(text)
 
 
@@ -325,23 +356,27 @@ def create_fixture_tree(artifacts_dir: Path) -> dict[str, Path]:
     recursive = artifacts_dir / "shared-rest-recursive"
     recursive_child = recursive / "child"
     replacement = artifacts_dir / "shared-rest-replacement"
+    exact_names = Path(str(artifacts_dir / "shared-rest-exact-names") + ". ")
     long_unicode = artifacts_dir / "shared-rest-long-unicode"
     while len(str(long_unicode.resolve())) < 285:
         long_unicode = long_unicode / "segment-abcdefghijklmnopqrstuvwxyz"
     long_unicode = long_unicode / f"unicode-{chr(0x00DF)}-{chr(0x6F22)}"
     for directory in (flat, recursive_child, replacement, long_unicode):
         mkdir_long_path(directory)
+    mkdir_exact_long_path(exact_names)
     write_text_long_path(flat / "flat_file.txt", "flat share fixture\r\n")
     write_text_long_path(recursive / "recursive_root_file.txt", "recursive root fixture\r\n")
     write_text_long_path(recursive_child / "recursive_child_file.txt", "recursive child fixture\r\n")
     write_text_long_path(replacement / "replacement_file.txt", "replacement fixture\r\n")
     write_text_long_path(long_unicode / f"unicode-{chr(0x00DF)}-{chr(0x6F22)}.txt", "unicode long-path fixture\r\n")
+    write_text_exact_long_path(exact_names / "shared-file. ", "exact trailing dot and space fixture\r\n")
     return {
         "flat": flat,
         "recursive": recursive,
         "recursive_child": recursive_child,
         "replacement": replacement,
         "long_unicode": long_unicode,
+        "exact_names": exact_names,
     }
 
 
@@ -488,9 +523,11 @@ def main() -> int:
     recursive_child_path = live_common.win_path(fixtures["recursive_child"], trailing_slash=True)
     replacement_path = live_common.win_path(fixtures["replacement"], trailing_slash=True)
     long_unicode_path = live_common.win_path(fixtures["long_unicode"], trailing_slash=True)
+    exact_names_path = exact_win_path(fixtures["exact_names"], trailing_slash=True)
     unicode_file_name = f"unicode-{chr(0x00DF)}-{chr(0x6F22)}.txt"
-    first_shared_dirs = [flat_path, recursive_path, recursive_child_path, long_unicode_path]
-    first_roots = [flat_path, recursive_path, long_unicode_path]
+    exact_file_name = "shared-file. "
+    first_shared_dirs = [flat_path, recursive_path, recursive_child_path, long_unicode_path, exact_names_path]
+    first_roots = [flat_path, recursive_path, long_unicode_path, exact_names_path]
     first_monitor_owned = [recursive_child_path]
     replacement_dirs = [replacement_path]
 
@@ -515,6 +552,11 @@ def main() -> int:
             "path_length": len(long_unicode_path),
             "file_name": unicode_file_name,
             "over_max_path": len(long_unicode_path) > 260,
+        },
+        "exact_names": {
+            "path": exact_names_path,
+            "directory_leaf": fixtures["exact_names"].name,
+            "file_name": exact_file_name,
         },
         "checks": {},
         "cleanup": {},
@@ -627,6 +669,7 @@ def main() -> int:
 
         current_phase = set_phase(report, "patch_flat_recursive")
         first_payload = build_shared_directory_patch_payload([fixtures["flat"], fixtures["long_unicode"]], [fixtures["recursive"]])
+        first_payload["roots"].append(exact_names_path)
         checks["patch_flat_recursive"] = {
             "payload": first_payload,
             "response": patch_shared_directories(base_url, args.api_key, first_payload),
@@ -642,8 +685,8 @@ def main() -> int:
         checks["flat_recursive_files"] = wait_for_shared_file_names(
             base_url,
             args.api_key,
-            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt", unicode_file_name],
-            "flat plus recursive plus long-unicode shared files",
+            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt", unicode_file_name, exact_file_name],
+            "flat plus recursive plus long-unicode plus exact-name shared files",
         )
 
         current_phase = set_phase(report, "shutdown_after_first_patch")
@@ -674,8 +717,8 @@ def main() -> int:
         checks["first_relaunch_files"] = wait_for_shared_file_names(
             base_url,
             args.api_key,
-            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt", unicode_file_name],
-            "reloaded flat plus recursive plus long-unicode shared files",
+            ["flat_file.txt", "recursive_root_file.txt", "recursive_child_file.txt", unicode_file_name, exact_file_name],
+            "reloaded flat plus recursive plus long-unicode plus exact-name shared files",
         )
 
         current_phase = set_phase(report, "patch_replacement")

@@ -48,6 +48,42 @@ def write_json_file(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def to_windows_extended_path(path: Path) -> str:
+    """Returns a Windows extended-length spelling without trimming exact names."""
+
+    text = str(path if path.is_absolute() else Path.cwd() / path)
+    if os.name != "nt" or text.startswith("\\\\?\\"):
+        return text
+    if text.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + text[2:]
+    return "\\\\?\\" + text
+
+
+def exact_path_exists(path: Path) -> bool:
+    """Reports existence through an exact-name-aware Windows path spelling."""
+
+    return os.path.exists(to_windows_extended_path(path))
+
+
+def exact_makedirs(path: Path) -> None:
+    """Creates directories without letting Win32 trim trailing dot/space names."""
+
+    os.makedirs(to_windows_extended_path(path), exist_ok=True)
+
+
+def exact_copy2(source_path: Path, destination_path: Path) -> None:
+    """Copies one file while preserving exact source and destination names."""
+
+    exact_makedirs(destination_path.parent)
+    shutil.copy2(to_windows_extended_path(source_path), to_windows_extended_path(destination_path))
+
+
+def exact_rmtree(path: Path) -> None:
+    """Removes a directory tree through an exact-name-aware path spelling."""
+
+    shutil.rmtree(to_windows_extended_path(path))
+
+
 def get_repo_root(script_file: str | Path) -> Path:
     """Returns the `eMule-build-tests` repo root from one script path."""
 
@@ -200,34 +236,19 @@ def prepare_run_paths(
 def publish_directory_snapshot(source_directory: Path, destination_directory: Path) -> None:
     """Refreshes one report directory from another directory snapshot."""
 
-    if destination_directory.exists():
-        shutil.rmtree(destination_directory)
-    destination_directory.mkdir(parents=True, exist_ok=True)
-    for entry in source_directory.iterdir():
-        if entry.is_dir() and entry.name in REPORT_EXCLUDED_DIRECTORY_NAMES:
-            continue
-        target_path = destination_directory / entry.name
-        if entry.is_dir():
-            shutil.copytree(
-                entry,
-                target_path,
-                ignore=shutil.ignore_patterns(*REPORT_EXCLUDED_DIRECTORY_NAMES),
-            )
-        else:
-            shutil.copy2(entry, target_path)
-
-
-def publish_run_artifacts(paths: HarnessRunPaths) -> None:
-    """Copies the source artifact directory into the stable report directory."""
-
-    paths.run_report_dir.parent.mkdir(parents=True, exist_ok=True)
-    publish_directory_snapshot(paths.source_artifacts_dir, paths.run_report_dir)
-
-
-def publish_latest_report(paths: HarnessRunPaths) -> None:
-    """Refreshes the suite-level `-latest` snapshot from one run report."""
-
-    publish_directory_snapshot(paths.run_report_dir, paths.latest_report_dir)
+    if exact_path_exists(destination_directory):
+        exact_rmtree(destination_directory)
+    exact_makedirs(destination_directory)
+    with os.scandir(to_windows_extended_path(source_directory)) as entries:
+        for entry in entries:
+            source_path = source_directory / entry.name
+            if entry.is_dir(follow_symlinks=False) and entry.name in REPORT_EXCLUDED_DIRECTORY_NAMES:
+                continue
+            target_path = destination_directory / entry.name
+            if entry.is_dir(follow_symlinks=False):
+                publish_directory_snapshot(source_path, target_path)
+            else:
+                exact_copy2(source_path, target_path)
 
 
 def cleanup_source_artifacts(paths: HarnessRunPaths) -> None:
@@ -235,17 +256,30 @@ def cleanup_source_artifacts(paths: HarnessRunPaths) -> None:
 
     if paths.keep_source_artifacts:
         return
-    if paths.source_artifacts_dir.exists():
+    if exact_path_exists(paths.source_artifacts_dir):
         deadline = time.monotonic() + 10.0
         last_error: OSError | None = None
         while time.monotonic() < deadline:
             try:
-                shutil.rmtree(paths.source_artifacts_dir)
+                exact_rmtree(paths.source_artifacts_dir)
                 return
             except OSError as exc:
                 last_error = exc
                 time.sleep(0.5)
         print(f"Warning: leaving source artifacts after cleanup failed: {paths.source_artifacts_dir} ({last_error})")
+
+
+def publish_run_artifacts(paths: HarnessRunPaths) -> None:
+    """Copies the source artifact directory into the stable report directory."""
+
+    exact_makedirs(paths.run_report_dir.parent)
+    publish_directory_snapshot(paths.source_artifacts_dir, paths.run_report_dir)
+
+
+def publish_latest_report(paths: HarnessRunPaths) -> None:
+    """Refreshes the suite-level `-latest` snapshot from one run report."""
+
+    publish_directory_snapshot(paths.run_report_dir, paths.latest_report_dir)
 
 
 def build_live_ui_summary(
