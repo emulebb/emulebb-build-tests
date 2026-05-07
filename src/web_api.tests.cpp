@@ -70,6 +70,34 @@ TEST_CASE("WebSocket HTTP seams reject duplicate or invalid Content-Length heade
 		value));
 }
 
+TEST_CASE("WebSocket HTTP seams reject duplicate sensitive header values")
+{
+	std::string value;
+	CHECK(WebSocketHttpSeams::GetSingleHeaderValue(
+		"POST /api/v1/searches HTTP/1.1\r\nContent-Type: application/json\r\nX-API-Key: secret\r\n\r\n",
+		"content-type",
+		value) == WebSocketHttpSeams::EHeaderValueResult::Found);
+	CHECK_EQ(value, "application/json");
+
+	CHECK(WebSocketHttpSeams::GetSingleHeaderValue(
+		"POST /api/v1/searches HTTP/1.1\r\nContent-Type: application/json\r\nContent-Type: text/plain\r\n\r\n",
+		"Content-Type",
+		value) == WebSocketHttpSeams::EHeaderValueResult::Duplicate);
+	CHECK(value.empty());
+
+	CHECK(WebSocketHttpSeams::GetSingleHeaderValue(
+		"GET /api/v1/app HTTP/1.1\r\nX-API-Key: secret\r\nx-api-key: other\r\n\r\n",
+		"X-API-Key",
+		value) == WebSocketHttpSeams::EHeaderValueResult::Duplicate);
+	CHECK(value.empty());
+
+	CHECK(WebSocketHttpSeams::GetSingleHeaderValue(
+		"GET /api/v1/app HTTP/1.1\r\nHost: local\r\n\r\n",
+		"X-API-Key",
+		value) == WebSocketHttpSeams::EHeaderValueResult::Missing);
+	CHECK(value.empty());
+}
+
 TEST_CASE("WebSocket HTTP seams bound incomplete header buffering")
 {
 	uint32_t headerLength = 0;

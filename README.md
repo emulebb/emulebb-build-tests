@@ -53,6 +53,7 @@ Current critical comparison slices:
 - upload queue/scoring divergence and FEAT-023 consumer helpers: `src\community_core_divergence.tests.cpp`, `src\upload_score.tests.cpp`
 - protocol receive replay parity with fragmented temp-file streams: `src\protocol_receive_flow.tests.cpp`
 - long-path and part/met persistence IO: `src\long_path_fs_parity.tests.cpp`, `src\part_file_persistence.tests.cpp`
+- R1 REST/WebServer contract and boundary seams: `src\web_api.tests.cpp`
 - core socket IO guards: `src\socket_io.tests.cpp`, `src\emsocket_send.tests.cpp`, `src\async_socket_ex.tests.cpp`
 
 Script inventory:
