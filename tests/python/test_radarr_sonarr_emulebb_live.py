@@ -41,6 +41,11 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
                 "/api/v2/torrents/info",
             }:
                 return {"status": 200, "body_text": "Ok."}
+            if (
+                path == "/api/v2/torrents/setForceStart"
+                and kwargs.get("form", {}).get("hashes") == "bad"
+            ):
+                return {"status": 400, "body_text": "Fails."}
             if method == "POST" and path in {
                 "/api/v2/torrents/setShareLimits",
                 "/api/v2/torrents/topPrio",
@@ -115,6 +120,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert {
         "delete_duplicate_hash",
         "pause_too_many_hashes",
+        "set_force_start_bad_hash",
         "add_json_content_type",
         "create_category_empty",
         "create_category_control_character",

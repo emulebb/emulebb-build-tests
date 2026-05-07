@@ -727,6 +727,13 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
             form={"hashes": too_many_hashes},
             method="POST",
         ),
+        "set_force_start_bad_hash": qbit_request(
+            base_url,
+            "/api/v2/torrents/setForceStart",
+            cookie=cookie,
+            form={"hashes": "bad", "value": "true"},
+            method="POST",
+        ),
         "add_json_content_type": qbit_request(
             base_url,
             "/api/v2/torrents/add",

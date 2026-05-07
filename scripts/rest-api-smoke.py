@@ -2691,6 +2691,16 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_set_category_missing["status"]) == 400, compact_http_result(qbit_set_category_missing)
 
+    qbit_set_force_start_bad_hash = http_request(
+        base_url,
+        "/api/v2/torrents/setForceStart",
+        method="POST",
+        raw_body="hashes=bad&value=true",
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_set_force_start_bad_hash["status"]) == 400, compact_http_result(qbit_set_force_start_bad_hash)
+
     smoke["qbit"] = {
         "public_version": compact_http_result(qbit_public_version),
         "categories_unauthenticated": compact_http_result(qbit_categories_unauthenticated),
@@ -2714,6 +2724,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "start_missing": compact_http_result(qbit_start_missing),
         "delete_missing": compact_http_result(qbit_delete_missing),
         "set_category_missing": compact_http_result(qbit_set_category_missing),
+        "set_force_start_bad_hash": compact_http_result(qbit_set_force_start_bad_hash),
     }
 
     return smoke
