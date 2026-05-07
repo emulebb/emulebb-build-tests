@@ -246,8 +246,7 @@
         "method": "POST",
         "path": "/api/v2/torrents/delete",
         "expected_statuses": [
-          200,
-          400
+          200
         ]
       },
       {
@@ -255,7 +254,6 @@
         "method": "POST",
         "path": "/api/v2/torrents/setCategory",
         "expected_statuses": [
-          200,
           400
         ]
       },
@@ -264,8 +262,7 @@
         "method": "POST",
         "path": "/api/v2/torrents/pause",
         "expected_statuses": [
-          200,
-          400
+          200
         ]
       },
       {
@@ -273,8 +270,7 @@
         "method": "POST",
         "path": "/api/v2/torrents/stop",
         "expected_statuses": [
-          200,
-          400
+          200
         ]
       },
       {
@@ -282,8 +278,7 @@
         "method": "POST",
         "path": "/api/v2/torrents/resume",
         "expected_statuses": [
-          200,
-          400
+          200
         ]
       },
       {
@@ -291,8 +286,7 @@
         "method": "POST",
         "path": "/api/v2/torrents/start",
         "expected_statuses": [
-          200,
-          400
+          200
         ]
       },
       {

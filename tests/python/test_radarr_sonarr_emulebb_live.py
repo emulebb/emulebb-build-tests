@@ -67,7 +67,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
                 and kwargs.get("form", {}).get("hashes") == module.rest_smoke.REST_SURFACE_MISSING_HASH
                 and kwargs.get("form", {}).get("category") == "LIVE_WIRE_ROUTE_CHECK"
             ):
-                return {"status": 200, "body_text": "Ok."}
+                return {"status": 400, "body_text": "Fails."}
         if path == "/api/v2/app/webapiVersion" and method == "POST":
             return {"status": 404, "body_text": "Not found"}
         if path == "/api/v2/app/version" and method == "POST":
