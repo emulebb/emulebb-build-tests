@@ -1405,6 +1405,42 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	CHECK_EQ(route.params["hash"].get<std::string>(), "0123456789abcdef0123456789abcdef");
 	CHECK_EQ(route.params["comment"].get<std::string>(), "good release");
 	CHECK_EQ(route.params["rating"].get<int>(), 4);
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
+		R"({})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "shared-file PATCH requires priority, comment, or rating");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
+		R"({"priority":7})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "priority must be a string");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
+		R"({"comment":"good release"})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "rating must be an integer between 0 and 5");
 }
 
 TEST_CASE("Web API exposes a strict route schema registry")

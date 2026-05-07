@@ -2185,6 +2185,20 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={"comment": "rest smoke", "rating": 4},
     )
+    shared_patch_empty = http_request(
+        base_url,
+        f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
+        api_key=api_key,
+        json_body={},
+    )
+    shared_patch_bad_priority_type = http_request(
+        base_url,
+        f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"priority": 7},
+    )
     shared_rating_bad_payload = None
     if shared_rows:
         first_hash = str(shared_rows[0].get("hash") or "")
@@ -2235,6 +2249,18 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "list_count": len(shared_rows),
         "missing_get": require_error_response(missing_shared, 404, "NOT_FOUND", message_contains="shared file not found"),
         "rating_missing": require_error_response(shared_rating_missing, 404, "NOT_FOUND", message_contains="shared file not found"),
+        "patch_empty": require_error_response(
+            shared_patch_empty,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="shared-file PATCH requires priority, comment, or rating",
+        ),
+        "patch_bad_priority_type": require_error_response(
+            shared_patch_bad_priority_type,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="priority must be a string",
+        ),
         "rating_bad_payload": (
             require_error_response(
                 shared_rating_bad_payload,
