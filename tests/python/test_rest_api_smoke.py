@@ -121,6 +121,46 @@ def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pyt
     }
 
 
+def test_live_seed_import_evidence_rejects_failed_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    def fake_http_request(_base_url: str, _path: str, **_kwargs: object) -> dict[str, object]:
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "raw_json": {"data": {"ok": False, "imported": False}, "meta": {"apiVersion": "v1"}},
+            "json": {"ok": False, "imported": False},
+            "headers": {},
+            "body_text": "",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+    with pytest.raises(AssertionError, match="imported"):
+        module.exercise_live_seed_imports(
+            "http://127.0.0.1:1",
+            "api-key",
+            {
+                "source_home_url": module.EMULE_SECURITY_HOME_URL,
+                "files": [
+                    {
+                        "name": "server_met",
+                        "file_name": "server.met",
+                        "url": module.EMULE_SECURITY_SERVER_MET_URL,
+                        "bytes": 80,
+                        "sha256": "s" * 64,
+                    },
+                    {
+                        "name": "nodes_dat",
+                        "file_name": "nodes.dat",
+                        "url": module.EMULE_SECURITY_NODES_DAT_URL,
+                        "bytes": 96,
+                        "sha256": "n" * 64,
+                    },
+                ],
+            },
+        )
+
+
 def test_missing_transfer_bulk_result_requires_per_item_error() -> None:
     module = load_rest_api_smoke_module()
 
