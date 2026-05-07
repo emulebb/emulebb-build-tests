@@ -671,6 +671,19 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
         "extra_headers": {"Cookie": "{qbit_session_cookie}"},
         "api_key": False,
     },
+    {
+        "method": "POST",
+        "path": "/api/v2/torrents/delete",
+        "raw_body": f"hashes={REST_SURFACE_MISSING_HASH}&deleteFiles=false",
+        "content_type": "application/x-www-form-urlencoded",
+        "family": "qbit",
+        "scenario": "qbit_missing_hash_delete",
+        "expected_statuses": (200,),
+        "response_kind": "text",
+        "expected_body_contains": "Ok.",
+        "extra_headers": {"Cookie": "{qbit_session_cookie}"},
+        "api_key": False,
+    },
 )
 REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = (
     {
