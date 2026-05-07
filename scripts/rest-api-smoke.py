@@ -660,6 +660,17 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
     },
     {
         "method": "GET",
+        "path": "/api/v2/torrents/categories",
+        "family": "qbit",
+        "scenario": "qbit_wrong_cookie_rejected",
+        "expected_statuses": (403,),
+        "response_kind": "text",
+        "expected_body_contains": "Forbidden",
+        "extra_headers": {"Cookie": "SID=wrong"},
+        "api_key": False,
+    },
+    {
+        "method": "GET",
         "path": f"/api/v2/torrents/properties?hash={REST_SURFACE_MISSING_HASH}",
         "family": "qbit",
         "scenario": "qbit_missing_hash_read",
@@ -2917,6 +2928,13 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     qbit_categories_unauthenticated = http_request(base_url, "/api/v2/torrents/categories")
     assert int(qbit_categories_unauthenticated["status"]) == 403, compact_http_result(qbit_categories_unauthenticated)
 
+    qbit_categories_wrong_cookie = http_request(
+        base_url,
+        "/api/v2/torrents/categories",
+        extra_headers={"Cookie": "SID=wrong"},
+    )
+    assert int(qbit_categories_wrong_cookie["status"]) == 403, compact_http_result(qbit_categories_wrong_cookie)
+
     login_form = urllib.parse.urlencode({"username": "emule", "password": api_key})
     qbit_login = http_request(
         base_url,
@@ -3141,6 +3159,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     smoke["qbit"] = {
         "public_version": compact_http_result(qbit_public_version),
         "categories_unauthenticated": compact_http_result(qbit_categories_unauthenticated),
+        "categories_wrong_cookie": compact_http_result(qbit_categories_wrong_cookie),
         "login": {
             "status": qbit_login["status"],
             "content_type": qbit_login.get("content_type"),

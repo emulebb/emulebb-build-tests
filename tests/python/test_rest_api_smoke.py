@@ -980,7 +980,21 @@ def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
         ("GET", "/indexer/emulebb/api?t=search&cat=abc&q=linux&apikey={api_key}")
     ]["expected_statuses"] == (400,)
     assert operations_by_pair[("GET", "/api/v2/app/webapiVersion")]["response_kind"] == "text"
-    assert operations_by_pair[("GET", "/api/v2/torrents/categories")]["extra_headers"] == {"Cookie": "{qbit_session_cookie}"}
+    assert any(
+        operation["method"] == "GET"
+        and operation["path"] == "/api/v2/torrents/categories"
+        and operation["scenario"] == "qbit_categories"
+        and operation["extra_headers"] == {"Cookie": "{qbit_session_cookie}"}
+        for operation in operations
+    )
+    assert any(
+        operation["method"] == "GET"
+        and operation["path"] == "/api/v2/torrents/categories"
+        and operation["scenario"] == "qbit_wrong_cookie_rejected"
+        and operation["expected_statuses"] == (403,)
+        and operation["extra_headers"] == {"Cookie": "SID=wrong"}
+        for operation in operations
+    )
     assert operations_by_pair[
         ("GET", f"/api/v2/torrents/properties?hash={module.REST_SURFACE_MISSING_HASH}")
     ]["expected_statuses"] == (404,)
