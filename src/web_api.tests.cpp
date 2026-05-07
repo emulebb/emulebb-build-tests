@@ -364,6 +364,13 @@ TEST_CASE("Web API shares strict bounded unsigned parsing across native REST and
 	CHECK_FALSE(WebServerJsonSeams::TryParseUnsignedDecimalValue("+42", ullValue));
 	CHECK_FALSE(WebServerJsonSeams::TryParseUnsignedDecimalValue(" 42", ullValue));
 	CHECK_FALSE(WebServerJsonSeams::TryParseUnsignedDecimalValue("18446744073709551616", ullValue));
+	CHECK(WebServerJsonSeams::TryParseJsonUInt64(WebServerJsonSeams::json(42), ullValue));
+	CHECK_EQ(ullValue, 42u);
+	CHECK_FALSE(WebServerJsonSeams::TryParseJsonUInt64(WebServerJsonSeams::json(-1), ullValue));
+	CHECK_FALSE(WebServerJsonSeams::TryParseJsonUInt64(WebServerJsonSeams::json("42"), ullValue));
+	CHECK(WebServerJsonSeams::TryParseJsonUInt64(WebServerJsonSeams::json("42"), ullValue, true));
+	CHECK_EQ(ullValue, 42u);
+	CHECK_FALSE(WebServerJsonSeams::TryParseJsonUInt64(WebServerJsonSeams::json("18446744073709551616"), ullValue, true));
 
 	WebServerJsonSeams::SApiRoute route;
 	std::string errorCode;
