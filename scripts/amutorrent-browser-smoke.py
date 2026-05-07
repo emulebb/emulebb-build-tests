@@ -145,6 +145,35 @@ def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dic
         )
 
 
+def iter_browser_http_results(value: Any, prefix: str = ""):
+    """Yields nested browser fetch results with stable diagnostic names."""
+
+    if isinstance(value, dict):
+        if "status" in value and "payload" in value:
+            yield prefix or "<root>", value
+            return
+        for key, nested in value.items():
+            name = f"{prefix}.{key}" if prefix else str(key)
+            yield from iter_browser_http_results(nested, name)
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            name = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            yield from iter_browser_http_results(nested, name)
+
+
+def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[str, list[dict[str, Any]]]) -> None:
+    """Raises when browser workflow HTTP calls or page diagnostics report failures."""
+
+    for name, result in iter_browser_http_results(checks):
+        if int(result["status"]) >= 500:
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}' failed: {result}")
+        payload = result.get("payload")
+        if isinstance(payload, dict) and payload.get("type") == "error":
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
+    if any(diagnostics.values()):
+        raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {diagnostics}")
+
+
 def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -> dict[str, Any]:
     """Drives the critical aMuTorrent workflows through a browser page."""
 
@@ -211,6 +240,31 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -
                     {"path": path, "method": method, "body": body},
                 )
 
+            def start_search_with_retry(search_type: str, query: str) -> dict[str, Any]:
+                last_result: dict[str, Any] | None = None
+                attempt_count = 0
+                for attempt in range(1, 31):
+                    attempt_count = attempt
+                    result = fetch_json(
+                        "/api/v1/search?wait=false",
+                        "POST",
+                        {"query": query, "type": search_type, "instanceId": instance_id},
+                    )
+                    last_result = result
+                    payload = result.get("payload")
+                    message = str(payload.get("message", "")) if isinstance(payload, dict) else ""
+                    if not (isinstance(payload, dict) and payload.get("type") == "error" and "Another search is running" in message):
+                        break
+                    page.wait_for_timeout(1000)
+
+                return {
+                    "type": search_type,
+                    "query": query,
+                    "start": last_result,
+                    "attempt_count": attempt_count,
+                    "results": fetch_json(f"/api/v1/search/results?type={search_type}&instanceId={instance_id}"),
+                }
+
             snapshot = fetch_json("/api/v1/data/snapshot")
             if not (200 <= int(snapshot["status"]) < 300):
                 raise RuntimeError(f"aMuTorrent snapshot failed: {snapshot}")
@@ -242,12 +296,17 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -
                     "instanceId": instance_id,
                 },
             )
-            checks["search_start"] = fetch_json(
-                "/api/v1/search?wait=false",
+            checks["qbit_delete_probe"] = fetch_json(
+                "/api/v2/torrents/delete",
                 "POST",
-                {"query": "linux", "type": "automatic", "instanceId": instance_id},
+                {"hashes": "0123456789abcdef0123456789abcdef", "deleteFiles": "true"},
             )
-            checks["search_results"] = fetch_json("/api/v1/search/results")
+            checks["search_modes"] = [
+                start_search_with_retry("automatic", "caf\u00e9 \u6e2c\u8a66"),
+                start_search_with_retry("server", "linux"),
+                start_search_with_retry("kad", "ubuntu"),
+            ]
+            checks["search_results"] = fetch_json(f"/api/v1/search/results?instanceId={instance_id}")
             checks["server_list"] = fetch_json("/api/v1/amule/servers")
             checks["server_disconnect"] = fetch_json(
                 "/api/v1/amule/servers/action",
@@ -261,17 +320,7 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -
             )
             checks["browser_diagnostics"] = diagnostics
 
-            for name, result in checks.items():
-                if isinstance(result, dict) and "status" in result and int(result["status"]) >= 500:
-                    raise RuntimeError(f"aMuTorrent browser workflow '{name}' failed: {result}")
-                if (
-                    isinstance(result, dict)
-                    and isinstance(result.get("payload"), dict)
-                    and result["payload"].get("type") == "error"
-                ):
-                    raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
-            if any(diagnostics.values()):
-                raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {diagnostics}")
+            assert_browser_workflow_results(checks, diagnostics)
         finally:
             browser.close()
     return checks

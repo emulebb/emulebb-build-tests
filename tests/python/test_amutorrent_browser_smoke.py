@@ -43,3 +43,37 @@ def test_require_server_dependencies_passes_when_runtime_modules_exist(tmp_path:
     (root / "server" / "node_modules" / "better-sqlite3").mkdir(parents=True)
 
     smoke.require_amutorrent_server_dependencies(root, {"install_command": "npm ci --prefix server --omit=dev"})
+
+
+def test_browser_workflow_validation_walks_nested_results() -> None:
+    smoke = load_smoke_module()
+    checks = {
+        "search_modes": [
+            {
+                "start": {"status": 200, "payload": {"type": "search-started"}},
+                "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
+            },
+            {
+                "start": {"status": 404, "payload": {"error": "not present"}},
+                "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
+            },
+        ]
+    }
+
+    smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_nested_server_errors() -> None:
+    smoke = load_smoke_module()
+    checks = {"search_modes": [{"start": {"status": 503, "payload": {"error": "offline"}}}]}
+
+    with pytest.raises(RuntimeError, match=r"search_modes\[0\]\.start"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_nested_error_payloads() -> None:
+    smoke = load_smoke_module()
+    checks = {"search_modes": [{"start": {"status": 200, "payload": {"type": "error", "message": "bad"}}}]}
+
+    with pytest.raises(RuntimeError, match=r"search_modes\[0\]\.start"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
