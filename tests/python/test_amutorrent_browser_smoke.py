@@ -71,6 +71,16 @@ def test_browser_smoke_stays_on_native_v1_surface() -> None:
     assert "/api/v1/amule/" not in script_text
 
 
+def test_browser_smoke_reports_live_network_launch_inputs() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert '"launch_inputs"' in script_text
+    assert '"p2p_bind_interface_name": args.p2p_bind_interface_name' in script_text
+    assert '"enable_upnp": True' in script_text
+    assert 'BindAddr=hide.me' not in script_text
+
+
 def test_amutorrent_ed2k_browser_routes_do_not_use_legacy_amule_paths() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     amutorrent_root = workspace_root / "repos" / "amutorrent"
