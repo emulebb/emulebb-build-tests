@@ -810,6 +810,27 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                 "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
                 "body_text": "{}",
             }
+        if path == "/api/v1/transfers/0123456789abcdef0123456789abcdef":
+            return {
+                "status": 200,
+                "content_type": "application/json",
+                "json": {
+                    "hash": "0123456789abcdef0123456789abcdef",
+                    "name": "linux.iso",
+                    "sizeBytes": 1024,
+                    "complete": False,
+                },
+                "raw_json": {
+                    "data": {
+                        "hash": "0123456789abcdef0123456789abcdef",
+                        "name": "linux.iso",
+                        "sizeBytes": 1024,
+                        "complete": False,
+                    },
+                    "meta": {"apiVersion": "v1"},
+                },
+                "body_text": "{}",
+            }
         return {
             "status": 200,
             "content_type": "application/json",
@@ -854,8 +875,36 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
     result = module.trigger_paused_download_from_search_result("http://127.0.0.1:1", "key", "42", 1.0)
 
     assert result["ok"] is True
-    assert requests[-1]["path"] == "/api/v1/searches/42/results/0123456789abcdef0123456789abcdef/operations/download"
-    assert requests[-1]["json_body"] == {"paused": True, "categoryId": 0}
+    assert requests[-2]["path"] == "/api/v1/searches/42/results/0123456789abcdef0123456789abcdef/operations/download"
+    assert requests[-2]["json_body"] == {"paused": True, "categoryId": 0}
+    assert requests[-1]["path"] == "/api/v1/transfers/0123456789abcdef0123456789abcdef"
+    assert result["transfer"]["status"] == 200
+
+
+def test_triggered_transfer_wait_rejects_hash_mismatch(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    def fake_http_request(_base_url, _path, **_kwargs):
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {"hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+            "raw_json": {
+                "data": {"hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                "meta": {"apiVersion": "v1"},
+            },
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    with pytest.raises(AssertionError, match="hash mismatch"):
+        module.wait_for_triggered_transfer(
+            "http://127.0.0.1:1",
+            "key",
+            "0123456789abcdef0123456789abcdef",
+            1.0,
+        )
 
 
 def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch) -> None:

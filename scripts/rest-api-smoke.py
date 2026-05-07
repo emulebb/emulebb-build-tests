@@ -3762,6 +3762,38 @@ def find_safe_live_download_result(search_payload: dict[str, Any]) -> dict[str, 
     return None
 
 
+def wait_for_triggered_transfer(
+    base_url: str,
+    api_key: str,
+    transfer_hash: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Polls until a download trigger is visible through the native transfer API."""
+
+    deadline = time.time() + timeout_seconds
+    last_status: int | None = None
+    while time.time() < deadline:
+        result = http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash}",
+            api_key=api_key,
+            request_timeout_seconds=timeout_seconds,
+        )
+        last_status = int(result["status"])
+        if last_status != 200:
+            time.sleep(1.0)
+            continue
+        payload = require_json_object(result, 200)
+        if payload.get("hash") != transfer_hash:
+            raise AssertionError(f"Triggered transfer hash mismatch: expected {transfer_hash!r}, got {payload.get('hash')!r}")
+        return compact_http_result(result)
+
+    raise RuntimeError(
+        "Timed out waiting for triggered transfer materialization. "
+        f"transfer_hash={transfer_hash!r}; last_status={last_status!r}"
+    )
+
+
 def trigger_paused_download_from_search_result(
     base_url: str,
     api_key: str,
@@ -3807,11 +3839,18 @@ def trigger_paused_download_from_search_result(
             request_timeout_seconds=timeout_seconds,
         )
         require_json_object(download, 200)
+        transfer = wait_for_triggered_transfer(
+            base_url,
+            api_key,
+            str(candidate["hash"]),
+            timeout_seconds,
+        )
         return {
             "ok": int(download["status"]) == 200,
             "searchId": search_id,
             "candidate": selected_candidate,
             "download": {"status": download.get("status")},
+            "transfer": transfer,
             "observations": observations,
         }
 
