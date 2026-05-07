@@ -1,4 +1,5 @@
 #include "../third_party/doctest/doctest.h"
+#include "../include/LongPathTestSupport.h"
 #include "WebApiCommandSeams.h"
 #include "WebApiSurfaceSeams.h"
 #include "WebServerArrCompatSeams.h"
@@ -7,8 +8,38 @@
 #include "WebServerQBitCompatSeams.h"
 #include "WebServerStaticFileSeams.h"
 #include "WebSocketHttpSeams.h"
+#include "WebSocketTlsSeams.h"
 
 TEST_SUITE_BEGIN("web_api");
+
+TEST_CASE("WebSocket TLS seam loads cert and key bytes from overlong unicode paths")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x57454254u));
+
+	const std::wstring certPath = fixture.MakeDirectoryChildPath((std::wstring(L"cert_") + LongPathTestSupport::MakeSpecialSegment() + L".crt").c_str());
+	const std::wstring keyPath = fixture.MakeDirectoryChildPath((std::wstring(L"key_") + LongPathTestSupport::MakeSpecialSegment() + L".key").c_str());
+	const std::vector<BYTE> certPayload = LongPathTestSupport::BuildDeterministicPayload(4097u, 0xC312u);
+	const std::vector<BYTE> keyPayload = LongPathTestSupport::BuildDeterministicPayload(3073u, 0xC313u);
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(certPath, certPayload));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(keyPath, keyPayload));
+
+	std::vector<unsigned char> certBytes;
+	std::vector<unsigned char> keyBytes;
+	REQUIRE(WebSocketTlsSeams::TryLoadPemFileForMbedTls(CString(certPath.c_str()), certBytes));
+	REQUIRE(WebSocketTlsSeams::TryLoadPemFileForMbedTls(CString(keyPath.c_str()), keyBytes));
+
+	REQUIRE_EQ(certBytes.size(), certPayload.size() + 1u);
+	REQUIRE_EQ(keyBytes.size(), keyPayload.size() + 1u);
+	CHECK(std::equal(certPayload.begin(), certPayload.end(), certBytes.begin()));
+	CHECK(std::equal(keyPayload.begin(), keyPayload.end(), keyBytes.begin()));
+	CHECK_EQ(certBytes.back(), 0u);
+	CHECK_EQ(keyBytes.back(), 0u);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(certPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(keyPath));
+}
 
 TEST_CASE("WebSocket HTTP seams parse Content-Length strictly")
 {
