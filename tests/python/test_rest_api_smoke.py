@@ -907,6 +907,12 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert ("POST", "/api/v1/transfers") in method_path_pairs
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/operations/pause") in method_path_pairs
     assert ("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}") in method_path_pairs
+    assert operations_by_pair[("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}")][
+        "expected_statuses"
+    ] == (400,)
+    assert operations_by_pair[("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}")][
+        "scenario"
+    ] == "transfer_delete_requires_delete_files"
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse") in method_path_pairs
     assert operations_by_pair[
         ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse")

@@ -431,8 +431,8 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
         "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
         "json_body": {"deleteFiles": False},
         "family": "transfers",
-        "scenario": "safe_mutation",
-        "expected_statuses": (200,),
+        "scenario": "transfer_delete_requires_delete_files",
+        "expected_statuses": (400,),
     },
     {
         "method": "POST",

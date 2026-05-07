@@ -27,8 +27,8 @@
     "kad_search_count": 6,
     "download_trigger_count": 1,
     "search_type": "any",
-    "contract_route_count": 81,
-    "safe_contract_route_count": 80,
+    "contract_route_count": 82,
+    "safe_contract_route_count": 81,
     "unsafe_contract_operations": [
       "shutdownApp"
     ],
@@ -41,7 +41,7 @@
       "shared-directories": 3,
       "uploads": 15,
       "servers": 9,
-      "kad": 5,
+      "kad": 6,
       "searches": 5,
       "friends": 3,
       "logs": 1
@@ -121,6 +121,14 @@
         "method": "GET",
         "path": "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF",
         "scenario": "uppercase_hash_rejected",
+        "expected_statuses": [
+          400
+        ]
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef",
+        "scenario": "transfer_delete_requires_delete_files",
         "expected_statuses": [
           400
         ]
