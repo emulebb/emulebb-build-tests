@@ -405,6 +405,9 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 	WebApiCommandSeams::SSearchStartRequest request;
 	std::string error;
 	const std::string strUnicodeQuery(std::string("linux ") + std::string("\xC3\xBC", 2) + "ber");
+	CHECK_EQ(std::string(WebApiCommandSeams::GetDefaultSearchMethodName()), "automatic");
+	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(WebApiCommandSeams::GetDefaultSearchMethodName()), WebApiCommandSeams::ESearchMethod::Automatic);
+
 	const WebApiCommandSeams::json params = {
 		{"query", "\t 1080p \n"},
 		{"method", "KaD"},
