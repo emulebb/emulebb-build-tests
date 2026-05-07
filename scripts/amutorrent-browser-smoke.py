@@ -14,9 +14,6 @@ from typing import Any
 AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
 DEFAULT_WINDOWS_NODE22 = Path(r"C:\bin\nodejs-v22-old\node.exe")
 DEFAULT_SEARCH_ROUNDS = 2
-QBIT_SMOKE_ED2K_HASH = "0123456789abcdef0123456789abcdef"
-QBIT_SMOKE_MAGNET_HASH = f"{QBIT_SMOKE_ED2K_HASH}00000000"
-QBIT_SMOKE_MAGNET = f"magnet:?xt=urn:btih:{QBIT_SMOKE_MAGNET_HASH}&dn=amutorrent-qbit-smoke.bin&xl=1"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -355,33 +352,6 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                     "instanceId": instance_id,
                 },
             )
-            checks["qbit_delete_probe"] = fetch_json(
-                "/api/v2/torrents/delete",
-                "POST",
-                {"hashes": QBIT_SMOKE_ED2K_HASH, "deleteFiles": "true"},
-            )
-            checks["qbit_adapter_probe"] = {
-                "add": fetch_json(
-                    "/api/v2/torrents/add",
-                    "POST",
-                    {"urls": QBIT_SMOKE_MAGNET, "category": ""},
-                ),
-                "pause": fetch_json(
-                    "/api/v2/torrents/pause",
-                    "POST",
-                    {"hashes": QBIT_SMOKE_MAGNET_HASH},
-                ),
-                "resume": fetch_json(
-                    "/api/v2/torrents/resume",
-                    "POST",
-                    {"hashes": QBIT_SMOKE_MAGNET_HASH},
-                ),
-                "delete": fetch_json(
-                    "/api/v2/torrents/delete",
-                    "POST",
-                    {"hashes": QBIT_SMOKE_MAGNET_HASH, "deleteFiles": "true"},
-                ),
-            }
             checks["search_modes"] = [
                 start_search_with_retry(spec["type"], spec["query"], spec["round"])
                 for spec in build_search_mode_specs(search_rounds)
@@ -394,9 +364,9 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                 {"ip": "127.0.0.1", "port": 4661, "serverAction": "disconnect", "instanceId": instance_id},
             )
             checks["shared_dirs_reload"] = fetch_json(
-                f"/api/amule/shared-dirs/reload?instanceId={instance_id}",
+                "/api/v1/amule/refresh-shared",
                 "POST",
-                {},
+                {"instanceId": instance_id},
             )
             checks["browser_diagnostics"] = diagnostics
 

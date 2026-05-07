@@ -62,6 +62,14 @@ def test_build_search_mode_specs_rejects_zero_rounds() -> None:
         smoke.build_search_mode_specs(0)
 
 
+def test_browser_smoke_stays_on_native_v1_surface() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "/api/v2/" not in script_text
+    assert "/api/amule/" not in script_text
+
+
 def test_browser_workflow_validation_walks_nested_results() -> None:
     smoke = load_smoke_module()
     checks = {
