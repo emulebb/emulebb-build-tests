@@ -1,23 +1,19 @@
 #include "../third_party/doctest/doctest.h"
 
 #include <cstdint>
+#include <limits>
 
 namespace
 {
-std::uint64_t Deadline(std::uint64_t startTick, std::uint64_t intervalMs)
-{
-	return startTick + intervalMs;
-}
-
 bool IsDeadlineReached(std::uint64_t nowTick, std::uint64_t startTick, std::uint64_t intervalMs)
 {
-	return nowTick >= Deadline(startTick, intervalMs);
+	return nowTick - startTick >= intervalMs;
 }
 
 std::uint64_t RemainingIntervalMs(std::uint64_t nowTick, std::uint64_t startTick, std::uint64_t intervalMs)
 {
-	const std::uint64_t deadlineTick = Deadline(startTick, intervalMs);
-	return nowTick < deadlineTick ? deadlineTick - nowTick : 0;
+	const std::uint64_t elapsedMs = nowTick - startTick;
+	return elapsedMs < intervalMs ? intervalMs - elapsedMs : 0;
 }
 }
 
@@ -54,4 +50,17 @@ TEST_CASE("64-bit fixed-window expiry math preserves ban and cleanup thresholds 
 
 	CHECK_FALSE(IsDeadlineReached(baseTick + cleanupWindowMs - 1, baseTick, cleanupWindowMs));
 	CHECK(IsDeadlineReached(baseTick + cleanupWindowMs, baseTick, cleanupWindowMs));
+}
+
+TEST_CASE("Elapsed tick math preserves ban and timeout thresholds when 64-bit addition would wrap")
+{
+	const std::uint64_t startTick = std::numeric_limits<std::uint64_t>::max() - 10;
+	const std::uint64_t intervalMs = 25;
+	const std::uint64_t beforeDeadline = startTick + intervalMs - 1;
+	const std::uint64_t atDeadline = startTick + intervalMs;
+
+	CHECK_FALSE(IsDeadlineReached(beforeDeadline, startTick, intervalMs));
+	CHECK_EQ(RemainingIntervalMs(beforeDeadline, startTick, intervalMs), static_cast<std::uint64_t>(1u));
+	CHECK(IsDeadlineReached(atDeadline, startTick, intervalMs));
+	CHECK_EQ(RemainingIntervalMs(atDeadline, startTick, intervalMs), static_cast<std::uint64_t>(0u));
 }
