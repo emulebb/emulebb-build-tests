@@ -1,6 +1,11 @@
 #include "../third_party/doctest/doctest.h"
 #include "AsyncSocketExSeams.h"
 
+#if __has_include("AsyncSocketExRuntimeSeams.h")
+#include "AsyncSocketExRuntimeSeams.h"
+#define EMULE_TEST_HAVE_ASYNC_SOCKET_RUNTIME_SEAMS 1
+#endif
+
 TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("Async socket seam maps a listening socket to readable poll interest")
@@ -97,6 +102,13 @@ TEST_CASE("Async socket seam only yields callback-drain polling while callbacks 
 	CHECK_FALSE(ShouldYieldForAsyncSocketCallbackDrain(0));
 	CHECK_FALSE(ShouldYieldForAsyncSocketCallbackDrain(-1));
 }
+
+#if defined(EMULE_TEST_HAVE_ASYNC_SOCKET_RUNTIME_SEAMS)
+TEST_CASE("Async socket seam makes helper initialization failures release-visible")
+{
+	CHECK(AsyncSocketExRuntimeSeams::ShouldLogThreadDataInitFailure());
+}
+#endif
 
 TEST_CASE("Async socket seam gates accept and read callbacks on state and requested interest")
 {
