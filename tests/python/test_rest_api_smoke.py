@@ -840,6 +840,95 @@ def test_verify_searches_deleted_requires_each_search_to_404(monkeypatch) -> Non
     assert requests == ["/api/v1/searches/42", "/api/v1/searches/43"]
 
 
+def test_clear_completed_transfers_uses_confirmation_payload(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    requests: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        requests.append({"path": path, **kwargs})
+        return {
+            "status": 200,
+            "content_type": "application/json; charset=utf-8",
+            "json": {"ok": True},
+            "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.clear_completed_transfers("http://127.0.0.1:1", "key")
+
+    assert result["status"] == 200
+    assert requests == [
+        {
+            "path": "/api/v1/transfers/operations/clear-completed",
+            "method": "POST",
+            "api_key": "key",
+            "json_body": {"confirmClearCompleted": True},
+        }
+    ]
+
+
+def test_extract_triggered_transfer_hashes_uses_live_transfer_response() -> None:
+    module = load_rest_api_smoke_module()
+
+    cycles = [
+        {
+            "download_trigger": {
+                "ok": True,
+                "transfer": {
+                    "json": {
+                        "hash": "0123456789abcdef0123456789abcdef",
+                    },
+                },
+            },
+        },
+        {
+            "download_trigger": {
+                "ok": True,
+                "transfer": {
+                    "json": {
+                        "hash": "0123456789ABCDEF0123456789ABCDEF",
+                    },
+                },
+            },
+        },
+        {"download_trigger": {"ok": False}},
+    ]
+
+    assert module.extract_triggered_transfer_hashes(cycles) == ["0123456789abcdef0123456789abcdef"]
+
+
+def test_verify_transfers_still_exist_requires_hash_match(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    requests: list[str] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        requests.append(path)
+        transfer_hash = path.rsplit("/", 1)[-1]
+        return {
+            "status": 200,
+            "content_type": "application/json; charset=utf-8",
+            "json": {"hash": transfer_hash},
+            "raw_json": {
+                "data": {"hash": transfer_hash},
+                "meta": {"apiVersion": "v1"},
+            },
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.verify_transfers_still_exist(
+        "http://127.0.0.1:1",
+        "key",
+        ["0123456789abcdef0123456789abcdef"],
+    )
+
+    assert result["checked"] == 1
+    assert requests == ["/api/v1/transfers/0123456789abcdef0123456789abcdef"]
+
+
 def test_live_download_candidate_filter_rejects_unsafe_rows() -> None:
     module = load_rest_api_smoke_module()
 

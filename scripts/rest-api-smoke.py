@@ -4060,6 +4060,58 @@ def verify_searches_deleted(base_url: str, api_key: str, search_ids: list[str]) 
     }
 
 
+def clear_completed_transfers(base_url: str, api_key: str) -> dict[str, object]:
+    """Clears completed transfers through the explicit native REST confirmation route."""
+
+    return http_request(
+        base_url,
+        "/api/v1/transfers/operations/clear-completed",
+        method="POST",
+        api_key=api_key,
+        json_body={"confirmClearCompleted": True},
+    )
+
+
+def extract_triggered_transfer_hashes(completed_cycles: list[dict[str, object]]) -> list[str]:
+    """Extracts triggered transfer hashes captured during live search cycles."""
+
+    hashes: list[str] = []
+    for cycle in completed_cycles:
+        trigger = cycle.get("download_trigger")
+        if not isinstance(trigger, dict) or not bool(trigger.get("ok")):
+            continue
+        transfer = trigger.get("transfer")
+        if not isinstance(transfer, dict):
+            continue
+        transfer_json = transfer.get("json")
+        if not isinstance(transfer_json, dict):
+            continue
+        transfer_hash = transfer_json.get("hash")
+        if isinstance(transfer_hash, str) and is_lowercase_md4_hash(transfer_hash):
+            hashes.append(transfer_hash)
+    return hashes
+
+
+def verify_transfers_still_exist(base_url: str, api_key: str, transfer_hashes: list[str]) -> dict[str, object]:
+    """Verifies that named transfers remain visible after a safe no-op mutation."""
+
+    probes: list[dict[str, object]] = []
+    for transfer_hash in transfer_hashes:
+        result = http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=api_key)
+        body = require_json_object(result, 200)
+        assert body.get("hash") == transfer_hash, compact_http_result(result)
+        probes.append(
+            {
+                "hash": transfer_hash,
+                "response": compact_http_result(result),
+            }
+        )
+    return {
+        "checked": len(transfer_hashes),
+        "probes": probes,
+    }
+
+
 def execute_search_plan(
     base_url: str,
     api_key: str,
@@ -4519,6 +4571,16 @@ def main() -> int:
             "searchIds": search_ids,
             "response": compact_http_result(delete_all_searches_result),
             "post_delete": verify_searches_deleted(base_url, args.api_key, search_ids),
+        }
+
+        triggered_transfer_hashes = extract_triggered_transfer_hashes(completed_cycles)
+        current_phase = set_phase(report, "clear_completed_transfers")
+        clear_completed_result = clear_completed_transfers(base_url, args.api_key)
+        require_json_object(clear_completed_result, 200)
+        report["checks"]["clear_completed_transfers"] = {
+            "triggeredTransferHashes": triggered_transfer_hashes,
+            "response": compact_http_result(clear_completed_result),
+            "post_clear": verify_transfers_still_exist(base_url, args.api_key, triggered_transfer_hashes),
         }
         search_id = None
 
