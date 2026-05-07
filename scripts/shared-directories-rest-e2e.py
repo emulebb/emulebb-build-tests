@@ -234,6 +234,34 @@ def get_shared_file_names(base_url: str, api_key: str) -> list[str]:
     return sorted(names)
 
 
+def get_shared_file_row_by_name(base_url: str, api_key: str, name: str) -> dict[str, object]:
+    """Returns one shared-file REST row by display name."""
+
+    rows = require_json_array(http_request(base_url, SHARED_FILES_ROUTE, api_key=api_key), 200)
+    for row in rows:
+        if isinstance(row, dict) and row.get("name") == name:
+            return row
+    raise AssertionError(f"Shared file named {name!r} not found in {rows!r}.")
+
+
+def delete_shared_file_by_hash(base_url: str, api_key: str, file_hash: str, *, delete_files: bool) -> dict[str, object]:
+    """Deletes one shared file through native REST and validates the response."""
+
+    result = http_request(
+        base_url,
+        f"{SHARED_FILES_ROUTE}/{file_hash}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"deleteFiles": delete_files},
+    )
+    body = require_json_object(result, 200)
+    assert body.get("ok") is True, compact_http_result(result)
+    assert body.get("deletedFiles") is delete_files, compact_http_result(result)
+    compact = compact_http_result(result)
+    compact["response"] = body
+    return compact
+
+
 def extract_directory_paths(model: dict[str, Any]) -> dict[str, list[str]]:
     """Extracts comparable path lists from the shared-directory REST model."""
 
@@ -781,6 +809,38 @@ def main() -> int:
             args.api_key,
             ["replacement_file.txt"],
             "reloaded replacement shared files",
+        )
+
+        current_phase = set_phase(report, "delete_replacement_shared_file")
+        replacement_row = get_shared_file_row_by_name(base_url, args.api_key, "replacement_file.txt")
+        replacement_hash = replacement_row.get("hash")
+        if not isinstance(replacement_hash, str) or not replacement_hash:
+            raise AssertionError(f"Replacement shared-file row has no hash: {replacement_row!r}")
+        replacement_file_path = fixtures["replacement"] / "replacement_file.txt"
+        checks["delete_replacement_shared_file"] = {
+            "row": replacement_row,
+            "response": delete_shared_file_by_hash(
+                base_url,
+                args.api_key,
+                replacement_hash,
+                delete_files=True,
+            ),
+        }
+        if replacement_file_path.exists():
+            raise AssertionError(f"Expected shared-file delete to remove {replacement_file_path}.")
+        checks["after_replacement_shared_file_delete_directories"] = wait_for_shared_directory_paths(
+            base_url,
+            args.api_key,
+            expected_roots=replacement_dirs,
+            expected_items=replacement_dirs,
+            expected_monitor_owned=[],
+            description="replacement shared-directory model after shared-file delete",
+        )
+        checks["after_replacement_shared_file_delete_files"] = wait_for_shared_file_names(
+            base_url,
+            args.api_key,
+            [],
+            "replacement shared files after native REST delete",
         )
 
         current_phase = set_phase(report, "completed")
