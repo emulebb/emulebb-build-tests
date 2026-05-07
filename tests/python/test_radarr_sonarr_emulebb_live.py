@@ -108,6 +108,8 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert all(response["status"] == 400 for response in result["invalid_mutations"].values())
     assert set(result["route_completeness"]) == {scenario["name"] for scenario in module.QBIT_ROUTE_COMPLETENESS_SCENARIOS}
     assert result["route_completeness"]["set_force_start"]["status"] == 200
+    assert result["route_completeness"]["set_force_start"]["expected_status"] == 200
+    assert all("expected_statuses" not in response for response in result["route_completeness"].values())
     assert {
         "delete_duplicate_hash",
         "pause_too_many_hashes",

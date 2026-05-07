@@ -570,17 +570,20 @@ def qbit_route_completeness_checks(base_url: str, emule_api_key: str, cookie: st
             form=form or None,
         )
         expected_statuses = tuple(int(value) for value in scenario["expected_statuses"])
+        if len(expected_statuses) != 1:
+            raise RuntimeError(f"qBit route completeness {scenario['name']} must declare exactly one expected HTTP status.")
+        expected_status = expected_statuses[0]
         status = int(result.get("status") or 0)
-        if status not in expected_statuses:
+        if status != expected_status:
             raise RuntimeError(
                 f"qBit route completeness {scenario['name']} returned HTTP {status}, "
-                f"expected one of {expected_statuses}: {str(result.get('body_text') or '')[:100]}"
+                f"expected {expected_status}: {str(result.get('body_text') or '')[:100]}"
             )
         checks[str(scenario["name"])] = {
             "method": scenario["method"],
             "path": scenario["path"],
             "status": status,
-            "expected_statuses": list(expected_statuses),
+            "expected_status": expected_status,
         }
     return checks
 
