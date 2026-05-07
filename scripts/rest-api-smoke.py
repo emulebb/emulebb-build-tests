@@ -1749,6 +1749,20 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         json_body={},
     )
     category_get_missing = http_request(base_url, "/api/v1/categories/999999", api_key=api_key)
+    category_patch_empty = http_request(
+        base_url,
+        "/api/v1/categories/1",
+        method="PATCH",
+        api_key=api_key,
+        json_body={},
+    )
+    category_patch_bad_color = http_request(
+        base_url,
+        "/api/v1/categories/1",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"color": 16777216},
+    )
     category_patch_default = http_request(
         base_url,
         "/api/v1/categories/0",
@@ -2007,6 +2021,8 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "category_count": len(category_rows),
         "category_create_bad": require_error_response(category_create_bad, 400, "INVALID_ARGUMENT", message_contains="name must be"),
         "category_get_missing": require_error_response(category_get_missing, 404, "NOT_FOUND", message_contains="category not found"),
+        "category_patch_empty": require_error_response(category_patch_empty, 400, "INVALID_ARGUMENT", message_contains="category PATCH requires at least one field"),
+        "category_patch_bad_color": require_error_response(category_patch_bad_color, 400, "INVALID_ARGUMENT", message_contains="color must be null or an RGB integer"),
         "category_patch_default": require_error_response(category_patch_default, 400, "INVALID_ARGUMENT", message_contains="default category"),
         "category_delete_default": require_error_response(category_delete_default, 400, "INVALID_ARGUMENT", message_contains="default category"),
         "missing_get": require_error_response(missing_transfer, 404, "NOT_FOUND", message_contains="transfer not found"),
@@ -2442,6 +2458,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={"query": "ubuntu", "clearExisting": 1},
     )
+    friend_bad_user_hash = http_request(
+        base_url,
+        "/api/v1/friends",
+        method="POST",
+        api_key=api_key,
+        json_body={"userHash": REST_SURFACE_MISSING_HASH.upper(), "name": "REST contract"},
+    )
     surface["errors"] = {
         "missing_route": require_error_response(missing_route, 404, "NOT_FOUND", message_contains="API route not found"),
         "invalid_method": require_error_response(
@@ -2539,6 +2562,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="clearExisting must be a boolean",
+        ),
+        "friend_bad_user_hash": require_error_response(
+            friend_bad_user_hash,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="userHash must be a 32-character lowercase hex string",
         ),
     }
 
