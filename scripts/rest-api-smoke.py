@@ -2478,6 +2478,34 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     }
 
     server_payload = dict(REST_SURFACE_TEST_SERVER)
+    server_add_bad_port = http_request(
+        base_url,
+        "/api/v1/servers",
+        method="POST",
+        api_key=api_key,
+        json_body={"address": REST_SURFACE_TEST_SERVER["address"], "port": 0},
+    )
+    server_add_bad_connect = http_request(
+        base_url,
+        "/api/v1/servers",
+        method="POST",
+        api_key=api_key,
+        json_body={"address": REST_SURFACE_TEST_SERVER["address"], "port": REST_SURFACE_TEST_SERVER["port"], "connect": "yes"},
+    )
+    server_met_bad_url = http_request(
+        base_url,
+        "/api/v1/servers/met-url-imports",
+        method="POST",
+        api_key=api_key,
+        json_body={"url": "   "},
+    )
+    kad_bootstrap_bad_port = http_request(
+        base_url,
+        "/api/v1/kad/operations/bootstrap",
+        method="POST",
+        api_key=api_key,
+        json_body={"address": "bootstrap.example.invalid", "port": 65536},
+    )
     server_add = http_request(
         base_url,
         "/api/v1/servers",
@@ -2505,6 +2533,30 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     server_remove_payload = require_json_object(server_remove, 200)
     surface["servers_mutation"] = {
+        "add_bad_port": require_error_response(
+            server_add_bad_port,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="port must be in the range 1..65535",
+        ),
+        "add_bad_connect": require_error_response(
+            server_add_bad_connect,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="connect must be a boolean",
+        ),
+        "met_bad_url": require_error_response(
+            server_met_bad_url,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="url must not be empty",
+        ),
+        "kad_bootstrap_bad_port": require_error_response(
+            kad_bootstrap_bad_port,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="port must be in the range 1..65535",
+        ),
         "add": compact_http_result(server_add),
         "added_server": server_add_payload,
         "remove": compact_http_result(server_remove),
