@@ -3,6 +3,9 @@
 Canonical app target: `release/v0.72a-community`
 Canonical test branch: `main`
 
+`release/v0.72a-community` is a seam-enabled parity and regression baseline
+only. It is not a product release or public tag/package target.
+
 ## Automated Coverage
 
 - Upload queue entry lifetime parity: `src/upload_queue.tests.cpp`
