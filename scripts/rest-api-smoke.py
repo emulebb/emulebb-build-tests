@@ -792,7 +792,6 @@ def configure_webserver_profile(
     api_key: str,
     port: int,
     bind_addr: str,
-    enable_upnp: bool,
 ) -> None:
     """Enables the WebServer listener and REST API key inside the temp profile."""
 
@@ -806,9 +805,8 @@ def configure_webserver_profile(
         ("NetworkKademlia", "1"),
     ):
         text = patch_ini_value(text, key, value)
-    if enable_upnp:
-        for key in ("Verbose", "FullVerbose"):
-            text = patch_ini_value(text, key, "1")
+    for key in ("Verbose", "FullVerbose"):
+        text = patch_ini_value(text, key, "1")
     template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
     text = patch_ini_value(text, "WebTemplateFile", str(template_path))
     for key, value in (
@@ -829,7 +827,7 @@ def configure_webserver_profile(
         ("HTTPSKey", ""),
     ):
         text = upsert_ini_section_value(text, "WebServer", key, value)
-    text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1" if enable_upnp else "0")
+    text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1")
     text = patch_ini_value(text, "CloseUPnPOnExit", "0")
     live_common.write_utf16_ini_text(preferences_path, text)
 
@@ -840,15 +838,7 @@ def apply_p2p_bind_interface_override(
 ) -> None:
     """Writes the requested P2P bind interface name into the isolated profile."""
 
-    interface_name = interface_name.strip()
-    if not interface_name:
-        raise ValueError("P2P bind interface name must not be empty.")
-    preferences_path = config_dir / "preferences.ini"
-    text = live_common.read_ini_text(preferences_path)
-    text = upsert_ini_section_value(text, "eMule", "BindInterface", interface_name)
-    text = upsert_ini_section_value(text, "eMule", "BindAddr", "")
-    text = upsert_ini_section_value(text, "eMule", "BlockNetworkWhenBindUnavailableAtStartup", "1")
-    live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_live_network_policy(config_dir, p2p_bind_interface_name=interface_name)
 
 
 def http_request(
@@ -3980,7 +3970,7 @@ def main() -> int:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="rest-smoke-test-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
-    parser.add_argument("--enable-upnp", action="store_true")
+    parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--server-activity-timeout-seconds", type=float, default=45.0)
@@ -4056,7 +4046,6 @@ def main() -> int:
         args.api_key,
         port,
         args.bind_addr,
-        args.enable_upnp,
     )
     if args.p2p_bind_interface_name:
         apply_p2p_bind_interface_override(
@@ -4080,7 +4069,7 @@ def main() -> int:
             "config_dir": str(profile["config_dir"]),
             "api_key_length": len(args.api_key),
             "bind_addr": args.bind_addr,
-            "enable_upnp": bool(args.enable_upnp),
+            "enable_upnp": True,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "keep_running": bool(args.keep_running),
             "server_search_count": args.server_search_count,
@@ -4121,13 +4110,12 @@ def main() -> int:
         ready = wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
         report["checks"]["ready"] = compact_http_result(ready)
 
-        if args.enable_upnp:
-            current_phase = set_phase(report, "nat_backend_order")
-            report["checks"]["nat_backend_order"] = wait_for_upnp_backend_order(
-                base_url,
-                args.api_key,
-                timeout_seconds=20.0,
-            )
+        current_phase = set_phase(report, "nat_backend_order")
+        report["checks"]["nat_backend_order"] = wait_for_upnp_backend_order(
+            base_url,
+            args.api_key,
+            timeout_seconds=20.0,
+        )
 
         current_phase = set_phase(report, "auth_checks")
         no_key = http_request(base_url, "/api/v1/app")

@@ -455,6 +455,7 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
 
     text = live_common.patch_ini_value(text, "WebTemplateFile", str(template_path))
     live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_live_network_policy(config_dir)
 
 
 def parse_ini_sections(path: Path) -> dict[str, dict[str, str]]:

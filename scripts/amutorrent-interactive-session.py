@@ -47,6 +47,7 @@ def configure_session_profile(
     api_key: str,
     port: int,
     bind_addr: str,
+    p2p_bind_interface_name: str,
     *,
     live_network: bool,
 ) -> None:
@@ -83,9 +84,8 @@ def configure_session_profile(
         ("HTTPSKey", ""),
     ):
         text = live_common.upsert_ini_section_value(text, "WebServer", key, value)
-    text = live_common.upsert_ini_section_value(text, "UPnP", "EnableUPnP", "0")
-    text = live_common.patch_ini_value(text, "CloseUPnPOnExit", "0")
     live_common.write_utf16_ini_text(preferences_path, text)
+    rest_api_smoke.apply_p2p_bind_interface_override(config_dir, p2p_bind_interface_name)
 
 
 def build_amutorrent_environment(
@@ -178,6 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-interactive-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--live-network", action="store_true")
     parser.add_argument("--no-open-browser", action="store_true")
@@ -221,6 +222,7 @@ def main() -> int:
         args.api_key,
         emule_port,
         args.bind_addr,
+        args.p2p_bind_interface_name,
         live_network=bool(args.live_network),
     )
 
@@ -230,6 +232,8 @@ def main() -> int:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "configuration": args.configuration,
         "live_network": bool(args.live_network),
+        "p2p_bind_interface_name": args.p2p_bind_interface_name,
+        "enable_upnp": True,
         "emule_base_url": emule_base_url,
         "amutorrent_base_url": amutorrent_base_url,
         "profile_base": str(profile["profile_base"]),

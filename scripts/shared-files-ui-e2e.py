@@ -384,9 +384,8 @@ def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: 
         ("HTTPSKey", ""),
     ):
         text = live_common.upsert_ini_section_value(text, "WebServer", key, value)
-    text = live_common.upsert_ini_section_value(text, "UPnP", "EnableUPnP", "0")
-    text = live_common.patch_ini_value(text, "CloseUPnPOnExit", "0")
     live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_live_network_policy(config_dir)
 
 
 def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_dir: Path, app_exe: Path) -> dict:

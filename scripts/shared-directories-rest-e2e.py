@@ -98,8 +98,8 @@ def configure_rest_only_profile(
         ("HTTPSKey", ""),
     ):
         text = upsert_ini_section_value(text, "WebServer", key, value)
-    text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "0")
     live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_live_network_policy(config_dir)
 
 
 def normalize_path_text(path: str) -> str:

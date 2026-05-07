@@ -1153,7 +1153,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=str((REPO_ROOT / live_env.DEFAULT_ENV_FILE_NAME).resolve()))
     parser.add_argument("--emule-api-key", default="arr-emulebb-live-key")
     parser.add_argument("--bind-addr")
-    parser.add_argument("--enable-upnp", action="store_true")
+    parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
@@ -1282,7 +1282,6 @@ def main() -> int:
         args.emule_api_key,
         port,
         bind_addr,
-        args.enable_upnp,
     )
     if args.p2p_bind_interface_name:
         rest_smoke.apply_p2p_bind_interface_override(
@@ -1301,7 +1300,7 @@ def main() -> int:
         "torznab_base_url": torznab_base_url,
         "indexer_name": indexer_name,
         "seed_refresh": seed_refresh,
-        "enable_upnp": bool(args.enable_upnp),
+        "enable_upnp": True,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_search_terms": {

@@ -129,19 +129,22 @@ def test_shared_hash_drain_rejects_hashing_done_with_short_rows(tmp_path: Path) 
         module.wait_for_shared_hash_drain(trace_path, expected_count=3, timeout=0.1)
 
 
-def test_configure_profile_upnp_disables_mapping_and_exit_cleanup(tmp_path: Path) -> None:
+def test_apply_live_network_policy_sets_bind_interface_and_upnp(tmp_path: Path) -> None:
     module = load_shared_hash_module()
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
     module.live_common.write_utf16_ini_text(preferences_path, "[eMule]\r\nNick=CodexE2E\r\n")
 
-    module.live_common.configure_profile_upnp(config_dir, enable_upnp=False)
+    module.live_common.apply_live_network_policy(config_dir)
 
     assert preferences_path.read_bytes().startswith(b"\xff\xfe")
     text = module.live_common.read_ini_text(preferences_path)
+    assert "BindInterface=hide.me" in text
+    assert "BindAddr=" in text
+    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in text
     assert "[UPnP]" in text
-    assert "EnableUPnP=0" in text
+    assert "EnableUPnP=1" in text
     assert "CloseUPnPOnExit=0" in text
 
 

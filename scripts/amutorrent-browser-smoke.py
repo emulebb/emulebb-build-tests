@@ -288,6 +288,7 @@ def main() -> int:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-browser-smoke-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     args = parser.parse_args()
 
@@ -316,7 +317,8 @@ def main() -> int:
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
-    configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, args.bind_addr, False)
+    configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, args.bind_addr)
+    rest_api_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
 
     report: dict[str, Any] = {
         "suite": "amutorrent-browser-smoke",
@@ -327,6 +329,8 @@ def main() -> int:
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
         "node": node_info,
+        "p2p_bind_interface_name": args.p2p_bind_interface_name,
+        "enable_upnp": True,
         "checks": {},
         "cleanup": {},
     }

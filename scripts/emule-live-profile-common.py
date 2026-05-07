@@ -55,6 +55,7 @@ STARTUP_PROFILE_SHARED_LIST_RELOAD_PHASE_NAME = "CSharedFilesCtrl::ReloadFileLis
 STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID = "shared.hashing.deferred_start"
 STARTUP_PROFILE_DEFERRED_SHARED_HASHING_MAX_LEAD_MS = 250.0
 STARTUP_PROFILE_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN = 1
+DEFAULT_P2P_BIND_INTERFACE_NAME = "hide.me"
 
 def require_pywinauto() -> None:
     """Raises one actionable error when the live/UI runtime dependency is missing."""
@@ -72,13 +73,24 @@ def write_json(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def configure_profile_upnp(config_dir: Path, *, enable_upnp: bool, close_on_exit: bool = False) -> None:
-    """Writes deterministic UPnP preferences for one isolated live profile."""
+def apply_live_network_policy(
+    config_dir: Path,
+    *,
+    p2p_bind_interface_name: str = DEFAULT_P2P_BIND_INTERFACE_NAME,
+    close_upnp_on_exit: bool = False,
+) -> None:
+    """Persists the workspace live-test P2P bind and UPnP policy."""
 
+    interface_name = p2p_bind_interface_name.strip()
+    if not interface_name:
+        raise ValueError("P2P bind interface name must not be empty.")
     preferences_path = config_dir / "preferences.ini"
     text = read_ini_text(preferences_path)
-    text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1" if enable_upnp else "0")
-    text = patch_ini_value(text, "CloseUPnPOnExit", "1" if close_on_exit else "0")
+    text = upsert_ini_section_value(text, "eMule", "BindInterface", interface_name)
+    text = upsert_ini_section_value(text, "eMule", "BindAddr", "")
+    text = upsert_ini_section_value(text, "eMule", "BlockNetworkWhenBindUnavailableAtStartup", "1")
+    text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1")
+    text = patch_ini_value(text, "CloseUPnPOnExit", "1" if close_upnp_on_exit else "0")
     write_utf16_ini_text(preferences_path, text)
 
 

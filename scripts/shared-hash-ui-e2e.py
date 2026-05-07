@@ -146,7 +146,7 @@ def prepare_hash_interruption_fixture(
         artifacts_dir=scenario_dir,
         shared_dirs=live_common.enumerate_recursive_directories(shared_root),
     )
-    live_common.configure_profile_upnp(Path(str(fixture["config_dir"])), enable_upnp=False)
+    live_common.apply_live_network_policy(Path(str(fixture["config_dir"])))
     fixture.update(
         {
             "shared_root": live_common.win_path(shared_root.resolve(), trailing_slash=True),

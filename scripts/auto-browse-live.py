@@ -149,7 +149,6 @@ def configure_auto_browse_profile(
         api_key=api_key,
         port=port,
         bind_addr=web_bind_addr,
-        enable_upnp=True,
     )
 
     preferences_path = config_dir / "preferences.ini"

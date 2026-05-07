@@ -138,6 +138,7 @@ Live Arr environment:
 - `live-wire-inputs.example.json` is the tracked schema example; copy its shape into the ignored local file and replace the placeholder values with operator-owned current inputs
 - auto-browse live fallback automatically refreshes the ignored live-wire JSON when it discovers a safe live search result with usable hash, name, size, and source metadata
 - persisted live reports redact exact runtime terms, movie titles, magnets, and real transfer hashes, keeping counts, indexes, sizes, and presence flags instead
+- all launched live eMule profiles apply the workspace live-network policy: P2P `BindInterface=hide.me`, empty P2P `BindAddr`, and main P2P `UPnP` enabled
 
 Terminology:
 
