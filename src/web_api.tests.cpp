@@ -1619,6 +1619,8 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
 
 	assertRoute("GET", "/api/v1/kad", "", "kad/status");
+	assertRoute("POST", "/api/v1/kad/nodes-url-imports", R"({"url":"https://example.invalid/nodes.dat"})", "kad/import_nodes_url");
+	CHECK_EQ(route.params["url"].get<std::string>(), "https://example.invalid/nodes.dat");
 	assertRoute("POST", "/api/v1/kad/operations/start", R"({})", "kad/connect");
 	assertRoute("POST", "/api/v1/kad/operations/bootstrap", R"({"address":"bootstrap.example.invalid","port":4672})", "kad/bootstrap");
 	CHECK_EQ(route.params["address"].get<std::string>(), "bootstrap.example.invalid");

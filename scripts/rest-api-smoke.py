@@ -1368,7 +1368,7 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {}
     if route_name in {"servers_patch_properties", "patchServer"}:
         return {"priority": "high"}
-    if route_name in {"servers_import_met_url", "createServerMetUrlImport"}:
+    if route_name in {"servers_import_met_url", "createServerMetUrlImport", "kad_import_nodes_url", "createKadNodesUrlImport"}:
         return {}
     if route_name in {"servers_delete", "deleteServer"}:
         return {}
