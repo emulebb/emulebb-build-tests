@@ -1128,6 +1128,9 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 	CHECK_EQ(request.hashes[1], "fedcba9876543210fedcba9876543210");
 	CHECK(request.bDeleteFiles);
 
+	CHECK(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789abcdef0123456789abcdef&deleteFiles=false", request, error));
+	CHECK(request.bDeleteFiles);
+
 	CHECK(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef&category=SONARR_ENG", request, error));
 	CHECK_EQ(request.strCategory, "SONARR_ENG");
 
