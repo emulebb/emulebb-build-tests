@@ -707,6 +707,19 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
         "extra_headers": {"Cookie": "{qbit_session_cookie}"},
         "api_key": False,
     },
+    {
+        "method": "POST",
+        "path": "/api/v2/torrents/setForceStart",
+        "raw_body": f"hashes={REST_SURFACE_MISSING_HASH}&value=wat",
+        "content_type": "application/x-www-form-urlencoded",
+        "family": "qbit",
+        "scenario": "qbit_bad_force_start_boolean_rejected",
+        "expected_statuses": (400,),
+        "response_kind": "text",
+        "expected_body_contains": "Fails.",
+        "extra_headers": {"Cookie": "{qbit_session_cookie}"},
+        "api_key": False,
+    },
 )
 REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = (
     {
@@ -3115,6 +3128,16 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_set_force_start_bad_hash["status"]) == 400, compact_http_result(qbit_set_force_start_bad_hash)
 
+    qbit_set_force_start_bad_boolean = http_request(
+        base_url,
+        "/api/v2/torrents/setForceStart",
+        method="POST",
+        raw_body=f"{qbit_missing_hash_form}&value=wat",
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_set_force_start_bad_boolean["status"]) == 400, compact_http_result(qbit_set_force_start_bad_boolean)
+
     smoke["qbit"] = {
         "public_version": compact_http_result(qbit_public_version),
         "categories_unauthenticated": compact_http_result(qbit_categories_unauthenticated),
@@ -3144,6 +3167,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "delete_bad_boolean": compact_http_result(qbit_delete_bad_boolean),
         "set_category_missing": compact_http_result(qbit_set_category_missing),
         "set_force_start_bad_hash": compact_http_result(qbit_set_force_start_bad_hash),
+        "set_force_start_bad_boolean": compact_http_result(qbit_set_force_start_bad_boolean),
     }
 
     return smoke

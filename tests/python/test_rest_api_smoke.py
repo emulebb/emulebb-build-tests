@@ -1001,6 +1001,14 @@ def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
         and operation["expected_statuses"] == (400,)
         for operation in operations
     )
+    assert any(
+        operation["method"] == "POST"
+        and operation["path"] == "/api/v2/torrents/setForceStart"
+        and operation["scenario"] == "qbit_bad_force_start_boolean_rejected"
+        and operation["raw_body"] == f"hashes={module.REST_SURFACE_MISSING_HASH}&value=wat"
+        and operation["expected_statuses"] == (400,)
+        for operation in operations
+    )
     assert operations_by_pair[("GET", "/")]["response_kind"] == "html"
 
 

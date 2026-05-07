@@ -1283,6 +1283,9 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 	CHECK(WebServerQBitCompatSeams::TryParseHashesOnlyRequest("hashes=0123456789abcdef0123456789abcdef", request, error));
 	CHECK_EQ(request.hashes[0], "0123456789abcdef0123456789abcdef");
 
+	CHECK(WebServerQBitCompatSeams::TryParseForceStartRequest("hashes=0123456789abcdef0123456789abcdef&value=false", request, error));
+	CHECK_EQ(request.hashes[0], "0123456789abcdef0123456789abcdef");
+
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=all&deleteFiles=true", request, error));
 	CHECK_EQ(error, "hashes=all is not supported");
 
@@ -1295,6 +1298,10 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 	error.clear();
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789abcdef0123456789abcdef&deleteFiles=wat", request, error));
 	CHECK_EQ(error, "deleteFiles must be a boolean form value");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseForceStartRequest("hashes=0123456789abcdef0123456789abcdef&value=wat", request, error));
+	CHECK_EQ(error, "value must be a boolean form value");
 
 	std::string manyHashes("hashes=");
 	const char hexDigits[] = "0123456789abcdef";
