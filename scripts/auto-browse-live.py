@@ -134,16 +134,6 @@ def should_promote_cleanup_error(report_status: object, pending_error: Exception
     return pending_error is None and report_status == "passed"
 
 
-def get_tooling_bind_updater(paths: harness_cli_common.HarnessRunPaths) -> Path:
-    """Returns the canonical bind-address updater helper from `eMule-tooling`."""
-
-    tooling_root = harness_cli_common.get_emule_workspace_root(paths.repo_root) / "repos" / "eMule-tooling"
-    script_path = (tooling_root / "scripts" / "config-bindaddr-updater.ps1").resolve()
-    if not script_path.is_file():
-        raise RuntimeError(f"Bind updater helper was not found at '{script_path}'.")
-    return script_path
-
-
 def configure_auto_browse_profile(
     config_dir: Path,
     app_exe: Path,
@@ -1063,7 +1053,6 @@ def main() -> int:
     artifacts_dir = paths.source_artifacts_dir
     port = rest_smoke.choose_listen_port()
     base_url = f"http://127.0.0.1:{port}"
-    bind_updater_script = get_tooling_bind_updater(paths)
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
     seed_refresh = None
@@ -1079,10 +1068,9 @@ def main() -> int:
         port=port,
         web_bind_addr=args.web_bind_addr,
     )
-    rest_smoke.apply_p2p_bindaddr_override(
+    rest_smoke.apply_p2p_bind_interface_override(
         config_dir=Path(profile["config_dir"]),
         interface_name=args.p2p_bind_interface_name,
-        bind_updater_script=bind_updater_script,
     )
 
     app = None
@@ -1103,7 +1091,6 @@ def main() -> int:
             "api_key_length": len(args.api_key),
             "web_bind_addr": args.web_bind_addr,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
-            "bind_updater_script": str(bind_updater_script),
             "enable_upnp": True,
             "autoconnect_via_preferences": True,
             "live_wire_inputs_file": str(inputs.path),

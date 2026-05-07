@@ -186,7 +186,7 @@ Aggregate live E2E lane:
 Canonical live auto-browse lane:
 
 - `scripts\auto-browse-live.py` is the operator-facing entrypoint for the isolated remote-share auto-browse validation
-- the scenario enables `AutoBrowseRemoteShares=1`, keeps REST on one per-run localhost port, and binds P2P `BindAddr` through `repos\eMule-tooling\scripts\config-bindaddr-updater.ps1`
+- the scenario enables `AutoBrowseRemoteShares=1`, keeps REST on one per-run localhost port, and writes the P2P `BindInterface` preference directly as `hide.me`
 - the default P2P bind target is the `hide.me` interface and the scenario always enables the main P2P `UPnP` setting
 - the scenario relies on `Autoconnect=1` in the isolated profile and intentionally does not issue overlapping REST connect requests for eD2K or Kad
 - the scenario first waits for real browse-capable clients to accumulate naturally after server+Kad autoconnect; transfer/source bootstrap is only a fallback if natural auto-browse never starts succeeding

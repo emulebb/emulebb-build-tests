@@ -102,6 +102,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
 
     rest_command = commands[6]
     assert "--enable-upnp" in rest_command
+    assert option_values(rest_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(rest_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
@@ -127,6 +128,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     prowlarr_command = commands[8]
     assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"
     assert "--enable-upnp" in prowlarr_command
+    assert option_values(prowlarr_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(prowlarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(prowlarr_command, "--direct-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)]
     assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)]
@@ -137,6 +139,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     arr_command = commands[9]
     assert script_name(arr_command) == "radarr-sonarr-emulebb-live.py"
     assert "--enable-upnp" in arr_command
+    assert option_values(arr_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(arr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(arr_command, "--qbit-live-wire-rounds") == [str(live_e2e_suite.DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)]
     assert "--skip-live-seed-refresh" not in arr_command
@@ -224,13 +227,15 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
             "45",
             "--rest-stress-concurrency",
             "2",
-            "--disable-upnp",
+            "--p2p-bind-interface-name",
+            "hide.me",
         ),
         FakeHarnessCliCommon(tmp_path),
     )
 
     rest_command = commands[0]
-    assert "--enable-upnp" not in rest_command
+    assert "--enable-upnp" in rest_command
+    assert option_values(rest_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-stress-duration-seconds") == ["45.0"]

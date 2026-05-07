@@ -834,38 +834,21 @@ def configure_webserver_profile(
     live_common.write_utf16_ini_text(preferences_path, text)
 
 
-def apply_p2p_bindaddr_override(
+def apply_p2p_bind_interface_override(
     config_dir: Path,
     interface_name: str,
-    bind_updater_script: Path,
 ) -> None:
-    """Runs the canonical bind-address updater against the isolated profile."""
+    """Writes the requested P2P bind interface name into the isolated profile."""
 
-    command = [
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(bind_updater_script),
-        "-InterfaceName",
-        interface_name,
-        "-ConfigDirectory",
-        str(config_dir),
-    ]
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            "P2P bind updater failed with exit code "
-            f"{completed.returncode}: {completed.stdout}{completed.stderr}"
-        )
+    interface_name = interface_name.strip()
+    if not interface_name:
+        raise ValueError("P2P bind interface name must not be empty.")
+    preferences_path = config_dir / "preferences.ini"
+    text = live_common.read_ini_text(preferences_path)
+    text = upsert_ini_section_value(text, "eMule", "BindInterface", interface_name)
+    text = upsert_ini_section_value(text, "eMule", "BindAddr", "")
+    text = upsert_ini_section_value(text, "eMule", "BlockNetworkWhenBindUnavailableAtStartup", "1")
+    live_common.write_utf16_ini_text(preferences_path, text)
 
 
 def http_request(
@@ -3998,8 +3981,7 @@ def main() -> int:
     parser.add_argument("--api-key", default="rest-smoke-test-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
     parser.add_argument("--enable-upnp", action="store_true")
-    parser.add_argument("--p2p-bind-interface-name")
-    parser.add_argument("--bind-updater-script")
+    parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--server-activity-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=30.0)
@@ -4077,12 +4059,9 @@ def main() -> int:
         args.enable_upnp,
     )
     if args.p2p_bind_interface_name:
-        if not args.bind_updater_script:
-            raise ValueError("bind updater script path is required when a P2P bind interface name is supplied.")
-        apply_p2p_bindaddr_override(
+        apply_p2p_bind_interface_override(
             Path(profile["config_dir"]),
             args.p2p_bind_interface_name,
-            Path(args.bind_updater_script).resolve(),
         )
 
     app = None
@@ -4103,7 +4082,6 @@ def main() -> int:
             "bind_addr": args.bind_addr,
             "enable_upnp": bool(args.enable_upnp),
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
-            "bind_updater_script": args.bind_updater_script,
             "keep_running": bool(args.keep_running),
             "server_search_count": args.server_search_count,
             "kad_search_count": args.kad_search_count,

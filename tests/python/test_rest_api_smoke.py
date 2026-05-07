@@ -55,6 +55,26 @@ def test_nat_backend_order_requires_attempts() -> None:
         module.assert_upnp_backend_order([{"message": "eMule Version 0.72a x64 ready"}])
 
 
+def test_p2p_bind_override_writes_interface_name(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text(
+        "[eMule]\nBindAddr=127.0.0.1\nBindInterface=\n",
+        encoding="utf-16",
+    )
+
+    module.apply_p2p_bind_interface_override(config_dir, "hide.me")
+
+    text = module.live_common.read_ini_text(preferences_path)
+    assert "BindInterface=hide.me" in text
+    assert "BindAddr=hide.me" not in text
+    assert "BindAddr=" in text
+    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in text
+    assert "127.0.0.1" not in text
+
+
 def test_live_server_unavailable_is_inconclusive_exit_code() -> None:
     module = load_rest_api_smoke_module()
 

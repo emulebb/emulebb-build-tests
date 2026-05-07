@@ -176,8 +176,7 @@ def build_suite_command(
     rest_stress_concurrency: int = 4,
     rest_stress_max_failures: int = 1,
     rest_stress_request_timeout_seconds: float = 5.0,
-    enable_upnp: bool = True,
-    auto_browse_p2p_bind_interface_name: str = "hide.me",
+    p2p_bind_interface_name: str = "hide.me",
     live_wire_inputs_file: Path | None = None,
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
     arr_prowlarr_search_stress_count: int = DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT,
@@ -225,26 +224,29 @@ def build_suite_command(
         command.extend(["--rest-stress-concurrency", str(rest_stress_concurrency)])
         command.extend(["--rest-stress-max-failures", str(rest_stress_max_failures)])
         command.extend(["--rest-stress-request-timeout-seconds", str(rest_stress_request_timeout_seconds)])
-        if enable_upnp:
-            command.append("--enable-upnp")
+        command.append("--enable-upnp")
+        if p2p_bind_interface_name:
+            command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_auto_browse:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
-    if spec.is_auto_browse and auto_browse_p2p_bind_interface_name:
-        command.extend(["--p2p-bind-interface-name", auto_browse_p2p_bind_interface_name])
+    if spec.is_auto_browse and p2p_bind_interface_name:
+        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
         command.extend(["--direct-search-stress-count", str(arr_direct_search_stress_count)])
         command.extend(["--prowlarr-search-stress-count", str(arr_prowlarr_search_stress_count)])
-        if enable_upnp:
-            command.append("--enable-upnp")
+        command.append("--enable-upnp")
+        if p2p_bind_interface_name:
+            command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_arr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
         command.extend(["--qbit-live-wire-rounds", str(arr_qbit_live_wire_rounds)])
-        if enable_upnp:
-            command.append("--enable-upnp")
+        command.append("--enable-upnp")
+        if p2p_bind_interface_name:
+            command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     return command
 
 
@@ -294,8 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-qbit-live-wire-rounds", type=int, default=DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)
-    parser.add_argument("--disable-upnp", action="store_true")
-    parser.add_argument("--auto-browse-p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument(
         "--live-wire-inputs-file",
         default=str(live_wire_inputs.get_default_inputs_path(Path(__file__).resolve().parent.parent)),
@@ -411,8 +412,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_stress_concurrency=args.rest_stress_concurrency,
             rest_stress_max_failures=args.rest_stress_max_failures,
             rest_stress_request_timeout_seconds=args.rest_stress_request_timeout_seconds,
-            enable_upnp=not args.disable_upnp,
-            auto_browse_p2p_bind_interface_name=args.auto_browse_p2p_bind_interface_name,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
             live_wire_inputs_file=live_wire_inputs_file,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
