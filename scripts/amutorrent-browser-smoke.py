@@ -356,6 +356,7 @@ def main() -> int:
     artifacts_dir = paths.source_artifacts_dir
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     node_info = resolve_amutorrent_node()
+    amutorrent_data_dir = artifacts_dir / "amutorrent-data"
 
     emule_port = choose_listen_port()
     amutorrent_port = choose_listen_port()
@@ -377,6 +378,7 @@ def main() -> int:
         "profile_base": str(profile["profile_base"]),
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
+        "amutorrent_data_dir": str(amutorrent_data_dir),
         "node": node_info,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
         "enable_upnp": True,
@@ -402,6 +404,7 @@ def main() -> int:
             {
                 "PORT": str(amutorrent_port),
                 "BIND_ADDRESS": "127.0.0.1",
+                "AMUTORRENT_DATA_DIR": str(amutorrent_data_dir),
                 "WEB_AUTH_ENABLED": "false",
                 "SKIP_SETUP_WIZARD": "true",
                 "EMULEBB_ENABLED": "true",

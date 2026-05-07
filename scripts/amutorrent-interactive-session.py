@@ -96,6 +96,7 @@ def build_amutorrent_environment(
     api_key: str,
     instance_id: str,
     node_path: Path,
+    data_dir: Path,
 ) -> dict[str, str]:
     """Builds the environment used by the interactive aMuTorrent server."""
 
@@ -104,6 +105,7 @@ def build_amutorrent_environment(
         {
             "PORT": str(amutorrent_port),
             "BIND_ADDRESS": "127.0.0.1",
+            "AMUTORRENT_DATA_DIR": str(data_dir),
             "WEB_AUTH_ENABLED": "false",
             "SKIP_SETUP_WIZARD": "true",
             "EMULEBB_ENABLED": "true",
@@ -214,6 +216,7 @@ def main() -> int:
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    amutorrent_data_dir = artifacts_dir / "amutorrent-data"
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
     configure_session_profile(
@@ -239,6 +242,7 @@ def main() -> int:
         "profile_base": str(profile["profile_base"]),
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
+        "amutorrent_data_dir": str(amutorrent_data_dir),
         "node": node_info,
         "artifacts_dir": str(artifacts_dir),
         "checks": {},
@@ -267,6 +271,7 @@ def main() -> int:
             api_key=args.api_key,
             instance_id=instance_id,
             node_path=node_path,
+            data_dir=amutorrent_data_dir,
         )
         amutorrent_log_path = artifacts_dir / "amutorrent-server.log"
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")

@@ -30,10 +30,12 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
         api_key="test-key",
         instance_id="emulebb-127.0.0.1-47110",
         node_path=node_path,
+        data_dir=tmp_path / "amutorrent-data",
     )
 
     assert env["PORT"] == "4001"
     assert env["BIND_ADDRESS"] == "127.0.0.1"
+    assert env["AMUTORRENT_DATA_DIR"] == str(tmp_path / "amutorrent-data")
     assert env["SKIP_SETUP_WIZARD"] == "true"
     assert env["EMULEBB_ENABLED"] == "true"
     assert env["EMULEBB_PORT"] == "47110"

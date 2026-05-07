@@ -124,6 +124,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
 
     browser_command = commands[7]
     assert script_name(browser_command) == "amutorrent-browser-smoke.py"
+    assert option_values(browser_command, "--p2p-bind-interface-name") == ["hide.me"]
 
     prowlarr_command = commands[8]
     assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"

@@ -54,6 +54,7 @@ class SuiteSpec:
     uses_live_seed_refresh: bool = False
     is_rest_api: bool = False
     is_auto_browse: bool = False
+    is_amutorrent_browser: bool = False
     is_prowlarr_emulebb: bool = False
     is_arr_emulebb: bool = False
 
@@ -106,6 +107,7 @@ SUITE_SPECS = (
         name="amutorrent-browser-smoke",
         script_name="amutorrent-browser-smoke.py",
         category="rest",
+        is_amutorrent_browser=True,
     ),
     SuiteSpec(
         name="prowlarr-emulebb",
@@ -231,6 +233,8 @@ def build_suite_command(
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
     if spec.is_auto_browse and p2p_bind_interface_name:
+        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.is_amutorrent_browser and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
