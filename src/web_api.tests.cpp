@@ -345,6 +345,15 @@ TEST_CASE("Web API preference bounds match UI and INI persistence ranges")
 
 TEST_CASE("Web API normalizes search method and type names case-insensitively")
 {
+	CHECK_EQ(std::string(WebServerJsonSeams::GetDefaultSearchMethodName()), "automatic");
+	CHECK(WebServerJsonSeams::IsSearchMethodName("AUTOMATIC"));
+	CHECK(WebServerJsonSeams::IsSearchMethodName("KaD"));
+	CHECK_FALSE(WebServerJsonSeams::IsSearchMethodName(""));
+	CHECK_FALSE(WebServerJsonSeams::IsSearchMethodName("contentdb"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("ISO"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName(""));
+	CHECK_FALSE(WebServerJsonSeams::IsSearchFileTypeName("ebook"));
+
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName("AUTOMATIC"), WebApiCommandSeams::ESearchMethod::Automatic);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName("gLoBaL"), WebApiCommandSeams::ESearchMethod::Global);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(""), WebApiCommandSeams::ESearchMethod::Invalid);
@@ -1974,6 +1983,26 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"any","minAvailability":5,"clearExisting":true})", "search/start");
 	CHECK_EQ(route.params["minAvailability"].get<int>(), 5);
 	CHECK(route.params["clearExisting"].get<bool>());
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"contentdb"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "method must be one of automatic, server, global, kad");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","type":"ebook"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "type is not supported");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","minSizeBytes":4096,"maxSizeBytes":700})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "maxSizeBytes must be greater than or equal to minSizeBytes");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","clearExisting":1})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "clearExisting must be a boolean");
 	assertRoute("GET", "/api/v1/searches/123", "", "search/results");
 	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
 	assertRoute("POST", "/api/v1/searches/123/results/0123456789abcdef0123456789abcdef/operations/download", R"({"paused":true,"categoryId":0})", "search/download_result");

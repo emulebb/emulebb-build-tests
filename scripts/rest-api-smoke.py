@@ -2421,6 +2421,27 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         raw_body=json.dumps({"safeServerConnect": True}),
         content_type="text/plain",
     )
+    search_bad_method = http_request(
+        base_url,
+        "/api/v1/searches",
+        method="POST",
+        api_key=api_key,
+        json_body={"query": "ubuntu", "method": "contentdb", "type": "any"},
+    )
+    search_bad_range = http_request(
+        base_url,
+        "/api/v1/searches",
+        method="POST",
+        api_key=api_key,
+        json_body={"query": "ubuntu", "minSizeBytes": 4096, "maxSizeBytes": 700},
+    )
+    search_bad_clear_existing = http_request(
+        base_url,
+        "/api/v1/searches",
+        method="POST",
+        api_key=api_key,
+        json_body={"query": "ubuntu", "clearExisting": 1},
+    )
     surface["errors"] = {
         "missing_route": require_error_response(missing_route, 404, "NOT_FOUND", message_contains="API route not found"),
         "invalid_method": require_error_response(
@@ -2500,6 +2521,24 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="Content-Type must be application/json",
+        ),
+        "search_bad_method": require_error_response(
+            search_bad_method,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="method must be one of automatic, server, global, kad",
+        ),
+        "search_bad_range": require_error_response(
+            search_bad_range,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="maxSizeBytes must be greater than or equal to minSizeBytes",
+        ),
+        "search_bad_clear_existing": require_error_response(
+            search_bad_clear_existing,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="clearExisting must be a boolean",
         ),
     }
 
