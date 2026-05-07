@@ -45,6 +45,23 @@ def test_require_server_dependencies_passes_when_runtime_modules_exist(tmp_path:
     smoke.require_amutorrent_server_dependencies(root, {"install_command": "npm ci --prefix server --omit=dev"})
 
 
+def test_build_search_mode_specs_repeats_all_modes_with_unicode() -> None:
+    smoke = load_smoke_module()
+
+    specs = smoke.build_search_mode_specs(2)
+
+    assert [spec["type"] for spec in specs] == ["automatic", "server", "kad", "automatic", "server", "kad"]
+    assert [spec["round"] for spec in specs] == ["1", "1", "1", "2", "2", "2"]
+    assert any("café" in spec["query"] for spec in specs)
+
+
+def test_build_search_mode_specs_rejects_zero_rounds() -> None:
+    smoke = load_smoke_module()
+
+    with pytest.raises(ValueError, match="greater than zero"):
+        smoke.build_search_mode_specs(0)
+
+
 def test_browser_workflow_validation_walks_nested_results() -> None:
     smoke = load_smoke_module()
     checks = {

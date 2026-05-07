@@ -13,6 +13,7 @@ from typing import Any
 
 AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
 DEFAULT_WINDOWS_NODE22 = Path(r"C:\bin\nodejs-v22-old\node.exe")
+DEFAULT_SEARCH_ROUNDS = 2
 
 
 def load_local_module(module_name: str, filename: str):
@@ -146,6 +147,36 @@ def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dic
         )
 
 
+def build_search_mode_specs(search_rounds: int) -> list[dict[str, str]]:
+    """Builds repeated search-mode probes for the browser smoke."""
+
+    if search_rounds <= 0:
+        raise ValueError("search_rounds must be greater than zero.")
+
+    base_terms = [
+        ("automatic", "cafe unicode test"),
+        ("server", "linux"),
+        ("kad", "ubuntu"),
+    ]
+    alternate_terms = [
+        ("automatic", "café 測試"),
+        ("server", "debian"),
+        ("kad", "libreoffice"),
+    ]
+    specs: list[dict[str, str]] = []
+    for round_index in range(search_rounds):
+        terms = base_terms if round_index % 2 == 0 else alternate_terms
+        for search_type, query in terms:
+            specs.append(
+                {
+                    "round": str(round_index + 1),
+                    "type": search_type,
+                    "query": query,
+                }
+            )
+    return specs
+
+
 def iter_browser_http_results(value: Any, prefix: str = ""):
     """Yields nested browser fetch results with stable diagnostic names."""
 
@@ -198,7 +229,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
         raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {unexpected_diagnostics}")
 
 
-def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -> dict[str, Any]:
+def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *, search_rounds: int = DEFAULT_SEARCH_ROUNDS) -> dict[str, Any]:
     """Drives the critical aMuTorrent workflows through a browser page."""
 
     try:
@@ -264,7 +295,7 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -
                     {"path": path, "method": method, "body": body},
                 )
 
-            def start_search_with_retry(search_type: str, query: str) -> dict[str, Any]:
+            def start_search_with_retry(search_type: str, query: str, round_number: str) -> dict[str, Any]:
                 last_result: dict[str, Any] | None = None
                 attempt_count = 0
                 for attempt in range(1, 31):
@@ -282,6 +313,7 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -
                     page.wait_for_timeout(1000)
 
                 return {
+                    "round": round_number,
                     "type": search_type,
                     "query": query,
                     "start": last_result,
@@ -326,9 +358,8 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -
                 {"hashes": "0123456789abcdef0123456789abcdef", "deleteFiles": "true"},
             )
             checks["search_modes"] = [
-                start_search_with_retry("automatic", "caf\u00e9 \u6e2c\u8a66"),
-                start_search_with_retry("server", "linux"),
-                start_search_with_retry("kad", "ubuntu"),
+                start_search_with_retry(spec["type"], spec["query"], spec["round"])
+                for spec in build_search_mode_specs(search_rounds)
             ]
             checks["search_results"] = fetch_json(f"/api/v1/search/results?instanceId={instance_id}")
             checks["server_list"] = fetch_json("/api/v1/amule/servers")
@@ -364,7 +395,10 @@ def main() -> int:
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--search-rounds", type=int, default=DEFAULT_SEARCH_ROUNDS)
     args = parser.parse_args()
+    if args.search_rounds <= 0:
+        raise ValueError("--search-rounds must be greater than zero.")
 
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -408,6 +442,7 @@ def main() -> int:
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
         "enable_upnp": True,
         "network_ready_timeout_seconds": args.network_ready_timeout_seconds,
+        "search_rounds": args.search_rounds,
         "checks": {},
         "cleanup": {},
     }
@@ -463,7 +498,12 @@ def main() -> int:
         wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.ready_timeout_seconds)
         report["amutorrent_process_id"] = amutorrent.pid
         category_path = live_common.win_path(Path(profile["incoming_dir"]), trailing_slash=True)
-        report["checks"]["browser_workflows"] = run_browser_workflows(amutorrent_base_url, instance_id, category_path)
+        report["checks"]["browser_workflows"] = run_browser_workflows(
+            amutorrent_base_url,
+            instance_id,
+            category_path,
+            search_rounds=args.search_rounds,
+        )
         report["status"] = "passed"
     except Exception as exc:
         pending_error = exc
