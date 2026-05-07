@@ -622,6 +622,15 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
     },
     {
         "method": "GET",
+        "path": "/indexer/emulebb/api?t=caps&apikey=wrong-key",
+        "family": "torznab",
+        "scenario": "torznab_wrong_query_key_rejected",
+        "expected_statuses": (401,),
+        "response_kind": "xml",
+        "api_key": False,
+    },
+    {
+        "method": "GET",
         "path": "/indexer/emulebb/api?t=search&season=abc&q=linux&apikey={api_key}",
         "family": "torznab",
         "scenario": "torznab_search_validation_rejected",
@@ -667,6 +676,18 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
         "response_kind": "text",
         "expected_body_contains": "Forbidden",
         "extra_headers": {"Cookie": "SID=wrong"},
+        "api_key": False,
+    },
+    {
+        "method": "POST",
+        "path": "/api/v2/auth/login",
+        "raw_body": "username=emule&password=wrong-key",
+        "content_type": "application/x-www-form-urlencoded",
+        "family": "qbit",
+        "scenario": "qbit_bad_login_rejected",
+        "expected_statuses": (200,),
+        "response_kind": "text",
+        "expected_body_contains": "Fails.",
         "api_key": False,
     },
     {
@@ -2875,6 +2896,9 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     torznab_unauthorized = http_request(base_url, "/indexer/emulebb/api?t=caps")
     assert int(torznab_unauthorized["status"]) == 401, compact_http_result(torznab_unauthorized)
 
+    torznab_wrong_query_key = http_request(base_url, "/indexer/emulebb/api?t=caps&apikey=wrong-key")
+    assert int(torznab_wrong_query_key["status"]) == 401, compact_http_result(torznab_wrong_query_key)
+
     torznab_caps_header = http_request(base_url, "/indexer/emulebb/api?t=caps", api_key=api_key)
     assert int(torznab_caps_header["status"]) == 200, compact_http_result(torznab_caps_header)
     assert "<caps>" in str(torznab_caps_header.get("body_text") or ""), compact_http_result(torznab_caps_header)
@@ -2913,6 +2937,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     assert int(torznab_bad_category["status"]) == 400, compact_http_result(torznab_bad_category)
     smoke["torznab"] = {
         "unauthorized": compact_http_result(torznab_unauthorized),
+        "wrong_query_key": compact_http_result(torznab_wrong_query_key),
         "caps_header_auth": compact_http_result(torznab_caps_header),
         "caps_query_auth": compact_http_result(torznab_caps_query),
         "duplicate_query": compact_http_result(torznab_duplicate_query),
@@ -2934,6 +2959,17 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         extra_headers={"Cookie": "SID=wrong"},
     )
     assert int(qbit_categories_wrong_cookie["status"]) == 403, compact_http_result(qbit_categories_wrong_cookie)
+
+    qbit_bad_login = http_request(
+        base_url,
+        "/api/v2/auth/login",
+        method="POST",
+        raw_body="username=emule&password=wrong-key",
+        content_type="application/x-www-form-urlencoded",
+    )
+    assert int(qbit_bad_login["status"]) == 200, compact_http_result(qbit_bad_login)
+    assert str(qbit_bad_login.get("body_text") or "") == "Fails.", compact_http_result(qbit_bad_login)
+    assert "SID=" not in get_response_header(qbit_bad_login, "Set-Cookie"), compact_http_result(qbit_bad_login)
 
     login_form = urllib.parse.urlencode({"username": "emule", "password": api_key})
     qbit_login = http_request(
@@ -3160,6 +3196,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "public_version": compact_http_result(qbit_public_version),
         "categories_unauthenticated": compact_http_result(qbit_categories_unauthenticated),
         "categories_wrong_cookie": compact_http_result(qbit_categories_wrong_cookie),
+        "bad_login": compact_http_result(qbit_bad_login),
         "login": {
             "status": qbit_login["status"],
             "content_type": qbit_login.get("content_type"),

@@ -973,6 +973,7 @@ def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
 
     assert operations_by_pair[("GET", "/indexer/emulebb/api?t=caps")]["response_kind"] == "xml"
     assert operations_by_pair[("GET", "/indexer/emulebb/api?t=caps&t=search")]["expected_statuses"] == (400,)
+    assert operations_by_pair[("GET", "/indexer/emulebb/api?t=caps&apikey=wrong-key")]["expected_statuses"] == (401,)
     assert operations_by_pair[
         ("GET", "/indexer/emulebb/api?t=search&season=abc&q=linux&apikey={api_key}")
     ]["api_key"] is False
@@ -993,6 +994,15 @@ def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
         and operation["scenario"] == "qbit_wrong_cookie_rejected"
         and operation["expected_statuses"] == (403,)
         and operation["extra_headers"] == {"Cookie": "SID=wrong"}
+        for operation in operations
+    )
+    assert any(
+        operation["method"] == "POST"
+        and operation["path"] == "/api/v2/auth/login"
+        and operation["scenario"] == "qbit_bad_login_rejected"
+        and operation["raw_body"] == "username=emule&password=wrong-key"
+        and operation["expected_statuses"] == (200,)
+        and operation["expected_body_contains"] == "Fails."
         for operation in operations
     )
     assert operations_by_pair[
