@@ -160,6 +160,38 @@
     ]
   },
   "arr": {
+    "torznab_direct_error_edges": [
+      {
+        "name": "malformed_percent_escape",
+        "method": "GET",
+        "path": "/indexer/emulebb/api?t=search&q=bad%2xescape&apikey={api_key}",
+        "expected_status": 400
+      },
+      {
+        "name": "malformed_path_escape",
+        "method": "GET",
+        "path": "/indexer/emulebb/api%2x?t=search&q=linux&apikey={api_key}",
+        "expected_status": 400
+      },
+      {
+        "name": "unsupported_method",
+        "method": "POST",
+        "path": "/indexer/emulebb/api?t=search&q=linux&apikey={api_key}",
+        "expected_status": 404
+      },
+      {
+        "name": "duplicate_t_parameter",
+        "method": "GET",
+        "path": "/indexer/emulebb/api?t=search&t=movie&q=linux&apikey={api_key}",
+        "expected_status": 400
+      },
+      {
+        "name": "unicode_query_length_rejected",
+        "method": "GET",
+        "path": "/indexer/emulebb/api?t=search&q={long_unicode_query}&apikey={api_key}",
+        "expected_status": 400
+      }
+    ],
     "qbit_route_completeness": [
       {
         "name": "public_webapi_version",

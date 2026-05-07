@@ -208,11 +208,10 @@ def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert [scenario["name"] for scenario in result["scenarios"]] == [
-        "malformed_percent_escape",
-        "malformed_path_escape",
-        "unsupported_method",
-        "duplicate_t_parameter",
-        "unicode_query_length_rejected",
+        scenario["name"] for scenario in module.TORZNAB_DIRECT_ERROR_SCENARIOS
+    ]
+    assert [scenario["expected_status"] for scenario in result["scenarios"]] == [
+        scenario["expected_status"] for scenario in module.TORZNAB_DIRECT_ERROR_SCENARIOS
     ]
     assert all("apikey=secret%20key" in path for _method, path in calls)
     assert calls[2][0] == "POST"

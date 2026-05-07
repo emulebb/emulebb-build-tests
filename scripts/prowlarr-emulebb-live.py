@@ -23,6 +23,35 @@ from emule_test_harness import live_env
 
 TORZNAB_LIVE_CATEGORY = 7000
 
+TORZNAB_DIRECT_ERROR_SCENARIOS: tuple[dict[str, object], ...] = (
+    {
+        "name": "malformed_percent_escape",
+        "path": "/indexer/emulebb/api?t=search&q=bad%2xescape&apikey={api_key}",
+        "expected_status": 400,
+    },
+    {
+        "name": "malformed_path_escape",
+        "path": "/indexer/emulebb/api%2x?t=search&q=linux&apikey={api_key}",
+        "expected_status": 400,
+    },
+    {
+        "name": "unsupported_method",
+        "method": "POST",
+        "path": "/indexer/emulebb/api?t=search&q=linux&apikey={api_key}",
+        "expected_status": 404,
+    },
+    {
+        "name": "duplicate_t_parameter",
+        "path": "/indexer/emulebb/api?t=search&t=movie&q=linux&apikey={api_key}",
+        "expected_status": 400,
+    },
+    {
+        "name": "unicode_query_length_rejected",
+        "path": "/indexer/emulebb/api?t=search&q={long_unicode_query}&apikey={api_key}",
+        "expected_status": 400,
+    },
+)
+
 
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
@@ -322,39 +351,12 @@ def check_direct_torznab_error_edges(base_url: str, emule_api_key: str) -> dict[
 
     api_key = urllib.parse.quote(emule_api_key)
     long_query = urllib.parse.quote("unicode-lambda-" + ("λ" * 161))
-    scenarios = (
-        {
-            "name": "malformed_percent_escape",
-            "path": f"/indexer/emulebb/api?t=search&q=bad%2xescape&apikey={api_key}",
-            "expected_status": 400,
-        },
-        {
-            "name": "malformed_path_escape",
-            "path": f"/indexer/emulebb/api%2x?t=search&q=linux&apikey={api_key}",
-            "expected_status": 400,
-        },
-        {
-            "name": "unsupported_method",
-            "path": f"/indexer/emulebb/api?t=search&q=linux&apikey={api_key}",
-            "method": "POST",
-            "expected_status": 404,
-        },
-        {
-            "name": "duplicate_t_parameter",
-            "path": f"/indexer/emulebb/api?t=search&t=movie&q=linux&apikey={api_key}",
-            "expected_status": 400,
-        },
-        {
-            "name": "unicode_query_length_rejected",
-            "path": f"/indexer/emulebb/api?t=search&q={long_query}&apikey={api_key}",
-            "expected_status": 400,
-        },
-    )
     results = []
-    for scenario in scenarios:
+    for scenario in TORZNAB_DIRECT_ERROR_SCENARIOS:
+        path = str(scenario["path"]).format(api_key=api_key, long_unicode_query=long_query)
         result = rest_smoke.http_request(
             base_url,
-            scenario["path"],
+            path,
             method=str(scenario.get("method") or "GET"),
             request_timeout_seconds=20.0,
         )

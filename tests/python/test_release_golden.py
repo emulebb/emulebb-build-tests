@@ -43,6 +43,7 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
     repo_root = Path(__file__).resolve().parents[2]
     golden = load_release_live_wire_golden(repo_root)
     rest_smoke = load_script_module("rest_api_smoke_golden_test", "rest-api-smoke.py")
+    prowlarr_live = load_script_module("prowlarr_emulebb_live_golden_test", "prowlarr-emulebb-live.py")
     arr_live = load_script_module("radarr_sonarr_emulebb_live_golden_test", "radarr-sonarr-emulebb-live.py")
 
     runtime_inputs = golden["operator_runtime_inputs"]
@@ -75,6 +76,17 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         assert live_operation["method"] == operation["method"]
         assert live_operation["path"] == operation["path"]
         assert list(live_operation["expected_statuses"]) == operation["expected_statuses"]
+
+    torznab_error_edges = [
+        {
+            "name": scenario["name"],
+            "method": str(scenario.get("method") or "GET"),
+            "path": scenario["path"],
+            "expected_status": scenario["expected_status"],
+        }
+        for scenario in prowlarr_live.TORZNAB_DIRECT_ERROR_SCENARIOS
+    ]
+    assert torznab_error_edges == golden["arr"]["torznab_direct_error_edges"]
 
     qbit_scenarios = [
         {
