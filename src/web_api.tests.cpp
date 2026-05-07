@@ -1450,9 +1450,15 @@ TEST_CASE("Web API requires explicit confirmation for destructive native routes"
 
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":false})", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":false})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "deleteFiles must be true for transfer deletes");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":true})", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "transfers/delete");
-	CHECK_FALSE(route.params["deleteFiles"].get<bool>());
+	CHECK(route.params["deleteFiles"].get<bool>());
 
 	errorCode.clear();
 	errorMessage.clear();

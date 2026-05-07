@@ -1332,7 +1332,7 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name in {"transfers_clear_completed", "clearCompletedTransfers"}:
         return {"confirmClearCompleted": True}
     if route_name in {"transfers_delete", "deleteTransfer"}:
-        return {"deleteFiles": False}
+        return {"deleteFiles": True}
     if route_name.startswith("transfers_source_") or route_name in {
         "browseTransferSource",
         "addTransferSourceFriend",
@@ -1940,7 +1940,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "resume_missing_item": require_missing_transfer_bulk_result(transfer_resume),
         "stop_missing_item": require_missing_transfer_bulk_result(transfer_stop),
         "delete_missing_item": require_missing_transfer_bulk_result(transfer_delete_missing),
-        "delete_without_files": require_missing_transfer_bulk_result(transfer_delete_bad),
+        "delete_without_files": require_error_response(
+            transfer_delete_bad,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="deleteFiles must be true for transfer deletes",
+        ),
         "add_bad_payload": require_error_response(
             transfer_add_bad,
             400,
