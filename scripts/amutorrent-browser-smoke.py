@@ -215,6 +215,46 @@ def unexpected_browser_diagnostics(diagnostics: dict[str, list[dict[str, Any]]])
     }
 
 
+def iter_snapshot_items(checks: dict[str, Any]):
+    """Yields aMuTorrent unified snapshot items from browser workflow checks."""
+
+    for check_name in ("snapshot", "snapshot_after_add"):
+        result = checks.get(check_name)
+        if not isinstance(result, dict) or int(result.get("status", 0)) >= 300:
+            continue
+        payload = result.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            continue
+        items = data.get("items")
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if isinstance(item, dict):
+                yield check_name, index, item
+
+
+def assert_snapshot_items_are_display_safe(checks: dict[str, Any]) -> None:
+    """Rejects snapshot shapes that would render noisy or ambiguous transfer UI."""
+
+    for check_name, index, item in iter_snapshot_items(checks):
+        item_name = f"{check_name}.payload.data.items[{index}]"
+        progress = item.get("progress")
+        if not isinstance(progress, (int, float)) or isinstance(progress, bool):
+            raise RuntimeError(f"aMuTorrent browser workflow '{item_name}' has non-numeric progress: {progress!r}")
+        if progress < 0 or progress > 100:
+            raise RuntimeError(f"aMuTorrent browser workflow '{item_name}' has out-of-range progress: {progress!r}")
+        if round(float(progress), 2) != float(progress):
+            raise RuntimeError(f"aMuTorrent browser workflow '{item_name}' has noisy progress precision: {progress!r}")
+        status = item.get("status")
+        if not isinstance(status, str) or not status.strip():
+            raise RuntimeError(f"aMuTorrent browser workflow '{item_name}' has missing status: {status!r}")
+        if item.get("shared") is True and item.get("downloading") is not True and progress != 100:
+            raise RuntimeError(f"aMuTorrent browser workflow '{item_name}' has incomplete shared-file progress: {progress!r}")
+
+
 def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[str, list[dict[str, Any]]]) -> None:
     """Raises when browser workflow HTTP calls or page diagnostics report failures."""
 
@@ -224,6 +264,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
         payload = result.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "error":
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
+    assert_snapshot_items_are_display_safe(checks)
     unexpected_diagnostics = unexpected_browser_diagnostics(diagnostics)
     if any(unexpected_diagnostics.values()):
         raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {unexpected_diagnostics}")
@@ -352,6 +393,8 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                     "instanceId": instance_id,
                 },
             )
+            page.wait_for_timeout(1000)
+            checks["snapshot_after_add"] = fetch_json("/api/v1/data/snapshot")
             checks["search_modes"] = [
                 start_search_with_retry(spec["type"], spec["query"], spec["round"])
                 for spec in build_search_mode_specs(search_rounds)

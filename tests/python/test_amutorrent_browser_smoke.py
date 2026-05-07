@@ -92,6 +92,30 @@ def test_amutorrent_ed2k_browser_routes_do_not_use_legacy_amule_paths() -> None:
 def test_browser_workflow_validation_walks_nested_results() -> None:
     smoke = load_smoke_module()
     checks = {
+        "snapshot": {
+            "status": 200,
+            "payload": {
+                "type": "batch-update",
+                "data": {
+                    "items": [
+                        {
+                            "hash": "a" * 32,
+                            "progress": 33.33,
+                            "status": "queued",
+                            "shared": False,
+                            "downloading": True,
+                        },
+                        {
+                            "hash": "b" * 32,
+                            "progress": 100,
+                            "status": "completed",
+                            "shared": True,
+                            "downloading": False,
+                        },
+                    ]
+                },
+            },
+        },
         "search_modes": [
             {
                 "start": {"status": 200, "payload": {"type": "search-started"}},
@@ -105,6 +129,44 @@ def test_browser_workflow_validation_walks_nested_results() -> None:
     }
 
     smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_noisy_snapshot_progress() -> None:
+    smoke = load_smoke_module()
+    checks = {
+        "snapshot": {
+            "status": 200,
+            "payload": {
+                "data": {
+                    "items": [
+                        {"progress": 33.3333333333, "status": "queued"},
+                    ]
+                },
+            },
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="noisy progress precision"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_incomplete_shared_snapshot_progress() -> None:
+    smoke = load_smoke_module()
+    checks = {
+        "snapshot": {
+            "status": 200,
+            "payload": {
+                "data": {
+                    "items": [
+                        {"progress": 1, "status": "completed", "shared": True, "downloading": False},
+                    ]
+                },
+            },
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="incomplete shared-file progress"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
 
 
 def test_browser_workflow_validation_rejects_nested_server_errors() -> None:
