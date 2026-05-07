@@ -923,6 +923,8 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	CHECK(category.empty());
 	CHECK(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=Movies", category, error));
 	CHECK_EQ(category, "Movies");
+	CHECK(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=++Movies++", category, error));
+	CHECK_EQ(category, "Movies");
 	error.clear();
 	CHECK_FALSE(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=%2x", category, error));
 	CHECK_EQ(error, "malformed percent escape");
@@ -930,6 +932,10 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	error.clear();
 	CHECK_FALSE(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=Movies&category=TV", category, error));
 	CHECK_EQ(error, "duplicate query parameter: category");
+	CHECK(category.empty());
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=bad%01name", category, error));
+	CHECK_EQ(error, "category must be valid UTF-8 without control characters");
 	CHECK(category.empty());
 }
 

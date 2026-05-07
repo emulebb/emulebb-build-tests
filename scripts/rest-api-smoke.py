@@ -2572,6 +2572,13 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     assert int(qbit_info["status"]) == 200, compact_http_result(qbit_info)
     assert isinstance(qbit_info.get("json"), list), compact_http_result(qbit_info)
 
+    qbit_bad_category_filter = http_request(
+        base_url,
+        "/api/v2/torrents/info?category=bad%01name",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_bad_category_filter["status"]) == 400, compact_http_result(qbit_bad_category_filter)
+
     qbit_properties_missing = http_request(
         base_url,
         f"/api/v2/torrents/properties?hash={REST_SURFACE_MISSING_HASH}",
@@ -2712,6 +2719,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "categories": compact_http_result(qbit_categories),
         "duplicate_query": compact_http_result(qbit_duplicate_query),
         "info": compact_http_result(qbit_info),
+        "bad_category_filter": compact_http_result(qbit_bad_category_filter),
         "properties_missing": compact_http_result(qbit_properties_missing),
         "files_missing": compact_http_result(qbit_files_missing),
         "bad_form": compact_http_result(qbit_bad_form),
