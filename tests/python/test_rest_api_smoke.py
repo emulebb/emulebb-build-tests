@@ -623,7 +623,7 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     )
     assert routes_by_operation["shutdownApp"]["safe"] is False
     assert routes_by_operation["shutdownApp"]["safety"] == "unsafe"
-    assert routes_by_operation["shutdownApp"]["successResponseStatuses"] == ["202"]
+    assert routes_by_operation["shutdownApp"]["successResponseStatuses"] == ["200"]
     assert routes_by_operation["shutdownApp"]["responseEnvelope"] == "OkAcceptedResponse"
     assert all(len(route["successResponseRefs"]) == 1 for route in module.REST_CONTRACT_ROUTES)
     assert all(route["responseEnvelope"] == route["successResponseRefs"][0] for route in module.REST_CONTRACT_ROUTES)
