@@ -2823,6 +2823,15 @@ def require_qbit_json_array(result: dict[str, object], description: str) -> list
     return list(payload)
 
 
+def require_qbit_json_object(result: dict[str, object], description: str) -> dict[str, Any]:
+    """Asserts one qBittorrent compatibility response is a JSON object."""
+
+    assert int(result["status"]) == 200, compact_http_result(result)
+    payload = result.get("json")
+    assert isinstance(payload, dict), {description: compact_http_result(result)}
+    return dict(payload)
+
+
 def require_qbit_ok_text(result: dict[str, object], description: str) -> None:
     """Asserts one qBittorrent compatibility mutation returned qBit's Ok text."""
 
@@ -3065,6 +3074,22 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     qbit_info_added_category_rows = require_qbit_json_array(qbit_info_added_category, "qBit info added category")
     qbit_added_category_row = find_qbit_info_row(qbit_info_added_category_rows, REST_SURFACE_QBIT_DOWNLOAD_HASH)
 
+    qbit_properties_added = http_request(
+        base_url,
+        f"/api/v2/torrents/properties?hash={REST_SURFACE_QBIT_DOWNLOAD_HASH}",
+        extra_headers={"Cookie": cookie_pair},
+        request_timeout_seconds=30.0,
+    )
+    qbit_properties_added_payload = require_qbit_json_object(qbit_properties_added, "qBit properties after add")
+
+    qbit_files_added = http_request(
+        base_url,
+        f"/api/v2/torrents/files?hash={REST_SURFACE_QBIT_DOWNLOAD_HASH}",
+        extra_headers={"Cookie": cookie_pair},
+        request_timeout_seconds=30.0,
+    )
+    qbit_files_added_payload = require_qbit_json_array(qbit_files_added, "qBit files after add")
+
     qbit_delete_added = http_request(
         base_url,
         "/api/v2/torrents/delete",
@@ -3079,6 +3104,9 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     assert qbit_added_row.get("category") == qbit_add_category, qbit_added_row
     assert qbit_added_row.get("name") == "qbit-rest-smoke.bin", qbit_added_row
     assert qbit_added_category_row is not None, compact_http_result(qbit_info_added_category)
+    assert qbit_properties_added_payload.get("hash") == REST_SURFACE_QBIT_DOWNLOAD_HASH, qbit_properties_added_payload
+    assert qbit_files_added_payload and isinstance(qbit_files_added_payload[0], dict), qbit_files_added_payload
+    assert qbit_files_added_payload[0].get("name") == "qbit-rest-smoke.bin", qbit_files_added_payload
 
     qbit_bad_category_filter = http_request(
         base_url,
@@ -3279,6 +3307,8 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "add_valid": compact_http_result(qbit_add_valid),
         "info_after_add": compact_http_result(qbit_info_after_add),
         "info_added_category": compact_http_result(qbit_info_added_category),
+        "properties_added": compact_http_result(qbit_properties_added),
+        "files_added": compact_http_result(qbit_files_added),
         "delete_added": compact_http_result(qbit_delete_added),
         "bad_category_filter": compact_http_result(qbit_bad_category_filter),
         "properties_missing": compact_http_result(qbit_properties_missing),
