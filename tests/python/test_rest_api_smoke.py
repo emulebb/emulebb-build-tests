@@ -649,6 +649,16 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     assert all(route["responseEnvelope"] == route["successResponseRefs"][0] for route in module.REST_CONTRACT_ROUTES)
 
 
+def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerQBitCompat.cpp"
+    source = source_path.read_text(encoding="utf-8")
+
+    assert 'BuildInternalCommand("transfers/list"' in source
+    assert "theApp.downloadqueue" not in source
+    assert "CPartFile" not in source
+
+
 def test_rest_contract_registry_covers_release_families() -> None:
     module = load_rest_api_smoke_module()
 
