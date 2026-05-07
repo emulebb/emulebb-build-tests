@@ -3100,6 +3100,27 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         request_timeout_seconds=30.0,
     )
     require_qbit_ok_text(qbit_delete_added, "qBit delete added")
+
+    qbit_info_after_delete = http_request(
+        base_url,
+        "/api/v2/torrents/info",
+        extra_headers={"Cookie": cookie_pair},
+        request_timeout_seconds=30.0,
+    )
+    qbit_info_after_delete_rows = require_qbit_json_array(qbit_info_after_delete, "qBit info after delete")
+    qbit_properties_after_delete = http_request(
+        base_url,
+        f"/api/v2/torrents/properties?hash={REST_SURFACE_QBIT_DOWNLOAD_HASH}",
+        extra_headers={"Cookie": cookie_pair},
+        request_timeout_seconds=30.0,
+    )
+    qbit_files_after_delete = http_request(
+        base_url,
+        f"/api/v2/torrents/files?hash={REST_SURFACE_QBIT_DOWNLOAD_HASH}",
+        extra_headers={"Cookie": cookie_pair},
+        request_timeout_seconds=30.0,
+    )
+
     assert qbit_added_row is not None, compact_http_result(qbit_info_after_add)
     assert qbit_added_row.get("category") == qbit_add_category, qbit_added_row
     assert qbit_added_row.get("name") == "qbit-rest-smoke.bin", qbit_added_row
@@ -3107,6 +3128,11 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     assert qbit_properties_added_payload.get("hash") == REST_SURFACE_QBIT_DOWNLOAD_HASH, qbit_properties_added_payload
     assert qbit_files_added_payload and isinstance(qbit_files_added_payload[0], dict), qbit_files_added_payload
     assert qbit_files_added_payload[0].get("name") == "qbit-rest-smoke.bin", qbit_files_added_payload
+    assert find_qbit_info_row(qbit_info_after_delete_rows, REST_SURFACE_QBIT_DOWNLOAD_HASH) is None, compact_http_result(
+        qbit_info_after_delete
+    )
+    assert int(qbit_properties_after_delete["status"]) == 404, compact_http_result(qbit_properties_after_delete)
+    assert int(qbit_files_after_delete["status"]) == 404, compact_http_result(qbit_files_after_delete)
 
     qbit_bad_category_filter = http_request(
         base_url,
@@ -3310,6 +3336,9 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "properties_added": compact_http_result(qbit_properties_added),
         "files_added": compact_http_result(qbit_files_added),
         "delete_added": compact_http_result(qbit_delete_added),
+        "info_after_delete": compact_http_result(qbit_info_after_delete),
+        "properties_after_delete": compact_http_result(qbit_properties_after_delete),
+        "files_after_delete": compact_http_result(qbit_files_after_delete),
         "bad_category_filter": compact_http_result(qbit_bad_category_filter),
         "properties_missing": compact_http_result(qbit_properties_missing),
         "files_missing": compact_http_result(qbit_files_missing),
