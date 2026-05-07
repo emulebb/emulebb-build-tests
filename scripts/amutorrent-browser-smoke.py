@@ -14,6 +14,7 @@ from typing import Any
 AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
 DEFAULT_WINDOWS_NODE22 = Path(r"C:\bin\nodejs-v22-old\node.exe")
 DEFAULT_SEARCH_ROUNDS = 2
+AMUTORRENT_BROWSER_SMOKE_HASH = "0123456789abcdef0123456789abcdef"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -215,25 +216,40 @@ def unexpected_browser_diagnostics(diagnostics: dict[str, list[dict[str, Any]]])
     }
 
 
+def snapshot_items(checks: dict[str, Any], check_name: str) -> list[dict[str, Any]]:
+    """Returns unified snapshot items from one browser workflow check."""
+
+    result = checks.get(check_name)
+    if not isinstance(result, dict) or int(result.get("status", 0)) >= 300:
+        return []
+    payload = result.get("payload")
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
 def iter_snapshot_items(checks: dict[str, Any]):
     """Yields aMuTorrent unified snapshot items from browser workflow checks."""
 
-    for check_name in ("snapshot", "snapshot_after_add"):
-        result = checks.get(check_name)
-        if not isinstance(result, dict) or int(result.get("status", 0)) >= 300:
-            continue
-        payload = result.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            continue
-        items = data.get("items")
-        if not isinstance(items, list):
-            continue
-        for index, item in enumerate(items):
-            if isinstance(item, dict):
-                yield check_name, index, item
+    for check_name in ("snapshot", "snapshot_after_add", "snapshot_after_delete"):
+        for index, item in enumerate(snapshot_items(checks, check_name)):
+            yield check_name, index, item
+
+
+def find_snapshot_item(checks: dict[str, Any], check_name: str, item_hash: str) -> dict[str, Any] | None:
+    """Finds one unified snapshot item by lowercase hash."""
+
+    expected = item_hash.lower()
+    for item in snapshot_items(checks, check_name):
+        if str(item.get("hash") or "").lower() == expected:
+            return item
+    return None
 
 
 def assert_snapshot_items_are_display_safe(checks: dict[str, Any]) -> None:
@@ -255,6 +271,31 @@ def assert_snapshot_items_are_display_safe(checks: dict[str, Any]) -> None:
             raise RuntimeError(f"aMuTorrent browser workflow '{item_name}' has incomplete shared-file progress: {progress!r}")
 
 
+def assert_browser_delete_removed_added_download(checks: dict[str, Any]) -> None:
+    """Verifies the browser delete workflow removed the synthetic eD2K transfer."""
+
+    if "delete_added_download" not in checks:
+        return
+    added = find_snapshot_item(checks, "snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
+    if added is None:
+        raise RuntimeError("aMuTorrent browser workflow did not observe the added eD2K transfer before delete.")
+    delete_result = checks.get("delete_added_download")
+    if not isinstance(delete_result, dict) or int(delete_result.get("status", 0)) >= 300:
+        raise RuntimeError(f"aMuTorrent browser delete workflow failed: {delete_result}")
+    payload = delete_result.get("payload")
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or not any(
+        isinstance(result, dict)
+        and str(result.get("fileHash") or "").lower() == AMUTORRENT_BROWSER_SMOKE_HASH
+        and result.get("success") is True
+        for result in results
+    ):
+        raise RuntimeError(f"aMuTorrent browser delete workflow did not report success for the added transfer: {delete_result}")
+    deleted = find_snapshot_item(checks, "snapshot_after_delete", AMUTORRENT_BROWSER_SMOKE_HASH)
+    if deleted is not None:
+        raise RuntimeError(f"aMuTorrent browser delete workflow left the added transfer in the snapshot: {deleted}")
+
+
 def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[str, list[dict[str, Any]]]) -> None:
     """Raises when browser workflow HTTP calls or page diagnostics report failures."""
 
@@ -265,6 +306,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
         if isinstance(payload, dict) and payload.get("type") == "error":
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
     assert_snapshot_items_are_display_safe(checks)
+    assert_browser_delete_removed_added_download(checks)
     unexpected_diagnostics = unexpected_browser_diagnostics(diagnostics)
     if any(unexpected_diagnostics.values()):
         raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {unexpected_diagnostics}")
@@ -389,12 +431,33 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                 "/api/v1/downloads/ed2k",
                 "POST",
                 {
-                    "links": ["ed2k://|file|amutorrent-browser-smoke.bin|1|0123456789abcdef0123456789abcdef|/"],
+                    "links": [f"ed2k://|file|amutorrent-browser-smoke.bin|1|{AMUTORRENT_BROWSER_SMOKE_HASH}|/"],
                     "instanceId": instance_id,
                 },
             )
             page.wait_for_timeout(1000)
             checks["snapshot_after_add"] = fetch_json("/api/v1/data/snapshot")
+            added_item = find_snapshot_item(checks, "snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
+            if added_item is None:
+                raise RuntimeError("aMuTorrent browser smoke did not observe the added eD2K transfer.")
+            checks["delete_added_download"] = fetch_json(
+                "/api/v1/downloads/delete",
+                "POST",
+                {
+                    "items": [
+                        {
+                            "fileHash": AMUTORRENT_BROWSER_SMOKE_HASH,
+                            "clientType": added_item.get("client") or "emulebb",
+                            "instanceId": added_item.get("instanceId") or instance_id,
+                            "fileName": added_item.get("name") or "amutorrent-browser-smoke.bin",
+                        }
+                    ],
+                    "deleteFiles": True,
+                    "source": "downloads",
+                },
+            )
+            page.wait_for_timeout(1000)
+            checks["snapshot_after_delete"] = fetch_json("/api/v1/data/snapshot")
             checks["search_modes"] = [
                 start_search_with_retry(spec["type"], spec["query"], spec["round"])
                 for spec in build_search_mode_specs(search_rounds)

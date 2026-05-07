@@ -179,6 +179,85 @@ def test_browser_workflow_validation_rejects_incomplete_shared_snapshot_progress
         smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
 
 
+def test_browser_workflow_validation_requires_delete_to_remove_added_download() -> None:
+    smoke = load_smoke_module()
+    added_hash = smoke.AMUTORRENT_BROWSER_SMOKE_HASH
+    checks = {
+        "snapshot_after_add": {
+            "status": 200,
+            "payload": {
+                "data": {
+                    "items": [
+                        {
+                            "hash": added_hash,
+                            "progress": 0,
+                            "status": "active",
+                            "shared": False,
+                            "downloading": True,
+                        }
+                    ]
+                }
+            },
+        },
+        "delete_added_download": {
+            "status": 200,
+            "payload": {"results": [{"fileHash": added_hash, "success": True}]},
+        },
+        "snapshot_after_delete": {
+            "status": 200,
+            "payload": {"data": {"items": []}},
+        },
+    }
+
+    smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_delete_snapshot_with_added_download() -> None:
+    smoke = load_smoke_module()
+    added_hash = smoke.AMUTORRENT_BROWSER_SMOKE_HASH
+    checks = {
+        "snapshot_after_add": {
+            "status": 200,
+            "payload": {
+                "data": {
+                    "items": [
+                        {
+                            "hash": added_hash,
+                            "progress": 0,
+                            "status": "active",
+                            "shared": False,
+                            "downloading": True,
+                        }
+                    ]
+                }
+            },
+        },
+        "delete_added_download": {
+            "status": 200,
+            "payload": {"results": [{"fileHash": added_hash, "success": True}]},
+        },
+        "snapshot_after_delete": {
+            "status": 200,
+            "payload": {
+                "data": {
+                    "items": [
+                        {
+                            "hash": added_hash,
+                            "progress": 0,
+                            "status": "active",
+                            "shared": False,
+                            "downloading": True,
+                        }
+                    ]
+                }
+            },
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="left the added transfer"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
 def test_browser_workflow_validation_rejects_nested_server_errors() -> None:
     smoke = load_smoke_module()
     checks = {"search_modes": [{"start": {"status": 503, "payload": {"error": "offline"}}}]}
