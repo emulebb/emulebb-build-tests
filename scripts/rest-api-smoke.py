@@ -1673,6 +1673,20 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={"maxUploadSlots": 0},
     )
+    invalid_preference_boolean = http_request(
+        base_url,
+        "/api/v1/app/preferences",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"safeServerConnect": "true"},
+    )
+    invalid_preference_empty = http_request(
+        base_url,
+        "/api/v1/app/preferences",
+        method="PATCH",
+        api_key=api_key,
+        json_body={},
+    )
     surface["app_preferences_invalid"] = {
         "status": invalid_preference["status"],
         "error": require_error_response(
@@ -1686,6 +1700,18 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="maxUploadSlots must be an unsigned number in the range 1..32",
+        ),
+        "bad_boolean": require_error_response(
+            invalid_preference_boolean,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="safeServerConnect must be a boolean",
+        ),
+        "empty": require_error_response(
+            invalid_preference_empty,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="preferences PATCH requires at least one preference",
         ),
     }
 
