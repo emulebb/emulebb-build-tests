@@ -1824,6 +1824,16 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "links": [f"ed2k://|file|rest-api-smoke.bin|1024|{REST_SURFACE_VALID_DOWNLOAD_HASH}|/"],
         },
     )
+    transfer_add_bad_category_id = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={
+            "link": f"ed2k://|file|rest-api-smoke.bin|1024|{REST_SURFACE_VALID_DOWNLOAD_HASH}|/",
+            "categoryId": -1,
+        },
+    )
     transfer_add_valid = http_request(
         base_url,
         "/api/v1/transfers",
@@ -1996,6 +2006,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="link and links are mutually exclusive",
+        ),
+        "add_bad_category_id": require_error_response(
+            transfer_add_bad_category_id,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="categoryId must be an unsigned number",
         ),
         "add_valid_paused": {
             "status": transfer_add_valid["status"],
