@@ -83,26 +83,26 @@ TEST_CASE("Preference UI seam bounds diagnostic numeric options")
 	CHECK(PreferenceUiSeams::NormalizePerfLogIntervalMinutes(PreferenceUiSeams::kMaxPerfLogIntervalMinutes + 1) == 5);
 }
 
-TEST_CASE("Preference UI seam normalizes broadband session transfer policy")
+TEST_CASE("Preference UI seam normalizes upload-policy session transfer limits")
 {
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(PreferenceUiSeams::kBBSessionTransferModeDisabled) == PreferenceUiSeams::kBBSessionTransferModeDisabled);
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(PreferenceUiSeams::kBBSessionTransferModePercentOfFile) == PreferenceUiSeams::kBBSessionTransferModePercentOfFile);
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB) == PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB);
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferMode(9) == PreferenceUiSeams::kBBSessionTransferModePercentOfFile);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitMode(PreferenceUiSeams::kSessionTransferModeDisabled) == PreferenceUiSeams::kSessionTransferModeDisabled);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitMode(PreferenceUiSeams::kSessionTransferModePercentOfFile) == PreferenceUiSeams::kSessionTransferModePercentOfFile);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitMode(PreferenceUiSeams::kSessionTransferModeAbsoluteMiB) == PreferenceUiSeams::kSessionTransferModeAbsoluteMiB);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitMode(9) == PreferenceUiSeams::kSessionTransferModePercentOfFile);
 
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModePercentOfFile, 0) == PreferenceUiSeams::kMinBBSessionTransferPercent);
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModePercentOfFile, 55) == 55);
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModePercentOfFile, 101) == PreferenceUiSeams::kMaxBBSessionTransferPercent);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModePercentOfFile, 0) == PreferenceUiSeams::kMinSessionTransferPercent);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModePercentOfFile, 55) == 55);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModePercentOfFile, 101) == PreferenceUiSeams::kMaxSessionTransferPercent);
 
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB, 0) == PreferenceUiSeams::kMinBBSessionTransferMiB);
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB, 512) == 512);
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeAbsoluteMiB, 4097) == PreferenceUiSeams::kMaxBBSessionTransferMiB);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModeAbsoluteMiB, 0) == PreferenceUiSeams::kMinSessionTransferMiB);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModeAbsoluteMiB, 512) == 512);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModeAbsoluteMiB, 4097) == PreferenceUiSeams::kMaxSessionTransferMiB);
 
-	CHECK(PreferenceUiSeams::NormalizeBBSessionTransferValue(PreferenceUiSeams::kBBSessionTransferModeDisabled, 5000) == PreferenceUiSeams::kMaxBBSessionTransferMiB);
+	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModeDisabled, 5000) == PreferenceUiSeams::kMaxSessionTransferMiB);
 }
 
 #if EMULE_TESTS_HAS_PREFERENCE_INI_MAP
-TEST_CASE("Preference INI map uses dedicated BB-added sections without legacy BB key names")
+TEST_CASE("Preference INI map uses dedicated upload-policy sections without legacy BB key names")
 {
 	CHECK(CString(PreferenceIniMap::Sections::FileCompletion) == CString(_T("FileCompletion")));
 	CHECK(CString(PreferenceIniMap::Sections::Proxy) == CString(_T("Proxy")));
