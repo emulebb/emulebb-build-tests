@@ -882,11 +882,24 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Unknown&cat=9999", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
 
-	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Overflow&cat=999999999999999999999", request, error));
-	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
-
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Mixed&cat=2000,3000", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Any);
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Bad&cat=abc", request, error));
+	CHECK_EQ(error, "cat must contain unsigned decimal Torznab category IDs");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Bad&cat=999999999999999999999", request, error));
+	CHECK_EQ(error, "cat must contain unsigned decimal Torznab category IDs");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Bad&cat=2000,", request, error));
+	CHECK_EQ(error, "cat must contain unsigned decimal Torznab category IDs");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Bad&cat=+2000", request, error));
+	CHECK_EQ(error, "cat must contain unsigned decimal Torznab category IDs");
 
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Bad&season=x&ep=2", request, error));

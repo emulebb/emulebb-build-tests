@@ -631,6 +631,15 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
     },
     {
         "method": "GET",
+        "path": "/indexer/emulebb/api?t=search&cat=abc&q=linux&apikey={api_key}",
+        "family": "torznab",
+        "scenario": "torznab_bad_category_rejected",
+        "expected_statuses": (400,),
+        "response_kind": "xml",
+        "api_key": False,
+    },
+    {
+        "method": "GET",
         "path": "/api/v2/app/webapiVersion",
         "family": "qbit",
         "scenario": "qbit_public_version",
@@ -2872,6 +2881,12 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         api_key=api_key,
     )
     assert int(torznab_malformed_search["status"]) == 400, compact_http_result(torznab_malformed_search)
+    torznab_bad_category = http_request(
+        base_url,
+        "/indexer/emulebb/api?t=search&cat=abc&q=linux",
+        api_key=api_key,
+    )
+    assert int(torznab_bad_category["status"]) == 400, compact_http_result(torznab_bad_category)
     smoke["torznab"] = {
         "unauthorized": compact_http_result(torznab_unauthorized),
         "caps_header_auth": compact_http_result(torznab_caps_header),
@@ -2879,6 +2894,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "duplicate_query": compact_http_result(torznab_duplicate_query),
         "search": compact_http_result(torznab_search),
         "malformed_search": compact_http_result(torznab_malformed_search),
+        "bad_category": compact_http_result(torznab_bad_category),
     }
 
     qbit_public_version = http_request(base_url, "/api/v2/app/webapiVersion")

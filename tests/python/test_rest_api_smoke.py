@@ -976,6 +976,9 @@ def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
     assert operations_by_pair[
         ("GET", "/indexer/emulebb/api?t=search&season=abc&q=linux&apikey={api_key}")
     ]["api_key"] is False
+    assert operations_by_pair[
+        ("GET", "/indexer/emulebb/api?t=search&cat=abc&q=linux&apikey={api_key}")
+    ]["expected_statuses"] == (400,)
     assert operations_by_pair[("GET", "/api/v2/app/webapiVersion")]["response_kind"] == "text"
     assert operations_by_pair[("GET", "/api/v2/torrents/categories")]["extra_headers"] == {"Cookie": "{qbit_session_cookie}"}
     assert operations_by_pair[
