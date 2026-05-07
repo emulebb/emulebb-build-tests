@@ -1480,6 +1480,18 @@ TEST_CASE("Web API rejects malformed path identifiers before dispatch")
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/uploads/not-a-client/operations/remove", R"({})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "clientId must be a 32-character lowercase hex string or address:port");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/uploads/192.0.2.1:0/operations/remove", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "clientId must be a 32-character lowercase hex string or address:port");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/upload-queue/192.0.2.1:65536/operations/remove", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "clientId must be a 32-character lowercase hex string or address:port");
 }
 
 TEST_CASE("Web API maps every current REST route family to a command")
@@ -1575,6 +1587,12 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/upload-queue/0123456789abcdef0123456789abcdef/operations/unban", R"({})", "peers/unban");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	assertRoute("POST", "/api/v1/uploads/192.0.2.10:4662/operations/remove", R"({})", "uploads/remove");
+	CHECK_EQ(route.params["ip"].get<std::string>(), "192.0.2.10");
+	CHECK_EQ(route.params["port"].get<uint64_t>(), 4662u);
+	assertRoute("POST", "/api/v1/upload-queue/192.0.2.11:4663/operations/release-slot", R"({})", "uploads/release_slot");
+	CHECK_EQ(route.params["ip"].get<std::string>(), "192.0.2.11");
+	CHECK_EQ(route.params["port"].get<uint64_t>(), 4663u);
 
 	assertRoute("GET", "/api/v1/servers", "", "servers/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
