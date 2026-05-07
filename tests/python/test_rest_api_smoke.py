@@ -63,6 +63,64 @@ def test_live_server_unavailable_is_inconclusive_exit_code() -> None:
         module.connect_to_live_server("http://127.0.0.1:1", "api-key", [], 1.0)
 
 
+def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    calls: list[dict[str, object]] = []
+
+    def fake_http_request(base_url: str, path: str, **kwargs: object) -> dict[str, object]:
+        calls.append({"base_url": base_url, "path": path, **kwargs})
+        return {
+            "status": 200,
+            "content_type": "application/json",
+            "raw_json": {"data": {"ok": True, "imported": True}, "meta": {"apiVersion": "v1"}},
+            "json": {"ok": True, "imported": True},
+            "headers": {},
+            "body_text": "",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+    summary = module.exercise_live_seed_imports(
+        "http://127.0.0.1:1",
+        "api-key",
+        {
+            "source_home_url": module.EMULE_SECURITY_HOME_URL,
+            "files": [
+                {
+                    "name": "server_met",
+                    "file_name": "server.met",
+                    "url": module.EMULE_SECURITY_SERVER_MET_URL,
+                    "bytes": 80,
+                    "sha256": "s" * 64,
+                },
+                {
+                    "name": "nodes_dat",
+                    "file_name": "nodes.dat",
+                    "url": module.EMULE_SECURITY_NODES_DAT_URL,
+                    "bytes": 96,
+                    "sha256": "n" * 64,
+                },
+            ],
+        },
+    )
+
+    assert [call["path"] for call in calls] == [
+        "/api/v1/servers/met-url-imports",
+        "/api/v1/kad/nodes-url-imports",
+    ]
+    assert [call["json_body"] for call in calls] == [
+        {"url": module.EMULE_SECURITY_SERVER_MET_URL},
+        {"url": module.EMULE_SECURITY_NODES_DAT_URL},
+    ]
+    assert {entry["file_name"]: entry["imported"] for entry in summary["imports"]} == {
+        "server.met": True,
+        "nodes.dat": True,
+    }
+    assert {entry["file_name"]: entry["source_bytes"] for entry in summary["imports"]} == {
+        "server.met": 80,
+        "nodes.dat": 96,
+    }
+
+
 def test_missing_transfer_bulk_result_requires_per_item_error() -> None:
     module = load_rest_api_smoke_module()
 

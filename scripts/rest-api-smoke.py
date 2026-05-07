@@ -21,7 +21,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import live_wire_inputs
-from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL, refresh_seed_files
+from emule_test_harness.live_seed_sources import (
+    EMULE_SECURITY_HOME_URL,
+    EMULE_SECURITY_NODES_DAT_URL,
+    EMULE_SECURITY_SERVER_MET_URL,
+    refresh_seed_files,
+)
 
 
 def load_local_module(module_name: str, filename: str):
@@ -2407,6 +2412,69 @@ def create_qbit_session_cookie(base_url: str, api_key: str) -> str:
     return session_cookie.split(";", 1)[0]
 
 
+def exercise_live_seed_imports(
+    base_url: str,
+    api_key: str,
+    seed_refresh: dict[str, object] | None,
+    *,
+    request_timeout_seconds: float = 60.0,
+) -> dict[str, object]:
+    """Imports refreshed live seed URLs and records source plus REST outcome evidence."""
+
+    if not isinstance(seed_refresh, dict):
+        return {"skipped": True, "reason": "live seed refresh disabled"}
+
+    route_by_file = {
+        "server.met": {
+            "route": "/api/v1/servers/met-url-imports",
+            "default_url": EMULE_SECURITY_SERVER_MET_URL,
+        },
+        "nodes.dat": {
+            "route": "/api/v1/kad/nodes-url-imports",
+            "default_url": EMULE_SECURITY_NODES_DAT_URL,
+        },
+    }
+    imports: list[dict[str, object]] = []
+    for source in seed_refresh.get("files", []):
+        assert isinstance(source, dict), source
+        file_name = str(source.get("file_name") or "")
+        route = route_by_file.get(file_name)
+        if route is None:
+            continue
+
+        source_url = str(source.get("url") or route["default_url"])
+        result = http_request(
+            base_url,
+            str(route["route"]),
+            method="POST",
+            api_key=api_key,
+            json_body={"url": source_url},
+            request_timeout_seconds=request_timeout_seconds,
+        )
+        payload = require_json_object(result, 200)
+        imported = bool(payload.get("imported", payload.get("ok")))
+        evidence = {
+            "name": source.get("name"),
+            "file_name": file_name,
+            "source_url": source_url,
+            "source_bytes": source.get("bytes"),
+            "source_sha256": source.get("sha256"),
+            "route": route["route"],
+            "imported": imported,
+            "response": compact_http_result(result),
+        }
+        assert imported, evidence
+        imports.append(evidence)
+
+    expected_files = set(route_by_file.keys())
+    imported_files = {str(entry["file_name"]) for entry in imports}
+    assert imported_files == expected_files, {"expected": sorted(expected_files), "actual": sorted(imported_files)}
+    return {
+        "source_home_url": seed_refresh.get("source_home_url"),
+        "imports": imports,
+    }
+
+
 def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]:
     """Exercises low-risk qBit/Torznab adapter flows without triggering live downloads."""
 
@@ -3569,6 +3637,14 @@ def main() -> int:
 
         current_phase = set_phase(report, "rest_surface")
         report["checks"]["rest_surface"] = exercise_rest_surface_smoke(base_url, args.api_key)
+
+        current_phase = set_phase(report, "live_seed_imports")
+        report["checks"]["live_seed_imports"] = exercise_live_seed_imports(
+            base_url,
+            args.api_key,
+            seed_refresh,
+            request_timeout_seconds=max(30.0, args.seed_download_timeout_seconds + 10.0),
+        )
 
         current_phase = set_phase(report, "arr_adapters")
         report["checks"]["arr_adapters"] = exercise_arr_adapter_smoke(base_url, args.api_key)
