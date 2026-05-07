@@ -357,14 +357,14 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                 for spec in build_search_mode_specs(search_rounds)
             ]
             checks["search_results"] = fetch_json(f"/api/v1/search/results?instanceId={instance_id}")
-            checks["server_list"] = fetch_json("/api/v1/amule/servers")
+            checks["server_list"] = fetch_json("/api/v1/ed2k/servers")
             checks["server_disconnect"] = fetch_json(
-                "/api/v1/amule/servers/action",
+                "/api/v1/ed2k/servers/action",
                 "POST",
                 {"ip": "127.0.0.1", "port": 4661, "serverAction": "disconnect", "instanceId": instance_id},
             )
             checks["shared_dirs_reload"] = fetch_json(
-                "/api/v1/amule/refresh-shared",
+                "/api/v1/ed2k/refresh-shared",
                 "POST",
                 {"instanceId": instance_id},
             )

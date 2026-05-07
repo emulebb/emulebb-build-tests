@@ -68,6 +68,25 @@ def test_browser_smoke_stays_on_native_v1_surface() -> None:
 
     assert "/api/v2/" not in script_text
     assert "/api/amule/" not in script_text
+    assert "/api/v1/amule/" not in script_text
+
+
+def test_amutorrent_ed2k_browser_routes_do_not_use_legacy_amule_paths() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    amutorrent_root = workspace_root / "repos" / "amutorrent"
+    source_roots = [
+        amutorrent_root / "server" / "modules",
+        amutorrent_root / "static" / "components",
+    ]
+
+    matches: list[str] = []
+    for source_root in source_roots:
+        for path in source_root.rglob("*.js"):
+            text = path.read_text(encoding="utf-8")
+            if "/api/amule/" in text or "/api/v1/amule/" in text:
+                matches.append(str(path.relative_to(amutorrent_root)))
+
+    assert matches == []
 
 
 def test_browser_workflow_validation_walks_nested_results() -> None:
