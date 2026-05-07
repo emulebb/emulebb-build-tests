@@ -602,6 +602,22 @@ def test_direct_bootstrap_transfer_candidate_uses_known_safe_link(monkeypatch) -
     monkeypatch.setattr(module, "add_transfer_from_search_result", fake_add_transfer)
     monkeypatch.setattr(
         module,
+        "observe_transfer_materialization",
+        lambda _base_url, _api_key, transfer_hash: {
+            "status": 200,
+            "hash_present": True,
+            "name_present": True,
+            "state": "queued",
+            "progress": 0,
+            "sizeBytes": 6655619072,
+            "completedBytes": 0,
+            "sources": 0,
+            "sourcesTransferring": 0,
+            "observed_hash": transfer_hash,
+        },
+    )
+    monkeypatch.setattr(
+        module,
         "wait_for_transfer_sources",
         lambda *_args, **_kwargs: {
             "sources": [
@@ -624,4 +640,5 @@ def test_direct_bootstrap_transfer_candidate_uses_known_safe_link(monkeypatch) -
 
     assert result["selected"]["method"] == "direct_ed2k"
     assert added_rows[0]["name"] == inputs.direct_bootstrap_transfers[0]["name"]
+    assert result["selected"]["transfer_materialization"]["observed_hash"] == inputs.direct_bootstrap_transfers[0]["hash"]
     assert result["selected"]["sources_ready"]["sources"][0]["userHash"] == "b" * 32

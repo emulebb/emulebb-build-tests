@@ -770,6 +770,26 @@ def add_transfer_from_search_result(base_url: str, api_key: str, result_row: dic
     return require_json_object(add_result, 200)
 
 
+def observe_transfer_materialization(base_url: str, api_key: str, transfer_hash: str) -> dict[str, object]:
+    """Returns a compact native transfer snapshot after a live bootstrap add."""
+
+    result = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=api_key)
+    payload = require_json_object(result, 200)
+    if payload.get("hash") != transfer_hash:
+        raise RuntimeError(f"Transfer materialization hash mismatch: expected {transfer_hash!r}, got {payload.get('hash')!r}")
+    return {
+        "status": result.get("status"),
+        "hash_present": bool(payload.get("hash")),
+        "name_present": bool(payload.get("name")),
+        "state": payload.get("state"),
+        "progress": payload.get("progress"),
+        "sizeBytes": payload.get("sizeBytes"),
+        "completedBytes": payload.get("completedBytes"),
+        "sources": payload.get("sources"),
+        "sourcesTransferring": payload.get("sourcesTransferring"),
+    }
+
+
 def wait_for_transfer_sources(
     base_url: str,
     api_key: str,
@@ -876,6 +896,11 @@ def find_direct_bootstrap_transfer_candidate(
                 raise RuntimeError("Direct bootstrap transfer is not safe to download.")
             add_payload = add_transfer_from_search_result(base_url, api_key, result_row)
             attempt["add_response"] = add_payload
+            attempt["transfer_materialization"] = observe_transfer_materialization(
+                base_url,
+                api_key,
+                str(add_payload["hash"]),
+            )
             attempt["sources_ready"] = wait_for_transfer_sources(
                 base_url,
                 api_key,
@@ -1264,6 +1289,11 @@ def main() -> int:
                     assert isinstance(result_row, dict)
                     add_payload = add_transfer_from_search_result(base_url, args.api_key, result_row)
                     selected_attempt["add_response"] = add_payload
+                    selected_attempt["transfer_materialization"] = observe_transfer_materialization(
+                        base_url,
+                        args.api_key,
+                        str(add_payload["hash"]),
+                    )
                     selected_attempt["sources_ready"] = wait_for_transfer_sources(
                         base_url,
                         args.api_key,
