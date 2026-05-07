@@ -178,6 +178,58 @@ TEST_CASE("Part-file persistence seam exposes overlong .part.met existence on re
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(rawPartMetPath));
 }
 
+#if defined(EMULE_TEST_HAVE_PART_FILE_DELETE_PLAN_SEAMS)
+TEST_CASE("Part-file persistence seam models metadata cleanup companion paths")
+{
+	const PartFilePersistenceSeams::PartFilePathString partMetPath(_T("C:\\Temp\\001.part.met"));
+
+	CHECK(PartFilePersistenceSeams::BuildPartFileDeletePath(partMetPath, PartFilePersistenceSeams::PartFileDeletePathRole::Metadata)
+		== PartFilePersistenceSeams::PartFilePathString(_T("C:\\Temp\\001.part.met")));
+	CHECK(PartFilePersistenceSeams::BuildPartFileDeletePath(partMetPath, PartFilePersistenceSeams::PartFileDeletePathRole::Data)
+		== PartFilePersistenceSeams::PartFilePathString(_T("C:\\Temp\\001.part")));
+	CHECK(PartFilePersistenceSeams::BuildPartFileDeletePath(partMetPath, PartFilePersistenceSeams::PartFileDeletePathRole::Backup)
+		== PartFilePersistenceSeams::PartFilePathString(_T("C:\\Temp\\001.part.met.bak")));
+	CHECK(PartFilePersistenceSeams::BuildPartFileDeletePath(partMetPath, PartFilePersistenceSeams::PartFileDeletePathRole::Temporary)
+		== PartFilePersistenceSeams::PartFilePathString(_T("C:\\Temp\\001.part.met.backup")));
+
+	CHECK_EQ(PartFilePersistenceSeams::GetPartFileDeletePathCount(false), 3u);
+	CHECK(PartFilePersistenceSeams::IsPartFileDeletePathActive(PartFilePersistenceSeams::PartFileDeletePathRole::Metadata, false));
+	CHECK_FALSE(PartFilePersistenceSeams::IsPartFileDeletePathActive(PartFilePersistenceSeams::PartFileDeletePathRole::Data, false));
+	CHECK(PartFilePersistenceSeams::IsPartFileDeletePathActive(PartFilePersistenceSeams::PartFileDeletePathRole::Backup, false));
+	CHECK(PartFilePersistenceSeams::IsPartFileDeletePathActive(PartFilePersistenceSeams::PartFileDeletePathRole::Temporary, false));
+}
+
+TEST_CASE("Part-file persistence seam models full part-file delete paths on real temp storage")
+{
+	ScopedTempDir tempDir;
+	const std::filesystem::path partMetFile = tempDir.Root() / L"002 odd-[delete].part.met";
+	const PartFilePersistenceSeams::PartFilePathString partMetPath(partMetFile.c_str());
+	const PartFilePersistenceSeams::PartFileDeletePathRole roles[] = {
+		PartFilePersistenceSeams::PartFileDeletePathRole::Metadata,
+		PartFilePersistenceSeams::PartFileDeletePathRole::Data,
+		PartFilePersistenceSeams::PartFileDeletePathRole::Backup,
+		PartFilePersistenceSeams::PartFileDeletePathRole::Temporary
+	};
+
+	CHECK_EQ(PartFilePersistenceSeams::GetPartFileDeletePathCount(true), 4u);
+	for (const PartFilePersistenceSeams::PartFileDeletePathRole role : roles) {
+		const std::filesystem::path plannedPath(PartFilePersistenceSeams::BuildPartFileDeletePath(partMetPath, role));
+		WriteTextFile(plannedPath, "delete-me");
+		CHECK(std::filesystem::exists(plannedPath));
+	}
+
+	for (const PartFilePersistenceSeams::PartFileDeletePathRole role : roles) {
+		REQUIRE(PartFilePersistenceSeams::IsPartFileDeletePathActive(role, true));
+		std::error_code ec;
+		std::filesystem::remove(std::filesystem::path(PartFilePersistenceSeams::BuildPartFileDeletePath(partMetPath, role)), ec);
+		REQUIRE_FALSE(ec);
+	}
+
+	for (const PartFilePersistenceSeams::PartFileDeletePathRole role : roles)
+		CHECK_FALSE(std::filesystem::exists(std::filesystem::path(PartFilePersistenceSeams::BuildPartFileDeletePath(partMetPath, role))));
+}
+#endif
+
 TEST_CASE("Part-file persistence seam keeps the non-shutdown flush path intact")
 {
 	CHECK(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(false, false, false));
