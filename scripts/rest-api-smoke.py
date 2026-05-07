@@ -4029,6 +4029,37 @@ def stop_live_search(base_url: str, api_key: str, search_id: str) -> dict[str, o
     )
 
 
+def delete_all_searches(base_url: str, api_key: str) -> dict[str, object]:
+    """Deletes every live search tab through the explicit destructive REST route."""
+
+    return http_request(
+        base_url,
+        "/api/v1/searches",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"confirmDeleteAllSearches": True},
+    )
+
+
+def verify_searches_deleted(base_url: str, api_key: str, search_ids: list[str]) -> dict[str, object]:
+    """Verifies that all supplied live search ids are gone after delete-all."""
+
+    probes: list[dict[str, object]] = []
+    for search_id in search_ids:
+        result = http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
+        probes.append(
+            {
+                "searchId": search_id,
+                "response": compact_http_result(result),
+            }
+        )
+        require_error_response(result, 404, "NOT_FOUND", message_contains="search not found")
+    return {
+        "checked": len(search_ids),
+        "probes": probes,
+    }
+
+
 def execute_search_plan(
     base_url: str,
     api_key: str,
@@ -4475,6 +4506,20 @@ def main() -> int:
             "ok": completed_download_triggers >= args.live_download_trigger_count,
         }
         assert completed_download_triggers >= args.live_download_trigger_count, report["checks"]["live_download_triggers"]
+
+        search_ids = [
+            str(cycle["searchId"])
+            for cycle in completed_cycles
+            if isinstance(cycle.get("searchId"), str) and cycle.get("searchId")
+        ]
+        current_phase = set_phase(report, "delete_all_searches")
+        delete_all_searches_result = delete_all_searches(base_url, args.api_key)
+        require_json_object(delete_all_searches_result, 200)
+        report["checks"]["delete_all_searches"] = {
+            "searchIds": search_ids,
+            "response": compact_http_result(delete_all_searches_result),
+            "post_delete": verify_searches_deleted(base_url, args.api_key, search_ids),
+        }
         search_id = None
 
         current_phase = set_phase(report, "log_limit")

@@ -783,6 +783,63 @@ def test_live_search_start_uses_broad_file_type_for_release_terms(monkeypatch) -
     }
 
 
+def test_delete_all_searches_uses_confirmation_payload(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    requests: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        requests.append({"path": path, **kwargs})
+        return {
+            "status": 200,
+            "content_type": "application/json; charset=utf-8",
+            "json": {"ok": True},
+            "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.delete_all_searches("http://127.0.0.1:1", "key")
+
+    assert result["status"] == 200
+    assert requests == [
+        {
+            "path": "/api/v1/searches",
+            "method": "DELETE",
+            "api_key": "key",
+            "json_body": {"confirmDeleteAllSearches": True},
+        }
+    ]
+
+
+def test_verify_searches_deleted_requires_each_search_to_404(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    requests: list[str] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        requests.append(path)
+        return {
+            "status": 404,
+            "content_type": "application/json; charset=utf-8",
+            "json": {"error": "NOT_FOUND", "message": "search not found"},
+            "raw_json": {
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": "search not found",
+                    "details": {},
+                }
+            },
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.verify_searches_deleted("http://127.0.0.1:1", "key", ["42", "43"])
+
+    assert result["checked"] == 2
+    assert requests == ["/api/v1/searches/42", "/api/v1/searches/43"]
+
+
 def test_live_download_candidate_filter_rejects_unsafe_rows() -> None:
     module = load_rest_api_smoke_module()
 
