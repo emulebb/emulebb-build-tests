@@ -1147,6 +1147,26 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert ("DELETE", "/api/v1/searches/123") in method_path_pairs
 
 
+def test_shutdown_is_excluded_from_broad_stress_mutation_loops() -> None:
+    module = load_rest_api_smoke_module()
+
+    audit = module.assert_shutdown_excluded_from_broad_mutation_loops()
+
+    assert audit["ok"] is True
+    assert "/api/v1/app/shutdown" in audit["excluded_paths"]
+    assert set(audit["stress_budgets"]) == {"smoke", "soak"}
+    for budget in ("smoke", "soak"):
+        operations = module.build_rest_stress_operations(budget)
+        assert all(operation["path"] != "/api/v1/app/shutdown" for operation in operations)
+        assert audit["stress_budgets"][budget]["unsafe_path_match_count"] == 0
+        assert audit["stress_budgets"][budget]["operation_count"] == len(operations)
+    assert len(audit["contract_routes"]) == 1
+    assert audit["contract_routes"][0]["operationId"] == "shutdownApp"
+    assert audit["contract_routes"][0]["path"] == "/api/v1/app/shutdown"
+    assert audit["contract_routes"][0]["safe"] is False
+    assert audit["contract_routes"][0]["safety"] == "unsafe"
+
+
 def test_rest_stress_operations_include_expected_error_edges() -> None:
     module = load_rest_api_smoke_module()
 

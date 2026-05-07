@@ -114,6 +114,7 @@ REST_STRESS_LONG_UNICODE_PATH = (
 )
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
 UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
+UNSAFE_BROAD_MUTATION_PATHS = ("/api/v1/app/shutdown",)
 REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "getCategory": (404,),
     "createCategory": (400,),
@@ -1209,6 +1210,55 @@ def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
         operations.extend(dict(operation) for operation in REST_STRESS_ADAPTER_OPERATIONS)
         operations.extend(dict(operation) for operation in REST_STRESS_LEGACY_OPERATIONS)
     return operations
+
+
+def assert_shutdown_excluded_from_broad_mutation_loops() -> dict[str, object]:
+    """Asserts app shutdown is excluded from broad automated mutation loops."""
+
+    stress_budgets: dict[str, object] = {}
+    for budget in REST_STRESS_BUDGETS:
+        if budget == "off":
+            continue
+        operations = build_rest_stress_operations(budget)
+        matches = [
+            {
+                "method": operation.get("method"),
+                "path": operation.get("path"),
+                "scenario": operation.get("scenario"),
+            }
+            for operation in operations
+            if operation.get("path") in UNSAFE_BROAD_MUTATION_PATHS
+        ]
+        if matches:
+            raise AssertionError(f"Unsafe shutdown route present in {budget!r} stress operations: {matches!r}")
+        stress_budgets[budget] = {
+            "operation_count": len(operations),
+            "unsafe_path_match_count": 0,
+        }
+
+    shutdown_routes = [
+        {
+            "name": route["name"],
+            "operationId": route["operationId"],
+            "path": route["path"],
+            "safe": route["safe"],
+            "safety": route["safety"],
+        }
+        for route in REST_CONTRACT_ROUTES
+        if route["operationId"] == "shutdownApp" or route["path"] in UNSAFE_BROAD_MUTATION_PATHS
+    ]
+    if not shutdown_routes:
+        raise AssertionError("OpenAPI-derived REST contract routes do not include shutdownApp.")
+    unsafe_routes = [route for route in shutdown_routes if route["safe"] is False and route["safety"] == "unsafe"]
+    if len(unsafe_routes) != len(shutdown_routes):
+        raise AssertionError(f"Shutdown routes are not all marked unsafe: {shutdown_routes!r}")
+
+    return {
+        "ok": True,
+        "excluded_paths": list(UNSAFE_BROAD_MUTATION_PATHS),
+        "stress_budgets": stress_budgets,
+        "contract_routes": shutdown_routes,
+    }
 
 
 def percentile(values: list[float], percentile_value: float) -> float:
@@ -4433,6 +4483,9 @@ def main() -> int:
             )
             assert rest_contract["ok"], rest_contract
             report["checks"]["rest_contract"] = rest_contract
+
+        current_phase = set_phase(report, "shutdown_exclusion_audit")
+        report["checks"]["shutdown_exclusion_audit"] = assert_shutdown_excluded_from_broad_mutation_loops()
 
         if effective_stress_budget != "off":
             current_phase = set_phase(report, "rest_stress")
