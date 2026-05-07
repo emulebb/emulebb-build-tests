@@ -1130,6 +1130,10 @@ TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams
 	std::string error;
 	CHECK(WebServerJsonSeams::TryUrlDecodeUtf8(encoded, decoded, error));
 	CHECK_EQ(decoded, "La Dolce Vita + [test].mkv");
+	CHECK(WebServerJsonSeams::TryUrlDecodeUtf8("La+Dolce", decoded, error));
+	CHECK_EQ(decoded, "La Dolce");
+	CHECK(WebServerJsonSeams::TryUrlDecodePathSegmentUtf8("La+Dolce", decoded, error));
+	CHECK_EQ(decoded, "La+Dolce");
 	CHECK_FALSE(WebServerJsonSeams::TryUrlDecodeUtf8("bad%2xescape", decoded, error));
 	CHECK_EQ(error, "malformed percent escape");
 
@@ -1147,6 +1151,11 @@ TEST_CASE("Web API shares strict percent decoding across native and Arr adapters
 	CHECK_FALSE(WebServerJsonSeams::TryParseQueryString("/api/v1/logs?limit=%2x", fields, error));
 	CHECK_EQ(error, "malformed percent escape");
 	CHECK(fields.empty());
+
+	error.clear();
+	CHECK(WebServerJsonSeams::TryParseQueryString("/api/v1/transfers?state=downloading+stalled", fields, error));
+	REQUIRE(fields.find("state") != fields.end());
+	CHECK_EQ(fields["state"], "downloading stalled");
 
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabQueryParameters("/indexer/emulebb/api?t=search&q=%2x", fields, error));
@@ -1788,6 +1797,14 @@ TEST_CASE("Web API rejects malformed path identifiers before dispatch")
 	WebServerJsonSeams::SApiRoute route;
 	std::string errorCode;
 	std::string errorMessage;
+
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/servers/node+alpha.example:4661", "", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "servers/get");
+	CHECK_EQ(route.params["addr"].get<std::string>(), "node+alpha.example");
+	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
+
+	errorCode.clear();
+	errorMessage.clear();
 
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
