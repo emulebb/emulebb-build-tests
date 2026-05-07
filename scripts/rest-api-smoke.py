@@ -115,6 +115,7 @@ OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "rest" / "
 UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
 REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "getCategory": (404,),
+    "createCategory": (400,),
     "patchCategory": (404,),
     "deleteCategory": (404,),
     "createTransfers": (400,),

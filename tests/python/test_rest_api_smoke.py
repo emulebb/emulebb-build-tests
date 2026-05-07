@@ -1189,3 +1189,47 @@ def test_rest_contract_completeness_accepts_declared_negative_probe(monkeypatch)
     assert summary["failed_routes"] == []
     assert summary["routes"][0]["outcome"] == "expected_error"
     assert summary["routes"][0]["expectedResponseStatuses"] == [200, 400]
+
+
+def test_rest_contract_completeness_accepts_category_create_negative_probe(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "REST_CONTRACT_ROUTES",
+        (
+            {
+                "name": "createCategory",
+                "operationId": "createCategory",
+                "family": "categories",
+                "method": "POST",
+                "path": "/api/v1/categories",
+                "safe": True,
+                "safety": "safe",
+                "hasRequestBody": True,
+                "requestBodyRequired": True,
+                "successResponseStatuses": ["200"],
+                "successResponseRefs": ["CategoryResponse"],
+                "responseEnvelope": "CategoryResponse",
+            },
+        ),
+    )
+    monkeypatch.setattr(module, "assert_contract_routes_match_openapi", lambda: {"ok": True})
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 400,
+            "content_type": "application/json",
+            "json": {"error": "INVALID_ARGUMENT", "message": "name is required"},
+            "raw_json": {"error": {"code": "INVALID_ARGUMENT", "message": "name is required", "details": {}}},
+            "body_text": "{}",
+        },
+    )
+
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
+
+    assert summary["ok"] is True
+    assert summary["expected_error_count"] == 1
+    assert summary["routes"][0]["operationId"] == "createCategory"
+    assert summary["routes"][0]["expectedResponseStatuses"] == [200, 400]
