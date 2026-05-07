@@ -2596,6 +2596,16 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_bad_form["status"]) == 400, compact_http_result(qbit_bad_form)
 
+    qbit_json_content_type = http_request(
+        base_url,
+        "/api/v2/torrents/add",
+        method="POST",
+        raw_body='{"urls":"not-a-link"}',
+        content_type="application/json",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_json_content_type["status"]) == 400, compact_http_result(qbit_json_content_type)
+
     qbit_bad_add = http_request(
         base_url,
         "/api/v2/torrents/add",
@@ -2695,6 +2705,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "properties_missing": compact_http_result(qbit_properties_missing),
         "files_missing": compact_http_result(qbit_files_missing),
         "bad_form": compact_http_result(qbit_bad_form),
+        "json_content_type": compact_http_result(qbit_json_content_type),
         "bad_add": compact_http_result(qbit_bad_add),
         "bad_synthetic_magnet": compact_http_result(qbit_bad_synthetic_magnet),
         "pause_missing": compact_http_result(qbit_pause_missing),

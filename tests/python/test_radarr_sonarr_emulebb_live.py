@@ -115,6 +115,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
     assert {
         "delete_duplicate_hash",
         "pause_too_many_hashes",
+        "add_json_content_type",
         "create_category_empty",
         "create_category_control_character",
         "info_malformed_percent_category",

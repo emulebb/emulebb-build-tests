@@ -492,6 +492,8 @@ def qbit_request(
     *,
     cookie: str | None = None,
     form: dict[str, object] | None = None,
+    raw_body: bytes | str | None = None,
+    content_type: str | None = None,
     method: str | None = None,
     timeout_seconds: float = 20.0,
 ) -> dict[str, object]:
@@ -504,6 +506,10 @@ def qbit_request(
     if form is not None:
         data = urllib.parse.urlencode(form).encode("utf-8")
         headers["Content-Type"] = "application/x-www-form-urlencoded"
+    if raw_body is not None:
+        data = raw_body.encode("utf-8") if isinstance(raw_body, str) else raw_body
+        if content_type is not None:
+            headers["Content-Type"] = content_type
     request = urllib.request.Request(base_url.rstrip("/") + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
@@ -719,6 +725,14 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
             "/api/v2/torrents/pause",
             cookie=cookie,
             form={"hashes": too_many_hashes},
+            method="POST",
+        ),
+        "add_json_content_type": qbit_request(
+            base_url,
+            "/api/v2/torrents/add",
+            cookie=cookie,
+            raw_body='{"urls":"not-a-download-link"}',
+            content_type="application/json",
             method="POST",
         ),
         "create_category_empty": qbit_request(

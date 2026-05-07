@@ -1005,6 +1005,15 @@ TEST_CASE("Web API validates qBittorrent login form credentials exactly")
 {
 	std::map<std::string, std::string> form;
 	std::string error;
+	CHECK(WebServerQBitCompatSeams::IsFormContentType("application/x-www-form-urlencoded"));
+	CHECK(WebServerQBitCompatSeams::IsFormContentType(" Application/X-WWW-Form-Urlencoded ; charset=UTF-8 "));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsFormContentType("application/json"));
+	CHECK(WebServerQBitCompatSeams::TryValidateFormRequestMetadata("", "", error));
+	CHECK(WebServerQBitCompatSeams::TryValidateFormRequestMetadata("username=emule", "application/x-www-form-urlencoded", error));
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryValidateFormRequestMetadata("{}", "application/json", error));
+	CHECK_EQ(error, "Content-Type must be application/x-www-form-urlencoded for form request bodies");
+
 	REQUIRE(WebServerQBitCompatSeams::TryParseFormBody("username=emule&password=secret", form, error));
 	CHECK(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "secret"));
 
