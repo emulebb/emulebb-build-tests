@@ -1541,7 +1541,7 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
 		"PATCH",
 		"/api/v1/shared-directories",
-		R"({"roots":[{"path":"C:\\share","recursive":"yes"}]})",
+		R"({"confirmReplaceRoots":true,"roots":[{"path":"C:\\share","recursive":"yes"}]})",
 		route,
 		errorCode,
 		errorMessage));
@@ -1553,7 +1553,7 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
 		"PATCH",
 		"/api/v1/shared-directories",
-		R"({"roots":[{"path":"C:\\share","mode":"fast"}]})",
+		R"({"confirmReplaceRoots":true,"roots":[{"path":"C:\\share","mode":"fast"}]})",
 		route,
 		errorCode,
 		errorMessage));
@@ -1728,6 +1728,18 @@ TEST_CASE("Web API requires explicit confirmation for broad native operations")
 	errorMessage.clear();
 	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/searches", R"({"confirmDeleteAllSearches":true})", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "search/clear");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/shared-directories", R"({"roots":[]})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "confirmReplaceRoots must be true");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/shared-directories", R"({"confirmReplaceRoots":true,"roots":[]})", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "shared_directories/set");
+	CHECK(route.params["confirmReplaceRoots"].get<bool>());
 }
 
 TEST_CASE("Web API requires explicit confirmation for destructive native routes")
@@ -2035,7 +2047,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/kad/operations/recheck-firewall", R"({})", "kad/recheck_firewall");
 
 	assertRoute("GET", "/api/v1/shared-directories", "", "shared_directories/get");
-	assertRoute("PATCH", "/api/v1/shared-directories", R"({"roots":[{"path":"C:\\share","recursive":true}]})", "shared_directories/set");
+	assertRoute("PATCH", "/api/v1/shared-directories", R"({"confirmReplaceRoots":true,"roots":[{"path":"C:\\share","recursive":true}]})", "shared_directories/set");
 	CHECK(route.params["roots"][0]["recursive"].get<bool>());
 	assertRoute("POST", "/api/v1/shared-directories/operations/reload", R"({})", "shared_directories/reload");
 

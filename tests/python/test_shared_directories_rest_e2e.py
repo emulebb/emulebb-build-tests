@@ -24,6 +24,7 @@ def test_build_shared_directory_patch_payload_uses_recursive_objects(tmp_path: P
     payload = module.build_shared_directory_patch_payload([flat], [recursive])
 
     assert payload == {
+        "confirmReplaceRoots": True,
         "roots": [
             module.live_common.win_path(flat, trailing_slash=True),
             {

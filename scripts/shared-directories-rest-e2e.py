@@ -214,7 +214,7 @@ def build_shared_directory_patch_payload(flat_roots: list[Path], recursive_roots
         }
         for root in recursive_roots
     )
-    return {"roots": roots}
+    return {"confirmReplaceRoots": True, "roots": roots}
 
 
 def get_shared_directory_model(base_url: str, api_key: str) -> dict[str, Any]:
@@ -594,21 +594,30 @@ def main() -> int:
         current_phase = set_phase(report, "invalid_patch_checks")
         missing_parent_path = live_common.win_path(artifacts_dir / "missing-parent" / "child", trailing_slash=True)
         checks["invalid_patch_blank_path"] = {
-            "payload": {"roots": ["   "]},
+            "payload": {"confirmReplaceRoots": True, "roots": ["   "]},
             "response": patch_shared_directories_error(
                 base_url,
                 args.api_key,
-                {"roots": ["   "]},
+                {"confirmReplaceRoots": True, "roots": ["   "]},
                 "path must not be empty",
             ),
         }
         checks["invalid_patch_recursive_type"] = {
-            "payload": {"roots": [{"path": flat_path, "recursive": "true"}]},
+            "payload": {"confirmReplaceRoots": True, "roots": [{"path": flat_path, "recursive": "true"}]},
             "response": patch_shared_directories_error(
                 base_url,
                 args.api_key,
-                {"roots": [{"path": flat_path, "recursive": "true"}]},
+                {"confirmReplaceRoots": True, "roots": [{"path": flat_path, "recursive": "true"}]},
                 "recursive must be a boolean",
+            ),
+        }
+        checks["invalid_patch_missing_confirmation"] = {
+            "payload": {"roots": []},
+            "response": patch_shared_directories_error(
+                base_url,
+                args.api_key,
+                {"roots": []},
+                "confirmReplaceRoots must be true",
             ),
         }
         checks["invalid_patch_state"] = wait_for_shared_directory_paths(
@@ -622,7 +631,7 @@ def main() -> int:
         )
 
         current_phase = set_phase(report, "missing_parent_patch")
-        missing_parent_payload = {"roots": [missing_parent_path]}
+        missing_parent_payload = {"confirmReplaceRoots": True, "roots": [missing_parent_path]}
         checks["patch_missing_parent"] = {
             "payload": missing_parent_payload,
             "response": patch_shared_directories(base_url, args.api_key, missing_parent_payload),
@@ -644,7 +653,7 @@ def main() -> int:
             "missing-parent shared-file list",
             timeout_seconds=15.0,
         )
-        clear_missing_parent_payload: dict[str, object] = {"roots": []}
+        clear_missing_parent_payload: dict[str, object] = {"confirmReplaceRoots": True, "roots": []}
         checks["patch_clear_missing_parent"] = {
             "payload": clear_missing_parent_payload,
             "response": patch_shared_directories(base_url, args.api_key, clear_missing_parent_payload),

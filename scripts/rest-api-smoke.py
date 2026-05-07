@@ -1485,7 +1485,9 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {"comment": "rest contract", "rating": 4}
     if route_name in {"shared_files_delete", "deleteSharedFile"}:
         return {"deleteFiles": False}
-    if route_name in {"shared_files_reload", "reloadSharedFiles", "replaceSharedDirectories", "reloadSharedDirectories"}:
+    if route_name in {"replaceSharedDirectories"}:
+        return {"confirmReplaceRoots": True, "roots": []}
+    if route_name in {"shared_files_reload", "reloadSharedFiles", "reloadSharedDirectories"}:
         return {}
     if route_name.startswith("uploads_") or route_name.startswith("upload_queue_") or route_name in {
         "deleteUpload",
@@ -2255,14 +2257,21 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "/api/v1/shared-directories",
         method="PATCH",
         api_key=api_key,
-        json_body={},
+        json_body={"confirmReplaceRoots": True},
+    )
+    shared_directories_missing_confirmation = http_request(
+        base_url,
+        "/api/v1/shared-directories",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"roots": []},
     )
     shared_directories_bad_recursive = http_request(
         base_url,
         "/api/v1/shared-directories",
         method="PATCH",
         api_key=api_key,
-        json_body={"roots": [{"path": "C:\\not-shared", "recursive": "yes"}]},
+        json_body={"confirmReplaceRoots": True, "roots": [{"path": "C:\\not-shared", "recursive": "yes"}]},
     )
     shared_directories_reload = http_request(
         base_url,
@@ -2279,6 +2288,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="roots must be an array",
+        ),
+        "missing_confirmation": require_error_response(
+            shared_directories_missing_confirmation,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="confirmReplaceRoots must be true",
         ),
         "bad_recursive": require_error_response(
             shared_directories_bad_recursive,
