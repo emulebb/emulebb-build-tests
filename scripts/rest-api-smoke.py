@@ -1960,6 +1960,20 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={"name": "renamed.bin"},
     )
+    transfer_patch_conflicting_families = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"priority": "high", "name": "renamed.bin"},
+    )
+    transfer_patch_bad_priority_type = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"priority": 7},
+    )
     surface["transfers"] = {
         "list_count": len(transfer_rows),
         "list_status": transfers["status"],
@@ -2040,6 +2054,18 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "priority_missing": require_error_response(transfer_priority_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "category_missing": require_error_response(transfer_category_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
         "rename_missing": require_error_response(transfer_rename_missing, 404, "NOT_FOUND", message_contains="transfer not found"),
+        "patch_conflicting_families": require_error_response(
+            transfer_patch_conflicting_families,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="transfer PATCH accepts only one mutation family",
+        ),
+        "patch_bad_priority_type": require_error_response(
+            transfer_patch_bad_priority_type,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="priority must be a string",
+        ),
     }
 
     shared_directories = http_request(base_url, "/api/v1/shared-directories", api_key=api_key)

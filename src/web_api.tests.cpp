@@ -1358,6 +1358,42 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	CHECK_EQ(route.params["hash"].get<std::string>(), "0123456789abcdef0123456789abcdef");
 	CHECK_EQ(route.params["name"].get<std::string>(), "renamed.bin");
 
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
+		R"({"priority":"high","name":"renamed.bin"})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "transfer PATCH accepts only one mutation family");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
+		R"({"priority":7})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "priority must be a string");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
+		R"({"name":"   "})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "name must not be empty");
+
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"PATCH",
 		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
