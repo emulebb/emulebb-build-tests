@@ -1441,6 +1441,54 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 		errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "rating must be an integer between 0 and 5");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"POST",
+		"/api/v1/shared-files",
+		R"({"path":"   "})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "path must not be empty");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute(
+		"POST",
+		"/api/v1/shared-files",
+		R"({"path":" C:\\share\\file.txt "})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(route.strCommand, "shared/add");
+	CHECK_EQ(route.params["path"].get<std::string>(), "C:\\share\\file.txt");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-directories",
+		R"({"roots":[{"path":"C:\\share","recursive":"yes"}]})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "recursive must be a boolean");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-directories",
+		R"({"roots":[{"path":"C:\\share","mode":"fast"}]})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown shared-directory root field: mode");
 }
 
 TEST_CASE("Web API exposes a strict route schema registry")

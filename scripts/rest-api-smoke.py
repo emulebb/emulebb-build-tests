@@ -2079,6 +2079,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={},
     )
+    shared_directories_bad_recursive = http_request(
+        base_url,
+        "/api/v1/shared-directories",
+        method="PATCH",
+        api_key=api_key,
+        json_body={"roots": [{"path": "C:\\not-shared", "recursive": "yes"}]},
+    )
     shared_directories_reload = http_request(
         base_url,
         "/api/v1/shared-directories/operations/reload",
@@ -2094,6 +2101,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="roots must be an array",
+        ),
+        "bad_recursive": require_error_response(
+            shared_directories_bad_recursive,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="recursive must be a boolean",
         ),
         "reload": compact_http_result(shared_directories_reload),
     }
