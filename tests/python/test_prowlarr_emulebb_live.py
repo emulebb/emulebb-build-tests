@@ -22,6 +22,16 @@ def load_prowlarr_module():
     return module
 
 
+def test_prowlarr_live_report_records_live_network_launch_inputs() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "prowlarr-emulebb-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert '"launch_inputs"' in script_text
+    assert '"p2p_bind_interface_name": args.p2p_bind_interface_name' in script_text
+    assert '"enable_upnp": True' in script_text
+    assert 'BindAddr=hide.me' not in script_text
+
+
 def test_upsert_creates_disabled_then_force_enables_when_prowlarr_create_test_has_no_results(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []

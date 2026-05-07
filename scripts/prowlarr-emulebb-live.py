@@ -707,6 +707,15 @@ def main() -> int:
         "seed_refresh": seed_refresh,
         "enable_upnp": True,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
+        "launch_inputs": {
+            "app_exe": str(paths.app_exe),
+            "bind_addr": bind_addr,
+            "config_dir": str(profile["config_dir"]),
+            "p2p_bind_interface_name": args.p2p_bind_interface_name,
+            "enable_upnp": True,
+            "profile_base": str(profile["profile_base"]),
+            "seed_config_dir": str(seed_config_dir),
+        },
         "live_wire_inputs_file": str(inputs.path),
         "search_terms": {
             "documents": live_wire_inputs.summarize_terms(document_terms),
