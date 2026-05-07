@@ -2865,6 +2865,20 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_files_missing["status"]) == 404, compact_http_result(qbit_files_missing)
 
+    qbit_properties_bad_hash = http_request(
+        base_url,
+        "/api/v2/torrents/properties?hash=bad",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_properties_bad_hash["status"]) == 400, compact_http_result(qbit_properties_bad_hash)
+
+    qbit_files_duplicate_hash = http_request(
+        base_url,
+        f"/api/v2/torrents/files?hash={REST_SURFACE_MISSING_HASH}&hash={REST_SURFACE_VALID_DOWNLOAD_HASH}",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_files_duplicate_hash["status"]) == 400, compact_http_result(qbit_files_duplicate_hash)
+
     qbit_bad_form = http_request(
         base_url,
         "/api/v2/torrents/createCategory",
@@ -2994,6 +3008,8 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "bad_category_filter": compact_http_result(qbit_bad_category_filter),
         "properties_missing": compact_http_result(qbit_properties_missing),
         "files_missing": compact_http_result(qbit_files_missing),
+        "properties_bad_hash": compact_http_result(qbit_properties_bad_hash),
+        "files_duplicate_hash": compact_http_result(qbit_files_duplicate_hash),
         "bad_form": compact_http_result(qbit_bad_form),
         "json_content_type": compact_http_result(qbit_json_content_type),
         "bad_add": compact_http_result(qbit_bad_add),

@@ -987,6 +987,31 @@ TEST_CASE("Web API recognizes qBittorrent compatibility routes")
 	CHECK_FALSE(WebServerQBitCompatSeams::TryGetOptionalCategoryQueryParam("/api/v2/torrents/info?category=bad%01name", category, error));
 	CHECK_EQ(error, "category must be valid UTF-8 without control characters");
 	CHECK(category.empty());
+
+	std::string hash;
+	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryGetRequiredHashQueryParam("/api/v2/torrents/properties?hash=0123456789ABCDEF0123456789ABCDEF", hash, error));
+	CHECK_EQ(hash, "0123456789abcdef0123456789abcdef");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetRequiredHashQueryParam("/api/v2/torrents/properties", hash, error));
+	CHECK_EQ(error, "hash query parameter is required");
+	CHECK(hash.empty());
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetRequiredHashQueryParam("/api/v2/torrents/files?hash=bad", hash, error));
+	CHECK_EQ(error, "hash must be a 32-character eD2K hash");
+	CHECK(hash.empty());
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetRequiredHashQueryParam("/api/v2/torrents/files?hash=%2x", hash, error));
+	CHECK_EQ(error, "malformed percent escape");
+	CHECK(hash.empty());
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryGetRequiredHashQueryParam("/api/v2/torrents/files?hash=0123456789abcdef0123456789abcdef&hash=fedcba9876543210fedcba9876543210", hash, error));
+	CHECK_EQ(error, "duplicate query parameter: hash");
+	CHECK(hash.empty());
 }
 
 TEST_CASE("Web API keeps adapter error responses outside native JSON envelopes")
