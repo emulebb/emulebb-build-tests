@@ -684,6 +684,19 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
         "extra_headers": {"Cookie": "{qbit_session_cookie}"},
         "api_key": False,
     },
+    {
+        "method": "POST",
+        "path": "/api/v2/torrents/delete",
+        "raw_body": f"hashes={REST_SURFACE_MISSING_HASH}&deleteFiles=wat",
+        "content_type": "application/x-www-form-urlencoded",
+        "family": "qbit",
+        "scenario": "qbit_bad_delete_boolean_rejected",
+        "expected_statuses": (400,),
+        "response_kind": "text",
+        "expected_body_contains": "Fails.",
+        "extra_headers": {"Cookie": "{qbit_session_cookie}"},
+        "api_key": False,
+    },
 )
 REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = (
     {
@@ -2977,6 +2990,19 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_bad_add["status"]) == 400, compact_http_result(qbit_bad_add)
 
+    qbit_bad_paused_boolean = http_request(
+        base_url,
+        "/api/v2/torrents/add",
+        method="POST",
+        raw_body=(
+            "paused=maybe&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A"
+            f"{REST_SURFACE_MISSING_HASH}00000000%26dn%3Dlinux.iso%26xl%3D42"
+        ),
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_bad_paused_boolean["status"]) == 400, compact_http_result(qbit_bad_paused_boolean)
+
     synthetic_magnet = (
         "urls=magnet%3A%3Fxt%3Durn%3Abtih%3A"
         f"{REST_SURFACE_MISSING_HASH}00000000%26dn%3Dlinux.iso%26xl%3D0"
@@ -3042,6 +3068,16 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     )
     assert int(qbit_delete_missing["status"]) == 200, compact_http_result(qbit_delete_missing)
 
+    qbit_delete_bad_boolean = http_request(
+        base_url,
+        "/api/v2/torrents/delete",
+        method="POST",
+        raw_body=f"{qbit_missing_hash_form}&deleteFiles=wat",
+        content_type="application/x-www-form-urlencoded",
+        extra_headers={"Cookie": cookie_pair},
+    )
+    assert int(qbit_delete_bad_boolean["status"]) == 400, compact_http_result(qbit_delete_bad_boolean)
+
     qbit_set_category_missing = http_request(
         base_url,
         "/api/v2/torrents/setCategory",
@@ -3081,12 +3117,14 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         "bad_form": compact_http_result(qbit_bad_form),
         "json_content_type": compact_http_result(qbit_json_content_type),
         "bad_add": compact_http_result(qbit_bad_add),
+        "bad_paused_boolean": compact_http_result(qbit_bad_paused_boolean),
         "bad_synthetic_magnet": compact_http_result(qbit_bad_synthetic_magnet),
         "pause_missing": compact_http_result(qbit_pause_missing),
         "resume_missing": compact_http_result(qbit_resume_missing),
         "stop_missing": compact_http_result(qbit_stop_missing),
         "start_missing": compact_http_result(qbit_start_missing),
         "delete_missing": compact_http_result(qbit_delete_missing),
+        "delete_bad_boolean": compact_http_result(qbit_delete_bad_boolean),
         "set_category_missing": compact_http_result(qbit_set_category_missing),
         "set_force_start_bad_hash": compact_http_result(qbit_set_force_start_bad_hash),
     }

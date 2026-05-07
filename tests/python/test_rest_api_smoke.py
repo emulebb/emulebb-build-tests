@@ -982,10 +982,22 @@ def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
         ("GET", f"/api/v2/torrents/properties?hash={module.REST_SURFACE_MISSING_HASH}")
     ]["expected_statuses"] == (404,)
     assert operations_by_pair[("POST", "/api/v2/torrents/pause")]["raw_body"] == f"hashes={module.REST_SURFACE_MISSING_HASH}"
-    assert operations_by_pair[("POST", "/api/v2/torrents/delete")]["raw_body"] == (
-        f"hashes={module.REST_SURFACE_MISSING_HASH}&deleteFiles=false"
+    assert any(
+        operation["method"] == "POST"
+        and operation["path"] == "/api/v2/torrents/delete"
+        and operation["scenario"] == "qbit_missing_hash_delete"
+        and operation["raw_body"] == f"hashes={module.REST_SURFACE_MISSING_HASH}&deleteFiles=false"
+        and operation["expected_statuses"] == (200,)
+        for operation in operations
     )
-    assert operations_by_pair[("POST", "/api/v2/torrents/delete")]["expected_statuses"] == (200,)
+    assert any(
+        operation["method"] == "POST"
+        and operation["path"] == "/api/v2/torrents/delete"
+        and operation["scenario"] == "qbit_bad_delete_boolean_rejected"
+        and operation["raw_body"] == f"hashes={module.REST_SURFACE_MISSING_HASH}&deleteFiles=wat"
+        and operation["expected_statuses"] == (400,)
+        for operation in operations
+    )
     assert operations_by_pair[("GET", "/")]["response_kind"] == "html"
 
 
