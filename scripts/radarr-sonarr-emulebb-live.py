@@ -908,107 +908,120 @@ def qbit_direct_live_wire_roundtrip(
     """Exercises qBittorrent-compatible add, mutate, verify, and delete flow."""
 
     report = progress if progress is not None else {}
-    cookie, login = qbit_login(base_url, emule_api_key)
-    report["login_status"] = int(login.get("status") or 0)
-    added = qbit_direct_add(base_url, emule_api_key, magnet, initial_category, cookie=cookie)
-    report["add"] = added
-    transfer_hash = str(added["hash"])
-    info_after_add = qbit_request(base_url, "/api/v2/torrents/info", cookie=cookie, timeout_seconds=30.0)
-    info_rows = require_qbit_json(info_after_add, "qBit torrents info after add")
-    if not isinstance(info_rows, list):
-        raise RuntimeError("qBit torrents info after add did not return a list.")
-    matching_info_rows = [row for row in info_rows if isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash]
-    if not matching_info_rows:
-        raise RuntimeError("qBit torrents info after add did not include the selected transfer.")
-    report["info_after_add"] = {"status": int(info_after_add.get("status") or 0), "count": len(info_rows)}
+    transfer_hash = ""
+    qbit_delete_completed = False
+    try:
+        cookie, login = qbit_login(base_url, emule_api_key)
+        report["login_status"] = int(login.get("status") or 0)
+        added = qbit_direct_add(base_url, emule_api_key, magnet, initial_category, cookie=cookie)
+        report["add"] = added
+        transfer_hash = str(added["hash"])
+        info_after_add = qbit_request(base_url, "/api/v2/torrents/info", cookie=cookie, timeout_seconds=30.0)
+        info_rows = require_qbit_json(info_after_add, "qBit torrents info after add")
+        if not isinstance(info_rows, list):
+            raise RuntimeError("qBit torrents info after add did not return a list.")
+        matching_info_rows = [row for row in info_rows if isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash]
+        if not matching_info_rows:
+            raise RuntimeError("qBit torrents info after add did not include the selected transfer.")
+        report["info_after_add"] = {"status": int(info_after_add.get("status") or 0), "count": len(info_rows)}
 
-    filtered_info = qbit_request(
-        base_url,
-        "/api/v2/torrents/info?category=" + urllib.parse.quote(initial_category),
-        cookie=cookie,
-        timeout_seconds=30.0,
-    )
-    filtered_rows = require_qbit_json(filtered_info, "qBit category-filtered torrents info after add")
-    if not isinstance(filtered_rows, list) or not any(
-        isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash
-        for row in filtered_rows
-    ):
-        raise RuntimeError("qBit category-filtered info did not include the selected transfer.")
+        filtered_info = qbit_request(
+            base_url,
+            "/api/v2/torrents/info?category=" + urllib.parse.quote(initial_category),
+            cookie=cookie,
+            timeout_seconds=30.0,
+        )
+        filtered_rows = require_qbit_json(filtered_info, "qBit category-filtered torrents info after add")
+        if not isinstance(filtered_rows, list) or not any(
+            isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash
+            for row in filtered_rows
+        ):
+            raise RuntimeError("qBit category-filtered info did not include the selected transfer.")
 
-    properties = qbit_request(
-        base_url,
-        "/api/v2/torrents/properties?hash=" + urllib.parse.quote(transfer_hash),
-        cookie=cookie,
-        timeout_seconds=30.0,
-    )
-    properties_body = require_qbit_json(properties, "qBit torrent properties after add")
-    if not isinstance(properties_body, dict):
-        raise RuntimeError("qBit torrent properties after add did not return an object.")
+        properties = qbit_request(
+            base_url,
+            "/api/v2/torrents/properties?hash=" + urllib.parse.quote(transfer_hash),
+            cookie=cookie,
+            timeout_seconds=30.0,
+        )
+        properties_body = require_qbit_json(properties, "qBit torrent properties after add")
+        if not isinstance(properties_body, dict):
+            raise RuntimeError("qBit torrent properties after add did not return an object.")
 
-    files = qbit_request(
-        base_url,
-        "/api/v2/torrents/files?hash=" + urllib.parse.quote(transfer_hash),
-        cookie=cookie,
-        timeout_seconds=30.0,
-    )
-    files_body = require_qbit_json(files, "qBit torrent files after add")
-    if not isinstance(files_body, list):
-        raise RuntimeError("qBit torrent files after add did not return a list.")
-    report["active_metadata"] = {
-        "filtered_info_count": len(filtered_rows),
-        "properties_status": int(properties.get("status") or 0),
-        "files_count": len(files_body),
-    }
+        files = qbit_request(
+            base_url,
+            "/api/v2/torrents/files?hash=" + urllib.parse.quote(transfer_hash),
+            cookie=cookie,
+            timeout_seconds=30.0,
+        )
+        files_body = require_qbit_json(files, "qBit torrent files after add")
+        if not isinstance(files_body, list):
+            raise RuntimeError("qBit torrent files after add did not return a list.")
+        report["active_metadata"] = {
+            "filtered_info_count": len(filtered_rows),
+            "properties_status": int(properties.get("status") or 0),
+            "files_count": len(files_body),
+        }
 
-    set_category = qbit_request(
-        base_url,
-        "/api/v2/torrents/setCategory",
-        cookie=cookie,
-        form={"hashes": transfer_hash, "category": updated_category},
-        method="POST",
-    )
-    require_qbit_ok(set_category, "qBit setCategory")
-    report["set_category_status"] = int(set_category.get("status") or 0)
-    report["updated_native_category"] = wait_for_transfer_category(
-        base_url,
-        emule_api_key,
-        transfer_hash,
-        updated_category,
-        timeout_seconds,
-    )
+        set_category = qbit_request(
+            base_url,
+            "/api/v2/torrents/setCategory",
+            cookie=cookie,
+            form={"hashes": transfer_hash, "category": updated_category},
+            method="POST",
+        )
+        require_qbit_ok(set_category, "qBit setCategory")
+        report["set_category_status"] = int(set_category.get("status") or 0)
+        report["updated_native_category"] = wait_for_transfer_category(
+            base_url,
+            emule_api_key,
+            transfer_hash,
+            updated_category,
+            timeout_seconds,
+        )
 
-    resume = qbit_request(
-        base_url,
-        "/api/v2/torrents/resume",
-        cookie=cookie,
-        form={"hashes": transfer_hash},
-        method="POST",
-    )
-    require_qbit_ok(resume, "qBit resume")
-    report["resume_status"] = int(resume.get("status") or 0)
+        resume = qbit_request(
+            base_url,
+            "/api/v2/torrents/resume",
+            cookie=cookie,
+            form={"hashes": transfer_hash},
+            method="POST",
+        )
+        require_qbit_ok(resume, "qBit resume")
+        report["resume_status"] = int(resume.get("status") or 0)
 
-    pause = qbit_request(
-        base_url,
-        "/api/v2/torrents/pause",
-        cookie=cookie,
-        form={"hashes": transfer_hash},
-        method="POST",
-    )
-    require_qbit_ok(pause, "qBit pause")
-    report["pause_status"] = int(pause.get("status") or 0)
+        pause = qbit_request(
+            base_url,
+            "/api/v2/torrents/pause",
+            cookie=cookie,
+            form={"hashes": transfer_hash},
+            method="POST",
+        )
+        require_qbit_ok(pause, "qBit pause")
+        report["pause_status"] = int(pause.get("status") or 0)
 
-    delete = qbit_request(
-        base_url,
-        "/api/v2/torrents/delete",
-        cookie=cookie,
-        form={"hashes": transfer_hash, "deleteFiles": "true"},
-        method="POST",
-        timeout_seconds=30.0,
-    )
-    require_qbit_ok(delete, "qBit delete")
-    report["delete_status"] = int(delete.get("status") or 0)
-    deleted_seen = wait_for_transfer_absent(base_url, emule_api_key, transfer_hash, timeout_seconds)
-    report["deleted_transfer"] = deleted_seen
+        delete = qbit_request(
+            base_url,
+            "/api/v2/torrents/delete",
+            cookie=cookie,
+            form={"hashes": transfer_hash, "deleteFiles": "true"},
+            method="POST",
+            timeout_seconds=30.0,
+        )
+        require_qbit_ok(delete, "qBit delete")
+        qbit_delete_completed = True
+        report["delete_status"] = int(delete.get("status") or 0)
+        deleted_seen = wait_for_transfer_absent(base_url, emule_api_key, transfer_hash, timeout_seconds)
+        report["deleted_transfer"] = deleted_seen
+    finally:
+        if transfer_hash and not qbit_delete_completed:
+            try:
+                report["native_cleanup_delete"] = delete_transfer(base_url, emule_api_key, transfer_hash)
+            except Exception as cleanup_exc:
+                report["native_cleanup_delete"] = {
+                    "status": "cleanup_failed",
+                    "error": str(cleanup_exc),
+                }
 
     return report
 
@@ -1029,6 +1042,7 @@ def redact_qbit_roundtrip_report(report: dict[str, object]) -> dict[str, object]
         "resume_status",
         "pause_status",
         "delete_status",
+        "native_cleanup_delete",
     ):
         if key in report:
             redacted[key] = report[key]

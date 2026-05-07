@@ -282,6 +282,46 @@ def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pyte
     assert result["deleted_transfer"]["absent"] is True
 
 
+def test_qbit_live_wire_roundtrip_cleans_up_added_transfer_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[str] = []
+    transfer_hash = "0123456789abcdef0123456789abcdef"
+
+    monkeypatch.setattr(module, "qbit_login", lambda _base_url, _api_key: ("opener", {"status": 200, "body_text": "Ok."}))
+    monkeypatch.setattr(
+        module,
+        "qbit_direct_add",
+        lambda *_args, **_kwargs: {"add_status": 200, "hash": transfer_hash},
+    )
+    monkeypatch.setattr(
+        module,
+        "delete_transfer",
+        lambda *_args, **_kwargs: calls.append("native_cleanup") or {"status": 200},
+    )
+
+    def fake_qbit_request(_base_url, path, **_kwargs):
+        if path == "/api/v2/torrents/info":
+            return {"status": 200, "body_text": "[]"}
+        return {"status": 200, "body_text": "Ok."}
+
+    monkeypatch.setattr(module, "qbit_request", fake_qbit_request)
+
+    progress: dict[str, object] = {}
+    with pytest.raises(RuntimeError, match="did not include the selected transfer"):
+        module.qbit_direct_live_wire_roundtrip(
+            "http://127.0.0.1:4711",
+            "secret",
+            module.SYNTHETIC_TRIGGER_MAGNET,
+            initial_category="RADARR_ENG",
+            updated_category="SONARR_ENG",
+            timeout_seconds=30.0,
+            progress=progress,
+        )
+
+    assert calls == ["native_cleanup"]
+    assert progress["native_cleanup_delete"] == {"status": 200}
+
+
 def test_collect_direct_magnets_deduplicates_search_results(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     magnet_a = (
