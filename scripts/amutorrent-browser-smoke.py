@@ -40,6 +40,7 @@ launch_app = live_common.launch_app
 prepare_profile_base = live_common.prepare_profile_base
 wait_for = live_common.wait_for
 wait_for_main_window = live_common.wait_for_main_window
+wait_for_requested_networks = rest_api_smoke.wait_for_requested_networks
 wait_for_rest_ready = rest_api_smoke.wait_for_rest_ready
 write_json = live_common.write_json
 
@@ -339,6 +340,7 @@ def main() -> int:
     parser.add_argument("--bind-addr", default="127.0.0.1")
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
     args = parser.parse_args()
 
     paths = harness_cli_common.prepare_run_paths(
@@ -382,6 +384,7 @@ def main() -> int:
         "node": node_info,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
         "enable_upnp": True,
+        "network_ready_timeout_seconds": args.network_ready_timeout_seconds,
         "checks": {},
         "cleanup": {},
     }
@@ -398,6 +401,13 @@ def main() -> int:
         main_window = wait_for_main_window(app)
         report["main_window_title"] = main_window.window_text()
         report["checks"]["emule_rest_ready"] = wait_for_rest_ready(emule_base_url, args.api_key, args.ready_timeout_seconds)
+        report["checks"]["emule_network_ready"] = wait_for_requested_networks(
+            emule_base_url,
+            args.api_key,
+            args.network_ready_timeout_seconds,
+            require_server_connected=True,
+            require_kad_connected=True,
+        )
 
         env = os.environ.copy()
         env.update(
