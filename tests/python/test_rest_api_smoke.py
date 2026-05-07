@@ -96,6 +96,36 @@ def test_missing_transfer_bulk_result_requires_per_item_error() -> None:
     assert result["hash"] == module.REST_SURFACE_MISSING_HASH
 
 
+def test_transfer_details_payload_compaction_validates_release_shape() -> None:
+    module = load_rest_api_smoke_module()
+
+    compact = module.compact_transfer_details_payload(
+        {
+            "transfer": {"hash": module.REST_SURFACE_VALID_DOWNLOAD_HASH, "name": "rest-api-smoke.bin"},
+            "parts": [
+                {
+                    "index": 0,
+                    "start": 0,
+                    "end": 1023,
+                    "completedBytes": 0,
+                    "gapBytes": 1024,
+                    "complete": False,
+                    "requested": False,
+                    "corrupted": False,
+                    "availableSources": 0,
+                }
+            ],
+            "sources": [],
+        },
+        module.REST_SURFACE_VALID_DOWNLOAD_HASH,
+    )
+
+    assert compact["hash"] == module.REST_SURFACE_VALID_DOWNLOAD_HASH
+    assert compact["part_count"] == 1
+    assert compact["source_count"] == 0
+    assert compact["first_part"]["gapBytes"] == 1024
+
+
 def test_rest_payload_unwraps_success_and_error_envelopes() -> None:
     module = load_rest_api_smoke_module()
 
@@ -488,6 +518,8 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     assert routes_by_operation["getSnapshot"]["path"] == "/api/v1/snapshot?limit=7"
     assert routes_by_operation["getTransfer"]["path"] == f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}"
     assert routes_by_operation["getTransfer"]["responseEnvelope"] == "TransferResponse"
+    assert routes_by_operation["getTransferDetails"]["path"] == f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/details"
+    assert routes_by_operation["getTransferDetails"]["responseEnvelope"] == "TransferDetailsResponse"
     assert routes_by_operation["downloadSearchResult"]["path"] == (
         f"/api/v1/searches/123/results/{module.REST_SURFACE_MISSING_HASH}/operations/download"
     )
@@ -801,6 +833,12 @@ def test_rest_stress_operations_include_expected_error_edges() -> None:
     assert operations_by_pair[
         ("GET", "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF")
     ]["scenario"] == "uppercase_hash_rejected"
+    assert operations_by_pair[
+        ("GET", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/details")
+    ]["scenario"] == "missing_transfer_details_rejected"
+    assert operations_by_pair[
+        ("GET", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/details")
+    ]["expected_statuses"] == (404,)
     assert operations_by_pair[("POST", "/api/v1/transfers")]["expected_statuses"] == (400,)
     assert any(
         operation["scenario"] == "conflicting_category_fields"

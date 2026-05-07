@@ -500,13 +500,21 @@ REST_STRESS_EDGE_OPERATIONS: tuple[dict[str, object], ...] = (
 		"scenario": "lowercase_method_rejected",
 		"expected_statuses": (400,),
 	},
-	{
-		"method": "GET",
-		"path": "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF",
-		"json_body": None,
+    {
+        "method": "GET",
+        "path": "/api/v1/transfers/0123456789ABCDEF0123456789ABCDEF",
+        "json_body": None,
         "family": "transfers",
         "scenario": "uppercase_hash_rejected",
         "expected_statuses": (400,),
+    },
+    {
+        "method": "GET",
+        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/details",
+        "json_body": None,
+        "family": "transfers",
+        "scenario": "missing_transfer_details_rejected",
+        "expected_statuses": (404,),
     },
     {
         "method": "POST",
@@ -919,6 +927,45 @@ def require_missing_transfer_bulk_result(result: dict[str, object]) -> dict[str,
     assert str(first.get("hash") or "").lower() == REST_SURFACE_MISSING_HASH
     assert "transfer not found" in str(first.get("error") or "")
     return first
+
+
+def compact_transfer_details_payload(payload: dict[str, Any], expected_hash: str) -> dict[str, object]:
+    """Asserts and compacts one transfer-detail REST payload for smoke artifacts."""
+
+    transfer = payload.get("transfer")
+    parts = payload.get("parts")
+    sources = payload.get("sources")
+    assert isinstance(transfer, dict)
+    assert transfer.get("hash") == expected_hash
+    assert isinstance(parts, list) and parts
+    assert isinstance(sources, list)
+    first_part = parts[0]
+    assert isinstance(first_part, dict)
+    assert isinstance(first_part.get("index"), int)
+    assert isinstance(first_part.get("start"), int)
+    assert isinstance(first_part.get("end"), int)
+    assert isinstance(first_part.get("completedBytes"), int)
+    assert isinstance(first_part.get("gapBytes"), int)
+    assert isinstance(first_part.get("complete"), bool)
+    assert isinstance(first_part.get("requested"), bool)
+    assert isinstance(first_part.get("corrupted"), bool)
+    assert isinstance(first_part.get("availableSources"), int)
+    return {
+        "hash": transfer.get("hash"),
+        "part_count": len(parts),
+        "source_count": len(sources),
+        "first_part": {
+            "index": first_part.get("index"),
+            "start": first_part.get("start"),
+            "end": first_part.get("end"),
+            "completedBytes": first_part.get("completedBytes"),
+            "gapBytes": first_part.get("gapBytes"),
+            "complete": first_part.get("complete"),
+            "requested": first_part.get("requested"),
+            "corrupted": first_part.get("corrupted"),
+            "availableSources": first_part.get("availableSources"),
+        },
+    }
 
 
 def require_transfer_bulk_result(result: dict[str, object], expected_hash: str, expected_ok: bool) -> dict[str, object]:
@@ -1680,6 +1727,11 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources",
         api_key=api_key,
     )
+    missing_transfer_details = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/details",
+        api_key=api_key,
+    )
     missing_transfer_source_browse = http_request(
         base_url,
         f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/sources/{REST_SURFACE_MISSING_HASH}/operations/browse",
@@ -1744,6 +1796,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     transfer_add_valid_payload = require_json_object(transfer_add_valid, 200)
     transfer_added = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}", api_key=api_key)
     transfer_added_payload = require_json_object(transfer_added, 200)
+    transfer_added_details = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}/details",
+        api_key=api_key,
+    )
+    transfer_added_details_payload = require_json_object(transfer_added_details, 200)
     unicode_transfer_name = "rest-api-unicode-ß-漢.bin"
     unicode_transfer_link = (
         "ed2k://|file|"
@@ -1860,6 +1918,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "category_delete_default": require_error_response(category_delete_default, 400, "INVALID_ARGUMENT", message_contains="default category"),
         "missing_get": require_error_response(missing_transfer, 404, "NOT_FOUND", message_contains="transfer not found"),
         "missing_sources": require_error_response(missing_transfer_sources, 404, "NOT_FOUND", message_contains="transfer not found"),
+        "missing_details": require_error_response(missing_transfer_details, 404, "NOT_FOUND", message_contains="transfer not found"),
         "missing_source_browse": require_error_response(missing_transfer_source_browse, 404, "NOT_FOUND", message_contains="transfer not found"),
         "pause_missing_item": require_missing_transfer_bulk_result(transfer_pause),
         "resume_missing_item": require_missing_transfer_bulk_result(transfer_resume),
@@ -1876,6 +1935,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "status": transfer_add_valid["status"],
             "hash": transfer_add_valid_payload.get("hash"),
             "state": transfer_added_payload.get("state"),
+            "details": compact_transfer_details_payload(transfer_added_details_payload, REST_SURFACE_VALID_DOWNLOAD_HASH),
             "delete": require_transfer_bulk_result(transfer_delete_added, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
         },
         "add_unicode_filename": {
