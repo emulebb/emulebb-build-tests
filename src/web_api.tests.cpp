@@ -1128,6 +1128,23 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	CHECK_EQ(error, "category must be valid UTF-8 without control characters");
 }
 
+TEST_CASE("Web API parses qBittorrent category creation through native category policy")
+{
+	std::string category;
+	std::string error;
+
+	CHECK(WebServerQBitCompatSeams::TryParseCreateCategoryRequest("category=++RADARR_ENG++", category, error));
+	CHECK_EQ(category, "RADARR_ENG");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseCreateCategoryRequest("category=", category, error));
+	CHECK_EQ(error, "category must not be empty");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseCreateCategoryRequest("category=bad%01name", category, error));
+	CHECK_EQ(error, "category must be valid UTF-8 without control characters");
+}
+
 TEST_CASE("Web API parses qBittorrent hash mutations safely")
 {
 	WebServerQBitCompatSeams::SQBitHashMutationRequest request;

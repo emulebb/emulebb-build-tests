@@ -49,6 +49,8 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
                 return {"status": 200, "body_text": "Ok."}
             if path == "/api/v2/torrents/createCategory" and kwargs.get("form", {}).get("category") == "LIVE_WIRE_ROUTE_CHECK":
                 return {"status": 200, "body_text": "Ok."}
+            if path == "/api/v2/torrents/createCategory" and kwargs.get("form", {}).get("category") == "bad\u0001name":
+                return {"status": 400, "body_text": "Fails."}
             if path in {
                 f"/api/v2/torrents/properties?hash={module.rest_smoke.REST_SURFACE_MISSING_HASH}",
                 f"/api/v2/torrents/files?hash={module.rest_smoke.REST_SURFACE_MISSING_HASH}",
@@ -114,6 +116,7 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
         "delete_duplicate_hash",
         "pause_too_many_hashes",
         "create_category_empty",
+        "create_category_control_character",
         "info_malformed_percent_category",
         "info_duplicate_category",
         "files_malformed_percent_hash",

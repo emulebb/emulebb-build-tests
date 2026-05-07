@@ -728,6 +728,13 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
             form={"category": ""},
             method="POST",
         ),
+        "create_category_control_character": qbit_request(
+            base_url,
+            "/api/v2/torrents/createCategory",
+            cookie=cookie,
+            form={"category": "bad\u0001name"},
+            method="POST",
+        ),
         "set_category_missing_category": qbit_request(
             base_url,
             "/api/v2/torrents/setCategory",
