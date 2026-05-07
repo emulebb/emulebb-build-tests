@@ -30,7 +30,11 @@ Supported branch:
 
 - `main`
 
-Baseline workspaces may be edited when the change is strictly to enable tests, seams, logging, tracing, or debugging. They are not feature-development branches.
+Workspace branch roles are owned by
+`EMULE_WORKSPACE_ROOT\repos\eMule-tooling\docs\WORKSPACE_POLICY.md`. Do not
+infer release status from branch names. Baseline workspaces may be edited only
+when the change is strictly to enable tests, seams, logging, tracing, or
+debugging; they are not feature-development branches.
 
 Current suite model:
 
@@ -96,10 +100,11 @@ Workspace quick reference:
 - for live-diff runs, point `-TestRunWorkspaceRoot` and `-BaselineWorkspaceRoot` at the two workspace roots you want to compare
 - for cleanroom validation, pass both `-WorkspaceRoot` and `-AppRoot` explicitly so reports and build tags stay tied to the selected workspace root
 
-The sanctioned seam-enabled baseline for 0.72a comparisons is
-`release/v0.72a-community`, materialized as `app\eMule-v0.72a-community`.
-It should stay behavior-preserving during normal app execution and may accept
-only test-enablement changes.
+The default seam-enabled baseline for 0.72a comparisons is materialized as
+`app\eMule-v0.72a-community`. It is test-only and should stay
+behavior-preserving during normal app execution. The tracing-harness workspace
+is reserved for explicit variant-client parity work and is not the default
+regression baseline.
 
 Standalone probe mode:
 
