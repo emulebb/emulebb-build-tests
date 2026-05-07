@@ -77,6 +77,8 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         assert live_operation["path"] == operation["path"]
         assert list(live_operation["expected_statuses"]) == operation["expected_statuses"]
 
+    assert all(len(operation["expected_statuses"]) == 1 for operation in golden["rest"]["expected_error_stress_operations"])
+
     torznab_error_edges = [
         {
             "name": scenario["name"],
@@ -98,6 +100,7 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         for scenario in arr_live.QBIT_ROUTE_COMPLETENESS_SCENARIOS
     ]
     assert qbit_scenarios == golden["arr"]["qbit_route_completeness"]
+    assert all(len(scenario["expected_statuses"]) == 1 for scenario in qbit_scenarios)
 
 
 def test_release_live_wire_golden_manifest_keeps_runtime_values_external() -> None:
