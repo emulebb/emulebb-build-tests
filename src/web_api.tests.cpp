@@ -276,6 +276,17 @@ TEST_CASE("Web API exposes stable upload state names for the REST surface")
 	CHECK(std::string(WebApiSurfaceSeams::GetUploadStateName(255)) == "idle");
 }
 
+TEST_CASE("Web API shares bounded transfer progress ratios across native and Arr surfaces")
+{
+	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(0, 0), 0.0);
+	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(0, 100), 0.0);
+	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(50, 100), 0.5);
+	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(100, 100), 1.0);
+	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(120, 100), 1.0);
+	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(1, 3), 0.3333);
+	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(2, 3), 0.6667);
+}
+
 TEST_CASE("Web API parses the final transfer priority vocabulary")
 {
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("auto"), WebApiSurfaceSeams::ETransferPriority::Auto);
