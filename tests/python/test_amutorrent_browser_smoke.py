@@ -77,3 +77,33 @@ def test_browser_workflow_validation_rejects_nested_error_payloads() -> None:
 
     with pytest.raises(RuntimeError, match=r"search_modes\[0\]\.start"):
         smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_ignores_expected_search_conflict_console_noise() -> None:
+    smoke = load_smoke_module()
+    checks = {"search_modes": [{"start": {"status": 202, "payload": {"type": "search-started"}}}]}
+    diagnostics = {
+        "console_errors": [
+            {
+                "text": "Failed to load resource: the server responded with a status of 409 (Conflict)",
+                "location": {"url": "http://127.0.0.1:4000/api/v1/search?wait=false"},
+            }
+        ],
+        "page_errors": [],
+        "request_failures": [],
+    }
+
+    smoke.assert_browser_workflow_results(checks, diagnostics)
+
+
+def test_browser_workflow_validation_rejects_unexpected_console_errors() -> None:
+    smoke = load_smoke_module()
+    checks = {"snapshot": {"status": 200, "payload": {"type": "empty"}}}
+    diagnostics = {
+        "console_errors": [{"text": "ReferenceError: bad", "location": {"url": "http://127.0.0.1:4000/"}}],
+        "page_errors": [],
+        "request_failures": [],
+    }
+
+    with pytest.raises(RuntimeError, match="browser diagnostics"):
+        smoke.assert_browser_workflow_results(checks, diagnostics)

@@ -162,6 +162,28 @@ def iter_browser_http_results(value: Any, prefix: str = ""):
             yield from iter_browser_http_results(nested, name)
 
 
+def is_expected_browser_console_error(entry: dict[str, Any]) -> bool:
+    """Returns true for console noise from intentional search-lock retry probes."""
+
+    text = str(entry.get("text", ""))
+    location = entry.get("location") if isinstance(entry.get("location"), dict) else {}
+    url = str(location.get("url", ""))
+    return "409 (Conflict)" in text and "/api/v1/search?wait=false" in url
+
+
+def unexpected_browser_diagnostics(diagnostics: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """Filters expected browser diagnostics that are already covered by HTTP checks."""
+
+    return {
+        "console_errors": [
+            entry for entry in diagnostics.get("console_errors", [])
+            if not is_expected_browser_console_error(entry)
+        ],
+        "page_errors": list(diagnostics.get("page_errors", [])),
+        "request_failures": list(diagnostics.get("request_failures", [])),
+    }
+
+
 def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[str, list[dict[str, Any]]]) -> None:
     """Raises when browser workflow HTTP calls or page diagnostics report failures."""
 
@@ -171,8 +193,9 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
         payload = result.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "error":
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
-    if any(diagnostics.values()):
-        raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {diagnostics}")
+    unexpected_diagnostics = unexpected_browser_diagnostics(diagnostics)
+    if any(unexpected_diagnostics.values()):
+        raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {unexpected_diagnostics}")
 
 
 def run_browser_workflows(base_url: str, instance_id: str, category_path: str) -> dict[str, Any]:
