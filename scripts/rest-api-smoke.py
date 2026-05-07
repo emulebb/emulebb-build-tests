@@ -113,6 +113,57 @@ REST_STRESS_LONG_UNICODE_PATH = (
 )
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
 UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
+REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
+    "getCategory": (404,),
+    "patchCategory": (404,),
+    "deleteCategory": (404,),
+    "createTransfers": (400,),
+    "getTransfer": (404,),
+    "patchTransfer": (404,),
+    "getTransferDetails": (404,),
+    "listTransferSources": (404,),
+    "browseTransferSource": (404,),
+    "addTransferSourceFriend": (404,),
+    "removeTransferSourceFriend": (404,),
+    "removeTransferSource": (404,),
+    "banTransferSource": (404,),
+    "unbanTransferSource": (404,),
+    "releaseTransferSourceUploadSlot": (404,),
+    "recheckTransfer": (404,),
+    "previewTransfer": (404,),
+    "createSharedFile": (400,),
+    "getSharedFile": (404,),
+    "patchSharedFile": (404,),
+    "deleteSharedFile": (404,),
+    "getSharedFileEd2kLink": (404,),
+    "listSharedFileComments": (404,),
+    "replaceSharedDirectories": (400,),
+    "deleteUpload": (404,),
+    "releaseUploadSlot": (404,),
+    "removeUploadClient": (404,),
+    "addUploadFriend": (404,),
+    "removeUploadFriend": (404,),
+    "banUploadClient": (404,),
+    "unbanUploadClient": (404,),
+    "removeUploadQueueClient": (404,),
+    "releaseUploadQueueClientSlot": (404,),
+    "addUploadQueueFriend": (404,),
+    "removeUploadQueueFriend": (404,),
+    "banUploadQueueClient": (404,),
+    "unbanUploadQueueClient": (404,),
+    "createServerMetUrlImport": (400,),
+    "getServer": (404,),
+    "patchServer": (404,),
+    "deleteServer": (404,),
+    "connectServer": (404,),
+    "createKadNodesUrlImport": (400,),
+    "bootstrapKad": (400,),
+    "createSearch": (400,),
+    "getSearch": (404,),
+    "deleteSearch": (404,),
+    "downloadSearchResult": (404,),
+    "deleteFriend": (404,),
+}
 OPENAPI_TAG_FAMILIES = {
     "App": "app",
     "Stats": "status",
@@ -1236,9 +1287,12 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
 
     routes: list[dict[str, object]] = []
     for route in REST_CONTRACT_ROUTES:
+        operation_id = str(route["operationId"])
+        expected_error_statuses = REST_CONTRACT_EXPECTED_ERROR_STATUSES.get(operation_id, ())
+        expected_statuses = tuple(int(value) for value in route["successResponseStatuses"]) + expected_error_statuses
         row = {
             "name": route["name"],
-            "operationId": route["operationId"],
+            "operationId": operation_id,
             "family": route["family"],
             "method": route["method"],
             "path": route["path"],
@@ -1247,6 +1301,7 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             "hasRequestBody": route["hasRequestBody"],
             "requestBodyRequired": route["requestBodyRequired"],
             "successResponseStatuses": route["successResponseStatuses"],
+            "expectedResponseStatuses": list(expected_statuses),
             "successResponseRefs": route["successResponseRefs"],
             "responseEnvelope": route["responseEnvelope"],
             "skipped": False,
@@ -1274,13 +1329,13 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
                 outcome = "success"
             elif status >= 400:
                 require_error_response(result, status, str(require_json_object(result, status).get("error") or ""))
-                outcome = "expected_error"
+                outcome = "expected_error" if status in expected_error_statuses else "unexpected_error"
             else:
                 outcome = "unexpected_status"
             row.update(
                 {
                     "status": status,
-                    "ok": outcome in {"success", "expected_error"},
+                    "ok": status in expected_statuses and outcome in {"success", "expected_error"},
                     "outcome": outcome,
                     "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
                 }

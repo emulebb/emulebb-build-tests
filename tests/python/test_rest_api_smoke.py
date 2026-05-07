@@ -1084,3 +1084,92 @@ def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
     assert summary["ok"] is True
     assert ("POST", "/api/v1/app/shutdown") not in observed_paths
     assert any(route["operationId"] == "shutdownApp" and route["skipped"] for route in summary["routes"])
+
+
+def test_rest_contract_completeness_rejects_undeclared_4xx(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "REST_CONTRACT_ROUTES",
+        (
+            {
+                "name": "getApp",
+                "operationId": "getApp",
+                "family": "app",
+                "method": "GET",
+                "path": "/api/v1/app",
+                "safe": True,
+                "safety": "safe",
+                "hasRequestBody": False,
+                "requestBodyRequired": False,
+                "successResponseStatuses": ["200"],
+                "successResponseRefs": ["AppResponse"],
+                "responseEnvelope": "AppResponse",
+            },
+        ),
+    )
+    monkeypatch.setattr(module, "assert_contract_routes_match_openapi", lambda: {"ok": True})
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 400,
+            "content_type": "application/json",
+            "json": {"error": "INVALID_ARGUMENT", "message": "bad request"},
+            "raw_json": {"error": {"code": "INVALID_ARGUMENT", "message": "bad request", "details": {}}},
+            "body_text": "{}",
+        },
+    )
+
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
+
+    assert summary["ok"] is False
+    assert summary["failed_routes"] == ["getApp"]
+    assert summary["routes"][0]["outcome"] == "unexpected_error"
+    assert summary["routes"][0]["expectedResponseStatuses"] == [200]
+
+
+def test_rest_contract_completeness_accepts_declared_negative_probe(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "REST_CONTRACT_ROUTES",
+        (
+            {
+                "name": "createSearch",
+                "operationId": "createSearch",
+                "family": "searches",
+                "method": "POST",
+                "path": "/api/v1/searches",
+                "safe": True,
+                "safety": "safe",
+                "hasRequestBody": True,
+                "requestBodyRequired": True,
+                "successResponseStatuses": ["200"],
+                "successResponseRefs": ["SearchResponse"],
+                "responseEnvelope": "SearchResponse",
+            },
+        ),
+    )
+    monkeypatch.setattr(module, "assert_contract_routes_match_openapi", lambda: {"ok": True})
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 400,
+            "content_type": "application/json",
+            "json": {"error": "INVALID_ARGUMENT", "message": "query is required"},
+            "raw_json": {"error": {"code": "INVALID_ARGUMENT", "message": "query is required", "details": {}}},
+            "body_text": "{}",
+        },
+    )
+
+    summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
+
+    assert summary["ok"] is True
+    assert summary["expected_error_count"] == 1
+    assert summary["failed_routes"] == []
+    assert summary["routes"][0]["outcome"] == "expected_error"
+    assert summary["routes"][0]["expectedResponseStatuses"] == [200, 400]
