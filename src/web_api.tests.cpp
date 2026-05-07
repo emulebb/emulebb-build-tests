@@ -1759,6 +1759,18 @@ TEST_CASE("Web API rejects unknown routes and unsupported HTTP methods")
 
 	errorCode.clear();
 	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/unsupported", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "NOT_FOUND");
+	CHECK_EQ(errorMessage, "API route not found");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/upload-queue/0123456789abcdef0123456789abcdef/operations/unsupported", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "NOT_FOUND");
+	CHECK_EQ(errorMessage, "API route not found");
+
+	errorCode.clear();
+	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/app", R"({})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "METHOD_NOT_ALLOWED");
 	CHECK_EQ(errorMessage, "HTTP method is not allowed for this API route");

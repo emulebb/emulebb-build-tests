@@ -2014,6 +2014,20 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={},
     )
+    upload_unsupported_operation = http_request(
+        base_url,
+        f"/api/v1/uploads/{REST_SURFACE_MISSING_HASH}/operations/unsupported",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
+    upload_queue_unsupported_operation = http_request(
+        base_url,
+        f"/api/v1/upload-queue/{REST_SURFACE_MISSING_HASH}/operations/unsupported",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
     surface["uploads"] = {
         "list_count": len(require_json_array(upload_list, 200)),
         "queue_count": len(require_json_array(upload_queue, 200)),
@@ -2034,6 +2048,18 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="clientId must be a 32-character lowercase hex string or address:port",
+        ),
+        "unsupported_operation": require_error_response(
+            upload_unsupported_operation,
+            404,
+            "NOT_FOUND",
+            message_contains="API route not found",
+        ),
+        "queue_unsupported_operation": require_error_response(
+            upload_queue_unsupported_operation,
+            404,
+            "NOT_FOUND",
+            message_contains="API route not found",
         ),
     }
 
