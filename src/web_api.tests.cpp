@@ -1172,6 +1172,10 @@ TEST_CASE("Web API decodes qBittorrent add forms into native eD2K links")
 	error.clear();
 	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=++RADARR_ENG++&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
 	CHECK_EQ(request.strCategory, "RADARR_ENG");
+
+	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("paused=false&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_FALSE(request.bPaused);
 }
 
 TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
@@ -1216,6 +1220,10 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	error.clear();
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=bad%01name&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
 	CHECK_EQ(error, "category must be valid UTF-8 without control characters");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("paused=maybe&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_EQ(error, "paused must be a boolean form value");
 }
 
 TEST_CASE("Web API parses qBittorrent category creation through native category policy")
@@ -1249,6 +1257,10 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 	CHECK(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789abcdef0123456789abcdef&deleteFiles=false", request, error));
 	CHECK(request.bDeleteFiles);
 
+	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789abcdef0123456789abcdef&deleteFiles=0", request, error));
+	CHECK(request.bDeleteFiles);
+
 	CHECK(WebServerQBitCompatSeams::TryParseSetCategoryRequest("hashes=0123456789abcdef0123456789abcdef&category=SONARR_ENG", request, error));
 	CHECK_EQ(request.strCategory, "SONARR_ENG");
 
@@ -1266,6 +1278,10 @@ TEST_CASE("Web API parses qBittorrent hash mutations safely")
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789abcdef0123456789abcdef%7C0123456789ABCDEF0123456789ABCDEF", request, error));
 	CHECK_EQ(error, "hashes must not contain duplicates");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseDeleteRequest("hashes=0123456789abcdef0123456789abcdef&deleteFiles=wat", request, error));
+	CHECK_EQ(error, "deleteFiles must be a boolean form value");
 
 	std::string manyHashes("hashes=");
 	const char hexDigits[] = "0123456789abcdef";
