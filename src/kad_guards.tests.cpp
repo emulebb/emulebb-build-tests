@@ -464,6 +464,41 @@ TEST_CASE("Nodes.dat replacement failure leaves live file intact and candidate a
 	::DeleteFile(strSourcePath);
 }
 
+TEST_CASE("Nodes.dat install rejects malformed candidates and preserves live file")
+{
+	const CString strTargetPath = CreateFastKadTempPath();
+	const CString strMalformedPath = CreateFastKadTempPath();
+
+	FILE *pTarget = NULL;
+	REQUIRE(_wfopen_s(&pTarget, strTargetPath, L"wb") == 0);
+	REQUIRE(pTarget != NULL);
+	const char szOldData[] = "old nodes";
+	REQUIRE(fwrite(szOldData, 1, sizeof szOldData, pTarget) == sizeof szOldData);
+	fclose(pTarget);
+
+	FILE *pCandidate = NULL;
+	REQUIRE(_wfopen_s(&pCandidate, strMalformedPath, L"wb") == 0);
+	REQUIRE(pCandidate != NULL);
+	const uint32 uHeader = 0;
+	const uint32 uVersion = 2;
+	const uint32 uCount = 1;
+	REQUIRE(fwrite(&uHeader, 1, sizeof uHeader, pCandidate) == sizeof uHeader);
+	REQUIRE(fwrite(&uVersion, 1, sizeof uVersion, pCandidate) == sizeof uVersion);
+	REQUIRE(fwrite(&uCount, 1, sizeof uCount, pCandidate) == sizeof uCount);
+	fclose(pCandidate);
+
+	DWORD dwLastError = ERROR_SUCCESS;
+	CHECK_FALSE(Kademlia::InstallPreparedNodesDatFile(strMalformedPath, strTargetPath, &dwLastError));
+	CHECK_EQ(dwLastError, static_cast<DWORD>(ERROR_INVALID_DATA));
+
+	const std::vector<char> targetData = ReadWholeFile(strTargetPath);
+	CHECK_EQ(targetData.size(), sizeof szOldData);
+	CHECK(std::equal(targetData.begin(), targetData.end(), szOldData));
+
+	::DeleteFile(strTargetPath);
+	::DeleteFile(strMalformedPath);
+}
+
 TEST_CASE("Nodes.dat install rejects bootstrap-only candidates and preserves live file")
 {
 	const CString strTargetPath = CreateFastKadTempPath();
