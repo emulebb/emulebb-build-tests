@@ -185,6 +185,18 @@ def write_text_exact_long_path(path: Path, text: str) -> None:
         handle.write(text)
 
 
+def file_exists_long_path(path: Path) -> bool:
+    """Returns whether one long-path-capable fixture file still exists."""
+
+    return os.path.isfile(to_windows_long_path(path))
+
+
+def file_exists_exact_long_path(path: Path) -> bool:
+    """Returns whether one exact-name fixture file still exists."""
+
+    return os.path.isfile(to_windows_exact_long_path(path))
+
+
 def read_persisted_path_list(path: Path) -> list[str]:
     """Reads one persisted eMule path-list file, accepting absent empty lists."""
 
@@ -260,6 +272,22 @@ def delete_shared_file_by_hash(base_url: str, api_key: str, file_hash: str, *, d
     compact = compact_http_result(result)
     compact["response"] = body
     return compact
+
+
+def assert_replaced_shared_files_preserved(fixtures: dict[str, Path], unicode_file_name: str, exact_file_name: str) -> dict[str, bool]:
+    """Asserts shared-directory replacement unshares old files without deleting them."""
+
+    old_files = {
+        "flat_file": file_exists_long_path(fixtures["flat"] / "flat_file.txt"),
+        "recursive_root_file": file_exists_long_path(fixtures["recursive"] / "recursive_root_file.txt"),
+        "recursive_child_file": file_exists_long_path(fixtures["recursive_child"] / "recursive_child_file.txt"),
+        "unicode_file": file_exists_long_path(fixtures["long_unicode"] / unicode_file_name),
+        "exact_name_file": file_exists_exact_long_path(fixtures["exact_names"] / exact_file_name),
+    }
+    missing = [name for name, exists in old_files.items() if not exists]
+    if missing:
+        raise AssertionError(f"Shared-directory replacement deleted old fixture files: {missing!r}")
+    return old_files
 
 
 def extract_directory_paths(model: dict[str, Any]) -> dict[str, list[str]]:
@@ -777,6 +805,11 @@ def main() -> int:
             args.api_key,
             ["replacement_file.txt"],
             "replacement shared files",
+        )
+        checks["replaced_shared_files_preserved"] = assert_replaced_shared_files_preserved(
+            fixtures,
+            unicode_file_name,
+            exact_file_name,
         )
 
         current_phase = set_phase(report, "shutdown_after_replacement")
