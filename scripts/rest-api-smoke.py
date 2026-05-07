@@ -1797,6 +1797,33 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={"link": "not-an-ed2k-link"},
     )
+    transfer_add_missing_link = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={"paused": True},
+    )
+    transfer_add_bad_paused = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={
+            "link": f"ed2k://|file|rest-api-smoke.bin|1024|{REST_SURFACE_VALID_DOWNLOAD_HASH}|/",
+            "paused": "true",
+        },
+    )
+    transfer_add_conflicting_link_shapes = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        json_body={
+            "link": f"ed2k://|file|rest-api-smoke.bin|1024|{REST_SURFACE_VALID_DOWNLOAD_HASH}|/",
+            "links": [f"ed2k://|file|rest-api-smoke.bin|1024|{REST_SURFACE_VALID_DOWNLOAD_HASH}|/"],
+        },
+    )
     transfer_add_valid = http_request(
         base_url,
         "/api/v1/transfers",
@@ -1951,6 +1978,24 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="Not an eD2K server or file link",
+        ),
+        "add_missing_link": require_error_response(
+            transfer_add_missing_link,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="link or links is required",
+        ),
+        "add_bad_paused": require_error_response(
+            transfer_add_bad_paused,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="paused must be a boolean",
+        ),
+        "add_conflicting_link_shapes": require_error_response(
+            transfer_add_conflicting_link_shapes,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="link and links are mutually exclusive",
         ),
         "add_valid_paused": {
             "status": transfer_add_valid["status"],

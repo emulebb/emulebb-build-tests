@@ -620,6 +620,47 @@ TEST_CASE("Web API preserves source-oriented ed2k links after trimming transport
 	CHECK_EQ(link, "ed2k://|file|ubuntu.iso|1|0123456789abcdef0123456789abcdef|sources,1.2.3.4:4662|/");
 }
 
+TEST_CASE("Web API validates native transfer add bodies before dispatch")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "link or links is required");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","links":[]})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "link and links are mutually exclusive");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"links":[]})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "links must not be empty");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"links":["ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","   "]})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "links must be a non-empty string array");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"link":"ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/","paused":"true"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "paused must be a boolean");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/transfers", R"({"links":[" ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/ "]})", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "transfers/add");
+	CHECK_EQ(route.params["links"][0].get<std::string>(), "ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/");
+}
+
 TEST_CASE("Web API parses bulk transfer mutations with the final deleteFiles spelling")
 {
 	WebApiCommandSeams::STransferBulkMutationRequest request;
