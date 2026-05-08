@@ -83,6 +83,47 @@ def test_live_server_unavailable_is_inconclusive_exit_code() -> None:
         module.connect_to_live_server("http://127.0.0.1:1", "api-key", [], 1.0)
 
 
+def test_rest_socket_adversity_base_url_parsing() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.parse_base_url_endpoint("http://127.0.0.1:4711") == {
+        "scheme": "http",
+        "host": "127.0.0.1",
+        "port": 4711,
+    }
+    assert module.parse_base_url_endpoint("https://localhost") == {
+        "scheme": "https",
+        "host": "localhost",
+        "port": 443,
+    }
+
+
+def test_rest_socket_probe_outcome_rejects_timeouts() -> None:
+    module = load_rest_api_smoke_module()
+
+    with pytest.raises(AssertionError, match="timeout_probe"):
+        module.require_socket_probe_outcome(
+            "timeout_probe",
+            {"outcome": "timeout", "status": None},
+            allowed_statuses={400},
+        )
+
+
+def test_rest_socket_probe_outcome_accepts_declared_status_or_close() -> None:
+    module = load_rest_api_smoke_module()
+
+    module.require_socket_probe_outcome(
+        "bad_request_probe",
+        {"outcome": "response", "status": 400},
+        allowed_statuses={400},
+    )
+    module.require_socket_probe_outcome(
+        "closed_probe",
+        {"outcome": "closed", "status": None},
+        allowed_statuses={400},
+    )
+
+
 def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     calls: list[dict[str, object]] = []

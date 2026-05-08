@@ -107,6 +107,7 @@ REST_PREFERENCE_KEYS = {
 }
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
+REST_SOCKET_ADVERSITY_BUDGETS = ("off", "smoke")
 REST_STRESS_LONG_SEARCH_QUERY = "unicode-lambda-" + ("λ" * 161)
 REST_STRESS_LONG_UNICODE_PATH = (
     ("deep_unicode_λ_例" * 24)
@@ -904,6 +905,219 @@ def http_request(
             "json": unwrap_rest_payload(payload),
             "raw_json": payload,
         }
+
+
+def parse_base_url_endpoint(base_url: str) -> dict[str, object]:
+    """Parses a REST base URL into socket connection details."""
+
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"Unsupported REST base URL scheme for socket probes: {parsed.scheme!r}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return {
+        "scheme": parsed.scheme,
+        "host": host,
+        "port": int(port),
+    }
+
+
+def read_raw_http_status(sock: socket.socket, timeout_seconds: float) -> dict[str, object]:
+    """Reads one raw HTTP status line, returning a closed/timeout outcome when no status arrives."""
+
+    sock.settimeout(timeout_seconds)
+    data = b""
+    try:
+        while b"\r\n" not in data and len(data) < 4096:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return {"outcome": "closed", "status": None, "status_line": ""}
+            data += chunk
+    except socket.timeout:
+        return {"outcome": "timeout", "status": None, "status_line": ""}
+    except OSError as exc:
+        return {"outcome": "socket_error", "status": None, "error": str(exc), "status_line": ""}
+
+    status_line = data.split(b"\r\n", 1)[0].decode("iso-8859-1", errors="replace")
+    status = None
+    parts = status_line.split()
+    if len(parts) >= 2 and parts[1].isdigit():
+        status = int(parts[1])
+    return {"outcome": "response", "status": status, "status_line": status_line}
+
+
+def raw_socket_probe(
+    host: str,
+    port: int,
+    payload: bytes,
+    *,
+    timeout_seconds: float,
+    read_response: bool,
+    reset_on_close: bool,
+) -> dict[str, object]:
+    """Sends one raw TCP probe and returns the observed response or close behavior."""
+
+    started = time.perf_counter()
+    with socket.create_connection((host, port), timeout=timeout_seconds) as sock:
+        sock.settimeout(timeout_seconds)
+        sock.sendall(payload)
+        if reset_on_close:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("HH", 1, 0))
+        if not read_response:
+            return {
+                "outcome": "sent_reset" if reset_on_close else "sent_closed",
+                "status": None,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+            }
+        result = read_raw_http_status(sock, timeout_seconds)
+        result["elapsed_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        return result
+
+
+def require_socket_probe_outcome(
+    scenario: str,
+    result: dict[str, object],
+    *,
+    allowed_statuses: set[int],
+    allow_close: bool = True,
+) -> None:
+    """Validates one socket-adversity probe outcome."""
+
+    status = result.get("status")
+    outcome = result.get("outcome")
+    if isinstance(status, int) and status in allowed_statuses:
+        return
+    if allow_close and outcome in {"closed", "socket_error", "sent_reset", "sent_closed"}:
+        return
+    raise AssertionError(f"Unexpected socket adversity outcome for {scenario}: {result!r}")
+
+
+def exercise_rest_socket_adversity(
+    base_url: str,
+    api_key: str,
+    *,
+    budget: str,
+    request_timeout_seconds: float,
+) -> dict[str, object]:
+    """Runs raw socket probes for malformed and reset-prone REST/WebServer paths."""
+
+    if budget not in REST_SOCKET_ADVERSITY_BUDGETS:
+        raise ValueError(f"Unsupported REST socket adversity budget: {budget}")
+    if budget == "off":
+        return {"budget": budget, "probes": [], "probe_count": 0}
+
+    endpoint = parse_base_url_endpoint(base_url)
+    if endpoint["scheme"] != "http":
+        raise RuntimeError("Raw socket adversity smoke currently requires an HTTP base URL.")
+
+    host = str(endpoint["host"])
+    port = int(endpoint["port"])
+    quoted_host = host.encode("ascii", errors="ignore") or b"127.0.0.1"
+    api_key_bytes = api_key.encode("ascii", errors="ignore")
+    probes = [
+        {
+            "scenario": "partial_header_reset",
+            "payload": b"GET /api/v1/app HTTP/1.1\r\nHost: " + quoted_host + b"\r\nX-API-Key: " + api_key_bytes + b"\r\n",
+            "read_response": False,
+            "reset_on_close": True,
+            "allowed_statuses": set(),
+        },
+        {
+            "scenario": "declared_body_reset",
+            "payload": (
+                b"POST /api/v1/transfers HTTP/1.1\r\nHost: "
+                + quoted_host
+                + b"\r\nX-API-Key: "
+                + api_key_bytes
+                + b"\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{\"ed2kLinks\":["
+            ),
+            "read_response": False,
+            "reset_on_close": True,
+            "allowed_statuses": set(),
+        },
+        {
+            "scenario": "conflicting_content_length",
+            "payload": (
+                b"POST /api/v1/transfers HTTP/1.1\r\nHost: "
+                + quoted_host
+                + b"\r\nX-API-Key: "
+                + api_key_bytes
+                + b"\r\nContent-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 9\r\n\r\n{}"
+            ),
+            "read_response": True,
+            "reset_on_close": False,
+            "allowed_statuses": {400, 408, 413, 500},
+        },
+        {
+            "scenario": "overlong_header",
+            "payload": (
+                b"GET /api/v1/app HTTP/1.1\r\nHost: "
+                + quoted_host
+                + b"\r\nX-API-Key: "
+                + api_key_bytes
+                + b"\r\nX-Fill: "
+                + (b"a" * 70000)
+                + b"\r\n\r\n"
+            ),
+            "read_response": True,
+            "reset_on_close": False,
+            "allowed_statuses": {400, 408, 413, 431, 500},
+        },
+    ]
+
+    rows = []
+    for probe in probes:
+        result = raw_socket_probe(
+            host,
+            port,
+            probe["payload"],
+            timeout_seconds=request_timeout_seconds,
+            read_response=bool(probe["read_response"]),
+            reset_on_close=bool(probe["reset_on_close"]),
+        )
+        require_socket_probe_outcome(
+            str(probe["scenario"]),
+            result,
+            allowed_statuses=set(probe["allowed_statuses"]),
+        )
+        rows.append(
+            {
+                "scenario": probe["scenario"],
+                "outcome": result.get("outcome"),
+                "status": result.get("status"),
+                "status_line": result.get("status_line", ""),
+                "elapsed_ms": result.get("elapsed_ms"),
+            }
+        )
+
+    invalid_utf8_json = http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=api_key,
+        raw_body=b"\xff\xfe\xfd",
+        content_type="application/json",
+        request_timeout_seconds=request_timeout_seconds,
+    )
+    if int(invalid_utf8_json["status"]) not in {400, 500}:
+        raise AssertionError(f"Unexpected invalid UTF-8 JSON status: {compact_http_result(invalid_utf8_json)}")
+    rows.append(
+        {
+            "scenario": "invalid_utf8_json",
+            "outcome": "response",
+            "status": int(invalid_utf8_json["status"]),
+            "content_type": invalid_utf8_json.get("content_type", ""),
+        }
+    )
+
+    return {
+        "budget": budget,
+        "scheme": endpoint["scheme"],
+        "host": host,
+        "port": port,
+        "probe_count": len(rows),
+        "probes": rows,
+    }
 
 
 def unwrap_rest_payload(payload: object) -> object:
@@ -4307,6 +4521,7 @@ def main() -> int:
     parser.add_argument("--rest-stress-concurrency", type=int, default=4)
     parser.add_argument("--rest-stress-max-failures", type=int, default=1)
     parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
+    parser.add_argument("--rest-socket-adversity-budget", choices=REST_SOCKET_ADVERSITY_BUDGETS, default="off")
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
@@ -4402,6 +4617,7 @@ def main() -> int:
             "rest_stress_budget": effective_stress_budget,
             "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
             "rest_stress_concurrency": args.rest_stress_concurrency,
+            "rest_socket_adversity_budget": args.rest_socket_adversity_budget,
             "timeouts": {
                 "rest_ready_seconds": args.rest_ready_timeout_seconds,
                 "server_activity_seconds": args.server_activity_timeout_seconds,
@@ -4474,6 +4690,15 @@ def main() -> int:
 
         current_phase = set_phase(report, "arr_adapters")
         report["checks"]["arr_adapters"] = exercise_arr_adapter_smoke(base_url, args.api_key)
+
+        if args.rest_socket_adversity_budget != "off":
+            current_phase = set_phase(report, "rest_socket_adversity")
+            report["checks"]["rest_socket_adversity"] = exercise_rest_socket_adversity(
+                base_url,
+                args.api_key,
+                budget=args.rest_socket_adversity_budget,
+                request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+            )
 
         if args.rest_coverage_budget != "smoke" and not args.skip_rest_contract_completeness:
             current_phase = set_phase(report, "rest_contract")
