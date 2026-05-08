@@ -429,6 +429,12 @@ TEST_CASE("Web API only allows shared-file removal for files that are shared and
 	CHECK_FALSE(WebApiSurfaceSeams::CanRemoveSharedFile(true, true));
 }
 
+TEST_CASE("Web API shared-file metadata distinguishes rule-backed and manual shares")
+{
+	CHECK(WebServerJsonSeams::BuildSharedByRuleFlag(true));
+	CHECK_FALSE(WebServerJsonSeams::BuildSharedByRuleFlag(false));
+}
+
 TEST_CASE("Web API parses the search start command vocabulary and trims the query")
 {
 	WebApiCommandSeams::SSearchStartRequest request;
