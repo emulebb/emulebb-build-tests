@@ -161,6 +161,13 @@ REST_LEAK_CHURN_DEFAULT_CYCLES = {
     "smoke": 100,
     "soak": 1000,
 }
+REST_LEAK_CHURN_RESOURCE_THRESHOLDS = {
+    "handles": {"after_drain_max": 64, "peak_max": 128},
+    "gdi_objects": {"after_drain_max": 32, "peak_max": 64},
+    "user_objects": {"after_drain_max": 32, "peak_max": 64},
+    "private_bytes": {"after_drain_max": 256 * 1024 * 1024, "peak_max": 384 * 1024 * 1024},
+    "working_set_bytes": {"after_drain_max": 256 * 1024 * 1024, "peak_max": 384 * 1024 * 1024},
+}
 REST_ERROR_MATRIX_RELEASE_STATUSES = (400, 401, 404, 405, 409, 500, 503)
 REST_ERROR_MATRIX_SEAM_BACKED_ROWS = {
     405: {
@@ -1406,6 +1413,45 @@ def max_resource_snapshot(
     return result
 
 
+def evaluate_rest_leak_churn_resources(
+    before_to_after_drain: dict[str, int | None],
+    before_to_peak: dict[str, int | None],
+) -> dict[str, object]:
+    """Evaluates leak-churn resource deltas against the R1 release thresholds."""
+
+    violations = []
+    for metric, limits in REST_LEAK_CHURN_RESOURCE_THRESHOLDS.items():
+        after_value = before_to_after_drain.get(metric)
+        after_limit = int(limits["after_drain_max"])
+        if after_value is not None and int(after_value) > after_limit:
+            violations.append(
+                {
+                    "metric": metric,
+                    "phase": "after_drain",
+                    "value": int(after_value),
+                    "limit": after_limit,
+                }
+            )
+
+        peak_value = before_to_peak.get(metric)
+        peak_limit = int(limits["peak_max"])
+        if peak_value is not None and int(peak_value) > peak_limit:
+            violations.append(
+                {
+                    "metric": metric,
+                    "phase": "peak",
+                    "value": int(peak_value),
+                    "limit": peak_limit,
+                }
+            )
+
+    return {
+        "ok": not violations,
+        "thresholds": REST_LEAK_CHURN_RESOURCE_THRESHOLDS,
+        "violations": violations,
+    }
+
+
 def exercise_rest_leak_churn(
     base_url: str,
     api_key: str,
@@ -1522,6 +1568,11 @@ def exercise_rest_leak_churn(
     time.sleep(0.5)
     after = get_process_resource_snapshot(process_id)
     peak = max_resource_snapshot(peak, after)
+    before_to_after_drain = diff_process_resource_snapshots(before, after)
+    before_to_peak = diff_process_resource_snapshots(before, peak)
+    resource_thresholds = evaluate_rest_leak_churn_resources(before_to_after_drain, before_to_peak)
+    if not resource_thresholds["ok"]:
+        raise AssertionError(f"REST leak churn resource thresholds exceeded: {resource_thresholds!r}")
     return {
         "budget": budget,
         "scheme": endpoint["scheme"],
@@ -1537,9 +1588,10 @@ def exercise_rest_leak_churn(
             "after_drain": after,
         },
         "deltas": {
-            "before_to_after_drain": diff_process_resource_snapshots(before, after),
-            "before_to_peak": diff_process_resource_snapshots(before, peak),
+            "before_to_after_drain": before_to_after_drain,
+            "before_to_peak": before_to_peak,
         },
+        "resource_thresholds": resource_thresholds,
     }
 
 

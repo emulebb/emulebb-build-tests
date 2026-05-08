@@ -288,6 +288,30 @@ def test_rest_leak_churn_supports_https_cycles(monkeypatch: pytest.MonkeyPatch) 
     assert len(calls) == 3
 
 
+def test_rest_leak_churn_resource_thresholds_report_pass_and_failures() -> None:
+    module = load_rest_api_smoke_module()
+
+    passing = module.evaluate_rest_leak_churn_resources(
+        {"handles": 1, "private_bytes": 1024, "working_set_bytes": None},
+        {"handles": 2, "private_bytes": 2048, "working_set_bytes": None},
+    )
+    assert passing["ok"] is True
+    assert passing["violations"] == []
+
+    failing = module.evaluate_rest_leak_churn_resources(
+        {"handles": 65, "private_bytes": 1024, "working_set_bytes": None},
+        {"handles": 2, "private_bytes": 512 * 1024 * 1024, "working_set_bytes": None},
+    )
+    assert failing["ok"] is False
+    assert {
+        (violation["metric"], violation["phase"])
+        for violation in failing["violations"]
+    } == {
+        ("handles", "after_drain"),
+        ("private_bytes", "peak"),
+    }
+
+
 def test_max_resource_snapshot_keeps_high_water_marks() -> None:
     module = load_rest_api_smoke_module()
 
