@@ -645,6 +645,117 @@ def get_trace_counter_int(counters: list[dict[str, object]], counter_id: str) ->
     return int(value) if isinstance(value, int) else None
 
 
+def safe_ratio(numerator: float | None, denominator: float | None) -> float | None:
+    """Returns a rounded ratio when both inputs are usable."""
+
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    return round(float(numerator) / float(denominator), 3)
+
+
+def first_progress_elapsed_seconds(summary: dict[str, object], progress_key: str, expected_count: int) -> float | None:
+    """Returns the first progress sample where the UI row count reaches the target."""
+
+    progress = summary.get(progress_key)
+    if not isinstance(progress, dict):
+        return None
+    samples = progress.get("samples")
+    if not isinstance(samples, list):
+        return None
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        if sample.get("ui_count") == expected_count and isinstance(sample.get("elapsed_seconds"), (int, float)):
+            return float(sample["elapsed_seconds"])
+    return None
+
+
+def startup_highlight_number(
+    startup_summary: dict[str, object],
+    highlight_name: str,
+    value_key: str,
+) -> float | None:
+    """Reads one numeric startup-profile highlight field from a summarized trace."""
+
+    highlights = startup_summary.get("startup_profile_highlights")
+    if not isinstance(highlights, dict):
+        return None
+    highlight = highlights.get(highlight_name)
+    if not isinstance(highlight, dict):
+        return None
+    value = highlight.get(value_key)
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def build_tree_stress_cold_cached_metrics(summary: dict[str, object], expected_count: int) -> dict[str, object]:
+    """Builds durable cold-vs-cached measurements for the 50k shared-files scenario."""
+
+    cached_startup = summary.get("cached_relaunch_startup")
+    if not isinstance(cached_startup, dict):
+        cached_startup = {}
+    first_launch_hashing_done = summary.get("first_launch_hashing_done")
+    if not isinstance(first_launch_hashing_done, dict):
+        first_launch_hashing_done = {}
+
+    cold_ui_ready_seconds = first_progress_elapsed_seconds(summary, "initial_row_count_progress", expected_count)
+    cached_ui_ready_seconds = first_progress_elapsed_seconds(
+        summary,
+        "cached_relaunch_row_count_progress",
+        expected_count,
+    )
+    cold_hashing_done_ms = first_launch_hashing_done.get("hashing_done_absolute_ms")
+    cold_hashing_done_seconds = (
+        round(float(cold_hashing_done_ms) / 1000.0, 3)
+        if isinstance(cold_hashing_done_ms, (int, float))
+        else None
+    )
+    cold_scan_construct_ms = startup_highlight_number(summary, "Construct CSharedFileList (share cache/scan)", "duration_ms")
+    cached_scan_construct_ms = startup_highlight_number(
+        cached_startup,
+        "Construct CSharedFileList (share cache/scan)",
+        "duration_ms",
+    )
+    cold_startup_ready_ms = startup_highlight_number(summary, "ui.shared_files_ready", "absolute_ms")
+    cached_startup_ready_ms = startup_highlight_number(cached_startup, "ui.shared_files_ready", "absolute_ms")
+    cold_oninit_ms = startup_highlight_number(summary, "CSharedFilesWnd::OnInitDialog total", "duration_ms")
+    cached_oninit_ms = startup_highlight_number(cached_startup, "CSharedFilesWnd::OnInitDialog total", "duration_ms")
+
+    return {
+        "expected_row_count": expected_count,
+        "cold_ui_rows_ready_seconds": cold_ui_ready_seconds,
+        "cold_rest_row_count": summary.get("initial_rest_row_count"),
+        "cold_hashing_done_seconds": cold_hashing_done_seconds,
+        "cold_startup_ready_seconds": round(cold_startup_ready_ms / 1000.0, 3)
+        if cold_startup_ready_ms is not None
+        else None,
+        "cold_scan_construct_ms": cold_scan_construct_ms,
+        "cold_shared_files_window_init_ms": cold_oninit_ms,
+        "cached_ui_rows_ready_seconds": cached_ui_ready_seconds,
+        "cached_rest_row_count": summary.get("cached_relaunch_rest_row_count"),
+        "cached_startup_ready_seconds": round(cached_startup_ready_ms / 1000.0, 3)
+        if cached_startup_ready_ms is not None
+        else None,
+        "cached_scan_construct_ms": cached_scan_construct_ms,
+        "cached_shared_files_window_init_ms": cached_oninit_ms,
+        "cached_files_queued_for_hash": summary.get("cached_relaunch_files_queued_for_hash"),
+        "cached_pending_hashes": summary.get("cached_relaunch_pending_hashes"),
+        "cached_shared_files_after_scan": summary.get("cached_relaunch_shared_files_after_scan"),
+        "cache_size_bytes": summary.get("shared_cache_size_bytes_after_first_launch"),
+        "cached_queue_skip_verified": (
+            summary.get("cached_relaunch_files_queued_for_hash") == 0
+            and summary.get("cached_relaunch_pending_hashes") == 0
+            and summary.get("cached_relaunch_shared_files_after_scan") == expected_count
+        ),
+        "cached_ui_ready_speedup_vs_cold_ui_ready": safe_ratio(cold_ui_ready_seconds, cached_ui_ready_seconds),
+        "cached_startup_ready_speedup_vs_cold_hash_done": safe_ratio(
+            cold_hashing_done_seconds,
+            round(cached_startup_ready_ms / 1000.0, 3) if cached_startup_ready_ms is not None else None,
+        ),
+        "cached_scan_speedup_vs_cold_scan": safe_ratio(cold_scan_construct_ms, cached_scan_construct_ms),
+        "cached_window_init_speedup_vs_cold_window_init": safe_ratio(cold_oninit_ms, cached_oninit_ms),
+    }
+
+
 def wait_for_shared_hashing_done_profile(
     startup_profile_path: Path,
     *,
@@ -2670,6 +2781,10 @@ def run_tree_refresh_stress_e2e(
             "cached 50k relaunch REST shared-files count",
         )
         summary["resources_after_cached_relaunch"] = get_process_resource_snapshot(process_handle)
+        summary["cold_vs_cached_50k_metrics"] = build_tree_stress_cold_cached_metrics(
+            summary,
+            fixture["expected_row_count"],
+        )
 
         summary["status"] = "passed"
         summary["error"] = None

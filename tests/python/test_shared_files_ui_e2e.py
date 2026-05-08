@@ -131,3 +131,49 @@ def test_get_rest_shared_file_count_rejects_invalid_rows(monkeypatch) -> None:
         assert "Unexpected shared-files REST row shape" in str(exc)
     else:
         raise AssertionError("Expected invalid shared-files REST row shape to fail.")
+
+
+def test_build_tree_stress_cold_cached_metrics_compares_50k_relaunch() -> None:
+    module = load_shared_files_module()
+
+    summary = {
+        "initial_row_count_progress": {
+            "samples": [
+                {"elapsed_seconds": 0.0, "ui_count": 0},
+                {"elapsed_seconds": 177.8, "ui_count": 50000},
+            ],
+        },
+        "cached_relaunch_row_count_progress": {
+            "samples": [
+                {"elapsed_seconds": 0.5, "ui_count": 50000},
+            ],
+        },
+        "initial_rest_row_count": 50000,
+        "cached_relaunch_rest_row_count": 50000,
+        "first_launch_hashing_done": {"hashing_done_absolute_ms": 194704.1},
+        "startup_profile_highlights": {
+            "ui.shared_files_ready": {"absolute_ms": 16092.885},
+            "Construct CSharedFileList (share cache/scan)": {"duration_ms": 15455.467},
+            "CSharedFilesWnd::OnInitDialog total": {"duration_ms": 120.847},
+        },
+        "cached_relaunch_startup": {
+            "startup_profile_highlights": {
+                "ui.shared_files_ready": {"absolute_ms": 8022.788},
+                "Construct CSharedFileList (share cache/scan)": {"duration_ms": 2216.584},
+                "CSharedFilesWnd::OnInitDialog total": {"duration_ms": 3903.437},
+            },
+        },
+        "cached_relaunch_files_queued_for_hash": 0,
+        "cached_relaunch_pending_hashes": 0,
+        "cached_relaunch_shared_files_after_scan": 50000,
+        "shared_cache_size_bytes_after_first_launch": 5006488,
+    }
+
+    metrics = module.build_tree_stress_cold_cached_metrics(summary, 50000)
+
+    assert metrics["cold_ui_rows_ready_seconds"] == 177.8
+    assert metrics["cached_ui_rows_ready_seconds"] == 0.5
+    assert metrics["cold_hashing_done_seconds"] == 194.704
+    assert metrics["cached_queue_skip_verified"] is True
+    assert metrics["cached_ui_ready_speedup_vs_cold_ui_ready"] == 355.6
+    assert metrics["cached_scan_speedup_vs_cold_scan"] == 6.973
