@@ -152,6 +152,12 @@ REST_PREFERENCE_KEYS = {
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
 REST_SOCKET_ADVERSITY_BUDGETS = ("off", "smoke")
+REST_LEAK_CHURN_BUDGETS = ("off", "smoke", "soak")
+REST_LEAK_CHURN_DEFAULT_CYCLES = {
+    "off": 0,
+    "smoke": 100,
+    "soak": 1000,
+}
 REST_ERROR_MATRIX_RELEASE_STATUSES = (400, 401, 404, 405, 409, 500, 503)
 REST_STRESS_LONG_SEARCH_QUERY = "unicode-lambda-" + ("λ" * 161)
 REST_STRESS_LONG_UNICODE_PATH = (
@@ -1162,6 +1168,122 @@ def exercise_rest_socket_adversity(
         "port": port,
         "probe_count": len(rows),
         "probes": rows,
+    }
+
+
+def max_resource_snapshot(
+    current: dict[str, int | None] | None,
+    candidate: dict[str, int | None],
+) -> dict[str, int | None]:
+    """Returns the element-wise maximum for numeric resource snapshot values."""
+
+    if current is None:
+        return dict(candidate)
+    result = dict(current)
+    for key, candidate_value in candidate.items():
+        if candidate_value is None:
+            continue
+        current_value = result.get(key)
+        if current_value is None or int(candidate_value) > int(current_value):
+            result[key] = int(candidate_value)
+    return result
+
+
+def exercise_rest_leak_churn(
+    base_url: str,
+    api_key: str,
+    *,
+    process_id: int | None,
+    budget: str,
+    cycles: int | None,
+    request_timeout_seconds: float,
+) -> dict[str, object]:
+    """Runs repeated HTTP connect/reset cycles and reports resource snapshots."""
+
+    if budget not in REST_LEAK_CHURN_BUDGETS:
+        raise ValueError(f"Unsupported REST leak churn budget: {budget}")
+    if cycles is None:
+        cycles = REST_LEAK_CHURN_DEFAULT_CYCLES[budget]
+    if cycles < 0:
+        raise ValueError("REST leak churn cycles must be zero or greater.")
+    if budget == "off" or cycles == 0:
+        return {"budget": budget, "cycles_requested": cycles, "cycles_completed": 0, "snapshots": {}}
+
+    endpoint = parse_base_url_endpoint(base_url)
+    if endpoint["scheme"] != "http":
+        raise RuntimeError("REST leak churn currently requires an HTTP base URL.")
+
+    host = str(endpoint["host"])
+    port = int(endpoint["port"])
+    quoted_host = host.encode("ascii", errors="ignore") or b"127.0.0.1"
+    api_key_bytes = api_key.encode("ascii", errors="ignore")
+    payloads = (
+        b"GET /api/v1/app HTTP/1.1\r\nHost: " + quoted_host + b"\r\nX-API-Key: " + api_key_bytes + b"\r\n",
+        b"GET /api/v1/logs?limit=400 HTTP/1.1\r\nHost: "
+        + quoted_host
+        + b"\r\nX-API-Key: "
+        + api_key_bytes
+        + b"\r\nConnection: close\r\n\r\n",
+        b"POST /api/v1/transfers HTTP/1.1\r\nHost: "
+        + quoted_host
+        + b"\r\nX-API-Key: "
+        + api_key_bytes
+        + b"\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{\"ed2kLinks\":[",
+    )
+
+    before = get_process_resource_snapshot(process_id)
+    peak = dict(before)
+    rows: list[dict[str, object]] = []
+    started = time.perf_counter()
+    sample_every = max(1, cycles // 10)
+
+    for cycle_index in range(cycles):
+        payload = payloads[cycle_index % len(payloads)]
+        result = raw_socket_probe(
+            host,
+            port,
+            payload,
+            timeout_seconds=request_timeout_seconds,
+            read_response=False,
+            reset_on_close=True,
+        )
+        require_socket_probe_outcome(
+            f"leak_churn_cycle_{cycle_index}",
+            result,
+            allowed_statuses=set(),
+        )
+        if cycle_index < 10 or (cycle_index + 1) % sample_every == 0:
+            rows.append(
+                {
+                    "cycle": cycle_index + 1,
+                    "outcome": result.get("outcome"),
+                    "elapsed_ms": result.get("elapsed_ms"),
+                }
+            )
+        if (cycle_index + 1) % sample_every == 0:
+            peak = max_resource_snapshot(peak, get_process_resource_snapshot(process_id))
+
+    time.sleep(0.5)
+    after = get_process_resource_snapshot(process_id)
+    peak = max_resource_snapshot(peak, after)
+    return {
+        "budget": budget,
+        "scheme": endpoint["scheme"],
+        "host": host,
+        "port": port,
+        "cycles_requested": cycles,
+        "cycles_completed": cycles,
+        "elapsed_seconds": round(time.perf_counter() - started, 3),
+        "sampled_cycles": rows,
+        "snapshots": {
+            "before": before,
+            "peak": peak,
+            "after_drain": after,
+        },
+        "deltas": {
+            "before_to_after_drain": diff_process_resource_snapshots(before, after),
+            "before_to_peak": diff_process_resource_snapshots(before, peak),
+        },
     }
 
 
@@ -4683,6 +4805,8 @@ def main() -> int:
     parser.add_argument("--rest-stress-max-failures", type=int, default=1)
     parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--rest-socket-adversity-budget", choices=REST_SOCKET_ADVERSITY_BUDGETS, default="off")
+    parser.add_argument("--rest-leak-churn-budget", choices=REST_LEAK_CHURN_BUDGETS, default="off")
+    parser.add_argument("--rest-leak-churn-cycles", type=int)
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
@@ -4779,6 +4903,8 @@ def main() -> int:
             "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
             "rest_stress_concurrency": args.rest_stress_concurrency,
             "rest_socket_adversity_budget": args.rest_socket_adversity_budget,
+            "rest_leak_churn_budget": args.rest_leak_churn_budget,
+            "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
             "timeouts": {
                 "rest_ready_seconds": args.rest_ready_timeout_seconds,
                 "server_activity_seconds": args.server_activity_timeout_seconds,
@@ -4887,6 +5013,17 @@ def main() -> int:
                 duration_seconds=args.rest_stress_duration_seconds,
                 concurrency=args.rest_stress_concurrency,
                 max_failures=args.rest_stress_max_failures,
+                request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+            )
+
+        if args.rest_leak_churn_budget != "off":
+            current_phase = set_phase(report, "rest_leak_churn")
+            report["checks"]["rest_leak_churn"] = exercise_rest_leak_churn(
+                base_url,
+                args.api_key,
+                process_id=launched_process_id,
+                budget=args.rest_leak_churn_budget,
+                cycles=args.rest_leak_churn_cycles,
                 request_timeout_seconds=args.rest_stress_request_timeout_seconds,
             )
 

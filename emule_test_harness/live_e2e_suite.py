@@ -180,6 +180,8 @@ def build_suite_command(
     rest_stress_max_failures: int = 1,
     rest_stress_request_timeout_seconds: float = 5.0,
     rest_socket_adversity_budget: str = "off",
+    rest_leak_churn_budget: str = "off",
+    rest_leak_churn_cycles: int | None = None,
     p2p_bind_interface_name: str = "hide.me",
     live_wire_inputs_file: Path | None = None,
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
@@ -229,6 +231,9 @@ def build_suite_command(
         command.extend(["--rest-stress-max-failures", str(rest_stress_max_failures)])
         command.extend(["--rest-stress-request-timeout-seconds", str(rest_stress_request_timeout_seconds)])
         command.extend(["--rest-socket-adversity-budget", rest_socket_adversity_budget])
+        command.extend(["--rest-leak-churn-budget", rest_leak_churn_budget])
+        if rest_leak_churn_cycles is not None:
+            command.extend(["--rest-leak-churn-cycles", str(rest_leak_churn_cycles)])
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -301,6 +306,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-stress-max-failures", type=int, default=1)
     parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--rest-socket-adversity-budget", choices=["off", "smoke"], default="off")
+    parser.add_argument("--rest-leak-churn-budget", choices=["off", "smoke", "soak"], default="off")
+    parser.add_argument("--rest-leak-churn-cycles", type=int)
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-qbit-live-wire-rounds", type=int, default=DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)
@@ -421,6 +428,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 rest_stress_max_failures=args.rest_stress_max_failures,
                 rest_stress_request_timeout_seconds=args.rest_stress_request_timeout_seconds,
                 rest_socket_adversity_budget=args.rest_socket_adversity_budget,
+                rest_leak_churn_budget=args.rest_leak_churn_budget,
+                rest_leak_churn_cycles=args.rest_leak_churn_cycles,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
             live_wire_inputs_file=live_wire_inputs_file,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,

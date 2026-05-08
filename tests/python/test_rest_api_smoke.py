@@ -169,6 +169,26 @@ def test_process_resource_snapshot_diff_ignores_missing_values() -> None:
     }
 
 
+def test_rest_leak_churn_defaults_include_r1_soak_boundary() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.REST_LEAK_CHURN_DEFAULT_CYCLES["smoke"] > 0
+    assert module.REST_LEAK_CHURN_DEFAULT_CYCLES["soak"] >= 1000
+
+
+def test_max_resource_snapshot_keeps_high_water_marks() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.max_resource_snapshot(
+        {"handles": 10, "private_bytes": None, "working_set_bytes": 500},
+        {"handles": 8, "private_bytes": 1000, "working_set_bytes": 700},
+    ) == {
+        "handles": 10,
+        "private_bytes": 1000,
+        "working_set_bytes": 700,
+    }
+
+
 def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     calls: list[dict[str, object]] = []
