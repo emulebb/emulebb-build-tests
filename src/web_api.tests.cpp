@@ -1093,6 +1093,11 @@ TEST_CASE("Web API validates qBittorrent session cookies by exact pair")
 	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc1234", "SID", "abc123"));
 	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=", "SID", "abc123"));
 	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123", "", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=", "SID", ""));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123", "SID", ""));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123; SID=abc123", "SID", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=wrong; SID=abc123", "SID", "abc123"));
+	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123; SID=wrong", "SID", "abc123"));
 }
 
 TEST_CASE("Web API validates qBittorrent login form credentials exactly")
