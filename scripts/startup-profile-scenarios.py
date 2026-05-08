@@ -42,6 +42,7 @@ HIGHLIGHTED_PHASES = [
     "StartupTimer complete",
 ]
 WARM_RELAUNCH_SHARED_CACHE_TIMEOUT_SECONDS = 45.0
+PERSISTED_STRESS_FIXTURE_PREFIXES = ("shared_files_tree_stress",)
 
 
 def create_fixture_shared_dirs(artifacts_dir: Path) -> tuple[list[str], dict[str, object]]:
@@ -98,21 +99,30 @@ def build_scenario_definition(name: str, artifacts_dir: Path, shared_root: Path)
             "tree_summary": tree_summary,
         }
     if name == "long-paths-root-only":
-        tree_summary = live_common.summarize_existing_tree(resolved_root)
+        tree_summary = live_common.summarize_existing_tree(
+            resolved_root,
+            excluded_dir_prefixes=PERSISTED_STRESS_FIXTURE_PREFIXES,
+        )
         tree_summary["shared_directory_count"] = 1
         return {
             "name": name,
-            "description": "Shares only the long-path root without expanding child directories into shareddir.dat.",
+            "description": "Shares only the long-path root without expanding child directories into shareddir.dat; persisted stress fixtures are excluded from harness metrics.",
             "shared_dirs": [live_common.win_path(resolved_root, trailing_slash=True)],
             "tree_summary": tree_summary,
         }
     if name == "long-paths-recursive":
-        shared_dirs = live_common.enumerate_recursive_directories(resolved_root)
-        tree_summary = live_common.summarize_existing_tree(resolved_root)
+        shared_dirs = live_common.enumerate_recursive_directories(
+            resolved_root,
+            excluded_dir_prefixes=PERSISTED_STRESS_FIXTURE_PREFIXES,
+        )
+        tree_summary = live_common.summarize_existing_tree(
+            resolved_root,
+            excluded_dir_prefixes=PERSISTED_STRESS_FIXTURE_PREFIXES,
+        )
         tree_summary["shared_directory_count"] = len(shared_dirs)
         return {
             "name": name,
-            "description": "Expands the long-path root recursively into shareddir.dat before launch.",
+            "description": "Expands the long-path root recursively into shareddir.dat before launch while excluding persisted stress fixtures.",
             "shared_dirs": shared_dirs,
             "tree_summary": tree_summary,
         }

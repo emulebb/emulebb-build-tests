@@ -179,13 +179,28 @@ def prepare_profile_base(
     }
 
 
-def enumerate_recursive_directories(root: Path) -> list[str]:
+def should_exclude_walk_dir(dir_name: str, excluded_dir_prefixes: tuple[str, ...]) -> bool:
+    """Reports whether one child directory should be pruned from a harness walk."""
+
+    lowered_name = dir_name.lower()
+    return any(lowered_name.startswith(prefix.lower()) for prefix in excluded_dir_prefixes)
+
+
+def prune_walk_dirs(dir_names: list[str], excluded_dir_prefixes: tuple[str, ...]) -> None:
+    """Sorts and prunes os.walk child directories in-place."""
+
+    if excluded_dir_prefixes:
+        dir_names[:] = [name for name in dir_names if not should_exclude_walk_dir(name, excluded_dir_prefixes)]
+    dir_names.sort(key=str.lower)
+
+
+def enumerate_recursive_directories(root: Path, excluded_dir_prefixes: tuple[str, ...] = ()) -> list[str]:
     """Returns one deterministic shared-directory list for a recursively shared root."""
 
     resolved_root = root.resolve()
     directories: list[str] = []
     for current_root, dir_names, _ in os.walk(resolved_root):
-        dir_names.sort(key=str.lower)
+        prune_walk_dirs(dir_names, excluded_dir_prefixes)
         directories.append(win_path(Path(current_root), trailing_slash=True))
     return directories
 
@@ -223,14 +238,14 @@ def summarize_shared_directories(shared_dirs: list[str]) -> dict[str, object]:
     }
 
 
-def summarize_existing_tree(root: Path) -> dict[str, object]:
+def summarize_existing_tree(root: Path, excluded_dir_prefixes: tuple[str, ...] = ()) -> dict[str, object]:
     """Summarizes an existing filesystem tree for startup-profile reporting."""
 
     resolved_root = root.resolve()
     directories = [resolved_root]
     files: list[Path] = []
     for current_root, dir_names, file_names in os.walk(resolved_root):
-        dir_names.sort(key=str.lower)
+        prune_walk_dirs(dir_names, excluded_dir_prefixes)
         current_path = Path(current_root)
         directories.extend(current_path / dir_name for dir_name in dir_names)
         files.extend(current_path / file_name for file_name in file_names)
