@@ -124,6 +124,28 @@ def test_rest_socket_probe_outcome_accepts_declared_status_or_close() -> None:
     )
 
 
+def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
+    module = load_rest_api_smoke_module()
+
+    matrix = module.build_rest_error_path_matrix(
+        {
+            "missing_key": {"status": 401, "content_type": "application/json"},
+            "rest_surface": {
+                "invalid_method": {"status": 405, "content_type": "application/json"},
+                "missing_route": {"status": 404, "content_type": "application/json"},
+                "bad_payload": {"status": 400, "content_type": "application/json"},
+            },
+            "conflict": {"response": {"status": 409, "content_type": "application/json"}},
+            "legacy": {"root": {"status": 200, "content_type": "text/html"}},
+        }
+    )
+
+    assert matrix["status_counts"] == {"400": 1, "401": 1, "404": 1, "405": 1, "409": 1}
+    assert matrix["covered_release_statuses"] == [400, 401, 404, 405, 409]
+    assert matrix["missing_release_statuses"] == [500, 503]
+    assert matrix["error_response_count"] == 5
+
+
 def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     calls: list[dict[str, object]] = []

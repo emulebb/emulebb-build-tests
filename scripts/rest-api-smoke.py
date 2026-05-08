@@ -108,6 +108,7 @@ REST_PREFERENCE_KEYS = {
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
 REST_SOCKET_ADVERSITY_BUDGETS = ("off", "smoke")
+REST_ERROR_MATRIX_RELEASE_STATUSES = (400, 401, 404, 405, 409, 500, 503)
 REST_STRESS_LONG_SEARCH_QUERY = "unicode-lambda-" + ("λ" * 161)
 REST_STRESS_LONG_UNICODE_PATH = (
     ("deep_unicode_λ_例" * 24)
@@ -1253,6 +1254,58 @@ def require_missing_transfer_bulk_result(result: dict[str, object]) -> dict[str,
     assert str(first.get("hash") or "").lower() == REST_SURFACE_MISSING_HASH
     assert "transfer not found" in str(first.get("error") or "")
     return first
+
+
+def iter_http_status_entries(value: object, path: tuple[str, ...] = ()):
+    """Yields compact HTTP result dictionaries found inside nested report data."""
+
+    if isinstance(value, dict):
+        status = value.get("status")
+        if isinstance(status, int):
+            yield {
+                "path": ".".join(path) if path else "<root>",
+                "status": status,
+                "content_type": value.get("content_type", ""),
+                "error": value.get("error"),
+                "message": value.get("message"),
+            }
+        for key, child in value.items():
+            if key in {"headers", "body_text", "json", "raw_json"}:
+                continue
+            yield from iter_http_status_entries(child, path + (str(key),))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from iter_http_status_entries(child, path + (str(index),))
+
+
+def build_rest_error_path_matrix(checks: dict[str, object]) -> dict[str, object]:
+    """Builds the release error-path coverage matrix from live REST check artifacts."""
+
+    error_rows = [
+        row
+        for row in iter_http_status_entries(checks)
+        if isinstance(row.get("status"), int) and int(row["status"]) >= 400
+    ]
+    by_status: dict[str, int] = {}
+    for row in error_rows:
+        key = str(row["status"])
+        by_status[key] = by_status.get(key, 0) + 1
+    release_status_rows = [
+        {
+            "status": status,
+            "covered": by_status.get(str(status), 0) > 0,
+            "count": by_status.get(str(status), 0),
+        }
+        for status in REST_ERROR_MATRIX_RELEASE_STATUSES
+    ]
+    return {
+        "release_statuses": release_status_rows,
+        "covered_release_statuses": [row["status"] for row in release_status_rows if row["covered"]],
+        "missing_release_statuses": [row["status"] for row in release_status_rows if not row["covered"]],
+        "error_response_count": len(error_rows),
+        "status_counts": by_status,
+        "sample_errors": error_rows[:40],
+    }
 
 
 def compact_transfer_details_payload(payload: dict[str, Any], expected_hash: str) -> dict[str, object]:
@@ -4724,6 +4777,9 @@ def main() -> int:
                 max_failures=args.rest_stress_max_failures,
                 request_timeout_seconds=args.rest_stress_request_timeout_seconds,
             )
+
+        current_phase = set_phase(report, "rest_error_path_matrix")
+        report["checks"]["rest_error_path_matrix"] = build_rest_error_path_matrix(report["checks"])
 
         current_phase = set_phase(report, "servers_list")
         servers = http_request(base_url, "/api/v1/servers", api_key=args.api_key)
