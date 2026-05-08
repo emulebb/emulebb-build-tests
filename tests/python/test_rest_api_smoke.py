@@ -235,17 +235,20 @@ def test_process_resource_snapshot_diff_ignores_missing_values() -> None:
         {
             "process_id": 123,
             "handles": 10,
+            "thread_count": 4,
             "gdi_objects": None,
             "private_bytes": 4096,
         },
         {
             "process_id": 123,
             "handles": 14,
+            "thread_count": 5,
             "gdi_objects": 2,
             "private_bytes": 6144,
         },
     ) == {
         "handles": 4,
+        "thread_count": 1,
         "gdi_objects": None,
         "private_bytes": 2048,
     }
@@ -299,7 +302,7 @@ def test_rest_leak_churn_resource_thresholds_report_pass_and_failures() -> None:
     assert passing["violations"] == []
 
     failing = module.evaluate_rest_leak_churn_resources(
-        {"handles": 65, "private_bytes": 1024, "working_set_bytes": None},
+        {"handles": 65, "thread_count": 5, "private_bytes": 1024, "working_set_bytes": None},
         {"handles": 2, "private_bytes": 512 * 1024 * 1024, "working_set_bytes": None},
     )
     assert failing["ok"] is False
@@ -308,6 +311,7 @@ def test_rest_leak_churn_resource_thresholds_report_pass_and_failures() -> None:
         for violation in failing["violations"]
     } == {
         ("handles", "after_drain"),
+        ("thread_count", "after_drain"),
         ("private_bytes", "peak"),
     }
 

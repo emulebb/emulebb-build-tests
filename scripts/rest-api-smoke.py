@@ -58,6 +58,8 @@ write_json = live_common.write_json
 
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
+TH32CS_SNAPTHREAD = 0x00000004
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 GR_GDIOBJECTS = 0
 GR_USEROBJECTS = 1
 
@@ -66,6 +68,8 @@ kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
 kernel32.OpenProcess.restype = ctypes.c_void_p
 kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
 kernel32.CloseHandle.restype = ctypes.c_int
+kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
 kernel32.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
 kernel32.GetProcessHandleCount.restype = ctypes.c_int
 psapi = ctypes.WinDLL("psapi", use_last_error=True)
@@ -90,6 +94,26 @@ class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
         ("PeakPagefileUsage", ctypes.c_size_t),
         ("PrivateUsage", ctypes.c_size_t),
     ]
+
+
+class THREADENTRY32(ctypes.Structure):
+    """Mirror of THREADENTRY32 for process thread-count leak snapshots."""
+
+    _fields_ = [
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ThreadID", ctypes.c_uint32),
+        ("th32OwnerProcessID", ctypes.c_uint32),
+        ("tpBasePri", ctypes.c_long),
+        ("tpDeltaPri", ctypes.c_long),
+        ("dwFlags", ctypes.c_uint32),
+    ]
+
+
+kernel32.Thread32First.argtypes = [ctypes.c_void_p, ctypes.POINTER(THREADENTRY32)]
+kernel32.Thread32First.restype = ctypes.c_int
+kernel32.Thread32Next.argtypes = [ctypes.c_void_p, ctypes.POINTER(THREADENTRY32)]
+kernel32.Thread32Next.restype = ctypes.c_int
 
 
 psapi.GetProcessMemoryInfo.argtypes = [
@@ -163,6 +187,7 @@ REST_LEAK_CHURN_DEFAULT_CYCLES = {
 }
 REST_LEAK_CHURN_RESOURCE_THRESHOLDS = {
     "handles": {"after_drain_max": 64, "peak_max": 128},
+    "thread_count": {"after_drain_max": 4, "peak_max": 32},
     "gdi_objects": {"after_drain_max": 32, "peak_max": 64},
     "user_objects": {"after_drain_max": 32, "peak_max": 64},
     "private_bytes": {"after_drain_max": 256 * 1024 * 1024, "peak_max": 384 * 1024 * 1024},
@@ -1867,6 +1892,7 @@ def get_process_resource_snapshot(process_id: int | None) -> dict[str, int | Non
         return {
             "process_id": None,
             "handles": None,
+            "thread_count": None,
             "gdi_objects": None,
             "user_objects": None,
             "private_bytes": None,
@@ -1878,6 +1904,7 @@ def get_process_resource_snapshot(process_id: int | None) -> dict[str, int | Non
         return {
             "process_id": process_id,
             "handles": None,
+            "thread_count": None,
             "gdi_objects": None,
             "user_objects": None,
             "private_bytes": None,
@@ -1888,6 +1915,7 @@ def get_process_resource_snapshot(process_id: int | None) -> dict[str, int | Non
         handles = None
         if kernel32.GetProcessHandleCount(process_handle, ctypes.byref(handle_count)):
             handles = int(handle_count.value)
+        thread_count = get_process_thread_count(process_id)
 
         memory = PROCESS_MEMORY_COUNTERS_EX()
         memory.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
@@ -1900,6 +1928,7 @@ def get_process_resource_snapshot(process_id: int | None) -> dict[str, int | Non
         return {
             "process_id": process_id,
             "handles": handles,
+            "thread_count": thread_count,
             "gdi_objects": int(user32.GetGuiResources(process_handle, GR_GDIOBJECTS)),
             "user_objects": int(user32.GetGuiResources(process_handle, GR_USEROBJECTS)),
             "private_bytes": private_bytes,
@@ -1907,6 +1936,31 @@ def get_process_resource_snapshot(process_id: int | None) -> dict[str, int | Non
         }
     finally:
         kernel32.CloseHandle(process_handle)
+
+
+def get_process_thread_count(process_id: int | None) -> int | None:
+    """Counts live threads owned by one process through Toolhelp snapshots."""
+
+    if process_id is None:
+        return None
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+    if snapshot in (None, INVALID_HANDLE_VALUE):
+        return None
+    try:
+        entry = THREADENTRY32()
+        entry.dwSize = ctypes.sizeof(THREADENTRY32)
+        if not kernel32.Thread32First(snapshot, ctypes.byref(entry)):
+            return None
+        count = 0
+        while True:
+            if int(entry.th32OwnerProcessID) == int(process_id):
+                count += 1
+            entry.dwSize = ctypes.sizeof(THREADENTRY32)
+            if not kernel32.Thread32Next(snapshot, ctypes.byref(entry)):
+                break
+        return count
+    finally:
+        kernel32.CloseHandle(snapshot)
 
 
 def diff_process_resource_snapshots(
