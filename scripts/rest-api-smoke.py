@@ -9,6 +9,7 @@ import importlib.util
 import json
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import time
