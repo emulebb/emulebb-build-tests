@@ -221,8 +221,10 @@ def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
     assert matrix["missing_release_statuses"] == []
     assert matrix["live_missing_release_statuses"] == [500, 503]
     assert matrix["seam_backed_release_statuses"] == [500, 503]
-    assert matrix["release_statuses"][-2]["seam"]["expected_error_code"] == "EMULE_ERROR"
-    assert matrix["release_statuses"][-1]["seam"]["expected_error_code"] == "EMULE_UNAVAILABLE"
+    assert matrix["release_statuses"][3]["seam"]["expected_error_code"] == "METHOD_NOT_ALLOWED"
+    assert matrix["release_statuses"][4]["seam"]["expected_error_code"] == "INVALID_STATE"
+    assert matrix["release_statuses"][5]["seam"]["expected_error_code"] == "EMULE_ERROR"
+    assert matrix["release_statuses"][6]["seam"]["expected_error_code"] == "EMULE_UNAVAILABLE"
     assert matrix["error_response_count"] == 5
 
 

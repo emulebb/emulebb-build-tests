@@ -163,6 +163,18 @@ REST_LEAK_CHURN_DEFAULT_CYCLES = {
 }
 REST_ERROR_MATRIX_RELEASE_STATUSES = (400, 401, 404, 405, 409, 500, 503)
 REST_ERROR_MATRIX_SEAM_BACKED_ROWS = {
+    405: {
+        "scenario": "native_rest_method_not_allowed_route_rejection",
+        "surface": "native-rest",
+        "source": "web_api.tests.cpp::Web API rejects malformed native REST routes with stable error codes",
+        "expected_error_code": "METHOD_NOT_ALLOWED",
+    },
+    409: {
+        "scenario": "native_rest_invalid_state_envelope",
+        "surface": "native-rest",
+        "source": "web_api.tests.cpp::Web API envelopes representative runtime REST failures",
+        "expected_error_code": "INVALID_STATE",
+    },
     500: {
         "scenario": "native_rest_runtime_failure_envelope",
         "surface": "native-rest",
