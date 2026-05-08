@@ -98,6 +98,13 @@ def test_rest_socket_adversity_base_url_parsing() -> None:
     }
 
 
+def test_https_urlopen_context_is_only_used_for_https() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.build_urlopen_context("http://127.0.0.1:4711") is None
+    assert module.build_urlopen_context("https://127.0.0.1:4711") is not None
+
+
 def test_rest_socket_probe_outcome_rejects_timeouts() -> None:
     module = load_rest_api_smoke_module()
 

@@ -174,6 +174,7 @@ def build_suite_command(
     rest_kad_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_download_trigger_count: int = DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT,
     rest_search_method_override: str | None = None,
+    rest_webserver_scheme: str = "http",
     rest_coverage_budget: str = "contract",
     rest_stress_budget: str = "smoke",
     rest_stress_duration_seconds: float = 30.0,
@@ -227,6 +228,7 @@ def build_suite_command(
         command.extend(["--live-download-trigger-count", str(rest_download_trigger_count)])
         if rest_search_method_override:
             command.extend(["--search-method-override", rest_search_method_override])
+        command.extend(["--webserver-scheme", rest_webserver_scheme])
         command.extend(["--rest-coverage-budget", rest_coverage_budget])
         command.extend(["--rest-stress-budget", rest_stress_budget])
         command.extend(["--rest-stress-duration-seconds", str(rest_stress_duration_seconds)])
@@ -303,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-kad-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-download-trigger-count", type=int, default=DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)
     parser.add_argument("--rest-search-method-override", choices=["automatic", "server", "global", "kad"])
+    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="http")
     parser.add_argument("--rest-coverage-budget", choices=["smoke", "contract", "contract-stress"], default="contract")
     parser.add_argument("--rest-stress-budget", choices=["off", "smoke", "soak"], default="smoke")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
@@ -426,6 +429,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_kad_search_count=args.rest_kad_search_count,
             rest_download_trigger_count=args.rest_download_trigger_count,
             rest_search_method_override=args.rest_search_method_override,
+            rest_webserver_scheme=args.rest_webserver_scheme,
             rest_coverage_budget=args.rest_coverage_budget,
             rest_stress_budget=args.rest_stress_budget,
             rest_stress_duration_seconds=args.rest_stress_duration_seconds,

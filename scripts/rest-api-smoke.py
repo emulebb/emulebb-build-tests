@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
 import json
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -840,12 +841,68 @@ def choose_listen_port() -> int:
         return int(probe.getsockname()[1])
 
 
+def create_https_certificate_pair(artifacts_dir: Path) -> dict[str, str]:
+    """Creates a temporary self-signed certificate/key pair for localhost HTTPS tests."""
+
+    cert_dir = artifacts_dir / "https-cert"
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    cert_path = cert_dir / "webserver-cert.pem"
+    key_path = cert_dir / "webserver-key.pem"
+    config_path = cert_dir / "openssl.cnf"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[req]",
+                "distinguished_name = req_distinguished_name",
+                "prompt = no",
+                "[req_distinguished_name]",
+                "CN = 127.0.0.1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    command = [
+        "openssl",
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        str(key_path),
+        "-out",
+        str(cert_path),
+        "-days",
+        "1",
+        "-config",
+        str(config_path),
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return {
+        "certificate": str(cert_path),
+        "key": str(key_path),
+    }
+
+
+def build_urlopen_context(base_url: str):
+    """Returns an urllib TLS context for localhost HTTPS smoke requests."""
+
+    if urllib.parse.urlparse(base_url).scheme == "https":
+        return ssl._create_unverified_context()
+    return None
+
+
 def configure_webserver_profile(
     config_dir: Path,
     app_exe: Path,
     api_key: str,
     port: int,
     bind_addr: str,
+    *,
+    use_https: bool = False,
+    https_certificate: str = "",
+    https_key: str = "",
 ) -> None:
     """Enables the WebServer listener and REST API key inside the temp profile."""
 
@@ -876,9 +933,9 @@ def configure_webserver_profile(
         ("UseLowRightsUser", "0"),
         ("AllowAdminHiLevelFunc", "1"),
         ("WebTimeoutMins", "5"),
-        ("UseHTTPS", "0"),
-        ("HTTPSCertificate", ""),
-        ("HTTPSKey", ""),
+        ("UseHTTPS", "1" if use_https else "0"),
+        ("HTTPSCertificate", https_certificate),
+        ("HTTPSKey", https_key),
     ):
         text = upsert_ini_section_value(text, "WebServer", key, value)
     text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1")
@@ -926,8 +983,12 @@ def http_request(
             headers["Content-Type"] = content_type
 
     request = urllib.request.Request(base_url + path, data=data, method=method, headers=headers)
+    urlopen_kwargs = {"timeout": request_timeout_seconds}
+    context = build_urlopen_context(base_url)
+    if context is not None:
+        urlopen_kwargs["context"] = context
     try:
-        with urllib.request.urlopen(request, timeout=request_timeout_seconds) as response:
+        with urllib.request.urlopen(request, **urlopen_kwargs) as response:
             body_bytes = response.read()
             body_text = body_bytes.decode("utf-8", errors="replace")
             content_type = response.headers.get("Content-Type", "")
@@ -4786,6 +4847,7 @@ def main() -> int:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="rest-smoke-test-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--webserver-scheme", choices=["http", "https"], default="http")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
@@ -4851,8 +4913,13 @@ def main() -> int:
     artifacts_dir = paths.source_artifacts_dir
 
     port = choose_listen_port()
-    base_url = f"http://127.0.0.1:{port}"
+    base_url = f"{args.webserver_scheme}://127.0.0.1:{port}"
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    https_material = (
+        create_https_certificate_pair(artifacts_dir)
+        if args.webserver_scheme == "https"
+        else {"certificate": "", "key": ""}
+    )
     seed_refresh = None
     if not args.skip_live_seed_refresh:
         seed_refresh = refresh_seed_files(
@@ -4865,6 +4932,9 @@ def main() -> int:
         args.api_key,
         port,
         args.bind_addr,
+        use_https=(args.webserver_scheme == "https"),
+        https_certificate=https_material["certificate"],
+        https_key=https_material["key"],
     )
     if args.p2p_bind_interface_name:
         apply_p2p_bind_interface_override(
@@ -4888,6 +4958,8 @@ def main() -> int:
             "config_dir": str(profile["config_dir"]),
             "api_key_length": len(args.api_key),
             "bind_addr": args.bind_addr,
+            "webserver_scheme": args.webserver_scheme,
+            "https_certificate": https_material["certificate"],
             "enable_upnp": True,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "keep_running": bool(args.keep_running),
