@@ -162,6 +162,20 @@ REST_LEAK_CHURN_DEFAULT_CYCLES = {
     "soak": 1000,
 }
 REST_ERROR_MATRIX_RELEASE_STATUSES = (400, 401, 404, 405, 409, 500, 503)
+REST_ERROR_MATRIX_SEAM_BACKED_ROWS = {
+    500: {
+        "scenario": "native_rest_runtime_failure_envelope",
+        "surface": "native-rest",
+        "source": "web_api.tests.cpp::Web API envelopes representative runtime REST failures",
+        "expected_error_code": "EMULE_ERROR",
+    },
+    503: {
+        "scenario": "native_rest_unavailable_envelope",
+        "surface": "native-rest",
+        "source": "web_api.tests.cpp::Web API classifies native REST API key failures without exposing wrong keys",
+        "expected_error_code": "EMULE_UNAVAILABLE",
+    },
+}
 REST_STRESS_LONG_SEARCH_QUERY = "unicode-lambda-" + ("λ" * 161)
 REST_STRESS_LONG_UNICODE_PATH = (
     ("deep_unicode_λ_例" * 24)
@@ -1650,8 +1664,16 @@ def build_rest_error_path_matrix(checks: dict[str, object]) -> dict[str, object]
     release_status_rows = [
         {
             "status": status,
-            "covered": by_status.get(str(status), 0) > 0,
-            "count": by_status.get(str(status), 0),
+            "covered": by_status.get(str(status), 0) > 0 or status in REST_ERROR_MATRIX_SEAM_BACKED_ROWS,
+            "coverage_source": (
+                "live"
+                if by_status.get(str(status), 0) > 0
+                else "seam-backed"
+                if status in REST_ERROR_MATRIX_SEAM_BACKED_ROWS
+                else "missing"
+            ),
+            "live_count": by_status.get(str(status), 0),
+            "seam": REST_ERROR_MATRIX_SEAM_BACKED_ROWS.get(status),
         }
         for status in REST_ERROR_MATRIX_RELEASE_STATUSES
     ]
@@ -1659,6 +1681,10 @@ def build_rest_error_path_matrix(checks: dict[str, object]) -> dict[str, object]
         "release_statuses": release_status_rows,
         "covered_release_statuses": [row["status"] for row in release_status_rows if row["covered"]],
         "missing_release_statuses": [row["status"] for row in release_status_rows if not row["covered"]],
+        "live_missing_release_statuses": [row["status"] for row in release_status_rows if row["live_count"] == 0],
+        "seam_backed_release_statuses": [
+            row["status"] for row in release_status_rows if row["coverage_source"] == "seam-backed"
+        ],
         "error_response_count": len(error_rows),
         "status_counts": by_status,
         "sample_errors": error_rows[:40],

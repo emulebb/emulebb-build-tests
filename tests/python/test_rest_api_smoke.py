@@ -217,8 +217,12 @@ def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
     )
 
     assert matrix["status_counts"] == {"400": 1, "401": 1, "404": 1, "405": 1, "409": 1}
-    assert matrix["covered_release_statuses"] == [400, 401, 404, 405, 409]
-    assert matrix["missing_release_statuses"] == [500, 503]
+    assert matrix["covered_release_statuses"] == [400, 401, 404, 405, 409, 500, 503]
+    assert matrix["missing_release_statuses"] == []
+    assert matrix["live_missing_release_statuses"] == [500, 503]
+    assert matrix["seam_backed_release_statuses"] == [500, 503]
+    assert matrix["release_statuses"][-2]["seam"]["expected_error_code"] == "EMULE_ERROR"
+    assert matrix["release_statuses"][-1]["seam"]["expected_error_code"] == "EMULE_UNAVAILABLE"
     assert matrix["error_response_count"] == 5
 
 
