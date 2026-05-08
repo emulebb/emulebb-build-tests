@@ -1263,6 +1263,10 @@ def require_json_array(result: dict[str, object], expected_status: int) -> list[
     if int(result["status"]) != expected_status:
         raise RuntimeError(f"Unexpected REST status {result['status']}: {result['body_text']!r}")
     payload = result["json"]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            return list(data["items"])
     if isinstance(payload, dict) and isinstance(payload.get("items"), list):
         return list(payload["items"])
     if isinstance(payload, list):
@@ -1299,10 +1303,16 @@ def get_rest_shared_names(base_url: str, api_key: str) -> list[str]:
 def get_rest_shared_file_count(base_url: str, api_key: str) -> int:
     """Returns the number of shared-file rows exposed by the REST read model."""
 
-    rows = require_json_array(http_request(base_url, "/api/v1/shared-files", api_key=api_key), 200)
+    result = http_request(base_url, "/api/v1/shared-files", api_key=api_key)
+    rows = require_json_array(result, 200)
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("name"), str):
             raise RuntimeError(f"Unexpected shared-files REST row shape: {row!r}")
+    payload = result["json"]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("total"), int):
+            return int(data["total"])
     return len(rows)
 
 
@@ -2360,6 +2370,7 @@ def run_tree_refresh_stress_e2e(
         "stress_empty_children_per_branch": fixture["stress_empty_children_per_branch"],
         "rest_base_url": fixture["rest_base_url"],
         "churn_cycles": churn_cycles,
+        "row_count_scope": "All Shared Files",
         "timeouts": {
             "main_window_seconds": 900.0,
             "row_count_seconds": 1800.0,
@@ -2392,7 +2403,7 @@ def run_tree_refresh_stress_e2e(
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
         list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
         wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
-        select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
         initial_count = wait_for_exact_list_count_with_progress(
             list_hwnd,
             fixture["expected_row_count"],
@@ -2424,7 +2435,7 @@ def run_tree_refresh_stress_e2e(
             cycles=churn_cycles,
         )
 
-        select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
         click_reload_button(main_hwnd)
         final_count = wait_for_exact_list_count_with_progress(
             list_hwnd,
