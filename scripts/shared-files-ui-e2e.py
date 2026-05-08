@@ -342,7 +342,7 @@ def prepare_generated_robustness_fixture(seed_config_dir: Path, artifacts_dir: P
     return fixture
 
 
-def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Path, shared_root: Path) -> dict:
+def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Path, shared_root: Path, app_exe: Path) -> dict:
     """Creates a profile base that shares the 10k-node tree-refresh stress subtree recursively."""
 
     manifest = generated_fixture.ensure_fixture(shared_root, include_tree_stress=True)
@@ -354,6 +354,9 @@ def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Pa
         artifacts_dir=artifacts_dir,
         shared_dirs=shared_dirs,
     )
+    rest_api_key = "shared-files-ui-tree-stress-key"
+    rest_port = choose_rest_listen_port()
+    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port)
     fixture.update(
         {
             "manifest_path": str(Path(str(manifest["manifest_path"])).resolve()),
@@ -367,6 +370,9 @@ def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Pa
             "stress_files_per_branch": int(subtree["stress_files_per_branch"]),
             "sample_directories": [Path(str(path)).resolve() for path in subtree["sample_directories"]],
             "shared_directory_count": len(shared_dirs),
+            "rest_api_key": rest_api_key,
+            "rest_port": rest_port,
+            "rest_base_url": f"http://127.0.0.1:{rest_port}",
         }
     )
     return fixture
@@ -1230,6 +1236,16 @@ def get_rest_shared_names(base_url: str, api_key: str) -> list[str]:
     return names
 
 
+def get_rest_shared_file_count(base_url: str, api_key: str) -> int:
+    """Returns the number of shared-file rows exposed by the REST read model."""
+
+    rows = require_json_array(http_request(base_url, "/api/v1/shared-files", api_key=api_key), 200)
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            raise RuntimeError(f"Unexpected shared-files REST row shape: {row!r}")
+    return len(rows)
+
+
 def get_rest_shared_directory_model(base_url: str, api_key: str) -> dict[str, object]:
     """Returns the current shared-directory REST model."""
 
@@ -1310,6 +1326,23 @@ def wait_for_rest_shared_name_set(
 
     result = wait_for(resolve, timeout=timeout, interval=0.5, description=description)
     return list(result["names"])
+
+
+def wait_for_rest_shared_file_count(
+    base_url: str,
+    api_key: str,
+    expected_count: int,
+    description: str,
+    *,
+    timeout: float = 120.0,
+) -> int:
+    """Waits until REST shared-files exposes the expected row count."""
+
+    def resolve():
+        count = get_rest_shared_file_count(base_url, api_key)
+        return count if count == expected_count else None
+
+    return int(wait_for(resolve, timeout=timeout, interval=1.0, description=description))
 
 
 def wait_for_list_names_one_of(
@@ -2249,7 +2282,7 @@ def run_tree_refresh_stress_e2e(
 ) -> None:
     """Executes the 10k-node Shared Files tree-refresh stress regression."""
 
-    fixture = prepare_tree_refresh_stress_fixture(seed_config_dir, artifacts_dir, shared_root)
+    fixture = prepare_tree_refresh_stress_fixture(seed_config_dir, artifacts_dir, shared_root, app_exe)
     summary = {
         "name": "tree-refresh-stress-10k",
         "status": "failed",
@@ -2264,6 +2297,7 @@ def run_tree_refresh_stress_e2e(
         "observable_node_count": fixture["observable_node_count"],
         "stress_branch_count": fixture["stress_branch_count"],
         "stress_files_per_branch": fixture["stress_files_per_branch"],
+        "rest_base_url": fixture["rest_base_url"],
         "churn_cycles": churn_cycles,
         "command_line": subprocess.list2cmdline(
             [str(app_exe), "-ignoreinstances", "-c", str(fixture["profile_base"])]
@@ -2291,8 +2325,15 @@ def run_tree_refresh_stress_e2e(
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
         list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
+        wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
         initial_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"])
         summary["initial_row_count"] = initial_count
+        summary["initial_rest_row_count"] = wait_for_rest_shared_file_count(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            fixture["expected_row_count"],
+            "initial tree stress REST shared-files count",
+        )
         summary["resources_before_churn"] = get_process_resource_snapshot(process_handle)
 
         sample_directories = list(fixture["sample_directories"])
@@ -2312,6 +2353,12 @@ def run_tree_refresh_stress_e2e(
         click_reload_button(main_hwnd)
         final_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"])
         summary["final_row_count"] = final_count
+        summary["final_rest_row_count"] = wait_for_rest_shared_file_count(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            fixture["expected_row_count"],
+            "final tree stress REST shared-files count",
+        )
         summary["final_name_preview"] = get_list_names(process_handle, list_hwnd, min(20, final_count))
         summary["resources_after_churn"] = get_process_resource_snapshot(process_handle)
         summary["resource_deltas"] = diff_resource_snapshots(
