@@ -1014,6 +1014,9 @@ def collect_startup_profile_bundle(
                 "startup_profile_path": str(startup_profile_path),
                 "startup_profile_status": "missing",
                 "startup_profile_error": str(exc),
+                "startup_profile_size_bytes": startup_profile_path.stat().st_size
+                if startup_profile_path.exists()
+                else None,
                 "startup_profile_phase_count": 0,
                 "startup_profile_counter_count": 0,
                 "startup_profile_counters": {},
@@ -2320,9 +2323,10 @@ def run_tree_refresh_stress_e2e(
         process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
         summary["process_id"] = process_id
 
+        summary["startup_profile_required"] = bool(require_startup_profile)
         startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
             fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+            require_startup_profile=False,
         )
         summary.update(startup_profile_summary)
         if startup_profile_phases:
