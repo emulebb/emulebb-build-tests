@@ -435,6 +435,13 @@ TEST_CASE("Web API shared-file metadata distinguishes rule-backed and manual sha
 	CHECK_FALSE(WebServerJsonSeams::BuildSharedByRuleFlag(false));
 }
 
+TEST_CASE("Web API UI dispatch uses a bounded wait result")
+{
+	CHECK(WebServerJsonSeams::kRestUiDispatchTimeoutMs > 0u);
+	CHECK(WebServerJsonSeams::DidRestUiDispatchComplete(TRUE));
+	CHECK_FALSE(WebServerJsonSeams::DidRestUiDispatchComplete(FALSE));
+}
+
 TEST_CASE("Web API parses the search start command vocabulary and trims the query")
 {
 	WebApiCommandSeams::SSearchStartRequest request;
