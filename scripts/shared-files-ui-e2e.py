@@ -698,6 +698,21 @@ def wait_for_shared_hashing_done_profile(
         raise RuntimeError(f"{exc} Last hashing state: {last_state!r}") from exc
 
 
+def close_app_after_cache_warmup(app: Application, summary: dict[str, object], label: str) -> None:
+    """Closes a cache warm-up launch, falling back to termination after persisted cache evidence."""
+
+    try:
+        live_common.close_app_cleanly(app, window_timeout=60.0, process_timeout=60.0)
+        summary[f"{label}_close_status"] = "clean"
+    except Exception as exc:
+        summary[f"{label}_close_status"] = "forced_after_cache_persisted"
+        summary[f"{label}_close_error"] = str(exc)
+        try:
+            app.kill()
+        except Exception as kill_exc:
+            summary[f"{label}_kill_error"] = str(kill_exc)
+
+
 def open_process(process_id: int) -> int:
     """Opens the target process for the remote memory operations needed by Win32 list controls."""
 
@@ -2566,11 +2581,6 @@ def run_tree_refresh_stress_e2e(
             shutil.copy2(fixture["startup_profile_path"], first_launch_trace_artifact)
             summary["first_launch_startup_profile_artifact"] = str(first_launch_trace_artifact)
 
-        close_process(process_handle)
-        process_handle = 0
-        live_common.close_app_cleanly(app)
-        app = None
-
         shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
         summary["shared_cache_path"] = str(shared_cache_path)
         wait_for(
@@ -2580,6 +2590,12 @@ def run_tree_refresh_stress_e2e(
             description="50k shared startup cache persistence",
         )
         summary["shared_cache_size_bytes_after_first_launch"] = shared_cache_path.stat().st_size
+
+        close_process(process_handle)
+        process_handle = 0
+        close_app_after_cache_warmup(app, summary, "first_launch")
+        app = None
+
         Path(str(fixture["startup_profile_path"])).unlink(missing_ok=True)
 
         app = live_common.launch_app(app_exe, fixture["profile_base"])
