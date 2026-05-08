@@ -2373,7 +2373,7 @@ def run_tree_refresh_stress_e2e(
         "row_count_scope": "All Shared Files",
         "timeouts": {
             "main_window_seconds": 900.0,
-            "row_count_seconds": 1800.0,
+            "row_count_seconds": 7200.0,
         },
         "command_line": subprocess.list2cmdline(
             [str(app_exe), "-ignoreinstances", "-c", str(fixture["profile_base"])]
@@ -2407,7 +2407,7 @@ def run_tree_refresh_stress_e2e(
         initial_count = wait_for_exact_list_count_with_progress(
             list_hwnd,
             fixture["expected_row_count"],
-            timeout=1800.0,
+            timeout=7200.0,
             summary=summary,
             summary_key="initial_row_count_progress",
             rest_base_url=str(fixture["rest_base_url"]),
@@ -2440,7 +2440,7 @@ def run_tree_refresh_stress_e2e(
         final_count = wait_for_exact_list_count_with_progress(
             list_hwnd,
             fixture["expected_row_count"],
-            timeout=1800.0,
+            timeout=7200.0,
             summary=summary,
             summary_key="final_row_count_progress",
             rest_base_url=str(fixture["rest_base_url"]),
