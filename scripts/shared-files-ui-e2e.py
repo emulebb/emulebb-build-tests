@@ -91,6 +91,8 @@ TVGN_CARET = 0x0009
 TVE_COLLAPSE = 0x0001
 TVE_EXPAND = 0x0002
 TVIF_TEXT = 0x0001
+SMTO_ABORTIFHUNG = 0x0002
+LIST_COUNT_MESSAGE_TIMEOUT_MS = 1000
 
 PROCESS_VM_OPERATION = 0x0008
 PROCESS_VM_READ = 0x0010
@@ -122,6 +124,16 @@ user32.GetGuiResources.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
 user32.GetGuiResources.restype = ctypes.c_uint32
 user32.UpdateWindow.argtypes = [ctypes.c_void_p]
 user32.UpdateWindow.restype = ctypes.c_int
+user32.SendMessageTimeoutW.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_uint32,
+    ctypes.c_size_t,
+    ctypes.c_ssize_t,
+    ctypes.c_uint32,
+    ctypes.c_uint32,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+user32.SendMessageTimeoutW.restype = ctypes.c_void_p
 
 GR_GDIOBJECTS = 0
 GR_USEROBJECTS = 1
@@ -1119,6 +1131,22 @@ def wait_for_exact_list_count(list_hwnd: int, expected_count: int, *, timeout: f
     return wait_for(resolve, timeout=timeout, interval=0.5, description=f"Shared Files row count {expected_count}")
 
 
+def get_list_item_count_with_timeout(list_hwnd: int) -> int | None:
+    """Returns a list-view item count, or None when the owner UI thread is hung."""
+
+    result = ctypes.c_size_t()
+    ok = user32.SendMessageTimeoutW(
+        ctypes.c_void_p(list_hwnd),
+        LVM_GETITEMCOUNT,
+        0,
+        0,
+        SMTO_ABORTIFHUNG,
+        LIST_COUNT_MESSAGE_TIMEOUT_MS,
+        ctypes.byref(result),
+    )
+    return int(result.value) if ok else None
+
+
 def wait_for_exact_list_count_with_progress(
     list_hwnd: int,
     expected_count: int,
@@ -1144,12 +1172,13 @@ def wait_for_exact_list_count_with_progress(
     }
     summary[summary_key] = progress
     samples = progress["samples"]
-    last_count = 0
+    last_count: int | None = 0
     max_count = 0
     while time.monotonic() < deadline:
         now = time.monotonic()
-        last_count = int(win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0))
-        max_count = max(max_count, last_count)
+        last_count = get_list_item_count_with_timeout(list_hwnd)
+        if last_count is not None:
+            max_count = max(max_count, last_count)
         progress["last_count"] = last_count
         progress["max_count"] = max_count
         if now >= next_ui_sample_at or last_count == expected_count:
@@ -1157,6 +1186,8 @@ def wait_for_exact_list_count_with_progress(
                 "elapsed_seconds": round(now - start, 1),
                 "ui_count": last_count,
             }
+            if last_count is None:
+                sample["ui_count_timed_out"] = True
             if rest_base_url is not None and rest_api_key is not None and now >= next_rest_sample_at:
                 try:
                     sample["rest_count"] = get_rest_shared_file_count(rest_base_url, rest_api_key)
