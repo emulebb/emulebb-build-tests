@@ -1119,6 +1119,62 @@ def wait_for_exact_list_count(list_hwnd: int, expected_count: int, *, timeout: f
     return wait_for(resolve, timeout=timeout, interval=0.5, description=f"Shared Files row count {expected_count}")
 
 
+def wait_for_exact_list_count_with_progress(
+    list_hwnd: int,
+    expected_count: int,
+    *,
+    timeout: float,
+    summary: dict[str, object],
+    summary_key: str,
+    rest_base_url: str | None = None,
+    rest_api_key: str | None = None,
+) -> int:
+    """Waits for an exact list count while preserving progress samples for post-failure diagnosis."""
+
+    start = time.monotonic()
+    deadline = start + timeout
+    next_ui_sample_at = start
+    next_rest_sample_at = start
+    progress: dict[str, object] = {
+        "expected_count": expected_count,
+        "timeout_seconds": timeout,
+        "samples": [],
+        "last_count": None,
+        "max_count": 0,
+    }
+    summary[summary_key] = progress
+    samples = progress["samples"]
+    last_count = 0
+    max_count = 0
+    while time.monotonic() < deadline:
+        now = time.monotonic()
+        last_count = int(win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0))
+        max_count = max(max_count, last_count)
+        progress["last_count"] = last_count
+        progress["max_count"] = max_count
+        if now >= next_ui_sample_at or last_count == expected_count:
+            sample: dict[str, object] = {
+                "elapsed_seconds": round(now - start, 1),
+                "ui_count": last_count,
+            }
+            if rest_base_url is not None and rest_api_key is not None and now >= next_rest_sample_at:
+                try:
+                    sample["rest_count"] = get_rest_shared_file_count(rest_base_url, rest_api_key)
+                except Exception as exc:
+                    sample["rest_error"] = str(exc)
+                next_rest_sample_at = now + 60.0
+            samples.append(sample)
+            next_ui_sample_at = now + 30.0
+        if last_count == expected_count:
+            return last_count
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"Timed out waiting for Shared Files row count {expected_count}. "
+        f"Last value: {last_count}; max value: {max_count}; "
+        f"progress key: {summary_key}"
+    )
+
+
 def wait_for_static_text(static_hwnd: int, expected_text: str) -> None:
     """Waits until a static control shows the expected file name."""
 
@@ -2337,7 +2393,15 @@ def run_tree_refresh_stress_e2e(
         list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
         wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
         select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
-        initial_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"], timeout=1800.0)
+        initial_count = wait_for_exact_list_count_with_progress(
+            list_hwnd,
+            fixture["expected_row_count"],
+            timeout=1800.0,
+            summary=summary,
+            summary_key="initial_row_count_progress",
+            rest_base_url=str(fixture["rest_base_url"]),
+            rest_api_key=str(fixture["rest_api_key"]),
+        )
         summary["initial_row_count"] = initial_count
         summary["initial_rest_row_count"] = wait_for_rest_shared_file_count(
             str(fixture["rest_base_url"]),
@@ -2362,7 +2426,15 @@ def run_tree_refresh_stress_e2e(
 
         select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
         click_reload_button(main_hwnd)
-        final_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"], timeout=1800.0)
+        final_count = wait_for_exact_list_count_with_progress(
+            list_hwnd,
+            fixture["expected_row_count"],
+            timeout=1800.0,
+            summary=summary,
+            summary_key="final_row_count_progress",
+            rest_base_url=str(fixture["rest_base_url"]),
+            rest_api_key=str(fixture["rest_api_key"]),
+        )
         summary["final_row_count"] = final_count
         summary["final_rest_row_count"] = wait_for_rest_shared_file_count(
             str(fixture["rest_base_url"]),
