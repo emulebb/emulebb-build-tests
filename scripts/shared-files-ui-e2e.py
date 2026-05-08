@@ -343,7 +343,7 @@ def prepare_generated_robustness_fixture(seed_config_dir: Path, artifacts_dir: P
 
 
 def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Path, shared_root: Path, app_exe: Path) -> dict:
-    """Creates a profile base that shares the 10k-node tree-refresh stress subtree recursively."""
+    """Creates a profile base that shares the 50k-file tree-refresh stress subtree recursively."""
 
     manifest = generated_fixture.ensure_fixture(shared_root, include_tree_stress=True)
     subtree = manifest["subtrees"]["shared_files_tree_stress"]
@@ -1106,14 +1106,14 @@ def wait_for_list_count(list_hwnd: int, minimum_count: int) -> int:
     return wait_for(resolve, timeout=90.0, interval=0.5, description="Shared Files list rows")
 
 
-def wait_for_exact_list_count(list_hwnd: int, expected_count: int) -> int:
+def wait_for_exact_list_count(list_hwnd: int, expected_count: int, *, timeout: float = 90.0) -> int:
     """Waits until the Shared Files list exposes exactly the requested item count."""
 
     def resolve():
         count = win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0)
         return count if count == expected_count else 0
 
-    return wait_for(resolve, timeout=90.0, interval=0.5, description=f"Shared Files row count {expected_count}")
+    return wait_for(resolve, timeout=timeout, interval=0.5, description=f"Shared Files row count {expected_count}")
 
 
 def wait_for_static_text(static_hwnd: int, expected_text: str) -> None:
@@ -2281,7 +2281,7 @@ def run_tree_refresh_stress_e2e(
     require_startup_profile: bool,
     churn_cycles: int,
 ) -> None:
-    """Executes the 10k-node Shared Files tree-refresh stress regression."""
+    """Executes the 50k-file Shared Files tree-refresh stress regression."""
 
     fixture = prepare_tree_refresh_stress_fixture(seed_config_dir, artifacts_dir, shared_root, app_exe)
     summary = {
@@ -2301,6 +2301,10 @@ def run_tree_refresh_stress_e2e(
         "stress_empty_children_per_branch": fixture["stress_empty_children_per_branch"],
         "rest_base_url": fixture["rest_base_url"],
         "churn_cycles": churn_cycles,
+        "timeouts": {
+            "main_window_seconds": 900.0,
+            "row_count_seconds": 1800.0,
+        },
         "command_line": subprocess.list2cmdline(
             [str(app_exe), "-ignoreinstances", "-c", str(fixture["profile_base"])]
         ),
@@ -2310,7 +2314,7 @@ def run_tree_refresh_stress_e2e(
     process_handle = 0
     try:
         app = live_common.launch_app(app_exe, fixture["profile_base"])
-        main_window = live_common.wait_for_main_window(app, timeout=180.0)
+        main_window = live_common.wait_for_main_window(app, timeout=900.0)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
         process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
@@ -2329,7 +2333,7 @@ def run_tree_refresh_stress_e2e(
         list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
         wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
         select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
-        initial_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"])
+        initial_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"], timeout=1800.0)
         summary["initial_row_count"] = initial_count
         summary["initial_rest_row_count"] = wait_for_rest_shared_file_count(
             str(fixture["rest_base_url"]),
@@ -2354,7 +2358,7 @@ def run_tree_refresh_stress_e2e(
 
         select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
         click_reload_button(main_hwnd)
-        final_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"])
+        final_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"], timeout=1800.0)
         summary["final_row_count"] = final_count
         summary["final_rest_row_count"] = wait_for_rest_shared_file_count(
             str(fixture["rest_base_url"]),

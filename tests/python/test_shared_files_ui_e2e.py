@@ -52,7 +52,8 @@ def test_tree_refresh_stress_fixture_estimate_exceeds_r1_node_floor() -> None:
 
     assert module.estimate_shared_files_tree_stress_observable_nodes() >= 10000
     assert module.estimate_shared_files_tree_stress_observable_nodes() >= module.TREE_STRESS_MIN_OBSERVABLE_NODES
-    assert module.TREE_STRESS_BRANCH_COUNT * module.TREE_STRESS_FILES_PER_BRANCH <= 2048
+    assert module.TREE_STRESS_BRANCH_COUNT * module.TREE_STRESS_FILES_PER_BRANCH >= 50000
+    assert module.TREE_STRESS_BRANCH_COUNT * module.TREE_STRESS_FILES_PER_BRANCH >= module.TREE_STRESS_MIN_FILE_COUNT
 
 
 def test_get_rest_shared_file_count_validates_row_shape(monkeypatch) -> None:

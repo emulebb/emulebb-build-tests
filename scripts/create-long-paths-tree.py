@@ -95,10 +95,11 @@ ROBUSTNESS_FILE_SPECS = [
     ("archive", "162_stream.capture.sample.mkv", 3407881, 0xB01B, True),
     ("archive", "163_large_tail_payload.iso", 3670027, 0xB01C, True),
 ]
-TREE_STRESS_BRANCH_COUNT = 1024
-TREE_STRESS_FILES_PER_BRANCH = 1
-TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH = 9
-TREE_STRESS_GROUP_SIZE = 16
+TREE_STRESS_BRANCH_COUNT = 500
+TREE_STRESS_FILES_PER_BRANCH = 100
+TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH = 0
+TREE_STRESS_GROUP_SIZE = 10
+TREE_STRESS_MIN_FILE_COUNT = 50000
 TREE_STRESS_MIN_OBSERVABLE_NODES = 10000
 
 
@@ -312,7 +313,7 @@ def build_shared_files_robustness(root: Path) -> dict[str, object]:
 
 
 def make_tree_stress_file_name(branch_index: int, file_index: int) -> str:
-    """Returns one deterministic file name for the 10k-node tree-refresh fixture."""
+    """Returns one deterministic file name for the 50k-file tree-refresh fixture."""
 
     stem = [
         "alpha duplicate-name",
@@ -328,7 +329,7 @@ def make_tree_stress_file_name(branch_index: int, file_index: int) -> str:
 
 
 def build_shared_files_tree_stress(root: Path) -> dict[str, object]:
-    """Builds the large Shared Files tree-refresh stress subtree."""
+    """Builds the 50k-file Shared Files tree-refresh stress subtree."""
 
     ensure_directory(root)
     directories = [root]
@@ -364,8 +365,14 @@ def build_shared_files_tree_stress(root: Path) -> dict[str, object]:
     summary["stress_branch_count"] = TREE_STRESS_BRANCH_COUNT
     summary["stress_files_per_branch"] = TREE_STRESS_FILES_PER_BRANCH
     summary["stress_empty_children_per_branch"] = TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH
+    summary["min_file_count"] = TREE_STRESS_MIN_FILE_COUNT
     summary["min_observable_node_count"] = TREE_STRESS_MIN_OBSERVABLE_NODES
     summary["sample_directories"] = sample_directories
+    if int(summary["expected_visible_file_count"]) < TREE_STRESS_MIN_FILE_COUNT:
+        raise RuntimeError(
+            "Shared Files tree stress fixture has too few shared files: "
+            f"{summary['expected_visible_file_count']} < {TREE_STRESS_MIN_FILE_COUNT}"
+        )
     if int(summary["observable_node_count"]) < TREE_STRESS_MIN_OBSERVABLE_NODES:
         raise RuntimeError(
             "Shared Files tree stress fixture is undersized: "
@@ -388,7 +395,7 @@ def ensure_fixture(shared_root: Path | str = DEFAULT_SHARED_ROOT, *, include_tre
     }
     if include_tree_stress:
         subtrees["shared_files_tree_stress"] = build_shared_files_tree_stress(
-            resolved_root / "shared_files_tree_stress_v2"
+            resolved_root / "shared_files_tree_stress_50k"
         )
 
     manifest_path = resolved_root / MANIFEST_FILENAME
@@ -418,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--include-tree-stress",
         action="store_true",
-        help="Also materialize the 10k+ node Shared Files tree-refresh stress subtree.",
+        help="Also materialize the 50k-file Shared Files tree-refresh stress subtree.",
     )
     args = parser.parse_args(argv)
 
