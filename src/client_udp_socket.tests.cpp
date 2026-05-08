@@ -37,4 +37,22 @@ TEST_CASE("Client UDP seam only reads diagnostic opcode when packet contains it"
 	CHECK(opcode == 0x91);
 }
 
+TEST_CASE("Client UDP seam gates outgoing encryption on the global crypt preference")
+{
+	CHECK(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, true, true, false, 0u));
+	CHECK(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, true, true, false));
+
+	CHECK(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, true, false, true, 0x12345678u));
+	CHECK(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, true, false, true));
+
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(false, true, true, false, 0u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(false, true, false, true, 0x12345678u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, false, true, false));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, false, false, true));
+
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, false, true, false, 0u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, true, false, true, 0u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, true, false, false));
+}
+
 TEST_SUITE_END();
