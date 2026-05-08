@@ -175,6 +175,25 @@ TEST_CASE("Shared hash completion delivery keeps results for UI retry unless shu
 		SharedFileListSeams::SharedHashCompletionDeliveryAction::DropResult);
 }
 
+TEST_CASE("Shared hash drain continuation cannot strand deferred results after post failure")
+{
+	CHECK_EQ(
+		SharedFileListSeams::GetSharedHashDrainContinuationAction({ false, false, false, false }),
+		SharedFileListSeams::SharedHashDrainContinuationAction::Complete);
+	CHECK_EQ(
+		SharedFileListSeams::GetSharedHashDrainContinuationAction({ true, false, false, true }),
+		SharedFileListSeams::SharedHashDrainContinuationAction::WaitForPostedDrain);
+	CHECK_EQ(
+		SharedFileListSeams::GetSharedHashDrainContinuationAction({ true, false, false, false }),
+		SharedFileListSeams::SharedHashDrainContinuationAction::DrainInlineFallback);
+	CHECK_EQ(
+		SharedFileListSeams::GetSharedHashDrainContinuationAction({ true, true, false, false }),
+		SharedFileListSeams::SharedHashDrainContinuationAction::Complete);
+	CHECK_EQ(
+		SharedFileListSeams::GetSharedHashDrainContinuationAction({ true, false, true, false }),
+		SharedFileListSeams::SharedHashDrainContinuationAction::Complete);
+}
+
 TEST_CASE("Shared hash shutdown invalidates warm caches only when hashing work was interrupted")
 {
 	CHECK_FALSE(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, false }));
