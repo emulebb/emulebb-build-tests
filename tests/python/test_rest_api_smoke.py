@@ -146,6 +146,29 @@ def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
     assert matrix["error_response_count"] == 5
 
 
+def test_process_resource_snapshot_diff_ignores_missing_values() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.diff_process_resource_snapshots(
+        {
+            "process_id": 123,
+            "handles": 10,
+            "gdi_objects": None,
+            "private_bytes": 4096,
+        },
+        {
+            "process_id": 123,
+            "handles": 14,
+            "gdi_objects": 2,
+            "private_bytes": 6144,
+        },
+    ) == {
+        "handles": 4,
+        "gdi_objects": None,
+        "private_bytes": 2048,
+    }
+
+
 def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     calls: list[dict[str, object]] = []

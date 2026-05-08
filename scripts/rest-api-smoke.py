@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
 import json
@@ -52,6 +53,49 @@ upsert_ini_section_value = live_common.upsert_ini_section_value
 wait_for = live_common.wait_for
 wait_for_main_window = live_common.wait_for_main_window
 write_json = live_common.write_json
+
+PROCESS_QUERY_INFORMATION = 0x0400
+PROCESS_VM_READ = 0x0010
+GR_GDIOBJECTS = 0
+GR_USEROBJECTS = 1
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+kernel32.OpenProcess.restype = ctypes.c_void_p
+kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+kernel32.CloseHandle.restype = ctypes.c_int
+kernel32.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+kernel32.GetProcessHandleCount.restype = ctypes.c_int
+psapi = ctypes.WinDLL("psapi", use_last_error=True)
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+user32.GetGuiResources.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+user32.GetGuiResources.restype = ctypes.c_uint32
+
+
+class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+    """Mirror of PROCESS_MEMORY_COUNTERS_EX for REST/WebSocket leak snapshots."""
+
+    _fields_ = [
+        ("cb", ctypes.c_uint32),
+        ("PageFaultCount", ctypes.c_uint32),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+        ("PrivateUsage", ctypes.c_size_t),
+    ]
+
+
+psapi.GetProcessMemoryInfo.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
+    ctypes.c_uint32,
+]
+psapi.GetProcessMemoryInfo.restype = ctypes.c_int
 
 DEFAULT_LIVE_DOWNLOAD_TRIGGER_COUNT = 1
 MAX_SAFE_LIVE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
@@ -1372,6 +1416,70 @@ def get_app_process_id(app: object) -> int | None:
     if isinstance(process_id, int):
         return process_id
     return None
+
+
+def get_process_resource_snapshot(process_id: int | None) -> dict[str, int | None]:
+    """Returns a best-effort resource snapshot for the launched eMule process."""
+
+    if process_id is None:
+        return {
+            "process_id": None,
+            "handles": None,
+            "gdi_objects": None,
+            "user_objects": None,
+            "private_bytes": None,
+            "working_set_bytes": None,
+        }
+
+    process_handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, process_id)
+    if not process_handle:
+        return {
+            "process_id": process_id,
+            "handles": None,
+            "gdi_objects": None,
+            "user_objects": None,
+            "private_bytes": None,
+            "working_set_bytes": None,
+        }
+    try:
+        handle_count = ctypes.c_uint32()
+        handles = None
+        if kernel32.GetProcessHandleCount(process_handle, ctypes.byref(handle_count)):
+            handles = int(handle_count.value)
+
+        memory = PROCESS_MEMORY_COUNTERS_EX()
+        memory.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+        private_bytes = None
+        working_set = None
+        if psapi.GetProcessMemoryInfo(process_handle, ctypes.byref(memory), memory.cb):
+            private_bytes = int(memory.PrivateUsage)
+            working_set = int(memory.WorkingSetSize)
+
+        return {
+            "process_id": process_id,
+            "handles": handles,
+            "gdi_objects": int(user32.GetGuiResources(process_handle, GR_GDIOBJECTS)),
+            "user_objects": int(user32.GetGuiResources(process_handle, GR_USEROBJECTS)),
+            "private_bytes": private_bytes,
+            "working_set_bytes": working_set,
+        }
+    finally:
+        kernel32.CloseHandle(process_handle)
+
+
+def diff_process_resource_snapshots(
+    before: dict[str, int | None],
+    after: dict[str, int | None],
+) -> dict[str, int | None]:
+    """Computes deltas between two process resource snapshots."""
+
+    deltas: dict[str, int | None] = {}
+    for key, before_value in before.items():
+        if key == "process_id":
+            continue
+        after_value = after.get(key)
+        deltas[key] = None if before_value is None or after_value is None else int(after_value) - int(before_value)
+    return deltas
 
 
 def compact_server_status(payload: dict[str, Any]) -> dict[str, Any]:
@@ -4690,7 +4798,11 @@ def main() -> int:
 
     try:
         app = launch_app(app_exe, Path(profile["profile_base"]))
-        report["launched_process_id"] = get_app_process_id(app)
+        launched_process_id = get_app_process_id(app)
+        report["launched_process_id"] = launched_process_id
+        report["resource_snapshots"] = {
+            "after_launch": get_process_resource_snapshot(launched_process_id),
+        }
         main_window = wait_for_main_window(app)
         report["main_window_title"] = main_window.window_text()
 
@@ -4777,6 +4889,17 @@ def main() -> int:
                 max_failures=args.rest_stress_max_failures,
                 request_timeout_seconds=args.rest_stress_request_timeout_seconds,
             )
+
+        assert isinstance(report.get("resource_snapshots"), dict)
+        report["resource_snapshots"]["after_rest_adversity_and_stress"] = get_process_resource_snapshot(
+            launched_process_id
+        )
+        report["resource_deltas"] = {
+            "launch_to_after_rest_adversity_and_stress": diff_process_resource_snapshots(
+                report["resource_snapshots"]["after_launch"],
+                report["resource_snapshots"]["after_rest_adversity_and_stress"],
+            )
+        }
 
         current_phase = set_phase(report, "rest_error_path_matrix")
         report["checks"]["rest_error_path_matrix"] = build_rest_error_path_matrix(report["checks"])
