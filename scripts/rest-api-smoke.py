@@ -1415,7 +1415,7 @@ def exercise_rest_leak_churn(
     cycles: int | None,
     request_timeout_seconds: float,
 ) -> dict[str, object]:
-    """Runs repeated HTTP connect/reset cycles and reports resource snapshots."""
+    """Runs repeated HTTP or HTTPS connect/reset cycles and reports resource snapshots."""
 
     if budget not in REST_LEAK_CHURN_BUDGETS:
         raise ValueError(f"Unsupported REST leak churn budget: {budget}")
@@ -1427,25 +1427,52 @@ def exercise_rest_leak_churn(
         return {"budget": budget, "cycles_requested": cycles, "cycles_completed": 0, "snapshots": {}}
 
     endpoint = parse_base_url_endpoint(base_url)
-    if endpoint["scheme"] != "http":
-        raise RuntimeError("REST leak churn currently requires an HTTP base URL.")
-
     host = str(endpoint["host"])
     port = int(endpoint["port"])
     quoted_host = host.encode("ascii", errors="ignore") or b"127.0.0.1"
     api_key_bytes = api_key.encode("ascii", errors="ignore")
-    payloads = (
-        b"GET /api/v1/app HTTP/1.1\r\nHost: " + quoted_host + b"\r\nX-API-Key: " + api_key_bytes + b"\r\n",
-        b"GET /api/v1/logs?limit=400 HTTP/1.1\r\nHost: "
-        + quoted_host
-        + b"\r\nX-API-Key: "
-        + api_key_bytes
-        + b"\r\nConnection: close\r\n\r\n",
-        b"POST /api/v1/transfers HTTP/1.1\r\nHost: "
-        + quoted_host
-        + b"\r\nX-API-Key: "
-        + api_key_bytes
-        + b"\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{\"ed2kLinks\":[",
+    http_payloads = (
+        {
+            "scenario": "partial_header_reset",
+            "payload": b"GET /api/v1/app HTTP/1.1\r\nHost: "
+            + quoted_host
+            + b"\r\nX-API-Key: "
+            + api_key_bytes
+            + b"\r\n",
+        },
+        {
+            "scenario": "response_send_reset",
+            "payload": b"GET /api/v1/logs?limit=400 HTTP/1.1\r\nHost: "
+            + quoted_host
+            + b"\r\nX-API-Key: "
+            + api_key_bytes
+            + b"\r\nConnection: close\r\n\r\n",
+        },
+        {
+            "scenario": "declared_body_reset",
+            "payload": b"POST /api/v1/transfers HTTP/1.1\r\nHost: "
+            + quoted_host
+            + b"\r\nX-API-Key: "
+            + api_key_bytes
+            + b"\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{\"ed2kLinks\":[",
+        },
+    )
+    tls_chunk_sets = (
+        {
+            "scenario": "stalled_tls_connect_close",
+            "chunks": [b""],
+            "reset_on_close": False,
+        },
+        {
+            "scenario": "partial_tls_record_reset",
+            "chunks": [b"\x16\x03", b"\x01\x02", b"\x00"],
+            "reset_on_close": True,
+        },
+        {
+            "scenario": "partial_tls_clienthello_reset",
+            "chunks": [b"\x16\x03\x01\x02\x00", b"\x01\x00", b"\x01"],
+            "reset_on_close": True,
+        },
     )
 
     before = get_process_resource_snapshot(process_id)
@@ -1455,15 +1482,26 @@ def exercise_rest_leak_churn(
     sample_every = max(1, cycles // 10)
 
     for cycle_index in range(cycles):
-        payload = payloads[cycle_index % len(payloads)]
-        result = raw_socket_probe(
-            host,
-            port,
-            payload,
-            timeout_seconds=request_timeout_seconds,
-            read_response=False,
-            reset_on_close=True,
-        )
+        if endpoint["scheme"] == "https":
+            scenario = tls_chunk_sets[cycle_index % len(tls_chunk_sets)]
+            result = raw_socket_chunk_probe(
+                host,
+                port,
+                list(scenario["chunks"]),
+                chunk_delay_seconds=0.0,
+                timeout_seconds=request_timeout_seconds,
+                reset_on_close=bool(scenario["reset_on_close"]),
+            )
+        else:
+            scenario = http_payloads[cycle_index % len(http_payloads)]
+            result = raw_socket_probe(
+                host,
+                port,
+                bytes(scenario["payload"]),
+                timeout_seconds=request_timeout_seconds,
+                read_response=False,
+                reset_on_close=True,
+            )
         require_socket_probe_outcome(
             f"leak_churn_cycle_{cycle_index}",
             result,
@@ -1473,6 +1511,7 @@ def exercise_rest_leak_churn(
             rows.append(
                 {
                     "cycle": cycle_index + 1,
+                    "scenario": scenario["scenario"],
                     "outcome": result.get("outcome"),
                     "elapsed_ms": result.get("elapsed_ms"),
                 }

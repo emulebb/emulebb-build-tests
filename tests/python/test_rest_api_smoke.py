@@ -258,6 +258,36 @@ def test_rest_leak_churn_defaults_include_r1_soak_boundary() -> None:
     assert module.REST_LEAK_CHURN_DEFAULT_CYCLES["soak"] >= 1000
 
 
+def test_rest_leak_churn_supports_https_cycles(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    calls: list[dict[str, object]] = []
+
+    def fake_chunk_probe(host: str, port: int, chunks: list[bytes], **kwargs: object) -> dict[str, object]:
+        calls.append({"host": host, "port": port, "chunks": chunks, **kwargs})
+        return {"outcome": "sent_reset", "status": None, "elapsed_ms": 1.0}
+
+    monkeypatch.setattr(module, "raw_socket_chunk_probe", fake_chunk_probe)
+    monkeypatch.setattr(module, "get_process_resource_snapshot", lambda _pid: {"handles": 10})
+
+    summary = module.exercise_rest_leak_churn(
+        "https://127.0.0.1:4711",
+        "api-key",
+        process_id=123,
+        budget="smoke",
+        cycles=3,
+        request_timeout_seconds=1.0,
+    )
+
+    assert summary["scheme"] == "https"
+    assert summary["cycles_completed"] == 3
+    assert [row["scenario"] for row in summary["sampled_cycles"]] == [
+        "stalled_tls_connect_close",
+        "partial_tls_record_reset",
+        "partial_tls_clienthello_reset",
+    ]
+    assert len(calls) == 3
+
+
 def test_max_resource_snapshot_keeps_high_water_marks() -> None:
     module = load_rest_api_smoke_module()
 
