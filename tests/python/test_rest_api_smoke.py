@@ -160,7 +160,9 @@ def test_rest_socket_adversity_includes_response_send_reset(monkeypatch: pytest.
     )
 
     assert "reset_during_response_send" in [probe["scenario"] for probe in summary["probes"]]
+    assert "reset_during_error_response_send" in [probe["scenario"] for probe in summary["probes"]]
     assert any(b"GET /api/v1/logs?limit=400 HTTP/1.1" in payload for payload in raw_payloads)
+    assert any(b"GET /api/v1/r1-missing-error-reset HTTP/1.1" in payload for payload in raw_payloads)
 
 
 def test_rest_tls_handshake_adversity_requires_https() -> None:
@@ -218,6 +220,7 @@ def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
     )
 
     assert matrix["status_counts"] == {"400": 1, "401": 1, "404": 1, "405": 1, "409": 1}
+    assert matrix["ok"] is True
     assert matrix["covered_release_statuses"] == [400, 401, 404, 405, 409, 500, 503]
     assert matrix["missing_release_statuses"] == []
     assert matrix["live_missing_release_statuses"] == [500, 503]
@@ -227,6 +230,17 @@ def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
     assert matrix["release_statuses"][5]["seam"]["expected_error_code"] == "EMULE_ERROR"
     assert matrix["release_statuses"][6]["seam"]["expected_error_code"] == "EMULE_UNAVAILABLE"
     assert matrix["error_response_count"] == 5
+
+
+def test_rest_error_path_matrix_hard_gate_rejects_missing_statuses() -> None:
+    module = load_rest_api_smoke_module()
+
+    matrix = module.build_rest_error_path_matrix({"missing_key": {"status": 401, "content_type": "application/json"}})
+
+    assert matrix["ok"] is False
+    assert matrix["missing_release_statuses"] == [400, 404]
+    with pytest.raises(AssertionError, match="release coverage gaps"):
+        module.require_rest_error_path_matrix(matrix)
 
 
 def test_process_resource_snapshot_diff_ignores_missing_values() -> None:

@@ -1290,6 +1290,19 @@ def exercise_rest_socket_adversity(
             "reset_on_close": True,
             "allowed_statuses": set(),
         },
+        {
+            "scenario": "reset_during_error_response_send",
+            "payload": (
+                b"GET /api/v1/r1-missing-error-reset HTTP/1.1\r\nHost: "
+                + quoted_host
+                + b"\r\nX-API-Key: "
+                + api_key_bytes
+                + b"\r\nConnection: close\r\n\r\n"
+            ),
+            "read_response": False,
+            "reset_on_close": True,
+            "allowed_statuses": set(),
+        },
     ]
 
     rows = []
@@ -1805,10 +1818,12 @@ def build_rest_error_path_matrix(checks: dict[str, object]) -> dict[str, object]
         }
         for status in REST_ERROR_MATRIX_RELEASE_STATUSES
     ]
+    missing_release_statuses = [row["status"] for row in release_status_rows if not row["covered"]]
     return {
+        "ok": not missing_release_statuses,
         "release_statuses": release_status_rows,
         "covered_release_statuses": [row["status"] for row in release_status_rows if row["covered"]],
-        "missing_release_statuses": [row["status"] for row in release_status_rows if not row["covered"]],
+        "missing_release_statuses": missing_release_statuses,
         "live_missing_release_statuses": [row["status"] for row in release_status_rows if row["live_count"] == 0],
         "seam_backed_release_statuses": [
             row["status"] for row in release_status_rows if row["coverage_source"] == "seam-backed"
@@ -1817,6 +1832,13 @@ def build_rest_error_path_matrix(checks: dict[str, object]) -> dict[str, object]
         "status_counts": by_status,
         "sample_errors": error_rows[:40],
     }
+
+
+def require_rest_error_path_matrix(matrix: dict[str, object]) -> None:
+    """Fails the run when the R1 REST/WebServer error-path matrix has release gaps."""
+
+    if not matrix.get("ok"):
+        raise AssertionError(f"REST error-path release coverage gaps: {matrix.get('missing_release_statuses')!r}")
 
 
 def compact_transfer_details_payload(payload: dict[str, Any], expected_hash: str) -> dict[str, object]:
@@ -5499,6 +5521,7 @@ def main() -> int:
 
         current_phase = set_phase(report, "rest_error_path_matrix")
         report["checks"]["rest_error_path_matrix"] = build_rest_error_path_matrix(report["checks"])
+        require_rest_error_path_matrix(report["checks"]["rest_error_path_matrix"])
 
         current_phase = set_phase(report, "servers_list")
         servers = http_request(base_url, "/api/v1/servers", api_key=args.api_key)
