@@ -14,6 +14,7 @@ from emule_test_harness import live_wire_inputs
 SHARED_FILES_UI_SCENARIOS = (
     "fixture-three-files",
     "generated-robustness-recursive",
+    "tree-refresh-stress-10k",
     "duplicate-startup-reuse",
     "dynamic-folder-lifecycle",
     "monitored-folder-events",

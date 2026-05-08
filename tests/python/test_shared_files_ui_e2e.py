@@ -18,6 +18,19 @@ def load_shared_files_module():
     return module
 
 
+def load_generated_fixture_module():
+    """Loads the hyphenated generated-fixture script for pure helper tests."""
+
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "create-long-paths-tree.py"
+    spec = importlib.util.spec_from_file_location("create_long_paths_tree_for_tests", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["create_long_paths_tree_for_tests"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_tree_label_matches_drive_accepts_bare_and_volume_labeled_drives() -> None:
     module = load_shared_files_module()
 
@@ -32,3 +45,10 @@ def test_tree_label_matches_drive_rejects_other_drives() -> None:
 
     assert not module.tree_label_matches_drive("DATA (D:)", "C:\\")
     assert not module.tree_label_matches_drive("C-drive backup", "D:\\")
+
+
+def test_tree_refresh_stress_fixture_estimate_exceeds_r1_node_floor() -> None:
+    module = load_generated_fixture_module()
+
+    assert module.estimate_shared_files_tree_stress_observable_nodes() >= 10000
+    assert module.estimate_shared_files_tree_stress_observable_nodes() >= module.TREE_STRESS_MIN_OBSERVABLE_NODES

@@ -47,6 +47,7 @@ harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common
 generated_fixture = load_local_module("create_long_paths_tree", "create-long-paths-tree.py")
 
 WM_COMMAND = 0x0111
+WM_PAINT = 0x000F
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 BM_CLICK = 0x00F5
@@ -87,6 +88,7 @@ TVGN_ROOT = 0x0000
 TVGN_NEXT = 0x0001
 TVGN_CHILD = 0x0004
 TVGN_CARET = 0x0009
+TVE_COLLAPSE = 0x0001
 TVE_EXPAND = 0x0002
 TVIF_TEXT = 0x0001
 
@@ -112,6 +114,17 @@ kernel32.ReadProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.
 kernel32.ReadProcessMemory.restype = ctypes.c_int
 kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
 kernel32.CloseHandle.restype = ctypes.c_int
+kernel32.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+kernel32.GetProcessHandleCount.restype = ctypes.c_int
+psapi = ctypes.WinDLL("psapi", use_last_error=True)
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+user32.GetGuiResources.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+user32.GetGuiResources.restype = ctypes.c_uint32
+user32.UpdateWindow.argtypes = [ctypes.c_void_p]
+user32.UpdateWindow.restype = ctypes.c_int
+
+GR_GDIOBJECTS = 0
+GR_USEROBJECTS = 1
 
 SHARED_DUPLICATE_PATH_CACHE_MAGIC = 0x50554453
 SHARED_DUPLICATE_PATH_CACHE_VERSION = 1
@@ -165,6 +178,32 @@ class RECT(ctypes.Structure):
         ("right", ctypes.c_long),
         ("bottom", ctypes.c_long),
     ]
+
+
+class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+    """Mirror of PROCESS_MEMORY_COUNTERS_EX for process resource snapshots."""
+
+    _fields_ = [
+        ("cb", ctypes.c_uint32),
+        ("PageFaultCount", ctypes.c_uint32),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+        ("PrivateUsage", ctypes.c_size_t),
+    ]
+
+
+psapi.GetProcessMemoryInfo.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
+    ctypes.c_uint32,
+]
+psapi.GetProcessMemoryInfo.restype = ctypes.c_int
 
 
 class RemoteBuffer:
@@ -297,6 +336,36 @@ def prepare_generated_robustness_fixture(seed_config_dir: Path, artifacts_dir: P
             "expected_size_descending_prefix": [
                 str(entry["name"]) for entry in subtree["expected_visible_largest_files_by_size"][:6]
             ],
+            "shared_directory_count": len(shared_dirs),
+        }
+    )
+    return fixture
+
+
+def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Path, shared_root: Path) -> dict:
+    """Creates a profile base that shares the 10k-node tree-refresh stress subtree recursively."""
+
+    manifest = generated_fixture.ensure_fixture(shared_root, include_tree_stress=True)
+    subtree = manifest["subtrees"]["shared_files_tree_stress"]
+    subtree_root = Path(str(subtree["root"])).resolve()
+    shared_dirs = live_common.enumerate_recursive_directories(subtree_root)
+    fixture = live_common.prepare_profile_base(
+        seed_config_dir=seed_config_dir,
+        artifacts_dir=artifacts_dir,
+        shared_dirs=shared_dirs,
+    )
+    fixture.update(
+        {
+            "manifest_path": str(Path(str(manifest["manifest_path"])).resolve()),
+            "shared_root": live_common.win_path(shared_root.resolve(), trailing_slash=True),
+            "subtree_root": live_common.win_path(subtree_root, trailing_slash=True),
+            "subtree_root_path": subtree_root,
+            "expected_row_count": int(subtree["expected_visible_file_count"]),
+            "observable_node_count": int(subtree["observable_node_count"]),
+            "directory_count": int(subtree["directory_count_including_root"]),
+            "stress_branch_count": int(subtree["stress_branch_count"]),
+            "stress_files_per_branch": int(subtree["stress_files_per_branch"]),
+            "sample_directories": [Path(str(path)).resolve() for path in subtree["sample_directories"]],
             "shared_directory_count": len(shared_dirs),
         }
     )
@@ -622,6 +691,41 @@ def get_all_list_names(process_handle: int, list_hwnd: int) -> list[str]:
     return get_list_names(process_handle, list_hwnd, count)
 
 
+def get_process_resource_snapshot(process_handle: int) -> dict[str, int | None]:
+    """Returns a best-effort Win32 resource snapshot for the target process."""
+
+    handle_count = ctypes.c_uint32()
+    handle_value = None
+    if kernel32.GetProcessHandleCount(process_handle, ctypes.byref(handle_count)):
+        handle_value = int(handle_count.value)
+
+    memory = PROCESS_MEMORY_COUNTERS_EX()
+    memory.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+    private_usage = None
+    working_set = None
+    if psapi.GetProcessMemoryInfo(process_handle, ctypes.byref(memory), memory.cb):
+        private_usage = int(memory.PrivateUsage)
+        working_set = int(memory.WorkingSetSize)
+
+    return {
+        "handles": handle_value,
+        "gdi_objects": int(user32.GetGuiResources(process_handle, GR_GDIOBJECTS)),
+        "user_objects": int(user32.GetGuiResources(process_handle, GR_USEROBJECTS)),
+        "private_bytes": private_usage,
+        "working_set_bytes": working_set,
+    }
+
+
+def diff_resource_snapshots(before: dict[str, int | None], after: dict[str, int | None]) -> dict[str, int | None]:
+    """Computes numeric deltas between two resource snapshots."""
+
+    deltas: dict[str, int | None] = {}
+    for key, before_value in before.items():
+        after_value = after.get(key)
+        deltas[key] = None if before_value is None or after_value is None else int(after_value) - int(before_value)
+    return deltas
+
+
 def get_tree_item_text(process_handle: int, tree_hwnd: int, item_handle: int) -> str:
     """Reads one tree-view item text through `TVM_GETITEMW`."""
 
@@ -656,6 +760,21 @@ def expand_tree_item(tree_hwnd: int, item_handle: int) -> None:
 
     win32gui.SendMessage(tree_hwnd, TVM_EXPAND, TVE_EXPAND, item_handle)
     time.sleep(0.2)
+
+
+def collapse_tree_item(tree_hwnd: int, item_handle: int) -> None:
+    """Collapses one tree-view item and gives repaint handling a short turn."""
+
+    win32gui.SendMessage(tree_hwnd, TVM_EXPAND, TVE_COLLAPSE, item_handle)
+    time.sleep(0.05)
+
+
+def force_control_paint(*hwnds: int) -> None:
+    """Forces pending paint work through the target controls without changing UI state."""
+
+    for hwnd in hwnds:
+        win32gui.SendMessage(hwnd, WM_PAINT, 0, 0)
+        user32.UpdateWindow(hwnd)
 
 
 def normalize_tree_label(label: str) -> str:
@@ -1253,6 +1372,59 @@ def click_reload_button(main_hwnd: int) -> None:
 
     reload_hwnd = get_control_handle(main_hwnd, IDC_RELOADSHAREDFILES, "Button", visible_only=True)
     win32gui.SendMessage(reload_hwnd, BM_CLICK, 0, 0)
+
+
+def churn_shared_files_tree(
+    process_handle: int,
+    main_hwnd: int,
+    list_hwnd: int,
+    tree_hwnd: int,
+    sample_directories: list[Path],
+    *,
+    cycles: int,
+) -> dict[str, object]:
+    """Rapidly exercises tree selection, collapse/expand, list sorting, reload, and paint paths."""
+
+    if not sample_directories:
+        raise RuntimeError("Tree refresh stress requires at least one sample directory.")
+
+    counts: list[int] = []
+    selected_paths: list[str] = []
+    reloads = 0
+    sort_clicks = 0
+
+    for cycle in range(cycles):
+        directory_path = sample_directories[cycle % len(sample_directories)]
+        selected_paths.append(live_common.win_path(directory_path))
+        item = select_directory_tree_item(process_handle, tree_hwnd, directory_path)
+        force_control_paint(tree_hwnd, list_hwnd)
+
+        if cycle % 2 == 0:
+            collapse_tree_item(tree_hwnd, item)
+            expand_tree_item(tree_hwnd, item)
+            win32gui.SendMessage(tree_hwnd, TVM_SELECTITEM, TVGN_CARET, item)
+
+        if cycle % 5 == 0:
+            click_list_column(process_handle, list_hwnd, 0, "Name")
+            sort_clicks += 1
+
+        if cycle % 7 == 0:
+            click_reload_button(main_hwnd)
+            reloads += 1
+
+        force_control_paint(tree_hwnd, list_hwnd)
+        counts.append(int(win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0)))
+
+    return {
+        "cycles": cycles,
+        "reloads": reloads,
+        "sort_clicks": sort_clicks,
+        "sample_directory_count": len(sample_directories),
+        "selected_path_preview": selected_paths[:8],
+        "row_count_min": min(counts) if counts else None,
+        "row_count_max": max(counts) if counts else None,
+        "row_count_tail": counts[-8:],
+    }
 
 
 def open_shared_files_list_page(main_hwnd: int) -> int:
@@ -2066,6 +2238,118 @@ def run_generated_robustness_e2e(
                     pass
 
 
+def run_tree_refresh_stress_e2e(
+    app_exe: Path,
+    seed_config_dir: Path,
+    artifacts_dir: Path,
+    shared_root: Path,
+    *,
+    require_startup_profile: bool,
+    churn_cycles: int,
+) -> None:
+    """Executes the 10k-node Shared Files tree-refresh stress regression."""
+
+    fixture = prepare_tree_refresh_stress_fixture(seed_config_dir, artifacts_dir, shared_root)
+    summary = {
+        "name": "tree-refresh-stress-10k",
+        "status": "failed",
+        "app_exe": str(app_exe),
+        "profile_base": str(fixture["profile_base"]),
+        "shared_root": fixture["shared_root"],
+        "subtree_root": fixture["subtree_root"],
+        "generated_fixture_manifest_path": fixture["manifest_path"],
+        "shared_directory_count": fixture["shared_directory_count"],
+        "directory_count": fixture["directory_count"],
+        "expected_row_count": fixture["expected_row_count"],
+        "observable_node_count": fixture["observable_node_count"],
+        "stress_branch_count": fixture["stress_branch_count"],
+        "stress_files_per_branch": fixture["stress_files_per_branch"],
+        "churn_cycles": churn_cycles,
+        "command_line": subprocess.list2cmdline(
+            [str(app_exe), "-ignoreinstances", "-c", str(fixture["profile_base"])]
+        ),
+    }
+
+    app = None
+    process_handle = 0
+    try:
+        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        main_window = live_common.wait_for_main_window(app)
+        main_hwnd = main_window.handle
+        live_common.bring_window_to_front(main_window)
+        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        summary["process_id"] = process_id
+
+        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
+            fixture["startup_profile_path"],
+            require_startup_profile=require_startup_profile,
+        )
+        summary.update(startup_profile_summary)
+        if startup_profile_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+        process_handle = open_process(process_id)
+
+        dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
+        list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
+        initial_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"])
+        summary["initial_row_count"] = initial_count
+        summary["resources_before_churn"] = get_process_resource_snapshot(process_handle)
+
+        sample_directories = list(fixture["sample_directories"])
+        if Path(str(fixture["subtree_root_path"])) not in sample_directories:
+            sample_directories.insert(0, Path(str(fixture["subtree_root_path"])))
+
+        summary["tree_churn"] = churn_shared_files_tree(
+            process_handle,
+            main_hwnd,
+            list_hwnd,
+            tree_hwnd,
+            sample_directories,
+            cycles=churn_cycles,
+        )
+
+        select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
+        click_reload_button(main_hwnd)
+        final_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"])
+        summary["final_row_count"] = final_count
+        summary["final_name_preview"] = get_list_names(process_handle, list_hwnd, min(20, final_count))
+        summary["resources_after_churn"] = get_process_resource_snapshot(process_handle)
+        summary["resource_deltas"] = diff_resource_snapshots(
+            summary["resources_before_churn"],
+            summary["resources_after_churn"],
+        )
+
+        summary["status"] = "passed"
+        summary["error"] = None
+        write_json(artifacts_dir / "result.json", summary)
+    except Exception as exc:
+        summary["error"] = str(exc)
+        if app is not None:
+            try:
+                main_window = app.top_window()
+                dump_window_tree(main_window.handle, artifacts_dir / "window-tree-failure.json")
+                try:
+                    image = main_window.capture_as_image()
+                    image.save(artifacts_dir / "failure.png")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        write_json(artifacts_dir / "result.json", summary)
+        raise
+    finally:
+        if process_handle:
+            close_process(process_handle)
+        if app is not None:
+            try:
+                live_common.close_app_cleanly(app)
+            except Exception:
+                try:
+                    app.kill()
+                except Exception:
+                    pass
+
+
 def run_duplicate_startup_reuse_e2e(
     app_exe: Path,
     seed_config_dir: Path,
@@ -2222,6 +2506,7 @@ def run_shared_files_ui_suite(
     scenario_names: list[str],
     *,
     require_startup_profile: bool,
+    tree_stress_churn_cycles: int,
 ) -> None:
     """Runs the requested Shared Files UI scenarios and writes one combined result."""
 
@@ -2254,6 +2539,15 @@ def run_shared_files_ui_suite(
                     scenario_dir,
                     shared_root,
                     require_startup_profile=require_startup_profile,
+                )
+            elif scenario_name == "tree-refresh-stress-10k":
+                run_tree_refresh_stress_e2e(
+                    app_exe,
+                    seed_config_dir,
+                    scenario_dir,
+                    shared_root,
+                    require_startup_profile=require_startup_profile,
+                    churn_cycles=tree_stress_churn_cycles,
                 )
             elif scenario_name == "duplicate-startup-reuse":
                 run_duplicate_startup_reuse_e2e(
@@ -2311,6 +2605,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
+    parser.add_argument("--tree-stress-churn-cycles", type=int, default=80)
     parser.add_argument(
         "--scenario",
         dest="scenarios",
@@ -2318,6 +2613,7 @@ def main(argv: list[str]) -> int:
         choices=[
             "fixture-three-files",
             "generated-robustness-recursive",
+            "tree-refresh-stress-10k",
             "duplicate-startup-reuse",
             "dynamic-folder-lifecycle",
             "monitored-folder-events",
@@ -2350,6 +2646,7 @@ def main(argv: list[str]) -> int:
             shared_root=Path(args.shared_root).resolve(),
             scenario_names=scenario_names,
             require_startup_profile=(args.startup_trace_mode == "required"),
+            tree_stress_churn_cycles=args.tree_stress_churn_cycles,
         )
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="passed", paths=paths)
