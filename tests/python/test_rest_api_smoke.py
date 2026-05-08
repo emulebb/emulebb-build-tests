@@ -1652,8 +1652,44 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["error_counts"] == {"timeout": 1}
     assert summary["timeout_count"] == 1
     assert summary["native_rest_non_json_count"] == 1
+    assert summary["retry_attempt_count"] == 0
+    assert summary["retried_success_count"] == 0
     assert summary["latency_ms"]["max"] == 9.0
     assert len(summary["failures_sample"]) == 1
+
+
+def test_rest_stress_retry_classification_is_limited_to_transient_resets() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.is_retryable_rest_stress_exception(
+        RuntimeError("<urlopen error [WinError 10054] An existing connection was forcibly closed by the remote host>")
+    )
+    assert module.is_retryable_rest_stress_exception(
+        RuntimeError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol")
+    )
+    assert not module.is_retryable_rest_stress_exception(
+        RuntimeError("<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>")
+    )
+    assert not module.is_retryable_rest_stress_exception(TimeoutError("timed out"))
+
+
+def test_rest_stress_summary_reports_retry_recovery() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.summarize_rest_stress_results(
+        [
+            {"status": 200, "ok": True, "duration_ms": 2.0, "retry_count": 1},
+            {"status": "exception", "ok": False, "duration_ms": 3.0, "retry_count": 2, "error": "reset"},
+        ],
+        budget="soak",
+        duration_seconds=30.0,
+        concurrency=64,
+        max_failures=1,
+    )
+
+    assert summary["ok"] is True
+    assert summary["retry_attempt_count"] == 3
+    assert summary["retried_success_count"] == 1
 
 
 def test_server_connect_transport_loss_is_runtime_failure_signal() -> None:

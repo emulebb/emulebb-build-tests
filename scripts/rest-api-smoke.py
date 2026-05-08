@@ -185,6 +185,13 @@ REST_LEAK_CHURN_DEFAULT_CYCLES = {
     "smoke": 100,
     "soak": 1000,
 }
+REST_STRESS_RETRYABLE_ERROR_FRAGMENTS = (
+    "winerror 10053",
+    "winerror 10054",
+    "unexpected_eof_while_reading",
+    "forcibly closed",
+    "connection was aborted",
+)
 REST_LEAK_CHURN_RESOURCE_THRESHOLDS = {
     "handles": {"after_drain_max": 64, "peak_max": 128},
     "thread_count": {"after_drain_max": 4, "peak_max": 32},
@@ -2164,6 +2171,13 @@ def percentile(values: list[float], percentile_value: float) -> float:
     return round(ordered[index], 3)
 
 
+def is_retryable_rest_stress_exception(exc: Exception) -> bool:
+    """Reports whether a stress request failed with a transient TLS/TCP reset."""
+
+    message = str(exc).lower()
+    return any(fragment in message for fragment in REST_STRESS_RETRYABLE_ERROR_FRAGMENTS)
+
+
 def summarize_rest_stress_results(
     rows: list[dict[str, object]],
     *,
@@ -2202,6 +2216,7 @@ def summarize_rest_stress_results(
             if len(failures) < 10:
                 failures.append(row)
     failure_count = len([row for row in rows if not row.get("ok")])
+    retry_attempt_count = sum(int(row.get("retry_count") or 0) for row in rows)
     return {
         "budget": budget,
         "duration_seconds": duration_seconds,
@@ -2211,6 +2226,8 @@ def summarize_rest_stress_results(
         "requests_completed": len(rows),
         "failure_count": failure_count,
         "ok": failure_count <= max_failures,
+        "retry_attempt_count": retry_attempt_count,
+        "retried_success_count": len([row for row in rows if row.get("ok") and int(row.get("retry_count") or 0) > 0]),
         "status_counts": status_counts,
         "method_counts": method_counts,
         "family_counts": family_counts,
@@ -2507,49 +2524,59 @@ def exercise_rest_stress(
         expected_body_contains = operation.get("expected_body_contains")
         expected_statuses = tuple(int(value) for value in operation.get("expected_statuses", ()))
         start = time.monotonic()
-        try:
-            result = http_request(
-                base_url,
-                path,
-                method=method,
-                api_key=api_key if bool(operation.get("api_key", True)) else None,
-                json_body=json_body,
-                raw_body=raw_body if isinstance(raw_body, bytes | str) else None,
-                content_type=str(content_type) if content_type is not None else None,
-                extra_headers=extra_headers,
-                request_timeout_seconds=request_timeout_seconds,
-            )
-            status = int(result["status"])
-            expected_match = not expected_statuses or status in expected_statuses
-            response_kind_match = response_matches_kind(result, response_kind)
-            body_match = expected_body_contains is None or str(expected_body_contains).lower() in str(result.get("body_text") or "").lower()
-            native_rest_json = response_kind != "native-json" or is_native_rest_json_response(result)
-            return {
-                "method": method,
-                "path": path,
-                "family": family,
-                "scenario": scenario,
-                "status": status,
-                "ok": (expected_match if expected_statuses else 200 <= status < 500) and response_kind_match and body_match and native_rest_json,
-                "expected_statuses": list(expected_statuses),
-                "content_type": str(result.get("content_type") or ""),
-                "response_kind": response_kind,
-                "native_rest_json": native_rest_json,
-                "error": None if native_rest_json and response_kind_match and body_match else "response shape mismatch",
-                "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
-            }
-        except Exception as exc:
-            return {
-                "method": method,
-                "path": path,
-                "family": family,
-                "scenario": scenario,
-                "status": "exception",
-                "ok": False,
-                "expected_statuses": list(expected_statuses),
-                "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
-                "error": str(exc),
-            }
+        retry_count = 0
+        last_exception: Exception | None = None
+        for attempt_index in range(3):
+            try:
+                result = http_request(
+                    base_url,
+                    path,
+                    method=method,
+                    api_key=api_key if bool(operation.get("api_key", True)) else None,
+                    json_body=json_body,
+                    raw_body=raw_body if isinstance(raw_body, bytes | str) else None,
+                    content_type=str(content_type) if content_type is not None else None,
+                    extra_headers=extra_headers,
+                    request_timeout_seconds=request_timeout_seconds,
+                )
+                status = int(result["status"])
+                expected_match = not expected_statuses or status in expected_statuses
+                response_kind_match = response_matches_kind(result, response_kind)
+                body_match = expected_body_contains is None or str(expected_body_contains).lower() in str(result.get("body_text") or "").lower()
+                native_rest_json = response_kind != "native-json" or is_native_rest_json_response(result)
+                return {
+                    "method": method,
+                    "path": path,
+                    "family": family,
+                    "scenario": scenario,
+                    "status": status,
+                    "ok": (expected_match if expected_statuses else 200 <= status < 500) and response_kind_match and body_match and native_rest_json,
+                    "expected_statuses": list(expected_statuses),
+                    "content_type": str(result.get("content_type") or ""),
+                    "response_kind": response_kind,
+                    "native_rest_json": native_rest_json,
+                    "retry_count": retry_count,
+                    "error": None if native_rest_json and response_kind_match and body_match else "response shape mismatch",
+                    "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
+                }
+            except Exception as exc:
+                last_exception = exc
+                if attempt_index >= 2 or not is_retryable_rest_stress_exception(exc):
+                    break
+                retry_count += 1
+                time.sleep(0.025 * retry_count)
+        return {
+            "method": method,
+            "path": path,
+            "family": family,
+            "scenario": scenario,
+            "status": "exception",
+            "ok": False,
+            "expected_statuses": list(expected_statuses),
+            "retry_count": retry_count,
+            "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
+            "error": str(last_exception),
+        }
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {}
