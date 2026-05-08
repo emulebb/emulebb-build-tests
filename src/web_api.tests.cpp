@@ -207,6 +207,15 @@ TEST_CASE("WebSocket HTTP seams parse request methods exactly")
 	CHECK_FALSE(WebSocketHttpSeams::IsSupportedDispatchMethod(method));
 }
 
+TEST_CASE("WebSocket HTTP seams bound accepted-client thread fanout")
+{
+	CHECK(WebSocketHttpSeams::kAcceptedClientIoTimeoutMs > 0u);
+	CHECK(WebSocketHttpSeams::CanStartAcceptedClientThread(0u));
+	CHECK(WebSocketHttpSeams::CanStartAcceptedClientThread(WebSocketHttpSeams::kMaxAcceptedClientThreads - 1u));
+	CHECK_FALSE(WebSocketHttpSeams::CanStartAcceptedClientThread(WebSocketHttpSeams::kMaxAcceptedClientThreads));
+	CHECK_FALSE(WebSocketHttpSeams::CanStartAcceptedClientThread(WebSocketHttpSeams::kMaxAcceptedClientThreads + 1u));
+}
+
 TEST_CASE("WebServer static file seam contains requests under the web root")
 {
 	CString path;
