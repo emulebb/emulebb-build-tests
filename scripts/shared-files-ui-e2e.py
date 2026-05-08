@@ -140,6 +140,13 @@ GR_USEROBJECTS = 1
 
 SHARED_DUPLICATE_PATH_CACHE_MAGIC = 0x50554453
 SHARED_DUPLICATE_PATH_CACHE_VERSION = 1
+TREE_STRESS_RESOURCE_THRESHOLDS = {
+    "handles": {"after_churn_max": 64},
+    "gdi_objects": {"after_churn_max": 32},
+    "user_objects": {"after_churn_max": 32},
+    "private_bytes": {"after_churn_max": 256 * 1024 * 1024},
+    "working_set_bytes": {"after_churn_max": 256 * 1024 * 1024},
+}
 
 
 class LVITEMW(ctypes.Structure):
@@ -932,6 +939,32 @@ def diff_resource_snapshots(before: dict[str, int | None], after: dict[str, int 
         after_value = after.get(key)
         deltas[key] = None if before_value is None or after_value is None else int(after_value) - int(before_value)
     return deltas
+
+
+def evaluate_tree_stress_resources(deltas: dict[str, int | None]) -> dict[str, object]:
+    """Evaluates 50k tree-refresh resource deltas against the R1 release thresholds."""
+
+    checks: list[dict[str, object]] = []
+    violations: list[dict[str, object]] = []
+    for resource_name, threshold in TREE_STRESS_RESOURCE_THRESHOLDS.items():
+        observed = deltas.get(resource_name)
+        limit = threshold["after_churn_max"]
+        ok = observed is not None and observed <= limit
+        check = {
+            "resource": resource_name,
+            "observed_after_churn_delta": observed,
+            "after_churn_max": limit,
+            "ok": ok,
+        }
+        checks.append(check)
+        if not ok:
+            violations.append(check)
+    return {
+        "ok": not violations,
+        "thresholds": TREE_STRESS_RESOURCE_THRESHOLDS,
+        "checks": checks,
+        "violations": violations,
+    }
 
 
 def get_tree_item_text(process_handle: int, tree_hwnd: int, item_handle: int) -> str:
@@ -2681,6 +2714,9 @@ def run_tree_refresh_stress_e2e(
             summary["resources_before_churn"],
             summary["resources_after_churn"],
         )
+        summary["resource_thresholds"] = evaluate_tree_stress_resources(summary["resource_deltas"])
+        if not summary["resource_thresholds"]["ok"]:
+            raise RuntimeError(f"50k tree stress resource thresholds exceeded: {summary['resource_thresholds']!r}")
 
         if require_startup_profile:
             summary["first_launch_hashing_done"] = wait_for_shared_hashing_done_profile(

@@ -177,3 +177,37 @@ def test_build_tree_stress_cold_cached_metrics_compares_50k_relaunch() -> None:
     assert metrics["cached_queue_skip_verified"] is True
     assert metrics["cached_ui_ready_speedup_vs_cold_ui_ready"] == 355.6
     assert metrics["cached_scan_speedup_vs_cold_scan"] == 6.973
+
+
+def test_evaluate_tree_stress_resources_accepts_r1_deltas() -> None:
+    module = load_shared_files_module()
+
+    evaluation = module.evaluate_tree_stress_resources(
+        {
+            "handles": 18,
+            "gdi_objects": 3,
+            "user_objects": 2,
+            "private_bytes": 12918784,
+            "working_set_bytes": 17395712,
+        }
+    )
+
+    assert evaluation["ok"] is True
+    assert evaluation["violations"] == []
+
+
+def test_evaluate_tree_stress_resources_rejects_unbounded_growth() -> None:
+    module = load_shared_files_module()
+
+    evaluation = module.evaluate_tree_stress_resources(
+        {
+            "handles": 65,
+            "gdi_objects": 0,
+            "user_objects": 0,
+            "private_bytes": 1,
+            "working_set_bytes": 1,
+        }
+    )
+
+    assert evaluation["ok"] is False
+    assert evaluation["violations"][0]["resource"] == "handles"
