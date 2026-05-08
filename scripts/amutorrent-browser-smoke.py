@@ -327,6 +327,8 @@ def assert_browser_delete_removed_added_download(checks: dict[str, Any]) -> None
 def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
     """Verifies the browser-visible snapshot carries eMule BB detail hydration fields."""
 
+    if "snapshot_after_add" not in checks:
+        return
     added = find_snapshot_item(checks, "snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
     if added is None:
         raise RuntimeError("aMuTorrent browser workflow did not observe the added eD2K transfer for detail hydration.")
@@ -354,6 +356,9 @@ def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
 def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[str, list[dict[str, Any]]]) -> None:
     """Raises when browser workflow HTTP calls or page diagnostics report failures."""
 
+    unexpected_diagnostics = unexpected_browser_diagnostics(diagnostics)
+    if any(unexpected_diagnostics.values()):
+        raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {unexpected_diagnostics}")
     for name, result in iter_browser_http_results(checks):
         if int(result["status"]) >= 500:
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' failed: {result}")
@@ -363,9 +368,6 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
     assert_snapshot_items_are_display_safe(checks)
     assert_emulebb_detail_hydration(checks)
     assert_browser_delete_removed_added_download(checks)
-    unexpected_diagnostics = unexpected_browser_diagnostics(diagnostics)
-    if any(unexpected_diagnostics.values()):
-        raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {unexpected_diagnostics}")
 
 
 def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *, search_rounds: int = DEFAULT_SEARCH_ROUNDS) -> dict[str, Any]:

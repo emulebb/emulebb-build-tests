@@ -19,6 +19,31 @@ def load_smoke_module():
     return module
 
 
+def hydrated_download_item(smoke, **overrides):
+    item = {
+        "hash": smoke.AMUTORRENT_BROWSER_SMOKE_HASH,
+        "client": "emulebb",
+        "progress": 0,
+        "status": "active",
+        "shared": False,
+        "downloading": True,
+        "partStatus": [],
+        "peers": [],
+    }
+    item.update(overrides)
+    return item
+
+
+def segment_download_item(smoke, **overrides):
+    item = {
+        "hash": smoke.AMUTORRENT_BROWSER_SMOKE_HASH,
+        "gapStatus": [],
+        "reqStatus": [],
+    }
+    item.update(overrides)
+    return item
+
+
 def test_parse_node_major_accepts_node_version() -> None:
     smoke = load_smoke_module()
 
@@ -188,16 +213,14 @@ def test_browser_workflow_validation_requires_delete_to_remove_added_download() 
             "payload": {
                 "data": {
                     "items": [
-                        {
-                            "hash": added_hash,
-                            "progress": 0,
-                            "status": "active",
-                            "shared": False,
-                            "downloading": True,
-                        }
+                        hydrated_download_item(smoke),
                     ]
                 }
             },
+        },
+        "segment_snapshot_after_add": {
+            "status": 200,
+            "payload": {"item": segment_download_item(smoke)},
         },
         "delete_added_download": {
             "status": 200,
@@ -221,16 +244,14 @@ def test_browser_workflow_validation_rejects_delete_snapshot_with_added_download
             "payload": {
                 "data": {
                     "items": [
-                        {
-                            "hash": added_hash,
-                            "progress": 0,
-                            "status": "active",
-                            "shared": False,
-                            "downloading": True,
-                        }
+                        hydrated_download_item(smoke),
                     ]
                 }
             },
+        },
+        "segment_snapshot_after_add": {
+            "status": 200,
+            "payload": {"item": segment_download_item(smoke)},
         },
         "delete_added_download": {
             "status": 200,
@@ -241,13 +262,7 @@ def test_browser_workflow_validation_rejects_delete_snapshot_with_added_download
             "payload": {
                 "data": {
                     "items": [
-                        {
-                            "hash": added_hash,
-                            "progress": 0,
-                            "status": "active",
-                            "shared": False,
-                            "downloading": True,
-                        }
+                        hydrated_download_item(smoke),
                     ]
                 }
             },
