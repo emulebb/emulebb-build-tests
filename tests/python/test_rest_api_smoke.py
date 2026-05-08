@@ -131,6 +131,37 @@ def test_rest_socket_probe_outcome_accepts_declared_status_or_close() -> None:
     )
 
 
+def test_rest_socket_adversity_includes_response_send_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    raw_payloads: list[bytes] = []
+
+    def fake_raw_socket_probe(_host: str, _port: int, payload: bytes, **_kwargs: object) -> dict[str, object]:
+        raw_payloads.append(payload)
+        return {"outcome": "sent_reset", "status": None, "elapsed_ms": 1.0}
+
+    def fake_http_request(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "status": 400,
+            "content_type": "application/json",
+            "json": {"error": "INVALID_ARGUMENT"},
+            "raw_json": {"error": {"code": "INVALID_ARGUMENT", "message": "bad request"}},
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "raw_socket_probe", fake_raw_socket_probe)
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    summary = module.exercise_rest_socket_adversity(
+        "http://127.0.0.1:4711",
+        "api-key",
+        budget="smoke",
+        request_timeout_seconds=1.0,
+    )
+
+    assert "reset_during_response_send" in [probe["scenario"] for probe in summary["probes"]]
+    assert any(b"GET /api/v1/logs?limit=400 HTTP/1.1" in payload for payload in raw_payloads)
+
+
 def test_rest_tls_handshake_adversity_requires_https() -> None:
     module = load_rest_api_smoke_module()
 

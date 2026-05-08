@@ -1218,6 +1218,19 @@ def exercise_rest_socket_adversity(
             "reset_on_close": False,
             "allowed_statuses": {400, 408, 413, 431, 500},
         },
+        {
+            "scenario": "reset_during_response_send",
+            "payload": (
+                b"GET /api/v1/logs?limit=400 HTTP/1.1\r\nHost: "
+                + quoted_host
+                + b"\r\nX-API-Key: "
+                + api_key_bytes
+                + b"\r\nConnection: close\r\n\r\n"
+            ),
+            "read_response": False,
+            "reset_on_close": True,
+            "allowed_statuses": set(),
+        },
     ]
 
     rows = []
