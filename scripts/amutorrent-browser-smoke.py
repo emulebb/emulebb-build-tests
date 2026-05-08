@@ -252,6 +252,34 @@ def find_snapshot_item(checks: dict[str, Any], check_name: str, item_hash: str) 
     return None
 
 
+def segment_snapshot_item(checks: dict[str, Any], check_name: str, item_hash: str) -> dict[str, Any] | None:
+    """Finds one WebSocket segment-subscribed snapshot item by lowercase hash."""
+
+    expected = item_hash.lower()
+    result = checks.get(check_name)
+    if not isinstance(result, dict) or int(result.get("status", 0)) >= 300:
+        return None
+    payload = result.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    item = payload.get("item")
+    if not isinstance(item, dict):
+        return None
+    if str(item.get("hash") or "").lower() == expected:
+        return item
+    return None
+
+
+def has_emulebb_detail_basics(item: dict[str, Any] | None) -> bool:
+    """Returns true once the non-segment snapshot carries detail hydration fields."""
+
+    if not isinstance(item, dict):
+        return False
+    if item.get("client") != "emulebb":
+        return False
+    return isinstance(item.get("partStatus"), list) and isinstance(item.get("peers"), list)
+
+
 def assert_snapshot_items_are_display_safe(checks: dict[str, Any]) -> None:
     """Rejects snapshot shapes that would render noisy or ambiguous transfer UI."""
 
@@ -296,6 +324,33 @@ def assert_browser_delete_removed_added_download(checks: dict[str, Any]) -> None
         raise RuntimeError(f"aMuTorrent browser delete workflow left the added transfer in the snapshot: {deleted}")
 
 
+def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
+    """Verifies the browser-visible snapshot carries eMule BB detail hydration fields."""
+
+    added = find_snapshot_item(checks, "snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
+    if added is None:
+        raise RuntimeError("aMuTorrent browser workflow did not observe the added eD2K transfer for detail hydration.")
+    if added.get("client") != "emulebb":
+        raise RuntimeError(f"aMuTorrent browser workflow added transfer through the wrong client type: {added.get('client')!r}")
+    for field_name in ("partStatus", "peers"):
+        value = added.get(field_name)
+        if not isinstance(value, list):
+            raise RuntimeError(
+                f"aMuTorrent browser workflow did not expose hydrated eMule BB field "
+                f"{field_name!r} as a list: {value!r}"
+            )
+    segment_added = segment_snapshot_item(checks, "segment_snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
+    if segment_added is None:
+        raise RuntimeError("aMuTorrent browser workflow did not observe the added transfer with segmentData subscribed.")
+    for field_name in ("gapStatus", "reqStatus"):
+        value = segment_added.get(field_name)
+        if not isinstance(value, list):
+            raise RuntimeError(
+                f"aMuTorrent browser workflow did not expose segment-subscribed eMule BB field "
+                f"{field_name!r} as a list: {value!r}"
+            )
+
+
 def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[str, list[dict[str, Any]]]) -> None:
     """Raises when browser workflow HTTP calls or page diagnostics report failures."""
 
@@ -306,6 +361,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
         if isinstance(payload, dict) and payload.get("type") == "error":
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
     assert_snapshot_items_are_display_safe(checks)
+    assert_emulebb_detail_hydration(checks)
     assert_browser_delete_removed_added_download(checks)
     unexpected_diagnostics = unexpected_browser_diagnostics(diagnostics)
     if any(unexpected_diagnostics.values()):
@@ -378,6 +434,76 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                     {"path": path, "method": method, "body": body},
                 )
 
+            def wait_for_hydrated_added_snapshot(timeout_seconds: float = 15.0) -> dict[str, Any]:
+                deadline = time.monotonic() + timeout_seconds
+                last_snapshot: dict[str, Any] | None = None
+                while time.monotonic() < deadline:
+                    last_snapshot = fetch_json("/api/v1/data/snapshot")
+                    added = find_snapshot_item({"snapshot_after_add": last_snapshot}, "snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
+                    if has_emulebb_detail_basics(added):
+                        return last_snapshot
+                    page.wait_for_timeout(1000)
+                return last_snapshot if last_snapshot is not None else fetch_json("/api/v1/data/snapshot")
+
+            def wait_for_segment_snapshot(timeout_ms: int = 15000) -> dict[str, Any]:
+                return page.evaluate(
+                    """async ({hash, timeoutMs}) => {
+                        const expected = String(hash).toLowerCase();
+                        const wsUrl = new URL('/', window.location.href);
+                        wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+                        return await new Promise(resolve => {
+                            let settled = false;
+                            let latest = null;
+                            let requestTimer = null;
+                            const finish = result => {
+                                if (settled) return;
+                                settled = true;
+                                clearTimeout(timeoutTimer);
+                                if (requestTimer != null) clearInterval(requestTimer);
+                                try { ws.close(); } catch (_) {}
+                                resolve(result);
+                            };
+                            const findItem = items => Array.isArray(items)
+                                ? items.find(item => String(item?.hash || '').toLowerCase() === expected)
+                                : null;
+                            const requestSnapshot = () => {
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({action: 'requestFullSnapshot'}));
+                                }
+                            };
+                            const timeoutTimer = setTimeout(() => {
+                                finish({status: 408, payload: latest, error: 'Timed out waiting for segmentData snapshot'});
+                            }, timeoutMs);
+                            const ws = new WebSocket(wsUrl.href);
+                            ws.onopen = () => {
+                                ws.send(JSON.stringify({action: 'subscribe', channel: 'segmentData'}));
+                                requestSnapshot();
+                                requestTimer = setInterval(requestSnapshot, 1000);
+                            };
+                            ws.onerror = () => {
+                                finish({status: 500, payload: latest, error: 'WebSocket error while waiting for segmentData snapshot'});
+                            };
+                            ws.onmessage = event => {
+                                let message = null;
+                                try { message = JSON.parse(event.data); } catch (error) { return; }
+                                if (message?.type !== 'batch-update') return;
+                                latest = message;
+                                const item = findItem(message?.data?.items);
+                                if (
+                                    item
+                                    && Array.isArray(item.partStatus)
+                                    && Array.isArray(item.gapStatus)
+                                    && Array.isArray(item.reqStatus)
+                                    && Array.isArray(item.peers)
+                                ) {
+                                    finish({status: 200, payload: {item}});
+                                }
+                            };
+                        });
+                    }""",
+                    {"hash": AMUTORRENT_BROWSER_SMOKE_HASH, "timeoutMs": timeout_ms},
+                )
+
             def start_search_with_retry(search_type: str, query: str, round_number: str) -> dict[str, Any]:
                 last_result: dict[str, Any] | None = None
                 attempt_count = 0
@@ -435,11 +561,11 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                     "instanceId": instance_id,
                 },
             )
-            page.wait_for_timeout(1000)
-            checks["snapshot_after_add"] = fetch_json("/api/v1/data/snapshot")
+            checks["snapshot_after_add"] = wait_for_hydrated_added_snapshot()
             added_item = find_snapshot_item(checks, "snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
             if added_item is None:
                 raise RuntimeError("aMuTorrent browser smoke did not observe the added eD2K transfer.")
+            checks["segment_snapshot_after_add"] = wait_for_segment_snapshot()
             checks["delete_added_download"] = fetch_json(
                 "/api/v1/downloads/delete",
                 "POST",

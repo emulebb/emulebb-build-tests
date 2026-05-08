@@ -1803,6 +1803,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "categoryAssignment",
         "fileRatingComment",
         "renameFile",
+        "transferDetails",
     ):
         assert capabilities.get(capability) is True, compact_http_result(app)
     assert capabilities.get("categoryCrud") is True, compact_http_result(app)
