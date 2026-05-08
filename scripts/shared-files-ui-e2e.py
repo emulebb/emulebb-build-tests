@@ -1341,6 +1341,8 @@ def get_rest_shared_file_count(base_url: str, api_key: str) -> int:
             raise RuntimeError(f"Unexpected shared-files REST row shape: {row!r}")
     payload = result["json"]
     if isinstance(payload, dict):
+        if isinstance(payload.get("total"), int):
+            return int(payload["total"])
         data = payload.get("data")
         if isinstance(data, dict) and isinstance(data.get("total"), int):
             return int(data["total"])

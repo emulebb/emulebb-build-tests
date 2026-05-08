@@ -97,6 +97,26 @@ def test_get_rest_shared_file_count_uses_v1_collection_total(monkeypatch) -> Non
     assert module.get_rest_shared_file_count("http://127.0.0.1:1", "key") == 50000
 
 
+def test_get_rest_shared_file_count_uses_unwrapped_collection_total(monkeypatch) -> None:
+    module = load_shared_files_module()
+
+    def fake_http_request(_base_url: str, _path: str, *, api_key: str, request_timeout_seconds: float = 5.0):
+        return {
+            "status": 200,
+            "json": {
+                "items": [{"name": "first.bin"}, {"name": "second.bin"}],
+                "limit": 2,
+                "offset": 0,
+                "total": 50000,
+            },
+            "body_text": "",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    assert module.get_rest_shared_file_count("http://127.0.0.1:1", "key") == 50000
+
+
 def test_get_rest_shared_file_count_rejects_invalid_rows(monkeypatch) -> None:
     module = load_shared_files_module()
 
