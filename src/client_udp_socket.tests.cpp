@@ -22,4 +22,19 @@ TEST_CASE("Client UDP seam always logs unexpected packet exceptions")
 	CHECK(ClientUDPSocketSeams::ShouldLogPacketFailure(true, policy));
 }
 
+TEST_CASE("Client UDP seam only reads diagnostic opcode when packet contains it")
+{
+	const unsigned char packet[] = {0xC5, 0x91};
+	unsigned char opcode = 0xFF;
+
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetPacketOpcodeForLog(nullptr, 2, opcode));
+	CHECK(opcode == 0xFF);
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetPacketOpcodeForLog(packet, 0, opcode));
+	CHECK(opcode == 0xFF);
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetPacketOpcodeForLog(packet, 1, opcode));
+	CHECK(opcode == 0xFF);
+	CHECK(ClientUDPSocketSeams::TryGetPacketOpcodeForLog(packet, 2, opcode));
+	CHECK(opcode == 0x91);
+}
+
 TEST_SUITE_END();
