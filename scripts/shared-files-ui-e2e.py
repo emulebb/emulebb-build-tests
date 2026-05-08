@@ -368,6 +368,7 @@ def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Pa
             "directory_count": int(subtree["directory_count_including_root"]),
             "stress_branch_count": int(subtree["stress_branch_count"]),
             "stress_files_per_branch": int(subtree["stress_files_per_branch"]),
+            "stress_empty_children_per_branch": int(subtree["stress_empty_children_per_branch"]),
             "sample_directories": [Path(str(path)).resolve() for path in subtree["sample_directories"]],
             "shared_directory_count": len(shared_dirs),
             "rest_api_key": rest_api_key,
@@ -2297,6 +2298,7 @@ def run_tree_refresh_stress_e2e(
         "observable_node_count": fixture["observable_node_count"],
         "stress_branch_count": fixture["stress_branch_count"],
         "stress_files_per_branch": fixture["stress_files_per_branch"],
+        "stress_empty_children_per_branch": fixture["stress_empty_children_per_branch"],
         "rest_base_url": fixture["rest_base_url"],
         "churn_cycles": churn_cycles,
         "command_line": subprocess.list2cmdline(
@@ -2308,7 +2310,7 @@ def run_tree_refresh_stress_e2e(
     process_handle = 0
     try:
         app = live_common.launch_app(app_exe, fixture["profile_base"])
-        main_window = live_common.wait_for_main_window(app)
+        main_window = live_common.wait_for_main_window(app, timeout=180.0)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
         process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
@@ -2326,6 +2328,7 @@ def run_tree_refresh_stress_e2e(
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
         list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
         wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
+        select_directory_tree_item(process_handle, tree_hwnd, Path(str(fixture["subtree_root_path"])))
         initial_count = wait_for_exact_list_count(list_hwnd, fixture["expected_row_count"])
         summary["initial_row_count"] = initial_count
         summary["initial_rest_row_count"] = wait_for_rest_shared_file_count(

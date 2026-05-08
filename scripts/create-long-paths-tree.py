@@ -95,8 +95,9 @@ ROBUSTNESS_FILE_SPECS = [
     ("archive", "162_stream.capture.sample.mkv", 3407881, 0xB01B, True),
     ("archive", "163_large_tail_payload.iso", 3670027, 0xB01C, True),
 ]
-TREE_STRESS_BRANCH_COUNT = 256
-TREE_STRESS_FILES_PER_BRANCH = 40
+TREE_STRESS_BRANCH_COUNT = 1024
+TREE_STRESS_FILES_PER_BRANCH = 1
+TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH = 9
 TREE_STRESS_GROUP_SIZE = 16
 TREE_STRESS_MIN_OBSERVABLE_NODES = 10000
 
@@ -242,7 +243,7 @@ def estimate_shared_files_tree_stress_observable_nodes() -> int:
     """Returns the expected minimum observable tree/list node count for the stress fixture."""
 
     group_count = (TREE_STRESS_BRANCH_COUNT + TREE_STRESS_GROUP_SIZE - 1) // TREE_STRESS_GROUP_SIZE
-    directory_count = 1 + group_count + (TREE_STRESS_BRANCH_COUNT * 2)
+    directory_count = 1 + group_count + (TREE_STRESS_BRANCH_COUNT * (1 + TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH))
     file_count = TREE_STRESS_BRANCH_COUNT * TREE_STRESS_FILES_PER_BRANCH
     return directory_count + file_count
 
@@ -342,10 +343,12 @@ def build_shared_files_tree_stress(root: Path) -> dict[str, object]:
             directories.append(group_dir)
 
         branch_dir = group_dir / f"branch_{branch_index:03d}_unicode_\u03bb_\u4f8b"
-        empty_child_dir = branch_dir / f"empty_child_{branch_index:03d}"
         ensure_directory(branch_dir)
-        ensure_directory(empty_child_dir)
-        directories.extend([branch_dir, empty_child_dir])
+        directories.append(branch_dir)
+        for child_index in range(TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH):
+            empty_child_dir = branch_dir / f"empty_child_{branch_index:03d}_{child_index:02d}"
+            ensure_directory(empty_child_dir)
+            directories.append(empty_child_dir)
         if len(sample_directories) < 12:
             sample_directories.append(str(branch_dir.resolve()))
 
@@ -360,6 +363,7 @@ def build_shared_files_tree_stress(root: Path) -> dict[str, object]:
     summary["subtree_name"] = "shared_files_tree_stress"
     summary["stress_branch_count"] = TREE_STRESS_BRANCH_COUNT
     summary["stress_files_per_branch"] = TREE_STRESS_FILES_PER_BRANCH
+    summary["stress_empty_children_per_branch"] = TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH
     summary["min_observable_node_count"] = TREE_STRESS_MIN_OBSERVABLE_NODES
     summary["sample_directories"] = sample_directories
     if int(summary["observable_node_count"]) < TREE_STRESS_MIN_OBSERVABLE_NODES:
@@ -384,7 +388,7 @@ def ensure_fixture(shared_root: Path | str = DEFAULT_SHARED_ROOT, *, include_tre
     }
     if include_tree_stress:
         subtrees["shared_files_tree_stress"] = build_shared_files_tree_stress(
-            resolved_root / "shared_files_tree_stress"
+            resolved_root / "shared_files_tree_stress_v2"
         )
 
     manifest_path = resolved_root / MANIFEST_FILENAME

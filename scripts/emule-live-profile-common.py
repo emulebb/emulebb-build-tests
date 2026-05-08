@@ -345,7 +345,7 @@ def is_expected_shutdown_progress_dialog(hwnd: int) -> bool:
     return title == "Shutting down eMule" or "eMule is shutting down" in body
 
 
-def wait_for_main_window(app: Application):
+def wait_for_main_window(app: Application, *, timeout: float = 90.0):
     """Waits until the started eMule process exposes a visible top-level window."""
 
     def resolve():
@@ -365,7 +365,7 @@ def wait_for_main_window(app: Application):
             )
         return window
 
-    return wait_for(resolve, timeout=90.0, interval=0.5, description="eMule main window")
+    return wait_for(resolve, timeout=timeout, interval=0.5, description="eMule main window")
 
 
 def get_window_show_cmd(hwnd: int) -> int:
