@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import types
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,24 @@ def test_radarr_sonarr_live_report_records_live_network_launch_inputs() -> None:
     assert '"p2p_bind_interface_name": args.p2p_bind_interface_name' in script_text
     assert '"enable_upnp": True' in script_text
     assert 'BindAddr=hide.me' not in script_text
+
+
+def test_radarr_sonarr_direct_search_terms_include_generic_fallback() -> None:
+    module = load_radarr_sonarr_module()
+    inputs = types.SimpleNamespace(
+        document_terms=("linux", "ubuntu"),
+        generic_open_terms=("ubuntu", "emule", "fedora"),
+        radarr_movie_terms=("La Dolce Vita", "linux"),
+    )
+
+    assert module.build_direct_search_terms(inputs) == ("linux", "ubuntu", "emule", "fedora")
+    assert module.build_qbit_search_terms(inputs) == (
+        "La Dolce Vita",
+        "linux",
+        "ubuntu",
+        "emule",
+        "fedora",
+    )
 
 
 def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:

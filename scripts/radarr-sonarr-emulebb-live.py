@@ -26,6 +26,12 @@ SYNTHETIC_TRIGGER_MAGNET = (
     "&dn=eMuleBB-Live-Wire-Trigger.bin"
     "&xl=1048576"
 )
+LIVE_SOURCE_UNAVAILABLE_EXIT_CODE = 2
+
+
+class LiveSearchUnavailableError(RuntimeError):
+    """Raised when the live P2P network returns no usable search rows."""
+
 
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
@@ -356,6 +362,24 @@ def summarize_arr_download_client(client: dict[str, Any], *, category: str) -> d
         "schema": client.get("_emulebbSchemaSummary"),
         "test_status": client.get("_emulebbTestStatus"),
     }
+
+
+def unique_terms(*term_groups: tuple[str, ...]) -> tuple[str, ...]:
+    """Combines live-wire search terms while preserving operator-provided order."""
+
+    return tuple(dict.fromkeys(term for group in term_groups for term in group))
+
+
+def build_direct_search_terms(inputs: Any) -> tuple[str, ...]:
+    """Builds direct Torznab search terms with generic fallback coverage."""
+
+    return unique_terms(inputs.document_terms, inputs.generic_open_terms)
+
+
+def build_qbit_search_terms(inputs: Any) -> tuple[str, ...]:
+    """Builds qBit live-wire search terms with generic fallback coverage."""
+
+    return unique_terms(inputs.radarr_movie_terms, inputs.document_terms, inputs.generic_open_terms)
 
 
 def delete_download_client(arr_url: str, api_key: str, client_id: int) -> dict[str, object]:
@@ -1259,8 +1283,9 @@ def main() -> int:
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
     document_terms = inputs.document_terms
+    direct_search_terms = build_direct_search_terms(inputs)
     radarr_movie_terms = inputs.radarr_movie_terms
-    qbit_search_terms = tuple(dict.fromkeys(radarr_movie_terms + document_terms))
+    qbit_search_terms = build_qbit_search_terms(inputs)
 
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
@@ -1328,7 +1353,10 @@ def main() -> int:
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_search_terms": {
             "documents": live_wire_inputs.summarize_terms(document_terms),
+            "direct_search": live_wire_inputs.summarize_terms(direct_search_terms),
+            "generic_open": live_wire_inputs.summarize_terms(inputs.generic_open_terms),
             "radarr_movies": live_wire_inputs.summarize_terms(radarr_movie_terms),
+            "qbit_search": live_wire_inputs.summarize_terms(qbit_search_terms),
         },
         "checks": {},
     }
@@ -1363,16 +1391,28 @@ def main() -> int:
             require_server_connected=False,
             require_kad_connected=True,
         )
-        direct_results = prowlarr_live.wait_for_direct_torznab_results(
-            emule_base_url,
-            args.emule_api_key,
-            document_terms,
-            args.result_timeout_seconds,
-        )
+        try:
+            direct_results = prowlarr_live.wait_for_direct_torznab_results(
+                emule_base_url,
+                args.emule_api_key,
+                direct_search_terms,
+                args.result_timeout_seconds,
+            )
+        except RuntimeError as exc:
+            report["checks"]["direct_search_results"] = {
+                "status": "inconclusive",
+                "source": "documents+generic_open",
+                "term_count": len(direct_search_terms),
+                "error": str(exc),
+            }
+            raise LiveSearchUnavailableError(
+                "Direct eMule BB Torznab searches returned no live results for the configured "
+                "document or generic-open terms."
+            ) from exc
         report["checks"]["direct_search_results"] = prowlarr_live.redact_term_result(
             direct_results,
-            source="documents",
-            term_count=len(document_terms),
+            source="documents+generic_open",
+            term_count=len(direct_search_terms),
         )
 
         magnet = get_first_direct_magnet(emule_base_url, args.emule_api_key, str(direct_results["query"]))
@@ -1450,8 +1490,13 @@ def main() -> int:
         report["status"] = "passed"
         return 0
     except Exception as exc:
-        report["status"] = "failed"
-        report["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        if isinstance(exc, LiveSearchUnavailableError):
+            report["status"] = "inconclusive"
+            report["inconclusive_reason"] = {"type": type(exc).__name__, "message": str(exc)}
+        else:
+            report["status"] = "failed"
+            report["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        exit_code = LIVE_SOURCE_UNAVAILABLE_EXIT_CODE if isinstance(exc, LiveSearchUnavailableError) else 1
         if app is not None:
             try:
                 windows = []
@@ -1473,7 +1518,7 @@ def main() -> int:
                 report["failure_window_tree"] = "window-tree-failure.json"
             except Exception as tree_exc:
                 report["failure_window_tree_error"] = str(tree_exc)
-        return 1
+        return exit_code
     finally:
         cleanup_report: list[dict[str, object]] = []
         for arr_url, arr_api_key, client_id in cleanup_clients:
