@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -314,6 +315,66 @@ def test_rest_leak_churn_resource_thresholds_report_pass_and_failures() -> None:
         ("thread_count", "after_drain"),
         ("private_bytes", "peak"),
     }
+
+
+def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() -> None:
+    module = load_rest_api_smoke_module()
+    closed_apps: list[object] = []
+
+    def fake_close(app: object) -> None:
+        closed_apps.append(app)
+
+    def fake_launch(app_exe: Path, profile_base: Path) -> str:
+        assert app_exe == Path("emule.exe")
+        assert profile_base == Path("profile")
+        return "new-app"
+
+    def fake_pid(app: object) -> int:
+        return {"old-app": 111, "new-app": 222}[str(app)]
+
+    def fake_snapshot(process_id: int | None) -> dict[str, int | None]:
+        return {
+            "process_id": process_id,
+            "handles": 20,
+            "thread_count": 8,
+            "gdi_objects": 1,
+            "user_objects": 1,
+            "private_bytes": 4096,
+            "working_set_bytes": 8192,
+        }
+
+    relaunched, summary = module.restart_app_after_churn(
+        "old-app",
+        app_exe=Path("emule.exe"),
+        profile_base=Path("profile"),
+        base_url="https://127.0.0.1:4711",
+        api_key="api-key",
+        rest_ready_timeout_seconds=5.0,
+        close_func=fake_close,
+        launch_func=fake_launch,
+        wait_main_window_func=lambda _app: SimpleNamespace(window_text=lambda: "eMule"),
+        wait_ready_func=lambda _base_url, _api_key, _timeout: {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {"name": "eMule"},
+        },
+        get_pid_func=fake_pid,
+        snapshot_func=fake_snapshot,
+    )
+
+    assert relaunched == "new-app"
+    assert closed_apps == ["old-app"]
+    assert summary["old_process_id"] == 111
+    assert summary["new_process_id"] == 222
+    assert summary["same_process_id_reused"] is False
+    assert summary["main_window_title"] == "eMule"
+    assert summary["ready"] == {
+        "status": 200,
+        "content_type": "application/json",
+        "json": {"name": "eMule"},
+    }
+    assert summary["snapshots"]["before_shutdown"]["process_id"] == 111
+    assert summary["snapshots"]["after_relaunch"]["process_id"] == 222
 
 
 def test_max_resource_snapshot_keeps_high_water_marks() -> None:

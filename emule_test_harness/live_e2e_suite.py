@@ -185,6 +185,7 @@ def build_suite_command(
     rest_tls_handshake_adversity_budget: str = "off",
     rest_leak_churn_budget: str = "off",
     rest_leak_churn_cycles: int | None = None,
+    rest_stop_start_after_churn: bool = False,
     p2p_bind_interface_name: str = "hide.me",
     live_wire_inputs_file: Path | None = None,
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
@@ -241,6 +242,8 @@ def build_suite_command(
         command.extend(["--rest-leak-churn-budget", rest_leak_churn_budget])
         if rest_leak_churn_cycles is not None:
             command.extend(["--rest-leak-churn-cycles", str(rest_leak_churn_cycles)])
+        if rest_stop_start_after_churn:
+            command.append("--rest-stop-start-after-churn")
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -318,6 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-tls-handshake-adversity-budget", choices=["off", "smoke"], default="off")
     parser.add_argument("--rest-leak-churn-budget", choices=["off", "smoke", "soak"], default="off")
     parser.add_argument("--rest-leak-churn-cycles", type=int)
+    parser.add_argument("--rest-stop-start-after-churn", action="store_true")
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-qbit-live-wire-rounds", type=int, default=DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)
@@ -344,6 +348,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST stress max failures must be zero or greater.")
     if args.rest_stress_request_timeout_seconds <= 0:
         raise ValueError("REST stress request timeout must be greater than zero.")
+    if args.rest_stop_start_after_churn and args.rest_leak_churn_budget == "off":
+        raise ValueError("REST stop/start after churn requires --rest-leak-churn-budget.")
     if args.arr_direct_search_stress_count <= 0:
         raise ValueError("Arr direct search stress count must be greater than zero.")
     if args.arr_prowlarr_search_stress_count <= 0:
@@ -396,6 +402,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_stress_concurrency": args.rest_stress_concurrency,
         "rest_stress_max_failures": args.rest_stress_max_failures,
         "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
+        "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "rest_search_method_override": args.rest_search_method_override,
         "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
@@ -436,14 +443,15 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_coverage_budget=args.rest_coverage_budget,
             rest_stress_budget=args.rest_stress_budget,
             rest_stress_duration_seconds=args.rest_stress_duration_seconds,
-                rest_stress_concurrency=args.rest_stress_concurrency,
-                rest_stress_max_failures=args.rest_stress_max_failures,
-                rest_stress_request_timeout_seconds=args.rest_stress_request_timeout_seconds,
-                rest_socket_adversity_budget=args.rest_socket_adversity_budget,
-                rest_tls_handshake_adversity_budget=args.rest_tls_handshake_adversity_budget,
-                rest_leak_churn_budget=args.rest_leak_churn_budget,
-                rest_leak_churn_cycles=args.rest_leak_churn_cycles,
-                p2p_bind_interface_name=args.p2p_bind_interface_name,
+            rest_stress_concurrency=args.rest_stress_concurrency,
+            rest_stress_max_failures=args.rest_stress_max_failures,
+            rest_stress_request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+            rest_socket_adversity_budget=args.rest_socket_adversity_budget,
+            rest_tls_handshake_adversity_budget=args.rest_tls_handshake_adversity_budget,
+            rest_leak_churn_budget=args.rest_leak_churn_budget,
+            rest_leak_churn_cycles=args.rest_leak_churn_cycles,
+            rest_stop_start_after_churn=args.rest_stop_start_after_churn,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
             live_wire_inputs_file=live_wire_inputs_file,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
@@ -472,6 +480,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                     "rest_stress_concurrency": args.rest_stress_concurrency,
                     "rest_stress_max_failures": args.rest_stress_max_failures,
                     "rest_stress_request_timeout_seconds": args.rest_stress_request_timeout_seconds,
+                    "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
                     "rest_download_trigger_count": args.rest_download_trigger_count,
                     "rest_search_method_override": args.rest_search_method_override,
                     "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",

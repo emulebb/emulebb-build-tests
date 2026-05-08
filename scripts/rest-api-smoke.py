@@ -4447,6 +4447,51 @@ def close_app_cleanly_with_timing(app: object, close_func=close_app_cleanly) -> 
     }
 
 
+def restart_app_after_churn(
+    app: object,
+    *,
+    app_exe: Path,
+    profile_base: Path,
+    base_url: str,
+    api_key: str,
+    rest_ready_timeout_seconds: float,
+    close_func=close_app_cleanly,
+    launch_func=launch_app,
+    wait_main_window_func=wait_for_main_window,
+    wait_ready_func=None,
+    get_pid_func=get_app_process_id,
+    snapshot_func=get_process_resource_snapshot,
+) -> tuple[object, dict[str, object]]:
+    """Stops and relaunches the same live profile after REST churn."""
+
+    if wait_ready_func is None:
+        wait_ready_func = wait_for_rest_ready
+
+    old_process_id = get_pid_func(app)
+    before_shutdown = snapshot_func(old_process_id)
+    shutdown = close_app_cleanly_with_timing(app, close_func=close_func)
+    relaunched_app = launch_func(app_exe, profile_base)
+    new_process_id = get_pid_func(relaunched_app)
+    after_relaunch = snapshot_func(new_process_id)
+    main_window = wait_main_window_func(relaunched_app)
+    ready = wait_ready_func(base_url, api_key, rest_ready_timeout_seconds)
+
+    return relaunched_app, {
+        "old_process_id": old_process_id,
+        "new_process_id": new_process_id,
+        "same_process_id_reused": old_process_id is not None
+        and new_process_id is not None
+        and int(old_process_id) == int(new_process_id),
+        "shutdown": shutdown,
+        "main_window_title": main_window.window_text(),
+        "ready": compact_http_result(ready),
+        "snapshots": {
+            "before_shutdown": before_shutdown,
+            "after_relaunch": after_relaunch,
+        },
+    }
+
+
 def wait_for_kad_running(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
     """Waits until Kad reports a running state after the connect request."""
 
@@ -5183,6 +5228,7 @@ def main() -> int:
     parser.add_argument("--rest-tls-handshake-adversity-budget", choices=REST_TLS_HANDSHAKE_ADVERSITY_BUDGETS, default="off")
     parser.add_argument("--rest-leak-churn-budget", choices=REST_LEAK_CHURN_BUDGETS, default="off")
     parser.add_argument("--rest-leak-churn-cycles", type=int)
+    parser.add_argument("--rest-stop-start-after-churn", action="store_true")
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
@@ -5195,6 +5241,8 @@ def main() -> int:
         raise ValueError("Search counts must be zero or greater.")
     if args.live_download_trigger_count < 0:
         raise ValueError("Live download trigger count must be zero or greater.")
+    if args.rest_stop_start_after_churn and args.rest_leak_churn_budget == "off":
+        raise ValueError("REST stop/start after churn requires --rest-leak-churn-budget.")
     effective_stress_budget = (
         "smoke"
         if args.rest_coverage_budget == "contract-stress" and args.rest_stress_budget == "off"
@@ -5292,6 +5340,7 @@ def main() -> int:
             "rest_tls_handshake_adversity_budget": args.rest_tls_handshake_adversity_budget,
             "rest_leak_churn_budget": args.rest_leak_churn_budget,
             "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
+            "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
             "timeouts": {
                 "rest_ready_seconds": args.rest_ready_timeout_seconds,
                 "server_activity_seconds": args.server_activity_timeout_seconds,
@@ -5421,6 +5470,21 @@ def main() -> int:
                 cycles=args.rest_leak_churn_cycles,
                 request_timeout_seconds=args.rest_stress_request_timeout_seconds,
             )
+
+        if args.rest_stop_start_after_churn:
+            current_phase = set_phase(report, "rest_stop_start_after_churn")
+            old_app = app
+            app = None
+            app, report["checks"]["rest_stop_start_after_churn"] = restart_app_after_churn(
+                old_app,
+                app_exe=app_exe,
+                profile_base=Path(profile["profile_base"]),
+                base_url=base_url,
+                api_key=args.api_key,
+                rest_ready_timeout_seconds=args.rest_ready_timeout_seconds,
+            )
+            launched_process_id = get_app_process_id(app)
+            report["relaunched_process_id"] = launched_process_id
 
         assert isinstance(report.get("resource_snapshots"), dict)
         report["resource_snapshots"]["after_rest_adversity_and_stress"] = get_process_resource_snapshot(

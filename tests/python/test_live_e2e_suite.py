@@ -233,6 +233,9 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
             "45",
             "--rest-stress-concurrency",
             "2",
+            "--rest-leak-churn-budget",
+            "smoke",
+            "--rest-stop-start-after-churn",
             "--p2p-bind-interface-name",
             "hide.me",
         ),
@@ -246,8 +249,11 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-stress-duration-seconds") == ["45.0"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["2"]
+    assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
+    assert "--rest-stop-start-after-churn" in rest_command
     assert summary["suites"][0]["rest_coverage_budget"] == "contract-stress"
     assert summary["suites"][0]["rest_stress_budget"] == "soak"
+    assert summary["suites"][0]["rest_stop_start_after_churn"] is True
 
 
 def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Path, monkeypatch) -> None:
