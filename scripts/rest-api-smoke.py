@@ -153,6 +153,7 @@ REST_PREFERENCE_KEYS = {
 REST_COVERAGE_BUDGETS = ("smoke", "contract", "contract-stress")
 REST_STRESS_BUDGETS = ("off", "smoke", "soak")
 REST_SOCKET_ADVERSITY_BUDGETS = ("off", "smoke")
+REST_TLS_HANDSHAKE_ADVERSITY_BUDGETS = ("off", "smoke")
 REST_LEAK_CHURN_BUDGETS = ("off", "smoke", "soak")
 REST_LEAK_CHURN_DEFAULT_CYCLES = {
     "off": 0,
@@ -1086,6 +1087,48 @@ def raw_socket_probe(
         return result
 
 
+def raw_socket_chunk_probe(
+    host: str,
+    port: int,
+    chunks: list[bytes],
+    *,
+    chunk_delay_seconds: float,
+    timeout_seconds: float,
+    reset_on_close: bool,
+) -> dict[str, object]:
+    """Sends delayed raw TCP chunks and closes without waiting for HTTP response bytes."""
+
+    started = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=timeout_seconds) as sock:
+            sock.settimeout(timeout_seconds)
+            for chunk in chunks:
+                if chunk:
+                    sock.sendall(chunk)
+                if chunk_delay_seconds > 0:
+                    time.sleep(chunk_delay_seconds)
+            if reset_on_close:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("HH", 1, 0))
+            return {
+                "outcome": "sent_reset" if reset_on_close else "sent_closed",
+                "status": None,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+            }
+    except socket.timeout:
+        return {
+            "outcome": "timeout",
+            "status": None,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        }
+    except OSError as exc:
+        return {
+            "outcome": "socket_error",
+            "status": None,
+            "error": str(exc),
+            "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        }
+
+
 def require_socket_probe_outcome(
     scenario: str,
     result: dict[str, object],
@@ -1227,6 +1270,79 @@ def exercise_rest_socket_adversity(
         "scheme": endpoint["scheme"],
         "host": host,
         "port": port,
+        "probe_count": len(rows),
+        "probes": rows,
+    }
+
+
+def exercise_rest_tls_handshake_adversity(
+    base_url: str,
+    *,
+    budget: str,
+    request_timeout_seconds: float,
+) -> dict[str, object]:
+    """Runs HTTPS-only raw TCP probes for stalled and partial TLS handshakes."""
+
+    if budget not in REST_TLS_HANDSHAKE_ADVERSITY_BUDGETS:
+        raise ValueError(f"Unsupported REST TLS handshake adversity budget: {budget}")
+    if budget == "off":
+        return {"budget": budget, "probes": [], "probe_count": 0}
+
+    endpoint = parse_base_url_endpoint(base_url)
+    if endpoint["scheme"] != "https":
+        raise RuntimeError("REST TLS handshake adversity requires an HTTPS base URL.")
+
+    host = str(endpoint["host"])
+    port = int(endpoint["port"])
+    delay_seconds = min(max(request_timeout_seconds / 20.0, 0.05), 0.25)
+    probes = [
+        {
+            "scenario": "stalled_tls_connect_close",
+            "chunks": [b""],
+            "reset_on_close": False,
+        },
+        {
+            "scenario": "partial_tls_record_reset",
+            "chunks": [b"\x16\x03", b"\x01\x02", b"\x00"],
+            "reset_on_close": True,
+        },
+        {
+            "scenario": "partial_tls_clienthello_reset",
+            "chunks": [b"\x16\x03\x01\x02\x00", b"\x01\x00", b"\x01"],
+            "reset_on_close": True,
+        },
+    ]
+
+    rows = []
+    for probe in probes:
+        result = raw_socket_chunk_probe(
+            host,
+            port,
+            list(probe["chunks"]),
+            chunk_delay_seconds=delay_seconds,
+            timeout_seconds=request_timeout_seconds,
+            reset_on_close=bool(probe["reset_on_close"]),
+        )
+        require_socket_probe_outcome(
+            str(probe["scenario"]),
+            result,
+            allowed_statuses=set(),
+        )
+        rows.append(
+            {
+                "scenario": probe["scenario"],
+                "outcome": result.get("outcome"),
+                "status": result.get("status"),
+                "elapsed_ms": result.get("elapsed_ms"),
+            }
+        )
+
+    return {
+        "budget": budget,
+        "scheme": endpoint["scheme"],
+        "host": host,
+        "port": port,
+        "chunk_delay_seconds": delay_seconds,
         "probe_count": len(rows),
         "probes": rows,
     }
@@ -4867,6 +4983,7 @@ def main() -> int:
     parser.add_argument("--rest-stress-max-failures", type=int, default=1)
     parser.add_argument("--rest-stress-request-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--rest-socket-adversity-budget", choices=REST_SOCKET_ADVERSITY_BUDGETS, default="off")
+    parser.add_argument("--rest-tls-handshake-adversity-budget", choices=REST_TLS_HANDSHAKE_ADVERSITY_BUDGETS, default="off")
     parser.add_argument("--rest-leak-churn-budget", choices=REST_LEAK_CHURN_BUDGETS, default="off")
     parser.add_argument("--rest-leak-churn-cycles", type=int)
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
@@ -4975,6 +5092,7 @@ def main() -> int:
             "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
             "rest_stress_concurrency": args.rest_stress_concurrency,
             "rest_socket_adversity_budget": args.rest_socket_adversity_budget,
+            "rest_tls_handshake_adversity_budget": args.rest_tls_handshake_adversity_budget,
             "rest_leak_churn_budget": args.rest_leak_churn_budget,
             "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
             "timeouts": {
@@ -5060,6 +5178,14 @@ def main() -> int:
                 base_url,
                 args.api_key,
                 budget=args.rest_socket_adversity_budget,
+                request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+            )
+
+        if args.rest_tls_handshake_adversity_budget != "off":
+            current_phase = set_phase(report, "rest_tls_handshake_adversity")
+            report["checks"]["rest_tls_handshake_adversity"] = exercise_rest_tls_handshake_adversity(
+                base_url,
+                budget=args.rest_tls_handshake_adversity_budget,
                 request_timeout_seconds=args.rest_stress_request_timeout_seconds,
             )
 

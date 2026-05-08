@@ -115,6 +115,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-stress-max-failures") == ["1"]
     assert option_values(rest_command, "--rest-stress-request-timeout-seconds") == ["5.0"]
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
+    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["off"]
     assert "--skip-live-seed-refresh" not in rest_command
     assert summary["suites"][6]["rest_coverage_budget"] == "contract"

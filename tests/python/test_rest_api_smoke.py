@@ -131,6 +131,44 @@ def test_rest_socket_probe_outcome_accepts_declared_status_or_close() -> None:
     )
 
 
+def test_rest_tls_handshake_adversity_requires_https() -> None:
+    module = load_rest_api_smoke_module()
+
+    with pytest.raises(RuntimeError, match="HTTPS base URL"):
+        module.exercise_rest_tls_handshake_adversity(
+            "http://127.0.0.1:4711",
+            budget="smoke",
+            request_timeout_seconds=1.0,
+        )
+
+
+def test_rest_tls_handshake_adversity_records_smoke_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    observed: list[dict[str, object]] = []
+
+    def fake_chunk_probe(host: str, port: int, chunks: list[bytes], **kwargs: object) -> dict[str, object]:
+        observed.append({"host": host, "port": port, "chunks": chunks, **kwargs})
+        return {"outcome": "sent_reset", "status": None, "elapsed_ms": 1.0}
+
+    monkeypatch.setattr(module, "raw_socket_chunk_probe", fake_chunk_probe)
+
+    summary = module.exercise_rest_tls_handshake_adversity(
+        "https://127.0.0.1:4711",
+        budget="smoke",
+        request_timeout_seconds=2.0,
+    )
+
+    assert summary["scheme"] == "https"
+    assert summary["probe_count"] == 3
+    assert [probe["scenario"] for probe in summary["probes"]] == [
+        "stalled_tls_connect_close",
+        "partial_tls_record_reset",
+        "partial_tls_clienthello_reset",
+    ]
+    assert {entry["host"] for entry in observed} == {"127.0.0.1"}
+    assert {entry["port"] for entry in observed} == {4711}
+
+
 def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
     module = load_rest_api_smoke_module()
 
