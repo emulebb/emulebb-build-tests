@@ -168,6 +168,7 @@ def build_suite_command(
     seed_config_dir: Path | None = None,
     startup_trace_mode: str = "required",
     shared_root: Path | None = None,
+    shared_files_tree_stress_churn_cycles: int | None = None,
     skip_live_seed_refresh: bool = False,
     rest_server_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_kad_search_count: int = DEFAULT_REST_SEARCH_COUNT,
@@ -212,6 +213,8 @@ def build_suite_command(
         command.extend(["--startup-trace-mode", startup_trace_mode])
     if spec.accepts_shared_root and shared_root is not None:
         command.extend(["--shared-root", str(shared_root.resolve())])
+    if spec.name == "shared-files-ui" and shared_files_tree_stress_churn_cycles is not None:
+        command.extend(["--tree-stress-churn-cycles", str(shared_files_tree_stress_churn_cycles)])
     for scenario in spec.scenarios:
         command.extend(["--scenario", scenario])
     if spec.uses_live_seed_refresh and skip_live_seed_refresh:
@@ -292,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
+    parser.add_argument("--shared-files-tree-stress-churn-cycles", type=int)
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
@@ -416,6 +420,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             seed_config_dir=seed_config_dir,
             startup_trace_mode=args.startup_trace_mode,
             shared_root=shared_root,
+            shared_files_tree_stress_churn_cycles=args.shared_files_tree_stress_churn_cycles,
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             rest_server_search_count=args.rest_server_search_count,
             rest_kad_search_count=args.rest_kad_search_count,
