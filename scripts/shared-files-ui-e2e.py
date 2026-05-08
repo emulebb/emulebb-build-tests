@@ -635,6 +635,69 @@ def get_profile_counter_value(summary: dict[str, object], counter_name: str, val
     return int(value) if isinstance(value, int) else None
 
 
+def get_trace_counter_int(counters: list[dict[str, object]], counter_id: str) -> int | None:
+    """Returns one integer counter value from a raw startup-profile counter list."""
+
+    counter = live_common.get_counter_by_id(counters, counter_id)
+    if not isinstance(counter, dict):
+        return None
+    value = counter.get("value")
+    return int(value) if isinstance(value, int) else None
+
+
+def wait_for_shared_hashing_done_profile(
+    startup_profile_path: Path,
+    *,
+    expected_count: int,
+    timeout: float = 7200.0,
+) -> dict[str, object]:
+    """Waits until the startup trace proves shared-file hashing fully drained."""
+
+    last_state: dict[str, object] = {}
+
+    def resolve() -> dict[str, object] | None:
+        nonlocal last_state
+        if not startup_profile_path.exists():
+            last_state = {"trace_exists": False}
+            return None
+        text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
+        phases = live_common.parse_startup_profile(text)
+        counters = live_common.parse_startup_profile_counters(text)
+        hashing_done_phase = live_common.get_phase_by_id(
+            phases,
+            live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID,
+        )
+        hashing_done_shared_files = get_trace_counter_int(counters, "shared.model.hashing_done_shared_files")
+        hashing_done_visible_rows = get_trace_counter_int(counters, "shared.model.hashing_done_visible_rows")
+        last_state = {
+            "trace_exists": True,
+            "hashing_done_observed": hashing_done_phase is not None,
+            "hashing_done_shared_files": hashing_done_shared_files,
+            "hashing_done_visible_rows": hashing_done_visible_rows,
+        }
+        if hashing_done_phase is not None:
+            last_state["hashing_done_absolute_ms"] = float(hashing_done_phase["absolute_ms"])
+        if (
+            hashing_done_phase is not None
+            and hashing_done_shared_files is not None
+            and hashing_done_visible_rows is not None
+            and hashing_done_shared_files >= expected_count
+            and hashing_done_visible_rows >= expected_count
+        ):
+            return dict(last_state)
+        return None
+
+    try:
+        return wait_for(
+            resolve,
+            timeout=timeout,
+            interval=1.0,
+            description="shared-file hashing drain profile",
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} Last hashing state: {last_state!r}") from exc
+
+
 def open_process(process_id: int) -> int:
     """Opens the target process for the remote memory operations needed by Win32 list controls."""
 
@@ -2492,6 +2555,105 @@ def run_tree_refresh_stress_e2e(
             summary["resources_before_churn"],
             summary["resources_after_churn"],
         )
+
+        if require_startup_profile:
+            summary["first_launch_hashing_done"] = wait_for_shared_hashing_done_profile(
+                fixture["startup_profile_path"],
+                expected_count=fixture["expected_row_count"],
+            )
+        first_launch_trace_artifact = artifacts_dir / "first-launch-startup-profile.trace.json"
+        if Path(str(fixture["startup_profile_path"])).exists():
+            shutil.copy2(fixture["startup_profile_path"], first_launch_trace_artifact)
+            summary["first_launch_startup_profile_artifact"] = str(first_launch_trace_artifact)
+
+        close_process(process_handle)
+        process_handle = 0
+        live_common.close_app_cleanly(app)
+        app = None
+
+        shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
+        summary["shared_cache_path"] = str(shared_cache_path)
+        wait_for(
+            lambda: shared_cache_path.stat().st_size if shared_cache_path.exists() else None,
+            timeout=60.0,
+            interval=0.5,
+            description="50k shared startup cache persistence",
+        )
+        summary["shared_cache_size_bytes_after_first_launch"] = shared_cache_path.stat().st_size
+        Path(str(fixture["startup_profile_path"])).unlink(missing_ok=True)
+
+        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        main_window = live_common.wait_for_main_window(app, timeout=900.0)
+        main_hwnd = main_window.handle
+        live_common.bring_window_to_front(main_window)
+        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        summary["cached_relaunch_process_id"] = process_id
+        process_handle = open_process(process_id)
+
+        relaunch_profile_summary, relaunch_profile_phases, _relaunch_profile_counters = collect_startup_profile_bundle(
+            fixture["startup_profile_path"],
+            require_startup_profile=require_startup_profile,
+        )
+        summary["cached_relaunch_startup"] = relaunch_profile_summary
+        if relaunch_profile_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(
+                relaunch_profile_phases,
+                summary["name"] + ".cached_relaunch",
+            )
+
+        cached_files_queued_for_hash = get_profile_counter_value(
+            relaunch_profile_summary,
+            "shared.scan.files_queued_for_hash",
+            "files",
+        )
+        cached_pending_hashes = get_profile_counter_value(
+            relaunch_profile_summary,
+            "shared.scan.pending_hashes",
+            "files",
+        )
+        cached_shared_files_after_scan = get_profile_counter_value(
+            relaunch_profile_summary,
+            "shared.scan.shared_files_after_scan",
+            "files",
+        )
+        summary["cached_relaunch_files_queued_for_hash"] = cached_files_queued_for_hash
+        summary["cached_relaunch_pending_hashes"] = cached_pending_hashes
+        summary["cached_relaunch_shared_files_after_scan"] = cached_shared_files_after_scan
+
+        if require_startup_profile:
+            if cached_files_queued_for_hash != 0:
+                raise RuntimeError(
+                    f"Expected files_queued_for_hash=0 on cached 50k relaunch, got {cached_files_queued_for_hash!r}."
+                )
+            if cached_pending_hashes != 0:
+                raise RuntimeError(f"Expected pending_hashes=0 on cached 50k relaunch, got {cached_pending_hashes!r}.")
+            if cached_shared_files_after_scan != fixture["expected_row_count"]:
+                raise RuntimeError(
+                    "Expected cached 50k relaunch shared_files_after_scan="
+                    f"{fixture['expected_row_count']}, got {cached_shared_files_after_scan!r}."
+                )
+
+        dump_window_tree(main_hwnd, artifacts_dir / "window-tree-cached-relaunch.json")
+        list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
+        wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
+        select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
+        cached_count = wait_for_exact_list_count_with_progress(
+            list_hwnd,
+            fixture["expected_row_count"],
+            timeout=900.0,
+            summary=summary,
+            summary_key="cached_relaunch_row_count_progress",
+            rest_base_url=str(fixture["rest_base_url"]),
+            rest_api_key=str(fixture["rest_api_key"]),
+        )
+        summary["cached_relaunch_row_count"] = cached_count
+        summary["cached_relaunch_rest_row_count"] = wait_for_rest_shared_file_count(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            fixture["expected_row_count"],
+            "cached 50k relaunch REST shared-files count",
+        )
+        summary["resources_after_cached_relaunch"] = get_process_resource_snapshot(process_handle)
 
         summary["status"] = "passed"
         summary["error"] = None
