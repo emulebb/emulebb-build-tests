@@ -146,6 +146,7 @@ def test_direct_torznab_search_stress_cycles_terms(monkeypatch) -> None:
     assert "q=alpha" in calls[0]
     assert "q=beta" in calls[1]
     assert "q=alpha" in calls[2]
+    assert all("cat=7000" in call for call in calls)
 
 
 def test_prowlarr_search_stress_requires_result_rows(monkeypatch) -> None:
@@ -164,6 +165,17 @@ def test_prowlarr_search_stress_requires_result_rows(monkeypatch) -> None:
     assert result["row_total"] == 2
     assert "query=alpha" in calls[0]
     assert "query=beta" in calls[1]
+    assert all("categories=7000" in call for call in calls)
+
+
+def test_search_path_builders_preserve_explicit_video_categories() -> None:
+    module = load_prowlarr_module()
+
+    direct_path = module.build_direct_torznab_search_path("secret key", "movie term", module.TORZNAB_MOVIE_CATEGORY)
+    prowlarr_path = module.build_prowlarr_search_path("series term", module.TORZNAB_TV_CATEGORY, 40)
+
+    assert direct_path == "/indexer/emulebb/api?t=search&cat=2000&q=movie%20term&apikey=secret%20key"
+    assert prowlarr_path == "/api/v1/search?query=series%20term&categories=5000&indexerIds=40"
 
 
 def test_secret_ignore_check_uses_secret_file_git_worktree(tmp_path: Path, monkeypatch) -> None:
@@ -237,12 +249,25 @@ def test_direct_rss_validation_requires_results(monkeypatch) -> None:
 <rss><channel><item><title>Linux</title></item></channel></rss>"""
 
     def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        assert path == "/indexer/emulebb/api?t=search&apikey=secret"
+        assert path == "/indexer/emulebb/api?t=search&cat=2000&q=movie%20term&apikey=secret"
         return {"status": 200, "body_text": rss}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
 
-    assert module.check_direct_rss_results("http://127.0.0.1:1", "secret") == {"status": 200, "count": 1}
+    assert module.check_direct_rss_results(
+        "http://127.0.0.1:1",
+        "secret",
+        ("movie term",),
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+        source="radarr_movies",
+    ) == {
+        "status": 200,
+        "count": 1,
+        "category": 2000,
+        "source": "radarr_movies",
+        "term_count": 1,
+        "attempts": [{"query_index": 0, "query_present": True, "status": 200, "count": 1}],
+    }
 
 
 def test_prowlarr_search_attempts_capture_error_body(monkeypatch) -> None:

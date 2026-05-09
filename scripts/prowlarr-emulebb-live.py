@@ -21,7 +21,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import live_env
 
-TORZNAB_LIVE_CATEGORY = 7000
+TORZNAB_MOVIE_CATEGORY = 2000
+TORZNAB_TV_CATEGORY = 5000
+TORZNAB_DOCUMENT_CATEGORY = 7000
+TORZNAB_LIVE_CATEGORY = TORZNAB_DOCUMENT_CATEGORY
 
 TORZNAB_DIRECT_ERROR_SCENARIOS: tuple[dict[str, object], ...] = (
     {
@@ -323,17 +326,58 @@ def check_direct_caps(base_url: str, emule_api_key: str) -> dict[str, object]:
     return {"status": 200, "root": root.tag, "length": len(body_text)}
 
 
-def check_direct_rss_results(base_url: str, emule_api_key: str) -> dict[str, object]:
-    """Validates the qless Torznab RSS path used by Prowlarr indexer tests."""
+def build_direct_torznab_search_path(emule_api_key: str, query: str, category_id: int) -> str:
+    """Builds one direct eMule BB Torznab search path."""
 
-    path = "/indexer/emulebb/api?t=search&apikey=" + urllib.parse.quote(emule_api_key)
-    result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
-    status = int(result.get("status") or 0)
-    body_text = str(result.get("body_text") or "")
-    count = count_torznab_items(body_text) if status == 200 and body_text else 0
-    if status != 200 or count <= 0:
-        raise RuntimeError(f"Direct Torznab RSS validation returned HTTP {status} with {count} item(s).")
-    return {"status": status, "count": count}
+    return (
+        f"/indexer/emulebb/api?t=search&cat={int(category_id)}&q="
+        + urllib.parse.quote(query)
+        + "&apikey="
+        + urllib.parse.quote(emule_api_key)
+    )
+
+
+def build_prowlarr_search_path(query: str, category_id: int, indexer_id: int) -> str:
+    """Builds one Prowlarr search API path for a specific Torznab category."""
+
+    encoded_query = urllib.parse.quote(query)
+    return f"/api/v1/search?query={encoded_query}&categories={int(category_id)}&indexerIds={int(indexer_id)}"
+
+
+def check_direct_rss_results(
+    base_url: str,
+    emule_api_key: str,
+    queries: tuple[str, ...],
+    *,
+    category_id: int,
+    source: str,
+) -> dict[str, object]:
+    """Validates direct Torznab RSS with explicit live-wire terms and category."""
+
+    if not queries:
+        raise RuntimeError("Direct Torznab RSS validation requires at least one query.")
+    attempts: list[dict[str, object]] = []
+    for query_index, query in enumerate(queries):
+        path = build_direct_torznab_search_path(emule_api_key, query, category_id)
+        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+        status = int(result.get("status") or 0)
+        body_text = str(result.get("body_text") or "")
+        count = count_torznab_items(body_text) if status == 200 and body_text else 0
+        attempt = {"query_index": query_index, "query_present": bool(query), "status": status, "count": count}
+        attempts.append(attempt)
+        if status == 200 and count > 0:
+            return {
+                "status": status,
+                "count": count,
+                "category": int(category_id),
+                "source": source,
+                "term_count": len(queries),
+                "attempts": attempts,
+            }
+    raise RuntimeError(
+        f"Direct Torznab RSS validation returned no {source} item(s) "
+        f"for category {int(category_id)}. Attempts: {attempts!r}"
+    )
 
 
 def check_direct_auth_rejection(base_url: str) -> dict[str, object]:
@@ -393,6 +437,8 @@ def wait_for_direct_torznab_results(
     emule_api_key: str,
     queries: tuple[str, ...],
     timeout_seconds: float,
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
 ) -> dict[str, object]:
     """Polls direct Torznab searches until the eMule bridge returns at least one item."""
 
@@ -400,12 +446,7 @@ def wait_for_direct_torznab_results(
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         for query_index, query in enumerate(queries):
-            path = (
-                f"/indexer/emulebb/api?t=search&cat={TORZNAB_LIVE_CATEGORY}&q="
-                + urllib.parse.quote(query)
-                + "&apikey="
-                + urllib.parse.quote(emule_api_key)
-            )
+            path = build_direct_torznab_search_path(emule_api_key, query, category_id)
             try:
                 result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
             except (ConnectionResetError, TimeoutError, OSError) as exc:
@@ -426,16 +467,13 @@ def stress_cached_direct_torznab_search(
     emule_api_key: str,
     query: str,
     count: int,
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
 ) -> dict[str, object]:
     """Repeatedly exercises one cached direct Torznab search result."""
 
     attempts: list[dict[str, object]] = []
-    path = (
-        f"/indexer/emulebb/api?t=search&cat={TORZNAB_LIVE_CATEGORY}&q="
-        + urllib.parse.quote(query)
-        + "&apikey="
-        + urllib.parse.quote(emule_api_key)
-    )
+    path = build_direct_torznab_search_path(emule_api_key, query, category_id)
     for ordinal in range(1, count + 1):
         started = time.monotonic()
         result = rest_smoke.http_request(base_url, path, request_timeout_seconds=20.0)
@@ -455,6 +493,8 @@ def stress_direct_torznab_search_terms(
     emule_api_key: str,
     queries: tuple[str, ...],
     count: int,
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
 ) -> dict[str, object]:
     """Exercises direct Torznab searches across configured live-wire terms."""
 
@@ -465,12 +505,7 @@ def stress_direct_torznab_search_terms(
     for ordinal in range(1, count + 1):
         query_index = (ordinal - 1) % len(queries)
         query = queries[query_index]
-        path = (
-            f"/indexer/emulebb/api?t=search&cat={TORZNAB_LIVE_CATEGORY}&q="
-            + urllib.parse.quote(query)
-            + "&apikey="
-            + urllib.parse.quote(emule_api_key)
-        )
+        path = build_direct_torznab_search_path(emule_api_key, query, category_id)
         started = time.monotonic()
         result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
         elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -500,6 +535,8 @@ def stress_prowlarr_search_terms(
     indexer_id: int,
     queries: tuple[str, ...],
     count: int,
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
 ) -> dict[str, object]:
     """Exercises Prowlarr release searches across configured live-wire terms."""
 
@@ -510,8 +547,7 @@ def stress_prowlarr_search_terms(
     for ordinal in range(1, count + 1):
         query_index = (ordinal - 1) % len(queries)
         query = queries[query_index]
-        encoded_query = urllib.parse.quote(query)
-        path = f"/api/v1/search?query={encoded_query}&categories={TORZNAB_LIVE_CATEGORY}&indexerIds={indexer_id}"
+        path = build_prowlarr_search_path(query, category_id, indexer_id)
         result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
         status = int(result.get("status") or 0)
         payload = result.get("json")
@@ -564,6 +600,8 @@ def wait_for_prowlarr_results(
     indexer_id: int,
     queries: tuple[str, ...],
     timeout_seconds: float,
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
 ) -> dict[str, object]:
     """Polls Prowlarr searches until one query returns at least one item."""
 
@@ -571,8 +609,7 @@ def wait_for_prowlarr_results(
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         for query_index, query in enumerate(queries):
-            encoded_query = urllib.parse.quote(query)
-            path = f"/api/v1/search?query={encoded_query}&categories={TORZNAB_LIVE_CATEGORY}&indexerIds={indexer_id}"
+            path = build_prowlarr_search_path(query, category_id, indexer_id)
             result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
             status = int(result.get("status") or 0)
             payload = result.get("json")
@@ -648,6 +685,8 @@ def main() -> int:
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
     document_terms = inputs.document_terms
+    radarr_movie_terms = inputs.radarr_movie_terms
+    sonarr_series_terms = inputs.sonarr_series_terms
     env_values = live_env.load_env_values(
         ("PROWLARR_URL", "PROWLARR_API_KEY"),
         env_file=Path(args.env_file).resolve(),
@@ -719,6 +758,13 @@ def main() -> int:
         "live_wire_inputs_file": str(inputs.path),
         "search_terms": {
             "documents": live_wire_inputs.summarize_terms(document_terms),
+            "radarr_movies": live_wire_inputs.summarize_terms(radarr_movie_terms),
+            "sonarr_series": live_wire_inputs.summarize_terms(sonarr_series_terms),
+        },
+        "torznab_media_categories": {
+            "movie": TORZNAB_MOVIE_CATEGORY,
+            "tv": TORZNAB_TV_CATEGORY,
+            "document": TORZNAB_DOCUMENT_CATEGORY,
         },
         "checks": {},
     }
@@ -764,29 +810,62 @@ def main() -> int:
         report["checks"]["direct_auth_rejection"] = check_direct_auth_rejection(emule_base_url)
         report["checks"]["direct_torznab_error_edges"] = check_direct_torznab_error_edges(emule_base_url, args.emule_api_key)
         report["checks"]["direct_caps"] = check_direct_caps(emule_base_url, args.emule_api_key)
-        report["checks"]["direct_rss_results"] = check_direct_rss_results(emule_base_url, args.emule_api_key)
+        report["checks"]["direct_rss_results"] = check_direct_rss_results(
+            emule_base_url,
+            args.emule_api_key,
+            document_terms,
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
+            source="documents",
+        )
         direct_results = wait_for_direct_torznab_results(
             emule_base_url,
             args.emule_api_key,
             document_terms,
             args.result_timeout_seconds,
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
         report["checks"]["direct_search_results"] = redact_term_result(
             direct_results,
             source="documents",
             term_count=len(document_terms),
         )
+        direct_movie_results = wait_for_direct_torznab_results(
+            emule_base_url,
+            args.emule_api_key,
+            radarr_movie_terms,
+            args.result_timeout_seconds,
+            category_id=TORZNAB_MOVIE_CATEGORY,
+        )
+        report["checks"]["direct_movie_video_results"] = redact_term_result(
+            direct_movie_results,
+            source="radarr_movies",
+            term_count=len(radarr_movie_terms),
+        )
+        direct_series_results = wait_for_direct_torznab_results(
+            emule_base_url,
+            args.emule_api_key,
+            sonarr_series_terms,
+            args.result_timeout_seconds,
+            category_id=TORZNAB_TV_CATEGORY,
+        )
+        report["checks"]["direct_series_video_results"] = redact_term_result(
+            direct_series_results,
+            source="sonarr_series",
+            term_count=len(sonarr_series_terms),
+        )
         report["checks"]["direct_cached_search_stress"] = stress_cached_direct_torznab_search(
             emule_base_url,
             args.emule_api_key,
             str(direct_results["query"]),
             args.cached_search_stress_count,
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
         report["checks"]["direct_search_stress"] = stress_direct_torznab_search_terms(
             emule_base_url,
             args.emule_api_key,
             document_terms,
             args.direct_search_stress_count,
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
 
         status_payload = require_success(
@@ -833,11 +912,38 @@ def main() -> int:
             int(saved_indexer["id"]),
             document_terms,
             args.result_timeout_seconds,
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
         report["checks"]["search_results"] = redact_term_result(
             report["checks"]["search_results"],
             source="documents",
             term_count=len(document_terms),
+        )
+        prowlarr_movie_results = wait_for_prowlarr_results(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            radarr_movie_terms,
+            args.result_timeout_seconds,
+            category_id=TORZNAB_MOVIE_CATEGORY,
+        )
+        report["checks"]["prowlarr_movie_video_results"] = redact_term_result(
+            prowlarr_movie_results,
+            source="radarr_movies",
+            term_count=len(radarr_movie_terms),
+        )
+        prowlarr_series_results = wait_for_prowlarr_results(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            sonarr_series_terms,
+            args.result_timeout_seconds,
+            category_id=TORZNAB_TV_CATEGORY,
+        )
+        report["checks"]["prowlarr_series_video_results"] = redact_term_result(
+            prowlarr_series_results,
+            source="sonarr_series",
+            term_count=len(sonarr_series_terms),
         )
         report["checks"]["prowlarr_search_stress"] = stress_prowlarr_search_terms(
             prowlarr_url,
@@ -845,6 +951,7 @@ def main() -> int:
             int(saved_indexer["id"]),
             document_terms,
             args.prowlarr_search_stress_count,
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
         report["status"] = "passed"
         return 0
