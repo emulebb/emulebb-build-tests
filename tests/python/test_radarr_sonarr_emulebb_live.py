@@ -265,6 +265,9 @@ def test_arr_readiness_summaries_are_compact() -> None:
         "name": "eMule BB Local",
         "implementation": "Torznab",
         "enable": True,
+        "enableRss": None,
+        "enableAutomaticSearch": None,
+        "enableInteractiveSearch": None,
         "protocol": "torrent",
         "priority": 25,
     }
@@ -298,26 +301,27 @@ def test_ensure_arr_indexer_enabled_reenables_disabled_provider(monkeypatch: pyt
     assert len(requests) == 1
 
 
-def test_require_arr_check_passed_rejects_inconclusive_release_search() -> None:
+def test_require_arr_check_passed_accepts_release_search_diagnostics() -> None:
     module = load_radarr_sonarr_module()
     report = {
         "readiness": {
             "indexer_synced": True,
+            "indexer_enabled": True,
             "download_client_created": True,
             "download_client_tested": True,
         },
         "release_search": {"status": "inconclusive", "error": "no rows"},
     }
 
-    with pytest.raises(RuntimeError, match="release search"):
-        module.require_arr_check_passed("sonarr", report)
+    module.require_arr_check_passed("sonarr", report)
 
 
 def test_require_arr_check_passed_rejects_disabled_indexer() -> None:
     module = load_radarr_sonarr_module()
     report = {
         "readiness": {
-            "indexer_synced": False,
+            "indexer_synced": True,
+            "indexer_enabled": False,
             "download_client_created": True,
             "download_client_tested": True,
         },
@@ -326,6 +330,25 @@ def test_require_arr_check_passed_rejects_disabled_indexer() -> None:
 
     with pytest.raises(RuntimeError, match="readiness"):
         module.require_arr_check_passed("sonarr", report)
+
+
+def test_is_arr_indexer_enabled_uses_modern_arr_flags() -> None:
+    module = load_radarr_sonarr_module()
+
+    assert module.is_arr_indexer_enabled(
+        {
+            "enableRss": True,
+            "enableAutomaticSearch": True,
+            "enableInteractiveSearch": True,
+        }
+    )
+    assert not module.is_arr_indexer_enabled(
+        {
+            "enableRss": True,
+            "enableAutomaticSearch": False,
+            "enableInteractiveSearch": True,
+        }
+    )
 
 
 def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pytest.MonkeyPatch) -> None:

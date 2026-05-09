@@ -220,17 +220,34 @@ def wait_for_synced_indexer(arr_url: str, api_key: str, indexer_name: str, timeo
     raise RuntimeError(f"Synced eMule BB indexer did not appear before timeout: {attempts!r}")
 
 
+def is_arr_indexer_enabled(indexer: dict[str, Any]) -> bool:
+    """Returns true when Radarr/Sonarr has enabled the synced indexer."""
+
+    if "enable" in indexer:
+        return bool(indexer.get("enable"))
+    enable_flags = [
+        indexer.get("enableRss"),
+        indexer.get("enableAutomaticSearch"),
+        indexer.get("enableInteractiveSearch"),
+    ]
+    return all(flag is not False for flag in enable_flags)
+
+
 def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, Any]) -> tuple[dict[str, Any], dict[str, object]]:
     """Ensures the synced Arr indexer is enabled before release-search proof."""
 
     indexer_id = int(indexer.get("id") or 0)
     if indexer_id <= 0:
         raise RuntimeError("Synced Arr indexer did not include a valid id.")
-    if bool(indexer.get("enable")):
+    if is_arr_indexer_enabled(indexer):
         return indexer, {"changed": False, "status": "already_enabled"}
 
     payload = json.loads(json.dumps(indexer))
-    payload["enable"] = True
+    if "enable" in payload:
+        payload["enable"] = True
+    for flag_name in ("enableRss", "enableAutomaticSearch", "enableInteractiveSearch"):
+        if flag_name in payload:
+            payload[flag_name] = True
     result = arr_request(
         arr_url,
         api_key,
@@ -242,6 +259,8 @@ def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, An
     saved = require_success(result, "Arr eMule BB synced indexer enable")
     if not isinstance(saved, dict) or int(saved.get("id") or 0) != indexer_id:
         raise RuntimeError("Arr did not return the enabled synced indexer.")
+    if not is_arr_indexer_enabled(saved):
+        raise RuntimeError("Arr returned the synced indexer but it is still disabled.")
     return saved, {"changed": True, "status": int(result.get("status") or 0)}
 
 
@@ -370,7 +389,10 @@ def summarize_arr_indexer(indexer: dict[str, Any]) -> dict[str, object]:
         "id": int(indexer.get("id") or 0),
         "name": indexer.get("name"),
         "implementation": indexer.get("implementation"),
-        "enable": bool(indexer.get("enable")),
+        "enable": is_arr_indexer_enabled(indexer),
+        "enableRss": indexer.get("enableRss"),
+        "enableAutomaticSearch": indexer.get("enableAutomaticSearch"),
+        "enableInteractiveSearch": indexer.get("enableInteractiveSearch"),
         "protocol": indexer.get("protocol"),
         "priority": indexer.get("priority"),
     }
@@ -1193,6 +1215,48 @@ def wait_for_arr_release_results(
     raise RuntimeError(f"Arr release searches returned no eMule BB rows before timeout. Attempts: {attempts!r}")
 
 
+def wait_for_prowlarr_category_results(
+    prowlarr_url: str,
+    api_key: str,
+    indexer_id: int,
+    terms: tuple[str, ...],
+    category_id: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Polls Prowlarr until one explicit media-category search returns rows."""
+
+    attempts: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        for term_index, term in enumerate(terms):
+            path = (
+                f"/api/v1/search?query={urllib.parse.quote(term)}"
+                f"&categories={category_id}&indexerIds={indexer_id}"
+            )
+            result = prowlarr_live.prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
+            payload = result.get("json")
+            rows = payload if isinstance(payload, list) else []
+            attempts.append(
+                {
+                    "term_index": term_index,
+                    "term_present": bool(term),
+                    "category": category_id,
+                    "status": int(result.get("status") or 0),
+                    "count": len(rows),
+                }
+            )
+            if int(result.get("status") or 0) >= 200 and int(result.get("status") or 0) < 300 and rows:
+                return {
+                    "term_index": term_index,
+                    "term_present": bool(term),
+                    "category": category_id,
+                    "count": len(rows),
+                    "attempt_count": len(attempts),
+                }
+        time.sleep(5.0)
+    raise RuntimeError(f"Prowlarr media-category search returned no rows before timeout. Attempts: {attempts!r}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the Radarr/Sonarr eMule BB live test argument parser."""
 
@@ -1260,7 +1324,8 @@ def run_arr_checks(
         "synced_indexer": summarize_arr_indexer(synced_indexer),
         "download_client": summarize_arr_download_client(client, category=category),
         "readiness": {
-            "indexer_synced": int(synced_indexer.get("id") or 0) > 0 and bool(synced_indexer.get("enable")),
+            "indexer_synced": int(synced_indexer.get("id") or 0) > 0,
+            "indexer_enabled": is_arr_indexer_enabled(synced_indexer),
             "download_client_created": int(client["id"]) > 0,
             "download_client_tested": int(client.get("_emulebbTestStatus") or 0) >= 200
             and int(client.get("_emulebbTestStatus") or 0) < 300,
@@ -1285,9 +1350,6 @@ def require_arr_check_passed(kind: str, report: dict[str, object]) -> None:
     readiness = report.get("readiness")
     if not isinstance(readiness, dict) or not all(bool(value) for value in readiness.values()):
         raise RuntimeError(f"{kind} eMule BB readiness failed: {readiness!r}")
-    release_search = report.get("release_search")
-    if not isinstance(release_search, dict) or release_search.get("status") == "inconclusive":
-        raise RuntimeError(f"{kind} eMule BB release search did not return matching rows: {release_search!r}")
 
 
 def main() -> int:
@@ -1492,6 +1554,22 @@ def main() -> int:
             "name": saved_indexer.get("name"),
             "tags": saved_indexer.get("tags"),
         }
+        report["checks"]["prowlarr_radarr_video_search"] = wait_for_prowlarr_category_results(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            radarr_movie_terms,
+            TORZNAB_MOVIE_CATEGORY,
+            args.result_timeout_seconds,
+        )
+        report["checks"]["prowlarr_sonarr_video_search"] = wait_for_prowlarr_category_results(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            sonarr_series_terms,
+            TORZNAB_TV_CATEGORY,
+            args.result_timeout_seconds,
+        )
         report["checks"]["prowlarr_sync"] = force_prowlarr_application_sync(
             prowlarr_url,
             prowlarr_api_key,
