@@ -220,6 +220,31 @@ def wait_for_synced_indexer(arr_url: str, api_key: str, indexer_name: str, timeo
     raise RuntimeError(f"Synced eMule BB indexer did not appear before timeout: {attempts!r}")
 
 
+def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, Any]) -> tuple[dict[str, Any], dict[str, object]]:
+    """Ensures the synced Arr indexer is enabled before release-search proof."""
+
+    indexer_id = int(indexer.get("id") or 0)
+    if indexer_id <= 0:
+        raise RuntimeError("Synced Arr indexer did not include a valid id.")
+    if bool(indexer.get("enable")):
+        return indexer, {"changed": False, "status": "already_enabled"}
+
+    payload = json.loads(json.dumps(indexer))
+    payload["enable"] = True
+    result = arr_request(
+        arr_url,
+        api_key,
+        f"/api/v3/indexer/{indexer_id}?forceSave=true",
+        method="PUT",
+        json_body=payload,
+        timeout_seconds=60.0,
+    )
+    saved = require_success(result, "Arr eMule BB synced indexer enable")
+    if not isinstance(saved, dict) or int(saved.get("id") or 0) != indexer_id:
+        raise RuntimeError("Arr did not return the enabled synced indexer.")
+    return saved, {"changed": True, "status": int(result.get("status") or 0)}
+
+
 def get_qbit_schema(arr_url: str, api_key: str) -> dict[str, Any]:
     """Loads the qBittorrent download-client schema from Radarr/Sonarr."""
 
@@ -1215,6 +1240,7 @@ def run_arr_checks(
     temp_client_name = f"eMule BB Live {kind} {port}"
     status_payload = require_success(arr_request(arr_url, arr_api_key, "/api/v3/system/status"), f"{kind} status")
     synced_indexer = wait_for_synced_indexer(arr_url, arr_api_key, indexer_name, timeout_seconds)
+    synced_indexer, indexer_enable = ensure_arr_indexer_enabled(arr_url, arr_api_key, synced_indexer)
     client = create_temp_qbit_client(
         arr_url,
         arr_api_key,
@@ -1230,6 +1256,7 @@ def run_arr_checks(
             "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
             "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
         },
+        "indexer_enable": indexer_enable,
         "synced_indexer": summarize_arr_indexer(synced_indexer),
         "download_client": summarize_arr_download_client(client, category=category),
         "readiness": {
@@ -1250,6 +1277,17 @@ def run_arr_checks(
     except Exception as exc:
         report["release_search"] = {"status": "inconclusive", "error": str(exc)}
     return report, int(client["id"])
+
+
+def require_arr_check_passed(kind: str, report: dict[str, object]) -> None:
+    """Fails the live suite when a Radarr/Sonarr proof only recorded diagnostics."""
+
+    readiness = report.get("readiness")
+    if not isinstance(readiness, dict) or not all(bool(value) for value in readiness.values()):
+        raise RuntimeError(f"{kind} eMule BB readiness failed: {readiness!r}")
+    release_search = report.get("release_search")
+    if not isinstance(release_search, dict) or release_search.get("status") == "inconclusive":
+        raise RuntimeError(f"{kind} eMule BB release search did not return matching rows: {release_search!r}")
 
 
 def main() -> int:
@@ -1473,6 +1511,7 @@ def main() -> int:
         )
         cleanup_clients.append((env_values["RADARR_URL"].rstrip("/"), env_values["RADARR_API_KEY"], radarr_client_id))
         report["checks"]["radarr"] = radarr_report
+        require_arr_check_passed("radarr", radarr_report)
 
         sonarr_report, sonarr_client_id = run_arr_checks(
             kind="sonarr",
@@ -1487,6 +1526,7 @@ def main() -> int:
         )
         cleanup_clients.append((env_values["SONARR_URL"].rstrip("/"), env_values["SONARR_API_KEY"], sonarr_client_id))
         report["checks"]["sonarr"] = sonarr_report
+        require_arr_check_passed("sonarr", sonarr_report)
 
         report["status"] = "passed"
         return 0

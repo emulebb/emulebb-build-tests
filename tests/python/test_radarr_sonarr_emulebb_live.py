@@ -273,6 +273,61 @@ def test_arr_readiness_summaries_are_compact() -> None:
     assert "fields" not in client
 
 
+def test_ensure_arr_indexer_enabled_reenables_disabled_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    requests: list[dict[str, object]] = []
+
+    def fake_arr_request(arr_url, api_key, path, **kwargs):
+        requests.append({"path": path, **kwargs})
+        assert path == "/api/v3/indexer/15?forceSave=true"
+        assert kwargs["method"] == "PUT"
+        payload = kwargs["json_body"]
+        assert payload["enable"] is True
+        return {"status": 202, "json": {**payload, "id": 15}, "body_text": "{}"}
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    enabled, summary = module.ensure_arr_indexer_enabled(
+        "http://sonarr.test",
+        "key",
+        {"id": 15, "name": "eMule BB Local", "enable": False, "fields": []},
+    )
+
+    assert enabled["enable"] is True
+    assert summary == {"changed": True, "status": 202}
+    assert len(requests) == 1
+
+
+def test_require_arr_check_passed_rejects_inconclusive_release_search() -> None:
+    module = load_radarr_sonarr_module()
+    report = {
+        "readiness": {
+            "indexer_synced": True,
+            "download_client_created": True,
+            "download_client_tested": True,
+        },
+        "release_search": {"status": "inconclusive", "error": "no rows"},
+    }
+
+    with pytest.raises(RuntimeError, match="release search"):
+        module.require_arr_check_passed("sonarr", report)
+
+
+def test_require_arr_check_passed_rejects_disabled_indexer() -> None:
+    module = load_radarr_sonarr_module()
+    report = {
+        "readiness": {
+            "indexer_synced": False,
+            "download_client_created": True,
+            "download_client_tested": True,
+        },
+        "release_search": {"count": 1},
+    }
+
+    with pytest.raises(RuntimeError, match="readiness"):
+        module.require_arr_check_passed("sonarr", report)
+
+
 def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[str] = []
