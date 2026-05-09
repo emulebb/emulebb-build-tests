@@ -204,6 +204,80 @@ def test_browser_workflow_validation_rejects_incomplete_shared_snapshot_progress
         smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
 
 
+def test_browser_workflow_validation_requires_category_lifecycle_visibility() -> None:
+    smoke = load_smoke_module()
+    category_name = "amutorrent-smoke-1"
+    checks = {
+        "category_expected": {"name": category_name, "path": r"C:\incoming\\"},
+        "category_create": {
+            "status": 200,
+            "payload": {"success": True, "type": "category-created"},
+        },
+        "categories_after_create": {
+            "status": 200,
+            "payload": {
+                "type": "categories-update",
+                "data": [
+                    {"name": "Default", "title": "Default"},
+                    {"name": category_name, "title": category_name},
+                ],
+            },
+        },
+        "category_delete": {
+            "status": 200,
+            "payload": {"success": True, "type": "category-deleted"},
+        },
+        "categories_after_delete": {
+            "status": 200,
+            "payload": {"type": "categories-update", "data": [{"name": "Default", "title": "Default"}]},
+        },
+    }
+
+    smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_invisible_created_category() -> None:
+    smoke = load_smoke_module()
+    category_name = "amutorrent-smoke-1"
+    checks = {
+        "category_expected": {"name": category_name, "path": r"C:\incoming\\"},
+        "category_create": {"status": 200, "payload": {"success": True}},
+        "categories_after_create": {
+            "status": 200,
+            "payload": {"type": "categories-update", "data": [{"name": "Default"}]},
+        },
+        "category_delete": {"status": 200, "payload": {"success": True}},
+        "categories_after_delete": {
+            "status": 200,
+            "payload": {"type": "categories-update", "data": [{"name": "Default"}]},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="not visible"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_visible_deleted_category() -> None:
+    smoke = load_smoke_module()
+    category_name = "amutorrent-smoke-1"
+    checks = {
+        "category_expected": {"name": category_name, "path": r"C:\incoming\\"},
+        "category_create": {"status": 200, "payload": {"success": True}},
+        "categories_after_create": {
+            "status": 200,
+            "payload": {"type": "categories-update", "data": [{"name": category_name}]},
+        },
+        "category_delete": {"status": 200, "payload": {"success": True}},
+        "categories_after_delete": {
+            "status": 200,
+            "payload": {"type": "categories-update", "data": [{"name": category_name}]},
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="left the category visible"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
 def test_browser_workflow_validation_requires_delete_to_remove_added_download() -> None:
     smoke = load_smoke_module()
     added_hash = smoke.AMUTORRENT_BROWSER_SMOKE_HASH

@@ -252,6 +252,30 @@ def find_snapshot_item(checks: dict[str, Any], check_name: str, item_hash: str) 
     return None
 
 
+def category_items(checks: dict[str, Any], check_name: str) -> list[dict[str, Any]]:
+    """Returns category rows from one browser workflow category API result."""
+
+    result = checks.get(check_name)
+    if not isinstance(result, dict) or int(result.get("status", 0)) >= 300:
+        return []
+    payload = result.get("payload")
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def find_category_item(checks: dict[str, Any], check_name: str, category_name: str) -> dict[str, Any] | None:
+    """Finds one browser-visible category row by name or title."""
+
+    for row in category_items(checks, check_name):
+        if row.get("name") == category_name or row.get("title") == category_name:
+            return row
+    return None
+
+
 def segment_snapshot_item(checks: dict[str, Any], check_name: str, item_hash: str) -> dict[str, Any] | None:
     """Finds one WebSocket segment-subscribed snapshot item by lowercase hash."""
 
@@ -324,6 +348,33 @@ def assert_browser_delete_removed_added_download(checks: dict[str, Any]) -> None
         raise RuntimeError(f"aMuTorrent browser delete workflow left the added transfer in the snapshot: {deleted}")
 
 
+def assert_browser_category_lifecycle(checks: dict[str, Any]) -> None:
+    """Verifies the browser category create/delete workflow changed visible state."""
+
+    if "category_create" not in checks:
+        return
+    expected = checks.get("category_expected")
+    category_name = str(expected.get("name") or "") if isinstance(expected, dict) else ""
+    if not category_name:
+        raise RuntimeError("aMuTorrent browser category workflow did not record the expected category name.")
+
+    create_result = checks.get("category_create")
+    create_payload = create_result.get("payload") if isinstance(create_result, dict) else None
+    if not isinstance(create_payload, dict) or create_payload.get("success") is not True:
+        raise RuntimeError(f"aMuTorrent browser category create did not report success: {create_result}")
+    created = find_category_item(checks, "categories_after_create", category_name)
+    if created is None:
+        raise RuntimeError(f"aMuTorrent browser category create was not visible in the category list: {category_name!r}")
+
+    delete_result = checks.get("category_delete")
+    delete_payload = delete_result.get("payload") if isinstance(delete_result, dict) else None
+    if not isinstance(delete_payload, dict) or delete_payload.get("success") is not True:
+        raise RuntimeError(f"aMuTorrent browser category delete did not report success: {delete_result}")
+    deleted = find_category_item(checks, "categories_after_delete", category_name)
+    if deleted is not None:
+        raise RuntimeError(f"aMuTorrent browser category delete left the category visible: {deleted}")
+
+
 def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
     """Verifies the browser-visible snapshot carries eMule BB detail hydration fields."""
 
@@ -366,6 +417,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
         if isinstance(payload, dict) and payload.get("type") == "error":
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
     assert_snapshot_items_are_display_safe(checks)
+    assert_browser_category_lifecycle(checks)
     assert_emulebb_detail_hydration(checks)
     assert_browser_delete_removed_added_download(checks)
 
@@ -539,6 +591,7 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
 
             checks["categories"] = fetch_json("/api/v1/categories")
             smoke_category = f"amutorrent-smoke-{int(time.time())}"
+            checks["category_expected"] = {"name": smoke_category, "path": category_path}
             checks["category_create"] = fetch_json(
                 "/api/v1/categories",
                 "POST",
@@ -550,11 +603,13 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                     "priority": 0,
                 },
             )
+            checks["categories_after_create"] = fetch_json("/api/v1/categories")
             checks["category_delete"] = fetch_json(
                 "/api/v1/categories",
                 "DELETE",
                 {"name": smoke_category},
             )
+            checks["categories_after_delete"] = fetch_json("/api/v1/categories")
             checks["add_ed2k"] = fetch_json(
                 "/api/v1/downloads/ed2k",
                 "POST",
