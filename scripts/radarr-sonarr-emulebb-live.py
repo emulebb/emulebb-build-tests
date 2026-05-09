@@ -356,6 +356,7 @@ def create_temp_qbit_client(
 ) -> dict[str, Any]:
     """Creates a temporary qBittorrent client and validates it."""
 
+    created_client_id: int | None = None
     schema = get_qbit_schema(arr_url, api_key)
     schema_summary = summarize_qbit_schema(schema, category_field=category_field)
     payload = build_qbit_client_payload(
@@ -367,19 +368,29 @@ def create_temp_qbit_client(
         category_field=category_field,
         category=category,
     )
-    created = require_success(
-        arr_request(arr_url, api_key, "/api/v3/downloadclient?forceSave=true", method="POST", json_body=payload),
-        "Arr eMule BB qBittorrent client create",
-    )
-    if not isinstance(created, dict) or not created.get("id"):
-        raise RuntimeError("Arr did not return a created qBittorrent client id.")
+    try:
+        created = require_success(
+            arr_request(arr_url, api_key, "/api/v3/downloadclient?forceSave=true", method="POST", json_body=payload),
+            "Arr eMule BB qBittorrent client create",
+        )
+        if not isinstance(created, dict) or not created.get("id"):
+            raise RuntimeError("Arr did not return a created qBittorrent client id.")
+        created_client_id = int(created["id"])
 
-    test_payload = json.loads(json.dumps(created))
-    test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
-    require_success(test_result, "Arr eMule BB qBittorrent client test")
-    created["_emulebbSchemaSummary"] = schema_summary
-    created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
-    return created
+        test_payload = json.loads(json.dumps(created))
+        test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
+        require_success(test_result, "Arr eMule BB qBittorrent client test")
+        created["_emulebbSchemaSummary"] = schema_summary
+        created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
+        return created
+    except Exception as exc:
+        if created_client_id is not None:
+            try:
+                delete_download_client(arr_url, api_key, created_client_id)
+            except Exception as cleanup_exc:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(f"Temporary Arr download client cleanup failed: {cleanup_exc}")
+        raise
 
 
 def summarize_arr_indexer(indexer: dict[str, Any]) -> dict[str, object]:

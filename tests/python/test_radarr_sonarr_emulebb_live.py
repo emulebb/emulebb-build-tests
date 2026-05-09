@@ -220,6 +220,8 @@ def test_qbit_schema_summary_requires_arr_fields() -> None:
         "fields": [
             {"name": "host"},
             {"name": "port"},
+            {"name": "useSsl"},
+            {"name": "urlBase"},
             {"name": "username"},
             {"name": "password"},
             {"name": "initialState"},
@@ -232,6 +234,60 @@ def test_qbit_schema_summary_requires_arr_fields() -> None:
     assert summary["ok"] is True
     assert summary["missing_required_fields"] == []
     assert module.summarize_qbit_schema(schema, category_field="tvCategory")["missing_required_fields"] == ["tvCategory"]
+
+
+def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, str]] = []
+    schema = {
+        "implementation": "QBittorrent",
+        "implementationName": "qBittorrent",
+        "protocol": "torrent",
+        "configContract": "QBittorrentSettings",
+        "fields": [
+            {"name": "host"},
+            {"name": "port"},
+            {"name": "useSsl"},
+            {"name": "urlBase"},
+            {"name": "username"},
+            {"name": "password"},
+            {"name": "initialState"},
+            {"name": "movieCategory"},
+        ],
+    }
+
+    monkeypatch.setattr(module, "get_qbit_schema", lambda _arr_url, _api_key: schema)
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        method = str(kwargs.get("method") or "GET")
+        calls.append((method, path))
+        if path == "/api/v3/downloadclient?forceSave=true":
+            return {"status": 201, "json": {"id": 77, "fields": []}, "body_text": "{}"}
+        if path == "/api/v3/downloadclient/test":
+            return {"status": 400, "json": None, "body_text": "cannot connect"}
+        if path == "/api/v3/downloadclient/77":
+            return {"status": 200, "json": None, "body_text": ""}
+        raise AssertionError(f"Unexpected Arr request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    with pytest.raises(RuntimeError, match="qBittorrent client test failed"):
+        module.create_temp_qbit_client(
+            "http://radarr.test",
+            "key",
+            name="eMule BB Live radarr 4711",
+            host="127.0.0.1",
+            port=4711,
+            emule_api_key="emule-key",
+            category_field="movieCategory",
+            category="RADARR_ENG",
+        )
+
+    assert calls == [
+        ("POST", "/api/v3/downloadclient?forceSave=true"),
+        ("POST", "/api/v3/downloadclient/test"),
+        ("DELETE", "/api/v3/downloadclient/77"),
+    ]
 
 
 def test_arr_readiness_summaries_are_compact() -> None:
