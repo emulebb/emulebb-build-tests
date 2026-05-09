@@ -40,6 +40,12 @@ DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT = 1
 DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT = 6
 DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT = 4
 DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS = 2
+DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES = 4
+DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 12
+DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 8
+DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 6
+DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 30.0
+DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,8 @@ class SuiteSpec:
     is_amutorrent_browser: bool = False
     is_prowlarr_emulebb: bool = False
     is_arr_emulebb: bool = False
+    is_rest_cold_start_dump_stress: bool = False
+    default_enabled: bool = True
 
 
 SUITE_SPECS = (
@@ -105,6 +113,14 @@ SUITE_SPECS = (
         is_rest_api=True,
     ),
     SuiteSpec(
+        name="rest-cold-start-dump-stress",
+        script_name="rest-cold-start-dump-stress.py",
+        category="rest",
+        uses_live_seed_refresh=True,
+        is_rest_cold_start_dump_stress=True,
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="amutorrent-browser-smoke",
         script_name="amutorrent-browser-smoke.py",
         category="rest",
@@ -140,7 +156,7 @@ def resolve_suite_specs(selected_names: list[str] | None) -> tuple[SuiteSpec, ..
     """Resolves selected suite names while preserving the canonical order."""
 
     if not selected_names:
-        return SUITE_SPECS
+        return tuple(spec for spec in SUITE_SPECS if spec.default_enabled)
 
     requested = set(selected_names)
     return tuple(spec for spec in SUITE_SPECS if spec.name in requested)
@@ -191,6 +207,14 @@ def build_suite_command(
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
     arr_prowlarr_search_stress_count: int = DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT,
     arr_qbit_live_wire_rounds: int = DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS,
+    rest_cold_start_dump_stress_waves: int = DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES,
+    rest_cold_start_dump_stress_searches_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE,
+    rest_cold_start_dump_stress_max_concurrent_searches: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES,
+    rest_cold_start_dump_stress_downloads_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE,
+    rest_cold_start_dump_stress_post_drain_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS,
+    rest_cold_start_dump_stress_tool_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS,
+    rest_cold_start_dump_stress_enable_umdh: bool = False,
+    rest_cold_start_dump_stress_skip_dumps: bool = False,
 ) -> list[str]:
     """Builds one child suite command line."""
 
@@ -269,6 +293,22 @@ def build_suite_command(
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.is_rest_cold_start_dump_stress:
+        if live_wire_inputs_file is not None:
+            command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
+        command.append("--enable-upnp")
+        if p2p_bind_interface_name:
+            command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+        command.extend(["--waves", str(rest_cold_start_dump_stress_waves)])
+        command.extend(["--searches-per-wave", str(rest_cold_start_dump_stress_searches_per_wave)])
+        command.extend(["--max-concurrent-searches", str(rest_cold_start_dump_stress_max_concurrent_searches)])
+        command.extend(["--downloads-per-wave", str(rest_cold_start_dump_stress_downloads_per_wave)])
+        command.extend(["--post-drain-seconds", str(rest_cold_start_dump_stress_post_drain_seconds)])
+        command.extend(["--tool-timeout-seconds", str(rest_cold_start_dump_stress_tool_timeout_seconds)])
+        if rest_cold_start_dump_stress_enable_umdh:
+            command.append("--enable-umdh")
+        if rest_cold_start_dump_stress_skip_dumps:
+            command.append("--skip-dumps")
     return command
 
 
@@ -325,6 +365,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-qbit-live-wire-rounds", type=int, default=DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)
+    parser.add_argument("--rest-cold-start-dump-stress-waves", type=int, default=DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES)
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-searches-per-wave",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-max-concurrent-searches",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-downloads-per-wave",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-post-drain-seconds",
+        type=float,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-tool-timeout-seconds",
+        type=float,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS,
+    )
+    parser.add_argument("--rest-cold-start-dump-stress-enable-umdh", action="store_true")
+    parser.add_argument("--rest-cold-start-dump-stress-skip-dumps", action="store_true")
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument(
         "--live-wire-inputs-file",
@@ -356,6 +424,18 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Arr Prowlarr search stress count must be greater than zero.")
     if args.arr_qbit_live_wire_rounds <= 0:
         raise ValueError("Arr qBit live-wire rounds must be greater than zero.")
+    if args.rest_cold_start_dump_stress_waves <= 0:
+        raise ValueError("REST cold-start dump stress waves must be greater than zero.")
+    if args.rest_cold_start_dump_stress_searches_per_wave <= 0:
+        raise ValueError("REST cold-start dump stress searches per wave must be greater than zero.")
+    if args.rest_cold_start_dump_stress_max_concurrent_searches <= 0:
+        raise ValueError("REST cold-start dump stress concurrency must be greater than zero.")
+    if args.rest_cold_start_dump_stress_downloads_per_wave < 0:
+        raise ValueError("REST cold-start dump stress downloads per wave must be zero or greater.")
+    if args.rest_cold_start_dump_stress_post_drain_seconds < 0:
+        raise ValueError("REST cold-start dump stress post-drain seconds must be zero or greater.")
+    if args.rest_cold_start_dump_stress_tool_timeout_seconds <= 0:
+        raise ValueError("REST cold-start dump stress tool timeout must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -408,6 +488,16 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
         "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
         "arr_qbit_live_wire_rounds": args.arr_qbit_live_wire_rounds,
+        "rest_cold_start_dump_stress": {
+            "waves": args.rest_cold_start_dump_stress_waves,
+            "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
+            "max_concurrent_searches": args.rest_cold_start_dump_stress_max_concurrent_searches,
+            "downloads_per_wave": args.rest_cold_start_dump_stress_downloads_per_wave,
+            "post_drain_seconds": args.rest_cold_start_dump_stress_post_drain_seconds,
+            "tool_timeout_seconds": args.rest_cold_start_dump_stress_tool_timeout_seconds,
+            "enable_umdh": bool(args.rest_cold_start_dump_stress_enable_umdh),
+            "skip_dumps": bool(args.rest_cold_start_dump_stress_skip_dumps),
+        },
         "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",
         "arr_live_wire_suites": [
             spec.name
@@ -456,6 +546,14 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
             arr_qbit_live_wire_rounds=args.arr_qbit_live_wire_rounds,
+            rest_cold_start_dump_stress_waves=args.rest_cold_start_dump_stress_waves,
+            rest_cold_start_dump_stress_searches_per_wave=args.rest_cold_start_dump_stress_searches_per_wave,
+            rest_cold_start_dump_stress_max_concurrent_searches=args.rest_cold_start_dump_stress_max_concurrent_searches,
+            rest_cold_start_dump_stress_downloads_per_wave=args.rest_cold_start_dump_stress_downloads_per_wave,
+            rest_cold_start_dump_stress_post_drain_seconds=args.rest_cold_start_dump_stress_post_drain_seconds,
+            rest_cold_start_dump_stress_tool_timeout_seconds=args.rest_cold_start_dump_stress_tool_timeout_seconds,
+            rest_cold_start_dump_stress_enable_umdh=args.rest_cold_start_dump_stress_enable_umdh,
+            rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
         )
         started = time.monotonic()
         return_code = run_suite_command(command)
@@ -501,6 +599,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             if spec.is_arr_emulebb:
                 arr_result["arr_qbit_live_wire_rounds"] = args.arr_qbit_live_wire_rounds
             result.update(arr_result)
+        if spec.is_rest_cold_start_dump_stress:
+            result.update(
+                {
+                    "live_wire_inputs_file": str(live_wire_inputs_file),
+                    "rest_cold_start_dump_stress": dict(summary["rest_cold_start_dump_stress"]),  # type: ignore[arg-type]
+                }
+            )
         summary["suites"].append(result)  # type: ignore[index]
         if suite_status == "inconclusive":
             summary["has_inconclusive_suites"] = True

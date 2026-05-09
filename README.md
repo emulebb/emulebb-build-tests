@@ -83,6 +83,7 @@ Script inventory:
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report resolution for Python-first live/UI harnesses |
 | `scripts\emule-live-profile-common.py` | internal Python helper | maintained | shared live-profile launch and trace helpers |
 | `scripts\rest-api-smoke.py` | operator-facing Python E2E | maintained | canonical isolated REST live E2E lane |
+| `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\auto-browse-live.py` | operator-facing Python E2E | maintained | isolated live auto-browse validation with `hide.me` bind and P2P UPnP |
 | `scripts\preference-ui-e2e.py` | operator-facing Python E2E | maintained | real Preferences dialog coverage for WebServer fields and Tweaks tree controls |
 | `scripts\config-stability-ui-e2e.py` | operator-facing Python E2E | maintained | long `-c` config path, settings save, relaunch, and stability regression |
@@ -169,6 +170,25 @@ Canonical live REST E2E lane:
 - `--server-search-count <N>` and `--kad-search-count <N>` cycle through the `search_terms.generic_open` values from the live-wire input file for exact per-network live search counts
 - `-KeepRunning` leaves the launched isolated eMule instance alive after a passing run and forces artifact retention so the profile can be inspected afterward
 - failure artifacts include the failing phase plus the last observed server/Kad state so live-network regressions are diagnosable
+
+Cold-start REST dump stress lane:
+
+- `scripts\rest-cold-start-dump-stress.py` launches a fresh isolated profile,
+  drives phased live REST search/download stress, and captures baseline, peak,
+  and post-drain diagnostics for memory leak triage
+- the lane uses Sysinternals `procdump64`, `handle64`, and `listdlls64` plus
+  Windows SDK `cdb` when available; `--enable-umdh` additionally enables
+  `gflags` UST before launch, captures UMDH snapshots, and restores the image
+  flag before exit
+- reports are written under `reports\rest-cold-start-dump-stress\...` and
+  include `result.json`, resource snapshots, dump files, CDB transcripts,
+  handle snapshots, module inventory, and optional UMDH diffs
+- live download triggers use the same safety filter as REST smoke; if the live
+  network does not expose enough safe paused-download candidates, the lane
+  returns inconclusive instead of failing the build
+- run it explicitly with `workspace.ps1 live-e2e -LiveSuite
+  rest-cold-start-dump-stress`; it is not part of the default aggregate suite
+  because it captures full process dumps
 
 Aggregate live E2E lane:
 

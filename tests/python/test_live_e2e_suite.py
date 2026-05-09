@@ -77,7 +77,9 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["live_wire_inputs_file"].endswith("live-wire-inputs.local.json")
     assert summary["rest_contract_completeness_expected"] is True
     assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-sonarr-emulebb"]
-    assert [suite["name"] for suite in summary["suites"]] == list(live_e2e_suite.SUITE_NAMES)
+    assert [suite["name"] for suite in summary["suites"]] == [
+        spec.name for spec in live_e2e_suite.SUITE_SPECS if spec.default_enabled
+    ]
     assert [script_name(command) for command in commands] == [
         "preference-ui-e2e.py",
         "shared-files-ui-e2e.py",
@@ -174,7 +176,7 @@ def test_suite_continues_after_failures_by_default(tmp_path: Path, monkeypatch) 
     )
 
     assert summary["status"] == "failed"
-    assert calls == len(live_e2e_suite.SUITE_SPECS)
+    assert calls == len([spec for spec in live_e2e_suite.SUITE_SPECS if spec.default_enabled])
 
 
 def test_inconclusive_live_wire_suite_does_not_fail_aggregate(tmp_path: Path, monkeypatch) -> None:
@@ -254,6 +256,54 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
     assert summary["suites"][0]["rest_coverage_budget"] == "contract-stress"
     assert summary["suites"][0]["rest_stress_budget"] == "soak"
     assert summary["suites"][0]["rest_stop_start_after_churn"] is True
+
+
+def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or live_e2e_suite.SUITE_INCONCLUSIVE_RETURN_CODE,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--suite",
+            "rest-cold-start-dump-stress",
+            "--rest-cold-start-dump-stress-waves",
+            "2",
+            "--rest-cold-start-dump-stress-searches-per-wave",
+            "3",
+            "--rest-cold-start-dump-stress-max-concurrent-searches",
+            "4",
+            "--rest-cold-start-dump-stress-downloads-per-wave",
+            "1",
+            "--rest-cold-start-dump-stress-post-drain-seconds",
+            "5",
+            "--rest-cold-start-dump-stress-tool-timeout-seconds",
+            "6",
+            "--rest-cold-start-dump-stress-enable-umdh",
+            "--rest-cold-start-dump-stress-skip-dumps",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    command = commands[0]
+    assert script_name(command) == "rest-cold-start-dump-stress.py"
+    assert "--enable-upnp" in command
+    assert option_values(command, "--waves") == ["2"]
+    assert option_values(command, "--searches-per-wave") == ["3"]
+    assert option_values(command, "--max-concurrent-searches") == ["4"]
+    assert option_values(command, "--downloads-per-wave") == ["1"]
+    assert option_values(command, "--post-drain-seconds") == ["5.0"]
+    assert option_values(command, "--tool-timeout-seconds") == ["6.0"]
+    assert "--enable-umdh" in command
+    assert "--skip-dumps" in command
+    assert summary["status"] == "passed"
+    assert summary["has_inconclusive_suites"] is True
+    assert summary["suites"][0]["status"] == "inconclusive"
 
 
 def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Path, monkeypatch) -> None:
