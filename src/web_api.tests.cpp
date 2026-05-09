@@ -216,6 +216,16 @@ TEST_CASE("WebSocket HTTP seams bound accepted-client thread fanout")
 	CHECK_FALSE(WebSocketHttpSeams::CanStartAcceptedClientThread(WebSocketHttpSeams::kMaxAcceptedClientThreads + 1u));
 }
 
+TEST_CASE("WebSocket HTTP seams keep draining accepts after remote IP rejection")
+{
+#ifdef EMULE_WEBSOCKET_HTTP_SEAMS_HAS_REJECTED_IP_ACTION
+	CHECK(WebSocketHttpSeams::GetRejectedRemoteAccessIpAction() ==
+		WebSocketHttpSeams::ERejectedRemoteAccessIpAction::ContinueAcceptDrain);
+#else
+	MESSAGE("Rejected remote-access IP action seam is not available in this workspace.");
+#endif
+}
+
 TEST_CASE("WebServer static file seam contains requests under the web root")
 {
 	CString path;
