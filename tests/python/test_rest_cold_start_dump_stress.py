@@ -292,6 +292,43 @@ def test_summarize_resource_deltas_reports_peak_and_post_drain() -> None:
     }
 
 
+def test_parse_cdb_summary_text_extracts_heap_and_address_usage() -> None:
+    module = load_script_module()
+    text = """
+          Heap     Flags   Reserv  Commit  Virt   Free  List   UCR  Virt  Lock  Fast
+                            (k)     (k)    (k)     (k) length      blocks cont. heap
+-------------------------------------------------------------------------------------
+0000013844de0000 00000002   81316  61368  81116  39349   713    12    1      1   LFH
+0000013844ff0000 00001002    1280    120   1080     43     9     2    0      0   LFH
+-------------------------------------------------------------------------------------
+
+--- Usage Summary ---------------- RgnCount ----------- Total Size -------- %ofBusy %ofTotal
+Free                                    267     7dfe`e4679000 ( 125.996 TB)           98.43%
+<unknown>                               309      201`071c9000 (   2.004 TB)  99.98%    1.57%
+Heap                                    988        0`0ceaf000 ( 206.684 MB)   0.01%    0.00%
+Image                                   505        0`06d17000 ( 109.090 MB)   0.01%    0.00%
+--- Type Summary (for busy) ------ RgnCount ----------- Total Size -------- %ofBusy %ofTotal
+"""
+
+    summary = module.parse_cdb_summary_text(text)
+
+    assert summary["heap"] == {
+        "heap_count": 2,
+        "reserve_bytes": 82596 * 1024,
+        "commit_bytes": 61488 * 1024,
+        "virtual_bytes": 82196 * 1024,
+        "free_bytes": 39392 * 1024,
+        "free_block_count": 722,
+        "ucr_count": 14,
+        "virtual_alloc_count": 1,
+    }
+    assert summary["address_usage"]["Heap"] == {
+        "region_count": 988,
+        "total_bytes": int(206.684 * 1024 * 1024),
+    }
+    assert summary["address_usage"]["Image"]["region_count"] == 505
+
+
 def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
     module = load_script_module()
     stress = {

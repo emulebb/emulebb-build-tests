@@ -47,6 +47,12 @@ UMDH_TOP_DELTA_LIMIT = 10
 UMDH_DIFF_ENTRY_RE = re.compile(
     r"^\s*([+-]?)\s*([0-9][0-9,]*)\s+\(\s*([0-9,]+)\s*-\s*([0-9,]+)\s*\)\s+([0-9,]+)\s+allocs\s+(BackTrace[0-9A-Fa-f]+)\b"
 )
+CDB_HEAP_ROW_RE = re.compile(
+    r"^\s*[0-9A-Fa-f`]+\s+[0-9A-Fa-f`]+\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\b"
+)
+CDB_ADDRESS_SUMMARY_RE = re.compile(
+    r"^\s*([A-Za-z_<>\-]+)\s+([0-9]+)\s+[0-9A-Fa-f`]+\s+\(\s*([0-9.]+)\s+([KMGT]B)\)"
+)
 BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES = (
     ".3gp",
     ".avi",
@@ -419,6 +425,101 @@ def set_umdh_stack_tracing(
     )
 
 
+def cdb_size_to_bytes(value: str, unit: str) -> int:
+    """Converts a CDB human-size pair to bytes."""
+
+    multiplier_by_unit = {
+        "KB": 1024,
+        "MB": 1024 * 1024,
+        "GB": 1024 * 1024 * 1024,
+        "TB": 1024 * 1024 * 1024 * 1024,
+    }
+    return int(float(value) * multiplier_by_unit[unit])
+
+
+def parse_cdb_summary_text(text: str) -> dict[str, object]:
+    """Extracts heap and address summary metrics from CDB diagnostic output."""
+
+    heap_totals = {
+        "heap_count": 0,
+        "reserve_bytes": 0,
+        "commit_bytes": 0,
+        "virtual_bytes": 0,
+        "free_bytes": 0,
+        "free_block_count": 0,
+        "ucr_count": 0,
+        "virtual_alloc_count": 0,
+    }
+    address_usage: dict[str, dict[str, int]] = {}
+    in_heap_table = False
+    in_usage_summary = False
+    for line in text.splitlines():
+        if "Heap     Flags   Reserv  Commit" in line:
+            in_heap_table = True
+            continue
+        if in_heap_table and line.startswith("-----"):
+            continue
+        if in_heap_table:
+            heap_match = CDB_HEAP_ROW_RE.match(line)
+            if heap_match:
+                reserve_kb, commit_kb, virtual_kb, free_kb, free_blocks, ucr_count, virtual_alloc_count, _lock_count = (
+                    int(group) for group in heap_match.groups()
+                )
+                heap_totals["heap_count"] += 1
+                heap_totals["reserve_bytes"] += reserve_kb * 1024
+                heap_totals["commit_bytes"] += commit_kb * 1024
+                heap_totals["virtual_bytes"] += virtual_kb * 1024
+                heap_totals["free_bytes"] += free_kb * 1024
+                heap_totals["free_block_count"] += free_blocks
+                heap_totals["ucr_count"] += ucr_count
+                heap_totals["virtual_alloc_count"] += virtual_alloc_count
+                continue
+            if line.startswith("---- Usage Summary"):
+                in_heap_table = False
+                in_usage_summary = True
+                continue
+            if line.startswith("0:") or line.startswith("--- "):
+                in_heap_table = False
+
+        if line.startswith("--- Usage Summary"):
+            in_usage_summary = True
+            continue
+        if in_usage_summary:
+            if line.startswith("--- ") and not line.startswith("--- Usage Summary"):
+                in_usage_summary = False
+                continue
+            address_match = CDB_ADDRESS_SUMMARY_RE.match(line)
+            if address_match:
+                name, region_count, size_value, size_unit = address_match.groups()
+                address_usage[name] = {
+                    "region_count": int(region_count),
+                    "total_bytes": cdb_size_to_bytes(size_value, size_unit),
+                }
+
+    summary: dict[str, object] = {}
+    if heap_totals["heap_count"]:
+        summary["heap"] = heap_totals
+    if address_usage:
+        summary["address_usage"] = address_usage
+    return summary
+
+
+def parse_cdb_summary_file(cdb_log: Path) -> dict[str, object]:
+    """Reads one CDB log and returns structured heap/address metrics."""
+
+    if not cdb_log.is_file():
+        return {"available": False, "reason": "CDB log was not written"}
+    try:
+        summary = parse_cdb_summary_text(cdb_log.read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        return {
+            "available": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+    summary["available"] = True
+    return summary
+
+
 def capture_dump_and_analysis(
     *,
     label: str,
@@ -460,7 +561,7 @@ def capture_dump_and_analysis(
     cdb = tools.get("cdb")
     if cdb and dump_path.is_file():
         cdb_log = diagnostics_dir / "analysis" / f"{label}-cdb.txt"
-        result["cdb"] = run_tool_to_file(
+        cdb_run = run_tool_to_file(
             [
                 cdb,
                 "-z",
@@ -472,6 +573,8 @@ def capture_dump_and_analysis(
             timeout_seconds,
             env=symbol_env,
         )
+        cdb_run["summary"] = parse_cdb_summary_file(cdb_log)
+        result["cdb"] = cdb_run
     elif not cdb:
         result["cdb"] = {"skipped": True, "reason": "cdb was not found"}
     return result
