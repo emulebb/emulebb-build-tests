@@ -42,21 +42,67 @@ live_common = rest_smoke.live_common
 SUITE_NAME = "rest-cold-start-dump-stress"
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
 DIAGNOSTIC_LABELS = ("baseline", "peak", "post_drain")
+BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES = (
+    ".bat",
+    ".cmd",
+    ".com",
+    ".exe",
+    ".msi",
+    ".ps1",
+    ".scr",
+    ".vbs",
+)
+BLOCKED_ACTIVE_DOWNLOAD_TYPES = frozenset(("program", "executable"))
+OPEN_SOURCE_STRESS_TERMS = (
+    "linux",
+    "ubuntu",
+    "debian",
+    "fedora",
+    "freebsd",
+    "openbsd",
+    "netbsd",
+    "arch linux",
+    "linux mint",
+    "opensuse",
+    "alpine linux",
+    "raspberry pi os",
+    "libreoffice",
+    "gimp",
+    "blender",
+    "inkscape",
+    "kodi",
+    "vlc",
+    "python",
+    "openstreetmap",
+    "wikipedia",
+    "creative commons",
+    "public domain",
+    "open source",
+)
 
 
 class DownloadTriggerBudget:
-    """Thread-safe per-wave budget for paused live download trigger attempts."""
+    """Thread-safe per-wave budget for active live download trigger attempts."""
 
     def __init__(self, attempts: int) -> None:
         self._remaining = attempts
+        self._claimed_hashes: set[str] = set()
         self._lock = threading.Lock()
 
-    def claim(self) -> bool:
-        """Returns true when the caller should attempt one download trigger."""
+    @property
+    def remaining(self) -> int:
+        """Returns the number of still-available download trigger claims."""
 
         with self._lock:
-            if self._remaining <= 0:
+            return self._remaining
+
+    def claim(self, transfer_hash: str) -> bool:
+        """Returns true when the caller owns one active download trigger claim."""
+
+        with self._lock:
+            if self._remaining <= 0 or transfer_hash in self._claimed_hashes:
                 return False
+            self._claimed_hashes.add(transfer_hash)
             self._remaining -= 1
             return True
 
@@ -86,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--waves", type=int, default=4)
     parser.add_argument("--searches-per-wave", type=int, default=12)
     parser.add_argument("--max-concurrent-searches", type=int, default=8)
-    parser.add_argument("--downloads-per-wave", type=int, default=6)
+    parser.add_argument("--downloads-per-wave", type=int, default=12)
     parser.add_argument("--post-drain-seconds", type=float, default=30.0)
     parser.add_argument("--tool-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--enable-umdh", action="store_true")
@@ -110,6 +156,20 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("post-drain seconds must be zero or greater.")
     if args.tool_timeout_seconds <= 0:
         raise ValueError("tool timeout seconds must be greater than zero.")
+
+
+def build_open_source_stress_terms(configured_terms: tuple[str, ...]) -> tuple[str, ...]:
+    """Combines operator terms with built-in open-source stress terms."""
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for term in (*configured_terms, *OPEN_SOURCE_STRESS_TERMS):
+        normalized = " ".join(str(term).split()).strip()
+        key = normalized.lower()
+        if normalized and key not in seen:
+            seen.add(key)
+            terms.append(normalized)
+    return tuple(terms)
 
 
 def candidate_tool_paths(tool_name: str) -> list[Path]:
@@ -336,6 +396,8 @@ def redact_sensitive_search_value(value: object) -> object:
         for key, item in value.items():
             if key == "query":
                 redacted["query_present"] = bool(item)
+            elif key == "message":
+                redacted["message_redacted"] = True
             elif key == "body_text":
                 redacted["body_text_redacted"] = True
             else:
@@ -483,27 +545,224 @@ def build_wave_search_plan(
 
     if not search_terms:
         raise RuntimeError("Cold-start stress requires at least one live search term.")
-    if network_mode == "both":
-        method_cycle = (("server", "server"), ("kad", "kad"), ("server", "automatic"))
-    elif network_mode == "kad":
-        method_cycle = (("kad", "kad"), ("kad", "automatic"))
-    else:
-        method_cycle = (("server", "server"), ("server", "global"), ("server", "automatic"))
+    method_cycle = (("server", "server"), ("server", "global"), ("kad", "kad"), ("server", "automatic"))
     rows: list[dict[str, object]] = []
     for index in range(searches_per_wave):
         network, method = method_cycle[index % len(method_cycle)]
         term_index = ((wave_index - 1) * searches_per_wave + index) % len(search_terms)
+        query = search_terms[term_index]
+        if method in {"automatic", "kad"}:
+            query = f"{query} stress{wave_index:02d}{index + 1:02d}"
         rows.append(
             {
                 "wave": wave_index,
                 "ordinal": index + 1,
                 "network": network,
                 "method": method,
-                "query": search_terms[term_index],
+                "query": query,
                 "query_index": term_index,
             }
         )
     return rows
+
+
+def is_stress_download_candidate(result_row: object) -> bool:
+    """Returns whether one live result is acceptable for active stress download."""
+
+    if not isinstance(result_row, dict):
+        return False
+    file_name = str(result_row.get("name") or "").strip().lower()
+    file_type = str(result_row.get("fileType") or "").strip().lower()
+    size_bytes = result_row.get("sizeBytes", result_row.get("size"))
+    sources = result_row.get("sources")
+    if not file_name or file_name.endswith(BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES) or file_type in BLOCKED_ACTIVE_DOWNLOAD_TYPES:
+        return False
+    if not isinstance(sources, int) or isinstance(sources, bool) or sources < rest_smoke.MIN_SAFE_LIVE_DOWNLOAD_SOURCES:
+        return False
+    if not rest_smoke.is_lowercase_md4_hash(result_row.get("hash")):
+        return False
+    return (
+        isinstance(size_bytes, int)
+        and not isinstance(size_bytes, bool)
+        and 0 < size_bytes <= rest_smoke.MAX_SAFE_LIVE_DOWNLOAD_BYTES
+    )
+
+
+def find_stress_download_candidates(search_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Returns safe active-download candidates, including archives/audio/video."""
+
+    results = search_payload.get("results")
+    if not isinstance(results, list):
+        return []
+    candidates: list[dict[str, Any]] = []
+    for result_row in results:
+        if is_stress_download_candidate(result_row):
+            assert isinstance(result_row, dict)
+            candidates.append(result_row)
+    return candidates
+
+
+def trigger_active_downloads_from_search_result(
+    base_url: str,
+    api_key: str,
+    search_id: str,
+    timeout_seconds: float,
+    trigger_budget: DownloadTriggerBudget,
+) -> dict[str, object]:
+    """Triggers active real downloads from safe live search results."""
+
+    observations: list[dict[str, object]] = []
+    triggered: list[dict[str, object]] = []
+
+    def resolve():
+        if trigger_budget.remaining <= 0:
+            return {
+                "ok": bool(triggered),
+                "reason": "download trigger budget exhausted",
+                "triggers": triggered,
+                "observations": observations,
+            }
+        result = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
+        if int(result["status"]) != 200 or not isinstance(result["json"], dict):
+            return None
+        payload = rest_smoke.require_json_object(result, 200)
+        candidates = find_stress_download_candidates(payload)
+        observations.append(
+            {
+                "observed_at": round(time.time(), 3),
+                "status": payload.get("status"),
+                "result_count": len(payload.get("results") or []),
+                "candidate_count": len(candidates),
+                "remaining_budget": trigger_budget.remaining,
+            }
+        )
+        for candidate in candidates:
+            transfer_hash = str(candidate["hash"])
+            if not trigger_budget.claim(transfer_hash):
+                continue
+            download = rest_smoke.http_request(
+                base_url,
+                f"/api/v1/searches/{search_id}/results/{transfer_hash}/operations/download",
+                method="POST",
+                api_key=api_key,
+                json_body={"paused": False, "categoryId": 0},
+                request_timeout_seconds=timeout_seconds,
+            )
+            rest_smoke.require_json_object(download, 200)
+            transfer = rest_smoke.wait_for_triggered_transfer(
+                base_url,
+                api_key,
+                transfer_hash,
+                timeout_seconds,
+            )
+            triggered.append(
+                {
+                    "hash_present": True,
+                    "candidate": {
+                        "name_present": bool(candidate.get("name")),
+                        "sizeBytes": candidate.get("sizeBytes", candidate.get("size")),
+                        "fileType": candidate.get("fileType"),
+                        "sources": candidate.get("sources"),
+                        "completeSources": candidate.get("completeSources"),
+                    },
+                    "download": {"status": download.get("status")},
+                    "transfer": transfer,
+                }
+            )
+            if trigger_budget.remaining <= 0:
+                break
+        if triggered:
+            return {
+                "ok": True,
+                "searchId": search_id,
+                "active": True,
+                "triggers": triggered,
+                "observations": observations,
+            }
+        return None
+
+    try:
+        result = rest_smoke.wait_for(resolve, timeout=timeout_seconds, interval=2.0, description="active live download candidates")
+    except Exception:
+        return {
+            "ok": False,
+            "reason": "timed out without active download candidates",
+            "active": True,
+            "triggers": triggered,
+            "observations": observations,
+        }
+    assert isinstance(result, dict)
+    return result
+
+
+def count_download_triggers(search_report: dict[str, object]) -> int:
+    """Counts active downloads triggered by one search task."""
+
+    trigger = search_report.get("download_trigger")
+    if not isinstance(trigger, dict):
+        return 0
+    triggers = trigger.get("triggers")
+    if not isinstance(triggers, list):
+        return 1 if bool(trigger.get("ok")) else 0
+    return len(triggers)
+
+
+def get_search_network_mode(
+    *,
+    base_url: str,
+    api_key: str,
+    server_rows: list[dict[str, object]],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Returns the best currently available live search transport for one wave."""
+
+    try:
+        ready = rest_smoke.wait_for_requested_networks(
+            base_url,
+            api_key,
+            min(timeout_seconds, 10.0),
+            require_server_connected=False,
+            require_kad_connected=False,
+        )
+        if bool(ready.get("ready")):
+            return {
+                "ok": True,
+                "mode": ready["mode"],
+                "source": "already_ready",
+                "ready": ready,
+            }
+    except Exception as exc:
+        last_error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+    else:
+        last_error = None
+
+    try:
+        reconnect = rest_smoke.connect_to_live_server(
+            base_url,
+            api_key=api_key,
+            server_rows=server_rows,
+            timeout_seconds=timeout_seconds,
+        )
+        return {
+            "ok": True,
+            "mode": "server",
+            "source": "server_reconnect",
+            "reconnect": reconnect,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "mode": None,
+            "source": "unavailable",
+            "last_ready_error": last_error,
+            "reconnect_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
 
 
 def run_search_task(
@@ -514,7 +773,7 @@ def run_search_task(
     observation_timeout_seconds: float,
     trigger_budget: DownloadTriggerBudget,
 ) -> dict[str, object]:
-    """Starts one live search, observes it, and optionally triggers a safe paused download."""
+    """Starts one live search, observes it, and optionally triggers active downloads."""
 
     report: dict[str, object] = {
         "wave": plan_row["wave"],
@@ -549,12 +808,13 @@ def run_search_task(
                 observation_timeout_seconds,
             )
         )
-        if trigger_budget.claim():
-            report["download_trigger"] = rest_smoke.trigger_paused_download_from_search_result(
+        if trigger_budget.remaining > 0:
+            report["download_trigger"] = trigger_active_downloads_from_search_result(
                 base_url,
                 api_key,
                 search_id,
                 observation_timeout_seconds,
+                trigger_budget,
             )
         report["ok"] = True
     except Exception as exc:
@@ -571,26 +831,49 @@ def run_stress_waves(
     base_url: str,
     api_key: str,
     process_id: int | None,
+    server_rows: list[dict[str, object]],
     search_terms: tuple[str, ...],
-    network_mode: str,
     waves: int,
     searches_per_wave: int,
     max_concurrent_searches: int,
     downloads_per_wave: int,
     observation_timeout_seconds: float,
+    network_ready_timeout_seconds: float,
 ) -> dict[str, object]:
     """Runs phased live search/download stress while keeping searches active until cleanup."""
 
     wave_reports: list[dict[str, object]] = []
     all_search_ids: list[str] = []
     completed_download_triggers = 0
+    transport_checks: list[dict[str, object]] = []
     for wave_index in range(1, waves + 1):
+        transport = get_search_network_mode(
+            base_url=base_url,
+            api_key=api_key,
+            server_rows=server_rows,
+            timeout_seconds=network_ready_timeout_seconds,
+        )
+        transport_checks.append({"wave": wave_index, **transport})
+        if not bool(transport.get("ok")):
+            wave_reports.append(
+                {
+                    "wave": wave_index,
+                    "planned_searches": searches_per_wave,
+                    "completed_searches": 0,
+                    "failed_searches": searches_per_wave,
+                    "requested_download_triggers": downloads_per_wave,
+                    "completed_download_triggers": 0,
+                    "transport": transport,
+                    "searches": [],
+                }
+            )
+            continue
         trigger_budget = DownloadTriggerBudget(downloads_per_wave)
         plan = build_wave_search_plan(
             wave_index=wave_index,
             searches_per_wave=searches_per_wave,
             search_terms=search_terms,
-            network_mode=network_mode,
+            network_mode=str(transport["mode"]),
         )
         wave_rows: list[dict[str, object]] = []
         with ThreadPoolExecutor(max_workers=max_concurrent_searches) as executor:
@@ -610,9 +893,7 @@ def run_stress_waves(
                 wave_rows.append(row)
                 if isinstance(row.get("searchId"), str):
                     all_search_ids.append(str(row["searchId"]))
-                trigger = row.get("download_trigger")
-                if isinstance(trigger, dict) and bool(trigger.get("ok")):
-                    completed_download_triggers += 1
+                completed_download_triggers += count_download_triggers(row)
 
         ready_probe = rest_smoke.http_request(base_url, "/api/v1/app", api_key=api_key)
         wave_reports.append(
@@ -622,13 +903,10 @@ def run_stress_waves(
                 "completed_searches": sum(1 for row in wave_rows if bool(row.get("ok"))),
                 "failed_searches": sum(1 for row in wave_rows if not bool(row.get("ok"))),
                 "requested_download_triggers": downloads_per_wave,
-                "completed_download_triggers": sum(
-                    1
-                    for row in wave_rows
-                    if isinstance(row.get("download_trigger"), dict) and bool(row["download_trigger"].get("ok"))
-                ),
+                "completed_download_triggers": sum(count_download_triggers(row) for row in wave_rows),
                 "rest_ready_probe": rest_smoke.compact_http_result(ready_probe),
                 "resource_snapshot": rest_smoke.get_process_resource_snapshot(process_id),
+                "transport": transport,
                 "searches": sorted(wave_rows, key=lambda row: int(row.get("ordinal", 0))),
             }
         )
@@ -643,6 +921,7 @@ def run_stress_waves(
         "failed_searches": sum(wave["failed_searches"] for wave in wave_reports),
         "requested_download_triggers": waves * downloads_per_wave,
         "completed_download_triggers": completed_download_triggers,
+        "transport_checks": transport_checks,
     }
 
 
@@ -724,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
-    search_terms = inputs.generic_open_terms
+    search_terms = build_open_source_stress_terms(inputs.generic_open_terms)
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
         suite_name=SUITE_NAME,
@@ -883,19 +1162,19 @@ def main(argv: list[str] | None = None) -> int:
             require_kad_connected=False,
         )
         report["checks"]["network_ready"] = live_network
-        network_mode = str(live_network["mode"])
 
         stress = run_stress_waves(
             base_url=base_url,
             api_key=args.api_key,
             process_id=process_id,
+            server_rows=server_rows,
             search_terms=search_terms,
-            network_mode=network_mode,
             waves=args.waves,
             searches_per_wave=args.searches_per_wave,
             max_concurrent_searches=args.max_concurrent_searches,
             downloads_per_wave=args.downloads_per_wave,
             observation_timeout_seconds=args.search_observation_timeout_seconds,
+            network_ready_timeout_seconds=args.network_ready_timeout_seconds,
         )
         report["checks"]["stress"] = stress
         report["diagnostics"]["peak"] = collect_diagnostics(
@@ -962,7 +1241,7 @@ def main(argv: list[str] | None = None) -> int:
             report["failure_reason"] = "required UMDH diagnostics did not complete"
         elif int(stress_summary.get("completed_download_triggers", 0)) < int(stress_summary.get("requested_download_triggers", 0)):
             report["status"] = "inconclusive"
-            report["failure_reason"] = "live network did not expose enough safe paused-download candidates"
+            report["failure_reason"] = "live network did not expose enough safe active-download candidates"
         else:
             report["status"] = "passed"
     except rest_smoke.LiveNetworkUnavailableError as exc:

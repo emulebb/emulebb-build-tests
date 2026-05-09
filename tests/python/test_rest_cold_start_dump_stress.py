@@ -34,9 +34,35 @@ def test_wave_plan_mixes_methods_when_both_networks_are_ready() -> None:
         network_mode="both",
     )
 
-    assert [row["method"] for row in plan] == ["server", "kad", "automatic", "server", "kad"]
-    assert [row["network"] for row in plan] == ["server", "kad", "server", "server", "kad"]
+    assert [row["method"] for row in plan] == ["server", "global", "kad", "automatic", "server"]
+    assert [row["network"] for row in plan] == ["server", "server", "kad", "server", "server"]
     assert [row["query_index"] for row in plan] == [2, 0, 1, 2, 0]
+    assert str(plan[2]["query"]).endswith("stress0203")
+    assert str(plan[3]["query"]).endswith("stress0204")
+
+
+def test_open_source_stress_terms_extend_operator_terms() -> None:
+    module = load_script_module()
+    terms = module.build_open_source_stress_terms(("linux", "custom oss term"))
+
+    assert terms[0] == "linux"
+    assert "custom oss term" in terms
+    assert "libreoffice" in terms
+    assert len(terms) == len({term.lower() for term in terms})
+
+
+def test_active_download_candidates_allow_archives_audio_and_video() -> None:
+    module = load_script_module()
+
+    base = {
+        "hash": "0123456789abcdef0123456789abcdef",
+        "sources": 3,
+        "sizeBytes": 1024,
+    }
+    assert module.is_stress_download_candidate({**base, "name": "debian.zip", "fileType": "archive"}) is True
+    assert module.is_stress_download_candidate({**base, "name": "public-domain.mp3", "fileType": "audio"}) is True
+    assert module.is_stress_download_candidate({**base, "name": "creative-commons.mkv", "fileType": "video"}) is True
+    assert module.is_stress_download_candidate({**base, "name": "installer.exe", "fileType": "program"}) is False
 
 
 def test_discover_diagnostic_tools_uses_path_first(monkeypatch) -> None:
@@ -52,6 +78,30 @@ def test_discover_diagnostic_tools_uses_path_first(monkeypatch) -> None:
 
     assert tools["procdump"] == r"C:\tools\procdump64.exe"
     assert tools["cdb"] is None
+
+
+def test_search_network_mode_reconnects_when_ready_probe_fails(monkeypatch) -> None:
+    module = load_script_module()
+
+    def fail_ready(*args, **kwargs):
+        raise RuntimeError("not ready")
+
+    def reconnect(*args, **kwargs):
+        return {"selected_server": {"address": "127.0.0.1", "port": 4661}}
+
+    monkeypatch.setattr(module.rest_smoke, "wait_for_requested_networks", fail_ready)
+    monkeypatch.setattr(module.rest_smoke, "connect_to_live_server", reconnect)
+
+    result = module.get_search_network_mode(
+        base_url="http://127.0.0.1:1",
+        api_key="key",
+        server_rows=[{"address": "127.0.0.1", "port": 4661}],
+        timeout_seconds=1.0,
+    )
+
+    assert result["ok"] is True
+    assert result["mode"] == "server"
+    assert result["source"] == "server_reconnect"
 
 
 def test_umdh_gflags_commands_are_explicit(monkeypatch, tmp_path: Path) -> None:
