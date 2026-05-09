@@ -329,6 +329,63 @@ Image                                   505        0`06d17000 ( 109.090 MB)   0.
     assert summary["address_usage"]["Image"]["region_count"] == 505
 
 
+def test_summarize_cdb_deltas_reports_heap_and_address_changes() -> None:
+    module = load_script_module()
+    diagnostics = {
+        "baseline": {
+            "tools": {
+                "dump_analysis": {
+                    "cdb": {
+                        "summary": {
+                            "heap": {"reserve_bytes": 100, "commit_bytes": 80, "free_bytes": 10},
+                            "address_usage": {"Heap": {"region_count": 2, "total_bytes": 100}},
+                        }
+                    }
+                }
+            }
+        },
+        "peak": {
+            "tools": {
+                "dump_analysis": {
+                    "cdb": {
+                        "summary": {
+                            "heap": {"reserve_bytes": 400, "commit_bytes": 320, "free_bytes": 50},
+                            "address_usage": {"Heap": {"region_count": 7, "total_bytes": 400}},
+                        }
+                    }
+                }
+            }
+        },
+        "post_drain": {
+            "tools": {
+                "dump_analysis": {
+                    "cdb": {
+                        "summary": {
+                            "heap": {"reserve_bytes": 400, "commit_bytes": 300, "free_bytes": 120},
+                            "address_usage": {"Heap": {"region_count": 9, "total_bytes": 400}},
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+    assert module.summarize_cdb_deltas(diagnostics) == {
+        "peak_minus_baseline": {
+            "heap": {"reserve_bytes": 300, "commit_bytes": 240, "free_bytes": 40},
+            "address_usage": {"Heap": {"region_count": 5, "total_bytes": 300}},
+        },
+        "post_drain_minus_baseline": {
+            "heap": {"reserve_bytes": 300, "commit_bytes": 220, "free_bytes": 110},
+            "address_usage": {"Heap": {"region_count": 7, "total_bytes": 300}},
+        },
+        "post_drain_minus_peak": {
+            "heap": {"reserve_bytes": 0, "commit_bytes": -20, "free_bytes": 70},
+            "address_usage": {"Heap": {"region_count": 2, "total_bytes": 0}},
+        },
+    }
+
+
 def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
     module = load_script_module()
     stress = {

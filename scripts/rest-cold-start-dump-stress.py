@@ -787,6 +787,69 @@ def summarize_resource_deltas(diagnostics: dict[str, object]) -> dict[str, objec
     return summary
 
 
+def summarize_cdb_deltas(diagnostics: dict[str, object]) -> dict[str, object]:
+    """Summarizes CDB heap/address deltas between diagnostic snapshots."""
+
+    summaries_by_label: dict[str, dict[str, object]] = {}
+    for label in DIAGNOSTIC_LABELS:
+        entry = diagnostics.get(label)
+        if not isinstance(entry, dict):
+            continue
+        tools = entry.get("tools")
+        if not isinstance(tools, dict):
+            continue
+        dump_analysis = tools.get("dump_analysis")
+        if not isinstance(dump_analysis, dict):
+            continue
+        cdb = dump_analysis.get("cdb")
+        if not isinstance(cdb, dict):
+            continue
+        cdb_summary = cdb.get("summary")
+        if isinstance(cdb_summary, dict):
+            summaries_by_label[label] = cdb_summary
+
+    baseline = summaries_by_label.get("baseline")
+    if not baseline:
+        return {}
+
+    def numeric_deltas(left: dict[str, object], right: dict[str, object]) -> dict[str, int]:
+        deltas: dict[str, int] = {}
+        for key, right_value in right.items():
+            left_value = left.get(key)
+            if isinstance(left_value, int) and not isinstance(left_value, bool) and isinstance(right_value, int) and not isinstance(right_value, bool):
+                deltas[key] = right_value - left_value
+        return deltas
+
+    def summary_delta(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
+        delta: dict[str, object] = {}
+        left_heap = left.get("heap")
+        right_heap = right.get("heap")
+        if isinstance(left_heap, dict) and isinstance(right_heap, dict):
+            delta["heap"] = numeric_deltas(left_heap, right_heap)
+        left_usage = left.get("address_usage")
+        right_usage = right.get("address_usage")
+        if isinstance(left_usage, dict) and isinstance(right_usage, dict):
+            address_deltas: dict[str, dict[str, int]] = {}
+            for name, right_row in right_usage.items():
+                left_row = left_usage.get(name)
+                if isinstance(left_row, dict) and isinstance(right_row, dict):
+                    address_deltas[str(name)] = numeric_deltas(left_row, right_row)
+            if address_deltas:
+                delta["address_usage"] = address_deltas
+        return delta
+
+    summary: dict[str, object] = {}
+    for label in ("peak", "post_drain"):
+        cdb_summary = summaries_by_label.get(label)
+        if cdb_summary:
+            summary[f"{label}_minus_baseline"] = summary_delta(baseline, cdb_summary)
+    peak = summaries_by_label.get("peak")
+    post_drain = summaries_by_label.get("post_drain")
+    if peak and post_drain:
+        summary["post_drain_minus_peak"] = summary_delta(peak, post_drain)
+    return summary
+
+
 def collect_diagnostics(
     *,
     label: str,
@@ -1886,6 +1949,7 @@ def main(argv: list[str] | None = None) -> int:
             symbol_env=symbol_env,
         )
         report["diagnostics"]["resource_deltas"] = summarize_resource_deltas(report["diagnostics"])
+        report["diagnostics"]["cdb_deltas"] = summarize_cdb_deltas(report["diagnostics"])
 
         if args.enable_umdh:
             report["diagnostics"]["umdh_diffs"] = {
