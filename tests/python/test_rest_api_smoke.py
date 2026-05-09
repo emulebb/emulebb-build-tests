@@ -1011,6 +1011,45 @@ def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
     assert "CPartFile" not in source
 
 
+def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    source = (app_source / "WebServerArrCompat.cpp").read_text(encoding="utf-8")
+    seams = (app_source / "WebServerArrCompatSeams.h").read_text(encoding="utf-8")
+
+    assert "WebApiCommandSeams.h" in source
+    assert "WebApiCommandSeams::GetDefaultSearchMethodName()" in source
+    assert 'BuildInternalCommand("search/start"' in source
+    assert 'BuildInternalCommand("search/results"' in source
+    assert 'BuildInternalCommand("search/stop"' in source
+    assert "WebServerJsonSeams::TryValidateRequestPathEscapes" in seams
+    assert "WebServerJsonSeams::TryParseQueryString" in seams
+    assert "WebServerJsonSeams::TryNormalizeSearchText" in seams
+    assert "WebServerJsonSeams::TryParseUnsignedDecimalValue" in seams
+    assert "WebServerJsonSeams::TryValidatePublicFileNameText" in seams
+    assert "WebServerJsonSeams::NormalizeAsciiWhitespace" in seams
+
+
+def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    source = (app_source / "WebServerQBitCompat.cpp").read_text(encoding="utf-8")
+    seams = (app_source / "WebServerQBitCompatSeams.h").read_text(encoding="utf-8")
+
+    assert "WebServerJson::BuildInternalCommand" in source
+    assert 'BuildInternalCommand("transfers/add"' in source
+    assert 'ExecuteHashBulkCommand("transfers/delete"' in source
+    assert 'BuildInternalCommand("transfers/set_category"' in source
+    assert 'BuildInternalCommand("transfers/get"' in source
+    assert "WebServerJsonSeams::TryValidateRequestPathEscapes" in seams
+    assert "WebServerJsonSeams::TryParseQueryString" in seams
+    assert "WebServerJsonSeams::TryParseUrlEncodedFields" in seams
+    assert "WebServerJsonSeams::TryNormalizeCategoryNameText" in seams
+    assert "WebServerJsonSeams::TryValidatePublicFileNameText" in seams
+    assert "WebServerJsonSeams::TryParseUnsignedDecimalValue" in seams
+    assert "WebServerJsonSeams::UrlEncodeUtf8" in seams
+
+
 def test_rest_contract_registry_covers_release_families() -> None:
     module = load_rest_api_smoke_module()
 
