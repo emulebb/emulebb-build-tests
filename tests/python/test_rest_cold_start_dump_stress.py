@@ -37,8 +37,7 @@ def test_wave_plan_mixes_methods_when_both_networks_are_ready() -> None:
     assert [row["method"] for row in plan] == ["server", "global", "kad", "automatic", "server"]
     assert [row["network"] for row in plan] == ["server", "server", "kad", "server", "server"]
     assert [row["query_index"] for row in plan] == [2, 0, 1, 2, 0]
-    assert str(plan[2]["query"]).endswith("stress0203")
-    assert str(plan[3]["query"]).endswith("stress0204")
+    assert all("stress" not in str(row["query"]).lower() for row in plan)
 
 
 def test_open_source_stress_terms_extend_operator_terms() -> None:
@@ -48,6 +47,9 @@ def test_open_source_stress_terms_extend_operator_terms() -> None:
     assert terms[0] == "linux"
     assert "custom oss term" in terms
     assert "libreoffice" in terms
+    assert "gnu" in terms
+    assert "python" in terms
+    assert "rust" in terms
     assert len(terms) == len({term.lower() for term in terms})
 
 
