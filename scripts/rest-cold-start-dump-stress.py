@@ -1541,6 +1541,8 @@ def cleanup_searches_and_transfers(
     )
     clear_result = rest_smoke.clear_completed_transfers(base_url, api_key)
     cleanup["clear_completed_transfers"] = rest_smoke.compact_http_result(clear_result)
+    clear_logs_result = rest_smoke.clear_logs(base_url, api_key)
+    cleanup["clear_logs"] = rest_smoke.compact_http_result(clear_logs_result)
     return cleanup
 
 

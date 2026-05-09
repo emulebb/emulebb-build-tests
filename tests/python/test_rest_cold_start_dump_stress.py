@@ -532,6 +532,61 @@ def test_wait_for_stress_transfers_absent_polls_until_transfer_disappears(monkey
     assert [row["present_count"] for row in result["observations"]] == [1, 0]
 
 
+def test_cleanup_clears_logs_after_transfer_cleanup(monkeypatch) -> None:
+    module = load_script_module()
+    calls: list[str] = []
+
+    def fake_delete_all_searches(*_args, **_kwargs):
+        calls.append("delete_all_searches")
+        return {"status": 200}
+
+    def fake_verify_searches_deleted(*_args, **_kwargs):
+        calls.append("verify_searches_deleted")
+        return {"checked": 1}
+
+    def fake_delete_stress_transfers(*_args, **_kwargs):
+        calls.append("delete_stress_transfers")
+        return {"requested_count": 1, "deleted_count": 1}
+
+    def fake_wait_for_stress_transfers_absent(*_args, **_kwargs):
+        calls.append("wait_for_stress_transfers_absent")
+        return {"absent": True}
+
+    def fake_clear_completed_transfers(*_args, **_kwargs):
+        calls.append("clear_completed_transfers")
+        return {"status": 200}
+
+    def fake_clear_logs(*_args, **_kwargs):
+        calls.append("clear_logs")
+        return {"status": 200}
+
+    monkeypatch.setattr(module.rest_smoke, "delete_all_searches", fake_delete_all_searches)
+    monkeypatch.setattr(module.rest_smoke, "verify_searches_deleted", fake_verify_searches_deleted)
+    monkeypatch.setattr(module, "delete_stress_transfers", fake_delete_stress_transfers)
+    monkeypatch.setattr(module, "wait_for_stress_transfers_absent", fake_wait_for_stress_transfers_absent)
+    monkeypatch.setattr(module.rest_smoke, "clear_completed_transfers", fake_clear_completed_transfers)
+    monkeypatch.setattr(module.rest_smoke, "clear_logs", fake_clear_logs)
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: result)
+
+    result = module.cleanup_searches_and_transfers(
+        base_url="http://127.0.0.1:1",
+        api_key="key",
+        search_ids=["101"],
+        transfer_hashes=["0123456789abcdef0123456789abcdef"],
+        transfer_cleanup_timeout_seconds=1.0,
+    )
+
+    assert calls == [
+        "delete_all_searches",
+        "verify_searches_deleted",
+        "delete_stress_transfers",
+        "wait_for_stress_transfers_absent",
+        "clear_completed_transfers",
+        "clear_logs",
+    ]
+    assert result["clear_logs"]["status"] == 200
+
+
 def test_stress_cleanup_completeness_requires_absent_transfers() -> None:
     module = load_script_module()
     report = {

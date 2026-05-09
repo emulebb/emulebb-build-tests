@@ -617,6 +617,14 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
         "expected_statuses": (404,),
     },
     {
+        "method": "POST",
+        "path": "/api/v1/logs/operations/clear",
+        "json_body": {"confirmClearLogs": True},
+        "family": "logs",
+        "scenario": "safe_mutation",
+        "expected_statuses": (200,),
+    },
+    {
         "method": "PATCH",
         "path": "/api/v1/servers/192.0.2.254:4669",
         "json_body": {"priority": "high"},
@@ -2401,6 +2409,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {}
     if route_name in {"transfers_clear_completed", "clearCompletedTransfers"}:
         return {"confirmClearCompleted": True}
+    if route_name in {"logs_clear", "clearLogs"}:
+        return {"confirmClearLogs": True}
     if route_name in {"transfers_delete", "deleteTransfer"}:
         return {"deleteFiles": True}
     if route_name.startswith("transfers_source_") or route_name in {
@@ -3525,6 +3535,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
         json_body={},
     )
+    missing_clear_logs_confirmation = http_request(
+        base_url,
+        "/api/v1/logs/operations/clear",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+    )
     bad_json_content_type = http_request(
         base_url,
         "/api/v1/app/preferences",
@@ -3634,6 +3651,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             400,
             "INVALID_ARGUMENT",
             message_contains="confirmDeleteAllSearches must be true",
+        ),
+        "missing_clear_logs_confirmation": require_error_response(
+            missing_clear_logs_confirmation,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="confirmClearLogs must be true",
         ),
         "bad_json_content_type": require_error_response(
             bad_json_content_type,
@@ -5085,6 +5108,18 @@ def clear_completed_transfers(base_url: str, api_key: str) -> dict[str, object]:
         method="POST",
         api_key=api_key,
         json_body={"confirmClearCompleted": True},
+    )
+
+
+def clear_logs(base_url: str, api_key: str) -> dict[str, object]:
+    """Clears retained UI logs through the explicit native REST confirmation route."""
+
+    return http_request(
+        base_url,
+        "/api/v1/logs/operations/clear",
+        method="POST",
+        api_key=api_key,
+        json_body={"confirmClearLogs": True},
     )
 
 

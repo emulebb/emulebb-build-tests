@@ -953,6 +953,7 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
         ("DELETE", "/shared-files/{hash}"): {"deleteFiles"},
         ("PATCH", "/shared-directories"): {"confirmReplaceRoots"},
         ("DELETE", "/searches"): {"confirmDeleteAllSearches"},
+        ("POST", "/logs/operations/clear"): {"confirmClearLogs"},
     }
     id_targeted_delete_routes = {
         ("DELETE", "/categories/{categoryId}"),
@@ -1260,6 +1261,35 @@ def test_clear_completed_transfers_uses_confirmation_payload(monkeypatch) -> Non
     ]
 
 
+def test_clear_logs_uses_confirmation_payload(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    requests: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        requests.append({"path": path, **kwargs})
+        return {
+            "status": 200,
+            "content_type": "application/json; charset=utf-8",
+            "json": {"ok": True},
+            "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}},
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    result = module.clear_logs("http://127.0.0.1:1", "key")
+
+    assert result["status"] == 200
+    assert requests == [
+        {
+            "path": "/api/v1/logs/operations/clear",
+            "method": "POST",
+            "api_key": "key",
+            "json_body": {"confirmClearLogs": True},
+        }
+    ]
+
+
 def test_extract_triggered_transfer_hashes_uses_live_transfer_response() -> None:
     module = load_rest_api_smoke_module()
 
@@ -1533,6 +1563,7 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert operations_by_pair[
         ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse")
     ]["json_body"] == {}
+    assert operations_by_pair[("POST", "/api/v1/logs/operations/clear")]["json_body"] == {"confirmClearLogs": True}
     assert ("POST", "/api/v1/kad/operations/recheck-firewall") in method_path_pairs
     assert ("POST", "/api/v1/searches") in method_path_pairs
     assert ("DELETE", "/api/v1/searches/123") in method_path_pairs
