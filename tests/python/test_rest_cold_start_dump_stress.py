@@ -199,6 +199,45 @@ def test_umdh_completeness_requires_snapshots_and_finished_diffs() -> None:
     assert module.umdh_diagnostics_are_complete(report) is False
 
 
+def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
+    module = load_script_module()
+    stress = {
+        "waves": [
+            {
+                "searches": [
+                    {
+                        "wave": 1,
+                        "ordinal": 1,
+                        "searchId": "101",
+                        "method": "server",
+                        "network": "server",
+                        "activity": {"maxResults": 0, "terminal": "timeout_zero_results"},
+                    },
+                    {
+                        "wave": 1,
+                        "ordinal": 2,
+                        "searchId": "102",
+                        "method": "kad",
+                        "network": "kad",
+                        "activity": {"maxResults": 4, "terminal": "results"},
+                    },
+                ]
+            }
+        ]
+    }
+
+    assert module.collect_zero_result_searches(stress) == [
+        {
+            "wave": 1,
+            "ordinal": 1,
+            "searchId": "101",
+            "method": "server",
+            "network": "server",
+            "terminal": "timeout_zero_results",
+        }
+    ]
+
+
 def test_validate_rejects_invalid_stress_shape() -> None:
     module = load_script_module()
     args = SimpleNamespace(

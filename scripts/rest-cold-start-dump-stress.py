@@ -819,6 +819,40 @@ def count_download_triggers(search_report: dict[str, object]) -> int:
     return len(triggers)
 
 
+def collect_zero_result_searches(stress_report: dict[str, object]) -> list[dict[str, object]]:
+    """Returns searches that completed observation without ever seeing a result."""
+
+    zero_result_searches: list[dict[str, object]] = []
+    waves = stress_report.get("waves")
+    if not isinstance(waves, list):
+        return zero_result_searches
+    for wave in waves:
+        if not isinstance(wave, dict):
+            continue
+        searches = wave.get("searches")
+        if not isinstance(searches, list):
+            continue
+        for row in searches:
+            if not isinstance(row, dict):
+                continue
+            activity = row.get("activity")
+            if not isinstance(activity, dict):
+                continue
+            max_results = activity.get("maxResults")
+            if isinstance(max_results, int) and not isinstance(max_results, bool) and max_results == 0:
+                zero_result_searches.append(
+                    {
+                        "wave": row.get("wave"),
+                        "ordinal": row.get("ordinal"),
+                        "searchId": row.get("searchId"),
+                        "method": row.get("method"),
+                        "network": row.get("network"),
+                        "terminal": activity.get("terminal"),
+                    }
+                )
+    return zero_result_searches
+
+
 def get_search_network_mode(
     *,
     base_url: str,
@@ -1025,7 +1059,7 @@ def run_stress_waves(
         if int(ready_probe["status"]) != 200:
             raise RuntimeError(f"REST readiness probe failed after wave {wave_index}: {ready_probe!r}")
 
-    return {
+    stress_report = {
         "waves": wave_reports,
         "search_ids": all_search_ids,
         "planned_searches": waves * searches_per_wave,
@@ -1035,6 +1069,10 @@ def run_stress_waves(
         "completed_download_triggers": completed_download_triggers,
         "transport_checks": transport_checks,
     }
+    zero_result_searches = collect_zero_result_searches(stress_report)
+    stress_report["zero_result_searches"] = zero_result_searches
+    stress_report["zero_result_search_count"] = len(zero_result_searches)
+    return stress_report
 
 
 def cleanup_searches_and_transfers(
@@ -1345,6 +1383,9 @@ def main(argv: list[str] | None = None) -> int:
         if int(stress_summary.get("failed_searches", 0)) > 0:
             report["status"] = "failed"
             report["failure_reason"] = "one or more live searches failed"
+        elif int(stress_summary.get("zero_result_search_count", 0)) > 0:
+            report["status"] = "failed"
+            report["failure_reason"] = "one or more live searches returned zero results"
         elif not diagnostics_are_complete(report, skip_dumps=args.skip_dumps):
             report["status"] = "failed"
             report["failure_reason"] = "required dump diagnostics were not captured"
