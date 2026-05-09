@@ -181,7 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=30.0)
-    parser.add_argument("--search-observation-timeout-seconds", type=float, default=45.0)
+    parser.add_argument("--search-observation-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--live-wire-inputs-file", default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)))
@@ -749,6 +749,64 @@ def trigger_active_downloads_from_search_result(
     return result
 
 
+def wait_for_stress_search_observation(
+    base_url: str,
+    api_key: str,
+    search_id: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Observes a queued live search until results arrive or the full timeout expires."""
+
+    observations: list[dict[str, object]] = []
+    max_results = 0
+    last_payload: dict[str, Any] | None = None
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
+        observed_at = round(time.time(), 3)
+        if int(response.get("status", 0)) == 200 and isinstance(response.get("json"), dict):
+            payload = rest_smoke.require_json_object(response, 200)
+            results = payload.get("results")
+            result_count = len(results) if isinstance(results, list) else 0
+            max_results = max(max_results, result_count)
+            last_payload = payload
+            observations.append(
+                {
+                    "observed_at": observed_at,
+                    "status": payload.get("status"),
+                    "result_count": result_count,
+                    "max_result_count": max_results,
+                }
+            )
+            if result_count > 0:
+                return {
+                    "ok": True,
+                    "searchId": search_id,
+                    "terminal": "results",
+                    "maxResults": max_results,
+                    "last": payload,
+                    "observations": observations,
+                }
+        else:
+            observations.append(
+                {
+                    "observed_at": observed_at,
+                    "status_code": response.get("status"),
+                    "max_result_count": max_results,
+                }
+            )
+        time.sleep(2.0)
+
+    return {
+        "ok": False,
+        "searchId": search_id,
+        "terminal": "timeout_zero_results",
+        "maxResults": max_results,
+        "last": last_payload,
+        "observations": observations,
+    }
+
+
 def count_download_triggers(search_report: dict[str, object]) -> int:
     """Counts active downloads triggered by one search task."""
 
@@ -855,7 +913,7 @@ def run_search_task(
         search_id = str(payload["id"])
         report["searchId"] = search_id
         report["activity"] = redact_sensitive_search_value(
-            rest_smoke.wait_for_search_observation(
+            wait_for_stress_search_observation(
                 base_url,
                 api_key,
                 search_id,

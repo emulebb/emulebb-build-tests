@@ -67,6 +67,34 @@ def test_active_download_candidates_allow_archives_audio_and_video() -> None:
     assert module.is_stress_download_candidate({**base, "name": "installer.exe", "fileType": "program"}) is False
 
 
+def test_stress_search_observation_waits_past_initial_zero(monkeypatch) -> None:
+    module = load_script_module()
+    payloads = [
+        {"id": "101", "status": "complete", "results": []},
+        {"id": "101", "status": "running", "results": []},
+        {"id": "101", "status": "running", "results": [{"hash": "0" * 32}]},
+    ]
+
+    def fake_http_request(*args, **kwargs):
+        return {"status": 200, "json": payloads.pop(0)}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, status: result["json"])
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+
+    result = module.wait_for_stress_search_observation(
+        "http://127.0.0.1:1",
+        "key",
+        "101",
+        timeout_seconds=10.0,
+    )
+
+    assert result["ok"] is True
+    assert result["terminal"] == "results"
+    assert result["maxResults"] == 1
+    assert len(result["observations"]) == 3
+
+
 def test_discover_diagnostic_tools_uses_path_first(monkeypatch) -> None:
     module = load_script_module()
 
