@@ -102,8 +102,8 @@ def test_common_sentinel_terms_require_nonzero_results() -> None:
     assert module.search_requires_nonzero_results("linux") is True
     assert module.search_requires_nonzero_results("  Ubuntu  ") is True
     assert module.search_requires_nonzero_results("obscure fixture term") is False
-    assert module.fallback_search_methods("server", "server") == ("global", "kad")
-    assert module.fallback_search_methods("automatic", "kad") == ("global",)
+    assert module.fallback_search_methods("server", "server") == ("global", "kad", "server")
+    assert module.fallback_search_methods("automatic", "kad") == ("server", "global", "kad")
 
 
 def test_discover_diagnostic_tools_uses_path_first(monkeypatch) -> None:

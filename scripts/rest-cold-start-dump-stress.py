@@ -849,8 +849,11 @@ def fallback_search_methods(primary_method: object, resolved_method: object) -> 
         str(resolved_method or "").strip().lower(),
     }
     methods: list[str] = []
-    for method in ("global", "kad"):
+    for method in ("server", "global", "kad"):
         if method not in seen:
+            methods.append(method)
+    for method in (str(resolved_method or "").strip().lower(), str(primary_method or "").strip().lower()):
+        if method in {"server", "global", "kad"} and method not in methods:
             methods.append(method)
     return tuple(methods)
 
