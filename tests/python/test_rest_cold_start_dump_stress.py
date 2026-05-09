@@ -68,6 +68,35 @@ def test_active_download_candidates_allow_archives_audio_and_block_video() -> No
     assert module.is_stress_download_candidate({**base, "name": "installer.exe", "fileType": "program"}) is False
 
 
+def test_download_trigger_summary_counts_file_types_and_video() -> None:
+    module = load_script_module()
+    report = {
+        "waves": [
+            {
+                "searches": [
+                    {
+                        "download_trigger": {
+                            "triggers": [
+                                {"candidate": {"extension": ".pdf", "fileType": "Doc"}},
+                                {"candidate": {"extension": ".mp3", "fileType": "Audio"}},
+                                {"candidate": {"extension": ".mp4", "fileType": ""}},
+                                {"candidate": {"extension": ".bin", "fileType": "Video"}},
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    summary = module.summarize_download_triggers(report)
+
+    assert summary["total"] == 4
+    assert summary["file_type_counts"] == {"audio": 1, "doc": 1, "video": 1}
+    assert summary["extension_counts"] == {".bin": 1, ".mp3": 1, ".mp4": 1, ".pdf": 1}
+    assert summary["video_download_trigger_count"] == 2
+
+
 def test_stress_search_observation_waits_past_initial_zero(monkeypatch) -> None:
     module = load_script_module()
     payloads = [

@@ -53,14 +53,10 @@ CDB_HEAP_ROW_RE = re.compile(
 CDB_ADDRESS_SUMMARY_RE = re.compile(
     r"^\s*([A-Za-z_<>\-]+)\s+([0-9]+)\s+[0-9A-Fa-f`]+\s+\(\s*([0-9.]+)\s+([KMGT]B)\)"
 )
-BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES = (
+VIDEO_ACTIVE_DOWNLOAD_SUFFIXES = (
     ".3gp",
     ".avi",
-    ".bat",
-    ".cmd",
-    ".com",
     ".divx",
-    ".exe",
     ".flv",
     ".m4v",
     ".mkv",
@@ -73,14 +69,23 @@ BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES = (
     ".ps1",
     ".rm",
     ".rmvb",
-    ".scr",
     ".ts",
     ".vob",
-    ".vbs",
     ".webm",
     ".wmv",
     ".xvid",
 )
+BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES = VIDEO_ACTIVE_DOWNLOAD_SUFFIXES + (
+    ".bat",
+    ".cmd",
+    ".com",
+    ".exe",
+    ".msi",
+    ".ps1",
+    ".scr",
+    ".vbs",
+)
+VIDEO_ACTIVE_DOWNLOAD_TYPES = frozenset(("movie", "video"))
 BLOCKED_ACTIVE_DOWNLOAD_TYPES = frozenset(("program", "executable", "movie", "video"))
 OPEN_SOURCE_STRESS_TERMS = (
     "linux",
@@ -962,6 +967,15 @@ def is_stress_download_candidate(result_row: object) -> bool:
     )
 
 
+def stress_candidate_extension(result_row: object) -> str:
+    """Returns the lowercase file extension recorded for stress download summaries."""
+
+    if not isinstance(result_row, dict):
+        return ""
+    file_name = str(result_row.get("name") or "").strip().lower()
+    return Path(file_name).suffix if file_name else ""
+
+
 def find_stress_download_candidates(search_payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Returns safe active-download candidates while excluding executables and video media."""
 
@@ -1034,6 +1048,7 @@ def trigger_active_downloads_from_search_result(
                     "hash_present": True,
                     "candidate": {
                         "name_present": bool(candidate.get("name")),
+                        "extension": stress_candidate_extension(candidate),
                         "sizeBytes": candidate.get("sizeBytes", candidate.get("size")),
                         "fileType": candidate.get("fileType"),
                         "sources": candidate.get("sources"),
@@ -1227,6 +1242,59 @@ def count_download_triggers(search_report: dict[str, object]) -> int:
     if not isinstance(triggers, list):
         return 1 if bool(trigger.get("ok")) else 0
     return len(triggers)
+
+
+def summarize_download_triggers(stress_report: dict[str, object]) -> dict[str, object]:
+    """Summarizes triggered file metadata so blocked media classes become a release gate."""
+
+    file_type_counts: dict[str, int] = {}
+    extension_counts: dict[str, int] = {}
+    video_trigger_count = 0
+    total_trigger_count = 0
+    waves = stress_report.get("waves")
+    if not isinstance(waves, list):
+        return {
+            "total": 0,
+            "file_type_counts": file_type_counts,
+            "extension_counts": extension_counts,
+            "video_download_trigger_count": 0,
+        }
+    for wave in waves:
+        if not isinstance(wave, dict):
+            continue
+        searches = wave.get("searches")
+        if not isinstance(searches, list):
+            continue
+        for search in searches:
+            if not isinstance(search, dict):
+                continue
+            trigger = search.get("download_trigger")
+            if not isinstance(trigger, dict):
+                continue
+            triggers = trigger.get("triggers")
+            if not isinstance(triggers, list):
+                continue
+            for trigger_row in triggers:
+                if not isinstance(trigger_row, dict):
+                    continue
+                candidate = trigger_row.get("candidate")
+                if not isinstance(candidate, dict):
+                    continue
+                total_trigger_count += 1
+                file_type = str(candidate.get("fileType") or "").strip().lower()
+                extension = str(candidate.get("extension") or "").strip().lower()
+                if file_type:
+                    file_type_counts[file_type] = file_type_counts.get(file_type, 0) + 1
+                if extension:
+                    extension_counts[extension] = extension_counts.get(extension, 0) + 1
+                if file_type in VIDEO_ACTIVE_DOWNLOAD_TYPES or extension in VIDEO_ACTIVE_DOWNLOAD_SUFFIXES:
+                    video_trigger_count += 1
+    return {
+        "total": total_trigger_count,
+        "file_type_counts": dict(sorted(file_type_counts.items())),
+        "extension_counts": dict(sorted(extension_counts.items())),
+        "video_download_trigger_count": video_trigger_count,
+    }
 
 
 def collect_zero_result_searches(stress_report: dict[str, object], *, required_only: bool = False) -> list[dict[str, object]]:
@@ -1511,6 +1579,11 @@ def run_stress_waves(
     stress_report["zero_result_search_count"] = len(zero_result_searches)
     stress_report["required_zero_result_searches"] = required_zero_result_searches
     stress_report["required_zero_result_search_count"] = len(required_zero_result_searches)
+    download_trigger_summary = summarize_download_triggers(stress_report)
+    stress_report["download_trigger_summary"] = download_trigger_summary
+    stress_report["download_file_type_counts"] = download_trigger_summary["file_type_counts"]
+    stress_report["download_extension_counts"] = download_trigger_summary["extension_counts"]
+    stress_report["video_download_trigger_count"] = download_trigger_summary["video_download_trigger_count"]
     return stress_report
 
 
@@ -1990,6 +2063,9 @@ def main(argv: list[str] | None = None) -> int:
         elif not stress_cleanup_is_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "stress transfer cleanup did not settle before post-drain diagnostics"
+        elif int(stress_summary.get("video_download_trigger_count", 0)) > 0:
+            report["status"] = "failed"
+            report["failure_reason"] = "video downloads were triggered during dump stress"
         elif args.enable_umdh and not umdh_diagnostics_are_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "required UMDH diagnostics did not complete"
