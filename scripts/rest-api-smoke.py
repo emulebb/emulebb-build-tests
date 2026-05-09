@@ -57,9 +57,11 @@ wait_for_main_window = live_common.wait_for_main_window
 write_json = live_common.write_json
 
 PROCESS_QUERY_INFORMATION = 0x0400
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_VM_READ = 0x0010
 TH32CS_SNAPTHREAD = 0x00000004
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+STILL_ACTIVE = 259
 GR_GDIOBJECTS = 0
 GR_USEROBJECTS = 1
 
@@ -72,6 +74,8 @@ kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
 kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
 kernel32.GetProcessHandleCount.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
 kernel32.GetProcessHandleCount.restype = ctypes.c_int
+kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+kernel32.GetExitCodeProcess.restype = ctypes.c_int
 psapi = ctypes.WinDLL("psapi", use_last_error=True)
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 user32.GetGuiResources.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
@@ -1973,6 +1977,36 @@ def get_process_resource_snapshot(process_id: int | None) -> dict[str, int | Non
         }
     finally:
         kernel32.CloseHandle(process_handle)
+
+
+def get_process_exit_state(process_id: int | None) -> dict[str, object]:
+    """Returns whether a Windows process id is still active and its exit code when available."""
+
+    state: dict[str, object] = {
+        "process_id": process_id,
+        "open_process_ok": False,
+        "running": None,
+        "exit_code": None,
+        "last_error": None,
+    }
+    if process_id is None:
+        return state
+    process_handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, process_id)
+    if not process_handle:
+        state["last_error"] = ctypes.get_last_error()
+        state["running"] = False
+        return state
+    try:
+        state["open_process_ok"] = True
+        exit_code = ctypes.c_uint32()
+        if kernel32.GetExitCodeProcess(process_handle, ctypes.byref(exit_code)):
+            state["exit_code"] = int(exit_code.value)
+            state["running"] = int(exit_code.value) == STILL_ACTIVE
+        else:
+            state["last_error"] = ctypes.get_last_error()
+    finally:
+        kernel32.CloseHandle(process_handle)
+    return state
 
 
 def get_process_thread_count(process_id: int | None) -> int | None:

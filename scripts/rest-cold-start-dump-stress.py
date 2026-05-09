@@ -2107,6 +2107,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         report["status"] = "failed"
         report["failure_reason"] = f"{type(exc).__name__}: {exc}"
+        if process_id is not None:
+            report["failure_process_state"] = rest_smoke.get_process_exit_state(process_id)
         if process_id is not None and "failure" not in report["diagnostics"]:
             report["diagnostics"]["failure"] = collect_diagnostics(
                 label="failure",

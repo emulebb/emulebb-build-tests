@@ -269,6 +269,18 @@ def test_process_resource_snapshot_diff_ignores_missing_values() -> None:
     }
 
 
+def test_process_exit_state_handles_missing_process_id() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.get_process_exit_state(None) == {
+        "process_id": None,
+        "open_process_ok": False,
+        "running": None,
+        "exit_code": None,
+        "last_error": None,
+    }
+
+
 def test_rest_leak_churn_defaults_include_r1_soak_boundary() -> None:
     module = load_rest_api_smoke_module()
 
