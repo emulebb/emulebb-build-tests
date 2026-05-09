@@ -149,6 +149,7 @@
     <ClCompile Include="src\client_socket_lifetime.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
     <ClCompile Include="src\client_udp_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientUDPSocketSeams.h')" />
     <ClCompile Include="src\collection.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
+    <ClCompile Include="src\custom_auto_complete.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h')" />
     <ClCompile Include="src\download_queue_diskspace.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
     <ClCompile Include="src\download_queue_hostname_resolver.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueHostnameResolverSeams.h')" />
     <ClCompile Include="src\download_queue_overview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueOverviewSeams.h')" />
@@ -247,6 +248,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\ClientCreditsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CompressionBufferSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CollectionSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h')" />
