@@ -157,7 +157,7 @@ def test_browser_workflow_validation_walks_nested_results() -> None:
                 "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
             },
             {
-                "start": {"status": 404, "payload": {"error": "not present"}},
+                "start": {"status": 202, "payload": {"type": "search-started"}},
                 "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
             },
         ]
@@ -276,6 +276,14 @@ def test_browser_workflow_validation_rejects_delete_snapshot_with_added_download
 def test_browser_workflow_validation_rejects_nested_server_errors() -> None:
     smoke = load_smoke_module()
     checks = {"search_modes": [{"start": {"status": 503, "payload": {"error": "offline"}}}]}
+
+    with pytest.raises(RuntimeError, match=r"search_modes\[0\]\.start"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_nested_client_errors() -> None:
+    smoke = load_smoke_module()
+    checks = {"search_modes": [{"start": {"status": 404, "payload": {"error": "not present"}}}]}
 
     with pytest.raises(RuntimeError, match=r"search_modes\[0\]\.start"):
         smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})

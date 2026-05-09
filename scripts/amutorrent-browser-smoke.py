@@ -360,7 +360,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
     if any(unexpected_diagnostics.values()):
         raise RuntimeError(f"aMuTorrent browser diagnostics reported errors: {unexpected_diagnostics}")
     for name, result in iter_browser_http_results(checks):
-        if int(result["status"]) >= 500:
+        if int(result["status"]) >= 400:
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' failed: {result}")
         payload = result.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "error":
