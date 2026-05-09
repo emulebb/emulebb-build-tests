@@ -43,16 +43,34 @@ SUITE_NAME = "rest-cold-start-dump-stress"
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
 DIAGNOSTIC_LABELS = ("baseline", "peak", "post_drain")
 BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES = (
+    ".3gp",
+    ".avi",
     ".bat",
     ".cmd",
     ".com",
+    ".divx",
     ".exe",
+    ".flv",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
     ".msi",
+    ".ogv",
     ".ps1",
+    ".rm",
+    ".rmvb",
     ".scr",
+    ".ts",
+    ".vob",
     ".vbs",
+    ".webm",
+    ".wmv",
+    ".xvid",
 )
-BLOCKED_ACTIVE_DOWNLOAD_TYPES = frozenset(("program", "executable"))
+BLOCKED_ACTIVE_DOWNLOAD_TYPES = frozenset(("program", "executable", "movie", "video"))
 OPEN_SOURCE_STRESS_TERMS = (
     "linux",
     "ubuntu",
@@ -653,7 +671,7 @@ def is_stress_download_candidate(result_row: object) -> bool:
 
 
 def find_stress_download_candidates(search_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Returns safe active-download candidates, including archives/audio/video."""
+    """Returns safe active-download candidates while excluding executables and video media."""
 
     results = search_payload.get("results")
     if not isinstance(results, list):

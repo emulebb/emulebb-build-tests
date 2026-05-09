@@ -53,7 +53,7 @@ def test_open_source_stress_terms_extend_operator_terms() -> None:
     assert len(terms) == len({term.lower() for term in terms})
 
 
-def test_active_download_candidates_allow_archives_audio_and_video() -> None:
+def test_active_download_candidates_allow_archives_audio_and_block_video() -> None:
     module = load_script_module()
 
     base = {
@@ -63,7 +63,8 @@ def test_active_download_candidates_allow_archives_audio_and_video() -> None:
     }
     assert module.is_stress_download_candidate({**base, "name": "debian.zip", "fileType": "archive"}) is True
     assert module.is_stress_download_candidate({**base, "name": "public-domain.mp3", "fileType": "audio"}) is True
-    assert module.is_stress_download_candidate({**base, "name": "creative-commons.mkv", "fileType": "video"}) is True
+    assert module.is_stress_download_candidate({**base, "name": "creative-commons.mkv", "fileType": "video"}) is False
+    assert module.is_stress_download_candidate({**base, "name": "public-domain.mp4", "fileType": ""}) is False
     assert module.is_stress_download_candidate({**base, "name": "installer.exe", "fileType": "program"}) is False
 
 
