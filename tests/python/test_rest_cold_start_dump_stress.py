@@ -22,6 +22,7 @@ def test_operator_script_help_loads() -> None:
 
     assert "--waves" in help_text
     assert "--enable-umdh" in help_text
+    assert "--max-post-drain-umdh-positive-bytes" in help_text
     assert "--skip-dumps" in help_text
 
 
@@ -632,6 +633,23 @@ def test_stress_cleanup_completeness_requires_absent_transfers() -> None:
     assert module.stress_cleanup_is_complete(report) is False
 
 
+def test_post_drain_umdh_delta_budget_uses_positive_bytes() -> None:
+    module = load_script_module()
+    report = {
+        "diagnostics": {
+            "umdh_summary": {
+                "baseline_to_post_drain": {
+                    "available": True,
+                    "positive_delta_bytes": 1024,
+                }
+            }
+        }
+    }
+
+    assert module.post_drain_umdh_delta_within_budget(report, 1024) is True
+    assert module.post_drain_umdh_delta_within_budget(report, 1023) is False
+
+
 def test_validate_rejects_invalid_stress_shape() -> None:
     module = load_script_module()
     args = SimpleNamespace(
@@ -641,6 +659,7 @@ def test_validate_rejects_invalid_stress_shape() -> None:
         downloads_per_wave=0,
         post_drain_seconds=0,
         tool_timeout_seconds=1,
+        max_post_drain_umdh_positive_bytes=1,
     )
 
     try:

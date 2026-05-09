@@ -44,6 +44,7 @@ SUITE_NAME = "rest-cold-start-dump-stress"
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
 DIAGNOSTIC_LABELS = ("baseline", "peak", "post_drain")
 UMDH_TOP_DELTA_LIMIT = 10
+DEFAULT_MAX_POST_DRAIN_UMDH_POSITIVE_BYTES = 8 * 1024 * 1024
 UMDH_DIFF_ENTRY_RE = re.compile(
     r"^\s*([+-]?)\s*([0-9][0-9,]*)\s+\(\s*([0-9,]+)\s*-\s*([0-9,]+)\s*\)\s+([0-9,]+)\s+allocs\s+(BackTrace[0-9A-Fa-f]+)\b"
 )
@@ -236,6 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--post-drain-seconds", type=float, default=30.0)
     parser.add_argument("--tool-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--enable-umdh", action="store_true")
+    parser.add_argument("--max-post-drain-umdh-positive-bytes", type=int, default=DEFAULT_MAX_POST_DRAIN_UMDH_POSITIVE_BYTES)
     parser.add_argument("--skip-dumps", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
     return parser
@@ -256,6 +258,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("post-drain seconds must be zero or greater.")
     if args.tool_timeout_seconds <= 0:
         raise ValueError("tool timeout seconds must be greater than zero.")
+    if args.max_post_drain_umdh_positive_bytes < 0:
+        raise ValueError("max post-drain UMDH positive bytes must be zero or greater.")
 
 
 def build_open_source_stress_terms(configured_terms: tuple[str, ...]) -> tuple[str, ...]:
@@ -1811,6 +1815,21 @@ def umdh_diagnostics_are_complete(report: dict[str, object]) -> bool:
     return True
 
 
+def post_drain_umdh_delta_within_budget(report: dict[str, object], max_positive_bytes: int) -> bool:
+    """Returns true when post-drain UMDH growth stays within the configured leak budget."""
+
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    umdh_summary = diagnostics.get("umdh_summary")
+    if not isinstance(umdh_summary, dict):
+        return False
+    post_drain = umdh_summary.get("baseline_to_post_drain")
+    if not isinstance(post_drain, dict) or not bool(post_drain.get("available")):
+        return False
+    return int(post_drain.get("positive_delta_bytes", 0)) <= max_positive_bytes
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the cold-start dump stress suite and returns a process exit code."""
 
@@ -1859,6 +1878,7 @@ def main(argv: list[str] | None = None) -> int:
             "post_drain_seconds": args.post_drain_seconds,
             "tool_timeout_seconds": args.tool_timeout_seconds,
             "enable_umdh": bool(args.enable_umdh),
+            "max_post_drain_umdh_positive_bytes": args.max_post_drain_umdh_positive_bytes,
             "skip_dumps": bool(args.skip_dumps),
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
         },
@@ -2069,6 +2089,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.enable_umdh and not umdh_diagnostics_are_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "required UMDH diagnostics did not complete"
+        elif args.enable_umdh and not post_drain_umdh_delta_within_budget(report, args.max_post_drain_umdh_positive_bytes):
+            post_drain = report["diagnostics"]["umdh_summary"]["baseline_to_post_drain"]
+            report["status"] = "failed"
+            report["failure_reason"] = (
+                "post-drain UMDH positive delta exceeded budget: "
+                f"{int(post_drain.get('positive_delta_bytes', 0))} > {args.max_post_drain_umdh_positive_bytes}"
+            )
         elif int(stress_summary.get("completed_download_triggers", 0)) < int(stress_summary.get("requested_download_triggers", 0)):
             report["status"] = "inconclusive"
             report["failure_reason"] = "live network did not expose enough safe active-download candidates"
