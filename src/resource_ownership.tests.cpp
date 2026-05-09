@@ -37,6 +37,11 @@ namespace
 			items.push_back(pItem);
 		}
 	};
+
+	UINT_PTR HandleValue(const void *hHandle) noexcept
+	{
+		return reinterpret_cast<UINT_PTR>(hHandle);
+	}
 }
 
 TEST_SUITE_BEGIN("parity");
@@ -49,7 +54,7 @@ TEST_CASE("ScopedHandle closes the wrapped Win32 handle on scope exit")
 	{
 		ScopedHandle hOwnedEvent(hEvent);
 		REQUIRE(hOwnedEvent.IsValid());
-		CHECK(hOwnedEvent.Get() == hEvent);
+		CHECK(HandleValue(hOwnedEvent.Get()) == HandleValue(hEvent));
 	}
 
 	::SetLastError(ERROR_SUCCESS);
@@ -68,14 +73,14 @@ TEST_CASE("ScopedHandle reset closes the previously owned handle before replacin
 	hOwnedEvent.Reset(hSecondEvent);
 
 	CHECK(hOwnedEvent.IsValid());
-	CHECK(hOwnedEvent.Get() == hSecondEvent);
+	CHECK(HandleValue(hOwnedEvent.Get()) == HandleValue(hSecondEvent));
 
 	::SetLastError(ERROR_SUCCESS);
 	CHECK(::WaitForSingleObject(hFirstEvent, 0) == WAIT_FAILED);
 	CHECK(::GetLastError() == ERROR_INVALID_HANDLE);
 
 	HANDLE hReleasedEvent = hOwnedEvent.Release();
-	CHECK(hReleasedEvent == hSecondEvent);
+	CHECK(HandleValue(hReleasedEvent) == HandleValue(hSecondEvent));
 	CHECK_FALSE(hOwnedEvent.IsValid());
 	CHECK(::CloseHandle(hReleasedEvent) != 0);
 }
@@ -88,10 +93,81 @@ TEST_CASE("ScopedHandle release keeps the raw handle alive for the next owner")
 	ScopedHandle hOwnedEvent(hEvent);
 	HANDLE hReleasedEvent = hOwnedEvent.Release();
 
-	CHECK(hReleasedEvent == hEvent);
+	CHECK(HandleValue(hReleasedEvent) == HandleValue(hEvent));
 	CHECK_FALSE(hOwnedEvent.IsValid());
 	CHECK(::WaitForSingleObject(hReleasedEvent, 0) == WAIT_TIMEOUT);
 	CHECK(::CloseHandle(hReleasedEvent) != 0);
+}
+
+TEST_CASE("ScopedGdiObject deletes owned bitmaps on scope exit")
+{
+	HBITMAP hBitmap = ::CreateBitmap(2, 2, 1, 1, NULL);
+	REQUIRE(hBitmap != NULL);
+
+	{
+		ScopedGdiObject hOwnedBitmap(hBitmap);
+		CHECK(HandleValue(hOwnedBitmap.Get()) == HandleValue(hBitmap));
+	}
+
+	BITMAP bitmap = {};
+	CHECK(::GetObject(hBitmap, sizeof(bitmap), &bitmap) == 0);
+}
+
+TEST_CASE("ScopedGdiObject release leaves ownership with the caller")
+{
+	HBRUSH hBrush = ::CreateSolidBrush(RGB(1, 2, 3));
+	REQUIRE(hBrush != NULL);
+
+	{
+		ScopedGdiObject hOwnedBrush(hBrush);
+		CHECK(HandleValue(hOwnedBrush.Release()) == HandleValue(hBrush));
+		CHECK(HandleValue(hOwnedBrush.Get()) == 0u);
+	}
+
+	LOGBRUSH brush = {};
+	CHECK(::GetObject(hBrush, sizeof(brush), &brush) == sizeof(brush));
+	CHECK(::DeleteObject(hBrush) != 0);
+}
+
+TEST_CASE("ScopedDc deletes scratch DCs on scope exit")
+{
+	HDC hScratchDc = ::CreateCompatibleDC(NULL);
+	REQUIRE(hScratchDc != NULL);
+
+	{
+		ScopedDc hOwnedDc(hScratchDc);
+		CHECK(HandleValue(hOwnedDc.Get()) == HandleValue(hScratchDc));
+	}
+
+	CHECK(::DeleteDC(hScratchDc) == 0);
+}
+
+TEST_CASE("ScopedSelectObject restores the previous bitmap before callers consume the selected object")
+{
+	HDC hScratchDc = ::CreateCompatibleDC(NULL);
+	REQUIRE(hScratchDc != NULL);
+	ScopedDc hOwnedDc(hScratchDc);
+
+	HBITMAP hFirstBitmap = ::CreateBitmap(2, 2, 1, 1, NULL);
+	HBITMAP hSecondBitmap = ::CreateBitmap(2, 2, 1, 1, NULL);
+	REQUIRE(hFirstBitmap != NULL);
+	REQUIRE(hSecondBitmap != NULL);
+
+	HGDIOBJ hOriginalBitmap = ::SelectObject(hScratchDc, hFirstBitmap);
+	REQUIRE(hOriginalBitmap != NULL);
+	REQUIRE(hOriginalBitmap != HGDI_ERROR);
+
+	{
+		ScopedSelectObject hSelectSecondBitmap(hScratchDc, hSecondBitmap);
+		REQUIRE(hSelectSecondBitmap.IsValid());
+		CHECK(HandleValue(::GetCurrentObject(hScratchDc, OBJ_BITMAP)) == HandleValue(hSecondBitmap));
+	}
+
+	CHECK(HandleValue(::GetCurrentObject(hScratchDc, OBJ_BITMAP)) == HandleValue(hFirstBitmap));
+
+	::SelectObject(hScratchDc, hOriginalBitmap);
+	CHECK(::DeleteObject(hFirstBitmap) != 0);
+	CHECK(::DeleteObject(hSecondBitmap) != 0);
 }
 
 TEST_CASE("ReleaseOwnedObjectIfMatched only releases ownership for the accepted object")
