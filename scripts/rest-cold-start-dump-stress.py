@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,10 @@ live_common = rest_smoke.live_common
 SUITE_NAME = "rest-cold-start-dump-stress"
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
 DIAGNOSTIC_LABELS = ("baseline", "peak", "post_drain")
+UMDH_TOP_DELTA_LIMIT = 10
+UMDH_DIFF_ENTRY_RE = re.compile(
+    r"^\s*([+-]?)\s*([0-9][0-9,]*)\s+\(\s*([0-9,]+)\s*-\s*([0-9,]+)\s*\)\s+([0-9,]+)\s+allocs\s+(BackTrace[0-9A-Fa-f]+)\b"
+)
 BLOCKED_ACTIVE_DOWNLOAD_SUFFIXES = (
     ".3gp",
     ".avi",
@@ -533,6 +538,71 @@ def capture_umdh_snapshot(
     return run
 
 
+def parse_umdh_int(value: str) -> int:
+    """Parses comma-formatted UMDH integers."""
+
+    return int(value.replace(",", ""))
+
+
+def parse_umdh_diff_text(text: str, *, limit: int = UMDH_TOP_DELTA_LIMIT) -> dict[str, object]:
+    """Extracts the largest positive allocation deltas from UMDH diff output."""
+
+    entries: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    for line in text.splitlines():
+        match = UMDH_DIFF_ENTRY_RE.match(line)
+        if match:
+            sign, delta_text, after_text, before_text, alloc_text, trace_id = match.groups()
+            delta_bytes = parse_umdh_int(delta_text)
+            if sign == "-":
+                current = None
+                continue
+            entry = {
+                "delta_bytes": delta_bytes,
+                "after_bytes": parse_umdh_int(after_text),
+                "before_bytes": parse_umdh_int(before_text),
+                "allocation_count": parse_umdh_int(alloc_text),
+                "trace_id": trace_id,
+                "stack": [],
+            }
+            entries.append(entry)
+            current = entry
+            continue
+        if current is None:
+            continue
+        frame = line.strip()
+        if not frame or "BackTrace" in frame:
+            continue
+        stack = current["stack"]
+        assert isinstance(stack, list)
+        if len(stack) < 8:
+            stack.append(frame)
+
+    positive_entries = [entry for entry in entries if int(entry["delta_bytes"]) > 0]
+    positive_entries.sort(key=lambda entry: int(entry["delta_bytes"]), reverse=True)
+    return {
+        "positive_delta_count": len(positive_entries),
+        "positive_delta_bytes": sum(int(entry["delta_bytes"]) for entry in positive_entries),
+        "top_positive_deltas": positive_entries[:limit],
+    }
+
+
+def parse_umdh_diff_file(diff_path: Path, *, limit: int = UMDH_TOP_DELTA_LIMIT) -> dict[str, object]:
+    """Reads one UMDH diff log and returns a compact allocation-delta summary."""
+
+    if not diff_path.is_file():
+        return {"available": False, "reason": "UMDH diff log was not written"}
+    try:
+        summary = parse_umdh_diff_text(diff_path.read_text(encoding="utf-8", errors="replace"), limit=limit)
+    except OSError as exc:
+        return {
+            "available": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+    summary["available"] = True
+    return summary
+
+
 def diff_umdh_snapshots(
     *,
     before: Path,
@@ -550,12 +620,31 @@ def diff_umdh_snapshots(
         return {"skipped": True, "reason": "umdh was not found"}
     if not before.is_file() or not after.is_file():
         return {"skipped": True, "reason": "one or both UMDH snapshots are missing"}
-    return run_tool_to_file(
+    output_path = diagnostics_dir / "analysis" / f"umdh-diff-{diff_name}.txt"
+    run = run_tool_to_file(
         [umdh, "-d", str(before), str(after)],
-        diagnostics_dir / "analysis" / f"umdh-diff-{diff_name}.txt",
+        output_path,
         timeout_seconds,
         env=symbol_env,
     )
+    run["summary"] = parse_umdh_diff_file(output_path)
+    return run
+
+
+def summarize_umdh_diffs(diagnostics: dict[str, object]) -> dict[str, object]:
+    """Builds a compact report-level summary from parsed UMDH diff results."""
+
+    diffs = diagnostics.get("umdh_diffs")
+    if not isinstance(diffs, dict):
+        return {}
+    summary: dict[str, object] = {}
+    for diff_name, diff_result in diffs.items():
+        if not isinstance(diff_result, dict):
+            continue
+        diff_summary = diff_result.get("summary")
+        if isinstance(diff_summary, dict):
+            summary[str(diff_name)] = diff_summary
+    return summary
 
 
 def collect_diagnostics(
@@ -1593,6 +1682,7 @@ def main(argv: list[str] | None = None) -> int:
                     symbol_env=symbol_env,
                 ),
             }
+            report["diagnostics"]["umdh_summary"] = summarize_umdh_diffs(report["diagnostics"])
 
         stress_summary = report["checks"]["stress"]
         assert isinstance(stress_summary, dict)

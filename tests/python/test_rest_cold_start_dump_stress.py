@@ -210,6 +210,40 @@ def test_umdh_completeness_requires_snapshots_and_finished_diffs() -> None:
     assert module.umdh_diagnostics_are_complete(report) is False
 
 
+def test_parse_umdh_diff_text_extracts_top_positive_deltas() -> None:
+    module = load_script_module()
+    text = """
+command: umdh -d before.txt after.txt
+return_code: 0
+
++ 8,192 ( 12,288 - 4,096) 2 allocs BackTrace00001234
+    emule!CSearchResultsWnd::AddResult
+    emule!CSearchList::AddToList
++ 512 ( 512 - 0) 1 allocs BackTrace00005678
+    emule!CUpDownClient::Create
+- 128 ( 0 - 128) 1 allocs BackTrace00009999
+    emule!ReleasedAllocation
+"""
+
+    summary = module.parse_umdh_diff_text(text, limit=1)
+
+    assert summary["positive_delta_count"] == 2
+    assert summary["positive_delta_bytes"] == 8704
+    assert summary["top_positive_deltas"] == [
+        {
+            "delta_bytes": 8192,
+            "after_bytes": 12288,
+            "before_bytes": 4096,
+            "allocation_count": 2,
+            "trace_id": "BackTrace00001234",
+            "stack": [
+                "emule!CSearchResultsWnd::AddResult",
+                "emule!CSearchList::AddToList",
+            ],
+        }
+    ]
+
+
 def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
     module = load_script_module()
     stress = {
