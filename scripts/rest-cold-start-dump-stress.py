@@ -647,6 +647,43 @@ def summarize_umdh_diffs(diagnostics: dict[str, object]) -> dict[str, object]:
     return summary
 
 
+def summarize_resource_deltas(diagnostics: dict[str, object]) -> dict[str, object]:
+    """Summarizes resource deltas between baseline, peak, and post-drain snapshots."""
+
+    resources_by_label: dict[str, dict[str, object]] = {}
+    for label in DIAGNOSTIC_LABELS:
+        entry = diagnostics.get(label)
+        if not isinstance(entry, dict):
+            continue
+        resources = entry.get("resources")
+        if isinstance(resources, dict):
+            resources_by_label[label] = resources
+    baseline = resources_by_label.get("baseline")
+    if not baseline:
+        return {}
+
+    def numeric_deltas(left: dict[str, object], right: dict[str, object]) -> dict[str, int]:
+        deltas: dict[str, int] = {}
+        for key, right_value in right.items():
+            if key == "process_id":
+                continue
+            left_value = left.get(key)
+            if isinstance(left_value, int) and not isinstance(left_value, bool) and isinstance(right_value, int) and not isinstance(right_value, bool):
+                deltas[key] = right_value - left_value
+        return deltas
+
+    summary: dict[str, object] = {}
+    for label in ("peak", "post_drain"):
+        resources = resources_by_label.get(label)
+        if resources:
+            summary[f"{label}_minus_baseline"] = numeric_deltas(baseline, resources)
+    peak = resources_by_label.get("peak")
+    post_drain = resources_by_label.get("post_drain")
+    if peak and post_drain:
+        summary["post_drain_minus_peak"] = numeric_deltas(peak, post_drain)
+    return summary
+
+
 def collect_diagnostics(
     *,
     label: str,
@@ -1745,6 +1782,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_umdh=args.enable_umdh,
             symbol_env=symbol_env,
         )
+        report["diagnostics"]["resource_deltas"] = summarize_resource_deltas(report["diagnostics"])
 
         if args.enable_umdh:
             report["diagnostics"]["umdh_diffs"] = {

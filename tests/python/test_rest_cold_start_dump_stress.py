@@ -244,6 +244,54 @@ return_code: 0
     ]
 
 
+def test_summarize_resource_deltas_reports_peak_and_post_drain() -> None:
+    module = load_script_module()
+    diagnostics = {
+        "baseline": {
+            "resources": {
+                "private_bytes": 100,
+                "working_set_bytes": 200,
+                "handles": 10,
+                "process_id": 1234,
+            }
+        },
+        "peak": {
+            "resources": {
+                "private_bytes": 250,
+                "working_set_bytes": 500,
+                "handles": 15,
+                "process_id": 1234,
+            }
+        },
+        "post_drain": {
+            "resources": {
+                "private_bytes": 175,
+                "working_set_bytes": 260,
+                "handles": 9,
+                "process_id": 1234,
+            }
+        },
+    }
+
+    assert module.summarize_resource_deltas(diagnostics) == {
+        "peak_minus_baseline": {
+            "private_bytes": 150,
+            "working_set_bytes": 300,
+            "handles": 5,
+        },
+        "post_drain_minus_baseline": {
+            "private_bytes": 75,
+            "working_set_bytes": 60,
+            "handles": -1,
+        },
+        "post_drain_minus_peak": {
+            "private_bytes": -75,
+            "working_set_bytes": -240,
+            "handles": -6,
+        },
+    }
+
+
 def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
     module = load_script_module()
     stress = {
