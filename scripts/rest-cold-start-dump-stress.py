@@ -1224,19 +1224,87 @@ def cleanup_searches_and_transfers(
     base_url: str,
     api_key: str,
     search_ids: list[str],
+    transfer_hashes: list[str],
 ) -> dict[str, object]:
-    """Deletes active searches and records safe transfer cleanup state."""
+    """Deletes active stress searches/transfers and records cleanup state."""
 
     cleanup: dict[str, object] = {
         "search_ids": search_ids,
+        "transfer_hashes": transfer_hashes,
     }
     delete_result = rest_smoke.delete_all_searches(base_url, api_key)
     cleanup["delete_all_searches"] = rest_smoke.compact_http_result(delete_result)
     if int(delete_result["status"]) == 200:
         cleanup["post_delete"] = rest_smoke.verify_searches_deleted(base_url, api_key, search_ids)
+    cleanup["delete_stress_transfers"] = delete_stress_transfers(base_url, api_key, transfer_hashes)
     clear_result = rest_smoke.clear_completed_transfers(base_url, api_key)
     cleanup["clear_completed_transfers"] = rest_smoke.compact_http_result(clear_result)
     return cleanup
+
+
+def extract_stress_transfer_hashes(stress_report: dict[str, object]) -> list[str]:
+    """Extracts unique transfer hashes triggered during the stress run."""
+
+    transfer_hashes: list[str] = []
+    seen: set[str] = set()
+    waves = stress_report.get("waves")
+    if not isinstance(waves, list):
+        return transfer_hashes
+    for wave in waves:
+        if not isinstance(wave, dict):
+            continue
+        searches = wave.get("searches")
+        if not isinstance(searches, list):
+            continue
+        for search in searches:
+            if not isinstance(search, dict):
+                continue
+            trigger = search.get("download_trigger")
+            if not isinstance(trigger, dict):
+                continue
+            triggers = trigger.get("triggers")
+            if not isinstance(triggers, list):
+                continue
+            for trigger_row in triggers:
+                if not isinstance(trigger_row, dict):
+                    continue
+                transfer = trigger_row.get("transfer")
+                if not isinstance(transfer, dict):
+                    continue
+                transfer_json = transfer.get("json")
+                if not isinstance(transfer_json, dict):
+                    continue
+                transfer_hash = str(transfer_json.get("hash") or "").lower()
+                if rest_smoke.is_lowercase_md4_hash(transfer_hash) and transfer_hash not in seen:
+                    seen.add(transfer_hash)
+                    transfer_hashes.append(transfer_hash)
+    return transfer_hashes
+
+
+def delete_stress_transfers(base_url: str, api_key: str, transfer_hashes: list[str]) -> dict[str, object]:
+    """Deletes stress-triggered transfers so post-drain diagnostics measure cleanup recovery."""
+
+    deletes: list[dict[str, object]] = []
+    for transfer_hash in transfer_hashes:
+        result = rest_smoke.http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash}",
+            method="DELETE",
+            api_key=api_key,
+            json_body={"deleteFiles": True},
+            request_timeout_seconds=30.0,
+        )
+        deletes.append(
+            {
+                "hash": transfer_hash,
+                "response": rest_smoke.compact_http_result(result),
+            }
+        )
+    return {
+        "requested_count": len(transfer_hashes),
+        "deleted_count": sum(1 for row in deletes if int(row["response"]["status"]) in {200, 404}),
+        "deletes": deletes,
+    }
 
 
 def diagnostics_are_complete(report: dict[str, object], *, skip_dumps: bool) -> bool:
@@ -1486,6 +1554,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=base_url,
             api_key=args.api_key,
             search_ids=[str(search_id) for search_id in stress["search_ids"]],
+            transfer_hashes=extract_stress_transfer_hashes(stress),
         )
         if args.post_drain_seconds:
             time.sleep(args.post_drain_seconds)

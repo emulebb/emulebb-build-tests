@@ -260,6 +260,68 @@ def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
     assert module.collect_zero_result_searches(stress, required_only=True) == []
 
 
+def test_extract_stress_transfer_hashes_uses_transfer_payloads() -> None:
+    module = load_script_module()
+    hash_a = "0123456789abcdef0123456789abcdef"
+    hash_b = "abcdef0123456789abcdef0123456789"
+    stress = {
+        "waves": [
+            {
+                "searches": [
+                    {
+                        "download_trigger": {
+                            "triggers": [
+                                {"transfer": {"json": {"hash": hash_a}}},
+                                {"transfer": {"json": {"hash": hash_a.upper()}}},
+                                {"transfer": {"json": {"hash": "not-a-hash"}}},
+                            ]
+                        }
+                    },
+                    {
+                        "download_trigger": {
+                            "triggers": [
+                                {"transfer": {"json": {"hash": hash_b}}},
+                            ]
+                        }
+                    },
+                ]
+            }
+        ]
+    }
+
+    assert module.extract_stress_transfer_hashes(stress) == [hash_a, hash_b]
+
+
+def test_delete_stress_transfers_uses_explicit_delete_files(monkeypatch) -> None:
+    module = load_script_module()
+    calls: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        calls.append({"path": path, **kwargs})
+        return {"status": 200, "json": {"ok": True}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+
+    result = module.delete_stress_transfers(
+        "http://127.0.0.1:1",
+        "key",
+        ["0123456789abcdef0123456789abcdef"],
+    )
+
+    assert result["requested_count"] == 1
+    assert result["deleted_count"] == 1
+    assert calls == [
+        {
+            "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef",
+            "method": "DELETE",
+            "api_key": "key",
+            "json_body": {"deleteFiles": True},
+            "request_timeout_seconds": 30.0,
+        }
+    ]
+
+
 def test_validate_rejects_invalid_stress_shape() -> None:
     module = load_script_module()
     args = SimpleNamespace(
