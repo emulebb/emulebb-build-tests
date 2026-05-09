@@ -944,6 +944,37 @@ def test_native_route_specs_match_openapi_methods_paths_and_fields() -> None:
     assert native_contracts == openapi_contracts
 
 
+def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> None:
+    native_contracts = _native_route_contracts()
+    required_body_fields = {
+        ("POST", "/app/shutdown"): {"confirmShutdown"},
+        ("POST", "/transfers/operations/clear-completed"): {"confirmClearCompleted"},
+        ("DELETE", "/transfers/{hash}"): {"deleteFiles"},
+        ("DELETE", "/shared-files/{hash}"): {"deleteFiles"},
+        ("PATCH", "/shared-directories"): {"confirmReplaceRoots"},
+        ("DELETE", "/searches"): {"confirmDeleteAllSearches"},
+    }
+    id_targeted_delete_routes = {
+        ("DELETE", "/categories/{categoryId}"),
+        ("DELETE", "/servers/{serverId}"),
+        ("DELETE", "/searches/{searchId}"),
+        ("DELETE", "/friends/{userHash}"),
+        ("DELETE", "/uploads/{clientId}"),
+    }
+
+    for route_key, required_fields in required_body_fields.items():
+        assert required_fields <= native_contracts[route_key]["body"]
+
+    for route_key in id_targeted_delete_routes:
+        assert route_key in native_contracts
+
+    audited_delete_routes = {
+        route_key for route_key in required_body_fields if route_key[0] == "DELETE"
+    } | id_targeted_delete_routes
+    delete_routes = {route_key for route_key in native_contracts if route_key[0] == "DELETE"}
+    assert delete_routes == audited_delete_routes
+
+
 def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     module = load_rest_api_smoke_module()
 
