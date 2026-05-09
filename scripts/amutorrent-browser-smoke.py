@@ -375,6 +375,55 @@ def assert_browser_category_lifecycle(checks: dict[str, Any]) -> None:
         raise RuntimeError(f"aMuTorrent browser category delete left the category visible: {deleted}")
 
 
+def assert_search_result_payload(name: str, result: dict[str, Any]) -> None:
+    """Verifies one aMuTorrent search-results payload has the expected shape."""
+
+    payload = result.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "previous-search-results":
+        raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an invalid search results payload: {result}")
+    if not isinstance(payload.get("data"), list):
+        raise RuntimeError(f"aMuTorrent browser workflow '{name}' search results data is not a list: {result}")
+
+
+def assert_browser_search_workflows(checks: dict[str, Any]) -> None:
+    """Verifies every browser search mode started and returned a valid result shape."""
+
+    if "search_modes" not in checks:
+        return
+    search_modes = checks.get("search_modes")
+    if not isinstance(search_modes, list) or not search_modes:
+        raise RuntimeError(f"aMuTorrent browser search workflow did not record search modes: {search_modes!r}")
+
+    allowed_types = {"automatic", "server", "kad"}
+    for index, row in enumerate(search_modes):
+        name = f"search_modes[{index}]"
+        if not isinstance(row, dict):
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}' is not an object: {row!r}")
+        if row.get("type") not in allowed_types:
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}' has invalid search type: {row.get('type')!r}")
+        if not str(row.get("round") or "").strip() or not str(row.get("query") or "").strip():
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}' has missing search metadata: {row!r}")
+        attempt_count = row.get("attempt_count")
+        if not isinstance(attempt_count, int) or isinstance(attempt_count, bool) or attempt_count < 1 or attempt_count > 30:
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}' has invalid retry count: {attempt_count!r}")
+
+        start = row.get("start")
+        if not isinstance(start, dict):
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}.start' is missing: {row!r}")
+        start_payload = start.get("payload")
+        if not isinstance(start_payload, dict) or start_payload.get("type") != "search-started":
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}.start' did not start a search: {start}")
+
+        results = row.get("results")
+        if not isinstance(results, dict):
+            raise RuntimeError(f"aMuTorrent browser workflow '{name}.results' is missing: {row!r}")
+        assert_search_result_payload(f"{name}.results", results)
+
+    final_results = checks.get("search_results")
+    if isinstance(final_results, dict):
+        assert_search_result_payload("search_results", final_results)
+
+
 def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
     """Verifies the browser-visible snapshot carries eMule BB detail hydration fields."""
 
@@ -418,6 +467,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
     assert_snapshot_items_are_display_safe(checks)
     assert_browser_category_lifecycle(checks)
+    assert_browser_search_workflows(checks)
     assert_emulebb_detail_hydration(checks)
     assert_browser_delete_removed_added_download(checks)
 

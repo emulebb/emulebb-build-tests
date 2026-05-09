@@ -153,10 +153,18 @@ def test_browser_workflow_validation_walks_nested_results() -> None:
         },
         "search_modes": [
             {
+                "round": "1",
+                "type": "automatic",
+                "query": "linux",
+                "attempt_count": 1,
                 "start": {"status": 200, "payload": {"type": "search-started"}},
                 "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
             },
             {
+                "round": "1",
+                "type": "server",
+                "query": "ubuntu",
+                "attempt_count": 1,
                 "start": {"status": 202, "payload": {"type": "search-started"}},
                 "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
             },
@@ -278,6 +286,63 @@ def test_browser_workflow_validation_rejects_visible_deleted_category() -> None:
         smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
 
 
+def test_browser_workflow_validation_requires_search_payload_contract() -> None:
+    smoke = load_smoke_module()
+    checks = {
+        "search_modes": [
+            {
+                "round": "1",
+                "type": "automatic",
+                "query": "linux",
+                "attempt_count": 1,
+                "start": {"status": 202, "payload": {"type": "search-started"}},
+                "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
+            }
+        ],
+        "search_results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
+    }
+
+    smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_search_start_payload_mismatch() -> None:
+    smoke = load_smoke_module()
+    checks = {
+        "search_modes": [
+            {
+                "round": "1",
+                "type": "automatic",
+                "query": "linux",
+                "attempt_count": 1,
+                "start": {"status": 202, "payload": {"type": "queued"}},
+                "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
+            }
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="did not start a search"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_workflow_validation_rejects_search_results_payload_mismatch() -> None:
+    smoke = load_smoke_module()
+    checks = {
+        "search_modes": [
+            {
+                "round": "1",
+                "type": "kad",
+                "query": "ubuntu",
+                "attempt_count": 1,
+                "start": {"status": 202, "payload": {"type": "search-started"}},
+                "results": {"status": 200, "payload": {"type": "previous-search-results", "data": {}}},
+            }
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="search results data is not a list"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
 def test_browser_workflow_validation_requires_delete_to_remove_added_download() -> None:
     smoke = load_smoke_module()
     added_hash = smoke.AMUTORRENT_BROWSER_SMOKE_HASH
@@ -373,7 +438,18 @@ def test_browser_workflow_validation_rejects_nested_error_payloads() -> None:
 
 def test_browser_workflow_validation_ignores_expected_search_conflict_console_noise() -> None:
     smoke = load_smoke_module()
-    checks = {"search_modes": [{"start": {"status": 202, "payload": {"type": "search-started"}}}]}
+    checks = {
+        "search_modes": [
+            {
+                "round": "1",
+                "type": "automatic",
+                "query": "linux",
+                "attempt_count": 2,
+                "start": {"status": 202, "payload": {"type": "search-started"}},
+                "results": {"status": 200, "payload": {"type": "previous-search-results", "data": []}},
+            }
+        ]
+    }
     diagnostics = {
         "console_errors": [
             {
