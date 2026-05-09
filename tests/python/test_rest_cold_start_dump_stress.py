@@ -94,6 +94,31 @@ def test_diagnostics_completeness_requires_all_default_dumps() -> None:
     assert module.diagnostics_are_complete({}, skip_dumps=True) is True
 
 
+def test_umdh_completeness_requires_snapshots_and_finished_diffs() -> None:
+    module = load_script_module()
+    report = {
+        "diagnostics": {
+            label: {
+                "tools": {
+                    "umdh": {
+                        "timed_out": False,
+                        "snapshot_exists": True,
+                    }
+                }
+            }
+            for label in module.DIAGNOSTIC_LABELS
+        }
+    }
+    report["diagnostics"]["umdh_diffs"] = {
+        "baseline_to_peak": {"timed_out": False, "return_code": 0},
+        "baseline_to_post_drain": {"timed_out": False, "return_code": 0},
+    }
+
+    assert module.umdh_diagnostics_are_complete(report) is True
+    report["diagnostics"]["umdh_diffs"]["baseline_to_post_drain"]["timed_out"] = True
+    assert module.umdh_diagnostics_are_complete(report) is False
+
+
 def test_validate_rejects_invalid_stress_shape() -> None:
     module = load_script_module()
     args = SimpleNamespace(

@@ -88,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-concurrent-searches", type=int, default=8)
     parser.add_argument("--downloads-per-wave", type=int, default=6)
     parser.add_argument("--post-drain-seconds", type=float, default=30.0)
-    parser.add_argument("--tool-timeout-seconds", type=float, default=120.0)
+    parser.add_argument("--tool-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--enable-umdh", action="store_true")
     parser.add_argument("--skip-dumps", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
@@ -690,6 +690,32 @@ def diagnostics_are_complete(report: dict[str, object], *, skip_dumps: bool) -> 
     return True
 
 
+def umdh_diagnostics_are_complete(report: dict[str, object]) -> bool:
+    """Returns true when UMDH snapshots and diffs completed without timing out."""
+
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    for label in DIAGNOSTIC_LABELS:
+        entry = diagnostics.get(label)
+        if not isinstance(entry, dict):
+            return False
+        tools = entry.get("tools")
+        if not isinstance(tools, dict):
+            return False
+        umdh = tools.get("umdh")
+        if not isinstance(umdh, dict) or bool(umdh.get("timed_out")) or not bool(umdh.get("snapshot_exists")):
+            return False
+    diffs = diagnostics.get("umdh_diffs")
+    if not isinstance(diffs, dict):
+        return False
+    for diff_name in ("baseline_to_peak", "baseline_to_post_drain"):
+        diff = diffs.get(diff_name)
+        if not isinstance(diff, dict) or bool(diff.get("timed_out")) or diff.get("return_code") != 0:
+            return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the cold-start dump stress suite and returns a process exit code."""
 
@@ -931,6 +957,9 @@ def main(argv: list[str] | None = None) -> int:
         elif not diagnostics_are_complete(report, skip_dumps=args.skip_dumps):
             report["status"] = "failed"
             report["failure_reason"] = "required dump diagnostics were not captured"
+        elif args.enable_umdh and not umdh_diagnostics_are_complete(report):
+            report["status"] = "failed"
+            report["failure_reason"] = "required UMDH diagnostics did not complete"
         elif int(stress_summary.get("completed_download_triggers", 0)) < int(stress_summary.get("requested_download_triggers", 0)):
             report["status"] = "inconclusive"
             report["failure_reason"] = "live network did not expose enough safe paused-download candidates"
