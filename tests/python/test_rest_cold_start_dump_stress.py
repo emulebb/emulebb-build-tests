@@ -95,6 +95,16 @@ def test_stress_search_observation_waits_past_initial_zero(monkeypatch) -> None:
     assert len(result["observations"]) == 3
 
 
+def test_common_sentinel_terms_require_nonzero_results() -> None:
+    module = load_script_module()
+
+    assert module.search_requires_nonzero_results("linux") is True
+    assert module.search_requires_nonzero_results("  Ubuntu  ") is True
+    assert module.search_requires_nonzero_results("obscure fixture term") is False
+    assert module.fallback_search_methods("server", "server") == ("global", "kad")
+    assert module.fallback_search_methods("automatic", "kad") == ("global",)
+
+
 def test_discover_diagnostic_tools_uses_path_first(monkeypatch) -> None:
     module = load_script_module()
 
@@ -211,6 +221,7 @@ def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
                         "searchId": "101",
                         "method": "server",
                         "network": "server",
+                        "must_return_results": True,
                         "activity": {"maxResults": 0, "terminal": "timeout_zero_results"},
                     },
                     {
@@ -219,6 +230,7 @@ def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
                         "searchId": "102",
                         "method": "kad",
                         "network": "kad",
+                        "must_return_results": False,
                         "activity": {"maxResults": 4, "terminal": "results"},
                     },
                 ]
@@ -234,8 +246,17 @@ def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
             "method": "server",
             "network": "server",
             "terminal": "timeout_zero_results",
+            "must_return_results": True,
         }
     ]
+    assert module.collect_zero_result_searches(stress, required_only=True)[0]["searchId"] == "101"
+
+    stress["waves"][0]["searches"][0]["fallback"] = {"recovered": True}
+    assert module.collect_zero_result_searches(stress) == []
+
+    stress["waves"][0]["searches"][0]["fallback"] = {"recovered": False}
+    stress["waves"][0]["searches"][0]["must_return_results"] = False
+    assert module.collect_zero_result_searches(stress, required_only=True) == []
 
 
 def test_validate_rejects_invalid_stress_shape() -> None:

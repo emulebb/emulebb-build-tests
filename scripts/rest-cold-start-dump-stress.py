@@ -135,6 +135,16 @@ OPEN_SOURCE_STRESS_TERMS = (
     "cygwin",
     "mingw",
 )
+MUST_RETURN_RESULT_TERMS = frozenset(
+    (
+        "linux",
+        "ubuntu",
+        "debian",
+        "gnu",
+        "python",
+        "rust",
+    )
+)
 
 
 class DownloadTriggerBudget:
@@ -807,6 +817,93 @@ def wait_for_stress_search_observation(
     }
 
 
+def search_requires_nonzero_results(query: object) -> bool:
+    """Returns true for common live-network terms that should not finish at zero."""
+
+    return " ".join(str(query).split()).strip().lower() in MUST_RETURN_RESULT_TERMS
+
+
+def fallback_search_methods(primary_method: object, resolved_method: object) -> tuple[str, ...]:
+    """Returns fallback methods to try after a sentinel term observes zero results."""
+
+    seen = {
+        str(primary_method or "").strip().lower(),
+        str(resolved_method or "").strip().lower(),
+    }
+    methods: list[str] = []
+    for method in ("global", "kad"):
+        if method not in seen:
+            methods.append(method)
+    return tuple(methods)
+
+
+def run_search_fallbacks(
+    *,
+    base_url: str,
+    api_key: str,
+    plan_row: dict[str, object],
+    resolved_method: str,
+    observation_timeout_seconds: float,
+) -> dict[str, object]:
+    """Retries sentinel searches on alternate backends before accepting zero results."""
+
+    attempts: list[dict[str, object]] = []
+    for method in fallback_search_methods(plan_row.get("method"), resolved_method):
+        network = "kad" if method == "kad" else "server"
+        attempt: dict[str, object] = {
+            "method": method,
+            "network": network,
+        }
+        try:
+            started = rest_smoke.start_live_search(
+                base_url,
+                api_key,
+                network,
+                str(plan_row["query"]),
+                forced_method=method,
+            )
+            attempt["start"] = redact_sensitive_search_value(started)
+            if not bool(started.get("ok")):
+                attempt["ok"] = False
+                attempt["error"] = "fallback search start failed"
+                attempts.append(attempt)
+                continue
+            response = started.get("response")
+            assert isinstance(response, dict)
+            payload = rest_smoke.require_json_object(response, 200)
+            search_id = str(payload["id"])
+            attempt["searchId"] = search_id
+            attempt["activity"] = redact_sensitive_search_value(
+                wait_for_stress_search_observation(
+                    base_url,
+                    api_key,
+                    search_id,
+                    observation_timeout_seconds,
+                )
+            )
+            attempt["ok"] = int(attempt["activity"].get("maxResults", 0)) > 0 if isinstance(attempt.get("activity"), dict) else False
+            attempts.append(attempt)
+            if bool(attempt["ok"]):
+                return {
+                    "recovered": True,
+                    "searchId": search_id,
+                    "method": method,
+                    "activity": attempt["activity"],
+                    "attempts": attempts,
+                }
+        except Exception as exc:
+            attempt["ok"] = False
+            attempt["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+            attempts.append(attempt)
+    return {
+        "recovered": False,
+        "attempts": attempts,
+    }
+
+
 def count_download_triggers(search_report: dict[str, object]) -> int:
     """Counts active downloads triggered by one search task."""
 
@@ -819,7 +916,7 @@ def count_download_triggers(search_report: dict[str, object]) -> int:
     return len(triggers)
 
 
-def collect_zero_result_searches(stress_report: dict[str, object]) -> list[dict[str, object]]:
+def collect_zero_result_searches(stress_report: dict[str, object], *, required_only: bool = False) -> list[dict[str, object]]:
     """Returns searches that completed observation without ever seeing a result."""
 
     zero_result_searches: list[dict[str, object]] = []
@@ -838,8 +935,13 @@ def collect_zero_result_searches(stress_report: dict[str, object]) -> list[dict[
             activity = row.get("activity")
             if not isinstance(activity, dict):
                 continue
+            if required_only and not bool(row.get("must_return_results")):
+                continue
             max_results = activity.get("maxResults")
             if isinstance(max_results, int) and not isinstance(max_results, bool) and max_results == 0:
+                fallback = row.get("fallback")
+                if isinstance(fallback, dict) and bool(fallback.get("recovered")):
+                    continue
                 zero_result_searches.append(
                     {
                         "wave": row.get("wave"),
@@ -848,6 +950,7 @@ def collect_zero_result_searches(stress_report: dict[str, object]) -> list[dict[
                         "method": row.get("method"),
                         "network": row.get("network"),
                         "terminal": activity.get("terminal"),
+                        "must_return_results": bool(row.get("must_return_results")),
                     }
                 )
     return zero_result_searches
@@ -927,6 +1030,7 @@ def run_search_task(
         "network": plan_row["network"],
         "method": plan_row["method"],
         "query_index": plan_row["query_index"],
+        "must_return_results": search_requires_nonzero_results(plan_row["query"]),
     }
     try:
         started = rest_smoke.start_live_search(
@@ -946,19 +1050,35 @@ def run_search_task(
         payload = rest_smoke.require_json_object(response, 200)
         search_id = str(payload["id"])
         report["searchId"] = search_id
-        report["activity"] = redact_sensitive_search_value(
-            wait_for_stress_search_observation(
-                base_url,
-                api_key,
-                search_id,
-                observation_timeout_seconds,
-            )
+        report["searchIds"] = [search_id]
+        activity = wait_for_stress_search_observation(
+            base_url,
+            api_key,
+            search_id,
+            observation_timeout_seconds,
         )
+        report["activity"] = redact_sensitive_search_value(activity)
+        resolved_method = str(payload.get("method") or plan_row["method"])
+        trigger_search_id = search_id
+        if int(activity.get("maxResults", 0)) == 0 and bool(report["must_return_results"]):
+            fallback = run_search_fallbacks(
+                base_url=base_url,
+                api_key=api_key,
+                plan_row=plan_row,
+                resolved_method=resolved_method,
+                observation_timeout_seconds=observation_timeout_seconds,
+            )
+            report["fallback"] = fallback
+            for attempt in fallback.get("attempts", []):
+                if isinstance(attempt, dict) and isinstance(attempt.get("searchId"), str):
+                    report["searchIds"].append(str(attempt["searchId"]))
+            if bool(fallback.get("recovered")) and isinstance(fallback.get("searchId"), str):
+                trigger_search_id = str(fallback["searchId"])
         if trigger_budget.remaining > 0:
             report["download_trigger"] = trigger_active_downloads_from_search_result(
                 base_url,
                 api_key,
-                search_id,
+                trigger_search_id,
                 observation_timeout_seconds,
                 trigger_budget,
             )
@@ -1039,6 +1159,9 @@ def run_stress_waves(
                 wave_rows.append(row)
                 if isinstance(row.get("searchId"), str):
                     all_search_ids.append(str(row["searchId"]))
+                for search_id in row.get("searchIds", []):
+                    if isinstance(search_id, str) and search_id not in all_search_ids:
+                        all_search_ids.append(search_id)
                 completed_download_triggers += count_download_triggers(row)
 
         ready_probe = rest_smoke.http_request(base_url, "/api/v1/app", api_key=api_key)
@@ -1070,8 +1193,11 @@ def run_stress_waves(
         "transport_checks": transport_checks,
     }
     zero_result_searches = collect_zero_result_searches(stress_report)
+    required_zero_result_searches = collect_zero_result_searches(stress_report, required_only=True)
     stress_report["zero_result_searches"] = zero_result_searches
     stress_report["zero_result_search_count"] = len(zero_result_searches)
+    stress_report["required_zero_result_searches"] = required_zero_result_searches
+    stress_report["required_zero_result_search_count"] = len(required_zero_result_searches)
     return stress_report
 
 
@@ -1383,9 +1509,9 @@ def main(argv: list[str] | None = None) -> int:
         if int(stress_summary.get("failed_searches", 0)) > 0:
             report["status"] = "failed"
             report["failure_reason"] = "one or more live searches failed"
-        elif int(stress_summary.get("zero_result_search_count", 0)) > 0:
+        elif int(stress_summary.get("required_zero_result_search_count", 0)) > 0:
             report["status"] = "failed"
-            report["failure_reason"] = "one or more live searches returned zero results"
+            report["failure_reason"] = "one or more required live searches returned zero results"
         elif not diagnostics_are_complete(report, skip_dumps=args.skip_dumps):
             report["status"] = "failed"
             report["failure_reason"] = "required dump diagnostics were not captured"
