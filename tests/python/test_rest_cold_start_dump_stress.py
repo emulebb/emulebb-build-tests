@@ -356,6 +356,56 @@ def test_delete_stress_transfers_uses_explicit_delete_files(monkeypatch) -> None
     ]
 
 
+def test_wait_for_stress_transfers_absent_polls_until_transfer_disappears(monkeypatch) -> None:
+    module = load_script_module()
+    transfer_hash = "0123456789abcdef0123456789abcdef"
+    payloads = [
+        [{"hash": transfer_hash}, {"hash": "abcdef0123456789abcdef0123456789"}],
+        [{"hash": "abcdef0123456789abcdef0123456789"}],
+    ]
+
+    def fake_http_request(_base_url, path, **kwargs):
+        assert path == "/api/v1/transfers"
+        assert kwargs["api_key"] == "key"
+        return {"status": 200, "json": payloads.pop(0)}
+
+    def fake_wait_for(resolve, **_kwargs):
+        first = resolve()
+        assert first is None
+        return resolve()
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_array", lambda result, _status: result["json"])
+    monkeypatch.setattr(module.rest_smoke, "wait_for", fake_wait_for)
+
+    result = module.wait_for_stress_transfers_absent(
+        "http://127.0.0.1:1",
+        "key",
+        [transfer_hash],
+        30.0,
+    )
+
+    assert result["absent"] is True
+    assert result["expected_count"] == 1
+    assert [row["present_count"] for row in result["observations"]] == [1, 0]
+
+
+def test_stress_cleanup_completeness_requires_absent_transfers() -> None:
+    module = load_script_module()
+    report = {
+        "cleanup": {
+            "searches_and_transfers": {
+                "delete_stress_transfers": {"requested_count": 2, "deleted_count": 2},
+                "post_transfer_delete": {"absent": True},
+            }
+        }
+    }
+
+    assert module.stress_cleanup_is_complete(report) is True
+    report["cleanup"]["searches_and_transfers"]["post_transfer_delete"]["absent"] = False
+    assert module.stress_cleanup_is_complete(report) is False
+
+
 def test_validate_rejects_invalid_stress_shape() -> None:
     module = load_script_module()
     args = SimpleNamespace(

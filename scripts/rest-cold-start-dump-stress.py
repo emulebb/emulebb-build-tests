@@ -1317,6 +1317,7 @@ def cleanup_searches_and_transfers(
     api_key: str,
     search_ids: list[str],
     transfer_hashes: list[str],
+    transfer_cleanup_timeout_seconds: float,
 ) -> dict[str, object]:
     """Deletes active stress searches/transfers and records cleanup state."""
 
@@ -1329,6 +1330,12 @@ def cleanup_searches_and_transfers(
     if int(delete_result["status"]) == 200:
         cleanup["post_delete"] = rest_smoke.verify_searches_deleted(base_url, api_key, search_ids)
     cleanup["delete_stress_transfers"] = delete_stress_transfers(base_url, api_key, transfer_hashes)
+    cleanup["post_transfer_delete"] = wait_for_stress_transfers_absent(
+        base_url,
+        api_key,
+        transfer_hashes,
+        transfer_cleanup_timeout_seconds,
+    )
     clear_result = rest_smoke.clear_completed_transfers(base_url, api_key)
     cleanup["clear_completed_transfers"] = rest_smoke.compact_http_result(clear_result)
     return cleanup
@@ -1397,6 +1404,83 @@ def delete_stress_transfers(base_url: str, api_key: str, transfer_hashes: list[s
         "deleted_count": sum(1 for row in deletes if int(row["response"]["status"]) in {200, 404}),
         "deletes": deletes,
     }
+
+
+def wait_for_stress_transfers_absent(
+    base_url: str,
+    api_key: str,
+    transfer_hashes: list[str],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until stress-triggered transfers no longer appear in the REST transfer list."""
+
+    expected = {transfer_hash.lower() for transfer_hash in transfer_hashes if rest_smoke.is_lowercase_md4_hash(transfer_hash)}
+    observations: list[dict[str, object]] = []
+    if not expected:
+        return {
+            "absent": True,
+            "expected_count": 0,
+            "observations": observations,
+        }
+
+    def resolve():
+        result = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=api_key)
+        rows = rest_smoke.require_json_array(result, 200)
+        present = sorted(
+            str(row.get("hash") or "").lower()
+            for row in rows
+            if isinstance(row, dict) and str(row.get("hash") or "").lower() in expected
+        )
+        observations.append(
+            {
+                "observed_at": round(time.time(), 3),
+                "transfer_count": len(rows),
+                "present_count": len(present),
+            }
+        )
+        if not present:
+            return {
+                "absent": True,
+                "expected_count": len(expected),
+                "observations": observations,
+            }
+        return None
+
+    try:
+        result = rest_smoke.wait_for(
+            resolve,
+            timeout=timeout_seconds,
+            interval=1.0,
+            description="stress transfer deletion",
+        )
+    except Exception:
+        last_present_count = observations[-1]["present_count"] if observations else None
+        return {
+            "absent": False,
+            "expected_count": len(expected),
+            "last_present_count": last_present_count,
+            "observations": observations,
+        }
+    assert isinstance(result, dict)
+    return result
+
+
+def stress_cleanup_is_complete(report: dict[str, object]) -> bool:
+    """Returns true when stress transfer cleanup completed before post-drain diagnostics."""
+
+    cleanup = report.get("cleanup")
+    if not isinstance(cleanup, dict):
+        return False
+    searches_and_transfers = cleanup.get("searches_and_transfers")
+    if not isinstance(searches_and_transfers, dict):
+        return False
+    delete_stress_transfers = searches_and_transfers.get("delete_stress_transfers")
+    post_transfer_delete = searches_and_transfers.get("post_transfer_delete")
+    if not isinstance(delete_stress_transfers, dict) or not isinstance(post_transfer_delete, dict):
+        return False
+    return int(delete_stress_transfers.get("deleted_count", 0)) >= int(delete_stress_transfers.get("requested_count", 0)) and bool(
+        post_transfer_delete.get("absent")
+    )
 
 
 def diagnostics_are_complete(report: dict[str, object], *, skip_dumps: bool) -> bool:
@@ -1647,6 +1731,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key=args.api_key,
             search_ids=[str(search_id) for search_id in stress["search_ids"]],
             transfer_hashes=extract_stress_transfer_hashes(stress),
+            transfer_cleanup_timeout_seconds=max(30.0, args.post_drain_seconds),
         )
         if args.post_drain_seconds:
             time.sleep(args.post_drain_seconds)
@@ -1695,6 +1780,9 @@ def main(argv: list[str] | None = None) -> int:
         elif not diagnostics_are_complete(report, skip_dumps=args.skip_dumps):
             report["status"] = "failed"
             report["failure_reason"] = "required dump diagnostics were not captured"
+        elif not stress_cleanup_is_complete(report):
+            report["status"] = "failed"
+            report["failure_reason"] = "stress transfer cleanup did not settle before post-drain diagnostics"
         elif args.enable_umdh and not umdh_diagnostics_are_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "required UMDH diagnostics did not complete"
