@@ -160,6 +160,11 @@
     ]
   },
   "arr": {
+    "media_categories": {
+      "qbit_video": 2000,
+      "radarr_release": 2000,
+      "sonarr_release": 5000
+    },
     "torznab_direct_error_edges": [
       {
         "name": "malformed_percent_escape",

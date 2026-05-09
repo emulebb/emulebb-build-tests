@@ -23,6 +23,7 @@ class LiveWireInputs:
     generic_open_terms: tuple[str, ...]
     document_terms: tuple[str, ...]
     radarr_movie_terms: tuple[str, ...]
+    sonarr_series_terms: tuple[str, ...]
     bootstrap_transfer_hashes: tuple[str, ...]
     direct_bootstrap_transfers: tuple[dict[str, object], ...]
 
@@ -84,6 +85,7 @@ def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None)
         generic_open_terms=read_terms(search_terms, "generic_open"),
         document_terms=read_terms(search_terms, "documents"),
         radarr_movie_terms=read_terms(search_terms, "radarr_movies"),
+        sonarr_series_terms=read_optional_terms(search_terms, "sonarr_series", fallback_key="radarr_movies"),
         bootstrap_transfer_hashes=read_hashes(auto_browse, "bootstrap_transfer_hashes"),
         direct_bootstrap_transfers=read_direct_transfers(auto_browse, "direct_bootstrap_transfers"),
     )
@@ -110,6 +112,14 @@ def read_terms(payload: dict[str, Any], key: str) -> tuple[str, ...]:
             raise RuntimeError(f"Live-wire inputs field {key!r}[{index}] must be a non-empty string.")
         terms.append(item.strip())
     return tuple(terms)
+
+
+def read_optional_terms(payload: dict[str, Any], key: str, *, fallback_key: str) -> tuple[str, ...]:
+    """Reads an optional term field, falling back to an existing required field."""
+
+    if key not in payload:
+        return read_terms(payload, fallback_key)
+    return read_terms(payload, key)
 
 
 def read_hashes(payload: dict[str, Any], key: str) -> tuple[str, ...]:

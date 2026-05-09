@@ -17,6 +17,9 @@
     ],
     "radarr_movies": [
       "Example Public Movie Title"
+    ],
+    "sonarr_series": [
+      "Example Public Series Title"
     ]
   },
   "auto_browse": {

@@ -18,6 +18,7 @@ def payload() -> dict[str, object]:
             "generic_open": [" linux ", "ubuntu"],
             "documents": ["debian"],
             "radarr_movies": ["public domain movie"],
+            "sonarr_series": ["public domain series"],
         },
         "auto_browse": {
             "bootstrap_transfer_hashes": ["28EAB1A0AB1B9416AAF534E27A234941"],
@@ -39,6 +40,7 @@ def test_parse_live_wire_inputs_normalizes_runtime_values() -> None:
     assert inputs.generic_open_terms == ("linux", "ubuntu")
     assert inputs.document_terms == ("debian",)
     assert inputs.radarr_movie_terms == ("public domain movie",)
+    assert inputs.sonarr_series_terms == ("public domain series",)
     assert inputs.bootstrap_transfer_hashes == ("28EAB1A0AB1B9416AAF534E27A234941",)
     assert inputs.direct_bootstrap_transfers[0]["name"] == "ubuntu.iso"
     assert live_wire_inputs.summarize_terms(inputs.generic_open_terms) == {"count": 2}
@@ -63,6 +65,17 @@ def test_parse_live_wire_inputs_rejects_missing_or_invalid_fields() -> None:
 
     with pytest.raises(RuntimeError, match="32-character hex hash"):
         live_wire_inputs.parse_live_wire_inputs(bad_hash)
+
+
+def test_parse_live_wire_inputs_keeps_sonarr_terms_backward_compatible() -> None:
+    old_payload = payload()
+    search_terms = old_payload["search_terms"]
+    assert isinstance(search_terms, dict)
+    del search_terms["sonarr_series"]
+
+    inputs = live_wire_inputs.parse_live_wire_inputs(old_payload)
+
+    assert inputs.sonarr_series_terms == inputs.radarr_movie_terms
 
 
 def test_select_daily_and_redaction_are_deterministic() -> None:

@@ -35,16 +35,48 @@ def test_radarr_sonarr_direct_search_terms_include_generic_fallback() -> None:
         document_terms=("linux", "ubuntu"),
         generic_open_terms=("ubuntu", "emule", "fedora"),
         radarr_movie_terms=("La Dolce Vita", "linux"),
+        sonarr_series_terms=("Star Trek", "linux"),
     )
 
     assert module.build_direct_search_terms(inputs) == ("linux", "ubuntu", "emule", "fedora")
     assert module.build_qbit_search_terms(inputs) == (
         "La Dolce Vita",
         "linux",
+        "Star Trek",
         "ubuntu",
         "emule",
         "fedora",
     )
+    assert module.build_sonarr_release_terms(inputs) == ("Star Trek", "linux", "ubuntu", "emule", "fedora")
+
+
+def test_radarr_sonarr_direct_magnet_collection_uses_explicit_video_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[str] = []
+    magnet = (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000"
+        "&dn=Public%20Movie.mkv&xl=42"
+    )
+    rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss><channel><item><title>Public Movie</title><link>{magnet.replace("&", "&amp;")}</link></item></channel></rss>"""
+
+    def fake_http_request(_base_url, path, **_kwargs):
+        calls.append(path)
+        return {"status": 200, "body_text": rss}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.collect_direct_magnets(
+        "http://127.0.0.1:4711",
+        "secret key",
+        ("Public Movie",),
+        1,
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+    )
+
+    assert result["magnets"][0]["hash"] == "0123456789abcdef0123456789abcdef"
+    assert "cat=2000" in calls[0]
+    assert "cat=7000" not in calls[0]
 
 
 def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -374,7 +406,13 @@ def test_collect_direct_magnets_deduplicates_search_results(monkeypatch: pytest.
         lambda *_args, **_kwargs: {"status": 200, "body_text": rss},
     )
 
-    result = module.collect_direct_magnets("http://127.0.0.1:4711", "secret", ("La Dolce Vita",), 2)
+    result = module.collect_direct_magnets(
+        "http://127.0.0.1:4711",
+        "secret",
+        ("La Dolce Vita",),
+        2,
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+    )
 
     assert result["attempts"][0]["items"] == 3
     assert [row["hash"] for row in result["magnets"]] == [

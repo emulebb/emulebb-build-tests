@@ -134,7 +134,8 @@ Live Arr environment:
 - live scripts load process environment variables first, then fall back to an ignored dotenv file selected by `--env-file`; the default fallback is `.env.local`
 - `.env.local`, `.env`, and `.env.*` are ignored; do not commit real API keys
 - `.env.example` is the tracked redacted template for live Arr/Prowlarr variables
-- live-wire runtime search terms, Radarr movie terms, bootstrap hashes, and direct ED2K bootstrap rows live in an ignored JSON file selected by `--live-wire-inputs-file`; the default is `live-wire-inputs.local.json`
+- live-wire runtime search terms, Radarr movie terms, Sonarr series terms, bootstrap hashes, and direct ED2K bootstrap rows live only in an ignored JSON file selected by `--live-wire-inputs-file`; the default is `live-wire-inputs.local.json`
+- do not commit operator-owned live search terms, live transfer hashes, live magnets, or direct ED2K bootstrap rows to tracked files; tracked fixtures and docs must use placeholders or redacted summaries
 - `live-wire-inputs.example.json` is the tracked schema example; copy its shape into the ignored local file and replace the placeholder values with operator-owned current inputs
 - auto-browse live fallback automatically refreshes the ignored live-wire JSON when it discovers a safe live search result with usable hash, name, size, and source metadata
 - persisted live reports redact exact runtime terms, movie titles, magnets, and real transfer hashes, keeping counts, indexes, sizes, and presence flags instead

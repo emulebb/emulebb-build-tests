@@ -89,6 +89,11 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         for scenario in prowlarr_live.TORZNAB_DIRECT_ERROR_SCENARIOS
     ]
     assert torznab_error_edges == golden["arr"]["torznab_direct_error_edges"]
+    assert golden["arr"]["media_categories"] == {
+        "qbit_video": arr_live.TORZNAB_MOVIE_CATEGORY,
+        "radarr_release": arr_live.TORZNAB_MOVIE_CATEGORY,
+        "sonarr_release": arr_live.TORZNAB_TV_CATEGORY,
+    }
 
     qbit_scenarios = [
         {

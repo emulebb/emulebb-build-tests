@@ -27,6 +27,8 @@ SYNTHETIC_TRIGGER_MAGNET = (
     "&xl=1048576"
 )
 LIVE_SOURCE_UNAVAILABLE_EXIT_CODE = 2
+TORZNAB_MOVIE_CATEGORY = 2000
+TORZNAB_TV_CATEGORY = 5000
 
 
 class LiveSearchUnavailableError(RuntimeError):
@@ -377,9 +379,26 @@ def build_direct_search_terms(inputs: Any) -> tuple[str, ...]:
 
 
 def build_qbit_search_terms(inputs: Any) -> tuple[str, ...]:
-    """Builds qBit live-wire search terms with generic fallback coverage."""
+    """Builds qBit live-wire video search terms with generic fallback coverage."""
 
-    return unique_terms(inputs.radarr_movie_terms, inputs.document_terms, inputs.generic_open_terms)
+    return unique_terms(inputs.radarr_movie_terms, inputs.sonarr_series_terms, inputs.document_terms, inputs.generic_open_terms)
+
+
+def build_sonarr_release_terms(inputs: Any) -> tuple[str, ...]:
+    """Builds Sonarr release-search terms from TV-oriented operator inputs."""
+
+    return unique_terms(inputs.sonarr_series_terms, inputs.generic_open_terms)
+
+
+def build_torznab_search_path(category_id: int, query: str, emule_api_key: str, *, request_type: str = "search") -> str:
+    """Builds one direct Torznab search URL using an explicit media category."""
+
+    return (
+        f"/indexer/emulebb/api?t={request_type}&cat={category_id}&q="
+        + urllib.parse.quote(query)
+        + "&apikey="
+        + urllib.parse.quote(emule_api_key)
+    )
 
 
 def delete_download_client(arr_url: str, api_key: str, client_id: int) -> dict[str, object]:
@@ -387,31 +406,6 @@ def delete_download_client(arr_url: str, api_key: str, client_id: int) -> dict[s
 
     result = arr_request(arr_url, api_key, f"/api/v3/downloadclient/{client_id}", method="DELETE")
     return {"id": client_id, "status": int(result.get("status") or 0)}
-
-
-def get_first_direct_magnet(base_url: str, emule_api_key: str, query: str) -> dict[str, object]:
-    """Returns the first direct Torznab magnet for a safe open-document query."""
-
-    path = (
-        "/indexer/emulebb/api?t=search&cat=7000&q="
-        + urllib.parse.quote(query)
-        + "&apikey="
-        + urllib.parse.quote(emule_api_key)
-    )
-    result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
-    status = int(result.get("status") or 0)
-    body_text = str(result.get("body_text") or "")
-    if status != 200:
-        raise RuntimeError(f"Direct Torznab magnet lookup returned HTTP {status}")
-    root = ET.fromstring(body_text)
-    item = root.find("./channel/item")
-    if item is None:
-        raise RuntimeError("Direct Torznab magnet lookup returned no items.")
-    title = item.findtext("title") or ""
-    link = item.findtext("link") or ""
-    if not link.startswith("magnet:?"):
-        raise RuntimeError("Direct Torznab first item did not include a magnet link.")
-    return {"query": query, "title": title, "magnet": link}
 
 
 def redact_direct_magnet(magnet: dict[str, object]) -> dict[str, object]:
@@ -461,6 +455,8 @@ def collect_direct_magnets(
     emule_api_key: str,
     queries: tuple[str, ...],
     max_magnets: int,
+    *,
+    category_id: int,
 ) -> dict[str, object]:
     """Collects unique direct Torznab magnets across multiple search terms."""
 
@@ -468,12 +464,7 @@ def collect_direct_magnets(
     attempts: list[dict[str, object]] = []
     seen_hashes: set[str] = set()
     for query_index, query in enumerate(queries):
-        path = (
-            "/indexer/emulebb/api?t=search&cat=7000&q="
-            + urllib.parse.quote(query)
-            + "&apikey="
-            + urllib.parse.quote(emule_api_key)
-        )
+        path = build_torznab_search_path(category_id, query, emule_api_key)
         result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
         status = int(result.get("status") or 0)
         body_text = str(result.get("body_text") or "")
@@ -1285,6 +1276,7 @@ def main() -> int:
     document_terms = inputs.document_terms
     direct_search_terms = build_direct_search_terms(inputs)
     radarr_movie_terms = inputs.radarr_movie_terms
+    sonarr_series_terms = build_sonarr_release_terms(inputs)
     qbit_search_terms = build_qbit_search_terms(inputs)
 
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
@@ -1356,7 +1348,13 @@ def main() -> int:
             "direct_search": live_wire_inputs.summarize_terms(direct_search_terms),
             "generic_open": live_wire_inputs.summarize_terms(inputs.generic_open_terms),
             "radarr_movies": live_wire_inputs.summarize_terms(radarr_movie_terms),
+            "sonarr_series": live_wire_inputs.summarize_terms(sonarr_series_terms),
             "qbit_search": live_wire_inputs.summarize_terms(qbit_search_terms),
+        },
+        "torznab_media_categories": {
+            "qbit_video": TORZNAB_MOVIE_CATEGORY,
+            "radarr_release": TORZNAB_MOVIE_CATEGORY,
+            "sonarr_release": TORZNAB_TV_CATEGORY,
         },
         "checks": {},
     }
@@ -1415,15 +1413,18 @@ def main() -> int:
             term_count=len(direct_search_terms),
         )
 
-        magnet = get_first_direct_magnet(emule_base_url, args.emule_api_key, str(direct_results["query"]))
-        report["checks"]["direct_qbit_magnet"] = redact_direct_magnet(magnet)
-        report["checks"]["qbit_safety"] = qbit_direct_safety_checks(emule_base_url, args.emule_api_key)
         direct_magnets = collect_direct_magnets(
             emule_base_url,
             args.emule_api_key,
             qbit_search_terms,
             args.qbit_live_wire_rounds,
+            category_id=TORZNAB_MOVIE_CATEGORY,
         )
+        magnet = direct_magnets["magnets"][0]
+        if not isinstance(magnet, dict):
+            raise RuntimeError("Direct Torznab magnet collection returned an invalid first magnet.")
+        report["checks"]["direct_qbit_magnet"] = redact_direct_magnet(magnet)
+        report["checks"]["qbit_safety"] = qbit_direct_safety_checks(emule_base_url, args.emule_api_key)
         report["checks"]["direct_qbit_search_stress"] = redact_collected_direct_magnets(direct_magnets)
         report["checks"]["direct_qbit_trigger"] = {
             "title_present": bool(magnet["title"]),
@@ -1481,7 +1482,7 @@ def main() -> int:
             port=port,
             emule_api_key=args.emule_api_key,
             indexer_name=indexer_name,
-            release_terms=document_terms,
+            release_terms=sonarr_series_terms,
             timeout_seconds=args.result_timeout_seconds,
         )
         cleanup_clients.append((env_values["SONARR_URL"].rstrip("/"), env_values["SONARR_API_KEY"], sonarr_client_id))
