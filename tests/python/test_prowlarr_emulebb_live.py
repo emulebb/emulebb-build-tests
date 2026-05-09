@@ -168,6 +168,84 @@ def test_prowlarr_search_stress_requires_result_rows(monkeypatch) -> None:
     assert all("categories=7000" in call for call in calls)
 
 
+def test_direct_media_category_search_stress_covers_radarr_and_sonarr(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[dict[str, object]] = []
+
+    def fake_stress(base_url: str, api_key: str, queries: tuple[str, ...], count: int, *, category_id: int) -> dict[str, object]:
+        calls.append(
+            {
+                "base_url": base_url,
+                "api_key": api_key,
+                "queries": queries,
+                "count": count,
+                "category_id": category_id,
+            }
+        )
+        return {"category": category_id, "requests": count, "term_count": len(queries)}
+
+    monkeypatch.setattr(module, "stress_direct_torznab_search_terms", fake_stress)
+
+    result = module.stress_direct_media_category_searches(
+        "http://127.0.0.1:1",
+        "secret",
+        ("movie",),
+        ("series", "show"),
+        3,
+    )
+
+    assert result == {
+        "radarr_movies": {"category": module.TORZNAB_MOVIE_CATEGORY, "requests": 3, "term_count": 1},
+        "sonarr_series": {"category": module.TORZNAB_TV_CATEGORY, "requests": 3, "term_count": 2},
+    }
+    assert [call["category_id"] for call in calls] == [module.TORZNAB_MOVIE_CATEGORY, module.TORZNAB_TV_CATEGORY]
+    assert [call["queries"] for call in calls] == [("movie",), ("series", "show")]
+
+
+def test_prowlarr_media_category_search_stress_covers_radarr_and_sonarr(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[dict[str, object]] = []
+
+    def fake_stress(
+        prowlarr_url: str,
+        api_key: str,
+        indexer_id: int,
+        queries: tuple[str, ...],
+        count: int,
+        *,
+        category_id: int,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "prowlarr_url": prowlarr_url,
+                "api_key": api_key,
+                "indexer_id": indexer_id,
+                "queries": queries,
+                "count": count,
+                "category_id": category_id,
+            }
+        )
+        return {"category": category_id, "requests": count, "term_count": len(queries)}
+
+    monkeypatch.setattr(module, "stress_prowlarr_search_terms", fake_stress)
+
+    result = module.stress_prowlarr_media_category_searches(
+        "http://prowlarr.test",
+        "key",
+        40,
+        ("movie", "film"),
+        ("series",),
+        2,
+    )
+
+    assert result == {
+        "radarr_movies": {"category": module.TORZNAB_MOVIE_CATEGORY, "requests": 2, "term_count": 2},
+        "sonarr_series": {"category": module.TORZNAB_TV_CATEGORY, "requests": 2, "term_count": 1},
+    }
+    assert [call["category_id"] for call in calls] == [module.TORZNAB_MOVIE_CATEGORY, module.TORZNAB_TV_CATEGORY]
+    assert [call["queries"] for call in calls] == [("movie", "film"), ("series",)]
+
+
 def test_search_path_builders_preserve_explicit_video_categories() -> None:
     module = load_prowlarr_module()
 

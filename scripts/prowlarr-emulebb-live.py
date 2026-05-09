@@ -570,6 +570,63 @@ def stress_prowlarr_search_terms(
     return {"requests": count, "term_count": len(queries), "row_total": row_total, "attempts": attempts}
 
 
+def stress_direct_media_category_searches(
+    base_url: str,
+    emule_api_key: str,
+    radarr_movie_terms: tuple[str, ...],
+    sonarr_series_terms: tuple[str, ...],
+    count: int,
+) -> dict[str, object]:
+    """Exercises direct Torznab media searches for Radarr and Sonarr categories."""
+
+    return {
+        "radarr_movies": stress_direct_torznab_search_terms(
+            base_url,
+            emule_api_key,
+            radarr_movie_terms,
+            count,
+            category_id=TORZNAB_MOVIE_CATEGORY,
+        ),
+        "sonarr_series": stress_direct_torznab_search_terms(
+            base_url,
+            emule_api_key,
+            sonarr_series_terms,
+            count,
+            category_id=TORZNAB_TV_CATEGORY,
+        ),
+    }
+
+
+def stress_prowlarr_media_category_searches(
+    prowlarr_url: str,
+    api_key: str,
+    indexer_id: int,
+    radarr_movie_terms: tuple[str, ...],
+    sonarr_series_terms: tuple[str, ...],
+    count: int,
+) -> dict[str, object]:
+    """Exercises Prowlarr-mediated media searches for Radarr and Sonarr categories."""
+
+    return {
+        "radarr_movies": stress_prowlarr_search_terms(
+            prowlarr_url,
+            api_key,
+            indexer_id,
+            radarr_movie_terms,
+            count,
+            category_id=TORZNAB_MOVIE_CATEGORY,
+        ),
+        "sonarr_series": stress_prowlarr_search_terms(
+            prowlarr_url,
+            api_key,
+            indexer_id,
+            sonarr_series_terms,
+            count,
+            category_id=TORZNAB_TV_CATEGORY,
+        ),
+    }
+
+
 def redact_term_result(result: dict[str, object], *, source: str, term_count: int) -> dict[str, object]:
     """Redacts exact search terms and titles from one live-wire result."""
 
@@ -867,6 +924,13 @@ def main() -> int:
             args.direct_search_stress_count,
             category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
+        report["checks"]["direct_media_category_search_stress"] = stress_direct_media_category_searches(
+            emule_base_url,
+            args.emule_api_key,
+            radarr_movie_terms,
+            sonarr_series_terms,
+            args.direct_search_stress_count,
+        )
 
         status_payload = require_success(
             prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/system/status"),
@@ -952,6 +1016,14 @@ def main() -> int:
             document_terms,
             args.prowlarr_search_stress_count,
             category_id=TORZNAB_DOCUMENT_CATEGORY,
+        )
+        report["checks"]["prowlarr_media_category_search_stress"] = stress_prowlarr_media_category_searches(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            radarr_movie_terms,
+            sonarr_series_terms,
+            args.prowlarr_search_stress_count,
         )
         report["status"] = "passed"
         return 0
