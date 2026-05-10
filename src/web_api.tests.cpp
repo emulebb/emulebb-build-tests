@@ -2052,6 +2052,9 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources", "", "transfers/sources");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210", "", "transfers/source");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources/fedcba9876543210fedcba9876543210/operations/browse", R"({})", "transfers/source_browse");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK_EQ(route.params["userHash"].get<std::string>(), "fedcba9876543210fedcba9876543210");
@@ -2076,6 +2079,10 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("GET", "/api/v1/upload-queue", "", "uploads/queue");
 	CHECK(route.params["_items_envelope"].get<bool>());
+	assertRoute("GET", "/api/v1/uploads/0123456789abcdef0123456789abcdef", "", "uploads/get");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	assertRoute("GET", "/api/v1/upload-queue/0123456789abcdef0123456789abcdef", "", "uploads/queue_get");
+	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("DELETE", "/api/v1/uploads/0123456789abcdef0123456789abcdef", R"({})", "uploads/remove");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/release-slot", R"({})", "uploads/release_slot");
