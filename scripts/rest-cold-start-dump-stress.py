@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
 import os
@@ -39,6 +40,25 @@ def load_local_module(module_name: str, filename: str):
 rest_smoke = load_local_module("rest_api_smoke_for_cold_start_dump_stress", "rest-api-smoke.py")
 harness_cli_common = rest_smoke.harness_cli_common
 live_common = rest_smoke.live_common
+
+
+class FILETIME(ctypes.Structure):
+    """Windows FILETIME used for best-effort process CPU telemetry."""
+
+    _fields_ = [
+        ("dwLowDateTime", ctypes.c_uint32),
+        ("dwHighDateTime", ctypes.c_uint32),
+    ]
+
+
+rest_smoke.kernel32.GetProcessTimes.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(FILETIME),
+    ctypes.POINTER(FILETIME),
+    ctypes.POINTER(FILETIME),
+    ctypes.POINTER(FILETIME),
+]
+rest_smoke.kernel32.GetProcessTimes.restype = ctypes.c_int
 
 SUITE_NAME = "rest-cold-start-dump-stress"
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
@@ -190,30 +210,245 @@ MUST_RETURN_RESULT_TERMS = frozenset(
 )
 
 
-class DownloadTriggerBudget:
-    """Thread-safe per-wave budget for active live download trigger attempts."""
+class DownloadTriggerCoordinator:
+    """Coordinates per-run download hash de-duplication across search workers."""
 
-    def __init__(self, attempts: int) -> None:
-        self._remaining = attempts
+    def __init__(self) -> None:
         self._claimed_hashes: set[str] = set()
         self._lock = threading.Lock()
 
-    @property
-    def remaining(self) -> int:
-        """Returns the number of still-available download trigger claims."""
-
-        with self._lock:
-            return self._remaining
-
     def claim(self, transfer_hash: str) -> bool:
-        """Returns true when the caller owns one active download trigger claim."""
+        """Returns true when this run has not already claimed the transfer."""
+
+        normalized = transfer_hash.lower()
+        with self._lock:
+            if normalized in self._claimed_hashes:
+                return False
+            self._claimed_hashes.add(normalized)
+            return True
+
+
+class StressTransferRegistry:
+    """Tracks stress-triggered transfers for completion, churn, and telemetry."""
+
+    def __init__(self) -> None:
+        self._triggered: set[str] = set()
+        self._completed: set[str] = set()
+        self._deleted: set[str] = set()
+        self._lock = threading.Lock()
+
+    def record_triggered(self, transfer_hash: str) -> None:
+        """Records one transfer hash after REST confirms materialization."""
+
+        normalized = transfer_hash.lower()
+        if not rest_smoke.is_lowercase_md4_hash(normalized):
+            return
+        with self._lock:
+            self._triggered.add(normalized)
+            self._deleted.discard(normalized)
+
+    def record_completed(self, transfer_hash: str) -> None:
+        """Records one stress transfer that reached native completed state."""
+
+        normalized = transfer_hash.lower()
+        if not rest_smoke.is_lowercase_md4_hash(normalized):
+            return
+        with self._lock:
+            if normalized in self._triggered:
+                self._completed.add(normalized)
+
+    def record_deleted(self, transfer_hash: str) -> None:
+        """Records one stress transfer deleted by churn or final cleanup."""
+
+        normalized = transfer_hash.lower()
+        if not rest_smoke.is_lowercase_md4_hash(normalized):
+            return
+        with self._lock:
+            if normalized in self._triggered:
+                self._deleted.add(normalized)
+
+    def hashes(self) -> list[str]:
+        """Returns all stress transfer hashes in stable order."""
 
         with self._lock:
-            if self._remaining <= 0 or transfer_hash in self._claimed_hashes:
-                return False
-            self._claimed_hashes.add(transfer_hash)
-            self._remaining -= 1
-            return True
+            return sorted(self._triggered)
+
+    def active_hashes(self) -> set[str]:
+        """Returns hashes still counted as active for stress telemetry."""
+
+        with self._lock:
+            return set(self._triggered - self._completed - self._deleted)
+
+    def counts(self) -> dict[str, int]:
+        """Returns compact stress transfer counters."""
+
+        with self._lock:
+            active = self._triggered - self._completed - self._deleted
+            return {
+                "triggered_stress_transfer_count": len(self._triggered),
+                "active_stress_transfer_count": len(active),
+                "completed_stress_transfer_count": len(self._completed),
+                "deleted_stress_transfer_count": len(self._deleted),
+            }
+
+
+def filetime_to_100ns(value: FILETIME) -> int:
+    """Converts a FILETIME structure to 100ns ticks."""
+
+    return (int(value.dwHighDateTime) << 32) + int(value.dwLowDateTime)
+
+
+def get_process_cpu_time_100ns(process_id: int | None) -> int | None:
+    """Returns process user+kernel CPU time in 100ns ticks when available."""
+
+    if process_id is None:
+        return None
+    process_handle = rest_smoke.kernel32.OpenProcess(rest_smoke.PROCESS_QUERY_LIMITED_INFORMATION, False, process_id)
+    if not process_handle:
+        return None
+    try:
+        create_time = FILETIME()
+        exit_time = FILETIME()
+        kernel_time = FILETIME()
+        user_time = FILETIME()
+        if not rest_smoke.kernel32.GetProcessTimes(
+            process_handle,
+            ctypes.byref(create_time),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel_time),
+            ctypes.byref(user_time),
+        ):
+            return None
+        return filetime_to_100ns(kernel_time) + filetime_to_100ns(user_time)
+    finally:
+        rest_smoke.kernel32.CloseHandle(process_handle)
+
+
+def compute_cpu_percent(
+    before_cpu_100ns: int | None,
+    after_cpu_100ns: int | None,
+    elapsed_seconds: float,
+    logical_cpu_count: int | None,
+) -> float | None:
+    """Computes process CPU percent normalized across logical CPUs."""
+
+    if before_cpu_100ns is None or after_cpu_100ns is None:
+        return None
+    if elapsed_seconds <= 0:
+        return None
+    if logical_cpu_count is None or logical_cpu_count <= 0:
+        return None
+    delta_seconds = max(0.0, (after_cpu_100ns - before_cpu_100ns) / 10_000_000.0)
+    return round((delta_seconds / elapsed_seconds) * 100.0 / logical_cpu_count, 3)
+
+
+def percentile_value(values: list[float], percentile: int) -> float | None:
+    """Returns a compact nearest-rank percentile for telemetry summaries."""
+
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, min(len(ordered), (len(ordered) * percentile + 99) // 100))
+    return ordered[rank - 1]
+
+
+def summarize_resource_monitor_samples(samples: list[dict[str, object]]) -> dict[str, object]:
+    """Summarizes continuous resource telemetry samples."""
+
+    cpu_values = [float(row["cpu_percent"]) for row in samples if isinstance(row.get("cpu_percent"), (int, float))]
+    thread_values = [int(row["thread_count"]) for row in samples if isinstance(row.get("thread_count"), int)]
+    handle_values = [int(row["handles"]) for row in samples if isinstance(row.get("handles"), int)]
+    private_values = [int(row["private_bytes"]) for row in samples if isinstance(row.get("private_bytes"), int)]
+    working_set_values = [int(row["working_set_bytes"]) for row in samples if isinstance(row.get("working_set_bytes"), int)]
+    return {
+        "sample_count": len(samples),
+        "cpu_percent_avg": round(sum(cpu_values) / len(cpu_values), 3) if cpu_values else None,
+        "cpu_percent_p95": percentile_value(cpu_values, 95),
+        "cpu_percent_max": max(cpu_values) if cpu_values else None,
+        "thread_count_max": max(thread_values) if thread_values else None,
+        "handles_max": max(handle_values) if handle_values else None,
+        "private_bytes_max": max(private_values) if private_values else None,
+        "working_set_bytes_max": max(working_set_values) if working_set_values else None,
+    }
+
+
+class ProcessResourceMonitor:
+    """Samples process resources in the background while live stress runs."""
+
+    def __init__(
+        self,
+        *,
+        process_id: int | None,
+        interval_seconds: float,
+        counts_provider,
+    ) -> None:
+        self.process_id = process_id
+        self.interval_seconds = interval_seconds
+        self.counts_provider = counts_provider
+        self.samples: list[dict[str, object]] = []
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._previous_cpu_100ns: int | None = None
+        self._previous_monotonic: float | None = None
+        self._logical_cpu_count = os.cpu_count() or 1
+
+    def start(self) -> None:
+        """Starts the monitor thread when sampling is enabled."""
+
+        if self.interval_seconds <= 0 or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="rest-cold-start-resource-monitor", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> dict[str, object]:
+        """Stops the monitor and returns a summary plus retained samples."""
+
+        if self._thread is not None:
+            self._stop_event.set()
+            self._thread.join(timeout=max(2.0, self.interval_seconds + 1.0))
+        return {
+            "samples": self.samples,
+            "summary": summarize_resource_monitor_samples(self.samples),
+        }
+
+    def sample_once(self) -> dict[str, object]:
+        """Collects one telemetry sample."""
+
+        observed_at_monotonic = time.monotonic()
+        observed_at = round(time.time(), 3)
+        cpu_100ns = get_process_cpu_time_100ns(self.process_id)
+        cpu_percent = compute_cpu_percent(
+            self._previous_cpu_100ns,
+            cpu_100ns,
+            observed_at_monotonic - self._previous_monotonic if self._previous_monotonic is not None else 0.0,
+            self._logical_cpu_count,
+        )
+        self._previous_cpu_100ns = cpu_100ns
+        self._previous_monotonic = observed_at_monotonic
+
+        sample: dict[str, object] = {
+            "observed_at": observed_at,
+            "cpu_percent": cpu_percent,
+        }
+        resources = rest_smoke.get_process_resource_snapshot(self.process_id)
+        sample.update(resources)
+        try:
+            counts = self.counts_provider()
+        except Exception as exc:
+            counts = {
+                "stress_transfer_count_error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            }
+        sample.update(counts)
+        self.samples.append(sample)
+        return sample
+
+    def _run(self) -> None:
+        self.sample_once()
+        while not self._stop_event.wait(self.interval_seconds):
+            self.sample_once()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -242,6 +477,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--searches-per-wave", type=int, default=12)
     parser.add_argument("--max-concurrent-searches", type=int, default=8)
     parser.add_argument("--downloads-per-wave", type=int, default=12)
+    parser.add_argument("--downloads-per-search", type=int)
+    parser.add_argument("--target-completed-downloads", type=int, default=0)
+    parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
+    parser.add_argument("--max-active-downloads", type=int, default=128)
+    parser.add_argument("--download-churn-interval-seconds", type=float, default=0.0)
+    parser.add_argument("--download-remove-count-per-churn", type=int, default=0)
+    parser.add_argument("--resource-monitor-interval-seconds", type=float, default=5.0)
     parser.add_argument("--post-drain-seconds", type=float, default=30.0)
     parser.add_argument("--tool-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--enable-umdh", action="store_true")
@@ -262,12 +504,36 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("max concurrent searches must be greater than zero.")
     if args.downloads_per_wave < 0:
         raise ValueError("downloads per wave must be zero or greater.")
+    if args.downloads_per_search is not None and args.downloads_per_search < 0:
+        raise ValueError("downloads per search must be zero or greater.")
+    if args.target_completed_downloads < 0:
+        raise ValueError("target completed downloads must be zero or greater.")
+    if args.completion_timeout_seconds <= 0:
+        raise ValueError("completion timeout seconds must be greater than zero.")
+    if args.max_active_downloads <= 0:
+        raise ValueError("max active downloads must be greater than zero.")
+    if args.download_churn_interval_seconds < 0:
+        raise ValueError("download churn interval seconds must be zero or greater.")
+    if args.download_remove_count_per_churn < 0:
+        raise ValueError("download remove count per churn must be zero or greater.")
+    if args.resource_monitor_interval_seconds < 0:
+        raise ValueError("resource monitor interval seconds must be zero or greater.")
     if args.post_drain_seconds < 0:
         raise ValueError("post-drain seconds must be zero or greater.")
     if args.tool_timeout_seconds <= 0:
         raise ValueError("tool timeout seconds must be greater than zero.")
     if args.max_post_drain_umdh_positive_bytes < 0:
         raise ValueError("max post-drain UMDH positive bytes must be zero or greater.")
+
+
+def resolve_downloads_per_search(args: argparse.Namespace) -> int:
+    """Resolves the per-search trigger budget while preserving legacy defaults."""
+
+    explicit = getattr(args, "downloads_per_search", None)
+    if explicit is not None:
+        return int(explicit)
+    searches_per_wave = max(1, int(args.searches_per_wave))
+    return max(0, int(args.downloads_per_wave) // searches_per_wave)
 
 
 def build_open_source_stress_terms(configured_terms: tuple[str, ...]) -> tuple[str, ...]:
@@ -1058,7 +1324,28 @@ def find_stress_download_candidates(search_payload: dict[str, Any]) -> list[dict
         if is_stress_download_candidate(result_row):
             assert isinstance(result_row, dict)
             candidates.append(result_row)
-    return candidates
+    return sort_stress_download_candidates(candidates)
+
+
+def stress_candidate_size(candidate: dict[str, Any]) -> int:
+    """Returns a safe integer size used for completion-oriented candidate ordering."""
+
+    size_bytes = candidate.get("sizeBytes", candidate.get("size"))
+    return int(size_bytes) if isinstance(size_bytes, int) and not isinstance(size_bytes, bool) else 0
+
+
+def sort_stress_download_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefers smaller safe files and then better complete-source counts."""
+
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            stress_candidate_size(candidate),
+            -int(candidate.get("completeSources") or 0),
+            -int(candidate.get("sources") or 0),
+            str(candidate.get("hash") or ""),
+        ),
+    )
 
 
 def trigger_active_downloads_from_search_result(
@@ -1066,7 +1353,10 @@ def trigger_active_downloads_from_search_result(
     api_key: str,
     search_id: str,
     timeout_seconds: float,
-    trigger_budget: DownloadTriggerBudget,
+    downloads_per_search: int,
+    trigger_coordinator: DownloadTriggerCoordinator,
+    transfer_registry: StressTransferRegistry,
+    max_active_downloads: int,
 ) -> dict[str, object]:
     """Triggers active real downloads from safe live search results."""
 
@@ -1074,10 +1364,26 @@ def trigger_active_downloads_from_search_result(
     triggered: list[dict[str, object]] = []
 
     def resolve():
-        if trigger_budget.remaining <= 0:
+        if downloads_per_search <= 0:
             return {
                 "ok": bool(triggered),
-                "reason": "download trigger budget exhausted",
+                "reason": "per-search download trigger budget is zero",
+                "triggers": triggered,
+                "observations": observations,
+            }
+        if len(triggered) >= downloads_per_search:
+            return {
+                "ok": True,
+                "reason": "per-search download trigger budget exhausted",
+                "triggers": triggered,
+                "observations": observations,
+            }
+        active_count = transfer_registry.counts()["active_stress_transfer_count"]
+        if active_count >= max_active_downloads:
+            return {
+                "ok": bool(triggered),
+                "reason": "max active download cap reached",
+                "active_stress_transfer_count": active_count,
                 "triggers": triggered,
                 "observations": observations,
             }
@@ -1092,12 +1398,19 @@ def trigger_active_downloads_from_search_result(
                 "status": payload.get("status"),
                 "result_count": len(payload.get("results") or []),
                 "candidate_count": len(candidates),
-                "remaining_budget": trigger_budget.remaining,
+                "search_trigger_count": len(triggered),
+                "downloads_per_search": downloads_per_search,
+                "active_stress_transfer_count": active_count,
+                "max_active_downloads": max_active_downloads,
             }
         )
         for candidate in candidates:
             transfer_hash = str(candidate["hash"])
-            if not trigger_budget.claim(transfer_hash):
+            if len(triggered) >= downloads_per_search:
+                break
+            if transfer_registry.counts()["active_stress_transfer_count"] >= max_active_downloads:
+                break
+            if not trigger_coordinator.claim(transfer_hash):
                 continue
             download = rest_smoke.http_request(
                 base_url,
@@ -1114,6 +1427,7 @@ def trigger_active_downloads_from_search_result(
                 transfer_hash,
                 timeout_seconds,
             )
+            transfer_registry.record_triggered(transfer_hash)
             triggered.append(
                 {
                     "hash_present": True,
@@ -1129,7 +1443,7 @@ def trigger_active_downloads_from_search_result(
                     "transfer": transfer,
                 }
             )
-            if trigger_budget.remaining <= 0:
+            if len(triggered) >= downloads_per_search:
                 break
         if triggered:
             return {
@@ -1487,7 +1801,10 @@ def run_search_task(
     api_key: str,
     plan_row: dict[str, object],
     observation_timeout_seconds: float,
-    trigger_budget: DownloadTriggerBudget,
+    downloads_per_search: int,
+    trigger_coordinator: DownloadTriggerCoordinator,
+    transfer_registry: StressTransferRegistry,
+    max_active_downloads: int,
 ) -> dict[str, object]:
     """Starts one live search, observes it, and optionally triggers active downloads."""
 
@@ -1542,13 +1859,16 @@ def run_search_task(
                     report["searchIds"].append(str(attempt["searchId"]))
             if bool(fallback.get("recovered")) and isinstance(fallback.get("searchId"), str):
                 trigger_search_id = str(fallback["searchId"])
-        if trigger_budget.remaining > 0:
+        if downloads_per_search > 0:
             report["download_trigger"] = trigger_active_downloads_from_search_result(
                 base_url,
                 api_key,
                 trigger_search_id,
                 observation_timeout_seconds,
-                trigger_budget,
+                downloads_per_search,
+                trigger_coordinator,
+                transfer_registry,
+                max_active_downloads,
             )
         report["ok"] = True
     except Exception as exc:
@@ -1570,7 +1890,11 @@ def run_stress_waves(
     waves: int,
     searches_per_wave: int,
     max_concurrent_searches: int,
-    downloads_per_wave: int,
+    downloads_per_search: int,
+    max_active_downloads: int,
+    download_churn_interval_seconds: float,
+    download_remove_count_per_churn: int,
+    transfer_registry: StressTransferRegistry,
     observation_timeout_seconds: float,
     network_ready_timeout_seconds: float,
 ) -> dict[str, object]:
@@ -1580,6 +1904,9 @@ def run_stress_waves(
     all_search_ids: list[str] = []
     completed_download_triggers = 0
     transport_checks: list[dict[str, object]] = []
+    trigger_coordinator = DownloadTriggerCoordinator()
+    churn_reports: list[dict[str, object]] = []
+    last_churn_at = time.monotonic()
     for wave_index in range(1, waves + 1):
         transport = get_search_network_mode(
             base_url=base_url,
@@ -1595,14 +1922,13 @@ def run_stress_waves(
                     "planned_searches": searches_per_wave,
                     "completed_searches": 0,
                     "failed_searches": searches_per_wave,
-                    "requested_download_triggers": downloads_per_wave,
+                    "requested_download_triggers": searches_per_wave * downloads_per_search,
                     "completed_download_triggers": 0,
                     "transport": transport,
                     "searches": [],
                 }
             )
             continue
-        trigger_budget = DownloadTriggerBudget(downloads_per_wave)
         plan = build_wave_search_plan(
             wave_index=wave_index,
             searches_per_wave=searches_per_wave,
@@ -1618,7 +1944,10 @@ def run_stress_waves(
                     api_key=api_key,
                     plan_row=row,
                     observation_timeout_seconds=observation_timeout_seconds,
-                    trigger_budget=trigger_budget,
+                    downloads_per_search=downloads_per_search,
+                    trigger_coordinator=trigger_coordinator,
+                    transfer_registry=transfer_registry,
+                    max_active_downloads=max_active_downloads,
                 )
                 for row in plan
             ]
@@ -1633,14 +1962,30 @@ def run_stress_waves(
                 completed_download_triggers += count_download_triggers(row)
 
         ready_probe = rest_smoke.http_request(base_url, "/api/v1/app", api_key=api_key)
+        churn_report: dict[str, object] | None = None
+        if (
+            download_churn_interval_seconds > 0
+            and download_remove_count_per_churn > 0
+            and time.monotonic() - last_churn_at >= download_churn_interval_seconds
+        ):
+            churn_report = delete_non_completed_stress_transfers(
+                base_url,
+                api_key,
+                transfer_registry,
+                download_remove_count_per_churn,
+            )
+            churn_report["wave"] = wave_index
+            churn_reports.append(churn_report)
+            last_churn_at = time.monotonic()
         wave_reports.append(
             {
                 "wave": wave_index,
                 "planned_searches": len(plan),
                 "completed_searches": sum(1 for row in wave_rows if bool(row.get("ok"))),
                 "failed_searches": sum(1 for row in wave_rows if not bool(row.get("ok"))),
-                "requested_download_triggers": downloads_per_wave,
+                "requested_download_triggers": len(plan) * downloads_per_search,
                 "completed_download_triggers": sum(count_download_triggers(row) for row in wave_rows),
+                "churn": churn_report,
                 "rest_ready_probe": rest_smoke.compact_http_result(ready_probe),
                 "resource_snapshot": rest_smoke.get_process_resource_snapshot(process_id),
                 "transport": transport,
@@ -1656,9 +2001,11 @@ def run_stress_waves(
         "planned_searches": waves * searches_per_wave,
         "completed_searches": sum(wave["completed_searches"] for wave in wave_reports),
         "failed_searches": sum(wave["failed_searches"] for wave in wave_reports),
-        "requested_download_triggers": waves * downloads_per_wave,
+        "requested_download_triggers": waves * searches_per_wave * downloads_per_search,
         "completed_download_triggers": completed_download_triggers,
         "transport_checks": transport_checks,
+        "churn": churn_reports,
+        "transfer_registry": transfer_registry.counts(),
     }
     zero_result_searches = collect_zero_result_searches(stress_report)
     required_zero_result_searches = collect_zero_result_searches(stress_report, required_only=True)
@@ -1676,6 +2023,133 @@ def run_stress_waves(
     return stress_report
 
 
+def list_stress_transfer_rows(
+    base_url: str,
+    api_key: str,
+    transfer_hashes: set[str],
+) -> list[dict[str, Any]]:
+    """Returns currently visible transfer rows for the requested stress hashes."""
+
+    result = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=api_key)
+    rows = rest_smoke.require_json_array(result, 200)
+    stress_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        transfer_hash = str(row.get("hash") or "").lower()
+        if transfer_hash in transfer_hashes:
+            stress_rows.append(row)
+    return stress_rows
+
+
+def delete_non_completed_stress_transfers(
+    base_url: str,
+    api_key: str,
+    transfer_registry: StressTransferRegistry,
+    remove_count: int,
+) -> dict[str, object]:
+    """Deletes a bounded set of non-completed stress transfers for churn."""
+
+    if remove_count <= 0:
+        return {"requested_count": 0, "deleted_count": 0, "deletes": []}
+    rows = list_stress_transfer_rows(base_url, api_key, transfer_registry.active_hashes())
+    candidates = [
+        row
+        for row in rows
+        if str(row.get("state") or "").lower() != "completed" and rest_smoke.is_lowercase_md4_hash(str(row.get("hash") or "").lower())
+    ]
+    candidates.sort(
+        key=lambda row: (
+            str(row.get("state") or ""),
+            -int(row.get("completedBytes") or 0),
+            str(row.get("hash") or ""),
+        )
+    )
+    selected_hashes = [str(row["hash"]).lower() for row in candidates[:remove_count]]
+    active_before = transfer_registry.counts()
+    result = delete_stress_transfers(base_url, api_key, selected_hashes)
+    for row in result.get("deletes", []):
+        if not isinstance(row, dict):
+            continue
+        response = row.get("response")
+        if isinstance(response, dict) and int(response.get("status", 0)) in {200, 404}:
+            transfer_registry.record_deleted(str(row.get("hash") or ""))
+    result["visible_candidate_count"] = len(candidates)
+    result["active_before"] = active_before
+    result["active_after"] = transfer_registry.counts()
+    return result
+
+
+def wait_for_completed_stress_downloads(
+    base_url: str,
+    api_key: str,
+    transfer_registry: StressTransferRegistry,
+    target_completed_downloads: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for the configured number of stress transfers to complete."""
+
+    observations: list[dict[str, object]] = []
+    if target_completed_downloads <= 0:
+        return {
+            "ok": True,
+            "target_completed_downloads": target_completed_downloads,
+            "completed_count": 0,
+            "observations": observations,
+            "skipped": True,
+        }
+
+    def resolve():
+        stress_hashes = set(transfer_registry.hashes())
+        rows = list_stress_transfer_rows(base_url, api_key, stress_hashes)
+        completed_hashes: list[str] = []
+        completed_bytes = 0
+        for row in rows:
+            transfer_hash = str(row.get("hash") or "").lower()
+            if str(row.get("state") or "").lower() == "completed":
+                transfer_registry.record_completed(transfer_hash)
+                completed_hashes.append(transfer_hash)
+            completed_bytes += int(row.get("completedBytes") or 0)
+        counts = transfer_registry.counts()
+        observation = {
+            "observed_at": round(time.time(), 3),
+            "target_completed_downloads": target_completed_downloads,
+            "visible_stress_transfer_count": len(rows),
+            "completed_count": counts["completed_stress_transfer_count"],
+            "active_stress_transfer_count": counts["active_stress_transfer_count"],
+            "triggered_stress_transfer_count": counts["triggered_stress_transfer_count"],
+            "completed_bytes": completed_bytes,
+        }
+        observations.append(observation)
+        if counts["completed_stress_transfer_count"] >= target_completed_downloads:
+            return {
+                "ok": True,
+                "target_completed_downloads": target_completed_downloads,
+                "completed_count": counts["completed_stress_transfer_count"],
+                "completed_hashes": sorted(set(completed_hashes)),
+                "observations": observations,
+            }
+        return None
+
+    try:
+        result = rest_smoke.wait_for(
+            resolve,
+            timeout=timeout_seconds,
+            interval=5.0,
+            description="stress download completions",
+        )
+    except Exception:
+        counts = transfer_registry.counts()
+        return {
+            "ok": False,
+            "target_completed_downloads": target_completed_downloads,
+            "completed_count": counts["completed_stress_transfer_count"],
+            "observations": observations,
+        }
+    assert isinstance(result, dict)
+    return result
+
+
 def cleanup_searches_and_transfers(
     *,
     base_url: str,
@@ -1683,6 +2157,7 @@ def cleanup_searches_and_transfers(
     search_ids: list[str],
     transfer_hashes: list[str],
     transfer_cleanup_timeout_seconds: float,
+    transfer_registry: StressTransferRegistry | None = None,
 ) -> dict[str, object]:
     """Deletes active stress searches/transfers and records cleanup state."""
 
@@ -1695,6 +2170,13 @@ def cleanup_searches_and_transfers(
     if int(delete_result["status"]) == 200:
         cleanup["post_delete"] = rest_smoke.verify_searches_deleted(base_url, api_key, search_ids)
     cleanup["delete_stress_transfers"] = delete_stress_transfers(base_url, api_key, transfer_hashes)
+    if transfer_registry is not None:
+        for row in cleanup["delete_stress_transfers"].get("deletes", []):
+            if not isinstance(row, dict):
+                continue
+            response = row.get("response")
+            if isinstance(response, dict) and int(response.get("status", 0)) in {200, 404}:
+                transfer_registry.record_deleted(str(row.get("hash") or ""))
     cleanup["post_transfer_delete"] = wait_for_stress_transfers_absent(
         base_url,
         api_key,
@@ -1985,6 +2467,9 @@ def main(argv: list[str] | None = None) -> int:
     base_url = f"http://127.0.0.1:{port}"
     tools = discover_diagnostic_tools()
     symbol_env = build_symbol_environment(paths.app_exe, artifacts_dir)
+    downloads_per_search = resolve_downloads_per_search(args)
+    transfer_registry = StressTransferRegistry()
+    resource_monitor: ProcessResourceMonitor | None = None
     report: dict[str, object] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "suite": SUITE_NAME,
@@ -2005,6 +2490,13 @@ def main(argv: list[str] | None = None) -> int:
             "searches_per_wave": args.searches_per_wave,
             "max_concurrent_searches": args.max_concurrent_searches,
             "downloads_per_wave": args.downloads_per_wave,
+            "downloads_per_search": downloads_per_search,
+            "target_completed_downloads": args.target_completed_downloads,
+            "completion_timeout_seconds": args.completion_timeout_seconds,
+            "max_active_downloads": args.max_active_downloads,
+            "download_churn_interval_seconds": args.download_churn_interval_seconds,
+            "download_remove_count_per_churn": args.download_remove_count_per_churn,
+            "resource_monitor_interval_seconds": args.resource_monitor_interval_seconds,
             "post_drain_seconds": args.post_drain_seconds,
             "tool_timeout_seconds": args.tool_timeout_seconds,
             "enable_umdh": bool(args.enable_umdh),
@@ -2129,6 +2621,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["network_ready"] = live_network
 
+        resource_monitor = ProcessResourceMonitor(
+            process_id=process_id,
+            interval_seconds=args.resource_monitor_interval_seconds,
+            counts_provider=transfer_registry.counts,
+        )
+        resource_monitor.start()
         stress = run_stress_waves(
             base_url=base_url,
             api_key=args.api_key,
@@ -2138,11 +2636,22 @@ def main(argv: list[str] | None = None) -> int:
             waves=args.waves,
             searches_per_wave=args.searches_per_wave,
             max_concurrent_searches=args.max_concurrent_searches,
-            downloads_per_wave=args.downloads_per_wave,
+            downloads_per_search=downloads_per_search,
+            max_active_downloads=args.max_active_downloads,
+            download_churn_interval_seconds=args.download_churn_interval_seconds,
+            download_remove_count_per_churn=args.download_remove_count_per_churn,
+            transfer_registry=transfer_registry,
             observation_timeout_seconds=args.search_observation_timeout_seconds,
             network_ready_timeout_seconds=args.network_ready_timeout_seconds,
         )
         report["checks"]["stress"] = stress
+        report["checks"]["download_completion"] = wait_for_completed_stress_downloads(
+            base_url,
+            args.api_key,
+            transfer_registry,
+            args.target_completed_downloads,
+            args.completion_timeout_seconds,
+        )
         report["diagnostics"]["peak"] = collect_diagnostics(
             label="peak",
             process_id=process_id,
@@ -2158,8 +2667,9 @@ def main(argv: list[str] | None = None) -> int:
             base_url=base_url,
             api_key=args.api_key,
             search_ids=[str(search_id) for search_id in stress["search_ids"]],
-            transfer_hashes=extract_stress_transfer_hashes(stress),
+            transfer_hashes=transfer_registry.hashes(),
             transfer_cleanup_timeout_seconds=max(30.0, args.post_drain_seconds),
+            transfer_registry=transfer_registry,
         )
         if args.post_drain_seconds:
             time.sleep(args.post_drain_seconds)
@@ -2175,6 +2685,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["diagnostics"]["resource_deltas"] = summarize_resource_deltas(report["diagnostics"])
         report["diagnostics"]["cdb_deltas"] = summarize_cdb_deltas(report["diagnostics"])
+        if resource_monitor is not None:
+            report["diagnostics"]["resource_monitor"] = resource_monitor.stop()
+            resource_monitor = None
 
         if args.enable_umdh:
             report["diagnostics"]["umdh_diffs"] = {
@@ -2219,6 +2732,12 @@ def main(argv: list[str] | None = None) -> int:
         elif int(stress_summary.get("video_download_trigger_count", 0)) > 0:
             report["status"] = "failed"
             report["failure_reason"] = "video downloads were triggered during dump stress"
+        elif not bool(report["checks"]["download_completion"].get("ok")):
+            report["status"] = "failed"
+            report["failure_reason"] = (
+                "target completed downloads were not reached: "
+                f"{report['checks']['download_completion'].get('completed_count')} < {args.target_completed_downloads}"
+            )
         elif args.enable_umdh and not umdh_diagnostics_are_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "required UMDH diagnostics did not complete"
@@ -2254,6 +2773,14 @@ def main(argv: list[str] | None = None) -> int:
                 symbol_env=symbol_env,
             )
     finally:
+        if resource_monitor is not None:
+            try:
+                report["diagnostics"]["resource_monitor"] = resource_monitor.stop()
+            except Exception as exc:
+                report["diagnostics"]["resource_monitor_error"] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
         if app is not None and not args.keep_running:
             try:
                 report["cleanup"]["app_shutdown"] = rest_smoke.close_app_cleanly(app)

@@ -24,6 +24,9 @@ def test_operator_script_help_loads() -> None:
     assert "--enable-umdh" in help_text
     assert "--max-post-drain-umdh-positive-bytes" in help_text
     assert "--skip-dumps" in help_text
+    assert "--downloads-per-search" in help_text
+    assert "--target-completed-downloads" in help_text
+    assert "--resource-monitor-interval-seconds" in help_text
     assert parser.get_default("max_post_drain_umdh_positive_bytes") == 16 * 1024 * 1024
 
 
@@ -104,6 +107,134 @@ def test_download_trigger_summary_counts_file_types_and_video() -> None:
     assert summary["file_type_counts"] == {"audio": 1, "doc": 1, "video": 1}
     assert summary["extension_counts"] == {".bin": 1, ".mp3": 1, ".mp4": 1, ".pdf": 1}
     assert summary["video_download_trigger_count"] == 2
+
+
+def test_download_candidates_are_ordered_by_size_then_sources() -> None:
+    module = load_script_module()
+    larger = {
+        "hash": "b" * 32,
+        "name": "larger.pdf",
+        "fileType": "document",
+        "sources": 9,
+        "completeSources": 9,
+        "sizeBytes": 1000,
+    }
+    smaller_low_sources = {
+        "hash": "a" * 32,
+        "name": "smaller-a.pdf",
+        "fileType": "document",
+        "sources": 2,
+        "completeSources": 1,
+        "sizeBytes": 100,
+    }
+    smaller_high_sources = {
+        "hash": "c" * 32,
+        "name": "smaller-c.pdf",
+        "fileType": "document",
+        "sources": 4,
+        "completeSources": 3,
+        "sizeBytes": 100,
+    }
+
+    ordered = module.find_stress_download_candidates(
+        {"results": [larger, smaller_low_sources, smaller_high_sources]}
+    )
+
+    assert [row["hash"] for row in ordered] == ["c" * 32, "a" * 32, "b" * 32]
+
+
+def test_download_trigger_respects_per_search_budget_and_dedupes(monkeypatch) -> None:
+    module = load_script_module()
+    hash_a = "0123456789abcdef0123456789abcdef"
+    hash_b = "abcdef0123456789abcdef0123456789"
+    search_payload = {
+        "status": "running",
+        "results": [
+            {"hash": hash_a, "name": "small-a.pdf", "sizeBytes": 100, "sources": 3, "completeSources": 2},
+            {"hash": hash_b, "name": "small-b.pdf", "sizeBytes": 200, "sources": 3, "completeSources": 2},
+        ],
+    }
+    downloads: list[str] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        if path == "/api/v1/searches/101":
+            return {"status": 200, "json": search_payload}
+        downloads.append(path)
+        return {"status": 200, "json": {"ok": True}}
+
+    def fake_wait_for(resolve, **_kwargs):
+        return resolve()
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: result["json"])
+    monkeypatch.setattr(module.rest_smoke, "wait_for", fake_wait_for)
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "wait_for_triggered_transfer",
+        lambda _base_url, _api_key, transfer_hash, _timeout: {"json": {"hash": transfer_hash}},
+    )
+
+    coordinator = module.DownloadTriggerCoordinator()
+    registry = module.StressTransferRegistry()
+    first = module.trigger_active_downloads_from_search_result(
+        "http://127.0.0.1:1",
+        "key",
+        "101",
+        5.0,
+        1,
+        coordinator,
+        registry,
+        10,
+    )
+    second = module.trigger_active_downloads_from_search_result(
+        "http://127.0.0.1:1",
+        "key",
+        "101",
+        5.0,
+        2,
+        coordinator,
+        registry,
+        10,
+    )
+
+    assert len(first["triggers"]) == 1
+    assert len(second["triggers"]) == 1
+    assert downloads == [
+        f"/api/v1/searches/101/results/{hash_a}/operations/download",
+        f"/api/v1/searches/101/results/{hash_b}/operations/download",
+    ]
+    assert registry.counts()["triggered_stress_transfer_count"] == 2
+
+
+def test_compute_cpu_percent_normalizes_by_logical_cpu_count() -> None:
+    module = load_script_module()
+
+    assert module.compute_cpu_percent(0, 20_000_000, 2.0, 4) == 25.0
+    assert module.compute_cpu_percent(None, 20_000_000, 2.0, 4) is None
+    assert module.compute_cpu_percent(0, 20_000_000, 0.0, 4) is None
+
+
+def test_summarize_resource_monitor_samples_reports_cpu_and_threads() -> None:
+    module = load_script_module()
+
+    summary = module.summarize_resource_monitor_samples(
+        [
+            {"cpu_percent": None, "thread_count": 5, "handles": 10, "private_bytes": 100, "working_set_bytes": 200},
+            {"cpu_percent": 10.0, "thread_count": 7, "handles": 15, "private_bytes": 300, "working_set_bytes": 400},
+            {"cpu_percent": 30.0, "thread_count": 6, "handles": 12, "private_bytes": 250, "working_set_bytes": 350},
+        ]
+    )
+
+    assert summary == {
+        "sample_count": 3,
+        "cpu_percent_avg": 20.0,
+        "cpu_percent_p95": 30.0,
+        "cpu_percent_max": 30.0,
+        "thread_count_max": 7,
+        "handles_max": 15,
+        "private_bytes_max": 300,
+        "working_set_bytes_max": 400,
+    }
 
 
 def test_access_violation_without_emule_dump_is_release_blocking() -> None:
@@ -712,6 +843,84 @@ def test_wait_for_stress_transfers_absent_polls_until_transfer_disappears(monkey
     assert [row["present_count"] for row in result["observations"]] == [1, 0]
 
 
+def test_wait_for_completed_stress_downloads_records_completed_hashes(monkeypatch) -> None:
+    module = load_script_module()
+    transfer_hash = "0123456789abcdef0123456789abcdef"
+    registry = module.StressTransferRegistry()
+    registry.record_triggered(transfer_hash)
+
+    def fake_http_request(_base_url, path, **kwargs):
+        assert path == "/api/v1/transfers"
+        return {
+            "status": 200,
+            "json": [
+                {
+                    "hash": transfer_hash,
+                    "state": "completed",
+                    "completedBytes": 1024,
+                }
+            ],
+        }
+
+    def fake_wait_for(resolve, **_kwargs):
+        return resolve()
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_array", lambda result, _status: result["json"])
+    monkeypatch.setattr(module.rest_smoke, "wait_for", fake_wait_for)
+
+    result = module.wait_for_completed_stress_downloads(
+        "http://127.0.0.1:1",
+        "key",
+        registry,
+        1,
+        10.0,
+    )
+
+    assert result["ok"] is True
+    assert result["completed_count"] == 1
+    assert registry.counts()["completed_stress_transfer_count"] == 1
+
+
+def test_delete_non_completed_stress_transfers_avoids_completed_rows(monkeypatch) -> None:
+    module = load_script_module()
+    active_hash = "0123456789abcdef0123456789abcdef"
+    completed_hash = "abcdef0123456789abcdef0123456789"
+    registry = module.StressTransferRegistry()
+    registry.record_triggered(active_hash)
+    registry.record_triggered(completed_hash)
+    registry.record_completed(completed_hash)
+    deletes: list[str] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        if path == "/api/v1/transfers":
+            return {
+                "status": 200,
+                "json": [
+                    {"hash": active_hash, "state": "downloading", "completedBytes": 500},
+                    {"hash": completed_hash, "state": "completed", "completedBytes": 1000},
+                ],
+            }
+        deletes.append(path)
+        return {"status": 200, "json": {"ok": True}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_array", lambda result, _status: result["json"])
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+
+    result = module.delete_non_completed_stress_transfers(
+        "http://127.0.0.1:1",
+        "key",
+        registry,
+        5,
+    )
+
+    assert result["requested_count"] == 1
+    assert result["deleted_count"] == 1
+    assert deletes == [f"/api/v1/transfers/{active_hash}"]
+    assert registry.counts()["deleted_stress_transfer_count"] == 1
+
+
 def test_cleanup_clears_logs_after_transfer_cleanup(monkeypatch) -> None:
     module = load_script_module()
     calls: list[str] = []
@@ -807,6 +1016,13 @@ def test_validate_rejects_invalid_stress_shape() -> None:
         searches_per_wave=1,
         max_concurrent_searches=1,
         downloads_per_wave=0,
+        downloads_per_search=None,
+        target_completed_downloads=0,
+        completion_timeout_seconds=1,
+        max_active_downloads=1,
+        download_churn_interval_seconds=0,
+        download_remove_count_per_churn=0,
+        resource_monitor_interval_seconds=0,
         post_drain_seconds=0,
         tool_timeout_seconds=1,
         max_post_drain_umdh_positive_bytes=1,

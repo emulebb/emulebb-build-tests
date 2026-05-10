@@ -336,6 +336,20 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "4",
             "--rest-cold-start-dump-stress-downloads-per-wave",
             "1",
+            "--rest-cold-start-dump-stress-downloads-per-search",
+            "7",
+            "--rest-cold-start-dump-stress-target-completed-downloads",
+            "3",
+            "--rest-cold-start-dump-stress-completion-timeout-seconds",
+            "8",
+            "--rest-cold-start-dump-stress-max-active-downloads",
+            "9",
+            "--rest-cold-start-dump-stress-download-churn-interval-seconds",
+            "10",
+            "--rest-cold-start-dump-stress-download-remove-count-per-churn",
+            "2",
+            "--rest-cold-start-dump-stress-resource-monitor-interval-seconds",
+            "11",
             "--rest-cold-start-dump-stress-post-drain-seconds",
             "5",
             "--rest-cold-start-dump-stress-tool-timeout-seconds",
@@ -353,6 +367,13 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert option_values(command, "--searches-per-wave") == ["3"]
     assert option_values(command, "--max-concurrent-searches") == ["4"]
     assert option_values(command, "--downloads-per-wave") == ["1"]
+    assert option_values(command, "--downloads-per-search") == ["7"]
+    assert option_values(command, "--target-completed-downloads") == ["3"]
+    assert option_values(command, "--completion-timeout-seconds") == ["8.0"]
+    assert option_values(command, "--max-active-downloads") == ["9"]
+    assert option_values(command, "--download-churn-interval-seconds") == ["10.0"]
+    assert option_values(command, "--download-remove-count-per-churn") == ["2"]
+    assert option_values(command, "--resource-monitor-interval-seconds") == ["11.0"]
     assert option_values(command, "--post-drain-seconds") == ["5.0"]
     assert option_values(command, "--tool-timeout-seconds") == ["6.0"]
     assert "--enable-umdh" in command

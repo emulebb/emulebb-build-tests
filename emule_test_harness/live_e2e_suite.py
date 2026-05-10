@@ -44,6 +44,13 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES = 4
 DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 12
 DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 8
 DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 12
+DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH = 1
+DEFAULT_REST_COLD_START_DUMP_STRESS_TARGET_COMPLETED_DOWNLOADS = 0
+DEFAULT_REST_COLD_START_DUMP_STRESS_COMPLETION_TIMEOUT_SECONDS = 1800.0
+DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS = 128
+DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS = 0.0
+DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN = 0
+DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 30.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 600.0
 
@@ -227,6 +234,13 @@ def build_suite_command(
     rest_cold_start_dump_stress_searches_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE,
     rest_cold_start_dump_stress_max_concurrent_searches: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES,
     rest_cold_start_dump_stress_downloads_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE,
+    rest_cold_start_dump_stress_downloads_per_search: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH,
+    rest_cold_start_dump_stress_target_completed_downloads: int = DEFAULT_REST_COLD_START_DUMP_STRESS_TARGET_COMPLETED_DOWNLOADS,
+    rest_cold_start_dump_stress_completion_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_COMPLETION_TIMEOUT_SECONDS,
+    rest_cold_start_dump_stress_max_active_downloads: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS,
+    rest_cold_start_dump_stress_download_churn_interval_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS,
+    rest_cold_start_dump_stress_download_remove_count_per_churn: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN,
+    rest_cold_start_dump_stress_resource_monitor_interval_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS,
     rest_cold_start_dump_stress_post_drain_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS,
     rest_cold_start_dump_stress_tool_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS,
     rest_cold_start_dump_stress_enable_umdh: bool = False,
@@ -322,6 +336,13 @@ def build_suite_command(
         command.extend(["--searches-per-wave", str(rest_cold_start_dump_stress_searches_per_wave)])
         command.extend(["--max-concurrent-searches", str(rest_cold_start_dump_stress_max_concurrent_searches)])
         command.extend(["--downloads-per-wave", str(rest_cold_start_dump_stress_downloads_per_wave)])
+        command.extend(["--downloads-per-search", str(rest_cold_start_dump_stress_downloads_per_search)])
+        command.extend(["--target-completed-downloads", str(rest_cold_start_dump_stress_target_completed_downloads)])
+        command.extend(["--completion-timeout-seconds", str(rest_cold_start_dump_stress_completion_timeout_seconds)])
+        command.extend(["--max-active-downloads", str(rest_cold_start_dump_stress_max_active_downloads)])
+        command.extend(["--download-churn-interval-seconds", str(rest_cold_start_dump_stress_download_churn_interval_seconds)])
+        command.extend(["--download-remove-count-per-churn", str(rest_cold_start_dump_stress_download_remove_count_per_churn)])
+        command.extend(["--resource-monitor-interval-seconds", str(rest_cold_start_dump_stress_resource_monitor_interval_seconds)])
         command.extend(["--post-drain-seconds", str(rest_cold_start_dump_stress_post_drain_seconds)])
         command.extend(["--tool-timeout-seconds", str(rest_cold_start_dump_stress_tool_timeout_seconds)])
         if rest_cold_start_dump_stress_enable_umdh:
@@ -404,6 +425,41 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE,
     )
     parser.add_argument(
+        "--rest-cold-start-dump-stress-downloads-per-search",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-target-completed-downloads",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_TARGET_COMPLETED_DOWNLOADS,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-completion-timeout-seconds",
+        type=float,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_COMPLETION_TIMEOUT_SECONDS,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-max-active-downloads",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-download-churn-interval-seconds",
+        type=float,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-download-remove-count-per-churn",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-resource-monitor-interval-seconds",
+        type=float,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS,
+    )
+    parser.add_argument(
         "--rest-cold-start-dump-stress-post-drain-seconds",
         type=float,
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS,
@@ -454,6 +510,20 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST cold-start dump stress concurrency must be greater than zero.")
     if args.rest_cold_start_dump_stress_downloads_per_wave < 0:
         raise ValueError("REST cold-start dump stress downloads per wave must be zero or greater.")
+    if args.rest_cold_start_dump_stress_downloads_per_search < 0:
+        raise ValueError("REST cold-start dump stress downloads per search must be zero or greater.")
+    if args.rest_cold_start_dump_stress_target_completed_downloads < 0:
+        raise ValueError("REST cold-start dump stress target completed downloads must be zero or greater.")
+    if args.rest_cold_start_dump_stress_completion_timeout_seconds <= 0:
+        raise ValueError("REST cold-start dump stress completion timeout must be greater than zero.")
+    if args.rest_cold_start_dump_stress_max_active_downloads <= 0:
+        raise ValueError("REST cold-start dump stress max active downloads must be greater than zero.")
+    if args.rest_cold_start_dump_stress_download_churn_interval_seconds < 0:
+        raise ValueError("REST cold-start dump stress download churn interval must be zero or greater.")
+    if args.rest_cold_start_dump_stress_download_remove_count_per_churn < 0:
+        raise ValueError("REST cold-start dump stress download remove count must be zero or greater.")
+    if args.rest_cold_start_dump_stress_resource_monitor_interval_seconds < 0:
+        raise ValueError("REST cold-start dump stress resource monitor interval must be zero or greater.")
     if args.rest_cold_start_dump_stress_post_drain_seconds < 0:
         raise ValueError("REST cold-start dump stress post-drain seconds must be zero or greater.")
     if args.rest_cold_start_dump_stress_tool_timeout_seconds <= 0:
@@ -518,6 +588,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
             "max_concurrent_searches": args.rest_cold_start_dump_stress_max_concurrent_searches,
             "downloads_per_wave": args.rest_cold_start_dump_stress_downloads_per_wave,
+            "downloads_per_search": args.rest_cold_start_dump_stress_downloads_per_search,
+            "target_completed_downloads": args.rest_cold_start_dump_stress_target_completed_downloads,
+            "completion_timeout_seconds": args.rest_cold_start_dump_stress_completion_timeout_seconds,
+            "max_active_downloads": args.rest_cold_start_dump_stress_max_active_downloads,
+            "download_churn_interval_seconds": args.rest_cold_start_dump_stress_download_churn_interval_seconds,
+            "download_remove_count_per_churn": args.rest_cold_start_dump_stress_download_remove_count_per_churn,
+            "resource_monitor_interval_seconds": args.rest_cold_start_dump_stress_resource_monitor_interval_seconds,
             "post_drain_seconds": args.rest_cold_start_dump_stress_post_drain_seconds,
             "tool_timeout_seconds": args.rest_cold_start_dump_stress_tool_timeout_seconds,
             "enable_umdh": bool(args.rest_cold_start_dump_stress_enable_umdh),
@@ -576,6 +653,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_searches_per_wave=args.rest_cold_start_dump_stress_searches_per_wave,
             rest_cold_start_dump_stress_max_concurrent_searches=args.rest_cold_start_dump_stress_max_concurrent_searches,
             rest_cold_start_dump_stress_downloads_per_wave=args.rest_cold_start_dump_stress_downloads_per_wave,
+            rest_cold_start_dump_stress_downloads_per_search=args.rest_cold_start_dump_stress_downloads_per_search,
+            rest_cold_start_dump_stress_target_completed_downloads=args.rest_cold_start_dump_stress_target_completed_downloads,
+            rest_cold_start_dump_stress_completion_timeout_seconds=args.rest_cold_start_dump_stress_completion_timeout_seconds,
+            rest_cold_start_dump_stress_max_active_downloads=args.rest_cold_start_dump_stress_max_active_downloads,
+            rest_cold_start_dump_stress_download_churn_interval_seconds=args.rest_cold_start_dump_stress_download_churn_interval_seconds,
+            rest_cold_start_dump_stress_download_remove_count_per_churn=args.rest_cold_start_dump_stress_download_remove_count_per_churn,
+            rest_cold_start_dump_stress_resource_monitor_interval_seconds=args.rest_cold_start_dump_stress_resource_monitor_interval_seconds,
             rest_cold_start_dump_stress_post_drain_seconds=args.rest_cold_start_dump_stress_post_drain_seconds,
             rest_cold_start_dump_stress_tool_timeout_seconds=args.rest_cold_start_dump_stress_tool_timeout_seconds,
             rest_cold_start_dump_stress_enable_umdh=args.rest_cold_start_dump_stress_enable_umdh,
