@@ -211,3 +211,74 @@ def test_evaluate_tree_stress_resources_rejects_unbounded_growth() -> None:
 
     assert evaluation["ok"] is False
     assert evaluation["violations"][0]["resource"] == "handles"
+
+
+def test_append_shared_state_failure_observation_captures_ui_and_rest(monkeypatch) -> None:
+    module = load_shared_files_module()
+    summary = {}
+
+    class FakeWin32Gui:
+        @staticmethod
+        def SendMessage(hwnd: int, message: int, wparam: int, lparam: int) -> int:
+            assert hwnd == 200
+            assert message == module.LVM_GETITEMCOUNT
+            return 2
+
+    monkeypatch.setattr(module, "win32gui", FakeWin32Gui)
+    monkeypatch.setattr(module, "get_all_list_names", lambda process_handle, list_hwnd: ["alpha.bin", "beta.bin"])
+    monkeypatch.setattr(module, "get_rest_shared_names", lambda base_url, api_key: ["alpha.bin", "beta.bin"])
+    monkeypatch.setattr(
+        module,
+        "get_rest_shared_directory_paths",
+        lambda base_url, api_key: {
+            "items": ["C:\\share\\"],
+            "monitor_owned": [],
+            "roots": ["C:\\share\\"],
+        },
+    )
+
+    module.append_shared_state_failure_observation(
+        summary,
+        process_handle=100,
+        list_hwnd=200,
+        base_url="http://127.0.0.1:1",
+        api_key="key",
+    )
+
+    assert summary["failure_observation"] == {
+        "ui_row_count": 2,
+        "ui_names": ["alpha.bin", "beta.bin"],
+        "rest_names": ["alpha.bin", "beta.bin"],
+        "rest_directories": {
+            "items": ["C:\\share\\"],
+            "monitor_owned": [],
+            "roots": ["C:\\share\\"],
+        },
+    }
+
+
+def test_append_shared_state_failure_observation_records_snapshot_errors(monkeypatch) -> None:
+    module = load_shared_files_module()
+    summary = {}
+
+    def fail_rest_names(_base_url: str, _api_key: str) -> list[str]:
+        raise RuntimeError("REST unavailable")
+
+    def fail_rest_directories(_base_url: str, _api_key: str) -> dict[str, list[str]]:
+        raise RuntimeError("directory model unavailable")
+
+    monkeypatch.setattr(module, "get_rest_shared_names", fail_rest_names)
+    monkeypatch.setattr(module, "get_rest_shared_directory_paths", fail_rest_directories)
+
+    module.append_shared_state_failure_observation(
+        summary,
+        process_handle=0,
+        list_hwnd=0,
+        base_url="http://127.0.0.1:1",
+        api_key="key",
+    )
+
+    observation = summary["failure_observation"]
+    assert observation["ui_error"] == "Shared Files list was not available."
+    assert observation["rest_names_error"] == "RuntimeError: REST unavailable"
+    assert observation["rest_directories_error"] == "RuntimeError: directory model unavailable"

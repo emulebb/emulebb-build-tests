@@ -1670,6 +1670,39 @@ def wait_for_rest_shared_file_count(
     return int(wait_for(resolve, timeout=timeout, interval=1.0, description=description))
 
 
+def append_shared_state_failure_observation(
+    summary: dict,
+    *,
+    process_handle: int,
+    list_hwnd: int,
+    base_url: str,
+    api_key: str,
+) -> None:
+    """Adds best-effort UI and REST shared-state snapshots to a failed scenario summary."""
+
+    observation: dict[str, object] = {}
+    if process_handle and list_hwnd:
+        try:
+            observation["ui_row_count"] = int(win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0))
+            observation["ui_names"] = get_all_list_names(process_handle, list_hwnd)
+        except Exception as exc:
+            observation["ui_error"] = f"{type(exc).__name__}: {exc}"
+    else:
+        observation["ui_error"] = "Shared Files list was not available."
+
+    try:
+        observation["rest_names"] = get_rest_shared_names(base_url, api_key)
+    except Exception as exc:
+        observation["rest_names_error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        observation["rest_directories"] = get_rest_shared_directory_paths(base_url, api_key)
+    except Exception as exc:
+        observation["rest_directories_error"] = f"{type(exc).__name__}: {exc}"
+
+    summary["failure_observation"] = observation
+
+
 def wait_for_list_names_one_of(
     process_handle: int,
     list_hwnd: int,
@@ -2084,6 +2117,7 @@ def run_dynamic_folder_lifecycle_e2e(
 
     app = None
     process_handle = 0
+    list_hwnd = 0
     try:
         app = live_common.launch_app(app_exe, fixture["profile_base"])
         main_window = live_common.wait_for_main_window(app)
@@ -2186,6 +2220,13 @@ def run_dynamic_folder_lifecycle_e2e(
         write_json(artifacts_dir / "result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
+        append_shared_state_failure_observation(
+            summary,
+            process_handle=process_handle,
+            list_hwnd=list_hwnd,
+            base_url=str(fixture["rest_base_url"]),
+            api_key=str(fixture["rest_api_key"]),
+        )
         if app is not None:
             try:
                 main_window = app.top_window()
@@ -2246,6 +2287,7 @@ def run_monitored_folder_events_e2e(
 
     app = None
     process_handle = 0
+    list_hwnd = 0
     try:
         app = live_common.launch_app(app_exe, fixture["profile_base"])
         main_window = live_common.wait_for_main_window(app)
@@ -2404,6 +2446,13 @@ def run_monitored_folder_events_e2e(
         write_json(artifacts_dir / "result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
+        append_shared_state_failure_observation(
+            summary,
+            process_handle=process_handle,
+            list_hwnd=list_hwnd,
+            base_url=str(fixture["rest_base_url"]),
+            api_key=str(fixture["rest_api_key"]),
+        )
         if app is not None:
             try:
                 main_window = app.top_window()
