@@ -27,6 +27,7 @@ def test_operator_script_help_loads() -> None:
     assert "--cpu-profile-max-file-mb" in help_text
     assert "--skip-dumps" in help_text
     assert "--downloads-per-search" in help_text
+    assert "--max-missing-download-triggers" in help_text
     assert "--target-completed-downloads" in help_text
     assert "--resource-monitor-interval-seconds" in help_text
     assert parser.get_default("max_post_drain_umdh_positive_bytes") == 16 * 1024 * 1024
@@ -1075,6 +1076,7 @@ def test_validate_rejects_invalid_stress_shape() -> None:
         max_concurrent_searches=1,
         downloads_per_wave=0,
         downloads_per_search=None,
+        max_missing_download_triggers=0,
         target_completed_downloads=0,
         completion_timeout_seconds=1,
         max_active_downloads=1,

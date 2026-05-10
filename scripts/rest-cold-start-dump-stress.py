@@ -478,6 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-concurrent-searches", type=int, default=8)
     parser.add_argument("--downloads-per-wave", type=int, default=12)
     parser.add_argument("--downloads-per-search", type=int)
+    parser.add_argument("--max-missing-download-triggers", type=int, default=0)
     parser.add_argument("--target-completed-downloads", type=int, default=0)
     parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--max-active-downloads", type=int, default=128)
@@ -509,6 +510,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("downloads per wave must be zero or greater.")
     if args.downloads_per_search is not None and args.downloads_per_search < 0:
         raise ValueError("downloads per search must be zero or greater.")
+    if args.max_missing_download_triggers < 0:
+        raise ValueError("max missing download triggers must be zero or greater.")
     if args.target_completed_downloads < 0:
         raise ValueError("target completed downloads must be zero or greater.")
     if args.completion_timeout_seconds <= 0:
@@ -2589,6 +2592,7 @@ def main(argv: list[str] | None = None) -> int:
             "max_concurrent_searches": args.max_concurrent_searches,
             "downloads_per_wave": args.downloads_per_wave,
             "downloads_per_search": downloads_per_search,
+            "max_missing_download_triggers": args.max_missing_download_triggers,
             "target_completed_downloads": args.target_completed_downloads,
             "completion_timeout_seconds": args.completion_timeout_seconds,
             "max_active_downloads": args.max_active_downloads,
@@ -2898,9 +2902,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cpu_profile and not cpu_profile_diagnostics_are_complete(report, symbols_required=args.cpu_profile_symbols_required):
             report["status"] = "failed"
             report["failure_reason"] = "required CPU profile diagnostics did not complete"
-        elif int(stress_summary.get("completed_download_triggers", 0)) < int(stress_summary.get("requested_download_triggers", 0)):
+        elif (
+            int(stress_summary.get("requested_download_triggers", 0)) - int(stress_summary.get("completed_download_triggers", 0))
+        ) > args.max_missing_download_triggers:
             report["status"] = "inconclusive"
-            report["failure_reason"] = "live network did not expose enough safe active-download candidates"
+            report["failure_reason"] = (
+                "live network did not expose enough safe active-download candidates: "
+                f"{int(stress_summary.get('completed_download_triggers', 0))}/"
+                f"{int(stress_summary.get('requested_download_triggers', 0))} triggers completed"
+            )
         else:
             report["status"] = "passed"
     except rest_smoke.LiveNetworkUnavailableError as exc:

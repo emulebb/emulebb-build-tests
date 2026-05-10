@@ -327,11 +327,14 @@ def parse_xperf_profile_detail(
         reverse=True,
     )
     top_rows = rows[:limit]
+    app_rows = [row for row in rows if isinstance(row.get("function"), str) and str(row["function"]).casefold().startswith("emule!")]
     return {
         "available": bool(top_rows),
+        "app_row_count": len(app_rows),
         "process_image": process_image,
         "row_count": len(rows),
         "top": top_rows,
+        "top_app_functions": app_rows[:limit],
         "unresolved_row_count": sum(1 for row in rows if row["function"] == "<unresolved>"),
     }
 

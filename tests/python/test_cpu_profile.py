@@ -47,6 +47,8 @@ emule.exe        cryptopp     cryptopp!SHA1::Transform                      12  
 
     assert summary["available"] is True
     assert summary["row_count"] == 3
+    assert summary["app_row_count"] == 2
+    assert summary["top_app_functions"] == summary["top"]
     assert summary["top"] == [
         {
             "function": "emule!CDownloadQueue::Process",
@@ -84,6 +86,7 @@ emule.exe (17236),     505140,       0.01,            emule.exe!CPartFile::Write
 
     assert summary["available"] is True
     assert summary["row_count"] == 3
+    assert summary["app_row_count"] == 2
     assert summary["unresolved_row_count"] == 1
     assert summary["top"] == [
         {
@@ -98,4 +101,8 @@ emule.exe (17236),     505140,       0.01,            emule.exe!CPartFile::Write
             "weight_percent": 0.02,
             "raw": "emule.exe (17236),    1656901,       0.02,            emule.exe!CMapPtrToPtr::GetValueAt",
         },
+    ]
+    assert [row["function"] for row in summary["top_app_functions"]] == [
+        "emule!CMapPtrToPtr::GetValueAt",
+        "emule!CPartFile::WriteToBuffer",
     ]
