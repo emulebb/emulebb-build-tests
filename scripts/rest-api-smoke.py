@@ -2342,6 +2342,7 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str
     outcome_counts: dict[str, int] = {}
     response_envelope_counts: dict[str, int] = {}
     safety_counts: dict[str, int] = {}
+    execution_model_counts: dict[str, int] = {}
     for route in routes:
         family = str(route["family"])
         family_summary = coverage_by_family.setdefault(family, {"total": 0, "exercised": 0, "skipped": 0, "failed": 0})
@@ -2352,6 +2353,8 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str
         response_envelope_counts[response_envelope] = response_envelope_counts.get(response_envelope, 0) + 1
         safety = str(route.get("safety") or ("unsafe" if route.get("safe") is False else "safe"))
         safety_counts[safety] = safety_counts.get(safety, 0) + 1
+        execution_model = str(route.get("executionModel") or "unknown")
+        execution_model_counts[execution_model] = execution_model_counts.get(execution_model, 0) + 1
         outcome = str(route.get("outcome") or ("skipped" if route.get("skipped") else "unknown"))
         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
         if route.get("skipped"):
@@ -2374,6 +2377,7 @@ def build_contract_coverage_summary(routes: list[dict[str, object]], budget: str
         "method_counts": method_counts,
         "response_envelope_counts": response_envelope_counts,
         "safety_counts": safety_counts,
+        "execution_model_counts": execution_model_counts,
         "outcome_counts": outcome_counts,
         "routes": routes,
         "coverage_by_family": coverage_by_family,
@@ -2406,6 +2410,7 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             "expectedResponseStatuses": list(expected_statuses),
             "successResponseRefs": route["successResponseRefs"],
             "responseEnvelope": route["responseEnvelope"],
+            "executionModel": route.get("executionModel", "unknown"),
             "skipped": False,
             "ok": False,
         }

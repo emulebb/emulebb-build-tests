@@ -657,6 +657,15 @@ def test_openapi_error_envelope_documents_stable_error_codes() -> None:
     assert "additionalProperties: true" in error_schema
 
 
+def test_openapi_metadata_tracks_beta_release_contract() -> None:
+    openapi_path = Path(__file__).resolve().parents[3] / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+    text = openapi_path.read_text(encoding="utf-8")
+
+    assert "  version: 0.7.3\n" in text
+    assert "Canonical beta 0.7.3 contract" in text
+    assert "1.0.0-pre" not in text
+
+
 def test_rest_error_response_requires_json_not_html() -> None:
     module = load_rest_api_smoke_module()
     error_result = {
@@ -1173,6 +1182,7 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
                 "safe": True,
                 "safety": "safe",
                 "responseEnvelope": "AppResponse",
+                "executionModel": "direct",
                 "skipped": False,
                 "ok": True,
                 "outcome": "success",
@@ -1186,6 +1196,7 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
                 "safe": True,
                 "safety": "safe",
                 "responseEnvelope": "TransferResponse",
+                "executionModel": "ui-thread",
                 "skipped": False,
                 "ok": True,
                 "outcome": "expected_error",
@@ -1199,6 +1210,7 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
                 "safe": False,
                 "safety": "unsafe",
                 "responseEnvelope": "OkAcceptedResponse",
+                "executionModel": "ui-thread",
                 "skipped": True,
                 "ok": True,
                 "outcome": "skipped_unsafe",
@@ -1215,6 +1227,7 @@ def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
     assert summary["method_counts"] == {"GET": 2, "POST": 1}
     assert summary["response_envelope_counts"] == {"AppResponse": 1, "TransferResponse": 1, "OkAcceptedResponse": 1}
     assert summary["safety_counts"] == {"safe": 2, "unsafe": 1}
+    assert summary["execution_model_counts"] == {"direct": 1, "ui-thread": 2}
     assert summary["outcome_counts"]["skipped_unsafe"] == 1
 
 
