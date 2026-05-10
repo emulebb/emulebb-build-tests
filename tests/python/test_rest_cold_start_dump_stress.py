@@ -368,6 +368,12 @@ def test_summarize_umdh_app_frames_groups_allocator_stacks() -> None:
     ]
 
 
+def test_umdh_app_allocation_frame_buckets_allocator_only_stacks() -> None:
+    module = load_script_module()
+
+    assert module.umdh_app_allocation_frame(["ntdll!RtlpAllocateHeapInternal+A7D", "emule!operator new+30"]) == "<allocator-only>"
+
+
 def test_summarize_resource_deltas_reports_peak_and_post_drain() -> None:
     module = load_script_module()
     diagnostics = {

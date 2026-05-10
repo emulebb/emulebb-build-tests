@@ -694,7 +694,7 @@ def umdh_app_allocation_frame(stack: object) -> str:
             continue
         if text.startswith("emule!"):
             return umdh_frame_symbol(text)
-    return umdh_frame_symbol(stack[0]) if stack else "<unknown>"
+    return "<allocator-only>" if stack else "<unknown>"
 
 
 def summarize_umdh_app_frames(entries: list[dict[str, object]], *, limit: int = UMDH_TOP_DELTA_LIMIT) -> list[dict[str, object]]:
