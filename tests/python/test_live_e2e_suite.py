@@ -397,6 +397,9 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "--rest-cold-start-dump-stress-cpu-profile",
             "--rest-cold-start-dump-stress-cpu-profile-max-file-mb",
             "64",
+            "--rest-cold-start-dump-stress-cpu-profile-stack",
+            "--rest-cold-start-dump-stress-cpu-profile-stack-min-hits",
+            "25",
             "--no-rest-cold-start-dump-stress-cpu-profile-symbols-required",
             "--rest-cold-start-dump-stress-skip-dumps",
         ),
@@ -427,10 +430,14 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert "--skip-umdh-diffs" in command
     assert "--cpu-profile" in command
     assert option_values(command, "--cpu-profile-max-file-mb") == ["64"]
+    assert "--cpu-profile-stack" in command
+    assert option_values(command, "--cpu-profile-stack-min-hits") == ["25"]
     assert "--no-cpu-profile-symbols-required" in command
     assert "--skip-dumps" in command
     assert summary["rest_cold_start_dump_stress"]["cpu_profile"] is True
     assert summary["rest_cold_start_dump_stress"]["cpu_profile_max_file_mb"] == 64
+    assert summary["rest_cold_start_dump_stress"]["cpu_profile_stack"] is True
+    assert summary["rest_cold_start_dump_stress"]["cpu_profile_stack_min_hits"] == 25
     assert summary["rest_cold_start_dump_stress"]["cpu_profile_symbols_required"] is False
     assert summary["rest_cold_start_dump_stress"]["max_missing_download_triggers"] == 1
     assert summary["rest_cold_start_dump_stress"]["search_observation_timeout_seconds"] == 12.0

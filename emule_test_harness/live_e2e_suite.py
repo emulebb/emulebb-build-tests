@@ -57,6 +57,7 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 30.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 60.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
+DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,8 @@ def build_suite_command(
     rest_cold_start_dump_stress_skip_umdh_diffs: bool = False,
     rest_cold_start_dump_stress_cpu_profile: bool = False,
     rest_cold_start_dump_stress_cpu_profile_max_file_mb: int = DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB,
+    rest_cold_start_dump_stress_cpu_profile_stack: bool = False,
+    rest_cold_start_dump_stress_cpu_profile_stack_min_hits: int = DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS,
     rest_cold_start_dump_stress_cpu_profile_symbols_required: bool = True,
     rest_cold_start_dump_stress_skip_dumps: bool = False,
 ) -> list[str]:
@@ -370,6 +373,9 @@ def build_suite_command(
         if rest_cold_start_dump_stress_cpu_profile:
             command.append("--cpu-profile")
         command.extend(["--cpu-profile-max-file-mb", str(rest_cold_start_dump_stress_cpu_profile_max_file_mb)])
+        if rest_cold_start_dump_stress_cpu_profile_stack:
+            command.append("--cpu-profile-stack")
+        command.extend(["--cpu-profile-stack-min-hits", str(rest_cold_start_dump_stress_cpu_profile_stack_min_hits)])
         if not rest_cold_start_dump_stress_cpu_profile_symbols_required:
             command.append("--no-cpu-profile-symbols-required")
         if rest_cold_start_dump_stress_skip_dumps:
@@ -523,6 +529,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB,
     )
+    parser.add_argument("--rest-cold-start-dump-stress-cpu-profile-stack", action="store_true")
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-cpu-profile-stack-min-hits",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS,
+    )
     parser.add_argument(
         "--rest-cold-start-dump-stress-cpu-profile-symbols-required",
         action=argparse.BooleanOptionalAction,
@@ -592,6 +604,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST cold-start dump stress tool timeout must be greater than zero.")
     if args.rest_cold_start_dump_stress_cpu_profile_max_file_mb <= 0:
         raise ValueError("REST cold-start dump stress CPU profile max file MB must be greater than zero.")
+    if args.rest_cold_start_dump_stress_cpu_profile_stack_min_hits <= 0:
+        raise ValueError("REST cold-start dump stress CPU profile stack min hits must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -669,6 +683,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "skip_umdh_diffs": bool(args.rest_cold_start_dump_stress_skip_umdh_diffs),
             "cpu_profile": bool(args.rest_cold_start_dump_stress_cpu_profile),
             "cpu_profile_max_file_mb": args.rest_cold_start_dump_stress_cpu_profile_max_file_mb,
+            "cpu_profile_stack": bool(args.rest_cold_start_dump_stress_cpu_profile_stack),
+            "cpu_profile_stack_min_hits": args.rest_cold_start_dump_stress_cpu_profile_stack_min_hits,
             "cpu_profile_symbols_required": bool(args.rest_cold_start_dump_stress_cpu_profile_symbols_required),
             "skip_dumps": bool(args.rest_cold_start_dump_stress_skip_dumps),
         },
@@ -742,6 +758,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_skip_umdh_diffs=args.rest_cold_start_dump_stress_skip_umdh_diffs,
             rest_cold_start_dump_stress_cpu_profile=args.rest_cold_start_dump_stress_cpu_profile,
             rest_cold_start_dump_stress_cpu_profile_max_file_mb=args.rest_cold_start_dump_stress_cpu_profile_max_file_mb,
+            rest_cold_start_dump_stress_cpu_profile_stack=args.rest_cold_start_dump_stress_cpu_profile_stack,
+            rest_cold_start_dump_stress_cpu_profile_stack_min_hits=args.rest_cold_start_dump_stress_cpu_profile_stack_min_hits,
             rest_cold_start_dump_stress_cpu_profile_symbols_required=args.rest_cold_start_dump_stress_cpu_profile_symbols_required,
             rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
         )
