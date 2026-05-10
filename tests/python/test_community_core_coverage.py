@@ -60,9 +60,10 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     community_app_root.mkdir(parents=True)
     captured: dict[str, object] = {}
 
-    def fake_run(command, check=False):
+    def fake_run(command, check=False, env=None):
         captured["command"] = command
         captured["check"] = check
+        captured["env"] = env
         return type("Completed", (), {"returncode": 0})()
 
     monkeypatch.setattr("emule_test_harness.community_core_coverage.subprocess.run", fake_run)
@@ -91,5 +92,8 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     assert "contract" in command
     assert "--rest-stress-budget" in command
     assert "smoke" in command
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["EMULE_WORKSPACE_ROOT"] == str(tmp_path)
     assert summary["rest_coverage_budget"] == "contract"
     assert summary["rest_stress_budget"] == "smoke"
