@@ -65,6 +65,7 @@ class SuiteSpec:
     is_prowlarr_emulebb: bool = False
     is_arr_emulebb: bool = False
     is_rest_cold_start_dump_stress: bool = False
+    is_search_ui_live: bool = False
     default_enabled: bool = True
 
 
@@ -85,6 +86,14 @@ SUITE_SPECS = (
         scenarios=CONFIG_STABILITY_UI_SCENARIOS,
         accepts_startup_trace_mode=True,
         accepts_shared_root=True,
+    ),
+    SuiteSpec(
+        name="search-ui-live",
+        script_name="search-ui-live.py",
+        category="ui",
+        uses_live_seed_refresh=True,
+        is_search_ui_live=True,
+        default_enabled=False,
     ),
     SuiteSpec(
         name="shared-hash-ui",
@@ -279,6 +288,8 @@ def build_suite_command(
     if spec.is_auto_browse and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_amutorrent_browser and p2p_bind_interface_name:
+        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.is_search_ui_live and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:

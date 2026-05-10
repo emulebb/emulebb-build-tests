@@ -187,6 +187,31 @@ def test_shared_files_ui_scenario_selector_limits_child_scenarios(tmp_path: Path
     assert summary["suites"][0]["scenario_names"] == ["dynamic-folder-lifecycle"]
 
 
+def test_search_ui_live_suite_is_selectable_with_live_network_policy(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--suite",
+            "search-ui-live",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert [suite["name"] for suite in summary["suites"]] == ["search-ui-live"]
+    assert script_name(commands[0]) == "search-ui-live.py"
+    assert option_values(commands[0], "--p2p-bind-interface-name") == ["hide.me"]
+    assert "--skip-live-seed-refresh" not in commands[0]
+
+
 def test_suite_continues_after_failures_by_default(tmp_path: Path, monkeypatch) -> None:
     calls = 0
 
