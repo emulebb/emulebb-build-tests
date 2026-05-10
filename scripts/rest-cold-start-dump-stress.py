@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import live_wire_inputs
+from emule_test_harness import cpu_profile, live_wire_inputs
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL, refresh_seed_files
 
 
@@ -488,6 +488,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tool-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--enable-umdh", action="store_true")
     parser.add_argument("--max-post-drain-umdh-positive-bytes", type=int, default=DEFAULT_MAX_POST_DRAIN_UMDH_POSITIVE_BYTES)
+    parser.add_argument("--cpu-profile", action="store_true")
+    parser.add_argument("--cpu-profile-max-file-mb", type=int, default=cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB)
+    parser.add_argument("--cpu-profile-symbols-required", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--skip-dumps", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
     return parser
@@ -524,6 +527,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("tool timeout seconds must be greater than zero.")
     if args.max_post_drain_umdh_positive_bytes < 0:
         raise ValueError("max post-drain UMDH positive bytes must be zero or greater.")
+    if args.cpu_profile_max_file_mb <= 0:
+        raise ValueError("CPU profile max file MB must be greater than zero.")
 
 
 def resolve_downloads_per_search(args: argparse.Namespace) -> int:
@@ -617,6 +622,78 @@ def discover_diagnostic_tools() -> dict[str, str | None]:
         "listdlls": find_tool("listdlls64.exe", "listdlls64", "listdlls.exe", "listdlls"),
         "gflags": find_tool("gflags.exe", "gflags"),
         "umdh": find_tool("umdh.exe", "umdh"),
+    }
+
+
+def cpu_profile_tools_to_report(tools: cpu_profile.CpuProfileTools) -> dict[str, str | None]:
+    """Returns a JSON-safe CPU profiling tool discovery payload."""
+
+    return {
+        "xperf": tools.xperf,
+        "wpaexporter": tools.wpaexporter,
+    }
+
+
+def cpu_profile_paths_to_report(paths: cpu_profile.CpuProfilePaths) -> dict[str, str]:
+    """Returns a JSON-safe CPU profiling artifact path payload."""
+
+    return {
+        "etl_path": str(paths.etl_path),
+        "raw_etl_path": str(paths.raw_etl_path),
+        "detail_path": str(paths.detail_path),
+        "summary_path": str(paths.summary_path),
+        "symbol_cache_dir": str(paths.symbol_cache_dir),
+    }
+
+
+def build_cpu_profile_symbol_status(app_exe: Path) -> dict[str, object]:
+    """Returns whether the app-local PDB needed for useful attribution exists."""
+
+    pdb_path = cpu_profile.resolve_app_pdb_path(app_exe)
+    return {
+        "app_pdb_path": str(pdb_path),
+        "app_pdb_exists": pdb_path.is_file(),
+    }
+
+
+def initialize_cpu_profile_report(
+    *,
+    app_exe: Path,
+    artifacts_dir: Path,
+) -> tuple[cpu_profile.CpuProfileTools, cpu_profile.CpuProfilePaths, dict[str, object]]:
+    """Discovers CPU profiling tools and builds the initial report payload."""
+
+    tools = cpu_profile.discover_cpu_profile_tools()
+    paths = cpu_profile.build_cpu_profile_paths(artifacts_dir)
+    report = {
+        "enabled": True,
+        "tools": cpu_profile_tools_to_report(tools),
+        "paths": cpu_profile_paths_to_report(paths),
+        "symbols": build_cpu_profile_symbol_status(app_exe),
+    }
+    return tools, paths, report
+
+
+def export_cpu_profile_summary(
+    *,
+    tools: cpu_profile.CpuProfileTools,
+    paths: cpu_profile.CpuProfilePaths,
+    app_exe: Path,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Exports the ETW profile and writes the compact top-function summary."""
+
+    export = cpu_profile.export_cpu_profile(
+        tools=tools,
+        paths=paths,
+        app_exe=app_exe,
+        timeout_seconds=timeout_seconds,
+    )
+    summary = cpu_profile.parse_xperf_profile_detail_file(paths.detail_path)
+    harness_cli_common.write_json_file(paths.summary_path, summary)
+    return {
+        "export": export,
+        "summary": summary,
     }
 
 
@@ -2382,6 +2459,27 @@ def umdh_diagnostics_are_complete(report: dict[str, object]) -> bool:
     return True
 
 
+def cpu_profile_diagnostics_are_complete(report: dict[str, object], *, symbols_required: bool) -> bool:
+    """Returns true when requested ETW CPU profile artifacts were captured and exported."""
+
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    profile = diagnostics.get("cpu_profile")
+    if not isinstance(profile, dict) or not bool(profile.get("enabled")):
+        return True
+    symbols = profile.get("symbols")
+    if symbols_required and (not isinstance(symbols, dict) or not bool(symbols.get("app_pdb_exists"))):
+        return False
+    stop = profile.get("stop")
+    if not isinstance(stop, dict) or bool(stop.get("timed_out")) or stop.get("return_code") != 0 or not bool(stop.get("etl_exists")):
+        return False
+    export = profile.get("export")
+    if not isinstance(export, dict) or bool(export.get("timed_out")) or export.get("return_code") != 0 or not bool(export.get("detail_exists")):
+        return False
+    return True
+
+
 def post_drain_umdh_delta_within_budget(report: dict[str, object], max_positive_bytes: int) -> bool:
     """Returns true when post-drain UMDH growth stays within the configured leak budget."""
 
@@ -2470,6 +2568,9 @@ def main(argv: list[str] | None = None) -> int:
     downloads_per_search = resolve_downloads_per_search(args)
     transfer_registry = StressTransferRegistry()
     resource_monitor: ProcessResourceMonitor | None = None
+    cpu_profile_tools: cpu_profile.CpuProfileTools | None = None
+    cpu_profile_paths: cpu_profile.CpuProfilePaths | None = None
+    cpu_profile_active = False
     report: dict[str, object] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "suite": SUITE_NAME,
@@ -2501,6 +2602,9 @@ def main(argv: list[str] | None = None) -> int:
             "tool_timeout_seconds": args.tool_timeout_seconds,
             "enable_umdh": bool(args.enable_umdh),
             "max_post_drain_umdh_positive_bytes": args.max_post_drain_umdh_positive_bytes,
+            "cpu_profile": bool(args.cpu_profile),
+            "cpu_profile_max_file_mb": args.cpu_profile_max_file_mb,
+            "cpu_profile_symbols_required": bool(args.cpu_profile_symbols_required),
             "skip_dumps": bool(args.skip_dumps),
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
         },
@@ -2513,6 +2617,18 @@ def main(argv: list[str] | None = None) -> int:
     gflags_enabled = False
 
     try:
+        if args.cpu_profile:
+            cpu_profile_tools, cpu_profile_paths, profile_report = initialize_cpu_profile_report(
+                app_exe=paths.app_exe,
+                artifacts_dir=artifacts_dir,
+            )
+            report["diagnostics"]["cpu_profile"] = profile_report
+            if not cpu_profile_tools.xperf:
+                raise RuntimeError("CPU profiling was requested but xperf was not found.")
+            symbols = profile_report["symbols"]
+            if args.cpu_profile_symbols_required and not bool(symbols.get("app_pdb_exists")):
+                raise RuntimeError(f"CPU profiling requires app symbols, but '{symbols.get('app_pdb_path')}' was not found.")
+
         if args.enable_umdh:
             if not tools.get("gflags") or not tools.get("umdh"):
                 raise RuntimeError("UMDH was requested but gflags or umdh was not found.")
@@ -2621,6 +2737,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["network_ready"] = live_network
 
+        if args.cpu_profile:
+            assert cpu_profile_tools is not None
+            assert cpu_profile_paths is not None
+            profile_report = report["diagnostics"]["cpu_profile"]
+            assert isinstance(profile_report, dict)
+            profile_report["start"] = cpu_profile.start_cpu_profile(
+                tools=cpu_profile_tools,
+                paths=cpu_profile_paths,
+                max_file_mb=args.cpu_profile_max_file_mb,
+                timeout_seconds=args.tool_timeout_seconds,
+            )
+            if profile_report["start"].get("return_code") != 0:
+                raise RuntimeError("CPU profile ETW start failed.")
+            cpu_profile_active = True
+
         resource_monitor = ProcessResourceMonitor(
             process_id=process_id,
             interval_seconds=args.resource_monitor_interval_seconds,
@@ -2652,6 +2783,25 @@ def main(argv: list[str] | None = None) -> int:
             args.target_completed_downloads,
             args.completion_timeout_seconds,
         )
+        if cpu_profile_active:
+            assert cpu_profile_tools is not None
+            assert cpu_profile_paths is not None
+            profile_report = report["diagnostics"]["cpu_profile"]
+            assert isinstance(profile_report, dict)
+            profile_report["stop"] = cpu_profile.stop_cpu_profile(
+                tools=cpu_profile_tools,
+                paths=cpu_profile_paths,
+                timeout_seconds=args.tool_timeout_seconds,
+            )
+            cpu_profile_active = False
+            profile_report.update(
+                export_cpu_profile_summary(
+                    tools=cpu_profile_tools,
+                    paths=cpu_profile_paths,
+                    app_exe=paths.app_exe,
+                    timeout_seconds=args.tool_timeout_seconds,
+                )
+            )
         report["diagnostics"]["peak"] = collect_diagnostics(
             label="peak",
             process_id=process_id,
@@ -2748,6 +2898,9 @@ def main(argv: list[str] | None = None) -> int:
                 "post-drain UMDH positive delta exceeded budget: "
                 f"{int(post_drain.get('positive_delta_bytes', 0))} > {args.max_post_drain_umdh_positive_bytes}"
             )
+        elif args.cpu_profile and not cpu_profile_diagnostics_are_complete(report, symbols_required=args.cpu_profile_symbols_required):
+            report["status"] = "failed"
+            report["failure_reason"] = "required CPU profile diagnostics did not complete"
         elif int(stress_summary.get("completed_download_triggers", 0)) < int(stress_summary.get("requested_download_triggers", 0)):
             report["status"] = "inconclusive"
             report["failure_reason"] = "live network did not expose enough safe active-download candidates"
@@ -2773,6 +2926,28 @@ def main(argv: list[str] | None = None) -> int:
                 symbol_env=symbol_env,
             )
     finally:
+        if cpu_profile_active and cpu_profile_tools is not None and cpu_profile_paths is not None:
+            profile_report = report["diagnostics"].setdefault("cpu_profile", {"enabled": True})
+            assert isinstance(profile_report, dict)
+            try:
+                profile_report["stop"] = cpu_profile.stop_cpu_profile(
+                    tools=cpu_profile_tools,
+                    paths=cpu_profile_paths,
+                    timeout_seconds=args.tool_timeout_seconds,
+                )
+                profile_report.update(
+                    export_cpu_profile_summary(
+                        tools=cpu_profile_tools,
+                        paths=cpu_profile_paths,
+                        app_exe=paths.app_exe,
+                        timeout_seconds=args.tool_timeout_seconds,
+                    )
+                )
+            except Exception as exc:
+                profile_report["stop_error"] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
         if resource_monitor is not None:
             try:
                 report["diagnostics"]["resource_monitor"] = resource_monitor.stop()

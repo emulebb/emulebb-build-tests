@@ -23,11 +23,15 @@ def test_operator_script_help_loads() -> None:
     assert "--waves" in help_text
     assert "--enable-umdh" in help_text
     assert "--max-post-drain-umdh-positive-bytes" in help_text
+    assert "--cpu-profile" in help_text
+    assert "--cpu-profile-max-file-mb" in help_text
     assert "--skip-dumps" in help_text
     assert "--downloads-per-search" in help_text
     assert "--target-completed-downloads" in help_text
     assert "--resource-monitor-interval-seconds" in help_text
     assert parser.get_default("max_post_drain_umdh_positive_bytes") == 16 * 1024 * 1024
+    assert parser.get_default("cpu_profile_max_file_mb") == 512
+    assert parser.get_default("cpu_profile_symbols_required") is True
 
 
 def test_wave_plan_mixes_methods_when_both_networks_are_ready() -> None:
@@ -462,6 +466,58 @@ def test_umdh_completeness_requires_snapshots_and_finished_diffs() -> None:
     assert module.umdh_diagnostics_are_complete(report) is True
     report["diagnostics"]["umdh_diffs"]["baseline_to_post_drain"]["timed_out"] = True
     assert module.umdh_diagnostics_are_complete(report) is False
+
+
+def test_cpu_profile_completeness_requires_etl_export_and_symbols() -> None:
+    module = load_script_module()
+    report = {
+        "diagnostics": {
+            "cpu_profile": {
+                "enabled": True,
+                "symbols": {"app_pdb_exists": True},
+                "stop": {
+                    "timed_out": False,
+                    "return_code": 0,
+                    "etl_exists": True,
+                },
+                "export": {
+                    "timed_out": False,
+                    "return_code": 0,
+                    "detail_exists": True,
+                },
+            }
+        }
+    }
+
+    assert module.cpu_profile_diagnostics_are_complete(report, symbols_required=True) is True
+    report["diagnostics"]["cpu_profile"]["symbols"]["app_pdb_exists"] = False
+    assert module.cpu_profile_diagnostics_are_complete(report, symbols_required=True) is False
+    assert module.cpu_profile_diagnostics_are_complete(report, symbols_required=False) is True
+    report["diagnostics"]["cpu_profile"]["stop"]["etl_exists"] = False
+    assert module.cpu_profile_diagnostics_are_complete(report, symbols_required=False) is False
+
+
+def test_initialize_cpu_profile_report_records_tools_paths_and_symbol_status(monkeypatch, tmp_path: Path) -> None:
+    module = load_script_module()
+    app_exe = tmp_path / "emule.exe"
+    app_pdb = tmp_path / "emule.pdb"
+    app_exe.write_bytes(b"exe")
+    app_pdb.write_bytes(b"pdb")
+
+    monkeypatch.setattr(
+        module.cpu_profile,
+        "discover_cpu_profile_tools",
+        lambda: module.cpu_profile.CpuProfileTools(xperf="xperf.exe", wpaexporter="wpaexporter.exe"),
+    )
+
+    tools, paths, report = module.initialize_cpu_profile_report(app_exe=app_exe, artifacts_dir=tmp_path / "artifacts")
+
+    assert tools.xperf == "xperf.exe"
+    assert paths.summary_path.name == "cpu-profile-summary.json"
+    assert report["enabled"] is True
+    assert report["tools"]["xperf"] == "xperf.exe"
+    assert report["symbols"]["app_pdb_path"] == str(app_pdb)
+    assert report["symbols"]["app_pdb_exists"] is True
 
 
 def test_parse_umdh_diff_text_extracts_top_positive_deltas() -> None:
@@ -1026,6 +1082,7 @@ def test_validate_rejects_invalid_stress_shape() -> None:
         post_drain_seconds=0,
         tool_timeout_seconds=1,
         max_post_drain_umdh_positive_bytes=1,
+        cpu_profile_max_file_mb=1,
     )
 
     try:
