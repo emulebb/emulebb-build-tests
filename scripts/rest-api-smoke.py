@@ -378,8 +378,7 @@ def validate_openapi_response_payload(response_name: str, payload: object, opena
 
     document = load_openapi_document(openapi_path)
     schema = get_openapi_response_schema(response_name, openapi_path)
-    resolver = jsonschema.RefResolver.from_schema(document)
-    validator = jsonschema.Draft202012Validator(schema, resolver=resolver)
+    validator = jsonschema.Draft202012Validator(document).evolve(schema=schema)
     validator.validate(payload)
 
 
