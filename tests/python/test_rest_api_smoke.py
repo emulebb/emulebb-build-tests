@@ -1004,6 +1004,7 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
     native_contracts = _native_route_contracts()
     required_body_fields = {
         ("POST", "/app/shutdown"): {"confirmShutdown"},
+        ("POST", "/app/operations/capture-dump"): {"confirmDump"},
         ("POST", "/transfers/operations/clear-completed"): {"confirmClearCompleted"},
         ("DELETE", "/transfers/{hash}"): {"deleteFiles"},
         ("DELETE", "/shared-files/{hash}"): {"deleteFiles"},
@@ -1055,6 +1056,9 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     assert routes_by_operation["shutdownApp"]["safety"] == "unsafe"
     assert routes_by_operation["shutdownApp"]["successResponseStatuses"] == ["200"]
     assert routes_by_operation["shutdownApp"]["responseEnvelope"] == "OkAcceptedResponse"
+    assert routes_by_operation["captureDiagnosticDump"]["safe"] is False
+    assert routes_by_operation["captureDiagnosticDump"]["safety"] == "unsafe"
+    assert routes_by_operation["captureDiagnosticDump"]["responseEnvelope"] == "DiagnosticDumpResponse"
     assert all(len(route["successResponseRefs"]) == 1 for route in module.REST_CONTRACT_ROUTES)
     assert all(route["responseEnvelope"] == route["successResponseRefs"][0] for route in module.REST_CONTRACT_ROUTES)
 
@@ -1128,6 +1132,7 @@ def test_rest_contract_registry_covers_release_families() -> None:
                     "logs",
                 }
     assert any(route["operationId"] == "shutdownApp" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
+    assert any(route["operationId"] == "captureDiagnosticDump" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
 
 
 def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
@@ -1633,17 +1638,22 @@ def test_shutdown_is_excluded_from_broad_stress_mutation_loops() -> None:
 
     assert audit["ok"] is True
     assert "/api/v1/app/shutdown" in audit["excluded_paths"]
+    assert "/api/v1/app/operations/capture-dump" in audit["excluded_paths"]
     assert set(audit["stress_budgets"]) == {"smoke", "soak"}
     for budget in ("smoke", "soak"):
         operations = module.build_rest_stress_operations(budget)
         assert all(operation["path"] != "/api/v1/app/shutdown" for operation in operations)
+        assert all(operation["path"] != "/api/v1/app/operations/capture-dump" for operation in operations)
         assert audit["stress_budgets"][budget]["unsafe_path_match_count"] == 0
         assert audit["stress_budgets"][budget]["operation_count"] == len(operations)
-    assert len(audit["contract_routes"]) == 1
-    assert audit["contract_routes"][0]["operationId"] == "shutdownApp"
-    assert audit["contract_routes"][0]["path"] == "/api/v1/app/shutdown"
-    assert audit["contract_routes"][0]["safe"] is False
-    assert audit["contract_routes"][0]["safety"] == "unsafe"
+    routes_by_operation = {route["operationId"]: route for route in audit["contract_routes"]}
+    assert set(routes_by_operation) == {"captureDiagnosticDump", "shutdownApp"}
+    assert routes_by_operation["shutdownApp"]["path"] == "/api/v1/app/shutdown"
+    assert routes_by_operation["shutdownApp"]["safe"] is False
+    assert routes_by_operation["shutdownApp"]["safety"] == "unsafe"
+    assert routes_by_operation["captureDiagnosticDump"]["path"] == "/api/v1/app/operations/capture-dump"
+    assert routes_by_operation["captureDiagnosticDump"]["safe"] is False
+    assert routes_by_operation["captureDiagnosticDump"]["safety"] == "unsafe"
 
 
 def test_rest_stress_operations_include_expected_error_edges() -> None:
@@ -1894,7 +1904,9 @@ def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
 
     assert summary["ok"] is True
     assert ("POST", "/api/v1/app/shutdown") not in observed_paths
+    assert ("POST", "/api/v1/app/operations/capture-dump") not in observed_paths
     assert any(route["operationId"] == "shutdownApp" and route["skipped"] for route in summary["routes"])
+    assert any(route["operationId"] == "captureDiagnosticDump" and route["skipped"] for route in summary["routes"])
 
 
 def test_rest_contract_completeness_rejects_undeclared_4xx(monkeypatch) -> None:

@@ -23,6 +23,20 @@ def test_operator_script_help_loads() -> None:
     assert "--p2p-bind-interface-name" in help_text
 
 
+def test_configure_emule_crash_dump_mode_forces_automatic_dump(tmp_path: Path) -> None:
+    module = load_script_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text("[eMule]\nCreateCrashDump=0\n", encoding="utf-16")
+
+    result = module.configure_emule_crash_dump_mode(config_dir, 2)
+
+    text = module.rest_smoke.live_common.read_ini_text(preferences_path)
+    assert result["create_crash_dump"] == 2
+    assert "CreateCrashDump=2" in text
+
+
 def test_trigger_crash_records_expected_disconnect(monkeypatch) -> None:
     module = load_script_module()
 
@@ -50,3 +64,14 @@ def test_wait_for_emule_local_dump_accepts_non_empty_dump(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["emule_dumps"][0]["name"] == "emule.exe.1234.dmp"
+
+
+def test_collect_dumps_in_directory_reports_non_empty_dumps(tmp_path: Path) -> None:
+    module = load_script_module()
+    (tmp_path / "emulebb-crash.dmp").write_bytes(b"dump")
+
+    result = module.collect_dumps_in_directory(tmp_path)
+
+    assert result["count"] == 1
+    assert result["files"][0]["name"] == "emulebb-crash.dmp"
+    assert result["files"][0]["size_bytes"] == 4

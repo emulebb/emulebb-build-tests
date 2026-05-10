@@ -237,8 +237,8 @@ REST_STRESS_LONG_UNICODE_PATH = (
     + "-linux-iso-library-Ω-例.mkv"
 )
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
-UNSAFE_OPENAPI_OPERATIONS = {"shutdownApp"}
-UNSAFE_BROAD_MUTATION_PATHS = ("/api/v1/app/shutdown",)
+UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "shutdownApp"}
+UNSAFE_BROAD_MUTATION_PATHS = ("/api/v1/app/operations/capture-dump", "/api/v1/app/shutdown")
 REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "getCategory": (404,),
     "createCategory": (400,),
@@ -2157,7 +2157,7 @@ def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
 
 
 def assert_shutdown_excluded_from_broad_mutation_loops() -> dict[str, object]:
-    """Asserts app shutdown is excluded from broad automated mutation loops."""
+    """Asserts app-level unsafe diagnostics are excluded from broad mutation loops."""
 
     stress_budgets: dict[str, object] = {}
     for budget in REST_STRESS_BUDGETS:
@@ -2174,13 +2174,13 @@ def assert_shutdown_excluded_from_broad_mutation_loops() -> dict[str, object]:
             if operation.get("path") in UNSAFE_BROAD_MUTATION_PATHS
         ]
         if matches:
-            raise AssertionError(f"Unsafe shutdown route present in {budget!r} stress operations: {matches!r}")
+            raise AssertionError(f"Unsafe app-level route present in {budget!r} stress operations: {matches!r}")
         stress_budgets[budget] = {
             "operation_count": len(operations),
             "unsafe_path_match_count": 0,
         }
 
-    shutdown_routes = [
+    unsafe_app_routes = [
         {
             "name": route["name"],
             "operationId": route["operationId"],
@@ -2191,17 +2191,17 @@ def assert_shutdown_excluded_from_broad_mutation_loops() -> dict[str, object]:
         for route in REST_CONTRACT_ROUTES
         if route["operationId"] == "shutdownApp" or route["path"] in UNSAFE_BROAD_MUTATION_PATHS
     ]
-    if not shutdown_routes:
+    if not any(route["operationId"] == "shutdownApp" for route in unsafe_app_routes):
         raise AssertionError("OpenAPI-derived REST contract routes do not include shutdownApp.")
-    unsafe_routes = [route for route in shutdown_routes if route["safe"] is False and route["safety"] == "unsafe"]
-    if len(unsafe_routes) != len(shutdown_routes):
-        raise AssertionError(f"Shutdown routes are not all marked unsafe: {shutdown_routes!r}")
+    unsafe_routes = [route for route in unsafe_app_routes if route["safe"] is False and route["safety"] == "unsafe"]
+    if len(unsafe_routes) != len(unsafe_app_routes):
+        raise AssertionError(f"Unsafe app-level routes are not all marked unsafe: {unsafe_app_routes!r}")
 
     return {
         "ok": True,
         "excluded_paths": list(UNSAFE_BROAD_MUTATION_PATHS),
         "stress_budgets": stress_budgets,
-        "contract_routes": shutdown_routes,
+        "contract_routes": unsafe_app_routes,
     }
 
 
@@ -2418,6 +2418,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
 
     if route_name in {"app_shutdown", "shutdownApp"}:
         return {"confirmShutdown": True}
+    if route_name == "captureDiagnosticDump":
+        return {"confirmDump": True, "fullMemory": False}
     if route_name in {"app_preferences_patch", "patchPreferences"}:
         return {"safeServerConnect": True}
     if route_name in {"categories_create", "createCategory"}:

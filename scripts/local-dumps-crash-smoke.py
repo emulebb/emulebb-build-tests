@@ -81,6 +81,26 @@ def wait_for_process_access_violation(process_id: int | None, timeout_seconds: f
     }
 
 
+def wait_for_process_exit(process_id: int | None, timeout_seconds: float) -> dict[str, object]:
+    """Waits until eMule exits after the crash trigger, regardless of exit code."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last_state: dict[str, object] = rest_smoke.get_process_exit_state(process_id)
+    while time.monotonic() <= deadline:
+        last_state = rest_smoke.get_process_exit_state(process_id)
+        if last_state.get("running") is False and last_state.get("exit_code") != rest_smoke.STILL_ACTIVE:
+            return {
+                "ok": True,
+                "state": last_state,
+            }
+        time.sleep(0.5)
+    return {
+        "ok": False,
+        "state": last_state,
+        "reason": "timed out waiting for process exit",
+    }
+
+
 def wait_for_emule_local_dump(local_dumps: dict[str, object], timeout_seconds: float) -> dict[str, object]:
     """Waits for at least one non-empty eMule LocalDump in the configured folder."""
 
@@ -106,6 +126,81 @@ def wait_for_emule_local_dump(local_dumps: dict[str, object], timeout_seconds: f
         "emule_dumps": [],
         "reason": "timed out waiting for emule.exe LocalDump",
     }
+
+
+def configure_emule_crash_dump_mode(config_dir: Path, mode: int = 2) -> dict[str, object]:
+    """Forces eMule's built-in unhandled-crash dump preference for this profile."""
+
+    preferences_path = config_dir / "preferences.ini"
+    text = rest_smoke.live_common.read_ini_text(preferences_path)
+    text = rest_smoke.upsert_ini_section_value(text, "eMule", "CreateCrashDump", str(mode))
+    rest_smoke.live_common.write_utf16_ini_text(preferences_path, text)
+    return {
+        "preferences_path": str(preferences_path),
+        "create_crash_dump": mode,
+    }
+
+
+def collect_dumps_in_directory(dump_dir: Path, *, recursive: bool = False) -> dict[str, object]:
+    """Collects non-empty dump files from one diagnostic directory."""
+
+    files: list[dict[str, object]] = []
+    if dump_dir.is_dir():
+        paths = dump_dir.rglob("*.dmp") if recursive else dump_dir.glob("*.dmp")
+        for dump_path in sorted(paths, key=lambda path: path.stat().st_mtime):
+            stat = dump_path.stat()
+            files.append(
+                {
+                    "name": dump_path.name,
+                    "path": str(dump_path),
+                    "size_bytes": stat.st_size,
+                    "mtime": round(stat.st_mtime, 3),
+                }
+            )
+    return {
+        "dump_folder": str(dump_dir),
+        "files": files,
+        "count": len(files),
+    }
+
+
+def capture_manual_dump(base_url: str, api_key: str, request_timeout_seconds: float, *, full_memory: bool = True) -> dict[str, object]:
+    """Calls the gated diagnostic dump endpoint and verifies the returned file."""
+
+    try:
+        result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/app/operations/capture-dump",
+            method="POST",
+            api_key=api_key,
+            json_body={"confirmDump": True, "fullMemory": full_memory},
+            request_timeout_seconds=request_timeout_seconds,
+        )
+        row: dict[str, object] = {
+            "request_completed": True,
+            "result": rest_smoke.compact_http_result(result),
+            "ok": False,
+        }
+        if int(result.get("status") or 0) == 200:
+            envelope = rest_smoke.require_success_envelope(result)
+            data = envelope.get("data")
+            if isinstance(data, dict):
+                dump_path = Path(str(data.get("path") or ""))
+                row["dump_path"] = str(dump_path)
+                row["full_memory"] = bool(data.get("fullMemory"))
+                row["dump_exists"] = dump_path.is_file()
+                row["size_bytes"] = dump_path.stat().st_size if dump_path.is_file() else 0
+                row["ok"] = bool(row["dump_exists"]) and int(row["size_bytes"]) > 0
+        return row
+    except (AssertionError, OSError, urllib.error.URLError) as exc:
+        return {
+            "request_completed": False,
+            "ok": False,
+            "exception": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
 
 
 def trigger_crash(base_url: str, api_key: str, request_timeout_seconds: float) -> dict[str, object]:
@@ -302,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
             args.bind_addr,
             enable_crash_test_endpoint=True,
         )
+        report["launch_inputs"]["emule_crash_dump"] = configure_emule_crash_dump_mode(Path(profile["config_dir"]), 2)
         if args.p2p_bind_interface_name:
             rest_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
 
@@ -312,21 +408,35 @@ def main(argv: list[str] | None = None) -> int:
         report["main_window_title"] = main_window.window_text()
         ready = rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
         report["checks"]["ready"] = rest_smoke.compact_http_result(ready)
+        report["checks"]["manual_dump"] = capture_manual_dump(base_url, args.api_key, args.request_timeout_seconds, full_memory=True)
         report["checks"]["procdump_monitor"], procdump_process = start_procdump_crash_monitor(process_id, procdump_dump_dir)
         if procdump_process is not None:
             time.sleep(2.0)
         report["checks"]["trigger_crash"] = trigger_crash(base_url, args.api_key, args.request_timeout_seconds)
         report["checks"]["process_exit"] = wait_for_process_access_violation(process_id, args.dump_timeout_seconds)
+        report["checks"]["process_stopped"] = wait_for_process_exit(process_id, args.dump_timeout_seconds)
         report["checks"]["procdump_monitor_finish"] = finish_procdump_crash_monitor(procdump_process, args.dump_timeout_seconds)
         procdump_process = None
         report["checks"]["procdump_dump_files"] = collect_procdump_crash_dumps(procdump_dump_dir)
+        report["checks"]["app_crash_dump_files"] = collect_dumps_in_directory(Path(profile["config_dir"]))
         report["checks"]["local_dump"] = wait_for_emule_local_dump(paths.local_dumps, args.dump_timeout_seconds)
-        dump_count = int(report["checks"]["local_dump"].get("local_dump_files", {}).get("count", 0))
-        dump_count += int(report["checks"]["procdump_dump_files"].get("count", 0))
-        if report["checks"]["process_exit"].get("ok") and dump_count > 0:
+        wer_dump_count = len(report["checks"]["local_dump"].get("emule_dumps", []))
+        crash_dump_count = wer_dump_count
+        crash_dump_count += int(report["checks"]["procdump_dump_files"].get("count", 0))
+        crash_dump_count += int(report["checks"]["app_crash_dump_files"].get("count", 0))
+        report["checks"]["dump_channel_summary"] = {
+            "manual_dump_ok": bool(report["checks"]["manual_dump"].get("ok")),
+            "process_exited_with_access_violation": bool(report["checks"]["process_exit"].get("ok")),
+            "process_stopped": bool(report["checks"]["process_stopped"].get("ok")),
+            "wer_emule_dump_count": wer_dump_count,
+            "procdump_dump_count": int(report["checks"]["procdump_dump_files"].get("count", 0)),
+            "app_crash_dump_count": int(report["checks"]["app_crash_dump_files"].get("count", 0)),
+            "crash_dump_count": crash_dump_count,
+        }
+        if report["checks"]["manual_dump"].get("ok") and report["checks"]["process_stopped"].get("ok") and crash_dump_count > 0:
             report["status"] = "passed"
         else:
-            report["failure_reason"] = "crash trigger did not produce an access-violation exit and eMule crash dump"
+            report["failure_reason"] = "crash trigger did not stop eMule and produce an eMule crash dump"
     except Exception as exc:
         report["status"] = "failed"
         report["failure_reason"] = f"{type(exc).__name__}: {exc}"
