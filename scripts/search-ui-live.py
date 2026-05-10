@@ -510,6 +510,162 @@ def wait_for_transfer(base_url: str, api_key: str, transfer_hash: str, timeout_s
     return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description="UI-triggered transfer")
 
 
+def request_transfer_operation(base_url: str, api_key: str, transfer_hash: str, operation: str) -> dict[str, object]:
+    """Invokes one native transfer lifecycle operation and verifies the response envelope."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        f"/api/v1/transfers/{transfer_hash}/operations/{operation}",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    payload = rest_smoke.require_json_object(result, 200)
+    require_transfer_hash_success(payload, transfer_hash)
+    return rest_smoke.compact_http_result(result)
+
+
+def require_transfer_hash_success(payload: dict[str, object], transfer_hash: str) -> None:
+    """Requires either a transfer payload or a successful bulk item for one hash."""
+
+    if payload.get("hash") == transfer_hash:
+        return
+    items = payload.get("items")
+    if isinstance(items, list):
+        matching = [item for item in items if isinstance(item, dict) and item.get("hash") == transfer_hash]
+        assert matching, payload
+        assert all(item.get("ok") is True for item in matching), payload
+        return
+    assert payload.get("ok") is not False and "error" not in payload, payload
+
+
+def wait_for_transfer_condition(
+    base_url: str,
+    api_key: str,
+    transfer_hash: str,
+    timeout_seconds: float,
+    description: str,
+    predicate,
+) -> dict[str, object]:
+    """Polls one transfer until the supplied state predicate is true."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        result = rest_smoke.http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash}",
+            api_key=api_key,
+            request_timeout_seconds=10.0,
+        )
+        status = int(result["status"])
+        payload = result.get("json") if isinstance(result.get("json"), dict) else {}
+        assert isinstance(payload, dict)
+        observations.append(
+            {
+                "observed_at": round(time.time(), 3),
+                "status": status,
+                "state": payload.get("state"),
+                "stopped": payload.get("stopped"),
+            }
+        )
+        if status == 200 and predicate(payload):
+            compact = rest_smoke.compact_http_result(result)
+            compact["observations"] = observations
+            return compact
+        return None
+
+    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=description)
+
+
+def wait_for_transfer_absent(base_url: str, api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
+    """Polls until one removed transfer no longer resolves through REST."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        result = rest_smoke.http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash}",
+            api_key=api_key,
+            request_timeout_seconds=10.0,
+        )
+        observations.append({"observed_at": round(time.time(), 3), "status": int(result["status"])})
+        if int(result["status"]) == 404:
+            compact = rest_smoke.compact_http_result(result)
+            compact["observations"] = observations
+            return compact
+        return None
+
+    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description="removed transfer absence")
+
+
+def delete_transfer(base_url: str, api_key: str, transfer_hash: str) -> dict[str, object]:
+    """Removes one sandboxed transfer with native partial-file cleanup semantics."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        f"/api/v1/transfers/{transfer_hash}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"deleteFiles": True},
+        request_timeout_seconds=30.0,
+    )
+    payload = rest_smoke.require_json_object(result, 200)
+    require_transfer_hash_success(payload, transfer_hash)
+    return rest_smoke.compact_http_result(result)
+
+
+def exercise_transfer_lifecycle(
+    base_url: str,
+    api_key: str,
+    transfer_hash: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Covers pause, resume, stop, and remove on the UI-created transfer."""
+
+    lifecycle: dict[str, object] = {}
+    lifecycle["resume"] = {
+        "operation": request_transfer_operation(base_url, api_key, transfer_hash, "resume"),
+        "state": wait_for_transfer_condition(
+            base_url,
+            api_key,
+            transfer_hash,
+            timeout_seconds,
+            "resumed transfer state",
+            lambda payload: payload.get("state") != "paused" and not bool(payload.get("stopped")),
+        ),
+    }
+    lifecycle["pause"] = {
+        "operation": request_transfer_operation(base_url, api_key, transfer_hash, "pause"),
+        "state": wait_for_transfer_condition(
+            base_url,
+            api_key,
+            transfer_hash,
+            timeout_seconds,
+            "paused transfer state",
+            lambda payload: payload.get("state") == "paused" and not bool(payload.get("stopped")),
+        ),
+    }
+    lifecycle["stop"] = {
+        "operation": request_transfer_operation(base_url, api_key, transfer_hash, "stop"),
+        "state": wait_for_transfer_condition(
+            base_url,
+            api_key,
+            transfer_hash,
+            timeout_seconds,
+            "stopped transfer state",
+            lambda payload: bool(payload.get("stopped")) or payload.get("state") == "stopped",
+        ),
+    }
+    lifecycle["remove"] = {
+        "operation": delete_transfer(base_url, api_key, transfer_hash),
+        "state": wait_for_transfer_absent(base_url, api_key, transfer_hash, timeout_seconds),
+    }
+    return lifecycle
+
+
 def wait_for_ui_started_search(main_hwnd: int, previous_tab_count: int, query: str, method: str) -> dict[str, object]:
     """Waits until the Search tab control records the UI-started search."""
 
@@ -670,6 +826,12 @@ def run_search_ui_live(
             assert isinstance(candidate, dict)
             transfer_hash = str(candidate["hash"])
             report["ui_download_transfer"] = wait_for_transfer(
+                base_url,
+                rest_api_key,
+                transfer_hash,
+                transfer_materialization_timeout_seconds,
+            )
+            report["transfer_lifecycle"] = exercise_transfer_lifecycle(
                 base_url,
                 rest_api_key,
                 transfer_hash,

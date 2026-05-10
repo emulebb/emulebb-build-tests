@@ -71,3 +71,92 @@ def test_is_safe_ui_download_candidate_rejects_executables_video_and_bad_hash() 
     assert not module.is_safe_ui_download_candidate({**base, "file_type": "Video"})
     assert not module.is_safe_ui_download_candidate({**base, "hash": "not-a-hash"})
     assert not module.is_safe_ui_download_candidate({**base, "size": "40 GB"})
+
+
+def test_request_transfer_operation_posts_native_lifecycle_route(monkeypatch) -> None:
+    module = load_search_ui_module()
+    calls = []
+
+    class FakeRestSmoke:
+        @staticmethod
+        def http_request(base_url: str, path: str, **kwargs):
+            calls.append((base_url, path, kwargs))
+            return {"status": 200, "content_type": "application/json", "json": {"ok": True}, "raw_json": {"data": {"ok": True}, "meta": {"apiVersion": "v1"}}}
+
+        @staticmethod
+        def require_json_object(result: dict, expected_status: int):
+            assert result["status"] == expected_status
+            return result["json"]
+
+        @staticmethod
+        def compact_http_result(result: dict):
+            return {"status": result["status"], "json": result["json"]}
+
+    monkeypatch.setattr(module, "rest_smoke", FakeRestSmoke)
+
+    assert module.request_transfer_operation("http://127.0.0.1:1", "key", "abc", "pause") == {
+        "status": 200,
+        "json": {"ok": True},
+    }
+    assert calls == [
+        (
+            "http://127.0.0.1:1",
+            "/api/v1/transfers/abc/operations/pause",
+            {
+                "method": "POST",
+                "api_key": "key",
+                "json_body": {},
+                "request_timeout_seconds": 30.0,
+            },
+        )
+    ]
+
+
+def test_delete_transfer_uses_native_partial_file_cleanup(monkeypatch) -> None:
+    module = load_search_ui_module()
+    calls = []
+
+    class FakeRestSmoke:
+        @staticmethod
+        def http_request(base_url: str, path: str, **kwargs):
+            calls.append((base_url, path, kwargs))
+            return {"status": 200, "content_type": "application/json", "json": {"removed": True}, "raw_json": {"data": {"removed": True}, "meta": {"apiVersion": "v1"}}}
+
+        @staticmethod
+        def require_json_object(result: dict, expected_status: int):
+            assert result["status"] == expected_status
+            return result["json"]
+
+        @staticmethod
+        def compact_http_result(result: dict):
+            return {"status": result["status"], "json": result["json"]}
+
+    monkeypatch.setattr(module, "rest_smoke", FakeRestSmoke)
+
+    assert module.delete_transfer("http://127.0.0.1:1", "key", "abc") == {
+        "status": 200,
+        "json": {"removed": True},
+    }
+    assert calls == [
+        (
+            "http://127.0.0.1:1",
+            "/api/v1/transfers/abc",
+            {
+                "method": "DELETE",
+                "api_key": "key",
+                "json_body": {"deleteFiles": True},
+                "request_timeout_seconds": 30.0,
+            },
+        )
+    ]
+
+
+def test_require_transfer_hash_success_rejects_failed_bulk_item() -> None:
+    module = load_search_ui_module()
+
+    module.require_transfer_hash_success({"items": [{"hash": "abc", "ok": True}]}, "abc")
+    try:
+        module.require_transfer_hash_success({"items": [{"hash": "abc", "ok": False}]}, "abc")
+    except AssertionError:
+        return
+    raise AssertionError("failed transfer lifecycle bulk item was accepted")
