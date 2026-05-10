@@ -2,7 +2,8 @@
 
 This repository is the shared test harness for the canonical 0.72a workspace rooted at `EMULE_WORKSPACE_ROOT`.
 
-This repo assumes the canonical workspace created by `eMulebb-setup`.
+This repo assumes the canonical workspace created by
+`python -m emule_workspace materialize` from `repos\eMule-build`.
 
 Minimum expected roots:
 
@@ -10,8 +11,8 @@ Minimum expected roots:
 - `EMULE_WORKSPACE_ROOT\repos\eMule-build-tests`
 - `EMULE_WORKSPACE_ROOT\workspaces\v0.72a`
 
-Use `eMulebb-setup\README.md` for the full workspace topology and materialization
-contract.
+Use `repos\eMule-build\README.md` for the full workspace topology and
+materialization contract.
 
 It owns:
 
