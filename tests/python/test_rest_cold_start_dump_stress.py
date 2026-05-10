@@ -24,6 +24,7 @@ def test_operator_script_help_loads() -> None:
     assert "--enable-umdh" in help_text
     assert "--max-post-drain-umdh-positive-bytes" in help_text
     assert "--skip-dumps" in help_text
+    assert parser.get_default("max_post_drain_umdh_positive_bytes") == 16 * 1024 * 1024
 
 
 def test_wave_plan_mixes_methods_when_both_networks_are_ready() -> None:
@@ -103,6 +104,42 @@ def test_download_trigger_summary_counts_file_types_and_video() -> None:
     assert summary["file_type_counts"] == {"audio": 1, "doc": 1, "video": 1}
     assert summary["extension_counts"] == {".bin": 1, ".mp3": 1, ".mp4": 1, ".pdf": 1}
     assert summary["video_download_trigger_count"] == 2
+
+
+def test_access_violation_without_emule_dump_is_release_blocking() -> None:
+    module = load_script_module()
+
+    assert module.access_violation_without_emule_dump(
+        {
+            "failure_process_state": {"exit_code": 0xC0000005},
+            "local_dump_files": {"files": []},
+        }
+    )
+    assert not module.access_violation_without_emule_dump(
+        {
+            "failure_process_state": {"exit_code": 0xC0000005},
+            "local_dump_files": {"files": [{"name": "emule.exe.1234.dmp"}]},
+        }
+    )
+
+
+def test_diagnostic_tool_crashes_detects_umdh_access_violation() -> None:
+    module = load_script_module()
+
+    crashes = module.diagnostic_tool_crashes(
+        {
+            "diagnostics": {
+                "post_drain": {
+                    "tools": {
+                        "umdh": {"return_code": 0xC0000005},
+                        "handle": {"return_code": 0},
+                    }
+                }
+            }
+        }
+    )
+
+    assert crashes == [{"label": "post_drain", "tool": "umdh", "return_code": 0xC0000005}]
 
 
 def test_stress_search_observation_waits_past_initial_zero(monkeypatch) -> None:

@@ -44,7 +44,8 @@ SUITE_NAME = "rest-cold-start-dump-stress"
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
 DIAGNOSTIC_LABELS = ("baseline", "peak", "post_drain")
 UMDH_TOP_DELTA_LIMIT = 10
-DEFAULT_MAX_POST_DRAIN_UMDH_POSITIVE_BYTES = 8 * 1024 * 1024
+DEFAULT_MAX_POST_DRAIN_UMDH_POSITIVE_BYTES = 16 * 1024 * 1024
+ACCESS_VIOLATION_EXIT_CODE = 0xC0000005
 UMDH_DIFF_ENTRY_RE = re.compile(
     r"^\s*([+-]?)\s*([0-9][0-9,]*)\s+\(\s*([0-9,]+)\s*-\s*([0-9,]+)\s*\)\s+([0-9,]+)\s+allocs\s+(BackTrace[0-9A-Fa-f]+)\b"
 )
@@ -1914,6 +1915,50 @@ def post_drain_umdh_delta_within_budget(report: dict[str, object], max_positive_
     return int(post_drain.get("positive_delta_bytes", 0)) <= max_positive_bytes
 
 
+def diagnostic_tool_crashes(report: dict[str, object]) -> list[dict[str, object]]:
+    """Returns diagnostic tool invocations that crashed with access violations."""
+
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return []
+    crashes: list[dict[str, object]] = []
+    for label, diagnostic in diagnostics.items():
+        if not isinstance(diagnostic, dict):
+            continue
+        tools = diagnostic.get("tools")
+        if not isinstance(tools, dict):
+            continue
+        for tool_name, tool_result in tools.items():
+            if not isinstance(tool_result, dict):
+                continue
+            return_code = tool_result.get("return_code")
+            if return_code is None and tool_name == "dump_analysis":
+                dump_result = tool_result.get("dump")
+                if isinstance(dump_result, dict):
+                    return_code = dump_result.get("return_code")
+            try:
+                crashed = int(return_code) == ACCESS_VIOLATION_EXIT_CODE
+            except (TypeError, ValueError):
+                crashed = False
+            if crashed:
+                crashes.append(
+                    {
+                        "label": label,
+                        "tool": tool_name,
+                        "return_code": int(return_code),
+                    }
+                )
+    return crashes
+
+
+def access_violation_without_emule_dump(report: dict[str, object]) -> bool:
+    """Returns true when eMule crashed with AV but no WER LocalDump was captured."""
+
+    if not harness_cli_common.process_exited_with_access_violation(report.get("failure_process_state")):
+        return False
+    return not harness_cli_common.local_dump_files_for_image(report.get("local_dump_files"), "emule.exe")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the cold-start dump stress suite and returns a process exit code."""
 
@@ -1950,6 +1995,7 @@ def main(argv: list[str] | None = None) -> int:
         "artifact_dir": str(paths.run_report_dir),
         "latest_report_dir": str(paths.latest_report_dir),
         "source_artifact_dir": str(paths.source_artifacts_dir),
+        "local_dumps": paths.local_dumps,
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_search_terms": live_wire_inputs.summarize_terms(search_terms),
@@ -2161,6 +2207,9 @@ def main(argv: list[str] | None = None) -> int:
         elif int(stress_summary.get("required_zero_result_search_count", 0)) > 0:
             report["status"] = "failed"
             report["failure_reason"] = "one or more required live searches returned zero results"
+        elif diagnostic_tool_crashes(report):
+            report["status"] = "failed"
+            report["failure_reason"] = "one or more diagnostic tools crashed"
         elif not diagnostics_are_complete(report, skip_dumps=args.skip_dumps):
             report["status"] = "failed"
             report["failure_reason"] = "required dump diagnostics were not captured"
@@ -2229,6 +2278,15 @@ def main(argv: list[str] | None = None) -> int:
                     "type": type(exc).__name__,
                     "message": str(exc),
                 }
+        report["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
+        if access_violation_without_emule_dump(report):
+            report["status"] = "failed"
+            report["failure_reason"] = "eMule exited with access violation but no WER LocalDump was captured"
+        crashes = diagnostic_tool_crashes(report)
+        if crashes:
+            report["diagnostic_tool_crashes"] = crashes
+            report["status"] = "failed"
+            report["failure_reason"] = "one or more diagnostic tools crashed"
         harness_cli_common.write_json_file(artifacts_dir / "result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)

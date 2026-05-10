@@ -130,6 +130,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="local-dumps-crash-smoke",
+        script_name="local-dumps-crash-smoke.py",
+        category="rest",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="amutorrent-browser-smoke",
         script_name="amutorrent-browser-smoke.py",
         category="rest",
@@ -322,6 +328,8 @@ def build_suite_command(
             command.append("--enable-umdh")
         if rest_cold_start_dump_stress_skip_dumps:
             command.append("--skip-dumps")
+    if spec.name == "local-dumps-crash-smoke" and p2p_bind_interface_name:
+        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     return command
 
 
@@ -488,6 +496,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "artifact_dir": str(paths.run_report_dir),
         "latest_report_dir": str(paths.latest_report_dir),
         "source_artifact_dir": str(paths.source_artifacts_dir),
+        "local_dumps": paths.local_dumps,
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
         "live_wire_inputs_file": str(live_wire_inputs_file),
@@ -635,6 +644,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             if args.fail_fast:
                 break
 
+    summary["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
     result_path = paths.source_artifacts_dir / "result.json"
     harness_cli_common.write_json_file(result_path, summary)
     harness_cli_common.publish_run_artifacts(paths)

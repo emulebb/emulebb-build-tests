@@ -982,6 +982,7 @@ def configure_webserver_profile(
     use_https: bool = False,
     https_certificate: str = "",
     https_key: str = "",
+    enable_crash_test_endpoint: bool = False,
 ) -> None:
     """Enables the WebServer listener and REST API key inside the temp profile."""
 
@@ -1012,6 +1013,7 @@ def configure_webserver_profile(
         ("UseLowRightsUser", "0"),
         ("AllowAdminHiLevelFunc", "1"),
         ("WebTimeoutMins", "5"),
+        ("EnableCrashTestEndpoint", "1" if enable_crash_test_endpoint else "0"),
         ("UseHTTPS", "1" if use_https else "0"),
         ("HTTPSCertificate", https_certificate),
         ("HTTPSKey", https_key),

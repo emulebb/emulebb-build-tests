@@ -28,6 +28,7 @@ class FakeHarnessCliCommon:
             run_report_dir=self.root / "reports" / kwargs["suite_name"] / "run",
             latest_report_dir=self.root / "reports" / f"{kwargs['suite_name']}-latest",
             keep_source_artifacts=True,
+            local_dumps={"dump_folder": str(source_artifacts_dir / "crash-dumps"), "image_names": ["emule.exe"]},
         )
 
     def find_python_executable(self) -> str:
@@ -45,6 +46,9 @@ class FakeHarnessCliCommon:
 
     def cleanup_source_artifacts(self, paths) -> None:
         return None
+
+    def collect_local_dump_files(self, _local_dumps):
+        return {"count": 0, "files": []}
 
 
 def parse_args(*argv: str):
@@ -356,6 +360,31 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert summary["status"] == "passed"
     assert summary["has_inconclusive_suites"] is True
     assert summary["suites"][0]["status"] == "inconclusive"
+
+
+def test_local_dumps_crash_smoke_forwards_live_bind_policy(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--suite",
+            "local-dumps-crash-smoke",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    command = commands[0]
+    assert script_name(command) == "local-dumps-crash-smoke.py"
+    assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert summary["status"] == "passed"
+    assert summary["suites"][0]["name"] == "local-dumps-crash-smoke"
 
 
 def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Path, monkeypatch) -> None:

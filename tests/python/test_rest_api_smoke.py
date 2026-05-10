@@ -7,6 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+PRIVATE_NATIVE_ONLY_ROUTES = {
+    ("POST", "/app/operations/crash-test"),
+}
+
 
 def load_rest_api_smoke_module():
     """Loads the hyphenated REST smoke script for focused unit tests."""
@@ -74,6 +78,42 @@ def test_p2p_bind_override_writes_interface_name(tmp_path: Path) -> None:
     assert "BindAddr=" in text
     assert "BlockNetworkWhenBindUnavailableAtStartup=1" in text
     assert "127.0.0.1" not in text
+
+
+def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
+    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emule.exe"
+
+    module.configure_webserver_profile(config_dir, app_exe, "api-key", 4711, "127.0.0.1")
+
+    text = module.live_common.read_ini_text(preferences_path)
+    assert "Enabled=1" in text
+    assert "EnableCrashTestEndpoint=0" in text
+
+
+def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
+    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emule.exe"
+
+    module.configure_webserver_profile(
+        config_dir,
+        app_exe,
+        "api-key",
+        4711,
+        "127.0.0.1",
+        enable_crash_test_endpoint=True,
+    )
+
+    text = module.live_common.read_ini_text(preferences_path)
+    assert "EnableCrashTestEndpoint=1" in text
 
 
 def test_live_server_unavailable_is_inconclusive_exit_code() -> None:
@@ -950,7 +990,11 @@ def _openapi_operation_contracts(openapi_path: Path) -> dict[tuple[str, str], di
 
 def test_native_route_specs_match_openapi_methods_paths_and_fields() -> None:
     module = load_rest_api_smoke_module()
-    native_contracts = _native_route_contracts()
+    native_contracts = {
+        route_key: contract
+        for route_key, contract in _native_route_contracts().items()
+        if route_key not in PRIVATE_NATIVE_ONLY_ROUTES
+    }
     openapi_contracts = _openapi_operation_contracts(module.OPENAPI_CONTRACT_PATH)
 
     assert native_contracts == openapi_contracts
@@ -966,6 +1010,7 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
         ("PATCH", "/shared-directories"): {"confirmReplaceRoots"},
         ("DELETE", "/searches"): {"confirmDeleteAllSearches"},
         ("POST", "/logs/operations/clear"): {"confirmClearLogs"},
+        ("POST", "/app/operations/crash-test"): {"confirmCrash"},
     }
     id_targeted_delete_routes = {
         ("DELETE", "/categories/{categoryId}"),

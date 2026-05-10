@@ -9,12 +9,23 @@ import subprocess
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+try:
+    import winreg
+except ImportError:  # pragma: no cover - non-Windows import guard
+    winreg = None  # type: ignore[assignment]
 
 WORKSPACE_NAME = "v0.72a"
 DEFAULT_APP_VARIANTS = ("main", "community", "broadband")
 REPORT_EXCLUDED_DIRECTORY_NAMES = frozenset(("shared-hash-root",))
+WER_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting"
+LOCAL_DUMPS_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+LOCAL_DUMPS_DUMP_TYPE_FULL = 2
+LOCAL_DUMPS_DUMP_COUNT = 64
+LOCAL_DUMPS_TOOL_IMAGE_NAMES = ("umdh.exe", "procdump.exe", "procdump64.exe")
+ACCESS_VIOLATION_EXIT_CODE = 0xC0000005
 
 
 @dataclass(frozen=True)
@@ -32,6 +43,7 @@ class HarnessRunPaths:
     run_report_dir: Path
     latest_report_dir: Path
     keep_source_artifacts: bool
+    local_dumps: dict[str, object] = field(default_factory=dict)
 
 
 def read_json_file(path: Path):
@@ -46,6 +58,247 @@ def write_json_file(path: Path, payload) -> None:
     """Writes one JSON artifact with stable formatting."""
 
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _read_registry_values(subkey: str) -> dict[str, object] | None:
+    """Reads a LocalDumps registry key when it already exists."""
+
+    if winreg is None:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+            values: dict[str, object] = {}
+            for name in ("DumpFolder", "DumpType", "DumpCount"):
+                try:
+                    value, value_type = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    continue
+                values[name] = {
+                    "value": value,
+                    "type": int(value_type),
+                }
+            return values
+    except FileNotFoundError:
+        return None
+
+
+def _registry_root_name(root) -> str:
+    """Returns a stable display name for a Windows registry root handle."""
+
+    if winreg is not None and root == winreg.HKEY_LOCAL_MACHINE:
+        return "HKLM"
+    return "HKCU"
+
+
+def _read_wer_root_values(root) -> dict[str, object] | None:
+    """Reads Windows Error Reporting root values for one registry hive."""
+
+    if winreg is None:
+        return None
+    try:
+        with winreg.OpenKey(root, WER_BASE_SUBKEY) as key:
+            values: dict[str, object] = {}
+            for name in ("Disabled", "DontShowUI"):
+                try:
+                    value, value_type = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    continue
+                values[name] = {
+                    "value": value,
+                    "type": int(value_type),
+                }
+            return values
+    except FileNotFoundError:
+        return None
+
+
+def _set_wer_disabled_value(root, value: int) -> dict[str, object]:
+    """Writes the WER Disabled flag for one hive and records before/after state."""
+
+    result: dict[str, object] = {
+        "root": _registry_root_name(root),
+        "registry_subkey": _registry_root_name(root) + "\\" + WER_BASE_SUBKEY,
+        "before": _read_wer_root_values(root),
+        "write_attempted": True,
+    }
+    try:
+        with winreg.CreateKeyEx(root, WER_BASE_SUBKEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "Disabled", 0, winreg.REG_DWORD, value)
+        result["write_ok"] = True
+    except OSError as exc:
+        result["write_ok"] = False
+        result["error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+    result["after"] = _read_wer_root_values(root)
+    return result
+
+
+def ensure_windows_error_reporting_enabled() -> dict[str, object]:
+    """Enables WER where permitted so LocalDumps can be produced by crashes."""
+
+    result: dict[str, object] = {
+        "enabled": False,
+        "hives": [],
+    }
+    if winreg is None:
+        result["error"] = "winreg is unavailable; Windows Error Reporting can only be configured on Windows"
+        return result
+
+    hives: list[dict[str, object]] = []
+    hives.append(_set_wer_disabled_value(winreg.HKEY_CURRENT_USER, 0))
+    hklm_before = _read_wer_root_values(winreg.HKEY_LOCAL_MACHINE)
+    hklm_disabled = (
+        isinstance(hklm_before, dict)
+        and isinstance(hklm_before.get("Disabled"), dict)
+        and int(hklm_before["Disabled"].get("value")) != 0
+    )
+    if hklm_disabled:
+        hives.append(_set_wer_disabled_value(winreg.HKEY_LOCAL_MACHINE, 0))
+    else:
+        hives.append(
+            {
+                "root": "HKLM",
+                "registry_subkey": "HKLM\\" + WER_BASE_SUBKEY,
+                "before": hklm_before,
+                "write_attempted": False,
+                "write_ok": True,
+                "after": hklm_before,
+            }
+        )
+
+    result["hives"] = hives
+    result["enabled"] = not windows_error_reporting_is_disabled({"hives": hives})
+    return result
+
+
+def windows_error_reporting_is_disabled(wer: dict[str, object] | None) -> bool:
+    """Returns true when recorded WER state still has Disabled set."""
+
+    hives = wer.get("hives") if isinstance(wer, dict) else None
+    if not isinstance(hives, list):
+        return False
+    for hive in hives:
+        if not isinstance(hive, dict):
+            continue
+        after = hive.get("after")
+        if not isinstance(after, dict):
+            continue
+        disabled = after.get("Disabled")
+        if isinstance(disabled, dict):
+            try:
+                if int(disabled.get("value")) != 0:
+                    return True
+            except (TypeError, ValueError):
+                return True
+    return False
+
+
+def configure_local_dumps(
+    *,
+    artifact_dir: Path,
+    app_exe: Path,
+    tool_image_names: tuple[str, ...] = LOCAL_DUMPS_TOOL_IMAGE_NAMES,
+    dump_count: int = LOCAL_DUMPS_DUMP_COUNT,
+) -> dict[str, object]:
+    """Enables full WER LocalDumps for eMule and diagnostic tools for one run."""
+
+    dump_dir = (artifact_dir / "crash-dumps").resolve()
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    image_names = tuple(dict.fromkeys((app_exe.name, *tool_image_names)))
+    result: dict[str, object] = {
+        "enabled": False,
+        "base_subkey": LOCAL_DUMPS_BASE_SUBKEY,
+        "dump_folder": str(dump_dir),
+        "dump_type": LOCAL_DUMPS_DUMP_TYPE_FULL,
+        "dump_count": dump_count,
+        "image_names": list(image_names),
+        "wer": None,
+        "entries": [],
+    }
+    if winreg is None:
+        result["error"] = "winreg is unavailable; LocalDumps can only be configured on Windows"
+        return result
+
+    result["wer"] = ensure_windows_error_reporting_enabled()
+    entries: list[dict[str, object]] = []
+    for image_name in image_names:
+        image_subkey = LOCAL_DUMPS_BASE_SUBKEY + "\\" + image_name
+        before = _read_registry_values(image_subkey)
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, image_subkey, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "DumpFolder", 0, winreg.REG_EXPAND_SZ, str(dump_dir))
+            winreg.SetValueEx(key, "DumpType", 0, winreg.REG_DWORD, LOCAL_DUMPS_DUMP_TYPE_FULL)
+            winreg.SetValueEx(key, "DumpCount", 0, winreg.REG_DWORD, dump_count)
+        entries.append(
+            {
+                "image_name": image_name,
+                "registry_subkey": "HKCU\\" + image_subkey,
+                "before": before,
+                "after": _read_registry_values(image_subkey),
+            }
+        )
+    result["enabled"] = True
+    result["entries"] = entries
+    return result
+
+
+def collect_local_dump_files(local_dumps: dict[str, object]) -> dict[str, object]:
+    """Returns the WER dump files currently present in the configured dump folder."""
+
+    dump_folder = local_dumps.get("dump_folder") if isinstance(local_dumps, dict) else None
+    image_names = local_dumps.get("image_names") if isinstance(local_dumps, dict) else None
+    dump_dir = Path(str(dump_folder)).resolve() if dump_folder else None
+    expected_prefixes = {
+        str(image_name).lower() + "."
+        for image_name in image_names
+        if isinstance(image_name, str) and image_name.strip()
+    } if isinstance(image_names, list) else set()
+    files: list[dict[str, object]] = []
+    if dump_dir and dump_dir.is_dir():
+        for dump_path in sorted(dump_dir.glob("*.dmp"), key=lambda path: path.stat().st_mtime):
+            lowered_name = dump_path.name.lower()
+            if expected_prefixes and not any(lowered_name.startswith(prefix) for prefix in expected_prefixes):
+                continue
+            stat = dump_path.stat()
+            files.append(
+                {
+                    "name": dump_path.name,
+                    "path": str(dump_path),
+                    "size_bytes": stat.st_size,
+                    "mtime": round(stat.st_mtime, 3),
+                }
+            )
+    return {
+        "dump_folder": str(dump_dir) if dump_dir else None,
+        "files": files,
+        "count": len(files),
+    }
+
+
+def local_dump_files_for_image(local_dump_files: dict[str, object], image_name: str) -> list[dict[str, object]]:
+    """Filters a collected LocalDumps file list by executable image name."""
+
+    files = local_dump_files.get("files") if isinstance(local_dump_files, dict) else None
+    if not isinstance(files, list):
+        return []
+    expected_prefix = image_name.lower() + "."
+    return [
+        row
+        for row in files
+        if isinstance(row, dict) and str(row.get("name") or "").lower().startswith(expected_prefix)
+    ]
+
+
+def process_exited_with_access_violation(process_state: dict[str, object] | None) -> bool:
+    """Returns true when a recorded process exit state is the Windows AV code."""
+
+    if not isinstance(process_state, dict):
+        return False
+    try:
+        return int(process_state.get("exit_code")) == ACCESS_VIOLATION_EXIT_CODE
+    except (TypeError, ValueError):
+        return False
 
 
 def to_windows_extended_path(path: Path) -> str:
@@ -217,6 +470,11 @@ def prepare_run_paths(
         else Path(tempfile.gettempdir(), f"emule-{suite_name}-{uuid.uuid4().hex}").resolve()
     )
     source_artifacts_dir.mkdir(parents=True, exist_ok=True)
+    local_dumps = configure_local_dumps(
+        artifact_dir=source_artifacts_dir,
+        app_exe=resolved_app_exe,
+    )
+    write_json_file(source_artifacts_dir / "local-dumps.json", local_dumps)
 
     return HarnessRunPaths(
         repo_root=repo_root,
@@ -230,6 +488,7 @@ def prepare_run_paths(
         run_report_dir=(suite_report_root / report_label).resolve(),
         latest_report_dir=(report_root / f"{suite_name}-latest").resolve(),
         keep_source_artifacts=keep_artifacts or bool(artifacts_dir),
+        local_dumps=local_dumps,
     )
 
 
@@ -299,6 +558,7 @@ def build_live_ui_summary(
         "artifact_dir": str(paths.run_report_dir),
         "latest_report_dir": str(paths.latest_report_dir),
         "source_artifact_dir": str(paths.source_artifacts_dir),
+        "local_dumps": paths.local_dumps,
         "result": read_json_file(paths.run_report_dir / result_filename),
         "error": error_message or None,
     }
@@ -323,6 +583,7 @@ def build_startup_profiles_summary(
         "artifact_dir": str(paths.run_report_dir),
         "latest_report_dir": str(paths.latest_report_dir),
         "source_artifact_dir": str(paths.source_artifacts_dir),
+        "local_dumps": paths.local_dumps,
         "result": read_json_file(paths.run_report_dir / result_filename),
         "error": error_message or None,
     }
