@@ -19,6 +19,12 @@ The seeded `preferences.ini` must stay UTF-16LE with BOM, matching eMule's
 profile-file write path, and limited to the non-default settings that the live
 harness truly needs before runtime overrides are applied.
 
+Runtime overrides belong in `emule_test_harness.live_profiles`, not in
+scenario-local INI patch loops or expanded seed files. The profile builder
+copies this seed into a fresh per-run profile, then applies typed Python specs
+for mutable directories, shared-directory lists, live network policy, and
+WebServer/REST settings.
+
 Required initialized `preferences.ini` keys are enforced by
 `emule_test_harness.live_profile_seed` so first-run UI prompts do not leak into
 live automation.

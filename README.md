@@ -80,8 +80,8 @@ Script inventory:
 | `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
-| `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report resolution for Python-first live/UI harnesses |
-| `scripts\emule-live-profile-common.py` | internal Python helper | maintained | shared live-profile launch and trace helpers |
+| `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report/profile-seed resolution for Python-first live/UI harnesses |
+| `scripts\emule-live-profile-common.py` | internal Python helper | maintained | compatibility facade for live-profile launch and trace helpers |
 | `scripts\rest-api-smoke.py` | operator-facing Python E2E | maintained | canonical isolated REST live E2E lane |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\auto-browse-live.py` | operator-facing Python E2E | maintained | isolated live auto-browse validation with `hide.me` bind and P2P UPnP |
@@ -124,7 +124,8 @@ Deterministic live-profile seed:
 - the harness validates that exact file allowlist before copying the seed; runtime files such as logs, `shareddir.dat`, caches, and history files belong only in per-run artifacts
 - `preferences.ini` is an initialized UTF-16LE-with-BOM profile seed; it must already carry the startup-silencing keys needed to avoid first-run UI such as the language prompt and runtime wizard
 - `preferences.dat` carries the deterministic maximized main-window placement used by the live UI and startup-profile harnesses
-- the helper injects only runtime-specific transport, logging, bind, temp, working-folder, and shared-directory settings per run
+- importable profile generation lives in `emule_test_harness.live_profiles`; scenario scripts should use that module's typed profile and WebServer specs instead of open-coded `preferences.ini` patch loops
+- the builder injects only runtime-specific transport, logging, bind, temp, working-folder, WebServer, and shared-directory settings per run
 - runtime working folders are copied from that seed and then expanded with per-run logs, temp files, and other mutable state
 - use `--profile-seed-dir <path>` on live harness entrypoints when diagnosing against an alternate seed
 
