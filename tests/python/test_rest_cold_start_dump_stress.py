@@ -485,6 +485,30 @@ def test_run_stress_waves_records_ready_probe_timeout(monkeypatch) -> None:
     assert result["waves"][0]["rest_ready_probe"]["error"]["type"] == "TimeoutError"
 
 
+def test_cleanup_records_rest_timeouts(monkeypatch) -> None:
+    module = load_script_module()
+
+    def fail(*_args, **_kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(module.rest_smoke, "delete_all_searches", fail)
+    monkeypatch.setattr(module.rest_smoke, "clear_completed_transfers", fail)
+    monkeypatch.setattr(module.rest_smoke, "clear_logs", fail)
+
+    result = module.cleanup_searches_and_transfers(
+        base_url="http://127.0.0.1:1",
+        api_key="key",
+        search_ids=[],
+        transfer_hashes=[],
+        transfer_cleanup_timeout_seconds=1.0,
+    )
+
+    assert result["delete_all_searches"]["error"]["type"] == "TimeoutError"
+    assert result["clear_completed_transfers"]["error"]["type"] == "TimeoutError"
+    assert result["clear_logs"]["error"]["type"] == "TimeoutError"
+    assert result["post_transfer_delete"]["absent"] is True
+
+
 def test_umdh_gflags_commands_are_explicit(monkeypatch, tmp_path: Path) -> None:
     module = load_script_module()
     calls: list[list[str]] = []

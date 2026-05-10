@@ -2382,29 +2382,56 @@ def cleanup_searches_and_transfers(
         "search_ids": search_ids,
         "transfer_hashes": transfer_hashes,
     }
-    delete_result = rest_smoke.delete_all_searches(base_url, api_key)
-    cleanup["delete_all_searches"] = rest_smoke.compact_http_result(delete_result)
-    if int(delete_result["status"]) == 200:
-        cleanup["post_delete"] = rest_smoke.verify_searches_deleted(base_url, api_key, search_ids)
-    cleanup["delete_stress_transfers"] = delete_stress_transfers(base_url, api_key, transfer_hashes)
-    if transfer_registry is not None:
-        for row in cleanup["delete_stress_transfers"].get("deletes", []):
-            if not isinstance(row, dict):
-                continue
-            response = row.get("response")
-            if isinstance(response, dict) and int(response.get("status", 0)) in {200, 404}:
-                transfer_registry.record_deleted(str(row.get("hash") or ""))
-    cleanup["post_transfer_delete"] = wait_for_stress_transfers_absent(
-        base_url,
-        api_key,
-        transfer_hashes,
-        transfer_cleanup_timeout_seconds,
-    )
-    clear_result = rest_smoke.clear_completed_transfers(base_url, api_key)
-    cleanup["clear_completed_transfers"] = rest_smoke.compact_http_result(clear_result)
-    clear_logs_result = rest_smoke.clear_logs(base_url, api_key)
-    cleanup["clear_logs"] = rest_smoke.compact_http_result(clear_logs_result)
+    try:
+        delete_result = rest_smoke.delete_all_searches(base_url, api_key)
+        cleanup["delete_all_searches"] = rest_smoke.compact_http_result(delete_result)
+        if int(delete_result["status"]) == 200:
+            cleanup["post_delete"] = rest_smoke.verify_searches_deleted(base_url, api_key, search_ids)
+    except Exception as exc:
+        cleanup["delete_all_searches"] = exception_report(exc)
+    try:
+        cleanup["delete_stress_transfers"] = delete_stress_transfers(base_url, api_key, transfer_hashes)
+        if transfer_registry is not None:
+            for row in cleanup["delete_stress_transfers"].get("deletes", []):
+                if not isinstance(row, dict):
+                    continue
+                response = row.get("response")
+                if isinstance(response, dict) and int(response.get("status", 0)) in {200, 404}:
+                    transfer_registry.record_deleted(str(row.get("hash") or ""))
+    except Exception as exc:
+        cleanup["delete_stress_transfers"] = exception_report(exc)
+    try:
+        cleanup["post_transfer_delete"] = wait_for_stress_transfers_absent(
+            base_url,
+            api_key,
+            transfer_hashes,
+            transfer_cleanup_timeout_seconds,
+        )
+    except Exception as exc:
+        cleanup["post_transfer_delete"] = exception_report(exc)
+    try:
+        clear_result = rest_smoke.clear_completed_transfers(base_url, api_key)
+        cleanup["clear_completed_transfers"] = rest_smoke.compact_http_result(clear_result)
+    except Exception as exc:
+        cleanup["clear_completed_transfers"] = exception_report(exc)
+    try:
+        clear_logs_result = rest_smoke.clear_logs(base_url, api_key)
+        cleanup["clear_logs"] = rest_smoke.compact_http_result(clear_logs_result)
+    except Exception as exc:
+        cleanup["clear_logs"] = exception_report(exc)
     return cleanup
+
+
+def exception_report(exc: Exception) -> dict[str, object]:
+    """Returns a compact serializable report for a best-effort diagnostic failure."""
+
+    return {
+        "ok": False,
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        },
+    }
 
 
 def extract_stress_transfer_hashes(stress_report: dict[str, object]) -> list[str]:
