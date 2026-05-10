@@ -495,7 +495,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--download-remove-count-per-churn", type=int, default=0)
     parser.add_argument("--resource-monitor-interval-seconds", type=float, default=5.0)
     parser.add_argument("--post-drain-seconds", type=float, default=30.0)
-    parser.add_argument("--tool-timeout-seconds", type=float, default=300.0)
+    parser.add_argument("--tool-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--enable-umdh", action="store_true")
     parser.add_argument("--max-post-drain-umdh-positive-bytes", type=int, default=DEFAULT_MAX_POST_DRAIN_UMDH_POSITIVE_BYTES)
     parser.add_argument("--cpu-profile", action="store_true")
