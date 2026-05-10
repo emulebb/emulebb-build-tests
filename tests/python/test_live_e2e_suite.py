@@ -387,6 +387,10 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "--rest-cold-start-dump-stress-tool-timeout-seconds",
             "6",
             "--rest-cold-start-dump-stress-enable-umdh",
+            "--rest-cold-start-dump-stress-cpu-profile",
+            "--rest-cold-start-dump-stress-cpu-profile-max-file-mb",
+            "64",
+            "--no-rest-cold-start-dump-stress-cpu-profile-symbols-required",
             "--rest-cold-start-dump-stress-skip-dumps",
         ),
         FakeHarnessCliCommon(tmp_path),
@@ -409,7 +413,13 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert option_values(command, "--post-drain-seconds") == ["5.0"]
     assert option_values(command, "--tool-timeout-seconds") == ["6.0"]
     assert "--enable-umdh" in command
+    assert "--cpu-profile" in command
+    assert option_values(command, "--cpu-profile-max-file-mb") == ["64"]
+    assert "--no-cpu-profile-symbols-required" in command
     assert "--skip-dumps" in command
+    assert summary["rest_cold_start_dump_stress"]["cpu_profile"] is True
+    assert summary["rest_cold_start_dump_stress"]["cpu_profile_max_file_mb"] == 64
+    assert summary["rest_cold_start_dump_stress"]["cpu_profile_symbols_required"] is False
     assert summary["status"] == "passed"
     assert summary["has_inconclusive_suites"] is True
     assert summary["suites"][0]["status"] == "inconclusive"

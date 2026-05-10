@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
-from emule_test_harness import live_wire_inputs
+from emule_test_harness import cpu_profile, live_wire_inputs
 
 SHARED_FILES_UI_SCENARIOS = (
     "fixture-three-files",
@@ -54,6 +54,7 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN = 0
 DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 30.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 600.0
+DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 
 
 @dataclass(frozen=True)
@@ -245,6 +246,9 @@ def build_suite_command(
     rest_cold_start_dump_stress_post_drain_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS,
     rest_cold_start_dump_stress_tool_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS,
     rest_cold_start_dump_stress_enable_umdh: bool = False,
+    rest_cold_start_dump_stress_cpu_profile: bool = False,
+    rest_cold_start_dump_stress_cpu_profile_max_file_mb: int = DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB,
+    rest_cold_start_dump_stress_cpu_profile_symbols_required: bool = True,
     rest_cold_start_dump_stress_skip_dumps: bool = False,
 ) -> list[str]:
     """Builds one child suite command line."""
@@ -348,6 +352,11 @@ def build_suite_command(
         command.extend(["--tool-timeout-seconds", str(rest_cold_start_dump_stress_tool_timeout_seconds)])
         if rest_cold_start_dump_stress_enable_umdh:
             command.append("--enable-umdh")
+        if rest_cold_start_dump_stress_cpu_profile:
+            command.append("--cpu-profile")
+        command.extend(["--cpu-profile-max-file-mb", str(rest_cold_start_dump_stress_cpu_profile_max_file_mb)])
+        if not rest_cold_start_dump_stress_cpu_profile_symbols_required:
+            command.append("--no-cpu-profile-symbols-required")
         if rest_cold_start_dump_stress_skip_dumps:
             command.append("--skip-dumps")
     if spec.name == "local-dumps-crash-smoke" and p2p_bind_interface_name:
@@ -480,6 +489,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS,
     )
     parser.add_argument("--rest-cold-start-dump-stress-enable-umdh", action="store_true")
+    parser.add_argument("--rest-cold-start-dump-stress-cpu-profile", action="store_true")
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-cpu-profile-max-file-mb",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-cpu-profile-symbols-required",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--rest-cold-start-dump-stress-skip-dumps", action="store_true")
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument(
@@ -538,6 +558,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST cold-start dump stress post-drain seconds must be zero or greater.")
     if args.rest_cold_start_dump_stress_tool_timeout_seconds <= 0:
         raise ValueError("REST cold-start dump stress tool timeout must be greater than zero.")
+    if args.rest_cold_start_dump_stress_cpu_profile_max_file_mb <= 0:
+        raise ValueError("REST cold-start dump stress CPU profile max file MB must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -608,6 +630,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "post_drain_seconds": args.rest_cold_start_dump_stress_post_drain_seconds,
             "tool_timeout_seconds": args.rest_cold_start_dump_stress_tool_timeout_seconds,
             "enable_umdh": bool(args.rest_cold_start_dump_stress_enable_umdh),
+            "cpu_profile": bool(args.rest_cold_start_dump_stress_cpu_profile),
+            "cpu_profile_max_file_mb": args.rest_cold_start_dump_stress_cpu_profile_max_file_mb,
+            "cpu_profile_symbols_required": bool(args.rest_cold_start_dump_stress_cpu_profile_symbols_required),
             "skip_dumps": bool(args.rest_cold_start_dump_stress_skip_dumps),
         },
         "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",
@@ -673,6 +698,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_post_drain_seconds=args.rest_cold_start_dump_stress_post_drain_seconds,
             rest_cold_start_dump_stress_tool_timeout_seconds=args.rest_cold_start_dump_stress_tool_timeout_seconds,
             rest_cold_start_dump_stress_enable_umdh=args.rest_cold_start_dump_stress_enable_umdh,
+            rest_cold_start_dump_stress_cpu_profile=args.rest_cold_start_dump_stress_cpu_profile,
+            rest_cold_start_dump_stress_cpu_profile_max_file_mb=args.rest_cold_start_dump_stress_cpu_profile_max_file_mb,
+            rest_cold_start_dump_stress_cpu_profile_symbols_required=args.rest_cold_start_dump_stress_cpu_profile_symbols_required,
             rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
         )
         started = time.monotonic()
