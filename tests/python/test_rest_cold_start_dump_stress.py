@@ -211,6 +211,50 @@ def test_download_trigger_respects_per_search_budget_and_dedupes(monkeypatch) ->
     assert registry.counts()["triggered_stress_transfer_count"] == 2
 
 
+def test_summarize_incoming_completed_files_redacts_names(tmp_path: Path) -> None:
+    module = load_script_module()
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "alpha.pdf").write_bytes(b"abc")
+    (incoming / "beta.zip").write_bytes(b"abcd")
+
+    summary = module.summarize_incoming_completed_files(incoming)
+
+    assert summary["completed_file_count"] == 2
+    assert summary["total_completed_file_bytes"] == 7
+    assert summary["extension_counts"] == {".pdf": 1, ".zip": 1}
+    assert summary["files"] == [
+        {"name_present": True, "extension": ".pdf", "size_bytes": 3},
+        {"name_present": True, "extension": ".zip", "size_bytes": 4},
+    ]
+
+
+def test_completion_wait_counts_materialized_incoming_files(monkeypatch, tmp_path: Path) -> None:
+    module = load_script_module()
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    (incoming / "complete-a.pdf").write_bytes(b"a")
+    (incoming / "complete-b.pdf").write_bytes(b"b")
+
+    monkeypatch.setattr(module, "list_stress_transfer_rows", lambda *_args: [])
+    monkeypatch.setattr(module.rest_smoke, "wait_for", lambda resolve, **_kwargs: resolve())
+
+    result = module.wait_for_completed_stress_downloads(
+        base_url="http://127.0.0.1:1",
+        api_key="key",
+        transfer_registry=module.StressTransferRegistry(),
+        target_completed_downloads=2,
+        timeout_seconds=1.0,
+        incoming_dir=incoming,
+    )
+
+    assert result["ok"] is True
+    assert result["completed_count"] == 2
+    assert result["transfer_completed_count"] == 0
+    assert result["incoming_completed_files"]["completed_file_count"] == 2
+    assert result["observations"][0]["incoming_completed_file_count"] == 2
+
+
 def test_compute_cpu_percent_normalizes_by_logical_cpu_count() -> None:
     module = load_script_module()
 
@@ -956,7 +1000,7 @@ def test_wait_for_stress_transfers_absent_polls_until_transfer_disappears(monkey
     assert [row["present_count"] for row in result["observations"]] == [1, 0]
 
 
-def test_wait_for_completed_stress_downloads_records_completed_hashes(monkeypatch) -> None:
+def test_wait_for_completed_stress_downloads_records_completed_hashes(monkeypatch, tmp_path: Path) -> None:
     module = load_script_module()
     transfer_hash = "0123456789abcdef0123456789abcdef"
     registry = module.StressTransferRegistry()
@@ -988,6 +1032,7 @@ def test_wait_for_completed_stress_downloads_records_completed_hashes(monkeypatc
         registry,
         1,
         10.0,
+        tmp_path / "incoming",
     )
 
     assert result["ok"] is True

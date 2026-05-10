@@ -485,8 +485,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--waves", type=int, default=4)
     parser.add_argument("--searches-per-wave", type=int, default=12)
     parser.add_argument("--max-concurrent-searches", type=int, default=8)
-    parser.add_argument("--downloads-per-wave", type=int, default=12)
-    parser.add_argument("--downloads-per-search", type=int)
+    parser.add_argument("--downloads-per-wave", type=int, default=48)
+    parser.add_argument("--downloads-per-search", type=int, default=4)
     parser.add_argument("--max-missing-download-triggers", type=int, default=0)
     parser.add_argument("--target-completed-downloads", type=int, default=0)
     parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
@@ -551,6 +551,43 @@ def resolve_downloads_per_search(args: argparse.Namespace) -> int:
         return int(explicit)
     searches_per_wave = max(1, int(args.searches_per_wave))
     return max(0, int(args.downloads_per_wave) // searches_per_wave)
+
+
+def summarize_incoming_completed_files(incoming_dir: Path) -> dict[str, object]:
+    """Summarizes completed files materialized in the isolated incoming directory."""
+
+    if not incoming_dir.is_dir():
+        return {
+            "incoming_dir": str(incoming_dir),
+            "completed_file_count": 0,
+            "total_completed_file_bytes": 0,
+            "extension_counts": {},
+            "files": [],
+        }
+    files: list[dict[str, object]] = []
+    extension_counts: dict[str, int] = {}
+    total_bytes = 0
+    for path in sorted(incoming_dir.iterdir(), key=lambda item: item.name.lower()):
+        if not path.is_file():
+            continue
+        size = path.stat().st_size
+        extension = path.suffix.lower()
+        total_bytes += size
+        extension_counts[extension] = extension_counts.get(extension, 0) + 1
+        files.append(
+            {
+                "name_present": bool(path.name),
+                "extension": extension,
+                "size_bytes": size,
+            }
+        )
+    return {
+        "incoming_dir": str(incoming_dir),
+        "completed_file_count": len(files),
+        "total_completed_file_bytes": total_bytes,
+        "extension_counts": dict(sorted(extension_counts.items())),
+        "files": files,
+    }
 
 
 def build_open_source_stress_terms(configured_terms: tuple[str, ...]) -> tuple[str, ...]:
@@ -2230,15 +2267,18 @@ def wait_for_completed_stress_downloads(
     transfer_registry: StressTransferRegistry,
     target_completed_downloads: int,
     timeout_seconds: float,
+    incoming_dir: Path,
 ) -> dict[str, object]:
     """Waits for the configured number of stress transfers to complete."""
 
     observations: list[dict[str, object]] = []
     if target_completed_downloads <= 0:
+        incoming_summary = summarize_incoming_completed_files(incoming_dir)
         return {
             "ok": True,
             "target_completed_downloads": target_completed_downloads,
-            "completed_count": 0,
+            "completed_count": int(incoming_summary["completed_file_count"]),
+            "incoming_completed_files": incoming_summary,
             "observations": observations,
             "skipped": True,
         }
@@ -2255,21 +2295,28 @@ def wait_for_completed_stress_downloads(
                 completed_hashes.append(transfer_hash)
             completed_bytes += int(row.get("completedBytes") or 0)
         counts = transfer_registry.counts()
+        incoming_summary = summarize_incoming_completed_files(incoming_dir)
+        incoming_completed_count = int(incoming_summary["completed_file_count"])
+        effective_completed_count = max(counts["completed_stress_transfer_count"], incoming_completed_count)
         observation = {
             "observed_at": round(time.time(), 3),
             "target_completed_downloads": target_completed_downloads,
             "visible_stress_transfer_count": len(rows),
-            "completed_count": counts["completed_stress_transfer_count"],
+            "completed_count": effective_completed_count,
+            "transfer_completed_count": counts["completed_stress_transfer_count"],
+            "incoming_completed_file_count": incoming_completed_count,
             "active_stress_transfer_count": counts["active_stress_transfer_count"],
             "triggered_stress_transfer_count": counts["triggered_stress_transfer_count"],
             "completed_bytes": completed_bytes,
         }
         observations.append(observation)
-        if counts["completed_stress_transfer_count"] >= target_completed_downloads:
+        if effective_completed_count >= target_completed_downloads:
             return {
                 "ok": True,
                 "target_completed_downloads": target_completed_downloads,
-                "completed_count": counts["completed_stress_transfer_count"],
+                "completed_count": effective_completed_count,
+                "transfer_completed_count": counts["completed_stress_transfer_count"],
+                "incoming_completed_files": incoming_summary,
                 "completed_hashes": sorted(set(completed_hashes)),
                 "observations": observations,
             }
@@ -2287,7 +2334,12 @@ def wait_for_completed_stress_downloads(
         return {
             "ok": False,
             "target_completed_downloads": target_completed_downloads,
-            "completed_count": counts["completed_stress_transfer_count"],
+            "completed_count": max(
+                counts["completed_stress_transfer_count"],
+                int(summarize_incoming_completed_files(incoming_dir)["completed_file_count"]),
+            ),
+            "transfer_completed_count": counts["completed_stress_transfer_count"],
+            "incoming_completed_files": summarize_incoming_completed_files(incoming_dir),
             "observations": observations,
         }
     assert isinstance(result, dict)
@@ -2565,6 +2617,16 @@ def build_live_diagnostic_findings(report: dict[str, object]) -> dict[str, objec
             "requested_download_triggers": stress.get("requested_download_triggers"),
             "completed_download_triggers": stress.get("completed_download_triggers"),
             "completed_downloads": download_completion.get("completed_count"),
+            "incoming_completed_file_count": (
+                download_completion.get("incoming_completed_files", {}).get("completed_file_count")
+                if isinstance(download_completion.get("incoming_completed_files"), dict)
+                else None
+            ),
+            "incoming_completed_file_bytes": (
+                download_completion.get("incoming_completed_files", {}).get("total_completed_file_bytes")
+                if isinstance(download_completion.get("incoming_completed_files"), dict)
+                else None
+            ),
         },
         "cpu": {
             "app_row_count": cpu_summary.get("app_row_count"),
@@ -2766,6 +2828,8 @@ def main(argv: list[str] | None = None) -> int:
             "live_seed_refresh": seed_refresh,
             "profile_base": str(profile["profile_base"]),
             "config_dir": str(profile["config_dir"]),
+            "incoming_dir": str(profile["incoming_dir"]),
+            "temp_dir": str(profile["temp_dir"]),
             "api_key_length": len(args.api_key),
             "bind_addr": args.bind_addr,
             "enable_upnp": True,
@@ -2903,6 +2967,7 @@ def main(argv: list[str] | None = None) -> int:
             transfer_registry,
             args.target_completed_downloads,
             args.completion_timeout_seconds,
+            Path(profile["incoming_dir"]),
         )
         if cpu_profile_active:
             assert cpu_profile_tools is not None
