@@ -1907,6 +1907,18 @@ def require_transfer_bulk_result(result: dict[str, object], expected_hash: str, 
     return first
 
 
+def require_transfer_operation_result(result: dict[str, object], expected_hash: str) -> dict[str, object]:
+    """Asserts one successful single-transfer operation returns the mutated transfer."""
+
+    payload = require_json_object(result, 200)
+    assert str(payload.get("hash") or "").lower() == expected_hash, compact_http_result(result)
+    return {
+        "hash": payload.get("hash"),
+        "state": payload.get("state"),
+        "stopped": payload.get("stopped"),
+    }
+
+
 def get_app_process_id(app: object) -> int | None:
     """Returns the launched process id when pywinauto exposes it."""
 
@@ -3239,11 +3251,11 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "state": transfer_added_payload.get("state"),
             "details": compact_transfer_details_payload(transfer_added_details_payload, REST_SURFACE_VALID_DOWNLOAD_HASH),
             "lifecycle": {
-                "resume": require_transfer_bulk_result(transfer_added_resume, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
-                "pause": require_transfer_bulk_result(transfer_added_pause, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
-                "stop": require_transfer_bulk_result(transfer_added_stop, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
-                "resume_after_stop": require_transfer_bulk_result(transfer_added_resume_after_stop, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
-                "pause_after_resume": require_transfer_bulk_result(transfer_added_pause_after_resume, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+                "resume": require_transfer_operation_result(transfer_added_resume, REST_SURFACE_VALID_DOWNLOAD_HASH),
+                "pause": require_transfer_operation_result(transfer_added_pause, REST_SURFACE_VALID_DOWNLOAD_HASH),
+                "stop": require_transfer_operation_result(transfer_added_stop, REST_SURFACE_VALID_DOWNLOAD_HASH),
+                "resume_after_stop": require_transfer_operation_result(transfer_added_resume_after_stop, REST_SURFACE_VALID_DOWNLOAD_HASH),
+                "pause_after_resume": require_transfer_operation_result(transfer_added_pause_after_resume, REST_SURFACE_VALID_DOWNLOAD_HASH),
             },
             "delete": require_transfer_bulk_result(transfer_delete_added, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
         },
