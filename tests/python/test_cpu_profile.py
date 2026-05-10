@@ -106,3 +106,17 @@ emule.exe (17236),     505140,       0.01,            emule.exe!CPartFile::Write
         "emule!CMapPtrToPtr::GetValueAt",
         "emule!CPartFile::WriteToBuffer",
     ]
+
+
+def test_parse_xperf_profile_detail_preserves_csv_template_symbols() -> None:
+    text = (
+        "emule.exe (5740),     136000,       0.01,            "
+        "emule.exe!nlohmann::json_abi_v3_11_3::basic_json<std::map,"
+        "std::vector,std::basic_string<char,std::char_traits<char>,std::allocator<char> > >::destroy\n"
+    )
+
+    summary = cpu_profile.parse_xperf_profile_detail(text)
+
+    function = summary["top_app_functions"][0]["function"]
+    assert function.startswith("emule!nlohmann::json_abi_v3_11_3::basic_json<std::map,std::vector")
+    assert function.endswith(">::destroy")

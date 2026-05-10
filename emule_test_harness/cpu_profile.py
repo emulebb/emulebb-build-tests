@@ -297,10 +297,17 @@ def parse_xperf_profile_detail(
         folded = line.casefold()
         if not line or (image_token not in folded and symbol_token not in folded and not any(prefix in folded for prefix in EMULE_SYMBOL_PREFIXES)):
             continue
-        symbol_match = _SYMBOL_RE.search(line)
-        function = normalize_emule_symbol(symbol_match.group(0)) if symbol_match else "<unresolved>"
         percent_match = _PERCENT_RE.search(line)
         csv_match = _XPERF_CSV_ROW_RE.match(line)
+        symbol_text = None
+        if csv_match:
+            csv_function = csv_match.group("function").strip()
+            if csv_function.casefold().startswith(EMULE_SYMBOL_PREFIXES):
+                symbol_text = csv_function
+        if symbol_text is None:
+            symbol_match = _SYMBOL_RE.search(line)
+            symbol_text = symbol_match.group(0) if symbol_match else None
+        function = normalize_emule_symbol(symbol_text) if symbol_text else "<unresolved>"
         if percent_match:
             weight = float(percent_match.group("value"))
             sample_count = parse_sample_count(line, percent_match.start())
