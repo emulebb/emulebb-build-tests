@@ -27,15 +27,15 @@ TEST_CASE("eMule BB release tags use strict semver identity")
 {
 	SModReleaseVersion parsed = {};
 
-	CHECK(TryParseReleaseTag("emule-bb-v1.0.0", parsed));
+	CHECK(TryParseReleaseTag("emule-bb-v1.1.1", parsed));
 	CHECK_EQ(parsed.uMajor, 1u);
-	CHECK_EQ(parsed.uMinor, 0u);
-	CHECK_EQ(parsed.uPatch, 0u);
+	CHECK_EQ(parsed.uMinor, 1u);
+	CHECK_EQ(parsed.uPatch, 1u);
 
 	CHECK_FALSE(TryParseReleaseTag("v0.72a-bb.1", parsed));
-	CHECK_FALSE(TryParseReleaseTag("bb-v1.0.0", parsed));
-	CHECK_FALSE(TryParseReleaseTag("emule-bb-v1.0", parsed));
-	CHECK_FALSE(TryParseReleaseTag("emule-bb-v1.0.0-beta", parsed));
+	CHECK_FALSE(TryParseReleaseTag("bb-v1.1.1", parsed));
+	CHECK_FALSE(TryParseReleaseTag("emule-bb-v1.1", parsed));
+	CHECK_FALSE(TryParseReleaseTag("emule-bb-v1.1.1-beta", parsed));
 	CHECK_FALSE(TryParseReleaseTag("emule-bb-v42949672960.0.0", parsed));
 }
 
@@ -50,31 +50,31 @@ TEST_CASE("eMule BB release version comparison orders major minor and patch")
 
 TEST_CASE("eMule BB release evaluation requires current-platform ZIP asset")
 {
-	const SModReleaseVersion local = {1u, 0u, 0u};
-	const std::string strX64Asset = BuildRequiredAssetName({1u, 0u, 1u}, "x64");
+	const SModReleaseVersion local = {1u, 1u, 1u};
+	const std::string strX64Asset = BuildRequiredAssetName({1u, 1u, 2u}, "x64");
 
-	const auto newer = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.0.1", strX64Asset.c_str()), local, "x64");
+	const auto newer = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.1.2", strX64Asset.c_str()), local, "x64");
 	CHECK_EQ(newer.eStatus, EReleaseEvaluationStatus::Newer);
-	CHECK_EQ(newer.strRequiredAssetName, "eMule-broadband-1.0.1-x64.zip");
+	CHECK_EQ(newer.strRequiredAssetName, "eMule-broadband-1.1.2-x64.zip");
 
-	const auto missingAsset = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.0.1", "eMule-broadband-1.0.1-arm64.zip"), local, "x64");
+	const auto missingAsset = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.1.2", "eMule-broadband-1.1.2-arm64.zip"), local, "x64");
 	CHECK_EQ(missingAsset.eStatus, EReleaseEvaluationStatus::MissingAsset);
 
-	const auto notNewer = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.0.0", "eMule-broadband-1.0.0-x64.zip"), local, "x64");
+	const auto notNewer = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.1.1", "eMule-broadband-1.1.1-x64.zip"), local, "x64");
 	CHECK_EQ(notNewer.eStatus, EReleaseEvaluationStatus::NotNewer);
 }
 
 TEST_CASE("eMule BB release evaluation ignores malformed and prerelease payloads")
 {
-	const SModReleaseVersion local = {1u, 0u, 0u};
+	const SModReleaseVersion local = {1u, 1u, 1u};
 
-	const auto malformedTag = EvaluateLatestReleaseJson(BuildReleaseJson("v0.72a-bb.1", "eMule-broadband-1.0.1-x64.zip"), local, "x64");
+	const auto malformedTag = EvaluateLatestReleaseJson(BuildReleaseJson("v0.72a-bb.1", "eMule-broadband-1.1.2-x64.zip"), local, "x64");
 	CHECK_EQ(malformedTag.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
 
 	const auto overflowedTag = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v42949672960.0.0", "eMule-broadband-42949672960.0.0-x64.zip"), local, "x64");
 	CHECK_EQ(overflowedTag.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
 
-	const auto prerelease = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.0.1", "eMule-broadband-1.0.1-x64.zip", false, true), local, "x64");
+	const auto prerelease = EvaluateLatestReleaseJson(BuildReleaseJson("emule-bb-v1.1.2", "eMule-broadband-1.1.2-x64.zip", false, true), local, "x64");
 	CHECK_EQ(prerelease.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
 
 	const auto parseFailed = EvaluateLatestReleaseJson("{not-json", local, "x64");
