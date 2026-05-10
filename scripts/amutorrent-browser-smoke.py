@@ -747,7 +747,7 @@ def main() -> int:
     workspace_repo_root = find_workspace_repo_root(paths.workspace_root)
     amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
     artifacts_dir = paths.source_artifacts_dir
-    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
+    seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = resolve_amutorrent_node()
     amutorrent_data_dir = artifacts_dir / "amutorrent-data"
 

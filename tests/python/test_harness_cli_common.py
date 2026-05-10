@@ -95,6 +95,26 @@ def test_cleanup_source_artifacts_leaves_locked_temp_payloads(monkeypatch, tmp_p
     assert attempts["count"] > 0
 
 
+def test_resolve_profile_seed_dir_uses_default_or_override(tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    paths = module.HarnessRunPaths(
+        repo_root=tmp_path,
+        workspace_root=tmp_path,
+        app_root=tmp_path,
+        app_exe=tmp_path / "emule.exe",
+        seed_config_dir=tmp_path / "default-seed",
+        configuration="Release",
+        suite_name="seed-resolution",
+        source_artifacts_dir=tmp_path / "source",
+        run_report_dir=tmp_path / "reports" / "run",
+        latest_report_dir=tmp_path / "reports" / "latest",
+        keep_source_artifacts=False,
+    )
+
+    assert module.resolve_profile_seed_dir(paths, None) == tmp_path / "default-seed"
+    assert module.resolve_profile_seed_dir(paths, tmp_path / "override") == (tmp_path / "override").resolve()
+
+
 def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatch, tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     registry: dict[str, dict[str, tuple[object, int]]] = {}

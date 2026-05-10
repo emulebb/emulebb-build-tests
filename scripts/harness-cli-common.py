@@ -492,6 +492,12 @@ def prepare_run_paths(
     )
 
 
+def resolve_profile_seed_dir(paths: HarnessRunPaths, profile_seed_dir: str | Path | None) -> Path:
+    """Resolves an optional profile-seed override against the run path defaults."""
+
+    return Path(profile_seed_dir).resolve() if profile_seed_dir else paths.seed_config_dir
+
+
 def publish_directory_snapshot(source_directory: Path, destination_directory: Path) -> None:
     """Refreshes one report directory from another directory snapshot."""
 

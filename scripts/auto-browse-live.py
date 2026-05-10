@@ -1073,7 +1073,7 @@ def main() -> int:
         keep_artifacts=(args.keep_artifacts or args.keep_running),
     )
 
-    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
+    seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
     port = rest_smoke.choose_listen_port()
     base_url = f"http://127.0.0.1:{port}"
