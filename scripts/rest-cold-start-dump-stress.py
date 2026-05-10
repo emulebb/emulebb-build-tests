@@ -181,6 +181,7 @@ MUST_RETURN_RESULT_TERMS = frozenset(
         "linux",
         "ubuntu",
         "debian",
+        "fedora",
         "gnu",
         "python",
         "rust",
