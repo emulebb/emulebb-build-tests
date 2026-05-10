@@ -451,6 +451,15 @@ class ProcessResourceMonitor:
             self.sample_once()
 
 
+class DumpMonitor:
+    """Background ProcDump monitor used to capture unexpected app termination."""
+
+    def __init__(self, process: subprocess.Popen[None], log_handle, result: dict[str, object]) -> None:
+        self.process = process
+        self.log_handle = log_handle
+        self.result = result
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the cold-start diagnostic stress CLI parser."""
 
@@ -948,6 +957,61 @@ def capture_dump_and_analysis(
     elif not cdb:
         result["cdb"] = {"skipped": True, "reason": "cdb was not found"}
     return result
+
+
+def start_dump_monitor(
+    *,
+    process_id: int,
+    tools: dict[str, str | None],
+    diagnostics_dir: Path,
+    skip_dumps: bool,
+) -> DumpMonitor | None:
+    """Starts ProcDump in the background so sudden process exit still leaves a dump."""
+
+    if skip_dumps:
+        return None
+    procdump = tools.get("procdump")
+    if not procdump:
+        return None
+    dump_dir = diagnostics_dir / "dumps" / "monitor"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    log_path = diagnostics_dir / "analysis" / "procdump-monitor.txt"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [procdump, "-accepteula", "-ma", "-e", "-t", str(process_id), str(dump_dir)]
+    log_handle = log_path.open("w", encoding="utf-8")
+    log_handle.write(f"command: {subprocess.list2cmdline(command)}\n\n")
+    log_handle.flush()
+    process = subprocess.Popen(command, stdout=log_handle, stderr=subprocess.STDOUT)
+    return DumpMonitor(
+        process=process,
+        log_handle=log_handle,
+        result={
+            "command": command,
+            "log_path": str(log_path),
+            "dump_dir": str(dump_dir),
+            "started": True,
+        },
+    )
+
+
+def stop_dump_monitor(monitor: DumpMonitor) -> dict[str, object]:
+    """Stops or reaps a background ProcDump monitor and records emitted dumps."""
+
+    if monitor.process.poll() is None:
+        monitor.process.terminate()
+        try:
+            monitor.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            monitor.process.kill()
+            monitor.process.wait(timeout=10)
+            monitor.result["killed"] = True
+    monitor.log_handle.close()
+    dump_dir = Path(str(monitor.result["dump_dir"]))
+    dump_files = sorted(dump_dir.glob("*.dmp"))
+    monitor.result["return_code"] = monitor.process.returncode
+    monitor.result["dump_files"] = [str(path) for path in dump_files]
+    monitor.result["dump_count"] = len(dump_files)
+    return monitor.result
 
 
 def redact_sensitive_search_value(value: object) -> object:
@@ -2568,6 +2632,7 @@ def main(argv: list[str] | None = None) -> int:
     downloads_per_search = resolve_downloads_per_search(args)
     transfer_registry = StressTransferRegistry()
     resource_monitor: ProcessResourceMonitor | None = None
+    dump_monitor: DumpMonitor | None = None
     cpu_profile_tools: cpu_profile.CpuProfileTools | None = None
     cpu_profile_paths: cpu_profile.CpuProfilePaths | None = None
     cpu_profile_active = False
@@ -2671,6 +2736,14 @@ def main(argv: list[str] | None = None) -> int:
         app = rest_smoke.launch_app(paths.app_exe, Path(profile["profile_base"]))
         process_id = rest_smoke.get_app_process_id(app)
         report["launched_process_id"] = process_id
+        dump_monitor = start_dump_monitor(
+            process_id=process_id,
+            tools=tools,
+            diagnostics_dir=diagnostics_dir,
+            skip_dumps=args.skip_dumps,
+        )
+        if dump_monitor is not None:
+            report["diagnostics"]["dump_monitor"] = dict(dump_monitor.result)
         main_window = rest_smoke.wait_for_main_window(app)
         report["main_window_title"] = main_window.window_text()
         ready = rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
@@ -2933,6 +3006,14 @@ def main(argv: list[str] | None = None) -> int:
                 symbol_env=symbol_env,
             )
     finally:
+        if dump_monitor is not None:
+            try:
+                report["diagnostics"]["dump_monitor"] = stop_dump_monitor(dump_monitor)
+            except Exception as exc:
+                report["diagnostics"]["dump_monitor_error"] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
         if cpu_profile_active and cpu_profile_tools is not None and cpu_profile_paths is not None:
             profile_report = report["diagnostics"].setdefault("cpu_profile", {"enabled": True})
             assert isinstance(profile_report, dict)
