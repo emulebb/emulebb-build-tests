@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from .live_diff import LiveDiffConfig, run_live_diff
 from .native_coverage import NativeCoverageConfig, run_native_coverage
+from .workspace_layout import get_default_workspace_root
 
 
 @dataclass(frozen=True)
@@ -137,7 +139,7 @@ def build_config(
     resolved_workspace_root = (
         workspace_root.resolve()
         if workspace_root is not None
-        else (resolved_test_repo_root / ".." / ".." / "workspaces" / "v0.72a").resolve()
+        else get_default_workspace_root(resolved_test_repo_root)
     )
     resolved_main_app_root = (
         main_app_root.resolve()
@@ -183,8 +185,6 @@ def run_live_rest_e2e_for_community_summary(
     command = [
         sys.executable,
         str(config.test_repo_root / "scripts" / "rest-api-smoke.py"),
-        "--workspace-root",
-        str(config.workspace_root),
         "--app-root",
         str(config.main_app_root),
         "--configuration",
@@ -196,7 +196,9 @@ def run_live_rest_e2e_for_community_summary(
         "--rest-stress-budget",
         config.rest_stress_budget,
     ]
-    completed = subprocess.run(command, check=False)
+    env = os.environ.copy()
+    env["EMULE_WORKSPACE_ROOT"] = str(config.workspace_root.parent.parent)
+    completed = subprocess.run(command, check=False, env=env)
     return {
         "status": "passed" if completed.returncode == 0 else "failed",
         "return_code": completed.returncode,

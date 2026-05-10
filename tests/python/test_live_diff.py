@@ -12,10 +12,19 @@ from emule_test_harness.live_diff import (
 )
 
 
-def test_get_default_workspace_root_uses_canonical_repo_layout(tmp_path: Path) -> None:
+def test_get_default_workspace_root_uses_canonical_repo_layout(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
     repo_root = tmp_path / "repos" / "eMule-build-tests"
 
     assert get_default_workspace_root(repo_root) == tmp_path / "workspaces" / "v0.72a"
+
+
+def test_get_default_workspace_root_prefers_environment(tmp_path: Path, monkeypatch) -> None:
+    repo_root = tmp_path / "repos" / "eMule-build-tests"
+    workspace_root = tmp_path / "env-root"
+    monkeypatch.setenv("EMULE_WORKSPACE_ROOT", str(workspace_root))
+
+    assert get_default_workspace_root(repo_root) == workspace_root / "workspaces" / "v0.72a"
 
 
 def test_build_emule_tests_command_uses_python_build_wrapper() -> None:
@@ -30,6 +39,7 @@ def test_build_emule_tests_command_uses_python_build_wrapper() -> None:
 
     assert command[0] == sys.executable
     assert command[1].endswith("scripts\\build-emule-tests.py")
+    assert "--workspace-root" not in command
     assert "--app-root" in command
     assert "tag" in command
 

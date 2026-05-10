@@ -12,6 +12,7 @@ from typing import Iterable
 from .doctest_results import compare_case_sets, parse_doctest_xml
 from .paths import get_build_tag, get_test_binary_path
 from .processes import run_captured
+from .workspace_layout import get_default_workspace_root
 
 DEFAULT_SUITE_NAMES = ("parity", "divergence")
 
@@ -32,12 +33,6 @@ class LiveDiffConfig:
     skip_build: bool = False
 
 
-def get_default_workspace_root(test_repo_root: Path) -> Path:
-    """Returns the default canonical workspace root from the test repo location."""
-
-    return (test_repo_root.resolve() / ".." / ".." / "workspaces" / "v0.72a").resolve()
-
-
 def build_emule_tests_command(
     *,
     test_repo_root: Path,
@@ -54,8 +49,6 @@ def build_emule_tests_command(
         str((test_repo_root / "scripts" / "build-emule-tests.py").resolve()),
         "--test-repo-root",
         str(test_repo_root.resolve()),
-        "--workspace-root",
-        str(workspace_root.resolve()),
         "--configuration",
         configuration,
         "--platform",

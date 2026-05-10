@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-repo-root", type=Path, default=REPO_ROOT)
     parser.add_argument("--test-run-workspace-root", type=Path)
-    parser.add_argument("--baseline-workspace-root", type=Path, required=True)
+    parser.add_argument("--baseline-workspace-root", type=Path)
     parser.add_argument("--test-run-app-root", type=Path)
     parser.add_argument("--baseline-app-root", type=Path)
     parser.add_argument("--configuration", choices=("Debug", "Release"), default="Debug")
@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     config = LiveDiffConfig(
         test_repo_root=test_repo_root,
         test_run_workspace_root=(args.test_run_workspace_root or get_default_workspace_root(test_repo_root)).resolve(),
-        baseline_workspace_root=args.baseline_workspace_root.resolve(),
+        baseline_workspace_root=(args.baseline_workspace_root or get_default_workspace_root(test_repo_root)).resolve(),
         test_run_app_root=args.test_run_app_root.resolve() if args.test_run_app_root else None,
         baseline_app_root=args.baseline_app_root.resolve() if args.baseline_app_root else None,
         configuration=args.configuration,
