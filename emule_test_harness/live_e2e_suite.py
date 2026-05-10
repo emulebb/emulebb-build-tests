@@ -245,12 +245,14 @@ def build_suite_command(
     rest_cold_start_dump_stress_completion_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_COMPLETION_TIMEOUT_SECONDS,
     rest_cold_start_dump_stress_max_active_downloads: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS,
     rest_cold_start_dump_stress_allow_required_zero_result_searches: bool = False,
+    rest_cold_start_dump_stress_skip_transfer_cleanup: bool = False,
     rest_cold_start_dump_stress_download_churn_interval_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS,
     rest_cold_start_dump_stress_download_remove_count_per_churn: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN,
     rest_cold_start_dump_stress_resource_monitor_interval_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS,
     rest_cold_start_dump_stress_post_drain_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS,
     rest_cold_start_dump_stress_tool_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS,
     rest_cold_start_dump_stress_enable_umdh: bool = False,
+    rest_cold_start_dump_stress_skip_umdh_diffs: bool = False,
     rest_cold_start_dump_stress_cpu_profile: bool = False,
     rest_cold_start_dump_stress_cpu_profile_max_file_mb: int = DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB,
     rest_cold_start_dump_stress_cpu_profile_symbols_required: bool = True,
@@ -354,6 +356,8 @@ def build_suite_command(
         command.extend(["--max-active-downloads", str(rest_cold_start_dump_stress_max_active_downloads)])
         if rest_cold_start_dump_stress_allow_required_zero_result_searches:
             command.append("--allow-required-zero-result-searches")
+        if rest_cold_start_dump_stress_skip_transfer_cleanup:
+            command.append("--skip-transfer-cleanup")
         command.extend(["--download-churn-interval-seconds", str(rest_cold_start_dump_stress_download_churn_interval_seconds)])
         command.extend(["--download-remove-count-per-churn", str(rest_cold_start_dump_stress_download_remove_count_per_churn)])
         command.extend(["--resource-monitor-interval-seconds", str(rest_cold_start_dump_stress_resource_monitor_interval_seconds)])
@@ -361,6 +365,8 @@ def build_suite_command(
         command.extend(["--tool-timeout-seconds", str(rest_cold_start_dump_stress_tool_timeout_seconds)])
         if rest_cold_start_dump_stress_enable_umdh:
             command.append("--enable-umdh")
+        if rest_cold_start_dump_stress_skip_umdh_diffs:
+            command.append("--skip-umdh-diffs")
         if rest_cold_start_dump_stress_cpu_profile:
             command.append("--cpu-profile")
         command.extend(["--cpu-profile-max-file-mb", str(rest_cold_start_dump_stress_cpu_profile_max_file_mb)])
@@ -483,6 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS,
     )
     parser.add_argument("--rest-cold-start-dump-stress-allow-required-zero-result-searches", action="store_true")
+    parser.add_argument("--rest-cold-start-dump-stress-skip-transfer-cleanup", action="store_true")
     parser.add_argument(
         "--rest-cold-start-dump-stress-download-churn-interval-seconds",
         type=float,
@@ -509,6 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS,
     )
     parser.add_argument("--rest-cold-start-dump-stress-enable-umdh", action="store_true")
+    parser.add_argument("--rest-cold-start-dump-stress-skip-umdh-diffs", action="store_true")
     parser.add_argument("--rest-cold-start-dump-stress-cpu-profile", action="store_true")
     parser.add_argument(
         "--rest-cold-start-dump-stress-cpu-profile-max-file-mb",
@@ -651,12 +659,14 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "completion_timeout_seconds": args.rest_cold_start_dump_stress_completion_timeout_seconds,
             "max_active_downloads": args.rest_cold_start_dump_stress_max_active_downloads,
             "allow_required_zero_result_searches": bool(args.rest_cold_start_dump_stress_allow_required_zero_result_searches),
+            "skip_transfer_cleanup": bool(args.rest_cold_start_dump_stress_skip_transfer_cleanup),
             "download_churn_interval_seconds": args.rest_cold_start_dump_stress_download_churn_interval_seconds,
             "download_remove_count_per_churn": args.rest_cold_start_dump_stress_download_remove_count_per_churn,
             "resource_monitor_interval_seconds": args.rest_cold_start_dump_stress_resource_monitor_interval_seconds,
             "post_drain_seconds": args.rest_cold_start_dump_stress_post_drain_seconds,
             "tool_timeout_seconds": args.rest_cold_start_dump_stress_tool_timeout_seconds,
             "enable_umdh": bool(args.rest_cold_start_dump_stress_enable_umdh),
+            "skip_umdh_diffs": bool(args.rest_cold_start_dump_stress_skip_umdh_diffs),
             "cpu_profile": bool(args.rest_cold_start_dump_stress_cpu_profile),
             "cpu_profile_max_file_mb": args.rest_cold_start_dump_stress_cpu_profile_max_file_mb,
             "cpu_profile_symbols_required": bool(args.rest_cold_start_dump_stress_cpu_profile_symbols_required),
@@ -722,12 +732,14 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_completion_timeout_seconds=args.rest_cold_start_dump_stress_completion_timeout_seconds,
             rest_cold_start_dump_stress_max_active_downloads=args.rest_cold_start_dump_stress_max_active_downloads,
             rest_cold_start_dump_stress_allow_required_zero_result_searches=args.rest_cold_start_dump_stress_allow_required_zero_result_searches,
+            rest_cold_start_dump_stress_skip_transfer_cleanup=args.rest_cold_start_dump_stress_skip_transfer_cleanup,
             rest_cold_start_dump_stress_download_churn_interval_seconds=args.rest_cold_start_dump_stress_download_churn_interval_seconds,
             rest_cold_start_dump_stress_download_remove_count_per_churn=args.rest_cold_start_dump_stress_download_remove_count_per_churn,
             rest_cold_start_dump_stress_resource_monitor_interval_seconds=args.rest_cold_start_dump_stress_resource_monitor_interval_seconds,
             rest_cold_start_dump_stress_post_drain_seconds=args.rest_cold_start_dump_stress_post_drain_seconds,
             rest_cold_start_dump_stress_tool_timeout_seconds=args.rest_cold_start_dump_stress_tool_timeout_seconds,
             rest_cold_start_dump_stress_enable_umdh=args.rest_cold_start_dump_stress_enable_umdh,
+            rest_cold_start_dump_stress_skip_umdh_diffs=args.rest_cold_start_dump_stress_skip_umdh_diffs,
             rest_cold_start_dump_stress_cpu_profile=args.rest_cold_start_dump_stress_cpu_profile,
             rest_cold_start_dump_stress_cpu_profile_max_file_mb=args.rest_cold_start_dump_stress_cpu_profile_max_file_mb,
             rest_cold_start_dump_stress_cpu_profile_symbols_required=args.rest_cold_start_dump_stress_cpu_profile_symbols_required,

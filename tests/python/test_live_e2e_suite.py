@@ -381,6 +381,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "--rest-cold-start-dump-stress-max-active-downloads",
             "9",
             "--rest-cold-start-dump-stress-allow-required-zero-result-searches",
+            "--rest-cold-start-dump-stress-skip-transfer-cleanup",
             "--rest-cold-start-dump-stress-download-churn-interval-seconds",
             "10",
             "--rest-cold-start-dump-stress-download-remove-count-per-churn",
@@ -392,6 +393,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "--rest-cold-start-dump-stress-tool-timeout-seconds",
             "6",
             "--rest-cold-start-dump-stress-enable-umdh",
+            "--rest-cold-start-dump-stress-skip-umdh-diffs",
             "--rest-cold-start-dump-stress-cpu-profile",
             "--rest-cold-start-dump-stress-cpu-profile-max-file-mb",
             "64",
@@ -415,12 +417,14 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert option_values(command, "--completion-timeout-seconds") == ["8.0"]
     assert option_values(command, "--max-active-downloads") == ["9"]
     assert "--allow-required-zero-result-searches" in command
+    assert "--skip-transfer-cleanup" in command
     assert option_values(command, "--download-churn-interval-seconds") == ["10.0"]
     assert option_values(command, "--download-remove-count-per-churn") == ["2"]
     assert option_values(command, "--resource-monitor-interval-seconds") == ["11.0"]
     assert option_values(command, "--post-drain-seconds") == ["5.0"]
     assert option_values(command, "--tool-timeout-seconds") == ["6.0"]
     assert "--enable-umdh" in command
+    assert "--skip-umdh-diffs" in command
     assert "--cpu-profile" in command
     assert option_values(command, "--cpu-profile-max-file-mb") == ["64"]
     assert "--no-cpu-profile-symbols-required" in command
@@ -431,6 +435,8 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert summary["rest_cold_start_dump_stress"]["max_missing_download_triggers"] == 1
     assert summary["rest_cold_start_dump_stress"]["search_observation_timeout_seconds"] == 12.0
     assert summary["rest_cold_start_dump_stress"]["allow_required_zero_result_searches"] is True
+    assert summary["rest_cold_start_dump_stress"]["skip_transfer_cleanup"] is True
+    assert summary["rest_cold_start_dump_stress"]["skip_umdh_diffs"] is True
     assert summary["status"] == "passed"
     assert summary["has_inconclusive_suites"] is True
     assert summary["suites"][0]["status"] == "inconclusive"

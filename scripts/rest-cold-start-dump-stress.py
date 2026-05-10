@@ -492,12 +492,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--max-active-downloads", type=int, default=512)
     parser.add_argument("--allow-required-zero-result-searches", action="store_true")
+    parser.add_argument("--skip-transfer-cleanup", action="store_true")
     parser.add_argument("--download-churn-interval-seconds", type=float, default=0.0)
     parser.add_argument("--download-remove-count-per-churn", type=int, default=0)
     parser.add_argument("--resource-monitor-interval-seconds", type=float, default=5.0)
     parser.add_argument("--post-drain-seconds", type=float, default=30.0)
     parser.add_argument("--tool-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--enable-umdh", action="store_true")
+    parser.add_argument("--skip-umdh-diffs", action="store_true")
     parser.add_argument("--max-post-drain-umdh-positive-bytes", type=int, default=DEFAULT_MAX_POST_DRAIN_UMDH_POSITIVE_BYTES)
     parser.add_argument("--cpu-profile", action="store_true")
     parser.add_argument("--cpu-profile-max-file-mb", type=int, default=cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB)
@@ -2820,12 +2822,14 @@ def main(argv: list[str] | None = None) -> int:
             "completion_timeout_seconds": args.completion_timeout_seconds,
             "max_active_downloads": args.max_active_downloads,
             "allow_required_zero_result_searches": bool(args.allow_required_zero_result_searches),
+            "skip_transfer_cleanup": bool(args.skip_transfer_cleanup),
             "download_churn_interval_seconds": args.download_churn_interval_seconds,
             "download_remove_count_per_churn": args.download_remove_count_per_churn,
             "resource_monitor_interval_seconds": args.resource_monitor_interval_seconds,
             "post_drain_seconds": args.post_drain_seconds,
             "tool_timeout_seconds": args.tool_timeout_seconds,
             "enable_umdh": bool(args.enable_umdh),
+            "skip_umdh_diffs": bool(args.skip_umdh_diffs),
             "max_post_drain_umdh_positive_bytes": args.max_post_drain_umdh_positive_bytes,
             "cpu_profile": bool(args.cpu_profile),
             "cpu_profile_max_file_mb": args.cpu_profile_max_file_mb,
@@ -3049,14 +3053,22 @@ def main(argv: list[str] | None = None) -> int:
             symbol_env=symbol_env,
         )
 
-        report["cleanup"]["searches_and_transfers"] = cleanup_searches_and_transfers(
-            base_url=base_url,
-            api_key=args.api_key,
-            search_ids=[str(search_id) for search_id in stress["search_ids"]],
-            transfer_hashes=transfer_registry.hashes(),
-            transfer_cleanup_timeout_seconds=max(30.0, args.post_drain_seconds),
-            transfer_registry=transfer_registry,
-        )
+        if args.skip_transfer_cleanup:
+            report["cleanup"]["searches_and_transfers"] = {
+                "skipped": True,
+                "reason": "skip_transfer_cleanup",
+                "search_ids": [str(search_id) for search_id in stress["search_ids"]],
+                "transfer_hashes": transfer_registry.hashes(),
+            }
+        else:
+            report["cleanup"]["searches_and_transfers"] = cleanup_searches_and_transfers(
+                base_url=base_url,
+                api_key=args.api_key,
+                search_ids=[str(search_id) for search_id in stress["search_ids"]],
+                transfer_hashes=transfer_registry.hashes(),
+                transfer_cleanup_timeout_seconds=max(30.0, args.post_drain_seconds),
+                transfer_registry=transfer_registry,
+            )
         if args.post_drain_seconds:
             time.sleep(args.post_drain_seconds)
         report["diagnostics"]["post_drain"] = collect_diagnostics(
@@ -3075,7 +3087,10 @@ def main(argv: list[str] | None = None) -> int:
             report["diagnostics"]["resource_monitor"] = resource_monitor.stop()
             resource_monitor = None
 
-        if args.enable_umdh:
+        if args.enable_umdh and args.skip_umdh_diffs:
+            report["diagnostics"]["umdh_diffs"] = {"skipped": True, "reason": "skip_umdh_diffs"}
+            report["diagnostics"]["umdh_summary"] = {"skipped": True}
+        elif args.enable_umdh:
             report["diagnostics"]["umdh_diffs"] = {
                 "baseline_to_peak": diff_umdh_snapshots(
                     before=diagnostics_dir / "analysis" / "umdh-baseline.txt",
@@ -3112,7 +3127,7 @@ def main(argv: list[str] | None = None) -> int:
         elif not diagnostics_are_complete(report, skip_dumps=args.skip_dumps):
             report["status"] = "failed"
             report["failure_reason"] = "required dump diagnostics were not captured"
-        elif not stress_cleanup_is_complete(report):
+        elif not args.skip_transfer_cleanup and not stress_cleanup_is_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "stress transfer cleanup did not settle before post-drain diagnostics"
         elif int(stress_summary.get("video_download_trigger_count", 0)) > 0:
@@ -3124,10 +3139,10 @@ def main(argv: list[str] | None = None) -> int:
                 "target completed downloads were not reached: "
                 f"{report['checks']['download_completion'].get('completed_count')} < {args.target_completed_downloads}"
             )
-        elif args.enable_umdh and not umdh_diagnostics_are_complete(report):
+        elif args.enable_umdh and not args.skip_umdh_diffs and not umdh_diagnostics_are_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "required UMDH diagnostics did not complete"
-        elif args.enable_umdh and not post_drain_umdh_delta_within_budget(report, args.max_post_drain_umdh_positive_bytes):
+        elif args.enable_umdh and not args.skip_umdh_diffs and not post_drain_umdh_delta_within_budget(report, args.max_post_drain_umdh_positive_bytes):
             post_drain = report["diagnostics"]["umdh_summary"]["baseline_to_post_drain"]
             report["status"] = "failed"
             report["failure_reason"] = (
