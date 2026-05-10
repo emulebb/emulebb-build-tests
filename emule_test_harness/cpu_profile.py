@@ -15,6 +15,7 @@ DEFAULT_CPU_PROFILE_INTERVAL_100NS = 80_000
 DEFAULT_CPU_PROFILE_TOP_LIMIT = 25
 CPU_PROFILE_KERNEL_FLAGS = "PROC_THREAD+LOADER+PROFILE"
 CPU_PROFILE_STACKWALK_FLAGS = "Profile"
+XPERF_ERROR_ALREADY_EXISTS = 2147942583
 EMULE_SYMBOL_PREFIXES = ("emule!", "emule.exe!")
 EMULE_SYMBOL_PREFIX = EMULE_SYMBOL_PREFIXES[0]
 
@@ -145,6 +146,14 @@ def build_xperf_stop_command(tools: CpuProfileTools, paths: CpuProfilePaths) -> 
     return [tools.xperf, "-d", str(paths.etl_path)]
 
 
+def build_xperf_cancel_command(tools: CpuProfileTools) -> list[str]:
+    """Builds the xperf command that stops a stale kernel capture without merging it."""
+
+    if not tools.xperf:
+        raise ValueError("xperf was not found.")
+    return [tools.xperf, "-stop"]
+
+
 def build_xperf_profile_export_command(tools: CpuProfileTools, paths: CpuProfilePaths) -> list[str]:
     """Builds the xperf command that exports symbolized sampled CPU detail."""
 
@@ -243,7 +252,19 @@ def start_cpu_profile(
 
     paths.raw_etl_path.parent.mkdir(parents=True, exist_ok=True)
     command = build_xperf_start_command(tools, paths, max_file_mb=max_file_mb)
-    return run_tool_to_file(command, paths.raw_etl_path.with_suffix(".start.txt"), timeout_seconds)
+    result = run_tool_to_file(command, paths.raw_etl_path.with_suffix(".start.txt"), timeout_seconds)
+    if result.get("return_code") != XPERF_ERROR_ALREADY_EXISTS:
+        return result
+
+    stale_stop = run_tool_to_file(
+        build_xperf_cancel_command(tools),
+        paths.raw_etl_path.with_suffix(".stale-stop.txt"),
+        timeout_seconds,
+    )
+    retry = run_tool_to_file(command, paths.raw_etl_path.with_suffix(".start-retry.txt"), timeout_seconds)
+    retry["stale_stop"] = stale_stop
+    retry["retried_after_existing_logger"] = True
+    return retry
 
 
 def stop_cpu_profile(

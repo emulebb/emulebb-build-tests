@@ -11,6 +11,7 @@ def test_build_xperf_commands_use_bounded_profile_capture(tmp_path: Path) -> Non
 
     start = cpu_profile.build_xperf_start_command(tools, paths, max_file_mb=128)
     stop = cpu_profile.build_xperf_stop_command(tools, paths)
+    cancel = cpu_profile.build_xperf_cancel_command(tools)
     export = cpu_profile.build_xperf_profile_export_command(tools, paths)
 
     assert start[:3] == ["xperf.exe", "-on", "PROC_THREAD+LOADER+PROFILE"]
@@ -18,6 +19,7 @@ def test_build_xperf_commands_use_bounded_profile_capture(tmp_path: Path) -> Non
     assert start[start.index("-MaxFile") + 1] == "128"
     assert start[start.index("-FileMode") + 1] == "Circular"
     assert stop == ["xperf.exe", "-d", str(paths.etl_path)]
+    assert cancel == ["xperf.exe", "-stop"]
     assert export[:5] == ["xperf.exe", "-i", str(paths.etl_path), "-symbols", "-target"]
     assert export[-2:] == ["profile", "-detail"]
 
