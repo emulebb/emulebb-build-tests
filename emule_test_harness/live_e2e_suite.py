@@ -44,6 +44,7 @@ DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS = 2
 DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES = 4
 DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 12
 DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 8
+DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCH_OBSERVATION_TIMEOUT_SECONDS = 60.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 600
 DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH = 50
 DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS = 0
@@ -236,6 +237,7 @@ def build_suite_command(
     rest_cold_start_dump_stress_waves: int = DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES,
     rest_cold_start_dump_stress_searches_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE,
     rest_cold_start_dump_stress_max_concurrent_searches: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES,
+    rest_cold_start_dump_stress_search_observation_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCH_OBSERVATION_TIMEOUT_SECONDS,
     rest_cold_start_dump_stress_downloads_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE,
     rest_cold_start_dump_stress_downloads_per_search: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH,
     rest_cold_start_dump_stress_max_missing_download_triggers: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS,
@@ -342,6 +344,7 @@ def build_suite_command(
         command.extend(["--waves", str(rest_cold_start_dump_stress_waves)])
         command.extend(["--searches-per-wave", str(rest_cold_start_dump_stress_searches_per_wave)])
         command.extend(["--max-concurrent-searches", str(rest_cold_start_dump_stress_max_concurrent_searches)])
+        command.extend(["--search-observation-timeout-seconds", str(rest_cold_start_dump_stress_search_observation_timeout_seconds)])
         command.extend(["--downloads-per-wave", str(rest_cold_start_dump_stress_downloads_per_wave)])
         command.extend(["--downloads-per-search", str(rest_cold_start_dump_stress_downloads_per_search)])
         command.extend(["--max-missing-download-triggers", str(rest_cold_start_dump_stress_max_missing_download_triggers)])
@@ -440,6 +443,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--rest-cold-start-dump-stress-max-concurrent-searches",
         type=int,
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-search-observation-timeout-seconds",
+        type=float,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCH_OBSERVATION_TIMEOUT_SECONDS,
     )
     parser.add_argument(
         "--rest-cold-start-dump-stress-downloads-per-wave",
@@ -546,6 +554,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST cold-start dump stress searches per wave must be greater than zero.")
     if args.rest_cold_start_dump_stress_max_concurrent_searches <= 0:
         raise ValueError("REST cold-start dump stress concurrency must be greater than zero.")
+    if args.rest_cold_start_dump_stress_search_observation_timeout_seconds <= 0:
+        raise ValueError("REST cold-start dump stress search observation timeout must be greater than zero.")
     if args.rest_cold_start_dump_stress_downloads_per_wave < 0:
         raise ValueError("REST cold-start dump stress downloads per wave must be zero or greater.")
     if args.rest_cold_start_dump_stress_downloads_per_search < 0:
@@ -629,6 +639,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "waves": args.rest_cold_start_dump_stress_waves,
             "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
             "max_concurrent_searches": args.rest_cold_start_dump_stress_max_concurrent_searches,
+            "search_observation_timeout_seconds": args.rest_cold_start_dump_stress_search_observation_timeout_seconds,
             "downloads_per_wave": args.rest_cold_start_dump_stress_downloads_per_wave,
             "downloads_per_search": args.rest_cold_start_dump_stress_downloads_per_search,
             "max_missing_download_triggers": args.rest_cold_start_dump_stress_max_missing_download_triggers,
@@ -698,6 +709,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_waves=args.rest_cold_start_dump_stress_waves,
             rest_cold_start_dump_stress_searches_per_wave=args.rest_cold_start_dump_stress_searches_per_wave,
             rest_cold_start_dump_stress_max_concurrent_searches=args.rest_cold_start_dump_stress_max_concurrent_searches,
+            rest_cold_start_dump_stress_search_observation_timeout_seconds=args.rest_cold_start_dump_stress_search_observation_timeout_seconds,
             rest_cold_start_dump_stress_downloads_per_wave=args.rest_cold_start_dump_stress_downloads_per_wave,
             rest_cold_start_dump_stress_downloads_per_search=args.rest_cold_start_dump_stress_downloads_per_search,
             rest_cold_start_dump_stress_max_missing_download_triggers=args.rest_cold_start_dump_stress_max_missing_download_triggers,

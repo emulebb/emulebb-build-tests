@@ -478,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=30.0)
-    parser.add_argument("--search-observation-timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--search-observation-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--live-wire-inputs-file", default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)))

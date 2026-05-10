@@ -366,6 +366,8 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "3",
             "--rest-cold-start-dump-stress-max-concurrent-searches",
             "4",
+            "--rest-cold-start-dump-stress-search-observation-timeout-seconds",
+            "12",
             "--rest-cold-start-dump-stress-downloads-per-wave",
             "1",
             "--rest-cold-start-dump-stress-downloads-per-search",
@@ -404,6 +406,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert option_values(command, "--waves") == ["2"]
     assert option_values(command, "--searches-per-wave") == ["3"]
     assert option_values(command, "--max-concurrent-searches") == ["4"]
+    assert option_values(command, "--search-observation-timeout-seconds") == ["12.0"]
     assert option_values(command, "--downloads-per-wave") == ["1"]
     assert option_values(command, "--downloads-per-search") == ["7"]
     assert option_values(command, "--max-missing-download-triggers") == ["1"]
@@ -424,6 +427,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert summary["rest_cold_start_dump_stress"]["cpu_profile_max_file_mb"] == 64
     assert summary["rest_cold_start_dump_stress"]["cpu_profile_symbols_required"] is False
     assert summary["rest_cold_start_dump_stress"]["max_missing_download_triggers"] == 1
+    assert summary["rest_cold_start_dump_stress"]["search_observation_timeout_seconds"] == 12.0
     assert summary["status"] == "passed"
     assert summary["has_inconclusive_suites"] is True
     assert summary["suites"][0]["status"] == "inconclusive"
