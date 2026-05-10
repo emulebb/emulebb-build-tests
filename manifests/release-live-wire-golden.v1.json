@@ -27,13 +27,14 @@
     "kad_search_count": 6,
     "download_trigger_count": 1,
     "search_type": "any",
-    "contract_route_count": 82,
-    "safe_contract_route_count": 81,
+    "contract_route_count": 84,
+    "safe_contract_route_count": 82,
     "unsafe_contract_operations": [
-      "shutdownApp"
+      "shutdownApp",
+      "captureDiagnosticDump"
     ],
     "contract_family_counts": {
-      "app": 4,
+      "app": 5,
       "status": 3,
       "categories": 5,
       "transfers": 20,
@@ -44,7 +45,7 @@
       "kad": 6,
       "searches": 5,
       "friends": 3,
-      "logs": 1
+      "logs": 2
     },
     "safe_stress_operations": [
       {
