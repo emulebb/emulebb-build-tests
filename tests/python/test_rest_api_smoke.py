@@ -1012,6 +1012,29 @@ def test_native_route_specs_match_openapi_methods_paths_and_fields() -> None:
     assert native_contracts == openapi_contracts
 
 
+def test_rest_v1_paging_surface_is_intentionally_narrow() -> None:
+    contracts = _openapi_operation_contracts(load_rest_api_smoke_module().OPENAPI_CONTRACT_PATH)
+
+    assert contracts[("GET", "/shared-files")]["query"] == {"limit", "offset"}
+    assert contracts[("GET", "/upload-queue")]["query"] == {"limit", "offset"}
+    assert contracts[("GET", "/logs")]["query"] == {"limit"}
+    assert contracts[("GET", "/snapshot")]["query"] == {"limit"}
+
+    unpaged_routes = {
+        ("GET", "/categories"),
+        ("GET", "/transfers"),
+        ("GET", "/transfers/{hash}/sources"),
+        ("GET", "/shared-files/{hash}/comments"),
+        ("GET", "/uploads"),
+        ("GET", "/servers"),
+        ("GET", "/friends"),
+        ("GET", "/searches/{searchId}"),
+    }
+    for route_key in unpaged_routes:
+        assert "limit" not in contracts[route_key]["query"]
+        assert "offset" not in contracts[route_key]["query"]
+
+
 def test_native_route_execution_model_inventory_matches_dispatch_boundary() -> None:
     module = load_rest_api_smoke_module()
     native_contracts = _native_route_contracts()

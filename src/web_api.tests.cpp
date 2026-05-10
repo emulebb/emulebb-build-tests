@@ -1403,13 +1403,26 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK_EQ(route.strCommand, "app/version");
 	CHECK(route.params.is_object());
 
-	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?state=Downloading&categoryId=3&offset=2&limit=25", "", route, errorCode, errorMessage));
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?state=Downloading&categoryId=3", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "transfers/list");
 	CHECK_EQ(route.params["filter"].get<std::string>(), "Downloading");
 	CHECK_EQ(route.params["categoryId"].get<uint64_t>(), 3u);
+	CHECK(route.params["_items_envelope"].get<bool>());
+	CHECK_FALSE(route.params.contains("_paged_items_envelope"));
+
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/shared-files?offset=2&limit=25", "", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "shared/list");
 	CHECK_EQ(route.params["_offset"].get<int>(), 2);
 	CHECK_EQ(route.params["_limit"].get<int>(), 25);
 	CHECK(route.params["_items_envelope"].get<bool>());
+	CHECK(route.params["_paged_items_envelope"].get<bool>());
+
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/upload-queue?offset=3&limit=50", "", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "uploads/queue");
+	CHECK_EQ(route.params["_offset"].get<int>(), 3);
+	CHECK_EQ(route.params["_limit"].get<int>(), 50);
+	CHECK(route.params["_items_envelope"].get<bool>());
+	CHECK(route.params["_paged_items_envelope"].get<bool>());
 
 	errorCode.clear();
 	errorMessage.clear();
@@ -1420,6 +1433,7 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/categories", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "categories/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
+	CHECK_FALSE(route.params.contains("_paged_items_envelope"));
 
 	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/shared-directories", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "shared_directories/get");
@@ -1647,6 +1661,54 @@ TEST_CASE("Web API rejects unknown body fields and malformed query parameters be
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?categoryId=4294967296", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "categoryId is out of range");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?limit=10", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: limit");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/uploads?offset=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: offset");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/servers?limit=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: limit");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/friends?offset=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: offset");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/categories?limit=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: limit");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef/sources?limit=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: limit");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef/comments?limit=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: limit");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?offset=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown query parameter: offset");
 
 	errorCode.clear();
 	errorMessage.clear();
