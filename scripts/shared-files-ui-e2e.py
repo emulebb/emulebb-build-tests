@@ -277,13 +277,6 @@ def write_json(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def win_path(path: Path, trailing_slash: bool = False) -> str:
-    """Formats a path as an absolute Windows string, optionally with a trailing separator."""
-
-    resolved = str(path.resolve())
-    return resolved + ("\\" if trailing_slash and not resolved.endswith("\\") else "")
-
-
 def prepare_fixture(seed_config_dir: Path, artifacts_dir: Path) -> dict:
     """Creates the small deterministic three-file fixture used by the UI smoke coverage."""
 
