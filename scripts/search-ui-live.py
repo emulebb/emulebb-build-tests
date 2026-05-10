@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import importlib.util
 import json
 import socket
@@ -61,17 +62,131 @@ IDC_TAB1 = 2442
 
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
+LVM_ENSUREVISIBLE = LVM_FIRST + 19
+LVM_SETITEMSTATE = LVM_FIRST + 43
+LVM_SETSELECTIONMARK = LVM_FIRST + 67
+LVM_GETITEMTEXTW = LVM_FIRST + 115
 TCM_FIRST = 0x1300
 TCM_GETITEMCOUNT = TCM_FIRST + 4
+
+LVIF_TEXT = 0x0001
+LVIS_FOCUSED = 0x0001
+LVIS_SELECTED = 0x0002
+
+PROCESS_VM_OPERATION = 0x0008
+PROCESS_VM_READ = 0x0010
+PROCESS_VM_WRITE = 0x0020
+PROCESS_QUERY_INFORMATION = 0x0400
+MEM_COMMIT = 0x1000
+MEM_RESERVE = 0x2000
+MEM_RELEASE = 0x8000
+PAGE_READWRITE = 0x04
+
+MP_RESUMEPAUSED = 10228
 
 SEARCH_TYPE_ED2K_SERVER = 1
 SEARCH_TYPE_KADEMLIA = 3
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
+MAX_UI_DOWNLOAD_CANDIDATE_BYTES = 20 * 1024 * 1024 * 1024
+UNSAFE_DOWNLOAD_SUFFIXES = (
+    ".ade",
+    ".adp",
+    ".app",
+    ".appx",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".cpl",
+    ".dll",
+    ".exe",
+    ".hta",
+    ".ins",
+    ".iso.exe",
+    ".jar",
+    ".js",
+    ".jse",
+    ".lnk",
+    ".msi",
+    ".msp",
+    ".pif",
+    ".ps1",
+    ".scr",
+    ".sh",
+    ".vb",
+    ".vbe",
+    ".vbs",
+    ".wsf",
+)
+UNSAFE_FILE_TYPES = {"program", "video"}
 
 DEFAULT_SEARCH_PLAN = (
     {"query": "linux", "method": "server", "method_index": SEARCH_TYPE_ED2K_SERVER},
     {"query": "ubuntu", "method": "kad", "method_index": SEARCH_TYPE_KADEMLIA},
 )
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+kernel32.OpenProcess.restype = ctypes.c_void_p
+kernel32.VirtualAllocEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_uint32]
+kernel32.VirtualAllocEx.restype = ctypes.c_void_p
+kernel32.VirtualFreeEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
+kernel32.VirtualFreeEx.restype = ctypes.c_int
+kernel32.WriteProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+kernel32.WriteProcessMemory.restype = ctypes.c_int
+kernel32.ReadProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+kernel32.ReadProcessMemory.restype = ctypes.c_int
+kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+kernel32.CloseHandle.restype = ctypes.c_int
+
+
+class LVITEMW(ctypes.Structure):
+    """Mirror of Win32 LVITEMW for remote Search result text retrieval."""
+
+    _fields_ = [
+        ("mask", ctypes.c_uint),
+        ("iItem", ctypes.c_int),
+        ("iSubItem", ctypes.c_int),
+        ("state", ctypes.c_uint),
+        ("stateMask", ctypes.c_uint),
+        ("pszText", ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32),
+        ("cchTextMax", ctypes.c_int),
+        ("iImage", ctypes.c_int),
+        ("lParam", ctypes.c_longlong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_long),
+        ("iIndent", ctypes.c_int),
+        ("iGroupId", ctypes.c_int),
+        ("cColumns", ctypes.c_uint),
+        ("puColumns", ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32),
+        ("piColFmt", ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32),
+        ("iGroup", ctypes.c_int),
+    ]
+
+
+class RemoteBuffer:
+    """Owns one temporary allocation inside the target process."""
+
+    def __init__(self, process_handle: int, size: int) -> None:
+        self.process_handle = process_handle
+        self.size = size
+        self.address = kernel32.VirtualAllocEx(
+            process_handle,
+            None,
+            size,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        )
+        if not self.address:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def close(self) -> None:
+        if self.address:
+            kernel32.VirtualFreeEx(self.process_handle, self.address, 0, MEM_RELEASE)
+            self.address = 0
+
+    def __enter__(self) -> "RemoteBuffer":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
 
 def choose_rest_listen_port() -> int:
@@ -195,6 +310,206 @@ def get_list_count(list_hwnd: int) -> int:
     return int(win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0))
 
 
+def open_process(process_id: int) -> int:
+    """Opens the target app process for list-view text marshalling."""
+
+    handle = kernel32.OpenProcess(
+        PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION,
+        False,
+        process_id,
+    )
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return int(handle)
+
+
+def close_process(handle: int) -> None:
+    """Closes a Win32 process handle."""
+
+    if handle:
+        kernel32.CloseHandle(handle)
+
+
+def write_remote(process_handle: int, address: int, data: bytes) -> None:
+    """Writes bytes into the target process."""
+
+    written = ctypes.c_size_t()
+    buffer = ctypes.create_string_buffer(data)
+    if not kernel32.WriteProcessMemory(process_handle, address, buffer, len(data), ctypes.byref(written)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if written.value != len(data):
+        raise RuntimeError(f"Short WriteProcessMemory: {written.value} of {len(data)} bytes.")
+
+
+def read_remote(process_handle: int, address: int, size: int) -> bytes:
+    """Reads bytes from the target process."""
+
+    read = ctypes.c_size_t()
+    buffer = ctypes.create_string_buffer(size)
+    if not kernel32.ReadProcessMemory(process_handle, address, buffer, size, ctypes.byref(read)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return bytes(buffer.raw[: read.value])
+
+
+def get_list_item_text(process_handle: int, list_hwnd: int, row_index: int, column_index: int) -> str:
+    """Reads one Search result list cell using LVM_GETITEMTEXTW."""
+
+    text_chars = 512
+    text_bytes = text_chars * 2
+    item_size = ctypes.sizeof(LVITEMW)
+    with RemoteBuffer(process_handle, item_size + text_bytes) as remote:
+        text_address = remote.address + item_size
+        item = LVITEMW()
+        item.mask = LVIF_TEXT
+        item.iItem = row_index
+        item.iSubItem = column_index
+        item.pszText = text_address
+        item.cchTextMax = text_chars
+        write_remote(process_handle, remote.address, bytes(item))
+        win32gui.SendMessage(list_hwnd, LVM_GETITEMTEXTW, row_index, remote.address)
+        raw = read_remote(process_handle, text_address, text_bytes)
+    return raw.decode("utf-16-le", errors="ignore").split("\x00", 1)[0]
+
+
+def get_search_result_row(process_handle: int, list_hwnd: int, row_index: int) -> dict[str, object]:
+    """Reads the safety-relevant Search result cells from one visible row."""
+
+    return {
+        "index": row_index,
+        "name": get_list_item_text(process_handle, list_hwnd, row_index, 0),
+        "size": get_list_item_text(process_handle, list_hwnd, row_index, 1),
+        "availability": get_list_item_text(process_handle, list_hwnd, row_index, 2),
+        "file_type": get_list_item_text(process_handle, list_hwnd, row_index, 4),
+        "hash": get_list_item_text(process_handle, list_hwnd, row_index, 5).lower(),
+    }
+
+
+def parse_display_size_bytes(value: str) -> int | None:
+    """Parses eMule display sizes such as `1.23 MB` into an approximate byte count."""
+
+    parts = value.strip().replace(",", ".").split()
+    if len(parts) < 2:
+        return None
+    try:
+        amount = float(parts[0])
+    except ValueError:
+        return None
+    unit = parts[1].lower()
+    multipliers = {
+        "b": 1,
+        "byte": 1,
+        "bytes": 1,
+        "kb": 1024,
+        "kib": 1024,
+        "mb": 1024 * 1024,
+        "mib": 1024 * 1024,
+        "gb": 1024 * 1024 * 1024,
+        "gib": 1024 * 1024 * 1024,
+    }
+    multiplier = multipliers.get(unit)
+    if multiplier is None:
+        return None
+    return int(amount * multiplier)
+
+
+def is_lowercase_md4_hash(value: object) -> bool:
+    """Returns true when one hash token is the strict lowercase MD4 shape."""
+
+    if not isinstance(value, str) or len(value) != 32:
+        return False
+    return all(("0" <= ch <= "9") or ("a" <= ch <= "f") for ch in value)
+
+
+def is_safe_ui_download_candidate(row: dict[str, object]) -> bool:
+    """Rejects unsafe Search UI rows before invoking the UI download command."""
+
+    name = str(row.get("name") or "").strip().lower()
+    file_type = str(row.get("file_type") or "").strip().lower()
+    size_bytes = parse_display_size_bytes(str(row.get("size") or ""))
+    if not name or name.endswith(UNSAFE_DOWNLOAD_SUFFIXES):
+        return False
+    if file_type in UNSAFE_FILE_TYPES:
+        return False
+    if not is_lowercase_md4_hash(row.get("hash")):
+        return False
+    return size_bytes is not None and 0 < size_bytes <= MAX_UI_DOWNLOAD_CANDIDATE_BYTES
+
+
+def select_list_row(process_handle: int, list_hwnd: int, row_index: int) -> None:
+    """Selects one Search result row."""
+
+    win32gui.SendMessage(list_hwnd, LVM_ENSUREVISIBLE, row_index, 0)
+    with RemoteBuffer(process_handle, ctypes.sizeof(LVITEMW)) as remote:
+        clear_state = LVITEMW()
+        clear_state.stateMask = LVIS_SELECTED | LVIS_FOCUSED
+        write_remote(process_handle, remote.address, bytes(clear_state))
+        win32gui.SendMessage(list_hwnd, LVM_SETITEMSTATE, -1, remote.address)
+
+        select_state = LVITEMW()
+        select_state.stateMask = LVIS_SELECTED | LVIS_FOCUSED
+        select_state.state = LVIS_SELECTED | LVIS_FOCUSED
+        write_remote(process_handle, remote.address, bytes(select_state))
+        win32gui.SendMessage(list_hwnd, LVM_SETITEMSTATE, row_index, remote.address)
+    win32gui.SendMessage(list_hwnd, LVM_SETSELECTIONMARK, 0, row_index)
+
+
+def find_safe_ui_download_candidate(process_handle: int, list_hwnd: int, row_count: int) -> dict[str, object] | None:
+    """Returns the first safe Search UI candidate from visible rows."""
+
+    inspected: list[dict[str, object]] = []
+    for row_index in range(min(row_count, 100)):
+        row = get_search_result_row(process_handle, list_hwnd, row_index)
+        row["safe"] = is_safe_ui_download_candidate(row)
+        inspected.append(row)
+        if row["safe"]:
+            row["inspected_count"] = len(inspected)
+            return row
+    return None
+
+
+def trigger_paused_download_from_ui(process_handle: int, list_hwnd: int, row_count: int) -> dict[str, object]:
+    """Selects one safe row and invokes the Search result `download paused` command."""
+
+    candidate = find_safe_ui_download_candidate(process_handle, list_hwnd, row_count)
+    if candidate is None:
+        return {
+            "ok": False,
+            "reason": "no safe visible Search UI download candidate",
+            "inspected_row_limit": min(row_count, 100),
+        }
+    select_list_row(process_handle, list_hwnd, int(candidate["index"]))
+    win32gui.SendMessage(list_hwnd, WM_COMMAND, MP_RESUMEPAUSED, 0)
+    return {
+        "ok": True,
+        "candidate": {
+            "index": candidate["index"],
+            "name_present": bool(candidate["name"]),
+            "size": candidate["size"],
+            "availability": candidate["availability"],
+            "file_type": candidate["file_type"],
+            "hash": candidate["hash"],
+            "inspected_count": candidate["inspected_count"],
+        },
+    }
+
+
+def wait_for_transfer(base_url: str, api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
+    """Polls until a UI-triggered transfer appears through native REST."""
+
+    def resolve():
+        result = rest_smoke.http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash}",
+            api_key=api_key,
+            request_timeout_seconds=10.0,
+        )
+        if int(result["status"]) == 200:
+            return rest_smoke.compact_http_result(result)
+        return None
+
+    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description="UI-triggered transfer")
+
+
 def wait_for_ui_started_search(main_hwnd: int, previous_tab_count: int, query: str, method: str) -> dict[str, object]:
     """Waits until the Search tab control records the UI-started search."""
 
@@ -246,6 +561,7 @@ def run_search_ui_live(
     skip_live_seed_refresh: bool,
     network_ready_timeout_seconds: float,
     search_observation_timeout_seconds: float,
+    transfer_materialization_timeout_seconds: float,
 ) -> dict[str, object]:
     """Runs the UI-driven search start scenario and returns the result report."""
 
@@ -280,12 +596,14 @@ def run_search_ui_live(
         "searches": [],
     }
     app = None
+    process_handle = 0
     try:
         app = live_common.launch_app(app_exe, Path(str(profile["profile_base"])))
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
         report["process_id"] = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_handle = open_process(int(report["process_id"]))
         report["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
         report["main_window_is_maximized"] = report["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
 
@@ -324,17 +642,48 @@ def run_search_ui_live(
             start_search_from_ui(main_hwnd, query, int(planned["method_index"]))
             started = wait_for_ui_started_search(main_hwnd, previous_tab_count, query, method)
             previous_tab_count = int(started["tab_count"])
-            result_rows = wait_for_search_result_rows(main_hwnd, search_observation_timeout_seconds)
-            report["searches"].append(
-                {
-                    "query": query,
-                    "method": method,
-                    "start_observations": started["observations"],
-                    "tab_count_after_start": started["tab_count"],
-                    "result_row_count": result_rows["row_count"],
-                    "result_observations": result_rows["observations"],
-                }
+            search_report: dict[str, object] = {
+                "query": query,
+                "method": method,
+                "start_observations": started["observations"],
+                "tab_count_after_start": started["tab_count"],
+            }
+            try:
+                result_rows = wait_for_search_result_rows(main_hwnd, search_observation_timeout_seconds)
+                search_report["result_row_count"] = result_rows["row_count"]
+                search_report["result_observations"] = result_rows["observations"]
+            except Exception as exc:
+                search_report["result_row_count"] = 0
+                search_report["result_error"] = f"{type(exc).__name__}: {exc}"
+                report["searches"].append(search_report)
+                continue
+
+            list_hwnd = find_control(main_hwnd, IDC_SEARCHLIST, "SysListView32")
+            ui_download = trigger_paused_download_from_ui(process_handle, list_hwnd, int(result_rows["row_count"]))
+            search_report["ui_download"] = ui_download
+            report["searches"].append(search_report)
+            if not bool(ui_download.get("ok")):
+                continue
+
+            report["ui_download"] = ui_download
+            candidate = ui_download["candidate"]
+            assert isinstance(candidate, dict)
+            transfer_hash = str(candidate["hash"])
+            report["ui_download_transfer"] = wait_for_transfer(
+                base_url,
+                rest_api_key,
+                transfer_hash,
+                transfer_materialization_timeout_seconds,
             )
+            break
+
+        if "ui_download_transfer" not in report:
+            report["status"] = "inconclusive"
+            report["inconclusive_reason"] = {
+                "reason": "no UI search yielded a safe downloadable candidate",
+                "searches": report["searches"],
+            }
+            return report
 
         report["status"] = "passed"
         return report
@@ -347,6 +696,8 @@ def run_search_ui_live(
         raise
     finally:
         write_json(artifacts_dir / "result.json", report)
+        if process_handle:
+            close_process(process_handle)
         if app is not None:
             try:
                 live_common.close_app_cleanly(app)
@@ -372,6 +723,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=240.0)
     parser.add_argument("--search-observation-timeout-seconds", type=float, default=120.0)
+    parser.add_argument("--transfer-materialization-timeout-seconds", type=float, default=60.0)
     args = parser.parse_args(argv)
 
     if _PYWINAUTO_IMPORT_ERROR is not None:
@@ -399,6 +751,7 @@ def main(argv: list[str]) -> int:
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             network_ready_timeout_seconds=args.network_ready_timeout_seconds,
             search_observation_timeout_seconds=args.search_observation_timeout_seconds,
+            transfer_materialization_timeout_seconds=args.transfer_materialization_timeout_seconds,
         )
         harness_cli_common.publish_run_artifacts(paths)
         status = str(report.get("status") or "failed")
