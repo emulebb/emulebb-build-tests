@@ -2212,6 +2212,8 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","clearExisting":1})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "clearExisting must be a boolean");
+	assertRoute("GET", "/api/v1/searches", "", "search/list");
+	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("GET", "/api/v1/searches/123", "", "search/results");
 	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
 	assertRoute("POST", "/api/v1/searches/123/results/0123456789abcdef0123456789abcdef/operations/download", R"({"paused":true,"categoryId":0})", "search/download_result");

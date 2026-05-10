@@ -1028,6 +1028,7 @@ def test_rest_v1_paging_surface_is_intentionally_narrow() -> None:
         ("GET", "/uploads"),
         ("GET", "/servers"),
         ("GET", "/friends"),
+        ("GET", "/searches"),
         ("GET", "/searches/{searchId}"),
     }
     for route_key in unpaged_routes:
