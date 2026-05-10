@@ -54,6 +54,13 @@ def test_open_source_stress_terms_extend_operator_terms() -> None:
     assert len(terms) == len({term.lower() for term in terms})
 
 
+def test_public_search_term_label_redacts_custom_terms() -> None:
+    module = load_script_module()
+
+    assert module.public_search_term_label("  Linux  ") == "linux"
+    assert module.public_search_term_label("custom private term") == "<custom>"
+
+
 def test_active_download_candidates_allow_archives_audio_and_block_video() -> None:
     module = load_script_module()
 
@@ -134,6 +141,54 @@ def test_common_sentinel_terms_require_nonzero_results() -> None:
     assert module.search_requires_nonzero_results("obscure fixture term") is False
     assert module.fallback_search_methods("server", "server") == ("global", "kad", "server")
     assert module.fallback_search_methods("automatic", "kad") == ("server", "global", "kad")
+
+
+def test_zero_result_search_summary_preserves_safe_diagnostics() -> None:
+    module = load_script_module()
+    report = {
+        "waves": [
+            {
+                "searches": [
+                    {
+                        "activity": {
+                            "last": {"status": "complete"},
+                            "maxResults": 0,
+                            "observations": [{}, {}],
+                            "terminal": "timeout_zero_results",
+                        },
+                        "method": "server",
+                        "must_return_results": True,
+                        "network": "server",
+                        "ordinal": 1,
+                        "query_index": 0,
+                        "query_label": "linux",
+                        "searchId": "101",
+                        "wave": 1,
+                    }
+                ]
+            }
+        ]
+    }
+
+    zeros = module.collect_zero_result_searches(report)
+
+    assert zeros == [
+        {
+            "wave": 1,
+            "ordinal": 1,
+            "searchId": "101",
+            "method": "server",
+            "network": "server",
+            "query_index": 0,
+            "query_label": "linux",
+            "terminal": "timeout_zero_results",
+            "maxResults": 0,
+            "observation_count": 2,
+            "last_status": "complete",
+            "must_return_results": True,
+        }
+    ]
+    assert module.summarize_zero_result_searches(zeros) == {"linux": 1}
 
 
 def test_discover_diagnostic_tools_uses_path_first(monkeypatch) -> None:
@@ -428,8 +483,15 @@ def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
                         "searchId": "101",
                         "method": "server",
                         "network": "server",
+                        "query_index": 0,
+                        "query_label": "linux",
                         "must_return_results": True,
-                        "activity": {"maxResults": 0, "terminal": "timeout_zero_results"},
+                        "activity": {
+                            "last": {"status": "complete"},
+                            "maxResults": 0,
+                            "observations": [{}],
+                            "terminal": "timeout_zero_results",
+                        },
                     },
                     {
                         "wave": 1,
@@ -452,7 +514,12 @@ def test_collect_zero_result_searches_flags_observed_empty_results() -> None:
             "searchId": "101",
             "method": "server",
             "network": "server",
+            "query_index": 0,
+            "query_label": "linux",
             "terminal": "timeout_zero_results",
+            "maxResults": 0,
+            "observation_count": 1,
+            "last_status": "complete",
             "must_return_results": True,
         }
     ]

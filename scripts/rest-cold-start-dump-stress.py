@@ -276,6 +276,13 @@ def build_open_source_stress_terms(configured_terms: tuple[str, ...]) -> tuple[s
     return tuple(terms)
 
 
+def public_search_term_label(query: object) -> str:
+    """Returns a report-safe label for built-in public OSS terms and redacts custom terms."""
+
+    normalized = " ".join(str(query).split()).strip().lower()
+    return normalized if normalized in OPEN_SOURCE_STRESS_TERMS else "<custom>"
+
+
 def candidate_tool_paths(tool_name: str) -> list[Path]:
     """Returns deterministic fallback locations for Windows diagnostic tools."""
 
@@ -1334,11 +1341,26 @@ def collect_zero_result_searches(stress_report: dict[str, object], *, required_o
                         "searchId": row.get("searchId"),
                         "method": row.get("method"),
                         "network": row.get("network"),
+                        "query_index": row.get("query_index"),
+                        "query_label": row.get("query_label"),
                         "terminal": activity.get("terminal"),
+                        "maxResults": activity.get("maxResults"),
+                        "observation_count": len(activity.get("observations") or []),
+                        "last_status": (activity.get("last") or {}).get("status") if isinstance(activity.get("last"), dict) else None,
                         "must_return_results": bool(row.get("must_return_results")),
                     }
                 )
     return zero_result_searches
+
+
+def summarize_zero_result_searches(zero_result_searches: list[dict[str, object]]) -> dict[str, int]:
+    """Groups zero-result searches by report-safe query label for release diagnostics."""
+
+    counts: dict[str, int] = {}
+    for row in zero_result_searches:
+        label = str(row.get("query_label") or "<unknown>")
+        counts[label] = counts.get(label, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def get_search_network_mode(
@@ -1415,6 +1437,7 @@ def run_search_task(
         "network": plan_row["network"],
         "method": plan_row["method"],
         "query_index": plan_row["query_index"],
+        "query_label": public_search_term_label(plan_row["query"]),
         "must_return_results": search_requires_nonzero_results(plan_row["query"]),
     }
     try:
@@ -1581,8 +1604,10 @@ def run_stress_waves(
     required_zero_result_searches = collect_zero_result_searches(stress_report, required_only=True)
     stress_report["zero_result_searches"] = zero_result_searches
     stress_report["zero_result_search_count"] = len(zero_result_searches)
+    stress_report["zero_result_query_counts"] = summarize_zero_result_searches(zero_result_searches)
     stress_report["required_zero_result_searches"] = required_zero_result_searches
     stress_report["required_zero_result_search_count"] = len(required_zero_result_searches)
+    stress_report["required_zero_result_query_counts"] = summarize_zero_result_searches(required_zero_result_searches)
     download_trigger_summary = summarize_download_triggers(stress_report)
     stress_report["download_trigger_summary"] = download_trigger_summary
     stress_report["download_file_type_counts"] = download_trigger_summary["file_type_counts"]
