@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import struct
 import subprocess
 import sys
 import time
@@ -20,12 +18,32 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.live_profile_seed import ensure_seed_profile_initialized, validate_seed_config_dir
 from emule_test_harness.ini import (
     patch_ini_value,
     read_ini_text,
     upsert_ini_section_value,
     write_utf16_ini_text,
+)
+from emule_test_harness.live_profiles import (
+    DEFAULT_P2P_BIND_INTERFACE_NAME,
+    DEFAULT_WINDOW_RECT,
+    PREFERENCES_DAT_VERSION,
+    STARTUP_PROFILE_TRACE_FILE_NAME,
+    WINDOW_PLACEMENT_LENGTH,
+    WINDOW_SHOW_MAXIMIZED,
+    LiveNetworkProfileSpec,
+    ProfileBuildSpec,
+    WebServerProfileSpec,
+    apply_emule_preferences,
+    apply_live_network_policy,
+    apply_live_network_profile,
+    apply_section_preferences,
+    apply_webserver_profile,
+    build_profile_base,
+    prepare_profile_base,
+    win_path,
+    write_preferences_dat,
+    write_shared_directories_file,
 )
 
 try:
@@ -35,15 +53,10 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
     Application = None  # type: ignore[assignment]
     _PYWINAUTO_IMPORT_ERROR = exc
 
-PREFERENCES_DAT_VERSION = 0x14
-WINDOW_PLACEMENT_LENGTH = 44
-WINDOW_SHOW_MAXIMIZED = 3
-DEFAULT_WINDOW_RECT = (10, 10, 700, 500)
 WINDOWS_DIRECTORY_PATH_LIMIT = 248
 WINDOWS_PATH_LIMIT = 260
 PATH_SAMPLE_LIMIT = 5
 MAIN_WINDOW_TITLE_PREFIXES = ("eMule v", "eMule BB")
-STARTUP_PROFILE_TRACE_FILE_NAME = "startup-profile.trace.json"
 STARTUP_PROFILE_COMPLETE_PHASE_ID = "startup.complete"
 STARTUP_PROFILE_COMPLETE_PHASE_NAME = "StartupTimer complete"
 STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
@@ -55,7 +68,6 @@ STARTUP_PROFILE_SHARED_LIST_RELOAD_PHASE_NAME = "CSharedFilesCtrl::ReloadFileLis
 STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID = "shared.hashing.deferred_start"
 STARTUP_PROFILE_DEFERRED_SHARED_HASHING_MAX_LEAD_MS = 250.0
 STARTUP_PROFILE_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN = 1
-DEFAULT_P2P_BIND_INTERFACE_NAME = "hide.me"
 
 def require_pywinauto() -> None:
     """Raises one actionable error when the live/UI runtime dependency is missing."""
@@ -71,112 +83,6 @@ def write_json(path: Path, payload) -> None:
     """Writes a UTF-8 JSON artifact with stable formatting."""
 
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-
-def apply_live_network_policy(
-    config_dir: Path,
-    *,
-    p2p_bind_interface_name: str = DEFAULT_P2P_BIND_INTERFACE_NAME,
-    close_upnp_on_exit: bool = False,
-) -> None:
-    """Persists the workspace live-test P2P bind and UPnP policy."""
-
-    interface_name = p2p_bind_interface_name.strip()
-    if not interface_name:
-        raise ValueError("P2P bind interface name must not be empty.")
-    preferences_path = config_dir / "preferences.ini"
-    text = read_ini_text(preferences_path)
-    text = upsert_ini_section_value(text, "eMule", "BindInterface", interface_name)
-    text = upsert_ini_section_value(text, "eMule", "BindAddr", "")
-    text = upsert_ini_section_value(text, "eMule", "BlockNetworkWhenBindUnavailableAtStartup", "1")
-    text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1")
-    text = patch_ini_value(text, "CloseUPnPOnExit", "1" if close_upnp_on_exit else "0")
-    write_utf16_ini_text(preferences_path, text)
-
-
-def win_path(path: Path, trailing_slash: bool = False) -> str:
-    """Formats a path as an absolute Windows string, optionally with a trailing separator."""
-
-    resolved = str(path.resolve())
-    return resolved + ("\\" if trailing_slash and not resolved.endswith("\\") else "")
-
-
-def write_preferences_dat(
-    path: Path,
-    show_cmd: int = WINDOW_SHOW_MAXIMIZED,
-    normal_rect: tuple[int, int, int, int] = DEFAULT_WINDOW_RECT,
-) -> None:
-    """Writes a deterministic preferences.dat carrying the requested main-window placement."""
-
-    data = struct.pack(
-        "<B16sIIIiiiiiiii",
-        PREFERENCES_DAT_VERSION,
-        b"\0" * 16,
-        WINDOW_PLACEMENT_LENGTH,
-        0,
-        show_cmd,
-        0,
-        0,
-        0,
-        0,
-        normal_rect[0],
-        normal_rect[1],
-        normal_rect[2],
-        normal_rect[3],
-    )
-    path.write_bytes(data)
-
-
-def write_shared_directories_file(path: Path, shared_dirs: list[str]) -> None:
-    """Writes the eMule shared-directory list as UTF-16 text."""
-
-    contents = "".join(f"{entry}\r\n" for entry in shared_dirs)
-    path.write_text(contents, encoding="utf-16")
-
-
-def prepare_profile_base(
-    seed_config_dir: Path,
-    artifacts_dir: Path,
-    shared_dirs: list[str],
-    incoming_dir: Path | None = None,
-    temp_dir: Path | None = None,
-) -> dict[str, object]:
-    """Copies the seed profile and patches per-run mutable paths into an isolated base."""
-
-    profile_base = artifacts_dir / "profile-base"
-    config_dir = profile_base / "config"
-    log_dir = profile_base / "logs"
-    incoming_dir = incoming_dir or (artifacts_dir / "incoming")
-    temp_dir = temp_dir or (artifacts_dir / "temp")
-
-    validate_seed_config_dir(seed_config_dir)
-    shutil.copytree(seed_config_dir, config_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    incoming_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    preferences_path = config_dir / "preferences.ini"
-    preferences_text = read_ini_text(preferences_path)
-    ensure_seed_profile_initialized(preferences_text)
-    for key, value in (
-        ("IncomingDir", win_path(incoming_dir, trailing_slash=True)),
-        ("TempDir", win_path(temp_dir, trailing_slash=True)),
-        ("TempDirs", win_path(temp_dir, trailing_slash=True)),
-    ):
-        preferences_text = patch_ini_value(preferences_text, key, value)
-    write_utf16_ini_text(preferences_path, preferences_text)
-
-    write_preferences_dat(config_dir / "preferences.dat")
-    write_shared_directories_file(config_dir / "shareddir.dat", shared_dirs)
-
-    return {
-        "profile_base": profile_base,
-        "config_dir": config_dir,
-        "log_dir": log_dir,
-        "incoming_dir": incoming_dir,
-        "temp_dir": temp_dir,
-        "startup_profile_path": config_dir / STARTUP_PROFILE_TRACE_FILE_NAME,
-    }
 
 
 def should_exclude_walk_dir(dir_name: str, excluded_dir_prefixes: tuple[str, ...]) -> bool:
