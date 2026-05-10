@@ -30,6 +30,8 @@ def test_operator_script_help_loads() -> None:
     assert "--skip-dumps" in help_text
     assert "--downloads-per-search" in help_text
     assert "--max-missing-download-triggers" in help_text
+    assert "--synthetic-queue-fill-count" in help_text
+    assert "--synthetic-queue-fill-size-bytes" in help_text
     assert "--target-completed-downloads" in help_text
     assert "--resource-monitor-interval-seconds" in help_text
     assert parser.get_default("max_post_drain_umdh_positive_bytes") == 16 * 1024 * 1024
@@ -37,6 +39,7 @@ def test_operator_script_help_loads() -> None:
     assert parser.get_default("cpu_profile_symbols_required") is True
     assert parser.get_default("cpu_profile_stack") is False
     assert parser.get_default("cpu_profile_stack_min_hits") == 10
+    assert parser.get_default("synthetic_queue_fill_count") == 0
 
 
 def test_wave_plan_mixes_methods_when_both_networks_are_ready() -> None:
@@ -212,6 +215,45 @@ def test_download_trigger_respects_per_search_budget_and_dedupes(monkeypatch) ->
         f"/api/v1/searches/101/results/{hash_a}/operations/download",
         f"/api/v1/searches/101/results/{hash_b}/operations/download",
     ]
+    assert registry.counts()["triggered_stress_transfer_count"] == 2
+
+
+def test_synthetic_queue_fill_posts_deterministic_ed2k_links(monkeypatch) -> None:
+    module = load_script_module()
+    posted: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        assert path == "/api/v1/transfers"
+        posted.append(kwargs["json_body"])
+        return {"status": 200, "json": {"hash": kwargs["json_body"]["link"].split("|")[4]}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: result["json"])
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(
+        module.rest_smoke,
+        "wait_for_triggered_transfer",
+        lambda _base_url, _api_key, transfer_hash, _timeout: {"json": {"hash": transfer_hash}},
+    )
+
+    registry = module.StressTransferRegistry()
+    result = module.queue_synthetic_stress_transfers(
+        "http://127.0.0.1:1",
+        "key",
+        2,
+        4096,
+        module.DownloadTriggerCoordinator(),
+        registry,
+        10,
+        5.0,
+    )
+
+    assert result["ok"] is True
+    assert result["queued_count"] == 2
+    assert len(posted) == 2
+    assert posted[0]["link"].startswith("ed2k://|file|emulebb-stress-queue-fill-00001.bin|4096|")
+    assert posted[0]["paused"] is False
+    assert posted[0]["categoryId"] == 0
     assert registry.counts()["triggered_stress_transfer_count"] == 2
 
 
@@ -501,8 +543,11 @@ def test_run_stress_waves_records_ready_probe_timeout(monkeypatch) -> None:
         max_active_downloads=1,
         download_churn_interval_seconds=0.0,
         download_remove_count_per_churn=0,
+        synthetic_queue_fill_count=0,
+        synthetic_queue_fill_size_bytes=1024,
         transfer_registry=module.StressTransferRegistry(),
         observation_timeout_seconds=1.0,
+        synthetic_queue_timeout_seconds=1.0,
         network_ready_timeout_seconds=1.0,
     )
 

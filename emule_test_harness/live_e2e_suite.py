@@ -48,6 +48,8 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCH_OBSERVATION_TIMEOUT_SECONDS = 60.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 600
 DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH = 50
 DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS = 0
+DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT = 0
+DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_SIZE_BYTES = 1024 * 1024
 DEFAULT_REST_COLD_START_DUMP_STRESS_TARGET_COMPLETED_DOWNLOADS = 0
 DEFAULT_REST_COLD_START_DUMP_STRESS_COMPLETION_TIMEOUT_SECONDS = 1800.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS = 512
@@ -242,6 +244,8 @@ def build_suite_command(
     rest_cold_start_dump_stress_downloads_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE,
     rest_cold_start_dump_stress_downloads_per_search: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH,
     rest_cold_start_dump_stress_max_missing_download_triggers: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS,
+    rest_cold_start_dump_stress_synthetic_queue_fill_count: int = DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT,
+    rest_cold_start_dump_stress_synthetic_queue_fill_size_bytes: int = DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_SIZE_BYTES,
     rest_cold_start_dump_stress_target_completed_downloads: int = DEFAULT_REST_COLD_START_DUMP_STRESS_TARGET_COMPLETED_DOWNLOADS,
     rest_cold_start_dump_stress_completion_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_COMPLETION_TIMEOUT_SECONDS,
     rest_cold_start_dump_stress_max_active_downloads: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS,
@@ -354,6 +358,8 @@ def build_suite_command(
         command.extend(["--downloads-per-wave", str(rest_cold_start_dump_stress_downloads_per_wave)])
         command.extend(["--downloads-per-search", str(rest_cold_start_dump_stress_downloads_per_search)])
         command.extend(["--max-missing-download-triggers", str(rest_cold_start_dump_stress_max_missing_download_triggers)])
+        command.extend(["--synthetic-queue-fill-count", str(rest_cold_start_dump_stress_synthetic_queue_fill_count)])
+        command.extend(["--synthetic-queue-fill-size-bytes", str(rest_cold_start_dump_stress_synthetic_queue_fill_size_bytes)])
         command.extend(["--target-completed-downloads", str(rest_cold_start_dump_stress_target_completed_downloads)])
         command.extend(["--completion-timeout-seconds", str(rest_cold_start_dump_stress_completion_timeout_seconds)])
         command.extend(["--max-active-downloads", str(rest_cold_start_dump_stress_max_active_downloads)])
@@ -480,6 +486,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS,
     )
     parser.add_argument(
+        "--rest-cold-start-dump-stress-synthetic-queue-fill-count",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT,
+    )
+    parser.add_argument(
+        "--rest-cold-start-dump-stress-synthetic-queue-fill-size-bytes",
+        type=int,
+        default=DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_SIZE_BYTES,
+    )
+    parser.add_argument(
         "--rest-cold-start-dump-stress-target-completed-downloads",
         type=int,
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_TARGET_COMPLETED_DOWNLOADS,
@@ -586,6 +602,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST cold-start dump stress downloads per search must be zero or greater.")
     if args.rest_cold_start_dump_stress_max_missing_download_triggers < 0:
         raise ValueError("REST cold-start dump stress max missing download triggers must be zero or greater.")
+    if args.rest_cold_start_dump_stress_synthetic_queue_fill_count < 0:
+        raise ValueError("REST cold-start dump stress synthetic queue fill count must be zero or greater.")
+    if args.rest_cold_start_dump_stress_synthetic_queue_fill_size_bytes <= 0:
+        raise ValueError("REST cold-start dump stress synthetic queue fill size bytes must be greater than zero.")
     if args.rest_cold_start_dump_stress_target_completed_downloads < 0:
         raise ValueError("REST cold-start dump stress target completed downloads must be zero or greater.")
     if args.rest_cold_start_dump_stress_completion_timeout_seconds <= 0:
@@ -669,6 +689,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "downloads_per_wave": args.rest_cold_start_dump_stress_downloads_per_wave,
             "downloads_per_search": args.rest_cold_start_dump_stress_downloads_per_search,
             "max_missing_download_triggers": args.rest_cold_start_dump_stress_max_missing_download_triggers,
+            "synthetic_queue_fill_count": args.rest_cold_start_dump_stress_synthetic_queue_fill_count,
+            "synthetic_queue_fill_size_bytes": args.rest_cold_start_dump_stress_synthetic_queue_fill_size_bytes,
             "target_completed_downloads": args.rest_cold_start_dump_stress_target_completed_downloads,
             "completion_timeout_seconds": args.rest_cold_start_dump_stress_completion_timeout_seconds,
             "max_active_downloads": args.rest_cold_start_dump_stress_max_active_downloads,
@@ -744,6 +766,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_downloads_per_wave=args.rest_cold_start_dump_stress_downloads_per_wave,
             rest_cold_start_dump_stress_downloads_per_search=args.rest_cold_start_dump_stress_downloads_per_search,
             rest_cold_start_dump_stress_max_missing_download_triggers=args.rest_cold_start_dump_stress_max_missing_download_triggers,
+            rest_cold_start_dump_stress_synthetic_queue_fill_count=args.rest_cold_start_dump_stress_synthetic_queue_fill_count,
+            rest_cold_start_dump_stress_synthetic_queue_fill_size_bytes=args.rest_cold_start_dump_stress_synthetic_queue_fill_size_bytes,
             rest_cold_start_dump_stress_target_completed_downloads=args.rest_cold_start_dump_stress_target_completed_downloads,
             rest_cold_start_dump_stress_completion_timeout_seconds=args.rest_cold_start_dump_stress_completion_timeout_seconds,
             rest_cold_start_dump_stress_max_active_downloads=args.rest_cold_start_dump_stress_max_active_downloads,

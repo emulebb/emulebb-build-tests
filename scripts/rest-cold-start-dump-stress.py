@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -490,6 +491,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--downloads-per-wave", type=int, default=600)
     parser.add_argument("--downloads-per-search", type=int, default=50)
     parser.add_argument("--max-missing-download-triggers", type=int, default=0)
+    parser.add_argument("--synthetic-queue-fill-count", type=int, default=0)
+    parser.add_argument("--synthetic-queue-fill-size-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--target-completed-downloads", type=int, default=0)
     parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--max-active-downloads", type=int, default=512)
@@ -528,6 +531,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("downloads per search must be zero or greater.")
     if args.max_missing_download_triggers < 0:
         raise ValueError("max missing download triggers must be zero or greater.")
+    if args.synthetic_queue_fill_count < 0:
+        raise ValueError("synthetic queue fill count must be zero or greater.")
+    if args.synthetic_queue_fill_size_bytes <= 0:
+        raise ValueError("synthetic queue fill size bytes must be greater than zero.")
     if args.target_completed_downloads < 0:
         raise ValueError("target completed downloads must be zero or greater.")
     if args.completion_timeout_seconds <= 0:
@@ -1721,6 +1728,104 @@ def trigger_active_downloads_from_search_result(
     return result
 
 
+def build_synthetic_queue_fill_link(index: int, size_bytes: int) -> dict[str, object]:
+    """Builds one deterministic ED2K link used only for explicit queue pressure."""
+
+    transfer_hash = hashlib.md5(f"emulebb-stress-queue-fill-{index}".encode("ascii")).hexdigest()
+    name = f"emulebb-stress-queue-fill-{index:05d}.bin"
+    return {
+        "hash": transfer_hash,
+        "name": name,
+        "size": size_bytes,
+        "link": f"ed2k://|file|{name}|{size_bytes}|{transfer_hash}|/",
+    }
+
+
+def queue_synthetic_stress_transfers(
+    base_url: str,
+    api_key: str,
+    count: int,
+    size_bytes: int,
+    trigger_coordinator: DownloadTriggerCoordinator,
+    transfer_registry: StressTransferRegistry,
+    max_active_downloads: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Adds deterministic no-source ED2K transfers to reproduce large queue pressure."""
+
+    triggers: list[dict[str, object]] = []
+    failures: list[dict[str, object]] = []
+    for index in range(1, count + 1):
+        active_count = transfer_registry.counts()["active_stress_transfer_count"]
+        if active_count >= max_active_downloads:
+            return {
+                "ok": bool(triggers),
+                "reason": "max active download cap reached",
+                "requested_count": count,
+                "queued_count": len(triggers),
+                "active_stress_transfer_count": active_count,
+                "triggers": triggers,
+                "failures": failures,
+            }
+
+        row = build_synthetic_queue_fill_link(index, size_bytes)
+        transfer_hash = str(row["hash"])
+        if not trigger_coordinator.claim(transfer_hash):
+            continue
+
+        try:
+            response = rest_smoke.http_request(
+                base_url,
+                "/api/v1/transfers",
+                method="POST",
+                api_key=api_key,
+                json_body={"link": row["link"], "paused": False, "categoryId": 0},
+                request_timeout_seconds=timeout_seconds,
+            )
+            rest_smoke.require_json_object(response, 200)
+            transfer = rest_smoke.wait_for_triggered_transfer(
+                base_url,
+                api_key,
+                transfer_hash,
+                timeout_seconds,
+            )
+            transfer_registry.record_triggered(transfer_hash)
+            triggers.append(
+                {
+                    "hash_present": True,
+                    "synthetic": True,
+                    "candidate": {
+                        "name_present": True,
+                        "extension": ".bin",
+                        "sizeBytes": size_bytes,
+                        "fileType": "synthetic",
+                        "sources": 0,
+                        "completeSources": 0,
+                    },
+                    "download": rest_smoke.compact_http_result(response),
+                    "transfer": transfer,
+                }
+            )
+        except Exception as exc:
+            failures.append(
+                {
+                    "hash_present": True,
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                }
+            )
+
+    return {
+        "ok": len(triggers) == count,
+        "requested_count": count,
+        "queued_count": len(triggers),
+        "triggers": triggers,
+        "failures": failures,
+    }
+
+
 def wait_for_stress_search_observation(
     base_url: str,
     api_key: str,
@@ -2146,15 +2251,18 @@ def run_stress_waves(
     max_active_downloads: int,
     download_churn_interval_seconds: float,
     download_remove_count_per_churn: int,
+    synthetic_queue_fill_count: int,
+    synthetic_queue_fill_size_bytes: int,
     transfer_registry: StressTransferRegistry,
     observation_timeout_seconds: float,
+    synthetic_queue_timeout_seconds: float,
     network_ready_timeout_seconds: float,
 ) -> dict[str, object]:
     """Runs phased live search/download stress while keeping searches active until cleanup."""
 
     wave_reports: list[dict[str, object]] = []
     all_search_ids: list[str] = []
-    completed_download_triggers = 0
+    live_completed_download_triggers = 0
     transport_checks: list[dict[str, object]] = []
     trigger_coordinator = DownloadTriggerCoordinator()
     churn_reports: list[dict[str, object]] = []
@@ -2212,7 +2320,7 @@ def run_stress_waves(
                 for search_id in row.get("searchIds", []):
                     if isinstance(search_id, str) and search_id not in all_search_ids:
                         all_search_ids.append(search_id)
-                completed_download_triggers += count_download_triggers(row)
+                live_completed_download_triggers += count_download_triggers(row)
 
         ready_probe_status: int | None = None
         try:
@@ -2267,6 +2375,29 @@ def run_stress_waves(
         if ready_probe_status != 200:
             break
 
+    synthetic_queue_fill_report: dict[str, object] = {
+        "requested_count": synthetic_queue_fill_count,
+        "queued_count": 0,
+        "triggers": [],
+        "failures": [],
+        "skipped": synthetic_queue_fill_count <= 0,
+    }
+    if synthetic_queue_fill_count > 0:
+        synthetic_queue_fill_report = queue_synthetic_stress_transfers(
+            base_url=base_url,
+            api_key=api_key,
+            count=synthetic_queue_fill_count,
+            size_bytes=synthetic_queue_fill_size_bytes,
+            trigger_coordinator=trigger_coordinator,
+            transfer_registry=transfer_registry,
+            max_active_downloads=max_active_downloads,
+            timeout_seconds=synthetic_queue_timeout_seconds,
+        )
+        synthetic_queue_fill_report["size_bytes"] = synthetic_queue_fill_size_bytes
+
+    synthetic_completed_download_triggers = int(synthetic_queue_fill_report.get("queued_count", 0))
+    completed_download_triggers = live_completed_download_triggers + synthetic_completed_download_triggers
+
     stress_report = {
         "waves": wave_reports,
         "search_ids": all_search_ids,
@@ -2274,7 +2405,10 @@ def run_stress_waves(
         "completed_searches": sum(wave["completed_searches"] for wave in wave_reports),
         "failed_searches": sum(wave["failed_searches"] for wave in wave_reports),
         "requested_download_triggers": waves * searches_per_wave * downloads_per_search,
+        "live_completed_download_triggers": live_completed_download_triggers,
+        "synthetic_completed_download_triggers": synthetic_completed_download_triggers,
         "completed_download_triggers": completed_download_triggers,
+        "synthetic_queue_fill": synthetic_queue_fill_report,
         "transport_checks": transport_checks,
         "churn": churn_reports,
         "warnings": stress_warnings,
@@ -2886,6 +3020,8 @@ def main(argv: list[str] | None = None) -> int:
             "downloads_per_wave": args.downloads_per_wave,
             "downloads_per_search": downloads_per_search,
             "max_missing_download_triggers": args.max_missing_download_triggers,
+            "synthetic_queue_fill_count": args.synthetic_queue_fill_count,
+            "synthetic_queue_fill_size_bytes": args.synthetic_queue_fill_size_bytes,
             "target_completed_downloads": args.target_completed_downloads,
             "completion_timeout_seconds": args.completion_timeout_seconds,
             "max_active_downloads": args.max_active_downloads,
@@ -3080,8 +3216,11 @@ def main(argv: list[str] | None = None) -> int:
             max_active_downloads=args.max_active_downloads,
             download_churn_interval_seconds=args.download_churn_interval_seconds,
             download_remove_count_per_churn=args.download_remove_count_per_churn,
+            synthetic_queue_fill_count=args.synthetic_queue_fill_count,
+            synthetic_queue_fill_size_bytes=args.synthetic_queue_fill_size_bytes,
             transfer_registry=transfer_registry,
             observation_timeout_seconds=args.search_observation_timeout_seconds,
+            synthetic_queue_timeout_seconds=args.tool_timeout_seconds,
             network_ready_timeout_seconds=args.network_ready_timeout_seconds,
         )
         report["checks"]["stress"] = stress
