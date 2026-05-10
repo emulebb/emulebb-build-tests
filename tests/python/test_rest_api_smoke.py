@@ -792,6 +792,7 @@ def test_rest_contract_registry_matches_openapi() -> None:
     assert summary["duplicate_operation_ids"] == []
     assert summary["missing_from_registry"] == []
     assert summary["missing_from_openapi"] == []
+    assert summary["unknown_execution_models"] == []
 
 
 def _csv_fields(value: str) -> set[str]:
@@ -811,7 +812,7 @@ def _native_route_contracts() -> dict[tuple[str, str], dict[str, set[str]]]:
     workspace_root = Path(__file__).resolve().parents[4]
     route_header = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJsonSeams.h"
     route_specs = re.findall(
-        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\}',
+        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"(?:\s*,\s*([^}]+?))?\s*\}',
         route_header.read_text(encoding="utf-8"),
     )
 
@@ -819,8 +820,9 @@ def _native_route_contracts() -> dict[tuple[str, str], dict[str, set[str]]]:
         (method, path): {
             "body": _csv_fields(body_fields),
             "query": _csv_fields(query_fields),
+            "execution": {"direct"} if "kRestRouteExecutionDirect" in execution_model else {"ui-thread"},
         }
-        for method, path, body_fields, query_fields in route_specs
+        for method, path, body_fields, query_fields, execution_model in route_specs
     }
 
 
@@ -991,13 +993,35 @@ def _openapi_operation_contracts(openapi_path: Path) -> dict[tuple[str, str], di
 def test_native_route_specs_match_openapi_methods_paths_and_fields() -> None:
     module = load_rest_api_smoke_module()
     native_contracts = {
-        route_key: contract
+        route_key: {
+            "body": contract["body"],
+            "query": contract["query"],
+        }
         for route_key, contract in _native_route_contracts().items()
         if route_key not in PRIVATE_NATIVE_ONLY_ROUTES
     }
     openapi_contracts = _openapi_operation_contracts(module.OPENAPI_CONTRACT_PATH)
 
     assert native_contracts == openapi_contracts
+
+
+def test_native_route_execution_model_inventory_matches_dispatch_boundary() -> None:
+    module = load_rest_api_smoke_module()
+    native_contracts = _native_route_contracts()
+    direct_routes = sorted(
+        route_key for route_key, contract in native_contracts.items() if contract["execution"] == {"direct"}
+    )
+    ui_thread_routes = sorted(
+        route_key for route_key, contract in native_contracts.items() if contract["execution"] == {"ui-thread"}
+    )
+    routes_by_operation = {route["operationId"]: route for route in module.REST_CONTRACT_ROUTES}
+
+    assert direct_routes == [("GET", "/app")]
+    assert len(direct_routes) + len(ui_thread_routes) == len(native_contracts)
+    assert routes_by_operation["getApp"]["executionModel"] == "direct"
+    assert routes_by_operation["getPreferences"]["executionModel"] == "ui-thread"
+    assert routes_by_operation["shutdownApp"]["executionModel"] == "ui-thread"
+    assert all(route["executionModel"] in {"direct", "ui-thread"} for route in module.REST_CONTRACT_ROUTES)
 
 
 def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> None:

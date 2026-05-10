@@ -7,6 +7,7 @@ import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
 import json
+import re
 import socket
 import ssl
 import struct
@@ -238,6 +239,15 @@ REST_STRESS_LONG_UNICODE_PATH = (
     + "-linux-iso-library-Ω-例.mkv"
 )
 OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+NATIVE_ROUTE_HEADER_PATH = (
+    REPO_ROOT.parent.parent
+    / "workspaces"
+    / "v0.72a"
+    / "app"
+    / "eMule-main"
+    / "srchybrid"
+    / "WebServerJsonSeams.h"
+)
 UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "shutdownApp"}
 UNSAFE_BROAD_MUTATION_PATHS = ("/api/v1/app/operations/capture-dump", "/api/v1/app/shutdown")
 REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
@@ -466,6 +476,22 @@ def load_openapi_operations(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> list[
     return operations
 
 
+def load_native_route_execution_models(route_header_path: Path = NATIVE_ROUTE_HEADER_PATH) -> dict[tuple[str, str], str]:
+    """Extracts internal route execution ownership from the native REST seam."""
+
+    route_specs = re.findall(
+        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*"[^"]*"(?:\s*,\s*([^}]+?))?\s*\}',
+        route_header_path.read_text(encoding="utf-8"),
+    )
+    models: dict[tuple[str, str], str] = {}
+    for method, path, model in route_specs:
+        if "kRestRouteExecutionDirect" in model:
+            models[(method, path)] = "direct"
+        else:
+            models[(method, path)] = "ui-thread"
+    return models
+
+
 def concrete_contract_path(openapi_path: str, operation_id: str) -> str:
     """Converts one OpenAPI path template to a live-smoke safe concrete path."""
 
@@ -487,6 +513,7 @@ def build_openapi_contract_routes(openapi_path: Path = OPENAPI_CONTRACT_PATH) ->
     """Builds the live REST completeness route list from the OpenAPI contract."""
 
     routes: list[dict[str, object]] = []
+    execution_models = load_native_route_execution_models()
     for operation in load_openapi_operations(openapi_path):
         tag = operation["tag"]
         family = OPENAPI_TAG_FAMILIES.get(tag)
@@ -513,6 +540,7 @@ def build_openapi_contract_routes(openapi_path: Path = OPENAPI_CONTRACT_PATH) ->
                 "successResponseStatuses": operation["successResponseStatuses"],
                 "successResponseRefs": success_response_refs,
                 "responseEnvelope": success_response_refs[0],
+                "executionModel": execution_models.get((str(operation["method"]), str(openapi_path_value)), "unknown"),
             }
         )
     return tuple(routes)
@@ -555,6 +583,11 @@ def assert_contract_routes_match_openapi() -> dict[str, object]:
         for route in REST_CONTRACT_ROUTES
         if bool(route["requestBodyRequired"]) and get_contract_route_body(str(route["operationId"])) is None
     )
+    unknown_execution_models = sorted(
+        str(route["operationId"])
+        for route in REST_CONTRACT_ROUTES
+        if route.get("executionModel") == "unknown"
+    )
     return {
         "openapi_route_count": len(openapi_routes),
         "registry_route_count": len(registry_routes),
@@ -563,7 +596,12 @@ def assert_contract_routes_match_openapi() -> dict[str, object]:
         "missing_from_registry": missing_from_registry,
         "missing_from_openapi": missing_from_openapi,
         "missing_required_body_payloads": missing_required_body_payloads,
-        "ok": not missing_from_registry and not missing_from_openapi and not duplicate_operation_ids and not missing_required_body_payloads,
+        "unknown_execution_models": unknown_execution_models,
+        "ok": not missing_from_registry
+        and not missing_from_openapi
+        and not duplicate_operation_ids
+        and not missing_required_body_payloads
+        and not unknown_execution_models,
     }
 REST_STRESS_READ_PATHS = (
     "/api/v1/app",
