@@ -449,37 +449,27 @@ def choose_rest_listen_port() -> int:
 def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: int) -> None:
     """Enables the WebServer REST listener inside one isolated Shared Files UI profile."""
 
-    preferences_path = config_dir / "preferences.ini"
-    text = live_common.read_ini_text(preferences_path)
-    text = live_common.patch_ini_value(text, "ConfirmExit", "0")
-    for key, value in (
-        ("Autoconnect", "0"),
-        ("Reconnect", "0"),
-        ("NetworkED2K", "0"),
-        ("NetworkKademlia", "0"),
-    ):
-        text = live_common.patch_ini_value(text, key, value)
-    template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
-    text = live_common.patch_ini_value(text, "WebTemplateFile", str(template_path))
-    for key, value in (
-        ("Password", ""),
-        ("PasswordLow", ""),
-        ("ApiKey", api_key),
-        ("BindAddr", "127.0.0.1"),
-        ("Port", str(port)),
-        ("WebUseUPnP", "0"),
-        ("Enabled", "1"),
-        ("UseGzip", "0"),
-        ("PageRefreshTime", "120"),
-        ("UseLowRightsUser", "0"),
-        ("AllowAdminHiLevelFunc", "1"),
-        ("WebTimeoutMins", "5"),
-        ("UseHTTPS", "0"),
-        ("HTTPSCertificate", ""),
-        ("HTTPSKey", ""),
-    ):
-        text = live_common.upsert_ini_section_value(text, "WebServer", key, value)
-    live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("ConfirmExit", "0"),
+            ("Autoconnect", "0"),
+            ("Reconnect", "0"),
+            ("NetworkED2K", "0"),
+            ("NetworkKademlia", "0"),
+        ),
+    )
+    live_common.apply_webserver_profile(
+        config_dir,
+        live_common.WebServerProfileSpec(
+            app_exe=app_exe,
+            api_key=api_key,
+            port=port,
+            bind_addr="127.0.0.1",
+            use_gzip=False,
+            allow_admin_high_level_func=True,
+        ),
+    )
     live_common.apply_live_network_policy(config_dir)
 
 

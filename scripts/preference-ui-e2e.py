@@ -398,63 +398,53 @@ def activate_tree_item(tree_hwnd: int, label: str) -> None:
 
 
 def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
-    preferences_path = config_dir / "preferences.ini"
-    text = live_common.read_ini_text(preferences_path)
-    template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
-
-    for key, value in (
-        ("ConfirmExit", "0"),
-        ("Autoconnect", "0"),
-        ("Reconnect", "0"),
-        ("NetworkED2K", "0"),
-        ("NetworkKademlia", "0"),
-        ("BeepOnError", "0"),
-        ("CreateCrashDump", "0"),
-        ("MaxLogFileSize", "1048576"),
-        ("MaxLogBuff", "64"),
-        ("LogFileFormat", "0"),
-        ("PreviewSmallBlocks", "0"),
-        ("TxtEditor", "notepad.exe"),
-        ("MaxChatHistoryLines", "100"),
-        ("MaxMessageSessions", "50"),
-        ("IPFilterUpdateEnabled", "0"),
-        ("IPFilterUpdatePeriodDays", "7"),
-        ("IPFilterLastUpdateTime", str(int(time.time()))),
-        ("IPFilterUpdateUrl", "http://upd.emule-security.org/ipfilter.zip"),
-    ):
-        text = live_common.patch_ini_value(text, key, value)
-
-    for key, value in (
-        ("Password", ""),
-        ("PasswordLow", ""),
-        ("ApiKey", "preference-ui-e2e-key"),
-        ("BindAddr", "127.0.0.1"),
-        ("Port", str(rest_port)),
-        ("WebUseUPnP", "0"),
-        ("Enabled", "0"),
-        ("UseGzip", "1"),
-        ("PageRefreshTime", "120"),
-        ("UseLowRightsUser", "0"),
-        ("AllowAdminHiLevelFunc", "0"),
-        ("WebTimeoutMins", "5"),
-        ("UseHTTPS", "0"),
-        ("HTTPSCertificate", ""),
-        ("HTTPSKey", ""),
-        ("MaxFileUploadSizeMB", "5"),
-        ("AllowedIPs", ""),
-    ):
-        text = rest_smoke.upsert_ini_section_value(text, "WebServer", key, value)
-
-    for key, value in (
-        ("Mode", "0"),
-        ("FileFormat", "0"),
-        ("File", ""),
-        ("Interval", "5"),
-    ):
-        text = rest_smoke.upsert_ini_section_value(text, "PerfLog", key, value)
-
-    text = live_common.patch_ini_value(text, "WebTemplateFile", str(template_path))
-    live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("ConfirmExit", "0"),
+            ("Autoconnect", "0"),
+            ("Reconnect", "0"),
+            ("NetworkED2K", "0"),
+            ("NetworkKademlia", "0"),
+            ("BeepOnError", "0"),
+            ("CreateCrashDump", "0"),
+            ("MaxLogFileSize", "1048576"),
+            ("MaxLogBuff", "64"),
+            ("LogFileFormat", "0"),
+            ("PreviewSmallBlocks", "0"),
+            ("TxtEditor", "notepad.exe"),
+            ("MaxChatHistoryLines", "100"),
+            ("MaxMessageSessions", "50"),
+            ("IPFilterUpdateEnabled", "0"),
+            ("IPFilterUpdatePeriodDays", "7"),
+            ("IPFilterLastUpdateTime", str(int(time.time()))),
+            ("IPFilterUpdateUrl", "http://upd.emule-security.org/ipfilter.zip"),
+        ),
+    )
+    live_common.apply_webserver_profile(
+        config_dir,
+        live_common.WebServerProfileSpec(
+            app_exe=app_exe,
+            api_key="preference-ui-e2e-key",
+            port=rest_port,
+            bind_addr="127.0.0.1",
+            enabled=False,
+            use_gzip=True,
+            allow_admin_high_level_func=False,
+            max_file_upload_size_mb=5,
+            allowed_ips="",
+        ),
+    )
+    live_common.apply_section_preferences(
+        config_dir,
+        "PerfLog",
+        (
+            ("Mode", "0"),
+            ("FileFormat", "0"),
+            ("File", ""),
+            ("Interval", "5"),
+        ),
+    )
     live_common.apply_live_network_policy(config_dir)
 
 

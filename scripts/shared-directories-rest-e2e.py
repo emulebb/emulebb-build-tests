@@ -30,9 +30,7 @@ rest_api_smoke = load_local_module("rest_api_smoke_helpers", "rest-api-smoke.py"
 
 close_app_cleanly = live_common.close_app_cleanly
 launch_app = live_common.launch_app
-patch_ini_value = live_common.patch_ini_value
 prepare_profile_base = live_common.prepare_profile_base
-upsert_ini_section_value = live_common.upsert_ini_section_value
 wait_for = live_common.wait_for
 wait_for_main_window = live_common.wait_for_main_window
 write_json = live_common.write_json
@@ -66,39 +64,28 @@ def configure_rest_only_profile(
 ) -> None:
     """Enables localhost REST while keeping P2P networks disabled."""
 
-    preferences_path = config_dir / "preferences.ini"
-    text = live_common.read_ini_text(preferences_path)
-    for key, value in (
-        ("ConfirmExit", "0"),
-        ("Autoconnect", "0"),
-        ("Reconnect", "0"),
-        ("NetworkED2K", "0"),
-        ("NetworkKademlia", "0"),
-        ("CloseUPnPOnExit", "0"),
-    ):
-        text = patch_ini_value(text, key, value)
-
-    template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
-    text = patch_ini_value(text, "WebTemplateFile", str(template_path))
-    for key, value in (
-        ("Password", ""),
-        ("PasswordLow", ""),
-        ("ApiKey", api_key),
-        ("BindAddr", bind_addr),
-        ("Port", str(port)),
-        ("WebUseUPnP", "0"),
-        ("Enabled", "1"),
-        ("UseGzip", "0"),
-        ("PageRefreshTime", "120"),
-        ("UseLowRightsUser", "0"),
-        ("AllowAdminHiLevelFunc", "1"),
-        ("WebTimeoutMins", "5"),
-        ("UseHTTPS", "0"),
-        ("HTTPSCertificate", ""),
-        ("HTTPSKey", ""),
-    ):
-        text = upsert_ini_section_value(text, "WebServer", key, value)
-    live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("ConfirmExit", "0"),
+            ("Autoconnect", "0"),
+            ("Reconnect", "0"),
+            ("NetworkED2K", "0"),
+            ("NetworkKademlia", "0"),
+            ("CloseUPnPOnExit", "0"),
+        ),
+    )
+    live_common.apply_webserver_profile(
+        config_dir,
+        live_common.WebServerProfileSpec(
+            app_exe=app_exe,
+            api_key=api_key,
+            port=port,
+            bind_addr=bind_addr,
+            use_gzip=False,
+            allow_admin_high_level_func=True,
+        ),
+    )
     live_common.apply_live_network_policy(config_dir)
 
 

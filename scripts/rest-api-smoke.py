@@ -54,6 +54,7 @@ prepare_profile_base = live_common.prepare_profile_base
 upsert_ini_section_value = live_common.upsert_ini_section_value
 wait_for = live_common.wait_for
 wait_for_main_window = live_common.wait_for_main_window
+WebServerProfileSpec = live_common.WebServerProfileSpec
 write_json = live_common.write_json
 
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -986,42 +987,34 @@ def configure_webserver_profile(
 ) -> None:
     """Enables the WebServer listener and REST API key inside the temp profile."""
 
-    preferences_path = config_dir / "preferences.ini"
-    text = live_common.read_ini_text(preferences_path)
-    text = patch_ini_value(text, "ConfirmExit", "0")
-    for key, value in (
-        ("Autoconnect", "1"),
-        ("Reconnect", "1"),
-        ("NetworkED2K", "1"),
-        ("NetworkKademlia", "1"),
-    ):
-        text = patch_ini_value(text, key, value)
-    for key in ("Verbose", "FullVerbose"):
-        text = patch_ini_value(text, key, "1")
-    template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
-    text = patch_ini_value(text, "WebTemplateFile", str(template_path))
-    for key, value in (
-        ("Password", ""),
-        ("PasswordLow", ""),
-        ("ApiKey", api_key),
-        ("BindAddr", bind_addr),
-        ("Port", str(port)),
-        ("WebUseUPnP", "0"),
-        ("Enabled", "1"),
-        ("UseGzip", "1"),
-        ("PageRefreshTime", "120"),
-        ("UseLowRightsUser", "0"),
-        ("AllowAdminHiLevelFunc", "1"),
-        ("WebTimeoutMins", "5"),
-        ("EnableCrashTestEndpoint", "1" if enable_crash_test_endpoint else "0"),
-        ("UseHTTPS", "1" if use_https else "0"),
-        ("HTTPSCertificate", https_certificate),
-        ("HTTPSKey", https_key),
-    ):
-        text = upsert_ini_section_value(text, "WebServer", key, value)
-    text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1")
-    text = patch_ini_value(text, "CloseUPnPOnExit", "0")
-    live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("ConfirmExit", "0"),
+            ("Autoconnect", "1"),
+            ("Reconnect", "1"),
+            ("NetworkED2K", "1"),
+            ("NetworkKademlia", "1"),
+            ("Verbose", "1"),
+            ("FullVerbose", "1"),
+        ),
+    )
+    live_common.apply_webserver_profile(
+        config_dir,
+        WebServerProfileSpec(
+            app_exe=app_exe,
+            api_key=api_key,
+            port=port,
+            bind_addr=bind_addr,
+            use_gzip=True,
+            allow_admin_high_level_func=True,
+            use_https=use_https,
+            https_certificate=https_certificate,
+            https_key=https_key,
+            enable_crash_test_endpoint=enable_crash_test_endpoint,
+        ),
+    )
+    live_common.apply_live_network_policy(config_dir)
 
 
 def apply_p2p_bind_interface_override(

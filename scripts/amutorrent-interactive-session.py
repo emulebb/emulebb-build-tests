@@ -53,38 +53,27 @@ def configure_session_profile(
 ) -> None:
     """Enables REST and applies the requested live-network startup policy."""
 
-    preferences_path = config_dir / "preferences.ini"
-    text = live_common.read_ini_text(preferences_path)
-    text = live_common.patch_ini_value(text, "ConfirmExit", "0")
-    for key, value in (
-        ("Autoconnect", "1" if live_network else "0"),
-        ("Reconnect", "1" if live_network else "0"),
-        ("NetworkED2K", "1" if live_network else "0"),
-        ("NetworkKademlia", "1" if live_network else "0"),
-    ):
-        text = live_common.patch_ini_value(text, key, value)
-
-    template_path = app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
-    text = live_common.patch_ini_value(text, "WebTemplateFile", str(template_path))
-    for key, value in (
-        ("Password", ""),
-        ("PasswordLow", ""),
-        ("ApiKey", api_key),
-        ("BindAddr", bind_addr),
-        ("Port", str(port)),
-        ("WebUseUPnP", "0"),
-        ("Enabled", "1"),
-        ("UseGzip", "1"),
-        ("PageRefreshTime", "120"),
-        ("UseLowRightsUser", "0"),
-        ("AllowAdminHiLevelFunc", "1"),
-        ("WebTimeoutMins", "5"),
-        ("UseHTTPS", "0"),
-        ("HTTPSCertificate", ""),
-        ("HTTPSKey", ""),
-    ):
-        text = live_common.upsert_ini_section_value(text, "WebServer", key, value)
-    live_common.write_utf16_ini_text(preferences_path, text)
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("ConfirmExit", "0"),
+            ("Autoconnect", "1" if live_network else "0"),
+            ("Reconnect", "1" if live_network else "0"),
+            ("NetworkED2K", "1" if live_network else "0"),
+            ("NetworkKademlia", "1" if live_network else "0"),
+        ),
+    )
+    live_common.apply_webserver_profile(
+        config_dir,
+        live_common.WebServerProfileSpec(
+            app_exe=app_exe,
+            api_key=api_key,
+            port=port,
+            bind_addr=bind_addr,
+            use_gzip=True,
+            allow_admin_high_level_func=True,
+        ),
+    )
     rest_api_smoke.apply_p2p_bind_interface_override(config_dir, p2p_bind_interface_name)
 
 
