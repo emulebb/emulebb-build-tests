@@ -187,7 +187,7 @@ Cold-start REST dump stress lane:
   audio, and video candidates while still blocking executable/script payloads;
   if the live network does not expose enough safe candidates, the lane returns
   inconclusive instead of failing the build
-- run it explicitly with `workspace.ps1 live-e2e -LiveSuite
+- run it explicitly with `python -m emule_workspace test live-e2e --suite
   rest-cold-start-dump-stress`; it is not part of the default aggregate suite
   because it captures full process dumps
 
