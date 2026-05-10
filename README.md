@@ -21,7 +21,7 @@ It owns:
 - parity and divergence suites for live workspace-to-workspace comparison
 - workspace-level build and live-diff scripts
 - fixture, manifest, and report directories for future protocol coverage
-- the deterministic live-profile seed used by the live REST E2E lane, named-pipe live harness, and live UI regressions
+- the deterministic live-profile seed used by the live REST E2E lane and live UI regressions
 
 The project is built against the canonical app checkout resolved from the invoking workspace manifest. It is intentionally not a runtime dependency like the `eMule-*` third-party dependencies, and it is no longer embedded as a `tests/` submodule inside each workspace.
 
@@ -78,7 +78,6 @@ Script inventory:
 | `scripts\run-native-coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
 | `scripts\run-live-diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
 | `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
-| `scripts\run-pipe-live-matrix.py` | operator-facing live harness wrapper | maintained | resolves the current helper from `repos\eMule-tooling` first, legacy path second |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report resolution for Python-first live/UI harnesses |
@@ -224,14 +223,6 @@ Canonical live auto-browse lane:
   - at least one successful automatic remote-share browse that logs success and persists `.browsecache` output
 - `--keep-running` leaves the launched isolated eMule instance alive after a passing run and forces artifact retention so the profile can be inspected afterward
 - artifacts are published under `reports\auto-browse-live\...` with the same latest-report mirroring as the other Python-first live harnesses
-
-Canonical live harness:
-
-- `scripts\run-pipe-live-matrix.py` is the operator-facing entrypoint for launch-only and full live named-pipe harness runs
-- the wrapper resolves `helper-runtime-pipe-live-session.ps1` from `repos\eMule-tooling\helpers` first and falls back to the legacy app-side helper path only when needed
-- the harness stages a renamed binary copy, `eMule_v072_harness.exe`, beside the debug build output and launches that copy so processes, dumps, and cleanup are easier to identify
-- the machine-readable session manifest can be requested through the shared wrapper with `-SessionManifestPath`
-- normal runs retry targeted teardown and fail if any harness-launched process remains afterward; `-KeepRunning` is the only supported opt-out
 
 Shared Files live UI regression:
 
