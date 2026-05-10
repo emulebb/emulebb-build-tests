@@ -20,15 +20,15 @@ def tooling_ci_root() -> Path:
     candidates.append(test_repo_root.parent.parent / "repos" / "eMule-tooling" / "ci")
 
     for candidate in candidates:
-        if (candidate / "workspace_ci.py").is_file():
+        if (candidate / "policy_guards.py").is_file():
             return candidate
-    raise RuntimeError("Unable to locate repos\\eMule-tooling\\ci\\workspace_ci.py.")
+    raise RuntimeError("Unable to locate repos\\eMule-tooling\\ci\\policy_guards.py.")
 
 
 TOOLING_CI_ROOT = tooling_ci_root()
 if str(TOOLING_CI_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOLING_CI_ROOT))
 
-from workspace_ci import PrivacyGuardFailure, run_privacy_guard  # noqa: E402
+from policy_guards import PrivacyGuardFailure, run_privacy_guard  # noqa: E402
 
 __all__ = ["PrivacyGuardFailure", "run_privacy_guard"]

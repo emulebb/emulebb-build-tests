@@ -74,7 +74,7 @@ Script inventory:
 | Path | Role | Status | Notes |
 | --- | --- | --- | --- |
 | `scripts\build-emule-tests.py` | operator-facing build wrapper | maintained | builds `emule-tests.exe`, optional run |
-| `scripts\guard-tracked-files.py` | operator-facing guard | maintained | privacy/path leak gate before builds, implemented by `repos\eMule-tooling\ci\workspace_ci.py` |
+| `scripts\guard-tracked-files.py` | operator-facing guard | maintained | privacy/path leak gate before builds, implemented by `repos\eMule-tooling\ci\policy_guards.py` |
 | `scripts\run-native-coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
 | `scripts\run-live-diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
 | `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
