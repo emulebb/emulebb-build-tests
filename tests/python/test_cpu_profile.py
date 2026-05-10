@@ -13,6 +13,7 @@ def test_build_xperf_commands_use_bounded_profile_capture(tmp_path: Path) -> Non
     stop = cpu_profile.build_xperf_stop_command(tools, paths)
     cancel = cpu_profile.build_xperf_cancel_command(tools)
     export = cpu_profile.build_xperf_profile_export_command(tools, paths)
+    stack_export = cpu_profile.build_xperf_stack_export_command(tools, paths, min_hits=25)
 
     assert start[:3] == ["xperf.exe", "-on", "PROC_THREAD+LOADER+PROFILE"]
     assert start[start.index("-stackwalk") + 1] == "Profile"
@@ -22,6 +23,8 @@ def test_build_xperf_commands_use_bounded_profile_capture(tmp_path: Path) -> Non
     assert cancel == ["xperf.exe", "-stop"]
     assert export[:5] == ["xperf.exe", "-i", str(paths.etl_path), "-symbols", "-target"]
     assert export[-2:] == ["profile", "-detail"]
+    assert stack_export[:5] == ["xperf.exe", "-i", str(paths.etl_path), "-symbols", "-target"]
+    assert stack_export[-7:] == ["stack", "-process", "emule.exe", "-event", "Profile", "-butterfly", "25"]
 
 
 def test_symbol_environment_prefers_app_pdb_and_sets_symcache(tmp_path: Path) -> None:
@@ -122,3 +125,32 @@ def test_parse_xperf_profile_detail_preserves_csv_template_symbols() -> None:
     function = summary["top_app_functions"][0]["function"]
     assert function.startswith("emule!nlohmann::json_abi_v3_11_3::basic_json<std::map,std::vector")
     assert function.endswith(">::destroy")
+
+
+def test_parse_xperf_stack_report_extracts_top_app_inclusive_functions() -> None:
+    text = """
+<h2>Functions by UniInclusive Hits</h2><table><tbody>
+<tr><td><a href='#m'>emule.exe</a>!<a href='#s'>WebServerJson::RunDispatchedCommand</a></td><td>5131</td><td>68.17%</td><td>0</td></tr>
+<tr><td><a href='#m'>ntdll.dll</a>!<a href='#s'>RtlCaptureStackBackTrace</a></td><td>4417</td><td>58.68%</td><td>6</td></tr>
+<tr><td><a href='#m'>emule.exe</a>!<a href='#s'>CDownloadQueue::CollectProtectedVolumeStatuses</a></td><td>32</td><td>0.42%</td><td>1</td></tr>
+</tbody></table><h2>Functions by Multi-Inclusive Hits with Callers and Callees</h2>
+"""
+
+    summary = cpu_profile.parse_xperf_stack_report(text)
+
+    assert summary["available"] is True
+    assert summary["app_row_count"] == 2
+    assert summary["top_app_inclusive_functions"] == [
+        {
+            "function": "emule!WebServerJson::RunDispatchedCommand",
+            "inclusive_hits": 5131,
+            "total_percent": 68.17,
+            "exclusive_hits": 0,
+        },
+        {
+            "function": "emule!CDownloadQueue::CollectProtectedVolumeStatuses",
+            "inclusive_hits": 32,
+            "total_percent": 0.42,
+            "exclusive_hits": 1,
+        },
+    ]

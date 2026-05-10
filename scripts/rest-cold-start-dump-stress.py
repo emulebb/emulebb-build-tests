@@ -506,6 +506,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cpu-profile", action="store_true")
     parser.add_argument("--cpu-profile-max-file-mb", type=int, default=cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB)
     parser.add_argument("--cpu-profile-symbols-required", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--cpu-profile-stack", action="store_true")
+    parser.add_argument("--cpu-profile-stack-min-hits", type=int, default=10)
     parser.add_argument("--skip-dumps", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
     return parser
@@ -546,6 +548,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("max post-drain UMDH positive bytes must be zero or greater.")
     if args.cpu_profile_max_file_mb <= 0:
         raise ValueError("CPU profile max file MB must be greater than zero.")
+    if args.cpu_profile_stack_min_hits <= 0:
+        raise ValueError("CPU profile stack min hits must be greater than zero.")
 
 
 def resolve_downloads_per_search(args: argparse.Namespace) -> int:
@@ -696,6 +700,7 @@ def cpu_profile_paths_to_report(paths: cpu_profile.CpuProfilePaths) -> dict[str,
         "raw_etl_path": str(paths.raw_etl_path),
         "detail_path": str(paths.detail_path),
         "summary_path": str(paths.summary_path),
+        "stack_path": str(paths.stack_path),
         "symbol_cache_dir": str(paths.symbol_cache_dir),
     }
 
@@ -734,6 +739,8 @@ def export_cpu_profile_summary(
     paths: cpu_profile.CpuProfilePaths,
     app_exe: Path,
     timeout_seconds: float,
+    include_stack: bool = False,
+    stack_min_hits: int = 10,
 ) -> dict[str, object]:
     """Exports the ETW profile and writes the compact top-function summary."""
 
@@ -742,12 +749,20 @@ def export_cpu_profile_summary(
         paths=paths,
         app_exe=app_exe,
         timeout_seconds=timeout_seconds,
+        include_stack=include_stack,
+        stack_min_hits=stack_min_hits,
     )
     summary = cpu_profile.parse_xperf_profile_detail_file(paths.detail_path)
+    stack_summary = (
+        cpu_profile.parse_xperf_stack_report_file(paths.stack_path)
+        if include_stack
+        else {"available": False, "reason": "stack export was not requested"}
+    )
     harness_cli_common.write_json_file(paths.summary_path, summary)
     return {
         "export": export,
         "summary": summary,
+        "stack_summary": stack_summary,
     }
 
 
@@ -2887,6 +2902,8 @@ def main(argv: list[str] | None = None) -> int:
             "cpu_profile": bool(args.cpu_profile),
             "cpu_profile_max_file_mb": args.cpu_profile_max_file_mb,
             "cpu_profile_symbols_required": bool(args.cpu_profile_symbols_required),
+            "cpu_profile_stack": bool(args.cpu_profile_stack),
+            "cpu_profile_stack_min_hits": args.cpu_profile_stack_min_hits,
             "skip_dumps": bool(args.skip_dumps),
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
         },
@@ -3093,6 +3110,8 @@ def main(argv: list[str] | None = None) -> int:
                     paths=cpu_profile_paths,
                     app_exe=paths.app_exe,
                     timeout_seconds=args.tool_timeout_seconds,
+                    include_stack=args.cpu_profile_stack,
+                    stack_min_hits=args.cpu_profile_stack_min_hits,
                 )
             )
         report["diagnostics"]["peak"] = collect_diagnostics(
@@ -3259,6 +3278,8 @@ def main(argv: list[str] | None = None) -> int:
                         paths=cpu_profile_paths,
                         app_exe=paths.app_exe,
                         timeout_seconds=args.tool_timeout_seconds,
+                        include_stack=args.cpu_profile_stack,
+                        stack_min_hits=args.cpu_profile_stack_min_hits,
                     )
                 )
             except Exception as exc:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import unescape
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,11 @@ _XPERF_CSV_ROW_RE = re.compile(
 )
 _SAMPLE_COUNT_RE = re.compile(r"(?<![A-Za-z0-9_.])([0-9][0-9,]*)(?![A-Za-z0-9_.])")
 _SYMBOL_RE = re.compile(r"\bemule(?:\.exe)?![^\s,;|]+", re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_STACK_ROW_RE = re.compile(
+    r"<tr><td>(?P<function>.*?)</td><td>(?P<hits>[0-9][0-9,]*)</td><td>(?P<percent>[0-9]+(?:\.[0-9]+)?)%</td><td>(?P<exclusive>[0-9][0-9,]*)</td>",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,7 @@ class CpuProfilePaths:
     raw_etl_path: Path
     detail_path: Path
     summary_path: Path
+    stack_path: Path
     symbol_cache_dir: Path
 
 
@@ -74,6 +81,7 @@ def build_cpu_profile_paths(artifacts_dir: Path) -> CpuProfilePaths:
         raw_etl_path=analysis_dir / "cpu-profile.raw.etl",
         detail_path=analysis_dir / "cpu-profile-detail.txt",
         summary_path=analysis_dir / "cpu-profile-summary.json",
+        stack_path=analysis_dir / "cpu-profile-stack.html",
         symbol_cache_dir=artifacts_dir / "symbols",
     )
 
@@ -171,6 +179,37 @@ def build_xperf_profile_export_command(tools: CpuProfileTools, paths: CpuProfile
         "-a",
         "profile",
         "-detail",
+    ]
+
+
+def build_xperf_stack_export_command(
+    tools: CpuProfileTools,
+    paths: CpuProfilePaths,
+    *,
+    process_image: str = "emule.exe",
+    min_hits: int = 10,
+) -> list[str]:
+    """Builds the xperf command that exports a caller/callee stack report."""
+
+    if not tools.xperf:
+        raise ValueError("xperf was not found.")
+    return [
+        tools.xperf,
+        "-i",
+        str(paths.etl_path),
+        "-symbols",
+        "-target",
+        "human",
+        "-o",
+        str(paths.stack_path),
+        "-a",
+        "stack",
+        "-process",
+        process_image,
+        "-event",
+        "Profile",
+        "-butterfly",
+        str(min_hits),
     ]
 
 
@@ -288,6 +327,8 @@ def export_cpu_profile(
     paths: CpuProfilePaths,
     app_exe: Path,
     timeout_seconds: float,
+    include_stack: bool = False,
+    stack_min_hits: int = 10,
 ) -> dict[str, object]:
     """Exports xperf sampled CPU detail with the required app symbols."""
 
@@ -298,6 +339,12 @@ def export_cpu_profile(
     result["detail_exists"] = paths.detail_path.is_file()
     result["symbol_path"] = symbol_env["_NT_SYMBOL_PATH"]
     result["symcache_path"] = symbol_env["_NT_SYMCACHE_PATH"]
+    if include_stack:
+        stack_command = build_xperf_stack_export_command(tools, paths, min_hits=stack_min_hits)
+        stack_result = run_tool_to_file(stack_command, paths.stack_path.with_suffix(".export.txt"), timeout_seconds, env=symbol_env)
+        stack_result["stack_path"] = str(paths.stack_path)
+        stack_result["stack_exists"] = paths.stack_path.is_file()
+        result["stack"] = stack_result
     return result
 
 
@@ -392,6 +439,60 @@ def parse_xperf_profile_detail_file(path: Path, *, limit: int = DEFAULT_CPU_PROF
         return {"available": False, "reason": "xperf profile detail output was not written"}
     try:
         return parse_xperf_profile_detail(path.read_text(encoding="utf-8", errors="replace"), limit=limit)
+    except OSError as exc:
+        return {
+            "available": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def parse_xperf_stack_report(
+    text: str,
+    *,
+    limit: int = DEFAULT_CPU_PROFILE_TOP_LIMIT,
+) -> dict[str, object]:
+    """Extracts top app functions from xperf's stack butterfly HTML report."""
+
+    start = text.find("Functions by UniInclusive Hits")
+    end = text.find("Functions by Multi-Inclusive Hits", start)
+    section = text[start:end] if start >= 0 and end > start else text
+    rows: list[dict[str, object]] = []
+    for match in _STACK_ROW_RE.finditer(section):
+        function = strip_html_cell(match.group("function"))
+        folded = function.casefold()
+        if not folded.startswith(("emule!", "emule.exe!")):
+            continue
+        rows.append(
+            {
+                "function": normalize_emule_symbol(function),
+                "inclusive_hits": int(match.group("hits").replace(",", "")),
+                "total_percent": float(match.group("percent")),
+                "exclusive_hits": int(match.group("exclusive").replace(",", "")),
+            }
+        )
+
+    rows.sort(key=lambda row: (float(row["total_percent"]), int(row["inclusive_hits"])), reverse=True)
+    return {
+        "available": bool(rows),
+        "app_row_count": len(rows),
+        "top_app_inclusive_functions": rows[:limit],
+    }
+
+
+def strip_html_cell(value: str) -> str:
+    """Returns display text from one xperf stack-report HTML cell."""
+
+    stripped = _HTML_TAG_RE.sub("", value)
+    return unescape(stripped).replace("\xa0", " ").strip()
+
+
+def parse_xperf_stack_report_file(path: Path, *, limit: int = DEFAULT_CPU_PROFILE_TOP_LIMIT) -> dict[str, object]:
+    """Reads an exported xperf stack report and returns a compact summary."""
+
+    if not path.is_file():
+        return {"available": False, "reason": "xperf stack output was not written"}
+    try:
+        return parse_xperf_stack_report(path.read_text(encoding="utf-8", errors="replace"), limit=limit)
     except OSError as exc:
         return {
             "available": False,

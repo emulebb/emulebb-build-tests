@@ -25,6 +25,8 @@ def test_operator_script_help_loads() -> None:
     assert "--max-post-drain-umdh-positive-bytes" in help_text
     assert "--cpu-profile" in help_text
     assert "--cpu-profile-max-file-mb" in help_text
+    assert "--cpu-profile-stack" in help_text
+    assert "--cpu-profile-stack-min-hits" in help_text
     assert "--skip-dumps" in help_text
     assert "--downloads-per-search" in help_text
     assert "--max-missing-download-triggers" in help_text
@@ -33,6 +35,8 @@ def test_operator_script_help_loads() -> None:
     assert parser.get_default("max_post_drain_umdh_positive_bytes") == 16 * 1024 * 1024
     assert parser.get_default("cpu_profile_max_file_mb") == 512
     assert parser.get_default("cpu_profile_symbols_required") is True
+    assert parser.get_default("cpu_profile_stack") is False
+    assert parser.get_default("cpu_profile_stack_min_hits") == 10
 
 
 def test_wave_plan_mixes_methods_when_both_networks_are_ready() -> None:
