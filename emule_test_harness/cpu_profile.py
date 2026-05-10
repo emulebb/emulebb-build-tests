@@ -15,11 +15,15 @@ DEFAULT_CPU_PROFILE_INTERVAL_100NS = 80_000
 DEFAULT_CPU_PROFILE_TOP_LIMIT = 25
 CPU_PROFILE_KERNEL_FLAGS = "PROC_THREAD+LOADER+PROFILE"
 CPU_PROFILE_STACKWALK_FLAGS = "Profile"
-EMULE_SYMBOL_PREFIX = "emule!"
+EMULE_SYMBOL_PREFIXES = ("emule!", "emule.exe!")
+EMULE_SYMBOL_PREFIX = EMULE_SYMBOL_PREFIXES[0]
 
 _PERCENT_RE = re.compile(r"(?P<value>[0-9]+(?:\.[0-9]+)?)\s*%")
+_XPERF_CSV_ROW_RE = re.compile(
+    r"^\s*(?P<process>[^,]+),\s*(?P<count>[0-9][0-9,]*),\s*(?P<weight>[0-9]+(?:\.[0-9]+)?),\s*(?P<function>.+?)\s*$"
+)
 _SAMPLE_COUNT_RE = re.compile(r"(?<![A-Za-z0-9_.])([0-9][0-9,]*)(?![A-Za-z0-9_.])")
-_SYMBOL_RE = re.compile(r"\bemule![^\s,;|]+", re.IGNORECASE)
+_SYMBOL_RE = re.compile(r"\bemule(?:\.exe)?![^\s,;|]+", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -291,18 +295,26 @@ def parse_xperf_profile_detail(
     for raw_line in text.splitlines():
         line = raw_line.strip()
         folded = line.casefold()
-        if not line or (image_token not in folded and symbol_token not in folded):
+        if not line or (image_token not in folded and symbol_token not in folded and not any(prefix in folded for prefix in EMULE_SYMBOL_PREFIXES)):
             continue
         symbol_match = _SYMBOL_RE.search(line)
-        function = symbol_match.group(0) if symbol_match else "<unresolved>"
+        function = normalize_emule_symbol(symbol_match.group(0)) if symbol_match else "<unresolved>"
         percent_match = _PERCENT_RE.search(line)
-        percent = float(percent_match.group("value")) if percent_match else None
-        sample_count = parse_sample_count(line, percent_match.start() if percent_match else None)
+        csv_match = _XPERF_CSV_ROW_RE.match(line)
+        if percent_match:
+            weight = float(percent_match.group("value"))
+            sample_count = parse_sample_count(line, percent_match.start())
+        elif csv_match:
+            weight = float(csv_match.group("weight"))
+            sample_count = int(csv_match.group("count").replace(",", ""))
+        else:
+            weight = None
+            sample_count = parse_sample_count(line, None)
         rows.append(
             {
                 "function": function,
                 "sample_count": sample_count,
-                "weight_percent": percent,
+                "weight_percent": weight,
                 "raw": line,
             }
         )
@@ -322,6 +334,14 @@ def parse_xperf_profile_detail(
         "top": top_rows,
         "unresolved_row_count": sum(1 for row in rows if row["function"] == "<unresolved>"),
     }
+
+
+def normalize_emule_symbol(symbol: str) -> str:
+    """Normalizes xperf's app module spellings to the historical emule! prefix."""
+
+    if symbol.casefold().startswith("emule.exe!"):
+        return f"emule!{symbol[len('emule.exe!'):]}"
+    return symbol
 
 
 def parse_sample_count(line: str, percent_start: int | None) -> int | None:

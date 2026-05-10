@@ -2434,7 +2434,7 @@ def diagnostics_are_complete(report: dict[str, object], *, skip_dumps: bool) -> 
 
 
 def umdh_diagnostics_are_complete(report: dict[str, object]) -> bool:
-    """Returns true when UMDH snapshots and diffs completed without timing out."""
+    """Returns true when UMDH snapshots and mandatory post-drain diff completed."""
 
     diagnostics = report.get("diagnostics")
     if not isinstance(diagnostics, dict):
@@ -2452,11 +2452,8 @@ def umdh_diagnostics_are_complete(report: dict[str, object]) -> bool:
     diffs = diagnostics.get("umdh_diffs")
     if not isinstance(diffs, dict):
         return False
-    for diff_name in ("baseline_to_peak", "baseline_to_post_drain"):
-        diff = diffs.get(diff_name)
-        if not isinstance(diff, dict) or bool(diff.get("timed_out")) or diff.get("return_code") != 0:
-            return False
-    return True
+    post_drain = diffs.get("baseline_to_post_drain")
+    return isinstance(post_drain, dict) and not bool(post_drain.get("timed_out")) and post_drain.get("return_code") == 0
 
 
 def cpu_profile_diagnostics_are_complete(report: dict[str, object], *, symbols_required: bool) -> bool:

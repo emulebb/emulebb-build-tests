@@ -71,3 +71,31 @@ def test_parse_xperf_profile_detail_reports_unresolved_emule_rows() -> None:
     assert summary["available"] is True
     assert summary["unresolved_row_count"] == 1
     assert summary["top"][0]["function"] == "<unresolved>"
+
+
+def test_parse_xperf_profile_detail_extracts_xperf_csv_rows() -> None:
+    text = """
+emule.exe (17236),  102036800,       1.06,            ntdll.dll!"Unknown"
+emule.exe (17236),    1656901,       0.02,            emule.exe!CMapPtrToPtr::GetValueAt
+emule.exe (17236),     505140,       0.01,            emule.exe!CPartFile::WriteToBuffer
+"""
+
+    summary = cpu_profile.parse_xperf_profile_detail(text, limit=2)
+
+    assert summary["available"] is True
+    assert summary["row_count"] == 3
+    assert summary["unresolved_row_count"] == 1
+    assert summary["top"] == [
+        {
+            "function": "<unresolved>",
+            "sample_count": 102036800,
+            "weight_percent": 1.06,
+            "raw": 'emule.exe (17236),  102036800,       1.06,            ntdll.dll!"Unknown"',
+        },
+        {
+            "function": "emule!CMapPtrToPtr::GetValueAt",
+            "sample_count": 1656901,
+            "weight_percent": 0.02,
+            "raw": "emule.exe (17236),    1656901,       0.02,            emule.exe!CMapPtrToPtr::GetValueAt",
+        },
+    ]

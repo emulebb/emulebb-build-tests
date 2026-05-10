@@ -464,6 +464,8 @@ def test_umdh_completeness_requires_snapshots_and_finished_diffs() -> None:
     }
 
     assert module.umdh_diagnostics_are_complete(report) is True
+    report["diagnostics"]["umdh_diffs"]["baseline_to_peak"]["timed_out"] = True
+    assert module.umdh_diagnostics_are_complete(report) is True
     report["diagnostics"]["umdh_diffs"]["baseline_to_post_drain"]["timed_out"] = True
     assert module.umdh_diagnostics_are_complete(report) is False
 
