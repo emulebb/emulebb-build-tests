@@ -2050,11 +2050,11 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers", R"({"address":"1.2.3.4","port":4661,"connect":"yes"})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "connect must be a boolean");
-	assertRoute("POST", "/api/v1/servers/met-url-imports", R"({"url":"https://example.invalid/server.met"})", "servers/import_met_url");
+	assertRoute("POST", "/api/v1/servers/operations/import-met-url", R"({"url":"https://example.invalid/server.met"})", "servers/import_met_url");
 	CHECK_EQ(route.params["url"].get<std::string>(), "https://example.invalid/server.met");
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers/met-url-imports", R"({"url":"   "})", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers/operations/import-met-url", R"({"url":"   "})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "url must not be empty");
 	assertRoute("POST", "/api/v1/servers/operations/connect", R"({})", "servers/connect");
@@ -2086,7 +2086,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
 
 	assertRoute("GET", "/api/v1/kad", "", "kad/status");
-	assertRoute("POST", "/api/v1/kad/nodes-url-imports", R"({"url":"https://example.invalid/nodes.dat"})", "kad/import_nodes_url");
+	assertRoute("POST", "/api/v1/kad/operations/import-nodes-url", R"({"url":"https://example.invalid/nodes.dat"})", "kad/import_nodes_url");
 	CHECK_EQ(route.params["url"].get<std::string>(), "https://example.invalid/nodes.dat");
 	assertRoute("POST", "/api/v1/kad/operations/start", R"({})", "kad/connect");
 	assertRoute("POST", "/api/v1/kad/operations/bootstrap", R"({"address":"bootstrap.example.invalid","port":4672})", "kad/bootstrap");

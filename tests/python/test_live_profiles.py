@@ -101,6 +101,6 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
     assert "Enabled=1" in text
     assert "UseGzip=0" in text
     assert "AllowAdminHiLevelFunc=0" in text
-    assert "EnableCrashTestEndpoint=0" in text
+    assert "EnableDiagnosticRestEndpoints=0" in text
     assert "MaxFileUploadSizeMB=5" in text
     assert "AllowedIPs=127.0.0.1" in text

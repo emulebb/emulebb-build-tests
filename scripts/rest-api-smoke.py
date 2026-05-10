@@ -20,6 +20,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import jsonschema
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -248,8 +251,12 @@ NATIVE_ROUTE_HEADER_PATH = (
     / "srchybrid"
     / "WebServerJsonSeams.h"
 )
-UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "shutdownApp"}
-UNSAFE_BROAD_MUTATION_PATHS = ("/api/v1/app/operations/capture-dump", "/api/v1/app/shutdown")
+UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "triggerDiagnosticCrashTest", "shutdownApp"}
+UNSAFE_BROAD_MUTATION_PATHS = (
+    "/api/v1/app/shutdown",
+    "/api/v1/diagnostics/dumps",
+    "/api/v1/diagnostics/crash-tests",
+)
 REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "getCategory": (404,),
     "createCategory": (400,),
@@ -304,6 +311,7 @@ REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
 }
 OPENAPI_TAG_FAMILIES = {
     "App": "app",
+    "Diagnostics": "diagnostics",
     "Stats": "status",
     "Categories": "categories",
     "Transfers": "transfers",
@@ -341,6 +349,38 @@ def load_openapi_method_paths(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> set
         if stripped in {"get:", "post:", "patch:", "delete:"}:
             method_paths.add((stripped[:-1].upper(), current_path))
     return method_paths
+
+
+def load_openapi_document(openapi_path: Path = OPENAPI_CONTRACT_PATH) -> dict[str, Any]:
+    """Loads the OpenAPI document with the harness-pinned YAML parser."""
+
+    document = yaml.safe_load(openapi_path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise RuntimeError(f"OpenAPI document is not an object: {openapi_path}")
+    return document
+
+
+def get_openapi_response_schema(response_name: str, openapi_path: Path = OPENAPI_CONTRACT_PATH) -> dict[str, Any]:
+    """Returns the JSON schema for one named OpenAPI response component."""
+
+    document = load_openapi_document(openapi_path)
+    response = (((document.get("components") or {}).get("responses") or {}).get(response_name) or {})
+    content = response.get("content") if isinstance(response, dict) else None
+    media_type = (content or {}).get("application/json") if isinstance(content, dict) else None
+    schema = (media_type or {}).get("schema") if isinstance(media_type, dict) else None
+    if not isinstance(schema, dict):
+        raise RuntimeError(f"OpenAPI response does not define an application/json schema: {response_name}")
+    return schema
+
+
+def validate_openapi_response_payload(response_name: str, payload: object, openapi_path: Path = OPENAPI_CONTRACT_PATH) -> None:
+    """Validates one REST response payload against its OpenAPI response schema."""
+
+    document = load_openapi_document(openapi_path)
+    schema = get_openapi_response_schema(response_name, openapi_path)
+    resolver = jsonschema.RefResolver.from_schema(document)
+    validator = jsonschema.Draft202012Validator(schema, resolver=resolver)
+    validator.validate(payload)
 
 
 def _commit_openapi_operation(
@@ -2433,9 +2473,11 @@ def exercise_rest_contract_completeness(base_url: str, api_key: str, budget: str
             status = int(result["status"])
             if 200 <= status < 300:
                 require_success_envelope(result)
+                validate_openapi_response_payload(str(route["responseEnvelope"]), result.get("raw_json"))
                 outcome = "success"
             elif status >= 400:
                 require_error_response(result, status, str(require_json_object(result, status).get("error") or ""))
+                validate_openapi_response_payload("ErrorResponse", result.get("raw_json"))
                 outcome = "expected_error" if status in expected_error_statuses else "unexpected_error"
             else:
                 outcome = "unexpected_status"
@@ -2468,6 +2510,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {"confirmShutdown": True}
     if route_name == "captureDiagnosticDump":
         return {"confirmDump": True, "fullMemory": False}
+    if route_name == "triggerDiagnosticCrashTest":
+        return {"confirmCrash": True}
     if route_name in {"app_preferences_patch", "patchPreferences"}:
         return {"safeServerConnect": True}
     if route_name in {"categories_create", "createCategory"}:
@@ -3840,7 +3884,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     server_met_bad_url = http_request(
         base_url,
-        "/api/v1/servers/met-url-imports",
+        "/api/v1/servers/operations/import-met-url",
         method="POST",
         api_key=api_key,
         json_body={"url": "   "},
@@ -3990,11 +4034,11 @@ def exercise_live_seed_imports(
 
     route_by_file = {
         "server.met": {
-            "route": "/api/v1/servers/met-url-imports",
+            "route": "/api/v1/servers/operations/import-met-url",
             "default_url": EMULE_SECURITY_SERVER_MET_URL,
         },
         "nodes.dat": {
-            "route": "/api/v1/kad/nodes-url-imports",
+            "route": "/api/v1/kad/operations/import-nodes-url",
             "default_url": EMULE_SECURITY_NODES_DAT_URL,
         },
     }

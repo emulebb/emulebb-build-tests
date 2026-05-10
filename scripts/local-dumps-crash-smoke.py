@@ -170,7 +170,7 @@ def capture_manual_dump(base_url: str, api_key: str, request_timeout_seconds: fl
     try:
         result = rest_smoke.http_request(
             base_url,
-            "/api/v1/app/operations/capture-dump",
+            "/api/v1/diagnostics/dumps",
             method="POST",
             api_key=api_key,
             json_body={"confirmDump": True, "fullMemory": full_memory},
@@ -209,7 +209,7 @@ def trigger_crash(base_url: str, api_key: str, request_timeout_seconds: float) -
     try:
         result = rest_smoke.http_request(
             base_url,
-            "/api/v1/app/operations/crash-test",
+            "/api/v1/diagnostics/crash-tests",
             method="POST",
             api_key=api_key,
             json_body={"confirmCrash": True},

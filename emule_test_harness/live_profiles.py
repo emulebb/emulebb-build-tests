@@ -147,9 +147,9 @@ def apply_webserver_profile(config_dir: Path, spec: WebServerProfileSpec) -> Non
         ("HTTPSKey", spec.https_key),
     ]
     if spec.enable_crash_test_endpoint:
-        values.append(("EnableCrashTestEndpoint", "1"))
+        values.append(("EnableDiagnosticRestEndpoints", "1"))
     else:
-        values.append(("EnableCrashTestEndpoint", "0"))
+        values.append(("EnableDiagnosticRestEndpoints", "0"))
     if spec.max_file_upload_size_mb is not None:
         values.append(("MaxFileUploadSizeMB", str(spec.max_file_upload_size_mb)))
     if spec.allowed_ips is not None:

@@ -7,9 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-PRIVATE_NATIVE_ONLY_ROUTES = {
-    ("POST", "/app/operations/crash-test"),
-}
+PRIVATE_NATIVE_ONLY_ROUTES: set[tuple[str, str]] = set()
 
 
 def load_rest_api_smoke_module():
@@ -92,7 +90,7 @@ def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tm
 
     text = module.live_common.read_ini_text(preferences_path)
     assert "Enabled=1" in text
-    assert "EnableCrashTestEndpoint=0" in text
+    assert "EnableDiagnosticRestEndpoints=0" in text
 
 
 def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -> None:
@@ -113,7 +111,7 @@ def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -
     )
 
     text = module.live_common.read_ini_text(preferences_path)
-    assert "EnableCrashTestEndpoint=1" in text
+    assert "EnableDiagnosticRestEndpoints=1" in text
 
 
 def test_live_server_unavailable_is_inconclusive_exit_code() -> None:
@@ -497,8 +495,8 @@ def test_live_seed_import_evidence_records_sources_and_outcomes(monkeypatch: pyt
     )
 
     assert [call["path"] for call in calls] == [
-        "/api/v1/servers/met-url-imports",
-        "/api/v1/kad/nodes-url-imports",
+        "/api/v1/servers/operations/import-met-url",
+        "/api/v1/kad/operations/import-nodes-url",
     ]
     assert [call["json_body"] for call in calls] == [
         {"url": module.EMULE_SECURITY_SERVER_MET_URL},
@@ -1037,14 +1035,14 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
     native_contracts = _native_route_contracts()
     required_body_fields = {
         ("POST", "/app/shutdown"): {"confirmShutdown"},
-        ("POST", "/app/operations/capture-dump"): {"confirmDump"},
+        ("POST", "/diagnostics/dumps"): {"confirmDump"},
         ("POST", "/transfers/operations/clear-completed"): {"confirmClearCompleted"},
         ("DELETE", "/transfers/{hash}"): {"deleteFiles"},
         ("DELETE", "/shared-files/{hash}"): {"deleteFiles"},
         ("PATCH", "/shared-directories"): {"confirmReplaceRoots"},
         ("DELETE", "/searches"): {"confirmDeleteAllSearches"},
         ("POST", "/logs/operations/clear"): {"confirmClearLogs"},
-        ("POST", "/app/operations/crash-test"): {"confirmCrash"},
+        ("POST", "/diagnostics/crash-tests"): {"confirmCrash"},
     }
     id_targeted_delete_routes = {
         ("DELETE", "/categories/{categoryId}"),
@@ -1092,8 +1090,46 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     assert routes_by_operation["captureDiagnosticDump"]["safe"] is False
     assert routes_by_operation["captureDiagnosticDump"]["safety"] == "unsafe"
     assert routes_by_operation["captureDiagnosticDump"]["responseEnvelope"] == "DiagnosticDumpResponse"
+    assert routes_by_operation["triggerDiagnosticCrashTest"]["safe"] is False
+    assert routes_by_operation["triggerDiagnosticCrashTest"]["safety"] == "unsafe"
+    assert routes_by_operation["triggerDiagnosticCrashTest"]["responseEnvelope"] == "OkAcceptedResponse"
     assert all(len(route["successResponseRefs"]) == 1 for route in module.REST_CONTRACT_ROUTES)
     assert all(route["responseEnvelope"] == route["successResponseRefs"][0] for route in module.REST_CONTRACT_ROUTES)
+
+
+def test_openapi_response_schema_validation_rejects_extra_fields(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    openapi_path = tmp_path / "openapi.yaml"
+    openapi_path.write_text(
+        """
+openapi: 3.1.0
+components:
+  responses:
+    StrictResponse:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StrictEnvelope"
+  schemas:
+    StrictEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [ok]
+          properties:
+            ok:
+              type: boolean
+""",
+        encoding="utf-8",
+    )
+
+    module.validate_openapi_response_payload("StrictResponse", {"data": {"ok": True}}, openapi_path)
+    with pytest.raises(module.jsonschema.ValidationError):
+        module.validate_openapi_response_payload("StrictResponse", {"data": {"ok": True, "extra": 1}}, openapi_path)
 
 
 def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
@@ -1152,20 +1188,22 @@ def test_rest_contract_registry_covers_release_families() -> None:
 
     assert families == {
         "app",
-        "status",
         "categories",
-                    "transfers",
-                    "shared-directories",
-                    "shared",
-                    "uploads",
-                    "servers",
-                    "kad",
-                    "searches",
-                    "friends",
-                    "logs",
-                }
+        "diagnostics",
+        "friends",
+        "kad",
+        "logs",
+        "searches",
+        "servers",
+        "shared",
+        "shared-directories",
+        "status",
+        "transfers",
+        "uploads",
+    }
     assert any(route["operationId"] == "shutdownApp" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
     assert any(route["operationId"] == "captureDiagnosticDump" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
+    assert any(route["operationId"] == "triggerDiagnosticCrashTest" and route["safe"] is False for route in module.REST_CONTRACT_ROUTES)
 
 
 def test_rest_contract_summary_counts_outcomes_and_methods() -> None:
@@ -1675,22 +1713,27 @@ def test_shutdown_is_excluded_from_broad_stress_mutation_loops() -> None:
 
     assert audit["ok"] is True
     assert "/api/v1/app/shutdown" in audit["excluded_paths"]
-    assert "/api/v1/app/operations/capture-dump" in audit["excluded_paths"]
+    assert "/api/v1/diagnostics/dumps" in audit["excluded_paths"]
+    assert "/api/v1/diagnostics/crash-tests" in audit["excluded_paths"]
     assert set(audit["stress_budgets"]) == {"smoke", "soak"}
     for budget in ("smoke", "soak"):
         operations = module.build_rest_stress_operations(budget)
         assert all(operation["path"] != "/api/v1/app/shutdown" for operation in operations)
-        assert all(operation["path"] != "/api/v1/app/operations/capture-dump" for operation in operations)
+        assert all(operation["path"] != "/api/v1/diagnostics/dumps" for operation in operations)
+        assert all(operation["path"] != "/api/v1/diagnostics/crash-tests" for operation in operations)
         assert audit["stress_budgets"][budget]["unsafe_path_match_count"] == 0
         assert audit["stress_budgets"][budget]["operation_count"] == len(operations)
     routes_by_operation = {route["operationId"]: route for route in audit["contract_routes"]}
-    assert set(routes_by_operation) == {"captureDiagnosticDump", "shutdownApp"}
+    assert set(routes_by_operation) == {"captureDiagnosticDump", "shutdownApp", "triggerDiagnosticCrashTest"}
     assert routes_by_operation["shutdownApp"]["path"] == "/api/v1/app/shutdown"
     assert routes_by_operation["shutdownApp"]["safe"] is False
     assert routes_by_operation["shutdownApp"]["safety"] == "unsafe"
-    assert routes_by_operation["captureDiagnosticDump"]["path"] == "/api/v1/app/operations/capture-dump"
+    assert routes_by_operation["captureDiagnosticDump"]["path"] == "/api/v1/diagnostics/dumps"
     assert routes_by_operation["captureDiagnosticDump"]["safe"] is False
     assert routes_by_operation["captureDiagnosticDump"]["safety"] == "unsafe"
+    assert routes_by_operation["triggerDiagnosticCrashTest"]["path"] == "/api/v1/diagnostics/crash-tests"
+    assert routes_by_operation["triggerDiagnosticCrashTest"]["safe"] is False
+    assert routes_by_operation["triggerDiagnosticCrashTest"]["safety"] == "unsafe"
 
 
 def test_rest_stress_operations_include_expected_error_edges() -> None:
@@ -1936,14 +1979,17 @@ def test_rest_contract_completeness_skips_shutdown(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(module, "http_request", fake_http_request)
+    monkeypatch.setattr(module, "validate_openapi_response_payload", lambda *_args, **_kwargs: None)
 
     summary = module.exercise_rest_contract_completeness("http://127.0.0.1:1", "key", "contract")
 
     assert summary["ok"] is True
     assert ("POST", "/api/v1/app/shutdown") not in observed_paths
-    assert ("POST", "/api/v1/app/operations/capture-dump") not in observed_paths
+    assert ("POST", "/api/v1/diagnostics/dumps") not in observed_paths
+    assert ("POST", "/api/v1/diagnostics/crash-tests") not in observed_paths
     assert any(route["operationId"] == "shutdownApp" and route["skipped"] for route in summary["routes"])
     assert any(route["operationId"] == "captureDiagnosticDump" and route["skipped"] for route in summary["routes"])
+    assert any(route["operationId"] == "triggerDiagnosticCrashTest" and route["skipped"] for route in summary["routes"])
 
 
 def test_rest_contract_completeness_rejects_undeclared_4xx(monkeypatch) -> None:
