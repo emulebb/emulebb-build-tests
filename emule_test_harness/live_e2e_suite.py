@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -252,14 +253,14 @@ def build_suite_command(
     command.extend(
         [
             str((scripts_dir / spec.script_name).resolve()),
-            "--workspace-root",
-            str(workspace_root.resolve()),
             "--configuration",
             configuration,
             "--artifacts-dir",
             str((artifacts_dir / spec.name).resolve()),
         ]
     )
+    if not env_workspace_root_matches(workspace_root):
+        command.extend(["--workspace-root", str(workspace_root.resolve())])
     if app_root is not None:
         command.extend(["--app-root", str(app_root.resolve())])
     if app_exe is not None:
@@ -359,6 +360,15 @@ def run_suite_command(command: list[str]) -> int:
 
     completed = subprocess.run(command, check=False)
     return completed.returncode
+
+
+def env_workspace_root_matches(workspace_root: Path) -> bool:
+    """Returns whether EMULE_WORKSPACE_ROOT already covers a workspace child root."""
+
+    env_root = os.environ.get("EMULE_WORKSPACE_ROOT")
+    if not env_root:
+        return False
+    return (Path(env_root).resolve() / "workspaces" / workspace_root.name).resolve() == workspace_root.resolve()
 
 
 def get_suite_status_from_return_code(return_code: int) -> str:

@@ -63,6 +63,38 @@ def option_values(command: list[str], option: str) -> list[str]:
     return [command[index + 1] for index, value in enumerate(command[:-1]) if value == option]
 
 
+def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Path, monkeypatch) -> None:
+    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    monkeypatch.setenv("EMULE_WORKSPACE_ROOT", str(tmp_path))
+
+    command = live_e2e_suite.build_suite_command(
+        spec=live_e2e_suite.SUITE_SPECS[0],
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=workspace_root,
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+
+    assert "--workspace-root" not in command
+
+
+def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, monkeypatch) -> None:
+    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+
+    command = live_e2e_suite.build_suite_command(
+        spec=live_e2e_suite.SUITE_SPECS[0],
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=workspace_root,
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+
+    assert option_values(command, "--workspace-root") == [str(workspace_root.resolve())]
+
+
 def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(
