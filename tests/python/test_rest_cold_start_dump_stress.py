@@ -448,6 +448,43 @@ def test_search_network_mode_reconnects_when_ready_probe_fails(monkeypatch) -> N
     assert result["source"] == "server_reconnect"
 
 
+def test_run_stress_waves_records_ready_probe_timeout(monkeypatch) -> None:
+    module = load_script_module()
+
+    monkeypatch.setattr(
+        module,
+        "get_search_network_mode",
+        lambda **_kwargs: {"ok": True, "mode": "server", "source": "test"},
+    )
+
+    def fake_http_request(*_args, **_kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "get_process_resource_snapshot", lambda _process_id: {"running": True})
+
+    result = module.run_stress_waves(
+        base_url="http://127.0.0.1:1",
+        api_key="key",
+        process_id=123,
+        server_rows=[],
+        search_terms=("ubuntu",),
+        waves=1,
+        searches_per_wave=0,
+        max_concurrent_searches=1,
+        downloads_per_search=0,
+        max_active_downloads=1,
+        download_churn_interval_seconds=0.0,
+        download_remove_count_per_churn=0,
+        transfer_registry=module.StressTransferRegistry(),
+        observation_timeout_seconds=1.0,
+        network_ready_timeout_seconds=1.0,
+    )
+
+    assert result["warnings"][0]["type"] == "rest_ready_probe_failed"
+    assert result["waves"][0]["rest_ready_probe"]["error"]["type"] == "TimeoutError"
+
+
 def test_umdh_gflags_commands_are_explicit(monkeypatch, tmp_path: Path) -> None:
     module = load_script_module()
     calls: list[list[str]] = []

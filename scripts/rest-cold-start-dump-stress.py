@@ -2087,6 +2087,7 @@ def run_stress_waves(
     transport_checks: list[dict[str, object]] = []
     trigger_coordinator = DownloadTriggerCoordinator()
     churn_reports: list[dict[str, object]] = []
+    stress_warnings: list[dict[str, object]] = []
     last_churn_at = time.monotonic()
     for wave_index in range(1, waves + 1):
         transport = get_search_network_mode(
@@ -2142,7 +2143,26 @@ def run_stress_waves(
                         all_search_ids.append(search_id)
                 completed_download_triggers += count_download_triggers(row)
 
-        ready_probe = rest_smoke.http_request(base_url, "/api/v1/app", api_key=api_key)
+        ready_probe_status: int | None = None
+        try:
+            ready_probe = rest_smoke.http_request(base_url, "/api/v1/app", api_key=api_key)
+            ready_probe_report = rest_smoke.compact_http_result(ready_probe)
+            ready_probe_status = int(ready_probe["status"])
+        except Exception as exc:
+            ready_probe_report = {
+                "ok": False,
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            }
+            stress_warnings.append(
+                {
+                    "type": "rest_ready_probe_failed",
+                    "wave": wave_index,
+                    "error": ready_probe_report["error"],
+                }
+            )
         churn_report: dict[str, object] | None = None
         if (
             download_churn_interval_seconds > 0
@@ -2167,14 +2187,14 @@ def run_stress_waves(
                 "requested_download_triggers": len(plan) * downloads_per_search,
                 "completed_download_triggers": sum(count_download_triggers(row) for row in wave_rows),
                 "churn": churn_report,
-                "rest_ready_probe": rest_smoke.compact_http_result(ready_probe),
+                "rest_ready_probe": ready_probe_report,
                 "resource_snapshot": rest_smoke.get_process_resource_snapshot(process_id),
                 "transport": transport,
                 "searches": sorted(wave_rows, key=lambda row: int(row.get("ordinal", 0))),
             }
         )
-        if int(ready_probe["status"]) != 200:
-            raise RuntimeError(f"REST readiness probe failed after wave {wave_index}: {ready_probe!r}")
+        if ready_probe_status != 200:
+            break
 
     stress_report = {
         "waves": wave_reports,
@@ -2186,6 +2206,7 @@ def run_stress_waves(
         "completed_download_triggers": completed_download_triggers,
         "transport_checks": transport_checks,
         "churn": churn_reports,
+        "warnings": stress_warnings,
         "transfer_registry": transfer_registry.counts(),
     }
     zero_result_searches = collect_zero_result_searches(stress_report)
