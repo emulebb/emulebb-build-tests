@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib.util
@@ -75,6 +76,7 @@ CDB_HEAP_ROW_RE = re.compile(
 CDB_ADDRESS_SUMMARY_RE = re.compile(
     r"^\s*([A-Za-z_<>\-]+)\s+([0-9]+)\s+[0-9A-Fa-f`]+\s+\(\s*([0-9.]+)\s+([KMGT]B)\)"
 )
+HANDLE_ROW_RE = re.compile(r"^\s*[0-9A-Fa-f]+:\s+([A-Za-z0-9_]+)\s+(?:\([^)]+\)\s+)?(.*)$")
 UMDH_ALLOCATOR_FRAME_PREFIXES = (
     "ntdll!",
     "emule!_malloc",
@@ -1089,6 +1091,54 @@ def capture_text_snapshot(
     return run_tool_to_file([tool_path, *command_suffix], output_path, timeout_seconds)
 
 
+def summarize_handle_text(text: str) -> dict[str, object]:
+    """Builds a compact type and transfer-file summary from Sysinternals handle output."""
+
+    type_counts: Counter[str] = Counter()
+    temp_part_file_handles = 0
+    temp_part_met_handles = 0
+    incoming_file_handles = 0
+
+    for line in text.splitlines():
+        match = HANDLE_ROW_RE.match(line)
+        if not match:
+            continue
+        handle_type, target = match.groups()
+        type_counts[handle_type] += 1
+        if handle_type.lower() != "file":
+            continue
+        normalized_target = target.strip().replace("/", "\\").lower()
+        if "\\incoming\\" in normalized_target:
+            incoming_file_handles += 1
+        if "\\temp\\" not in normalized_target:
+            continue
+        if normalized_target.endswith(".part"):
+            temp_part_file_handles += 1
+        elif normalized_target.endswith(".part.met") or normalized_target.endswith(".part.met.bak"):
+            temp_part_met_handles += 1
+
+    return {
+        "total_handles": sum(type_counts.values()),
+        "type_counts": dict(sorted(type_counts.items())),
+        "temp_part_file_handles": temp_part_file_handles,
+        "temp_part_met_handles": temp_part_met_handles,
+        "incoming_file_handles": incoming_file_handles,
+    }
+
+
+def summarize_handle_file(path: Path) -> dict[str, object]:
+    """Reads one handle log and returns structured handle-count metadata."""
+
+    if not path.is_file():
+        return {"available": False, "reason": "handle log was not written"}
+    try:
+        summary = summarize_handle_text(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+    summary["available"] = True
+    return summary
+
+
 def capture_umdh_snapshot(
     *,
     label: str,
@@ -1409,13 +1459,16 @@ def collect_diagnostics(
         skip_dumps=skip_dumps,
         symbol_env=symbol_env,
     )
+    handle_output_path = diagnostics_dir / "analysis" / f"handle-{label}.txt"
     result["tools"]["handle"] = capture_text_snapshot(
         tool_path=tools.get("handle"),
         command_suffix=["-accepteula", "-p", str(process_id), "-a"],
-        output_path=diagnostics_dir / "analysis" / f"handle-{label}.txt",
+        output_path=handle_output_path,
         timeout_seconds=timeout_seconds,
         missing_reason="handle was not found",
     )
+    if isinstance(result["tools"]["handle"], dict) and not result["tools"]["handle"].get("skipped"):
+        result["tools"]["handle"]["summary"] = summarize_handle_file(handle_output_path)
     if label == "baseline":
         result["tools"]["listdlls"] = capture_text_snapshot(
             tool_path=tools.get("listdlls"),

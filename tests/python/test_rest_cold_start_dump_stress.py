@@ -263,6 +263,27 @@ def test_compute_cpu_percent_normalizes_by_logical_cpu_count() -> None:
     assert module.compute_cpu_percent(0, 20_000_000, 0.0, 4) is None
 
 
+def test_summarize_handle_text_counts_transfer_file_handles() -> None:
+    module = load_script_module()
+    text = "\n".join(
+        [
+            "  2E8: File  (RW-)   C:\\run\\temp\\001.part",
+            "  2EC: File  (RW-)   C:\\run\\temp\\001.part.met",
+            "  2F0: File  (RW-)   C:\\run\\temp\\001.part.met.bak",
+            "  2F4: File  (R--)   C:\\run\\incoming\\done.pdf",
+            "  300: Event (---)   unnamed",
+        ]
+    )
+
+    summary = module.summarize_handle_text(text)
+
+    assert summary["total_handles"] == 5
+    assert summary["type_counts"] == {"Event": 1, "File": 4}
+    assert summary["temp_part_file_handles"] == 1
+    assert summary["temp_part_met_handles"] == 2
+    assert summary["incoming_file_handles"] == 1
+
+
 def test_summarize_resource_monitor_samples_reports_cpu_and_threads() -> None:
     module = load_script_module()
 
