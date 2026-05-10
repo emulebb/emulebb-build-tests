@@ -1076,7 +1076,6 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
         ("DELETE", "/servers/{serverId}"),
         ("DELETE", "/searches/{searchId}"),
         ("DELETE", "/friends/{userHash}"),
-        ("DELETE", "/uploads/{clientId}"),
     }
 
     for route_key, required_fields in required_body_fields.items():
@@ -1107,6 +1106,10 @@ def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
     assert routes_by_operation["getTransfer"]["responseEnvelope"] == "TransferResponse"
     assert routes_by_operation["getTransferDetails"]["path"] == f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/details"
     assert routes_by_operation["getTransferDetails"]["responseEnvelope"] == "TransferDetailsResponse"
+    assert routes_by_operation["removeUploadClient"]["method"] == "POST"
+    assert routes_by_operation["removeUploadClient"]["path"] == (
+        f"/api/v1/uploads/{module.REST_SURFACE_MISSING_HASH}/operations/remove"
+    )
     assert routes_by_operation["downloadSearchResult"]["path"] == (
         f"/api/v1/searches/123/results/{module.REST_SURFACE_MISSING_HASH}/operations/download"
     )

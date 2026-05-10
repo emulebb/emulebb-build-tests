@@ -283,7 +283,6 @@ REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "getSharedFileEd2kLink": (404,),
     "listSharedFileComments": (404,),
     "replaceSharedDirectories": (400,),
-    "deleteUpload": (404,),
     "releaseUploadSlot": (404,),
     "removeUploadClient": (404,),
     "addUploadFriend": (404,),
@@ -2563,7 +2562,6 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name in {"shared_files_reload", "reloadSharedFiles", "reloadSharedDirectories"}:
         return {}
     if route_name.startswith("uploads_") or route_name.startswith("upload_queue_") or route_name in {
-        "deleteUpload",
         "releaseUploadSlot",
         "removeUploadClient",
         "addUploadFriend",
@@ -3856,7 +3854,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             search_bad_clear_existing,
             400,
             "INVALID_ARGUMENT",
-            message_contains="clearExisting must be a boolean",
+            message_contains="unknown JSON field: clearExisting",
         ),
         "friend_bad_user_hash": require_error_response(
             friend_bad_user_hash,

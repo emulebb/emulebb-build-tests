@@ -534,10 +534,6 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 	CHECK_EQ(error, "minAvailability must be an unsigned number in the range 0..1000000");
 
 	error.clear();
-	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"clearExisting", 1}}, request, error));
-	CHECK_EQ(error, "clearExisting must be a boolean");
-
-	error.clear();
 	const std::string strInvalidUtf8(std::string("bad ") + std::string("\xC3\x28", 2));
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", strInvalidUtf8}}, request, error));
 	CHECK_EQ(error, "query must be valid UTF-8 without control characters");
@@ -2083,8 +2079,10 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/upload-queue/0123456789abcdef0123456789abcdef", "", "uploads/queue_get");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
-	assertRoute("DELETE", "/api/v1/uploads/0123456789abcdef0123456789abcdef", R"({})", "uploads/remove");
-	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/uploads/0123456789abcdef0123456789abcdef", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "METHOD_NOT_ALLOWED");
 	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/release-slot", R"({})", "uploads/release_slot");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/uploads/0123456789abcdef0123456789abcdef/operations/remove", R"({})", "uploads/remove");
@@ -2196,9 +2194,8 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
-	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"any","minAvailability":5,"clearExisting":true})", "search/start");
+	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"any","minAvailability":5})", "search/start");
 	CHECK_EQ(route.params["minAvailability"].get<int>(), 5);
-	CHECK(route.params["clearExisting"].get<bool>());
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"contentdb"})", route, errorCode, errorMessage));
@@ -2218,7 +2215,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","clearExisting":1})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "clearExisting must be a boolean");
+	CHECK_EQ(errorMessage, "unknown JSON field: clearExisting");
 	assertRoute("GET", "/api/v1/searches", "", "search/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("GET", "/api/v1/searches/123", "", "search/results");
