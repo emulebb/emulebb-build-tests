@@ -238,7 +238,7 @@ Shared Files live UI regression:
 - `scripts\shared-files-ui-e2e.py` is the operator-facing entrypoint for the real Win32 Shared Files regression
 - it launches `emule.exe` with explicit `-ignoreinstances -c <profile-base>` so the run stays isolated from local user sessions
 - the checked-in seed profile must stay initialized; the Python harness validates the seed keys, writes deterministic maximized window placement, and patches only per-run incoming, temp, and shared-directory paths
-- the default UI run now covers two scenarios: the original three-file deterministic smoke case plus a generated recursive robustness tree under `C:\tmp\00_long_paths\shared_files_robustness`
+- the default UI run now covers two scenarios: the original three-file deterministic smoke case plus a generated recursive robustness tree under the configured long-path shared root
 - the regression asserts that the main window starts maximized and exercises exact default-name ordering, size ascending and descending sorts, name ascending and descending sorts after reload, selection-detail updates, reload preservation of the active descending size sort, and large-tree row-count/set/prefix checks driven by the generated manifest
 - `--scenario` can be repeated on the Python entrypoint to run only `fixture-three-files` or only `generated-robustness-recursive`
 - each run publishes artifacts and `ui-summary.json` under `reports\shared-files-ui-e2e\...` and refreshes `reports\shared-files-ui-e2e-latest`
@@ -250,7 +250,7 @@ Config-stability live UI regression:
 - it launches `emule.exe` with explicit `-ignoreinstances -c <profile-base>` under a deliberately deep profile root so `profile-base\config\preferences.ini` exceeds normal Win32 path limits
 - the default run covers `long-config-settings-roundtrip` and `long-config-shared-stress`
 - the roundtrip scenario edits the real Preferences dialog, saves `OnlineSignature`, verifies `preferences.ini`, relaunches the same long-path profile, and confirms persisted UI state
-- the stress scenario repeats launch, Preferences save, Shared Files activation, and clean shutdown across multiple cycles while recursively sharing the generated robustness tree under `C:\tmp\00_long_paths`
+- the stress scenario repeats launch, Preferences save, Shared Files activation, and clean shutdown across multiple cycles while recursively sharing the generated robustness tree under the configured long-path shared root
 - each run publishes artifacts and `ui-summary.json` under `reports\config-stability-ui-e2e\...` and refreshes `reports\config-stability-ui-e2e-latest`
 
 Preferences live UI regression:
@@ -266,8 +266,8 @@ Startup-profile scenarios:
 - the trace includes stable readiness, Shared Files hashing, Statistics dialog, and broadband lifecycle phase ids so Perfetto and the JSON summaries can separate startup, UI setup, queue wait, worker-thread bring-up costs, and final shared-hash drain time
 - the default run covers `baseline-no-shares`, `fixture-three-files`, `long-paths-root-only`, `long-paths-recursive`, `long-path-output-root-only`, `long-path-output-recursive`, `long-path-emule-fixture-root-only`, `long-path-emule-fixture-recursive`, `shared-files-robustness-root-only`, and `shared-files-robustness-recursive`
 - `--scenario` can be repeated on the Python entrypoint to run only the scenarios you want
-- `scripts\create-long-paths-tree.py` now lives in this repo and materializes the generated long-path fixture trees plus `generated-fixture-manifest.json` under `C:\tmp\00_long_paths`
-- the long-path scenarios target `C:\tmp\00_long_paths` by default, regenerate the repo-owned fixture tree as needed, and expand `shareddir.dat` deterministically in the recursive cases
+- `scripts\create-long-paths-tree.py` now lives in this repo and materializes the generated long-path fixture trees plus `generated-fixture-manifest.json` under the configured long-path shared root
+- the long-path scenarios target the configured long-path shared root by default, regenerate the repo-owned fixture tree as needed, and expand `shareddir.dat` deterministically in the recursive cases
 - each scenario summary now also records shareddir payload metrics plus tree-shape metrics such as depth, longest paths, and counts beyond the Windows path thresholds
 - each scenario summary includes highlighted timings, normalized derived timings, and the top slowest startup phases, and the combined summary adds direct delta comparisons between the main long-path, generated output, and Shared Files robustness root-only vs recursive variants
 - each run publishes scenario artifacts plus `startup-profiles-summary.json` and `startup-profiles-wrapper-summary.json` under `reports\startup-profile-scenarios\...` and refreshes `reports\startup-profile-scenarios-latest`
