@@ -1,0 +1,339 @@
+"""ETW CPU stack attribution helpers for live eMule diagnostics."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import time
+
+DEFAULT_CPU_PROFILE_MAX_FILE_MB = 512
+DEFAULT_CPU_PROFILE_INTERVAL_100NS = 10_000
+DEFAULT_CPU_PROFILE_TOP_LIMIT = 25
+CPU_PROFILE_KERNEL_FLAGS = "PROC_THREAD+LOADER+PROFILE"
+CPU_PROFILE_STACKWALK_FLAGS = "Profile"
+EMULE_SYMBOL_PREFIX = "emule!"
+
+_PERCENT_RE = re.compile(r"(?P<value>[0-9]+(?:\.[0-9]+)?)\s*%")
+_SAMPLE_COUNT_RE = re.compile(r"(?<![A-Za-z0-9_.])([0-9][0-9,]*)(?![A-Za-z0-9_.])")
+_SYMBOL_RE = re.compile(r"\bemule![^\s,;|]+", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class CpuProfileTools:
+    """Resolved Windows Performance Toolkit tools used for CPU profiling."""
+
+    xperf: str | None
+    wpaexporter: str | None = None
+
+
+@dataclass(frozen=True)
+class CpuProfilePaths:
+    """Filesystem paths for one ETW CPU profile capture."""
+
+    etl_path: Path
+    raw_etl_path: Path
+    detail_path: Path
+    summary_path: Path
+    symbol_cache_dir: Path
+
+
+def discover_cpu_profile_tools() -> CpuProfileTools:
+    """Finds Windows Performance Toolkit commands needed for CPU profile capture."""
+
+    return CpuProfileTools(
+        xperf=find_tool("xperf.exe", "xperf"),
+        wpaexporter=find_tool("wpaexporter.exe", "wpaexporter"),
+    )
+
+
+def find_tool(*names: str) -> str | None:
+    """Resolves the first command available on PATH."""
+
+    for name in names:
+        resolved = shutil.which(name)
+        if resolved:
+            return resolved
+    return None
+
+
+def build_cpu_profile_paths(artifacts_dir: Path) -> CpuProfilePaths:
+    """Returns the conventional artifact paths for one CPU profile run."""
+
+    analysis_dir = artifacts_dir / "analysis"
+    return CpuProfilePaths(
+        etl_path=analysis_dir / "cpu-profile.etl",
+        raw_etl_path=analysis_dir / "cpu-profile.raw.etl",
+        detail_path=analysis_dir / "cpu-profile-detail.txt",
+        summary_path=analysis_dir / "cpu-profile-summary.json",
+        symbol_cache_dir=artifacts_dir / "symbols",
+    )
+
+
+def resolve_app_pdb_path(app_exe: Path) -> Path:
+    """Returns the expected app-local PDB path for an eMule executable."""
+
+    return app_exe.with_suffix(".pdb")
+
+
+def build_symbol_environment(app_exe: Path, symbol_cache_dir: Path, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Builds an environment that resolves app symbols before Microsoft symbols."""
+
+    env = dict(base_env or os.environ)
+    symbol_cache_dir.mkdir(parents=True, exist_ok=True)
+    app_symbol_dir = app_exe.parent
+    env["_NT_SYMBOL_PATH"] = f"{app_symbol_dir};srv*{symbol_cache_dir}*https://msdl.microsoft.com/download/symbols"
+    env["_NT_SYMCACHE_PATH"] = str(symbol_cache_dir)
+    return env
+
+
+def build_xperf_start_command(
+    tools: CpuProfileTools,
+    paths: CpuProfilePaths,
+    *,
+    max_file_mb: int = DEFAULT_CPU_PROFILE_MAX_FILE_MB,
+    profile_interval_100ns: int = DEFAULT_CPU_PROFILE_INTERVAL_100NS,
+) -> list[str]:
+    """Builds the xperf command that starts bounded sampled CPU capture."""
+
+    if not tools.xperf:
+        raise ValueError("xperf was not found.")
+    return [
+        tools.xperf,
+        "-on",
+        CPU_PROFILE_KERNEL_FLAGS,
+        "-stackwalk",
+        CPU_PROFILE_STACKWALK_FLAGS,
+        "-SetProfInt",
+        str(profile_interval_100ns),
+        "-BufferSize",
+        "1024",
+        "-MinBuffers",
+        "64",
+        "-MaxBuffers",
+        "256",
+        "-MaxFile",
+        str(max_file_mb),
+        "-FileMode",
+        "Circular",
+        "-f",
+        str(paths.raw_etl_path),
+    ]
+
+
+def build_xperf_stop_command(tools: CpuProfileTools, paths: CpuProfilePaths) -> list[str]:
+    """Builds the xperf command that stops and merges the active kernel capture."""
+
+    if not tools.xperf:
+        raise ValueError("xperf was not found.")
+    return [tools.xperf, "-d", str(paths.etl_path)]
+
+
+def build_xperf_profile_export_command(tools: CpuProfileTools, paths: CpuProfilePaths) -> list[str]:
+    """Builds the xperf command that exports symbolized sampled CPU detail."""
+
+    if not tools.xperf:
+        raise ValueError("xperf was not found.")
+    return [
+        tools.xperf,
+        "-i",
+        str(paths.etl_path),
+        "-symbols",
+        "-target",
+        "human",
+        "-o",
+        str(paths.detail_path),
+        "-a",
+        "profile",
+        "-detail",
+    ]
+
+
+def run_tool_to_file(
+    command: list[str],
+    output_path: Path,
+    timeout_seconds: float,
+    *,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Runs one profiling tool command and records stdout/stderr metadata."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    command_line = subprocess.list2cmdline(command)
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout_seconds,
+            env=env,
+        )
+        duration = round(time.monotonic() - started, 3)
+        output_path.write_text(
+            "\n".join(
+                [
+                    f"command: {command_line}",
+                    f"return_code: {completed.returncode}",
+                    f"duration_seconds: {duration}",
+                    "",
+                    completed.stdout,
+                    completed.stderr,
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "command": command,
+            "output_path": str(output_path),
+            "return_code": completed.returncode,
+            "duration_seconds": duration,
+            "timed_out": False,
+        }
+    except subprocess.TimeoutExpired as exc:
+        duration = round(time.monotonic() - started, 3)
+        output_path.write_text(
+            "\n".join(
+                [
+                    f"command: {command_line}",
+                    "timed_out: true",
+                    f"duration_seconds: {duration}",
+                    "",
+                    str(exc.stdout or ""),
+                    str(exc.stderr or ""),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "command": command,
+            "output_path": str(output_path),
+            "return_code": None,
+            "duration_seconds": duration,
+            "timed_out": True,
+        }
+
+
+def start_cpu_profile(
+    *,
+    tools: CpuProfileTools,
+    paths: CpuProfilePaths,
+    max_file_mb: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Starts ETW sampled CPU capture and returns command metadata."""
+
+    paths.raw_etl_path.parent.mkdir(parents=True, exist_ok=True)
+    command = build_xperf_start_command(tools, paths, max_file_mb=max_file_mb)
+    return run_tool_to_file(command, paths.raw_etl_path.with_suffix(".start.txt"), timeout_seconds)
+
+
+def stop_cpu_profile(
+    *,
+    tools: CpuProfileTools,
+    paths: CpuProfilePaths,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Stops ETW sampled CPU capture and merges the trace."""
+
+    command = build_xperf_stop_command(tools, paths)
+    result = run_tool_to_file(command, paths.etl_path.with_suffix(".stop.txt"), timeout_seconds)
+    result["etl_path"] = str(paths.etl_path)
+    result["etl_exists"] = paths.etl_path.is_file()
+    return result
+
+
+def export_cpu_profile(
+    *,
+    tools: CpuProfileTools,
+    paths: CpuProfilePaths,
+    app_exe: Path,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Exports xperf sampled CPU detail with the required app symbols."""
+
+    symbol_env = build_symbol_environment(app_exe, paths.symbol_cache_dir)
+    command = build_xperf_profile_export_command(tools, paths)
+    result = run_tool_to_file(command, paths.detail_path.with_suffix(".export.txt"), timeout_seconds, env=symbol_env)
+    result["detail_path"] = str(paths.detail_path)
+    result["detail_exists"] = paths.detail_path.is_file()
+    result["symbol_path"] = symbol_env["_NT_SYMBOL_PATH"]
+    result["symcache_path"] = symbol_env["_NT_SYMCACHE_PATH"]
+    return result
+
+
+def parse_xperf_profile_detail(
+    text: str,
+    *,
+    process_image: str = "emule.exe",
+    symbol_prefix: str = EMULE_SYMBOL_PREFIX,
+    limit: int = DEFAULT_CPU_PROFILE_TOP_LIMIT,
+) -> dict[str, object]:
+    """Extracts top eMule CPU attribution rows from xperf profile detail text."""
+
+    rows: list[dict[str, object]] = []
+    image_token = process_image.casefold()
+    symbol_token = symbol_prefix.casefold()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        folded = line.casefold()
+        if not line or (image_token not in folded and symbol_token not in folded):
+            continue
+        symbol_match = _SYMBOL_RE.search(line)
+        function = symbol_match.group(0) if symbol_match else "<unresolved>"
+        percent_match = _PERCENT_RE.search(line)
+        percent = float(percent_match.group("value")) if percent_match else None
+        sample_count = parse_sample_count(line, percent_match.start() if percent_match else None)
+        rows.append(
+            {
+                "function": function,
+                "sample_count": sample_count,
+                "weight_percent": percent,
+                "raw": line,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            float(row["weight_percent"]) if isinstance(row.get("weight_percent"), (float, int)) else -1.0,
+            int(row["sample_count"]) if isinstance(row.get("sample_count"), int) else -1,
+        ),
+        reverse=True,
+    )
+    top_rows = rows[:limit]
+    return {
+        "available": bool(top_rows),
+        "process_image": process_image,
+        "row_count": len(rows),
+        "top": top_rows,
+        "unresolved_row_count": sum(1 for row in rows if row["function"] == "<unresolved>"),
+    }
+
+
+def parse_sample_count(line: str, percent_start: int | None) -> int | None:
+    """Returns the nearest integer sample count before the percentage column."""
+
+    prefix = line[:percent_start] if percent_start is not None else line
+    matches = list(_SAMPLE_COUNT_RE.finditer(prefix))
+    if not matches:
+        return None
+    return int(matches[-1].group(1).replace(",", ""))
+
+
+def parse_xperf_profile_detail_file(path: Path, *, limit: int = DEFAULT_CPU_PROFILE_TOP_LIMIT) -> dict[str, object]:
+    """Reads an exported xperf profile report and returns a compact summary."""
+
+    if not path.is_file():
+        return {"available": False, "reason": "xperf profile detail output was not written"}
+    try:
+        return parse_xperf_profile_detail(path.read_text(encoding="utf-8", errors="replace"), limit=limit)
+    except OSError as exc:
+        return {
+            "available": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
