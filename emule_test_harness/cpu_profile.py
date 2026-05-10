@@ -453,8 +453,16 @@ def parse_xperf_stack_report(
 ) -> dict[str, object]:
     """Extracts top app functions from xperf's stack butterfly HTML report."""
 
-    start = text.find("Functions by UniInclusive Hits")
-    end = text.find("Functions by Multi-Inclusive Hits", start)
+    start = text.find("id='TblSI'")
+    if start < 0:
+        start = text.find('id="TblSI"')
+    if start < 0:
+        start = text.find("Functions by UniInclusive Hits")
+    end = text.find("id='TblSN'", start)
+    if end < 0:
+        end = text.find('id="TblSN"', start)
+    if end < 0:
+        end = text.find("Functions by Multi-Inclusive Hits", start)
     section = text[start:end] if start >= 0 and end > start else text
     rows: list[dict[str, object]] = []
     for match in _STACK_ROW_RE.finditer(section):

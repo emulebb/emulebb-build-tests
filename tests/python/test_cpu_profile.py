@@ -129,11 +129,13 @@ def test_parse_xperf_profile_detail_preserves_csv_template_symbols() -> None:
 
 def test_parse_xperf_stack_report_extracts_top_app_inclusive_functions() -> None:
     text = """
-<h2>Functions by UniInclusive Hits</h2><table><tbody>
+<a href="#TblSI">Functions by UniInclusive Hits</a>
+<a href="#TblSN">Functions by Multi-Inclusive Hits with Callers and Callees</a>
+<h2 id='TblSI'>Functions by UniInclusive Hits</h2><table><tbody>
 <tr><td><a href='#m'>emule.exe</a>!<a href='#s'>WebServerJson::RunDispatchedCommand</a></td><td>5131</td><td>68.17%</td><td>0</td></tr>
 <tr><td><a href='#m'>ntdll.dll</a>!<a href='#s'>RtlCaptureStackBackTrace</a></td><td>4417</td><td>58.68%</td><td>6</td></tr>
 <tr><td><a href='#m'>emule.exe</a>!<a href='#s'>CDownloadQueue::CollectProtectedVolumeStatuses</a></td><td>32</td><td>0.42%</td><td>1</td></tr>
-</tbody></table><h2>Functions by Multi-Inclusive Hits with Callers and Callees</h2>
+</tbody></table><h2 id='TblSN'>Functions by Multi-Inclusive Hits with Callers and Callees</h2>
 """
 
     summary = cpu_profile.parse_xperf_stack_report(text)
