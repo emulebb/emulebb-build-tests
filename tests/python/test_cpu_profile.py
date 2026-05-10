@@ -29,7 +29,7 @@ def test_symbol_environment_prefers_app_pdb_and_sets_symcache(tmp_path: Path) ->
     env = cpu_profile.build_symbol_environment(app_exe, symbol_cache, base_env={})
 
     assert str(app_exe.parent) in env["_NT_SYMBOL_PATH"]
-    assert "https://msdl.microsoft.com/download/symbols" in env["_NT_SYMBOL_PATH"]
+    assert "https://msdl.microsoft.com/download/symbols" not in env["_NT_SYMBOL_PATH"]
     assert env["_NT_SYMCACHE_PATH"] == str(symbol_cache)
     assert cpu_profile.resolve_app_pdb_path(app_exe) == app_exe.with_suffix(".pdb")
 

@@ -11,7 +11,7 @@ import subprocess
 import time
 
 DEFAULT_CPU_PROFILE_MAX_FILE_MB = 512
-DEFAULT_CPU_PROFILE_INTERVAL_100NS = 10_000
+DEFAULT_CPU_PROFILE_INTERVAL_100NS = 80_000
 DEFAULT_CPU_PROFILE_TOP_LIMIT = 25
 CPU_PROFILE_KERNEL_FLAGS = "PROC_THREAD+LOADER+PROFILE"
 CPU_PROFILE_STACKWALK_FLAGS = "Profile"
@@ -79,13 +79,22 @@ def resolve_app_pdb_path(app_exe: Path) -> Path:
     return app_exe.with_suffix(".pdb")
 
 
-def build_symbol_environment(app_exe: Path, symbol_cache_dir: Path, base_env: dict[str, str] | None = None) -> dict[str, str]:
-    """Builds an environment that resolves app symbols before Microsoft symbols."""
+def build_symbol_environment(
+    app_exe: Path,
+    symbol_cache_dir: Path,
+    base_env: dict[str, str] | None = None,
+    *,
+    include_microsoft_symbols: bool = False,
+) -> dict[str, str]:
+    """Builds an environment that resolves app symbols without slow public symbol downloads."""
 
     env = dict(base_env or os.environ)
     symbol_cache_dir.mkdir(parents=True, exist_ok=True)
     app_symbol_dir = app_exe.parent
-    env["_NT_SYMBOL_PATH"] = f"{app_symbol_dir};srv*{symbol_cache_dir}*https://msdl.microsoft.com/download/symbols"
+    symbol_paths = [str(app_symbol_dir)]
+    if include_microsoft_symbols:
+        symbol_paths.append(f"srv*{symbol_cache_dir}*https://msdl.microsoft.com/download/symbols")
+    env["_NT_SYMBOL_PATH"] = ";".join(symbol_paths)
     env["_NT_SYMCACHE_PATH"] = str(symbol_cache_dir)
     return env
 
