@@ -491,6 +491,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-completed-downloads", type=int, default=0)
     parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--max-active-downloads", type=int, default=512)
+    parser.add_argument("--allow-required-zero-result-searches", action="store_true")
     parser.add_argument("--download-churn-interval-seconds", type=float, default=0.0)
     parser.add_argument("--download-remove-count-per-churn", type=int, default=0)
     parser.add_argument("--resource-monitor-interval-seconds", type=float, default=5.0)
@@ -2818,6 +2819,7 @@ def main(argv: list[str] | None = None) -> int:
             "target_completed_downloads": args.target_completed_downloads,
             "completion_timeout_seconds": args.completion_timeout_seconds,
             "max_active_downloads": args.max_active_downloads,
+            "allow_required_zero_result_searches": bool(args.allow_required_zero_result_searches),
             "download_churn_interval_seconds": args.download_churn_interval_seconds,
             "download_remove_count_per_churn": args.download_remove_count_per_churn,
             "resource_monitor_interval_seconds": args.resource_monitor_interval_seconds,
@@ -3101,7 +3103,7 @@ def main(argv: list[str] | None = None) -> int:
         if int(stress_summary.get("failed_searches", 0)) > 0:
             report["status"] = "failed"
             report["failure_reason"] = "one or more live searches failed"
-        elif int(stress_summary.get("required_zero_result_search_count", 0)) > 0:
+        elif int(stress_summary.get("required_zero_result_search_count", 0)) > 0 and not args.allow_required_zero_result_searches:
             report["status"] = "failed"
             report["failure_reason"] = "one or more required live searches returned zero results"
         elif diagnostic_tool_crashes(report):

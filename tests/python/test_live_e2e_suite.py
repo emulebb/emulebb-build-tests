@@ -380,6 +380,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "8",
             "--rest-cold-start-dump-stress-max-active-downloads",
             "9",
+            "--rest-cold-start-dump-stress-allow-required-zero-result-searches",
             "--rest-cold-start-dump-stress-download-churn-interval-seconds",
             "10",
             "--rest-cold-start-dump-stress-download-remove-count-per-churn",
@@ -413,6 +414,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert option_values(command, "--target-completed-downloads") == ["3"]
     assert option_values(command, "--completion-timeout-seconds") == ["8.0"]
     assert option_values(command, "--max-active-downloads") == ["9"]
+    assert "--allow-required-zero-result-searches" in command
     assert option_values(command, "--download-churn-interval-seconds") == ["10.0"]
     assert option_values(command, "--download-remove-count-per-churn") == ["2"]
     assert option_values(command, "--resource-monitor-interval-seconds") == ["11.0"]
@@ -428,6 +430,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert summary["rest_cold_start_dump_stress"]["cpu_profile_symbols_required"] is False
     assert summary["rest_cold_start_dump_stress"]["max_missing_download_triggers"] == 1
     assert summary["rest_cold_start_dump_stress"]["search_observation_timeout_seconds"] == 12.0
+    assert summary["rest_cold_start_dump_stress"]["allow_required_zero_result_searches"] is True
     assert summary["status"] == "passed"
     assert summary["has_inconclusive_suites"] is True
     assert summary["suites"][0]["status"] == "inconclusive"

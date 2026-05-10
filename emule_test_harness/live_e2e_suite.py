@@ -244,6 +244,7 @@ def build_suite_command(
     rest_cold_start_dump_stress_target_completed_downloads: int = DEFAULT_REST_COLD_START_DUMP_STRESS_TARGET_COMPLETED_DOWNLOADS,
     rest_cold_start_dump_stress_completion_timeout_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_COMPLETION_TIMEOUT_SECONDS,
     rest_cold_start_dump_stress_max_active_downloads: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS,
+    rest_cold_start_dump_stress_allow_required_zero_result_searches: bool = False,
     rest_cold_start_dump_stress_download_churn_interval_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS,
     rest_cold_start_dump_stress_download_remove_count_per_churn: int = DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN,
     rest_cold_start_dump_stress_resource_monitor_interval_seconds: float = DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS,
@@ -351,6 +352,8 @@ def build_suite_command(
         command.extend(["--target-completed-downloads", str(rest_cold_start_dump_stress_target_completed_downloads)])
         command.extend(["--completion-timeout-seconds", str(rest_cold_start_dump_stress_completion_timeout_seconds)])
         command.extend(["--max-active-downloads", str(rest_cold_start_dump_stress_max_active_downloads)])
+        if rest_cold_start_dump_stress_allow_required_zero_result_searches:
+            command.append("--allow-required-zero-result-searches")
         command.extend(["--download-churn-interval-seconds", str(rest_cold_start_dump_stress_download_churn_interval_seconds)])
         command.extend(["--download-remove-count-per-churn", str(rest_cold_start_dump_stress_download_remove_count_per_churn)])
         command.extend(["--resource-monitor-interval-seconds", str(rest_cold_start_dump_stress_resource_monitor_interval_seconds)])
@@ -479,6 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_ACTIVE_DOWNLOADS,
     )
+    parser.add_argument("--rest-cold-start-dump-stress-allow-required-zero-result-searches", action="store_true")
     parser.add_argument(
         "--rest-cold-start-dump-stress-download-churn-interval-seconds",
         type=float,
@@ -646,6 +650,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "target_completed_downloads": args.rest_cold_start_dump_stress_target_completed_downloads,
             "completion_timeout_seconds": args.rest_cold_start_dump_stress_completion_timeout_seconds,
             "max_active_downloads": args.rest_cold_start_dump_stress_max_active_downloads,
+            "allow_required_zero_result_searches": bool(args.rest_cold_start_dump_stress_allow_required_zero_result_searches),
             "download_churn_interval_seconds": args.rest_cold_start_dump_stress_download_churn_interval_seconds,
             "download_remove_count_per_churn": args.rest_cold_start_dump_stress_download_remove_count_per_churn,
             "resource_monitor_interval_seconds": args.rest_cold_start_dump_stress_resource_monitor_interval_seconds,
@@ -716,6 +721,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_target_completed_downloads=args.rest_cold_start_dump_stress_target_completed_downloads,
             rest_cold_start_dump_stress_completion_timeout_seconds=args.rest_cold_start_dump_stress_completion_timeout_seconds,
             rest_cold_start_dump_stress_max_active_downloads=args.rest_cold_start_dump_stress_max_active_downloads,
+            rest_cold_start_dump_stress_allow_required_zero_result_searches=args.rest_cold_start_dump_stress_allow_required_zero_result_searches,
             rest_cold_start_dump_stress_download_churn_interval_seconds=args.rest_cold_start_dump_stress_download_churn_interval_seconds,
             rest_cold_start_dump_stress_download_remove_count_per_churn=args.rest_cold_start_dump_stress_download_remove_count_per_churn,
             rest_cold_start_dump_stress_resource_monitor_interval_seconds=args.rest_cold_start_dump_stress_resource_monitor_interval_seconds,
