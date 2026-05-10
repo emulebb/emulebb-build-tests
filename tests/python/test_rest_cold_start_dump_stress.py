@@ -302,9 +302,13 @@ command: umdh -d before.txt after.txt
 return_code: 0
 
 + 8,192 ( 12,288 - 4,096) 2 allocs BackTrace00001234
+    ntdll!RtlpAllocateHeapInternal+A7D
+    emule!operator new+30
     emule!CSearchResultsWnd::AddResult
     emule!CSearchList::AddToList
 + 512 ( 512 - 0) 1 allocs BackTrace00005678
+    ntdll!RtlpAllocateHeapInternal+A7D
+    emule!operator new+30
     emule!CUpDownClient::Create
 - 128 ( 0 - 128) 1 allocs BackTrace00009999
     emule!ReleasedAllocation
@@ -322,9 +326,44 @@ return_code: 0
             "allocation_count": 2,
             "trace_id": "BackTrace00001234",
             "stack": [
+                "ntdll!RtlpAllocateHeapInternal+A7D",
+                "emule!operator new+30",
                 "emule!CSearchResultsWnd::AddResult",
                 "emule!CSearchList::AddToList",
             ],
+        }
+    ]
+    assert summary["top_positive_app_frames"] == [
+        {
+            "frame": "emule!CSearchResultsWnd::AddResult",
+            "delta_bytes": 8192,
+            "allocation_count": 2,
+            "trace_count": 1,
+        }
+    ]
+
+
+def test_summarize_umdh_app_frames_groups_allocator_stacks() -> None:
+    module = load_script_module()
+    entries = [
+        {
+            "allocation_count": 2,
+            "delta_bytes": 1024,
+            "stack": ["ntdll!RtlpAllocateHeapInternal+A7D", "emule!operator new+30", "emule!CPartFile::WriteToBuffer+235"],
+        },
+        {
+            "allocation_count": 3,
+            "delta_bytes": 2048,
+            "stack": ["ntdll!RtlpAllocateHeapInternal+A7D", "emule!operator new+30", "emule!CPartFile::WriteToBuffer+123"],
+        },
+    ]
+
+    assert module.summarize_umdh_app_frames(entries) == [
+        {
+            "frame": "emule!CPartFile::WriteToBuffer",
+            "delta_bytes": 3072,
+            "allocation_count": 5,
+            "trace_count": 2,
         }
     ]
 

@@ -54,6 +54,12 @@ CDB_HEAP_ROW_RE = re.compile(
 CDB_ADDRESS_SUMMARY_RE = re.compile(
     r"^\s*([A-Za-z_<>\-]+)\s+([0-9]+)\s+[0-9A-Fa-f`]+\s+\(\s*([0-9.]+)\s+([KMGT]B)\)"
 )
+UMDH_ALLOCATOR_FRAME_PREFIXES = (
+    "ntdll!",
+    "emule!_malloc",
+    "emule!operator new",
+    "emule!CAfxStringMgr::Allocate",
+)
 VIDEO_ACTIVE_DOWNLOAD_SUFFIXES = (
     ".3gp",
     ".avi",
@@ -663,6 +669,57 @@ def parse_umdh_int(value: str) -> int:
     return int(value.replace(",", ""))
 
 
+def umdh_frame_symbol(frame: object) -> str:
+    """Normalizes a UMDH frame to a stable module/function symbol."""
+
+    text = str(frame).strip()
+    if not text:
+        return "<unknown>"
+    symbol = text.split(" ", 1)[0]
+    if "+" in symbol:
+        symbol = symbol.split("+", 1)[0]
+    return symbol or "<unknown>"
+
+
+def umdh_app_allocation_frame(stack: object) -> str:
+    """Returns the first non-allocator eMule frame from one UMDH stack."""
+
+    if not isinstance(stack, list):
+        return "<unknown>"
+    for frame in stack:
+        text = str(frame).strip()
+        if not text:
+            continue
+        if any(text.startswith(prefix) for prefix in UMDH_ALLOCATOR_FRAME_PREFIXES):
+            continue
+        if text.startswith("emule!"):
+            return umdh_frame_symbol(text)
+    return umdh_frame_symbol(stack[0]) if stack else "<unknown>"
+
+
+def summarize_umdh_app_frames(entries: list[dict[str, object]], *, limit: int = UMDH_TOP_DELTA_LIMIT) -> list[dict[str, object]]:
+    """Groups UMDH positive deltas by the first relevant eMule allocation frame."""
+
+    grouped: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        frame = umdh_app_allocation_frame(entry.get("stack"))
+        row = grouped.setdefault(
+            frame,
+            {
+                "frame": frame,
+                "delta_bytes": 0,
+                "allocation_count": 0,
+                "trace_count": 0,
+            },
+        )
+        row["delta_bytes"] = int(row["delta_bytes"]) + int(entry.get("delta_bytes", 0))
+        row["allocation_count"] = int(row["allocation_count"]) + int(entry.get("allocation_count", 0))
+        row["trace_count"] = int(row["trace_count"]) + 1
+    rows = list(grouped.values())
+    rows.sort(key=lambda row: int(row["delta_bytes"]), reverse=True)
+    return rows[:limit]
+
+
 def parse_umdh_diff_text(text: str, *, limit: int = UMDH_TOP_DELTA_LIMIT) -> dict[str, object]:
     """Extracts the largest positive allocation deltas from UMDH diff output."""
 
@@ -703,6 +760,7 @@ def parse_umdh_diff_text(text: str, *, limit: int = UMDH_TOP_DELTA_LIMIT) -> dic
         "positive_delta_count": len(positive_entries),
         "positive_delta_bytes": sum(int(entry["delta_bytes"]) for entry in positive_entries),
         "top_positive_deltas": positive_entries[:limit],
+        "top_positive_app_frames": summarize_umdh_app_frames(positive_entries, limit=limit),
     }
 
 
