@@ -123,48 +123,48 @@ def build_amutorrent_environment(
 
 
 def write_stop_script(path: Path, *, emule_pid: int | None, amutorrent_pid: int | None) -> None:
-    """Writes a PowerShell helper that stops the launched interactive processes."""
+    """Writes a command helper that stops the launched interactive processes."""
 
     process_rows = [
         ("eMule BB", emule_pid),
         ("aMuTorrent", amutorrent_pid),
     ]
-    process_literal = "\n".join(
-        f"    [pscustomobject]@{{ Name = '{name}'; Id = {pid if pid is not None else '$null'} }}"
+    stop_calls = "\n".join(
+        f'call :stop_process "{name}" "{pid}"'
         for name, pid in process_rows
+        if pid is not None
     )
     path.write_text(
-        f"""#Requires -Version 7.6
-[CmdletBinding()]
-param()
+        f"""@echo off
+setlocal
+{stop_calls}
+exit /b 0
 
-$ErrorActionPreference = 'Continue'
-$processes = @(
-{process_literal}
+:stop_process
+set "name=%~1"
+set "pid=%~2"
+if "%pid%"=="" exit /b 0
+
+tasklist /FI "PID eq %pid%" 2>NUL | findstr /C:"%pid%" >NUL
+if errorlevel 1 (
+    echo %name% is not running (PID %pid%).
+    exit /b 0
 )
 
-foreach ($entry in $processes) {{
-    if ($null -eq $entry.Id) {{
-        continue
-    }}
-    $process = Get-Process -Id $entry.Id -ErrorAction SilentlyContinue
-    if ($null -eq $process) {{
-        Write-Host "$($entry.Name) is not running (PID $($entry.Id))."
-        continue
-    }}
-    if ($process.MainWindowHandle -ne 0) {{
-        Write-Host "Closing $($entry.Name) (PID $($entry.Id))..."
-        $null = $process.CloseMainWindow()
-        if ($process.WaitForExit(30000)) {{
-            continue
-        }}
-    }}
-    Write-Host "Stopping $($entry.Name) (PID $($entry.Id))..."
-    Stop-Process -Id $entry.Id -Force -ErrorAction SilentlyContinue
-}}
+echo Closing %name% (PID %pid%)...
+taskkill /PID %pid% >NUL 2>NUL
+for /L %%I in (1,1,30) do (
+    tasklist /FI "PID eq %pid%" 2>NUL | findstr /C:"%pid%" >NUL
+    if errorlevel 1 exit /b 0
+    timeout /T 1 /NOBREAK >NUL
+)
+
+echo Forcing %name% (PID %pid%)...
+taskkill /PID %pid% /F >NUL 2>NUL
+exit /b 0
 """,
         encoding="utf-8",
-        newline="\n",
+        newline="\r\n",
     )
 
 
@@ -292,11 +292,11 @@ def main() -> int:
         )
         report["amutorrent_process_id"] = amutorrent.pid
         report["amutorrent_log"] = str(amutorrent_log_path)
-        report["stop_script"] = str(artifacts_dir / "stop-session.ps1")
+        report["stop_script"] = str(artifacts_dir / "stop-session.cmd")
         report["status"] = "running"
 
         write_stop_script(
-            artifacts_dir / "stop-session.ps1",
+            artifacts_dir / "stop-session.cmd",
             emule_pid=int(report["emule_process_id"]),
             amutorrent_pid=amutorrent.pid,
         )
@@ -310,7 +310,7 @@ def main() -> int:
         print(f"eMule BB REST: {emule_base_url}")
         print(f"aMuTorrent UI: {amutorrent_base_url}")
         print(f"Artifacts: {paths.run_report_dir}")
-        print(f"Stop script: {paths.run_report_dir / 'stop-session.ps1'}")
+        print(f"Stop script: {paths.run_report_dir / 'stop-session.cmd'}")
         return 0
     except Exception as exc:
         report["status"] = "failed"

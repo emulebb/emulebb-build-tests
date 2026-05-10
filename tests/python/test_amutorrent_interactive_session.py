@@ -47,16 +47,15 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
 
 def test_write_stop_script_closes_emule_and_stops_amutorrent(tmp_path: Path) -> None:
     session = load_session_module()
-    stop_script = tmp_path / "stop-session.ps1"
+    stop_script = tmp_path / "stop-session.cmd"
 
     session.write_stop_script(stop_script, emule_pid=1234, amutorrent_pid=5678)
 
     text = stop_script.read_text(encoding="utf-8")
-    assert "#Requires -Version 7.6" in text
-    assert "Name = 'eMule BB'; Id = 1234" in text
-    assert "Name = 'aMuTorrent'; Id = 5678" in text
-    assert "CloseMainWindow()" in text
-    assert "Stop-Process -Id $entry.Id -Force" in text
+    assert 'call :stop_process "eMule BB" "1234"' in text
+    assert 'call :stop_process "aMuTorrent" "5678"' in text
+    assert "taskkill /PID %pid%" in text
+    assert "taskkill /PID %pid% /F" in text
 
 
 def test_parser_defaults_to_local_control_session() -> None:
