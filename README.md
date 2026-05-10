@@ -267,6 +267,7 @@ Startup-profile scenarios:
 Tracked-file privacy guard:
 
 - `scripts\guard-tracked-files.py` fails when tracked files contain local user-home paths or personal-identifier filename leaks derived from the current environment or an untracked local override file
+- the guard implementation is owned by `repos\eMule-tooling\ci\policy_guards.py`; this repo keeps only a compatibility import facade and operator wrapper
 - `scripts\build-emule-tests.py` runs that guard by default before building
 - the same guard is enforced in GitHub Actions for pushes and pull requests
 
