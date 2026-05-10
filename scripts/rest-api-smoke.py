@@ -3019,6 +3019,46 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         api_key=api_key,
     )
     transfer_added_details_payload = require_json_object(transfer_added_details, 200)
+    transfer_added_resume = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}/operations/resume",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    transfer_added_pause = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}/operations/pause",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    transfer_added_stop = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}/operations/stop",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    transfer_added_resume_after_stop = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}/operations/resume",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    transfer_added_pause_after_resume = http_request(
+        base_url,
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}/operations/pause",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
     unicode_transfer_name = "rest-api-unicode-ß-漢.bin"
     unicode_transfer_link = (
         "ed2k://|file|"
@@ -3198,6 +3238,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "hash": transfer_add_valid_payload.get("hash"),
             "state": transfer_added_payload.get("state"),
             "details": compact_transfer_details_payload(transfer_added_details_payload, REST_SURFACE_VALID_DOWNLOAD_HASH),
+            "lifecycle": {
+                "resume": require_transfer_bulk_result(transfer_added_resume, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+                "pause": require_transfer_bulk_result(transfer_added_pause, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+                "stop": require_transfer_bulk_result(transfer_added_stop, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+                "resume_after_stop": require_transfer_bulk_result(transfer_added_resume_after_stop, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+                "pause_after_resume": require_transfer_bulk_result(transfer_added_pause_after_resume, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
+            },
             "delete": require_transfer_bulk_result(transfer_delete_added, REST_SURFACE_VALID_DOWNLOAD_HASH, True),
         },
         "add_unicode_filename": {
