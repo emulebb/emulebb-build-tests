@@ -32,6 +32,7 @@ def test_operator_script_help_loads() -> None:
     assert "--max-missing-download-triggers" in help_text
     assert "--synthetic-queue-fill-count" in help_text
     assert "--synthetic-queue-fill-size-bytes" in help_text
+    assert "--synthetic-queue-fill-batch-size" in help_text
     assert "--target-completed-downloads" in help_text
     assert "--resource-monitor-interval-seconds" in help_text
     assert parser.get_default("max_post_drain_umdh_positive_bytes") == 16 * 1024 * 1024
@@ -40,6 +41,7 @@ def test_operator_script_help_loads() -> None:
     assert parser.get_default("cpu_profile_stack") is False
     assert parser.get_default("cpu_profile_stack_min_hits") == 10
     assert parser.get_default("synthetic_queue_fill_count") == 0
+    assert parser.get_default("synthetic_queue_fill_batch_size") == 50
 
 
 def test_wave_plan_mixes_methods_when_both_networks_are_ready() -> None:
@@ -225,7 +227,7 @@ def test_synthetic_queue_fill_posts_deterministic_ed2k_links(monkeypatch) -> Non
     def fake_http_request(_base_url, path, **kwargs):
         assert path == "/api/v1/transfers"
         posted.append(kwargs["json_body"])
-        return {"status": 200, "json": {"hash": kwargs["json_body"]["link"].split("|")[4]}}
+        return {"status": 200, "json": {"items": [{"ok": True} for _link in kwargs["json_body"]["links"]]}}
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
     monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: result["json"])
@@ -246,12 +248,15 @@ def test_synthetic_queue_fill_posts_deterministic_ed2k_links(monkeypatch) -> Non
         registry,
         10,
         5.0,
+        2,
     )
 
     assert result["ok"] is True
     assert result["queued_count"] == 2
-    assert len(posted) == 2
-    assert posted[0]["link"].startswith("ed2k://|file|emulebb-stress-queue-fill-00001.bin|4096|")
+    assert result["batch_count"] == 1
+    assert len(posted) == 1
+    assert posted[0]["links"][0].startswith("ed2k://|file|emulebb-stress-queue-fill-00001.bin|4096|")
+    assert len(posted[0]["links"]) == 2
     assert posted[0]["paused"] is False
     assert posted[0]["categoryId"] == 0
     assert registry.counts()["triggered_stress_transfer_count"] == 2
@@ -545,6 +550,7 @@ def test_run_stress_waves_records_ready_probe_timeout(monkeypatch) -> None:
         download_remove_count_per_churn=0,
         synthetic_queue_fill_count=0,
         synthetic_queue_fill_size_bytes=1024,
+        synthetic_queue_fill_batch_size=10,
         transfer_registry=module.StressTransferRegistry(),
         observation_timeout_seconds=1.0,
         synthetic_queue_timeout_seconds=1.0,

@@ -378,6 +378,8 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
             "5",
             "--rest-cold-start-dump-stress-synthetic-queue-fill-size-bytes",
             "4096",
+            "--rest-cold-start-dump-stress-synthetic-queue-fill-batch-size",
+            "3",
             "--rest-cold-start-dump-stress-target-completed-downloads",
             "3",
             "--rest-cold-start-dump-stress-completion-timeout-seconds",
@@ -422,6 +424,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert option_values(command, "--max-missing-download-triggers") == ["1"]
     assert option_values(command, "--synthetic-queue-fill-count") == ["5"]
     assert option_values(command, "--synthetic-queue-fill-size-bytes") == ["4096"]
+    assert option_values(command, "--synthetic-queue-fill-batch-size") == ["3"]
     assert option_values(command, "--target-completed-downloads") == ["3"]
     assert option_values(command, "--completion-timeout-seconds") == ["8.0"]
     assert option_values(command, "--max-active-downloads") == ["9"]
@@ -448,6 +451,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert summary["rest_cold_start_dump_stress"]["max_missing_download_triggers"] == 1
     assert summary["rest_cold_start_dump_stress"]["synthetic_queue_fill_count"] == 5
     assert summary["rest_cold_start_dump_stress"]["synthetic_queue_fill_size_bytes"] == 4096
+    assert summary["rest_cold_start_dump_stress"]["synthetic_queue_fill_batch_size"] == 3
     assert summary["rest_cold_start_dump_stress"]["search_observation_timeout_seconds"] == 12.0
     assert summary["rest_cold_start_dump_stress"]["allow_required_zero_result_searches"] is True
     assert summary["rest_cold_start_dump_stress"]["skip_transfer_cleanup"] is True

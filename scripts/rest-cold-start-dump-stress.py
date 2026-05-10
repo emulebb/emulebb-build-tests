@@ -493,6 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-missing-download-triggers", type=int, default=0)
     parser.add_argument("--synthetic-queue-fill-count", type=int, default=0)
     parser.add_argument("--synthetic-queue-fill-size-bytes", type=int, default=1024 * 1024)
+    parser.add_argument("--synthetic-queue-fill-batch-size", type=int, default=50)
     parser.add_argument("--target-completed-downloads", type=int, default=0)
     parser.add_argument("--completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--max-active-downloads", type=int, default=512)
@@ -535,6 +536,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("synthetic queue fill count must be zero or greater.")
     if args.synthetic_queue_fill_size_bytes <= 0:
         raise ValueError("synthetic queue fill size bytes must be greater than zero.")
+    if args.synthetic_queue_fill_batch_size <= 0:
+        raise ValueError("synthetic queue fill batch size must be greater than zero.")
     if args.target_completed_downloads < 0:
         raise ValueError("target completed downloads must be zero or greater.")
     if args.completion_timeout_seconds <= 0:
@@ -1750,12 +1753,15 @@ def queue_synthetic_stress_transfers(
     transfer_registry: StressTransferRegistry,
     max_active_downloads: int,
     timeout_seconds: float,
+    batch_size: int,
 ) -> dict[str, object]:
     """Adds deterministic no-source ED2K transfers to reproduce large queue pressure."""
 
     triggers: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
-    for index in range(1, count + 1):
+    next_index = 1
+    compact_batch_responses: list[dict[str, object]] = []
+    while next_index <= count:
         active_count = transfer_registry.counts()["active_stress_transfer_count"]
         if active_count >= max_active_downloads:
             return {
@@ -1766,11 +1772,19 @@ def queue_synthetic_stress_transfers(
                 "active_stress_transfer_count": active_count,
                 "triggers": triggers,
                 "failures": failures,
+                "batch_responses": compact_batch_responses,
             }
 
-        row = build_synthetic_queue_fill_link(index, size_bytes)
-        transfer_hash = str(row["hash"])
-        if not trigger_coordinator.claim(transfer_hash):
+        batch_rows: list[dict[str, object]] = []
+        while next_index <= count and len(batch_rows) < batch_size:
+            if transfer_registry.counts()["active_stress_transfer_count"] + len(batch_rows) >= max_active_downloads:
+                break
+            row = build_synthetic_queue_fill_link(next_index, size_bytes)
+            next_index += 1
+            transfer_hash = str(row["hash"])
+            if trigger_coordinator.claim(transfer_hash):
+                batch_rows.append(row)
+        if not batch_rows:
             continue
 
         try:
@@ -1779,50 +1793,62 @@ def queue_synthetic_stress_transfers(
                 "/api/v1/transfers",
                 method="POST",
                 api_key=api_key,
-                json_body={"link": row["link"], "paused": False, "categoryId": 0},
+                json_body={
+                    "links": [str(row["link"]) for row in batch_rows],
+                    "paused": False,
+                    "categoryId": 0,
+                },
                 request_timeout_seconds=timeout_seconds,
             )
             rest_smoke.require_json_object(response, 200)
-            transfer = rest_smoke.wait_for_triggered_transfer(
-                base_url,
-                api_key,
-                transfer_hash,
-                timeout_seconds,
-            )
-            transfer_registry.record_triggered(transfer_hash)
-            triggers.append(
-                {
-                    "hash_present": True,
-                    "synthetic": True,
-                    "candidate": {
-                        "name_present": True,
-                        "extension": ".bin",
-                        "sizeBytes": size_bytes,
-                        "fileType": "synthetic",
-                        "sources": 0,
-                        "completeSources": 0,
-                    },
-                    "download": rest_smoke.compact_http_result(response),
-                    "transfer": transfer,
-                }
-            )
+            compact_response = rest_smoke.compact_http_result(response)
+            compact_batch_responses.append(compact_response)
+            for row in batch_rows:
+                transfer_hash = str(row["hash"])
+                transfer = rest_smoke.wait_for_triggered_transfer(
+                    base_url,
+                    api_key,
+                    transfer_hash,
+                    timeout_seconds,
+                )
+                transfer_registry.record_triggered(transfer_hash)
+                triggers.append(
+                    {
+                        "hash_present": True,
+                        "synthetic": True,
+                        "candidate": {
+                            "name_present": True,
+                            "extension": ".bin",
+                            "sizeBytes": size_bytes,
+                            "fileType": "synthetic",
+                            "sources": 0,
+                            "completeSources": 0,
+                        },
+                        "download": compact_response,
+                        "transfer": transfer,
+                    }
+                )
         except Exception as exc:
-            failures.append(
-                {
-                    "hash_present": True,
-                    "error": {
-                        "type": type(exc).__name__,
-                        "message": str(exc),
-                    },
-                }
-            )
+            for row in batch_rows:
+                failures.append(
+                    {
+                        "hash_present": True,
+                        "error": {
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    }
+                )
 
     return {
         "ok": len(triggers) == count,
         "requested_count": count,
         "queued_count": len(triggers),
+        "batch_size": batch_size,
+        "batch_count": len(compact_batch_responses),
         "triggers": triggers,
         "failures": failures,
+        "batch_responses": compact_batch_responses,
     }
 
 
@@ -2253,6 +2279,7 @@ def run_stress_waves(
     download_remove_count_per_churn: int,
     synthetic_queue_fill_count: int,
     synthetic_queue_fill_size_bytes: int,
+    synthetic_queue_fill_batch_size: int,
     transfer_registry: StressTransferRegistry,
     observation_timeout_seconds: float,
     synthetic_queue_timeout_seconds: float,
@@ -2392,6 +2419,7 @@ def run_stress_waves(
             transfer_registry=transfer_registry,
             max_active_downloads=max_active_downloads,
             timeout_seconds=synthetic_queue_timeout_seconds,
+            batch_size=synthetic_queue_fill_batch_size,
         )
         synthetic_queue_fill_report["size_bytes"] = synthetic_queue_fill_size_bytes
 
@@ -3022,6 +3050,7 @@ def main(argv: list[str] | None = None) -> int:
             "max_missing_download_triggers": args.max_missing_download_triggers,
             "synthetic_queue_fill_count": args.synthetic_queue_fill_count,
             "synthetic_queue_fill_size_bytes": args.synthetic_queue_fill_size_bytes,
+            "synthetic_queue_fill_batch_size": args.synthetic_queue_fill_batch_size,
             "target_completed_downloads": args.target_completed_downloads,
             "completion_timeout_seconds": args.completion_timeout_seconds,
             "max_active_downloads": args.max_active_downloads,
@@ -3218,6 +3247,7 @@ def main(argv: list[str] | None = None) -> int:
             download_remove_count_per_churn=args.download_remove_count_per_churn,
             synthetic_queue_fill_count=args.synthetic_queue_fill_count,
             synthetic_queue_fill_size_bytes=args.synthetic_queue_fill_size_bytes,
+            synthetic_queue_fill_batch_size=args.synthetic_queue_fill_batch_size,
             transfer_registry=transfer_registry,
             observation_timeout_seconds=args.search_observation_timeout_seconds,
             synthetic_queue_timeout_seconds=args.tool_timeout_seconds,
