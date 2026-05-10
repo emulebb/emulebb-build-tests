@@ -75,6 +75,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["status"] == "passed"
     assert summary["live_seed_source_url"] == EMULE_SECURITY_HOME_URL
     assert summary["live_wire_inputs_file"].endswith("live-wire-inputs.local.json")
+    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_SCENARIOS)
     assert summary["rest_contract_completeness_expected"] is True
     assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-sonarr-emulebb"]
     assert [suite["name"] for suite in summary["suites"]] == [
@@ -158,6 +159,32 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert "--update-live-wire-inputs" not in auto_browse_command
+
+
+def test_shared_files_ui_scenario_selector_limits_child_scenarios(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--suite",
+            "shared-files-ui",
+            "--shared-files-ui-scenario",
+            "dynamic-folder-lifecycle",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["shared_files_ui_scenarios"] == ["dynamic-folder-lifecycle"]
+    assert option_values(commands[0], "--scenario") == ["dynamic-folder-lifecycle"]
+    assert summary["suites"][0]["scenario_names"] == ["dynamic-folder-lifecycle"]
 
 
 def test_suite_continues_after_failures_by_default(tmp_path: Path, monkeypatch) -> None:

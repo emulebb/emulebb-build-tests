@@ -184,6 +184,7 @@ def build_suite_command(
     seed_config_dir: Path | None = None,
     startup_trace_mode: str = "required",
     shared_root: Path | None = None,
+    shared_files_ui_scenarios: tuple[str, ...] | None = None,
     shared_files_tree_stress_churn_cycles: int | None = None,
     skip_live_seed_refresh: bool = False,
     rest_server_search_count: int = DEFAULT_REST_SEARCH_COUNT,
@@ -242,7 +243,8 @@ def build_suite_command(
         command.extend(["--shared-root", str(shared_root.resolve())])
     if spec.name == "shared-files-ui" and shared_files_tree_stress_churn_cycles is not None:
         command.extend(["--tree-stress-churn-cycles", str(shared_files_tree_stress_churn_cycles)])
-    for scenario in spec.scenarios:
+    scenario_names = shared_files_ui_scenarios if spec.name == "shared-files-ui" and shared_files_ui_scenarios else spec.scenarios
+    for scenario in scenario_names:
         command.extend(["--scenario", scenario])
     if spec.uses_live_seed_refresh and skip_live_seed_refresh:
         command.append("--skip-live-seed-refresh")
@@ -342,6 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
+    parser.add_argument("--shared-files-ui-scenario", action="append", choices=SHARED_FILES_UI_SCENARIOS)
     parser.add_argument("--shared-files-tree-stress-churn-cycles", type=int)
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--fail-fast", action="store_true")
@@ -457,6 +460,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     python_executable = harness_cli_common.find_python_executable()
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
     shared_root = Path(args.shared_root).resolve() if args.shared_root else None
+    shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     live_wire_inputs_file = live_wire_inputs.resolve_inputs_path(
         Path(__file__).resolve().parent.parent,
         args.live_wire_inputs_file,
@@ -476,6 +480,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
         "live_wire_inputs_file": str(live_wire_inputs_file),
+        "shared_files_ui_scenarios": list(shared_files_ui_scenarios) if shared_files_ui_scenarios else list(SHARED_FILES_UI_SCENARIOS),
         "rest_coverage_budget": args.rest_coverage_budget,
         "rest_stress_budget": args.rest_stress_budget,
         "rest_stress_duration_seconds": args.rest_stress_duration_seconds,
@@ -523,6 +528,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             seed_config_dir=seed_config_dir,
             startup_trace_mode=args.startup_trace_mode,
             shared_root=shared_root,
+            shared_files_ui_scenarios=shared_files_ui_scenarios or None,
             shared_files_tree_stress_churn_cycles=args.shared_files_tree_stress_churn_cycles,
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             rest_server_search_count=args.rest_server_search_count,
@@ -566,7 +572,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "duration_seconds": round(time.monotonic() - started, 3),
             "artifacts_dir": str(child_artifacts_dir.resolve()),
             "command": command,
-            "scenario_names": list(spec.scenarios),
+            "scenario_names": (
+                list(shared_files_ui_scenarios)
+                if spec.name == "shared-files-ui" and shared_files_ui_scenarios
+                else list(spec.scenarios)
+            ),
             "uses_live_seed_refresh": bool(spec.uses_live_seed_refresh and not args.skip_live_seed_refresh),
         }
         if spec.is_rest_api:
