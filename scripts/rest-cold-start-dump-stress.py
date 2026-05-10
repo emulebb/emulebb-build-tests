@@ -2544,6 +2544,53 @@ def cpu_profile_diagnostics_are_complete(report: dict[str, object], *, symbols_r
     return True
 
 
+def build_live_diagnostic_findings(report: dict[str, object]) -> dict[str, object]:
+    """Builds a compact leak, CPU, and dump summary from detailed live artifacts."""
+
+    diagnostics = report.get("diagnostics") if isinstance(report.get("diagnostics"), dict) else {}
+    checks = report.get("checks") if isinstance(report.get("checks"), dict) else {}
+    stress = checks.get("stress") if isinstance(checks.get("stress"), dict) else {}
+    download_completion = checks.get("download_completion") if isinstance(checks.get("download_completion"), dict) else {}
+    cpu = diagnostics.get("cpu_profile") if isinstance(diagnostics.get("cpu_profile"), dict) else {}
+    cpu_summary = cpu.get("summary") if isinstance(cpu.get("summary"), dict) else {}
+    umdh_summary = diagnostics.get("umdh_summary") if isinstance(diagnostics.get("umdh_summary"), dict) else {}
+    post_drain_umdh = umdh_summary.get("baseline_to_post_drain") if isinstance(umdh_summary.get("baseline_to_post_drain"), dict) else {}
+    resource_monitor = diagnostics.get("resource_monitor") if isinstance(diagnostics.get("resource_monitor"), dict) else {}
+    resource_summary = resource_monitor.get("summary") if isinstance(resource_monitor.get("summary"), dict) else {}
+    dump_monitor = diagnostics.get("dump_monitor") if isinstance(diagnostics.get("dump_monitor"), dict) else {}
+    return {
+        "downloads": {
+            "planned_searches": stress.get("planned_searches"),
+            "completed_searches": stress.get("completed_searches"),
+            "requested_download_triggers": stress.get("requested_download_triggers"),
+            "completed_download_triggers": stress.get("completed_download_triggers"),
+            "completed_downloads": download_completion.get("completed_count"),
+        },
+        "cpu": {
+            "app_row_count": cpu_summary.get("app_row_count"),
+            "top_app_functions": list(cpu_summary.get("top_app_functions") or [])[:10],
+        },
+        "memory": {
+            "post_drain_positive_delta_bytes": post_drain_umdh.get("positive_delta_bytes"),
+            "top_post_drain_app_frames": list(post_drain_umdh.get("top_positive_app_frames") or [])[:10],
+        },
+        "resources": resource_summary,
+        "dumps": {
+            "required_dump_labels": [
+                label
+                for label in DIAGNOSTIC_LABELS
+                if isinstance(diagnostics.get(label), dict)
+                and isinstance(diagnostics[label].get("tools"), dict)
+                and isinstance(diagnostics[label]["tools"].get("dump_analysis"), dict)
+                and isinstance(diagnostics[label]["tools"]["dump_analysis"].get("dump"), dict)
+                and bool(diagnostics[label]["tools"]["dump_analysis"]["dump"].get("dump_exists"))
+            ],
+            "monitor_dump_count": dump_monitor.get("dump_count", 0),
+            "monitor_dump_files": list(dump_monitor.get("dump_files") or []),
+        },
+    }
+
+
 def post_drain_umdh_delta_within_budget(report: dict[str, object], max_positive_bytes: int) -> bool:
     """Returns true when post-drain UMDH growth stays within the configured leak budget."""
 
@@ -3077,6 +3124,7 @@ def main(argv: list[str] | None = None) -> int:
             report["diagnostic_tool_crashes"] = crashes
             report["status"] = "failed"
             report["failure_reason"] = "one or more diagnostic tools crashed"
+        report["diagnostics"]["findings"] = build_live_diagnostic_findings(report)
         harness_cli_common.write_json_file(artifacts_dir / "result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)

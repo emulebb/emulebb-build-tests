@@ -500,6 +500,60 @@ def test_cpu_profile_completeness_requires_etl_export_and_symbols() -> None:
     assert module.cpu_profile_diagnostics_are_complete(report, symbols_required=False) is False
 
 
+def test_build_live_diagnostic_findings_compacts_cpu_memory_and_dumps() -> None:
+    module = load_script_module()
+    report = {
+        "checks": {
+            "stress": {
+                "planned_searches": 2,
+                "completed_searches": 2,
+                "requested_download_triggers": 2,
+                "completed_download_triggers": 1,
+            },
+            "download_completion": {"completed_count": 0},
+        },
+        "diagnostics": {
+            "baseline": {
+                "tools": {
+                    "dump_analysis": {
+                        "dump": {"dump_exists": True},
+                    }
+                }
+            },
+            "cpu_profile": {
+                "summary": {
+                    "app_row_count": 2,
+                    "top_app_functions": [
+                        {"function": "emule!Hot1"},
+                        {"function": "emule!Hot2"},
+                    ],
+                }
+            },
+            "resource_monitor": {"summary": {"cpu_percent_max": 5.0}},
+            "umdh_summary": {
+                "baseline_to_post_drain": {
+                    "positive_delta_bytes": 1024,
+                    "top_positive_app_frames": [{"frame": "emule!Frame"}],
+                }
+            },
+            "dump_monitor": {
+                "dump_count": 1,
+                "dump_files": ["monitor.dmp"],
+            },
+        },
+    }
+
+    findings = module.build_live_diagnostic_findings(report)
+
+    assert findings["downloads"]["completed_download_triggers"] == 1
+    assert findings["cpu"]["app_row_count"] == 2
+    assert findings["cpu"]["top_app_functions"][0]["function"] == "emule!Hot1"
+    assert findings["memory"]["post_drain_positive_delta_bytes"] == 1024
+    assert findings["resources"] == {"cpu_percent_max": 5.0}
+    assert findings["dumps"]["required_dump_labels"] == ["baseline"]
+    assert findings["dumps"]["monitor_dump_files"] == ["monitor.dmp"]
+
+
 def test_initialize_cpu_profile_report_records_tools_paths_and_symbol_status(monkeypatch, tmp_path: Path) -> None:
     module = load_script_module()
     app_exe = tmp_path / "emule.exe"
