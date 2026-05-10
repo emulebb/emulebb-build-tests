@@ -708,6 +708,34 @@ def wait_for_search_result_rows(main_hwnd: int, timeout_seconds: float) -> dict[
     return wait_for(resolve, timeout=timeout_seconds, interval=2.0, description="Search result rows")
 
 
+def capture_network_state(base_url: str, api_key: str) -> dict[str, object]:
+    """Captures server and Kad state for inconclusive live-network reports."""
+
+    snapshots: dict[str, object] = {}
+    for name, path in (
+        ("status", "/api/v1/status"),
+        ("kad", "/api/v1/kad"),
+        ("servers", "/api/v1/servers"),
+    ):
+        try:
+            snapshots[name] = rest_smoke.compact_http_result(
+                rest_smoke.http_request(
+                    base_url,
+                    path,
+                    api_key=api_key,
+                    request_timeout_seconds=10.0,
+                )
+            )
+        except Exception as exc:
+            snapshots[name] = {
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            }
+    return snapshots
+
+
 def run_search_ui_live(
     *,
     app_exe: Path,
@@ -851,7 +879,11 @@ def run_search_ui_live(
         return report
     except rest_smoke.LiveNetworkUnavailableError as exc:
         report["status"] = "inconclusive"
-        report["inconclusive_reason"] = str(exc)
+        report["inconclusive_reason"] = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "network_state": capture_network_state(base_url, rest_api_key),
+        }
         return report
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"

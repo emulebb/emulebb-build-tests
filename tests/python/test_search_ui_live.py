@@ -160,3 +160,32 @@ def test_require_transfer_hash_success_rejects_failed_bulk_item() -> None:
     except AssertionError:
         return
     raise AssertionError("failed transfer lifecycle bulk item was accepted")
+
+
+def test_capture_network_state_records_status_kad_and_servers(monkeypatch) -> None:
+    module = load_search_ui_module()
+    requests = []
+
+    class FakeRestSmoke:
+        @staticmethod
+        def http_request(base_url: str, path: str, **kwargs):
+            requests.append((base_url, path, kwargs))
+            return {"status": 200, "content_type": "application/json", "json": {"path": path}}
+
+        @staticmethod
+        def compact_http_result(result: dict):
+            return {"status": result["status"], "json": result["json"]}
+
+    monkeypatch.setattr(module, "rest_smoke", FakeRestSmoke)
+
+    assert module.capture_network_state("http://127.0.0.1:1", "key") == {
+        "status": {"status": 200, "json": {"path": "/api/v1/status"}},
+        "kad": {"status": 200, "json": {"path": "/api/v1/kad"}},
+        "servers": {"status": 200, "json": {"path": "/api/v1/servers"}},
+    }
+    assert [request[1] for request in requests] == [
+        "/api/v1/status",
+        "/api/v1/kad",
+        "/api/v1/servers",
+    ]
+    assert all(request[2]["api_key"] == "key" for request in requests)
