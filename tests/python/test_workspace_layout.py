@@ -19,19 +19,19 @@ def test_default_roots_use_canonical_repo_layout(tmp_path: Path, monkeypatch) ->
 def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspaces" / "v0.72a"
     workspace_root.mkdir(parents=True)
-    (workspace_root / "deps.psd1").write_text(
-        """@{
-    Workspace = @{
-        AppRepo = @{
-            SeedRepo = @{
-                Path = '..\\..\\repos\\eMule'
-            }
-            Variants = @(
-                @{ Name = 'main'; Path = 'app\\eMule-main'; Branch = 'main' }
-                @{ Name = 'community'; Path = 'app\\eMule-v0.72a-community'; Branch = 'release/v0.72a-community' }
-            )
-        }
+    (workspace_root / "deps.json").write_text(
+        """{
+  "workspace": {
+    "app_repo": {
+      "seed_repo": {
+        "path": "..\\\\..\\\\repos\\\\eMule"
+      },
+      "variants": [
+        { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
+        { "name": "community", "path": "app\\\\eMule-v0.72a-community", "branch": "release/v0.72a-community" }
+      ]
     }
+  }
 }
 """,
         encoding="utf-8",
@@ -50,17 +50,17 @@ def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path
     workspace_root = tmp_path / "workspaces" / "v0.72a"
     community_root = workspace_root / "app" / "eMule-v0.72a-community"
     community_root.mkdir(parents=True)
-    (workspace_root / "deps.psd1").write_text(
-        """@{
-    Workspace = @{
-        AppRepo = @{
-            SeedRepo = @{ Path = '..\\..\\repos\\eMule' }
-            Variants = @(
-                @{ Name = 'main'; Path = 'app\\eMule-main'; Branch = 'main' }
-                @{ Name = 'community'; Path = 'app\\eMule-v0.72a-community'; Branch = 'release/v0.72a-community' }
-            )
-        }
+    (workspace_root / "deps.json").write_text(
+        """{
+  "workspace": {
+    "app_repo": {
+      "seed_repo": { "path": "..\\\\..\\\\repos\\\\eMule" },
+      "variants": [
+        { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
+        { "name": "community", "path": "app\\\\eMule-v0.72a-community", "branch": "release/v0.72a-community" }
+      ]
     }
+  }
 }
 """,
         encoding="utf-8",

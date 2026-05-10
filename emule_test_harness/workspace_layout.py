@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-import re
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +21,7 @@ class AppVariant:
 
 @dataclass(frozen=True)
 class WorkspaceManifest:
-    """Minimal app-root data consumed from `deps.psd1`."""
+    """Minimal app-root data consumed from `deps.json`."""
 
     seed_repo_path: Path | None
     variants: tuple[AppVariant, ...]
@@ -43,17 +43,20 @@ def get_default_workspace_root(test_repo_root: Path, workspace_name: str = WORKS
 
 
 def load_workspace_manifest(workspace_root: Path) -> WorkspaceManifest:
-    """Parses the app-root subset of the generated workspace `deps.psd1` file."""
+    """Parses the app-root subset of the generated workspace `deps.json` file."""
 
-    manifest_path = workspace_root.resolve() / "deps.psd1"
+    manifest_path = workspace_root.resolve() / "deps.json"
     if not manifest_path.is_file():
         return WorkspaceManifest(seed_repo_path=None, variants=())
 
-    text = manifest_path.read_text(encoding="utf-8")
-    seed_repo_path = _parse_seed_repo_path(text)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    workspace = payload.get("workspace", {})
+    app_repo = workspace.get("app_repo", {})
+    seed_repo = app_repo.get("seed_repo", {})
+    seed_repo_path = seed_repo.get("path")
     variants = tuple(
-        AppVariant(name=name, path=Path(raw_path))
-        for name, raw_path in _parse_variant_entries(text)
+        AppVariant(name=str(raw["name"]), path=Path(str(raw["path"])))
+        for raw in app_repo.get("variants", [])
     )
     return WorkspaceManifest(seed_repo_path=Path(seed_repo_path) if seed_repo_path else None, variants=variants)
 
@@ -91,27 +94,4 @@ def resolve_workspace_app_root(
         if resolved_candidate.is_dir():
             return resolved_candidate
 
-    raise RuntimeError(f"Unable to resolve a canonical app root from '{resolved_workspace_root / 'deps.psd1'}'.")
-
-
-def _parse_seed_repo_path(text: str) -> str | None:
-    """Extracts `Workspace.AppRepo.SeedRepo.Path` from the generated manifest text."""
-
-    seed_match = re.search(r"SeedRepo\s*=\s*@\{(?P<body>.*?)^\s*\}", text, flags=re.DOTALL | re.MULTILINE)
-    if not seed_match:
-        return None
-    path_match = re.search(r"\bPath\s*=\s*(['\"])(?P<path>.*?)\1", seed_match.group("body"))
-    return path_match.group("path") if path_match else None
-
-
-def _parse_variant_entries(text: str) -> list[tuple[str, str]]:
-    """Extracts one-line variant `Name` and `Path` entries from the manifest text."""
-
-    entries: list[tuple[str, str]] = []
-    pattern = re.compile(
-        r"@\{\s*Name\s*=\s*(['\"])(?P<name>.*?)\1\s*;\s*Path\s*=\s*(['\"])(?P<path>.*?)\3\s*;",
-        flags=re.DOTALL,
-    )
-    for match in pattern.finditer(text):
-        entries.append((match.group("name"), match.group("path")))
-    return entries
+    raise RuntimeError(f"Unable to resolve a canonical app root from '{resolved_workspace_root / 'deps.json'}'.")
