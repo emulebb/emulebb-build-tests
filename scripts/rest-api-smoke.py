@@ -964,18 +964,7 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
         "api_key": False,
     },
 )
-REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = (
-    {
-        "method": "GET",
-        "path": "/",
-        "family": "legacy-html",
-        "scenario": "legacy_html_get",
-        "expected_statuses": (200,),
-        "response_kind": "html",
-        "expected_body_contains": "<html",
-        "api_key": False,
-    },
-)
+REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = ()
 REST_INTENTIONALLY_UNSUPPORTED = (
     "category_crud",
     "shared_file_rename",
@@ -2233,7 +2222,6 @@ def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
         operations.extend(dict(operation) for operation in REST_STRESS_SAFE_MUTATION_OPERATIONS)
         operations.extend(dict(operation) for operation in REST_STRESS_EDGE_OPERATIONS)
         operations.extend(dict(operation) for operation in REST_STRESS_ADAPTER_OPERATIONS)
-        operations.extend(dict(operation) for operation in REST_STRESS_LEGACY_OPERATIONS)
     return operations
 
 
@@ -5927,18 +5915,6 @@ def main() -> int:
         assert isinstance(kad_disconnect["json"], dict)
         assert "running" in kad_disconnect["json"]
         report["checks"]["kad_disconnect"] = compact_http_result(kad_disconnect)
-
-        current_phase = set_phase(report, "html_root")
-        html_root = http_request(base_url, "/")
-        assert html_root["status"] == 200
-        require_legacy_non_json_response(html_root, 200)
-        assert "text/html" in str(html_root["content_type"]).lower()
-        assert "<html" in str(html_root["body_text"]).lower()
-        report["checks"]["html_root"] = {
-            "status": html_root["status"],
-            "content_type": html_root["content_type"],
-            "body_preview": str(html_root["body_text"])[:200],
-        }
 
         current_phase = set_phase(report, "completed")
         report["status"] = "passed"

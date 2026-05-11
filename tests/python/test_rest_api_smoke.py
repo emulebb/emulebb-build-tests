@@ -664,6 +664,112 @@ def test_openapi_metadata_tracks_beta_release_contract() -> None:
     assert "1.0.0-pre" not in text
 
 
+def _collect_open_additional_properties(schema: object, path: tuple[str, ...] = ()) -> dict[tuple[str, ...], object]:
+    open_nodes: dict[tuple[str, ...], object] = {}
+    if isinstance(schema, dict):
+        if schema.get("additionalProperties") is not False and "additionalProperties" in schema:
+            open_nodes[path] = schema["additionalProperties"]
+        for key, value in schema.items():
+            if key != "additionalProperties":
+                open_nodes.update(_collect_open_additional_properties(value, path + (str(key),)))
+    elif isinstance(schema, list):
+        for index, value in enumerate(schema):
+            open_nodes.update(_collect_open_additional_properties(value, path + (str(index),)))
+    return open_nodes
+
+
+def test_openapi_public_response_dtos_are_closed_except_explicit_extension_maps() -> None:
+    module = load_rest_api_smoke_module()
+    document = module.load_openapi_document()
+
+    open_nodes = _collect_open_additional_properties(document)
+
+    assert open_nodes == {
+        (
+            "components",
+            "schemas",
+            "ErrorEnvelope",
+            "properties",
+            "error",
+            "properties",
+            "details",
+        ): True,
+        (
+            "components",
+            "schemas",
+            "App",
+            "properties",
+            "capabilities",
+        ): {"type": "boolean"},
+    }
+
+
+def test_openapi_core_public_dtos_reject_undocumented_fields() -> None:
+    module = load_rest_api_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    for schema_name in (
+        "EnvelopeMeta",
+        "Preferences",
+        "Stats",
+        "Category",
+        "Transfer",
+        "TransferPart",
+        "TransferSource",
+        "SharedFile",
+        "SharedDirectory",
+        "Upload",
+        "SearchResult",
+    ):
+        assert schemas[schema_name]["additionalProperties"] is False
+
+    assert schemas["SnapshotEnvelope"]["allOf"][1]["properties"]["data"]["additionalProperties"] is False
+
+
+def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_boundary() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
+    adapter_doc = (rest_docs_dir / "REST-API-ADAPTERS.md").read_text(encoding="utf-8")
+    contract_doc = (rest_docs_dir / "REST-API-CONTRACT.md").read_text(encoding="utf-8")
+    qbit_seams = (
+        workspace_root
+        / "workspaces"
+        / "v0.72a"
+        / "app"
+        / "eMule-main"
+        / "srchybrid"
+        / "WebServerQBitCompatSeams.h"
+    ).read_text(encoding="utf-8")
+
+    route_specs = re.findall(r'\{"(GET|POST)", "([^"]+)", (?:true|false)\}', qbit_seams)
+    assert len(route_specs) == 19
+
+    adapter_doc_lower = adapter_doc.lower()
+    for method, path in route_specs:
+        assert f"| `{method.lower()}` | `{path}` |" in adapter_doc_lower
+
+    normalized_adapter_doc = re.sub(r"\s+", " ", adapter_doc_lower)
+    assert "not a full qbittorrent web api clone" in normalized_adapter_doc
+
+    for required_text in (
+        "/indexer/emulebb/api",
+        "`t`",
+        "`apikey`",
+        "`season`",
+        "`ep`",
+        "`year`",
+        "deprecated",
+        "compile-only",
+    ):
+        assert required_text in adapter_doc_lower
+
+    contract_doc_lower = contract_doc.lower()
+    assert "rest-api-adapters.md" in contract_doc_lower
+    assert "deprecated" in contract_doc_lower
+    assert "legacy template-based webserver" in contract_doc_lower
+    assert "compile preservation" in contract_doc_lower
+
+
 def test_rest_error_response_requires_json_not_html() -> None:
     module = load_rest_api_smoke_module()
     error_result = {
@@ -1809,7 +1915,7 @@ def test_rest_stress_operations_include_expected_error_edges() -> None:
     )
 
 
-def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
+def test_rest_stress_operations_include_adapter_traffic_without_legacy_html() -> None:
     module = load_rest_api_smoke_module()
 
     operations = module.build_rest_stress_operations("smoke")
@@ -1877,7 +1983,9 @@ def test_rest_stress_operations_include_adapter_and_legacy_traffic() -> None:
         and operation["expected_statuses"] == (400,)
         for operation in operations
     )
-    assert operations_by_pair[("GET", "/")]["response_kind"] == "html"
+    assert ("GET", "/") not in operations_by_pair
+    assert all(operation.get("family") != "legacy-html" for operation in operations)
+    assert all(operation.get("response_kind") != "html" for operation in operations)
 
 
 def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
