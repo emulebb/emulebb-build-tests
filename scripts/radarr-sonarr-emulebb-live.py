@@ -39,6 +39,7 @@ DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 90.0
 DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES = 30.0
 ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
+DEFAULT_MEDIA_QUALITY_PROFILE_NAME = "AnyAnyLang"
 
 
 class LiveSearchUnavailableError(RuntimeError):
@@ -1124,18 +1125,18 @@ def first_arr_row(result: dict[str, Any], description: str) -> dict[str, Any]:
     return rows[0]
 
 
-def get_default_quality_profile_id(arr_url: str, api_key: str) -> int:
-    """Returns the first Radarr quality profile id."""
+def summarize_quality_profile(profile: dict[str, Any], preferred_name: str | None) -> dict[str, object]:
+    """Returns the report-safe identity of one Arr quality profile."""
 
-    profile = first_arr_row(arr_request(arr_url, api_key, "/api/v3/qualityprofile"), "Radarr quality profiles")
-    profile_id = int(profile.get("id") or 0)
-    if profile_id <= 0:
-        raise RuntimeError("Radarr first quality profile did not include an id.")
-    return profile_id
+    return {
+        "id": int(profile.get("id") or 0),
+        "name": profile.get("name"),
+        "preferred_name": preferred_name,
+    }
 
 
-def get_quality_profile_id(arr_url: str, api_key: str, kind: str, preferred_name: str | None = None) -> int:
-    """Returns the configured quality profile id, preferring an operator-provided name."""
+def get_quality_profile(arr_url: str, api_key: str, kind: str, preferred_name: str | None = None) -> dict[str, Any]:
+    """Returns the configured quality profile, preferring an operator-provided name."""
 
     profiles = require_success(arr_request(arr_url, api_key, "/api/v3/qualityprofile"), f"{kind} quality profiles")
     if not isinstance(profiles, list) or not profiles:
@@ -1145,14 +1146,20 @@ def get_quality_profile_id(arr_url: str, api_key: str, kind: str, preferred_name
             if isinstance(profile, dict) and str(profile.get("name") or "").strip().lower() == preferred_name.strip().lower():
                 profile_id = int(profile.get("id") or 0)
                 if profile_id > 0:
-                    return profile_id
+                    return profile
         raise RuntimeError(f"{kind} quality profile {preferred_name!r} was not found.")
     for profile in profiles:
         if isinstance(profile, dict):
             profile_id = int(profile.get("id") or 0)
             if profile_id > 0:
-                return profile_id
+                return profile
     raise RuntimeError(f"{kind} quality profiles did not include a valid id.")
+
+
+def get_quality_profile_id(arr_url: str, api_key: str, kind: str, preferred_name: str | None = None) -> int:
+    """Returns the configured quality profile id, preferring an operator-provided name."""
+
+    return int(get_quality_profile(arr_url, api_key, kind, preferred_name).get("id") or 0)
 
 
 def ensure_radarr_root_folder(
@@ -1204,24 +1211,47 @@ def ensure_radarr_movie(
     root_path: Path | str,
     *,
     create_local_root_path: bool = True,
+    quality_profile_name: str | None = None,
 ) -> dict[str, object]:
     """Ensures a temporary Radarr movie exists for the import E2E."""
 
     root_folder = ensure_radarr_root_folder(arr_url, api_key, root_path, create_local_path=create_local_root_path)
     root_path_text = str(root_folder.get("path") or resolve_radarr_root_path(root_path, create_local_path=False))
+    quality_profile = get_quality_profile(arr_url, api_key, "radarr", quality_profile_name)
+    quality_profile_id = int(quality_profile.get("id") or 0)
     movies = require_success(arr_request(arr_url, api_key, "/api/v3/movie"), "Radarr movie list")
     if isinstance(movies, list):
         for movie in movies:
             if isinstance(movie, dict) and str(movie.get("title") or "").strip().lower() == title.lower():
+                updated = False
+                selected_movie = movie
+                if int(movie.get("qualityProfileId") or 0) != quality_profile_id:
+                    payload = dict(movie)
+                    payload["qualityProfileId"] = quality_profile_id
+                    updated_payload = require_success(
+                        arr_request(
+                            arr_url,
+                            api_key,
+                            f"/api/v3/movie/{int(movie.get('id') or 0)}",
+                            method="PUT",
+                            json_body=payload,
+                            timeout_seconds=60.0,
+                        ),
+                        "Radarr movie quality profile update",
+                    )
+                    if isinstance(updated_payload, dict):
+                        selected_movie = updated_payload
+                    updated = True
                 return {
                     "id": int(movie.get("id") or 0),
                     "title": movie.get("title"),
                     "created": False,
+                    "updated": updated,
                     "root_folder": root_folder,
-                    "movie": movie,
+                    "quality_profile": summarize_quality_profile(quality_profile, quality_profile_name),
+                    "movie": selected_movie,
                 }
 
-    quality_profile_id = get_default_quality_profile_id(arr_url, api_key)
     lookup = lookup_radarr_movie(arr_url, api_key, title)
     payload = dict(lookup)
     payload["qualityProfileId"] = quality_profile_id
@@ -1239,7 +1269,9 @@ def ensure_radarr_movie(
         "id": int(created["id"]),
         "title": created.get("title"),
         "created": True,
+        "updated": False,
         "root_folder": root_folder,
+        "quality_profile": summarize_quality_profile(quality_profile, quality_profile_name),
         "movie": created,
     }
 
@@ -1307,19 +1339,41 @@ def ensure_sonarr_series(
 
     root_folder = ensure_arr_root_folder(arr_url, api_key, root_path, create_local_path=create_local_root_path, kind="sonarr")
     root_path_text = str(root_folder.get("path") or resolve_radarr_root_path(root_path, create_local_path=False))
+    quality_profile = get_quality_profile(arr_url, api_key, "sonarr", quality_profile_name)
+    quality_profile_id = int(quality_profile.get("id") or 0)
     series_rows = require_success(arr_request(arr_url, api_key, "/api/v3/series"), "Sonarr series list")
     if isinstance(series_rows, list):
         for series in series_rows:
             if isinstance(series, dict) and str(series.get("title") or "").strip().lower() == title.lower():
+                updated = False
+                selected_series = series
+                if int(series.get("qualityProfileId") or 0) != quality_profile_id:
+                    payload = dict(series)
+                    payload["qualityProfileId"] = quality_profile_id
+                    updated_payload = require_success(
+                        arr_request(
+                            arr_url,
+                            api_key,
+                            f"/api/v3/series/{int(series.get('id') or 0)}",
+                            method="PUT",
+                            json_body=payload,
+                            timeout_seconds=60.0,
+                        ),
+                        "Sonarr series quality profile update",
+                    )
+                    if isinstance(updated_payload, dict):
+                        selected_series = updated_payload
+                    updated = True
                 return {
                     "id": int(series.get("id") or 0),
                     "title": series.get("title"),
                     "created": False,
+                    "updated": updated,
                     "root_folder": root_folder,
-                    "series": series,
+                    "quality_profile": summarize_quality_profile(quality_profile, quality_profile_name),
+                    "series": selected_series,
                 }
 
-    quality_profile_id = get_quality_profile_id(arr_url, api_key, "sonarr", quality_profile_name)
     lookup = lookup_sonarr_series(arr_url, api_key, title)
     payload = dict(lookup)
     payload["qualityProfileId"] = quality_profile_id
@@ -1337,7 +1391,9 @@ def ensure_sonarr_series(
         "id": int(created["id"]),
         "title": created.get("title"),
         "created": True,
+        "updated": False,
         "root_folder": root_folder,
+        "quality_profile": summarize_quality_profile(quality_profile, quality_profile_name),
         "series": created,
     }
 
@@ -2647,8 +2703,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional Radarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
     )
     parser.add_argument(
+        "--radarr-quality-profile-name",
+        help="Radarr quality profile used by the movie acquisition proof. Defaults to AnyAnyLang or RADARR_QUALITY_PROFILE_NAME.",
+    )
+    parser.add_argument(
         "--sonarr-series-root",
         help="Optional Sonarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
+    )
+    parser.add_argument(
+        "--sonarr-quality-profile-name",
+        help="Sonarr quality profile used by the series acquisition proof. Defaults to AnyAnyLang or SONARR_QUALITY_PROFILE_NAME.",
     )
     parser.add_argument(
         "--live-wire-inputs-file",
@@ -2767,6 +2831,7 @@ def run_radarr_movie_download_e2e(
     movie_root: Path | str,
     category_name: str,
     movie_root_creates_local_path: bool,
+    quality_profile_name: str | None,
     release_search_timeout_seconds: float,
     timeout_seconds: float,
 ) -> tuple[dict[str, object], int | None]:
@@ -2778,14 +2843,17 @@ def run_radarr_movie_download_e2e(
         movie_title,
         movie_root,
         create_local_root_path=movie_root_creates_local_path,
+        quality_profile_name=quality_profile_name,
     )
     movie_id = int(movie["id"])
     report: dict[str, object] = {
         "movie_title_present": bool(movie_title),
         "movie_id": movie_id,
         "movie_created": bool(movie.get("created")),
+        "movie_updated": bool(movie.get("updated")),
         "category": category_name,
         "root_folder": movie.get("root_folder"),
+        "quality_profile": movie.get("quality_profile"),
     }
     health = arr_health_rows(radarr_url, radarr_api_key)
     report["indexer_health"] = {
@@ -2878,8 +2946,10 @@ def run_sonarr_series_download_e2e(
         "series_title_present": bool(series_title),
         "series_id": series_id,
         "series_created": bool(series.get("created")),
+        "series_updated": bool(series.get("updated")),
         "category": category_name,
         "root_folder": series.get("root_folder"),
+        "quality_profile": series.get("quality_profile"),
     }
     health = arr_health_rows(sonarr_url, sonarr_api_key)
     report["indexer_health"] = {
@@ -3042,7 +3112,11 @@ def main() -> int:
         acquisition_check_key = RADARR_DOWNLOAD_PROOF_CHECK_KEY
         root_arg = args.radarr_movie_root
         media_root: Path | str = root_arg.strip() if root_arg else None  # type: ignore[assignment]
-        quality_profile_name = env_values.get("RADARR_QUALITY_PROFILE_NAME")
+        quality_profile_name = (
+            args.radarr_quality_profile_name
+            or env_values.get("RADARR_QUALITY_PROFILE_NAME")
+            or DEFAULT_MEDIA_QUALITY_PROFILE_NAME
+        )
     else:
         media_terms = prowlarr_live.first_live_wire_term(
             require_sonarr_import_series_terms(inputs),
@@ -3059,7 +3133,11 @@ def main() -> int:
         acquisition_check_key = SONARR_DOWNLOAD_PROOF_CHECK_KEY
         root_arg = args.sonarr_series_root
         media_root = root_arg.strip() if root_arg else None  # type: ignore[assignment]
-        quality_profile_name = env_values.get("SONARR_QUALITY_PROFILE_NAME")
+        quality_profile_name = (
+            args.sonarr_quality_profile_name
+            or env_values.get("SONARR_QUALITY_PROFILE_NAME")
+            or DEFAULT_MEDIA_QUALITY_PROFILE_NAME
+        )
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
     indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
@@ -3155,6 +3233,7 @@ def main() -> int:
             "root_configured": bool(root_arg),
             "root_path_present": bool(str(media_root).strip()),
             "root_creates_local_path": media_root_creates_local_path,
+            "quality_profile_name": quality_profile_name,
             "environment_warning": media_root_warning,
             "acquisition_timeout_seconds": acquisition_timeout_seconds,
             "search_timeout_seconds": min(args.radarr_release_timeout_seconds, ARR_LIVE_SEARCH_TIMEOUT_SECONDS),
@@ -3298,6 +3377,7 @@ def main() -> int:
                 movie_root=media_root,
                 category_name=arr_category,
                 movie_root_creates_local_path=media_root_creates_local_path,
+                quality_profile_name=quality_profile_name,
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
                 timeout_seconds=acquisition_timeout_seconds,
             )
