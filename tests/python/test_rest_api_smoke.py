@@ -725,6 +725,18 @@ def test_openapi_core_public_dtos_reject_undocumented_fields() -> None:
     assert schemas["SnapshotEnvelope"]["allOf"][1]["properties"]["data"]["additionalProperties"] is False
 
 
+def test_openapi_search_type_enums_match_native_tokens() -> None:
+    module = load_rest_api_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+    native_tokens = ["", "Arc", "Audio", "Iso", "Image", "Pro", "Video", "Doc", "EmuleCollection"]
+
+    for schema_name in ("SearchSession", "Search", "SearchCreateRequest", "SearchResult"):
+        assert schemas[schema_name]["properties"]["type"]["enum"] == native_tokens
+
+    assert "enum" not in schemas["SearchResult"]["properties"]["fileType"]
+    assert "not remapped" in schemas["SearchResult"]["properties"]["fileType"]["description"]
+
+
 def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_boundary() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
@@ -1293,6 +1305,7 @@ def test_native_search_resources_echo_selected_type() -> None:
     source = source_path.read_text(encoding="utf-8")
 
     assert 'return StdUtf8FromCString(rFileType);' in source
+    assert "pSearchParams->strFileType = CStringFromStdUtf8(request.strFileType);" in source
 
     assert "GetSearchTypeName(pSearchParams->strFileType)" in source
     assert "GetSearchTypeName(rSearchParams.strFileType)" in source

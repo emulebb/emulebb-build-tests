@@ -364,6 +364,9 @@ TEST_CASE("Web API preference bounds match UI and INI persistence ranges")
 
 TEST_CASE("Web API normalizes search method names and validates native search type tokens")
 {
+	const std::vector<std::string> nativeSearchTypes = {"", "Arc", "Audio", "Iso", "Image", "Pro", "Video", "Doc", "EmuleCollection"};
+	CHECK_EQ(WebServerJsonSeams::GetNativeSearchFileTypeNames(), nativeSearchTypes);
+
 	CHECK_EQ(std::string(WebServerJsonSeams::GetDefaultSearchMethodName()), "automatic");
 	CHECK(WebServerJsonSeams::IsSearchMethodName("AUTOMATIC"));
 	CHECK(WebServerJsonSeams::IsSearchMethodName("KaD"));
@@ -497,6 +500,7 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 	CHECK_EQ(request.strQuery, "1080p");
 	CHECK_EQ(request.eMethod, WebApiCommandSeams::ESearchMethod::Kad);
 	CHECK_EQ(request.eFileType, WebApiCommandSeams::ESearchFileType::CdImage);
+	CHECK_EQ(request.strFileType, "Iso");
 	CHECK_EQ(request.strExtension, ".mkv");
 	CHECK(request.bHasMinSize);
 	CHECK(request.bHasMaxSize);
@@ -507,10 +511,12 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "feature film"}, {"method", "global"}, {"type", "Video"}}, request, error));
 	CHECK_EQ(request.eMethod, WebApiCommandSeams::ESearchMethod::Global);
 	CHECK_EQ(request.eFileType, WebApiCommandSeams::ESearchFileType::Video);
+	CHECK_EQ(request.strFileType, "Video");
 
 	error.clear();
 	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", strUnicodeQuery}}, request, error));
 	CHECK_EQ(request.strQuery, strUnicodeQuery);
+	CHECK_EQ(request.strFileType, "");
 }
 
 TEST_CASE("Web API rejects invalid search start payloads before they touch the UI")
