@@ -798,6 +798,11 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert schemas["TransferCreateRequest"]["properties"]["categoryId"]["maximum"] == 4294967295
     assert len(schemas["TransferPatch"]["oneOf"]) == 4
     assert schemas["TransferPatch"]["properties"]["categoryId"]["maximum"] == 4294967295
+    assert schemas["Transfer"]["properties"]["categoryId"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295,
+    }
     assert schemas["SharedFilePatch"]["minProperties"] == 1
     assert schemas["SharedFilePatch"]["dependentRequired"] == {
         "comment": ["rating"],
@@ -835,6 +840,32 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert document["paths"]["/kad/operations/bootstrap"]["post"]["requestBody"]["required"] is True
     assert schemas["SearchResultDownloadRequest"]["not"] == {"required": ["categoryId", "categoryName"]}
     assert schemas["SearchResultDownloadRequest"]["properties"]["categoryId"]["maximum"] == 4294967295
+
+    category_id_schema_paths: list[str] = []
+
+    def visit_category_id_schemas(node: object, path: tuple[str, ...] = ()) -> None:
+        if isinstance(node, dict):
+            properties = node.get("properties")
+            if isinstance(properties, dict) and "categoryId" in properties:
+                category_schema = properties["categoryId"]
+                assert isinstance(category_schema, dict)
+                category_id_schema_paths.append("/".join((*path, "properties", "categoryId")))
+                assert category_schema.get("type") == "integer"
+                assert category_schema.get("minimum") == 0
+                assert category_schema.get("maximum") == 4294967295
+            for key, value in node.items():
+                visit_category_id_schemas(value, path + (str(key),))
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                visit_category_id_schemas(value, path + (str(index),))
+
+    visit_category_id_schemas(document)
+    assert category_id_schema_paths == [
+        "components/schemas/Transfer/properties/categoryId",
+        "components/schemas/TransferCreateRequest/properties/categoryId",
+        "components/schemas/TransferPatch/properties/categoryId",
+        "components/schemas/SearchResultDownloadRequest/properties/categoryId",
+    ]
 
     parameters = document["components"]["parameters"]
     assert parameters["CategoryId"]["schema"]["maximum"] == 4294967295
@@ -1436,6 +1467,48 @@ components:
     module.validate_openapi_response_payload("StrictResponse", {"data": {"ok": True}}, openapi_path)
     with pytest.raises(module.jsonschema.ValidationError):
         module.validate_openapi_response_payload("StrictResponse", {"data": {"ok": True, "extra": 1}}, openapi_path)
+
+
+def test_openapi_custom_success_response_samples_match_contract() -> None:
+    module = load_rest_api_smoke_module()
+    samples = {
+        "BulkOperationResponse": {"data": {"items": [{"ok": True, "hash": "0" * 32}], "total": 1}, "meta": {}},
+        "PeerBanResponse": {"data": {"ok": True, "banned": True}, "meta": {}},
+        "UploadRemoveResponse": {"data": {"ok": True, "removed": "queue"}, "meta": {}},
+        "UrlImportResponse": {"data": {"ok": True, "imported": False}, "meta": {}},
+        "SharedFileCreateResponse": {
+            "data": {"ok": True, "path": "C:/incoming/example.dat", "alreadyShared": False, "queued": True, "file": None},
+            "meta": {},
+        },
+        "SharedFileDeleteResponse": {
+            "data": {"ok": True, "deletedFiles": False, "path": "C:/incoming/example.dat", "hash": "0" * 32},
+            "meta": {},
+        },
+        "TransferSourceBrowseResponse": {"data": {"ok": True, "alreadyPending": False, "searchId": "12"}, "meta": {}},
+        "SearchResultDownloadResponse": {"data": {"ok": True, "searchId": "12", "hash": "0" * 32}, "meta": {}},
+        "Ed2kLinkResponse": {"data": {"hash": "0" * 32, "link": "ed2k://|file|example.dat|1|hash|/"}, "meta": {}},
+    }
+
+    for response_name, payload in samples.items():
+        module.validate_openapi_response_payload(response_name, payload)
+
+
+def test_openapi_custom_success_responses_reject_generic_ok_fallbacks() -> None:
+    module = load_rest_api_smoke_module()
+
+    for response_name in (
+        "FriendResponse",
+        "PeerBanResponse",
+        "UploadRemoveResponse",
+        "UrlImportResponse",
+        "SharedFileCreateResponse",
+        "SharedFileDeleteResponse",
+        "TransferSourceBrowseResponse",
+        "SearchResultDownloadResponse",
+        "Ed2kLinkResponse",
+    ):
+        with pytest.raises(module.jsonschema.ValidationError):
+            module.validate_openapi_response_payload(response_name, {"data": {"ok": True}, "meta": {}})
 
 
 def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
