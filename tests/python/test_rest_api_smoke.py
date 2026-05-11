@@ -767,7 +767,9 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
 
     assert len(schemas["TransferCreateRequest"]["oneOf"]) == 2
     assert schemas["TransferCreateRequest"]["not"] == {"required": ["categoryId", "categoryName"]}
+    assert schemas["TransferCreateRequest"]["properties"]["categoryId"]["maximum"] == 4294967295
     assert len(schemas["TransferPatch"]["oneOf"]) == 4
+    assert schemas["TransferPatch"]["properties"]["categoryId"]["maximum"] == 4294967295
     assert schemas["SharedFilePatch"]["minProperties"] == 1
     assert schemas["SharedFilePatch"]["dependentRequired"] == {
         "comment": ["rating"],
@@ -795,12 +797,42 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert schemas["ServerCreateRequest"]["properties"]["port"]["minimum"] == 1
     assert schemas["ServerCreateRequest"]["properties"]["port"]["maximum"] == 65535
     assert schemas["UrlImportRequest"]["properties"]["url"]["minLength"] == 1
+    assert "format" not in schemas["UrlImportRequest"]["properties"]["url"]
     assert schemas["KadBootstrapRequest"]["required"] == ["address", "port"]
     assert schemas["KadBootstrapRequest"]["properties"]["address"]["minLength"] == 1
     assert schemas["KadBootstrapRequest"]["properties"]["port"]["minimum"] == 1
     assert schemas["KadBootstrapRequest"]["properties"]["port"]["maximum"] == 65535
     assert document["paths"]["/kad/operations/bootstrap"]["post"]["requestBody"]["required"] is True
     assert schemas["SearchResultDownloadRequest"]["not"] == {"required": ["categoryId", "categoryName"]}
+    assert schemas["SearchResultDownloadRequest"]["properties"]["categoryId"]["maximum"] == 4294967295
+
+    parameters = document["components"]["parameters"]
+    assert parameters["CategoryId"]["schema"]["maximum"] == 4294967295
+    assert parameters["SearchId"]["schema"] == {"type": "integer", "minimum": 0, "maximum": 4294967295}
+    assert parameters["Offset"]["schema"]["maximum"] == 2147483647
+
+    responses = document["components"]["responses"]
+    assert document["paths"]["/transfers"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
+    assert document["paths"]["/transfers/{hash}/operations/pause"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
+    assert document["paths"]["/transfers/{hash}/operations/resume"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
+    assert document["paths"]["/transfers/{hash}/operations/stop"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
+    assert document["paths"]["/shared-files"]["post"]["responses"]["200"]["$ref"].endswith("/SharedFileCreateResponse")
+    assert document["paths"]["/searches/{searchId}/results/{hash}/operations/download"]["post"]["responses"]["200"]["$ref"].endswith("/SearchResultDownloadResponse")
+    assert document["paths"]["/transfers/{hash}/sources/{clientId}/operations/browse"]["post"]["responses"]["200"]["$ref"].endswith("/TransferSourceBrowseResponse")
+    assert document["paths"]["/servers/{serverId}/operations/connect"]["post"]["responses"]["200"]["$ref"].endswith("/ServerStatusResponse")
+    assert document["paths"]["/servers/operations/import-met-url"]["post"]["responses"]["200"]["$ref"].endswith("/UrlImportResponse")
+    assert document["paths"]["/kad/operations/import-nodes-url"]["post"]["responses"]["200"]["$ref"].endswith("/UrlImportResponse")
+    assert document["paths"]["/uploads/{clientId}/operations/remove"]["post"]["responses"]["200"]["$ref"].endswith("/UploadRemoveResponse")
+    assert document["paths"]["/upload-queue/{clientId}/operations/remove"]["post"]["responses"]["200"]["$ref"].endswith("/UploadRemoveResponse")
+    for response_name in (
+        "PeerBanResponse",
+        "SearchResultDownloadResponse",
+        "SharedFileCreateResponse",
+        "TransferSourceBrowseResponse",
+        "UploadRemoveResponse",
+        "UrlImportResponse",
+    ):
+        assert response_name in responses
 
     source_properties = schemas["TransferSource"]["properties"]
     assert "state" not in source_properties
@@ -822,6 +854,16 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
         "remotequeuefull",
         "unknown",
     ]
+
+
+def test_native_transfer_operation_responses_use_stable_bulk_items() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source = source_path.read_text(encoding="utf-8")
+
+    assert 'return json{{"items", json::array({result})}};' in source
+    assert "json singleResource;" not in source
+    assert 'return json{{"items", results}};' in source
 
 
 def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
