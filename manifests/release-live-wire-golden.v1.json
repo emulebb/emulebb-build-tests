@@ -27,8 +27,8 @@
     "kad_search_count": 6,
     "download_trigger_count": 1,
     "search_type": "any",
-    "contract_route_count": 85,
-    "safe_contract_route_count": 82,
+    "contract_route_count": 88,
+    "safe_contract_route_count": 85,
     "unsafe_contract_operations": [
       "shutdownApp",
       "captureDiagnosticDump",
@@ -39,13 +39,13 @@
       "diagnostics": 2,
       "status": 3,
       "categories": 5,
-      "transfers": 20,
+      "transfers": 21,
       "shared": 8,
       "shared-directories": 3,
-      "uploads": 15,
+      "uploads": 16,
       "servers": 9,
       "kad": 6,
-      "searches": 5,
+      "searches": 6,
       "friends": 3,
       "logs": 2
     },
@@ -167,6 +167,15 @@
       "qbit_video": 2000,
       "radarr_release": 2000,
       "sonarr_release": 5000
+    },
+    "prowlarr_download_client_proof": {
+      "category": "prowlarr_grabs_cat",
+      "check_keys": [
+        "download_client",
+        "search_results",
+        "download_client_grab"
+      ],
+      "cleanup_key": "cleanup_download_clients"
     },
     "torznab_direct_error_edges": [
       {

@@ -26,6 +26,8 @@ TORZNAB_TV_CATEGORY = 5000
 TORZNAB_DOCUMENT_CATEGORY = 7000
 TORZNAB_LIVE_CATEGORY = TORZNAB_DOCUMENT_CATEGORY
 PROWLARR_GRAB_CATEGORY = "prowlarr_grabs_cat"
+PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS = ("download_client", "search_results", "download_client_grab")
+PROWLARR_DOWNLOAD_CLIENT_CLEANUP_KEY = "cleanup_download_clients"
 TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS = 70.0
 
 TORZNAB_DIRECT_ERROR_SCENARIOS: tuple[dict[str, object], ...] = (
@@ -1608,8 +1610,8 @@ def main() -> int:
             category=PROWLARR_GRAB_CATEGORY,
         )
         cleanup_download_clients.append((prowlarr_url, prowlarr_api_key, int(qbit_client["id"])))
-        report["checks"]["download_client"] = summarize_qbit_download_client(qbit_client, category=PROWLARR_GRAB_CATEGORY)
-        report["checks"]["search_results"] = wait_for_prowlarr_results(
+        report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[0]] = summarize_qbit_download_client(qbit_client, category=PROWLARR_GRAB_CATEGORY)
+        report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[1]] = wait_for_prowlarr_results(
             prowlarr_url,
             prowlarr_api_key,
             int(saved_indexer["id"]),
@@ -1617,12 +1619,12 @@ def main() -> int:
             args.result_timeout_seconds,
             category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
-        report["checks"]["search_results"] = redact_term_result(
-            report["checks"]["search_results"],
+        report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[1]] = redact_term_result(
+            report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[1]],
             source="documents",
             term_count=len(document_terms),
         )
-        report["checks"]["download_client_grab"] = prowlarr_download_client_grab_roundtrip(
+        report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[2]] = prowlarr_download_client_grab_roundtrip(
             prowlarr_url=prowlarr_url,
             prowlarr_api_key=prowlarr_api_key,
             emule_base_url=emule_base_url,
@@ -1692,7 +1694,7 @@ def main() -> int:
                 if report.get("status") == "passed":
                     report["status"] = "failed"
         if cleanup_report:
-            report["cleanup_download_clients"] = cleanup_report
+            report[PROWLARR_DOWNLOAD_CLIENT_CLEANUP_KEY] = cleanup_report
         if app is not None:
             try:
                 live_common.close_app_cleanly(app)

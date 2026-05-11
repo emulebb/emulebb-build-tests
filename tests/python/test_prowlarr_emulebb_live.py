@@ -34,6 +34,18 @@ def test_prowlarr_live_report_records_live_network_launch_inputs() -> None:
     assert 'BindAddr=hide.me' not in script_text
 
 
+def test_prowlarr_live_report_contract_requires_download_client_grab_proof() -> None:
+    module = load_prowlarr_module()
+
+    assert module.PROWLARR_GRAB_CATEGORY == "prowlarr_grabs_cat"
+    assert module.PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS == (
+        "download_client",
+        "search_results",
+        "download_client_grab",
+    )
+    assert module.PROWLARR_DOWNLOAD_CLIENT_CLEANUP_KEY == "cleanup_download_clients"
+
+
 def test_upsert_creates_disabled_then_force_enables_when_prowlarr_create_test_has_no_results(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []

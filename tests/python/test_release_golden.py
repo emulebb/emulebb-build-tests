@@ -94,6 +94,11 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         "radarr_release": arr_live.TORZNAB_MOVIE_CATEGORY,
         "sonarr_release": arr_live.TORZNAB_TV_CATEGORY,
     }
+    assert golden["arr"]["prowlarr_download_client_proof"] == {
+        "category": prowlarr_live.PROWLARR_GRAB_CATEGORY,
+        "check_keys": list(prowlarr_live.PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS),
+        "cleanup_key": prowlarr_live.PROWLARR_DOWNLOAD_CLIENT_CLEANUP_KEY,
+    }
 
     qbit_scenarios = [
         {
