@@ -40,7 +40,10 @@ DEFAULT_REST_SEARCH_COUNT = 6
 DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT = 1
 DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT = 6
 DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT = 4
-DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS = 2
+DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
+DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS = 90.0
+DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS = 300.0
+DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES = 30.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES = 4
 DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 12
 DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 8
@@ -164,8 +167,15 @@ SUITE_SPECS = (
         is_prowlarr_emulebb=True,
     ),
     SuiteSpec(
-        name="radarr-sonarr-emulebb",
-        script_name="radarr-sonarr-emulebb-live.py",
+        name="radarr-emulebb",
+        script_name="radarr-emulebb-live.py",
+        category="live-wire",
+        uses_live_seed_refresh=True,
+        is_arr_emulebb=True,
+    ),
+    SuiteSpec(
+        name="sonarr-emulebb",
+        script_name="sonarr-emulebb-live.py",
         category="live-wire",
         uses_live_seed_refresh=True,
         is_arr_emulebb=True,
@@ -237,8 +247,12 @@ def build_suite_command(
     live_wire_inputs_file: Path | None = None,
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
     arr_prowlarr_search_stress_count: int = DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT,
-    arr_qbit_live_wire_rounds: int = DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS,
+    emule_connection_timeout_seconds: float = DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS,
+    arr_search_timeout_seconds: float = DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS,
+    document_download_timeout_seconds: float = DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS,
+    media_acquisition_timeout_minutes: float = DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES,
     radarr_movie_root: str | None = None,
+    sonarr_series_root: str | None = None,
     rest_cold_start_dump_stress_waves: int = DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES,
     rest_cold_start_dump_stress_searches_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE,
     rest_cold_start_dump_stress_max_concurrent_searches: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES,
@@ -336,6 +350,10 @@ def build_suite_command(
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
+        command.extend(["--rest-ready-timeout-seconds", str(emule_connection_timeout_seconds)])
+        command.extend(["--emule-connection-timeout-seconds", str(emule_connection_timeout_seconds)])
+        command.extend(["--result-timeout-seconds", str(arr_search_timeout_seconds)])
+        command.extend(["--document-download-timeout-seconds", str(document_download_timeout_seconds)])
         command.extend(["--direct-search-stress-count", str(arr_direct_search_stress_count)])
         command.extend(["--prowlarr-search-stress-count", str(arr_prowlarr_search_stress_count)])
         command.append("--enable-upnp")
@@ -344,9 +362,15 @@ def build_suite_command(
     if spec.is_arr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
-        command.extend(["--qbit-live-wire-rounds", str(arr_qbit_live_wire_rounds)])
-        if radarr_movie_root is not None:
+        command.extend(["--rest-ready-timeout-seconds", str(emule_connection_timeout_seconds)])
+        command.extend(["--emule-connection-timeout-seconds", str(emule_connection_timeout_seconds)])
+        command.extend(["--result-timeout-seconds", str(arr_search_timeout_seconds)])
+        command.extend(["--radarr-release-timeout-seconds", str(arr_search_timeout_seconds)])
+        command.extend(["--acquisition-timeout-minutes", str(media_acquisition_timeout_minutes)])
+        if spec.name == "radarr-emulebb" and radarr_movie_root is not None:
             command.extend(["--radarr-movie-root", str(radarr_movie_root)])
+        if spec.name == "sonarr-emulebb" and sonarr_series_root is not None:
+            command.extend(["--sonarr-series-root", str(sonarr_series_root)])
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -459,8 +483,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-stop-start-after-churn", action="store_true")
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
-    parser.add_argument("--arr-qbit-live-wire-rounds", type=int, default=DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)
+    parser.add_argument("--emule-connection-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
+    parser.add_argument("--arr-search-timeout-seconds", type=float, default=DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS)
+    parser.add_argument("--document-download-timeout-seconds", type=float, default=DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS)
+    parser.add_argument("--media-acquisition-timeout-minutes", type=float, default=DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES)
     parser.add_argument("--radarr-movie-root")
+    parser.add_argument("--sonarr-series-root")
     parser.add_argument("--rest-cold-start-dump-stress-waves", type=int, default=DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES)
     parser.add_argument(
         "--rest-cold-start-dump-stress-searches-per-wave",
@@ -598,8 +626,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Arr direct search stress count must be greater than zero.")
     if args.arr_prowlarr_search_stress_count <= 0:
         raise ValueError("Arr Prowlarr search stress count must be greater than zero.")
-    if args.arr_qbit_live_wire_rounds <= 0:
-        raise ValueError("Arr qBit live-wire rounds must be greater than zero.")
+    if args.emule_connection_timeout_seconds <= 0:
+        raise ValueError("eMule connection timeout must be greater than zero.")
+    if args.arr_search_timeout_seconds <= 0:
+        raise ValueError("Arr search timeout must be greater than zero.")
+    if args.document_download_timeout_seconds <= 0:
+        raise ValueError("Document download timeout must be greater than zero.")
+    if args.media_acquisition_timeout_minutes <= 0:
+        raise ValueError("Media acquisition timeout must be greater than zero.")
     if args.rest_cold_start_dump_stress_waves <= 0:
         raise ValueError("REST cold-start dump stress waves must be greater than zero.")
     if args.rest_cold_start_dump_stress_searches_per_wave <= 0:
@@ -662,6 +696,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
     shared_root = Path(args.shared_root).resolve() if args.shared_root else None
     radarr_movie_root = args.radarr_movie_root.strip() if args.radarr_movie_root else None
+    sonarr_series_root = args.sonarr_series_root.strip() if args.sonarr_series_root else None
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     live_wire_inputs_file = live_wire_inputs.resolve_inputs_path(
         Path(__file__).resolve().parent.parent,
@@ -695,9 +730,14 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_search_method_override": args.rest_search_method_override,
         "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
         "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
-        "arr_qbit_live_wire_rounds": args.arr_qbit_live_wire_rounds,
+        "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
+        "arr_search_timeout_seconds": args.arr_search_timeout_seconds,
+        "document_download_timeout_seconds": args.document_download_timeout_seconds,
+        "media_acquisition_timeout_minutes": args.media_acquisition_timeout_minutes,
         "radarr_movie_root_configured": bool(args.radarr_movie_root),
         "radarr_movie_root_present": bool(args.radarr_movie_root),
+        "sonarr_series_root_configured": bool(args.sonarr_series_root),
+        "sonarr_series_root_present": bool(args.sonarr_series_root),
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
             "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
@@ -776,8 +816,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             live_wire_inputs_file=live_wire_inputs_file,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
-            arr_qbit_live_wire_rounds=args.arr_qbit_live_wire_rounds,
+            emule_connection_timeout_seconds=args.emule_connection_timeout_seconds,
+            arr_search_timeout_seconds=args.arr_search_timeout_seconds,
+            document_download_timeout_seconds=args.document_download_timeout_seconds,
+            media_acquisition_timeout_minutes=args.media_acquisition_timeout_minutes,
             radarr_movie_root=radarr_movie_root,
+            sonarr_series_root=sonarr_series_root,
             rest_cold_start_dump_stress_waves=args.rest_cold_start_dump_stress_waves,
             rest_cold_start_dump_stress_searches_per_wave=args.rest_cold_start_dump_stress_searches_per_wave,
             rest_cold_start_dump_stress_max_concurrent_searches=args.rest_cold_start_dump_stress_max_concurrent_searches,
@@ -844,17 +888,23 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             arr_result = {
                 "arr_integration": True,
                 "live_wire_inputs_file": str(live_wire_inputs_file),
+                "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
+                "arr_search_timeout_seconds": args.arr_search_timeout_seconds,
             }
             if spec.is_prowlarr_emulebb:
                 arr_result.update(
                     {
                         "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
                         "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
+                        "document_download_timeout_seconds": args.document_download_timeout_seconds,
                     }
                 )
             if spec.is_arr_emulebb:
-                arr_result["arr_qbit_live_wire_rounds"] = args.arr_qbit_live_wire_rounds
-                arr_result["radarr_movie_root_configured"] = bool(args.radarr_movie_root)
+                arr_result["media_acquisition_timeout_minutes"] = args.media_acquisition_timeout_minutes
+                if spec.name == "radarr-emulebb":
+                    arr_result["radarr_movie_root_configured"] = bool(args.radarr_movie_root)
+                if spec.name == "sonarr-emulebb":
+                    arr_result["sonarr_series_root_configured"] = bool(args.sonarr_series_root)
             result.update(arr_result)
         if spec.is_rest_cold_start_dump_stress:
             result.update(

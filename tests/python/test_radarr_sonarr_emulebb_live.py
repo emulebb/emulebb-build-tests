@@ -29,25 +29,20 @@ def test_radarr_sonarr_live_report_records_live_network_launch_inputs() -> None:
     assert 'BindAddr=hide.me' not in script_text
 
 
-def test_radarr_sonarr_direct_search_terms_include_generic_fallback() -> None:
+def test_radarr_stage_keeps_movie_and_generic_terms_separate() -> None:
     module = load_radarr_sonarr_module()
     inputs = types.SimpleNamespace(
-        document_terms=("linux", "ubuntu"),
-        generic_open_terms=("ubuntu", "emule", "fedora"),
-        radarr_movie_terms=("operator movie term", "linux"),
-        sonarr_series_terms=("operator series term", "linux"),
+        generic_open_terms=("linux", "ubuntu"),
+        radarr_movie_terms=("operator movie term", "fallback movie"),
+        sonarr_series_terms=("operator series term",),
     )
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "radarr-sonarr-emulebb-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
 
-    assert module.build_direct_search_terms(inputs) == ("linux", "ubuntu", "emule", "fedora")
-    assert module.build_qbit_search_terms(inputs) == (
-        "operator movie term",
-        "linux",
-        "operator series term",
-        "ubuntu",
-        "emule",
-        "fedora",
-    )
-    assert module.build_sonarr_release_terms(inputs) == ("operator series term", "linux", "ubuntu", "emule", "fedora")
+    assert not hasattr(module, "build_direct_search_terms")
+    assert not hasattr(module, "build_qbit_search_terms")
+    assert module.require_radarr_import_movie_terms(inputs) == ("operator movie term", "fallback movie")
+    assert "generic_open" not in script_text
 
 
 def test_radarr_import_movie_title_comes_from_live_wire_inputs() -> None:
@@ -57,13 +52,260 @@ def test_radarr_import_movie_title_comes_from_live_wire_inputs() -> None:
     assert module.require_radarr_import_movie_terms(inputs) == ("operator configured title", "fallback")
 
 
-def test_radarr_import_movie_selection_uses_prowlarr_reachable_term() -> None:
+def test_radarr_stage_does_not_duplicate_prowlarr_movie_readiness() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "radarr-sonarr-emulebb-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "selected_media_terms = media_terms" in script_text
+    assert "wait_for_primary_radarr_movie_term_results" not in script_text
+    assert "diagnose_radarr_movie_terms" not in script_text
+    assert "prowlarr_radarr_video_search" not in script_text
+    assert "prowlarr_sonarr_video_search" not in script_text
+
+
+def test_arr_release_selection_prefers_title_match_then_sources() -> None:
     module = load_radarr_sonarr_module()
 
-    assert module.select_radarr_import_movie_terms(
-        ("first operator title", "reachable operator title"),
-        {"term_index": 1, "term_present": True, "count": 100},
-    ) == ("reachable operator title",)
+    result = module.select_best_arr_release(
+        [
+            {"title": "Other Release", "sources": 100, "guid": "other"},
+            {"title": "Operator Movie 720p", "sources": 4, "guid": "lower"},
+            {"title": "Operator Movie 1080p", "sources": 12, "guid": "best"},
+        ],
+        "operator movie",
+    )
+
+    assert result["guid"] == "best"
+
+
+def test_arr_release_search_paths_try_operator_term_before_media_id() -> None:
+    module = load_radarr_sonarr_module()
+
+    paths = module.build_arr_release_search_paths("radarr", "operator movie", 14, media_id=77)
+
+    assert paths[:2] == [
+        "/api/v3/release?term=operator%20movie&indexerIds=14",
+        "/api/v3/release?term=operator%20movie&indexerId=14",
+    ]
+    assert paths[2:] == [
+        "/api/v3/release?movieId=77&indexerIds=14",
+        "/api/v3/release?movieId=77&indexerId=14",
+    ]
+
+
+def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        module,
+        "ensure_radarr_movie",
+        lambda *_args, **_kwargs: calls.append(("movie", None))
+        or {"id": 77, "created": True, "root_folder": {"path": str(tmp_path)}},
+    )
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release",
+        lambda *_args, **_kwargs: calls.append(("release_grab", _args[3]))
+        or {
+            "attempt_count": 1,
+            "title_present": True,
+            "downloadUrl_present": True,
+            "guid_present": True,
+            "selection": {"title_match_score": 200, "source_count": 12},
+            "hash": "fedcba9876543210fedcba9876543210",
+            "hash_present": True,
+            "grab_status": 200,
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_transfer_category",
+        lambda *_args, **_kwargs: calls.append(("category_transfer", _args[2:4]))
+        or {"hash": _args[2], "categoryName": _args[3]},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_transfer_completion",
+        lambda *_args, **_kwargs: calls.append(("transfer_complete", _args[2])) or {"hash": _args[2], "state": "completed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_radarr_import",
+        lambda *_args, **_kwargs: calls.append(("radarr_import", _args[2])) or {"movie_id": _args[2], "hasFile": True},
+    )
+    monkeypatch.setattr(
+        module,
+        "resume_transfer_if_paused",
+        lambda *_args, **_kwargs: calls.append(("resume_if_paused", _args[2])) or {"resumed": False},
+    )
+    monkeypatch.setattr(module, "arr_health_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: set())
+    report, cleanup_movie_id = module.run_radarr_movie_download_e2e(
+        radarr_url="http://radarr.test",
+        radarr_api_key="key",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        indexer_id=40,
+        indexer_name="eMule BB Local (Prowlarr)",
+        prowlarr_indexer_id=50,
+        movie_title="operator movie",
+        movie_root=tmp_path,
+        category_name=module.RADARR_IMPORT_CATEGORY,
+        movie_root_creates_local_path=True,
+        release_search_timeout_seconds=10.0,
+        timeout_seconds=10.0,
+    )
+
+    assert cleanup_movie_id == 77
+    assert report["release_grab"]["hash_present"] is True
+    assert report["release_grab"]["selection"] == {"title_match_score": 200, "source_count": 12}
+    assert report["category_transfer"]["categoryName"] == module.RADARR_IMPORT_CATEGORY
+    assert calls == [
+        ("movie", None),
+        ("release_grab", "operator movie"),
+        ("category_transfer", ("fedcba9876543210fedcba9876543210", module.RADARR_IMPORT_CATEGORY)),
+        ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
+        ("transfer_complete", "fedcba9876543210fedcba9876543210"),
+        ("radarr_import", 77),
+    ]
+
+
+def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_indexer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        module,
+        "ensure_radarr_movie",
+        lambda *_args, **_kwargs: {"id": 77, "created": True, "root_folder": {"path": str(tmp_path)}},
+    )
+    monkeypatch.setattr(
+        module,
+        "arr_health_rows",
+        lambda *_args, **_kwargs: [
+            {
+                "source": "IndexerStatusCheck",
+                "message": "Indexers unavailable due to failures: eMule BB Local (Prowlarr)",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release",
+        lambda *_args, **_kwargs: calls.append(("direct_arr_search", None)) or pytest.fail("direct Arr search should not run"),
+    )
+
+    def fake_prowlarr_source_grab(**kwargs):
+        calls.append(("prowlarr_source_grab", (kwargs["title"], kwargs["category_id"], kwargs["download_category"])))
+        return {
+            "source": "prowlarr_eMule_indexer_arr_grab",
+            "hash": "fedcba9876543210fedcba9876543210",
+            "hash_present": True,
+            "category_transfer": {"hash_present": True, "categoryName": module.RADARR_IMPORT_CATEGORY},
+        }
+
+    monkeypatch.setattr(module, "grab_first_arr_release_via_prowlarr", fake_prowlarr_source_grab)
+    monkeypatch.setattr(
+        module,
+        "wait_for_transfer_completion",
+        lambda *_args, **_kwargs: calls.append(("transfer_complete", _args[2])) or {"hash": _args[2], "state": "completed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_radarr_import",
+        lambda *_args, **_kwargs: calls.append(("radarr_import", _args[2])) or {"movie_id": _args[2], "hasFile": True},
+    )
+    monkeypatch.setattr(
+        module,
+        "resume_transfer_if_paused",
+        lambda *_args, **_kwargs: calls.append(("resume_if_paused", _args[2])) or {"resumed": False},
+    )
+
+    report, cleanup_movie_id = module.run_radarr_movie_download_e2e(
+        radarr_url="http://radarr.test",
+        radarr_api_key="key",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        indexer_id=40,
+        indexer_name="eMule BB Local (Prowlarr)",
+        prowlarr_indexer_id=50,
+        movie_title="operator movie",
+        movie_root=tmp_path,
+        category_name=module.RADARR_IMPORT_CATEGORY,
+        movie_root_creates_local_path=True,
+        release_search_timeout_seconds=10.0,
+        timeout_seconds=10.0,
+    )
+
+    assert cleanup_movie_id == 77
+    assert report["indexer_health"]["unavailable_due_to_failures"] is True
+    assert report["release_grab"]["source"] == "prowlarr_eMule_indexer_arr_grab"
+    assert report["category_transfer"]["categoryName"] == module.RADARR_IMPORT_CATEGORY
+    assert calls == [
+        ("prowlarr_source_grab", ("operator movie", module.TORZNAB_MOVIE_CATEGORY, module.RADARR_IMPORT_CATEGORY)),
+        ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
+        ("transfer_complete", "fedcba9876543210fedcba9876543210"),
+        ("radarr_import", 77),
+    ]
+
+
+def test_arr_release_grab_discovers_new_category_transfer_when_release_hash_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: {"oldhash"})
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release",
+        lambda *_args, **_kwargs: calls.append(("direct_arr_search", _args[3]))
+        or {"source": "arr_release_search", "hash": "", "hash_present": False, "grab_status": 200},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_new_transfer_category",
+        lambda *_args, **kwargs: calls.append(("new_transfer", kwargs["category"]))
+        or {"hash": "fedcba9876543210fedcba9876543210", "categoryName": kwargs["category"]},
+    )
+
+    result = module.grab_first_arr_release_or_fallback_to_prowlarr(
+        kind="radarr",
+        arr_url="http://radarr.test",
+        arr_api_key="key",
+        arr_indexer_id=40,
+        arr_indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=50,
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        title="operator movie",
+        media_id=77,
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+        download_category=module.RADARR_IMPORT_CATEGORY,
+        timeout_seconds=10.0,
+        health_rows=[],
+    )
+
+    assert result["hash"] == "fedcba9876543210fedcba9876543210"
+    assert result["hash_present"] is True
+    assert result["category_transfer"]["categoryName"] == module.RADARR_IMPORT_CATEGORY
+    assert calls == [
+        ("direct_arr_search", "operator movie"),
+        ("new_transfer", module.RADARR_IMPORT_CATEGORY),
+    ]
 
 
 def test_radarr_sonarr_live_script_does_not_define_static_movie_title() -> None:
@@ -270,6 +512,39 @@ def test_qbit_schema_summary_requires_arr_fields() -> None:
     assert module.summarize_qbit_schema(schema, category_field="tvCategory")["missing_required_fields"] == ["tvCategory"]
 
 
+def test_qbit_client_payload_starts_media_downloads() -> None:
+    module = load_radarr_sonarr_module()
+    schema = {
+        "implementation": "QBittorrent",
+        "implementationName": "qBittorrent",
+        "protocol": "torrent",
+        "configContract": "QBittorrentSettings",
+        "fields": [
+            {"name": "host"},
+            {"name": "port"},
+            {"name": "useSsl"},
+            {"name": "urlBase"},
+            {"name": "username"},
+            {"name": "password"},
+            {"name": "initialState"},
+            {"name": "movieCategory"},
+        ],
+    }
+
+    payload = module.build_qbit_client_payload(
+        schema,
+        name="eMule BB Live radarr 4711",
+        host="127.0.0.1",
+        port=4711,
+        api_key="emule-key",
+        category_field="movieCategory",
+        category="radarr_movies_cat",
+    )
+
+    assert next(field["value"] for field in payload["fields"] if field["name"] == "initialState") == 0
+    assert next(field["value"] for field in payload["fields"] if field["name"] == "movieCategory") == "radarr_movies_cat"
+
+
 def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[tuple[str, str]] = []
@@ -360,6 +635,7 @@ def test_arr_readiness_summaries_are_compact() -> None:
         "enableInteractiveSearch": None,
         "protocol": "torrent",
         "priority": 25,
+        "tag_count": None,
     }
     assert client["test_status"] == 200
     assert client["schema"] == {"ok": True}
@@ -509,7 +785,299 @@ def test_ensure_arr_indexer_enabled_reenables_disabled_provider(monkeypatch: pyt
     assert len(requests) == 1
 
 
-def test_require_arr_check_passed_accepts_release_search_diagnostics() -> None:
+def test_ensure_arr_emule_indexer_reuses_existing_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    requests: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_arr_request(_arr_url, _api_key, path, *, method="GET", json_body=None, **_kwargs):
+        requests.append((method, path, json_body))
+        if path == "/api/v3/indexer" and method == "GET":
+            return {
+                "status": 200,
+                "json": [
+                    {
+                        "id": 14,
+                        "name": "eMule BB Local (Prowlarr)",
+                        "enableRss": False,
+                        "enableAutomaticSearch": False,
+                        "enableInteractiveSearch": False,
+                        "fields": [{"name": "baseUrl"}, {"name": "apiPath"}, {"name": "apiKey"}, {"name": "categories"}],
+                    },
+                    {"id": 20, "name": "Other Indexer"},
+                ],
+                "body_text": "[]",
+            }
+        if path == "/api/v3/indexer/14?forceSave=true" and method == "PUT":
+            assert json_body["name"] == "eMule BB Local"
+            assert json_body["enableRss"] is True
+            assert json_body["fields"][0]["value"] == "http://prowlarr.test/40/"
+            assert json_body["fields"][3]["value"] == [module.TORZNAB_MOVIE_CATEGORY]
+            return {"status": 202, "json": {**json_body, "id": 14}, "body_text": "{}"}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    indexer, summary = module.ensure_arr_emule_indexer(
+        arr_url="http://radarr.test",
+        api_key="key",
+        indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=40,
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+    )
+
+    assert indexer["id"] == 14
+    assert summary == {"mode": "updated", "validation_retry": False, "category": module.TORZNAB_MOVIE_CATEGORY, "status": 202}
+    assert [request[:2] for request in requests] == [("GET", "/api/v3/indexer"), ("PUT", "/api/v3/indexer/14?forceSave=true")]
+
+
+def test_ensure_arr_emule_indexer_creates_missing_sonarr_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    requests: list[tuple[str, str]] = []
+    schema = {
+        "implementation": "Torznab",
+        "implementationName": "Torznab",
+        "configContract": "TorznabSettings",
+        "protocol": "torrent",
+        "enableRss": False,
+        "enableAutomaticSearch": False,
+        "enableInteractiveSearch": False,
+        "fields": [{"name": "baseUrl"}, {"name": "apiPath"}, {"name": "apiKey"}, {"name": "categories"}],
+    }
+
+    def fake_arr_request(_arr_url, _api_key, path, *, method="GET", json_body=None, **_kwargs):
+        requests.append((method, path))
+        if path == "/api/v3/indexer" and method == "GET":
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/indexer/schema" and method == "GET":
+            return {"status": 200, "json": [schema], "body_text": "[]"}
+        if path == "/api/v3/indexer?forceSave=true" and method == "POST":
+            assert json_body["fields"][0]["value"] == "http://prowlarr.test/40/"
+            assert json_body["fields"][3]["value"] == [module.TORZNAB_TV_CATEGORY]
+            return {"status": 201, "json": {**json_body, "id": 16}, "body_text": "{}"}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    indexer, summary = module.ensure_arr_emule_indexer(
+        arr_url="http://sonarr.test",
+        api_key="key",
+        indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test/",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=40,
+        category_id=module.TORZNAB_TV_CATEGORY,
+    )
+
+    assert indexer["id"] == 16
+    assert summary == {"mode": "created", "validation_retry": False, "category": module.TORZNAB_TV_CATEGORY, "status": 201}
+    assert requests == [
+        ("GET", "/api/v3/indexer"),
+        ("GET", "/api/v3/indexer/schema"),
+        ("POST", "/api/v3/indexer?forceSave=true"),
+    ]
+
+
+def test_ensure_arr_emule_indexer_retries_disabled_save_on_validation_blocker(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    requests: list[tuple[str, str, bool]] = []
+    schema = {
+        "implementation": "Torznab",
+        "implementationName": "Torznab",
+        "configContract": "TorznabSettings",
+        "protocol": "torrent",
+        "enableRss": False,
+        "enableAutomaticSearch": False,
+        "enableInteractiveSearch": False,
+        "fields": [{"name": "baseUrl"}, {"name": "apiPath"}, {"name": "apiKey"}, {"name": "categories"}],
+    }
+
+    def fake_arr_request(_arr_url, _api_key, path, *, method="GET", json_body=None, **_kwargs):
+        enabled = bool(json_body and json_body.get("enableRss"))
+        requests.append((method, path, enabled))
+        if path == "/api/v3/indexer" and method == "GET":
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/indexer/schema" and method == "GET":
+            return {"status": 200, "json": [schema], "body_text": "[]"}
+        if path == "/api/v3/indexer?forceSave=true" and method == "POST" and enabled:
+            return {"status": 400, "json": None, "body_text": "no results in the configured categories"}
+        if path == "/api/v3/indexer?forceSave=true" and method == "POST" and not enabled:
+            return {"status": 201, "json": {**json_body, "id": 21}, "body_text": "{}"}
+        if path == "/api/v3/indexer/21?forceSave=true" and method == "PUT" and enabled:
+            return {"status": 202, "json": {**json_body, "id": 21}, "body_text": "{}"}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    indexer, summary = module.ensure_arr_emule_indexer(
+        arr_url="http://radarr.test",
+        api_key="key",
+        indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=40,
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+    )
+
+    assert indexer["id"] == 21
+    assert summary == {
+        "mode": "created",
+        "validation_retry": True,
+        "category": module.TORZNAB_MOVIE_CATEGORY,
+        "initial_status": 400,
+        "disabled_id": 21,
+    }
+    assert requests == [
+        ("GET", "/api/v3/indexer", False),
+        ("GET", "/api/v3/indexer/schema", False),
+        ("POST", "/api/v3/indexer?forceSave=true", True),
+        ("POST", "/api/v3/indexer?forceSave=true", False),
+        ("PUT", "/api/v3/indexer/21?forceSave=true", True),
+    ]
+
+
+def test_recreate_arr_emule_indexer_if_unavailable_uses_public_arr_apis(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    requests: list[tuple[str, str]] = []
+    schema = {
+        "implementation": "Torznab",
+        "implementationName": "Torznab",
+        "configContract": "TorznabSettings",
+        "protocol": "torrent",
+        "enableRss": False,
+        "enableAutomaticSearch": False,
+        "enableInteractiveSearch": False,
+        "fields": [{"name": "baseUrl"}, {"name": "apiPath"}, {"name": "apiKey"}, {"name": "categories"}],
+    }
+
+    def fake_arr_request(_arr_url, _api_key, path, *, method="GET", json_body=None, **_kwargs):
+        requests.append((method, path))
+        if path == "/api/v3/health" and method == "GET":
+            return {
+                "status": 200,
+                "json": [
+                    {
+                        "source": "IndexerStatusCheck",
+                        "message": "Indexers unavailable due to failures: eMule BB Local",
+                    }
+                ],
+                "body_text": "[]",
+            }
+        if path == "/api/v3/indexer/15" and method == "DELETE":
+            return {"status": 202, "json": None, "body_text": ""}
+        if path == "/api/v3/indexer/schema" and method == "GET":
+            return {"status": 200, "json": [schema], "body_text": "[]"}
+        if path == "/api/v3/indexer?forceSave=true" and method == "POST":
+            assert json_body["name"] == "eMule BB Local"
+            assert json_body["fields"][0]["value"] == "http://prowlarr.test/40/"
+            assert json_body["fields"][3]["value"] == [module.TORZNAB_MOVIE_CATEGORY]
+            return {"status": 201, "json": {**json_body, "id": 44}, "body_text": "{}"}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    indexer, summary = module.recreate_arr_emule_indexer_if_unavailable(
+        arr_url="http://radarr.test",
+        api_key="key",
+        indexer={"id": 15, "name": "eMule BB Local"},
+        indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=40,
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+    )
+
+    assert indexer["id"] == 44
+    assert summary["mode"] == "recreated"
+    assert summary["old_id"] == 15
+    assert summary["new_id"] == 44
+    assert requests == [
+        ("GET", "/api/v3/health"),
+        ("DELETE", "/api/v3/indexer/15"),
+        ("GET", "/api/v3/indexer/schema"),
+        ("POST", "/api/v3/indexer?forceSave=true"),
+    ]
+
+
+def test_arr_validation_blocker_accepts_provider_validation_transport_errors() -> None:
+    module = load_radarr_sonarr_module()
+
+    assert module.is_arr_validation_blocker(
+        {
+            "status": 400,
+            "body_text": "Unable to connect to indexer. HTTP request failed: [429:TooManyRequests]",
+        }
+    )
+
+
+def test_ensure_arr_indexer_untagged_clears_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        assert path == "/api/v3/indexer/15?forceSave=true"
+        assert kwargs["method"] == "PUT"
+        payload = kwargs["json_body"]
+        assert payload["tags"] == []
+        return {"status": 202, "json": {**payload, "id": 15}, "body_text": "{}"}
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    indexer, summary = module.ensure_arr_indexer_untagged(
+        "http://radarr.test",
+        "key",
+        {"id": 15, "name": "eMule BB Local", "tags": [3]},
+    )
+
+    assert indexer["tags"] == []
+    assert summary == {"changed": True, "previous_tag_count": 1, "status": 202}
+
+
+def test_resolve_prowlarr_indexer_sync_tags_uses_matching_arr_application(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+
+    def fake_prowlarr_request(_prowlarr_url, _api_key, path, **_kwargs):
+        assert path == "/api/v1/applications"
+        return {
+            "status": 200,
+            "json": [
+                {
+                    "enable": True,
+                    "name": "RADARR_ENG",
+                    "tags": [3],
+                    "fields": [{"name": "baseUrl", "value": "http://radarr.test/"}],
+                },
+                {
+                    "enable": True,
+                    "name": "SONARR_ENG",
+                    "tags": [4],
+                    "fields": [{"name": "baseUrl", "value": "http://sonarr.test"}],
+                },
+            ],
+            "body_text": "[]",
+        }
+
+    monkeypatch.setattr(module.prowlarr_live, "prowlarr_request", fake_prowlarr_request)
+
+    assert module.resolve_prowlarr_indexer_sync_tags("http://prowlarr.test", "key", "http://radarr.test") == [3]
+
+
+def test_require_arr_check_passed_accepts_skipped_release_search() -> None:
+    module = load_radarr_sonarr_module()
+    report = {
+        "readiness": {
+            "indexer_synced": True,
+            "indexer_enabled": True,
+            "download_client_created": True,
+            "download_client_tested": True,
+        },
+        "release_search": {"status": "skipped", "reason": "covered by movie download proof"},
+    }
+
+    module.require_arr_check_passed("radarr", report)
+
+
+def test_require_arr_check_passed_rejects_release_search_diagnostics() -> None:
     module = load_radarr_sonarr_module()
     report = {
         "readiness": {
@@ -521,7 +1089,8 @@ def test_require_arr_check_passed_accepts_release_search_diagnostics() -> None:
         "release_search": {"status": "inconclusive", "error": "no rows"},
     }
 
-    module.require_arr_check_passed("sonarr", report)
+    with pytest.raises(RuntimeError, match="release search"):
+        module.require_arr_check_passed("sonarr", report)
 
 
 def test_require_arr_check_passed_rejects_disabled_indexer() -> None:

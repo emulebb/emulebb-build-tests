@@ -236,6 +236,14 @@ def build_profile_base(spec: ProfileBuildSpec) -> dict[str, object]:
         ("IncomingDir", win_path(incoming_dir, trailing_slash=True)),
         ("TempDir", win_path(temp_dir, trailing_slash=True)),
         ("TempDirs", win_path(temp_dir, trailing_slash=True)),
+        ("SaveLogToDisk", "1"),
+        ("SaveDebugToDisk", "1"),
+        ("VerboseOptions", "1"),
+        ("Verbose", "1"),
+        ("FullVerbose", "1"),
+        ("MaxLogFileSize", "10485760"),
+        ("MaxLogBuff", "256"),
+        ("LogFileFormat", "0"),
     ):
         preferences_text = patch_ini_value(preferences_text, key, value)
     write_utf16_ini_text(preferences_path, preferences_text)

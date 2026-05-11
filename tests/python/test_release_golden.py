@@ -90,7 +90,6 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
     ]
     assert torznab_error_edges == golden["arr"]["torznab_direct_error_edges"]
     assert golden["arr"]["media_categories"] == {
-        "qbit_video": arr_live.TORZNAB_MOVIE_CATEGORY,
         "radarr_release": arr_live.TORZNAB_MOVIE_CATEGORY,
         "sonarr_release": arr_live.TORZNAB_TV_CATEGORY,
     }
@@ -98,6 +97,19 @@ def test_release_live_wire_golden_manifest_matches_rest_and_aggregate_runners() 
         "category": prowlarr_live.PROWLARR_GRAB_CATEGORY,
         "check_keys": list(prowlarr_live.PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS),
         "cleanup_key": prowlarr_live.PROWLARR_DOWNLOAD_CLIENT_CLEANUP_KEY,
+        "persist_on_success": False,
+    }
+    assert golden["arr"]["radarr_movie_download_proof"] == {
+        "check_key": arr_live.RADARR_DOWNLOAD_PROOF_CHECK_KEY,
+        "category": arr_live.RADARR_IMPORT_CATEGORY,
+        "trigger": "radarr_release_grab",
+        "cleanup_key": arr_live.ARR_DOWNLOAD_CLIENT_CLEANUP_KEY,
+    }
+    assert golden["arr"]["sonarr_series_download_proof"] == {
+        "check_key": arr_live.SONARR_DOWNLOAD_PROOF_CHECK_KEY,
+        "category": arr_live.SONARR_IMPORT_CATEGORY,
+        "trigger": "sonarr_release_grab",
+        "cleanup_key": arr_live.ARR_DOWNLOAD_CLIENT_CLEANUP_KEY,
     }
 
     qbit_scenarios = [

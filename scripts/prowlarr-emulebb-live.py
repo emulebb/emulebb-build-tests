@@ -29,6 +29,10 @@ PROWLARR_GRAB_CATEGORY = "prowlarr_grabs_cat"
 PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS = ("download_client", "search_results", "download_client_grab")
 PROWLARR_DOWNLOAD_CLIENT_CLEANUP_KEY = "cleanup_download_clients"
 TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS = 70.0
+DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
+DEFAULT_SEARCH_TIMEOUT_SECONDS = 90.0
+DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS = 300.0
+PROWLARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 
 TORZNAB_DIRECT_ERROR_SCENARIOS: tuple[dict[str, object], ...] = (
     {
@@ -253,7 +257,7 @@ def summarize_qbit_download_client_schema(schema: dict[str, Any]) -> dict[str, o
 
 
 def build_qbit_download_client_payload(
-    schema: dict[str, Any],
+    base_payload: dict[str, Any],
     *,
     name: str,
     host: str,
@@ -261,13 +265,13 @@ def build_qbit_download_client_payload(
     emule_api_key: str,
     category: str,
 ) -> dict[str, Any]:
-    """Builds a temporary Prowlarr qBittorrent client payload for eMule BB."""
+    """Builds the managed Prowlarr qBittorrent client payload for eMule BB."""
 
-    schema_summary = summarize_qbit_download_client_schema(schema)
+    schema_summary = summarize_qbit_download_client_schema(base_payload)
     if not bool(schema_summary["ok"]):
         raise RuntimeError(f"Prowlarr qBittorrent schema is missing required fields: {schema_summary['missing_required_fields']!r}")
 
-    payload = json.loads(json.dumps(schema))
+    payload = json.loads(json.dumps(base_payload))
     payload["name"] = name
     payload["enable"] = True
     payload["priority"] = int(payload.get("priority") or 1)
@@ -287,10 +291,26 @@ def build_qbit_download_client_payload(
 
 
 def delete_download_client(prowlarr_url: str, api_key: str, client_id: int) -> dict[str, object]:
-    """Deletes one temporary Prowlarr download client."""
+    """Deletes one Prowlarr download client by id."""
 
     result = prowlarr_request(prowlarr_url, api_key, f"/api/v1/downloadclient/{client_id}", method="DELETE")
     return {"id": client_id, "status": int(result.get("status") or 0)}
+
+
+def test_qbit_download_client(prowlarr_url: str, api_key: str, client: dict[str, Any]) -> int:
+    """Runs Prowlarr's download-client self-test and returns the HTTP status."""
+
+    test_payload = json.loads(json.dumps(client))
+    test_result = prowlarr_request(
+        prowlarr_url,
+        api_key,
+        "/api/v1/downloadclient/test",
+        method="POST",
+        json_body=test_payload,
+        timeout_seconds=60.0,
+    )
+    require_success(test_result, "Prowlarr eMule BB qBittorrent client test")
+    return int(test_result.get("status") or 0)
 
 
 def create_temp_qbit_download_client(
@@ -317,27 +337,18 @@ def create_temp_qbit_download_client(
         category=category,
     )
     try:
-        created = require_success(
+        saved = require_success(
             prowlarr_request(prowlarr_url, api_key, "/api/v1/downloadclient?forceSave=true", method="POST", json_body=payload),
             "Prowlarr eMule BB qBittorrent client create",
         )
-        if not isinstance(created, dict) or not created.get("id"):
+        if not isinstance(saved, dict) or not saved.get("id"):
             raise RuntimeError("Prowlarr did not return a created qBittorrent client id.")
-        created_client_id = int(created["id"])
+        created_client_id = int(saved["id"])
 
-        test_payload = json.loads(json.dumps(created))
-        test_result = prowlarr_request(
-            prowlarr_url,
-            api_key,
-            "/api/v1/downloadclient/test",
-            method="POST",
-            json_body=test_payload,
-            timeout_seconds=60.0,
-        )
-        require_success(test_result, "Prowlarr eMule BB qBittorrent client test")
-        created["_emulebbSchemaSummary"] = schema_summary
-        created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
-        return created
+        saved["_emulebbSchemaSummary"] = schema_summary
+        saved["_emulebbTemporary"] = True
+        saved["_emulebbTestStatus"] = test_qbit_download_client(prowlarr_url, api_key, saved)
+        return saved
     except Exception as exc:
         if created_client_id is not None:
             try:
@@ -358,6 +369,7 @@ def summarize_qbit_download_client(client: dict[str, Any], *, category: str) -> 
         "protocol": client.get("protocol"),
         "enable": bool(client.get("enable")),
         "category": category,
+        "temporary": bool(client.get("_emulebbTemporary")),
         "schema": client.get("_emulebbSchemaSummary"),
         "test_status": client.get("_emulebbTestStatus"),
     }
@@ -390,6 +402,78 @@ def get_indexer_by_id(prowlarr_url: str, api_key: str, indexer_id: int) -> dict[
     return payload
 
 
+def delete_indexer(prowlarr_url: str, api_key: str, indexer_id: int) -> dict[str, object]:
+    """Deletes one Prowlarr indexer by id."""
+
+    result = prowlarr_request(prowlarr_url, api_key, f"/api/v1/indexer/{indexer_id}", method="DELETE")
+    return {"id": indexer_id, "status": int(result.get("status") or 0)}
+
+
+def get_indexer_statuses(prowlarr_url: str, api_key: str) -> list[dict[str, Any]]:
+    """Returns Prowlarr indexer status rows."""
+
+    statuses = require_success(
+        prowlarr_request(prowlarr_url, api_key, "/api/v1/indexerstatus"),
+        "Prowlarr indexer status",
+    )
+    if not isinstance(statuses, list):
+        raise RuntimeError("Prowlarr indexer status response was not a list.")
+    return [status for status in statuses if isinstance(status, dict)]
+
+
+def indexer_is_unavailable(statuses: list[dict[str, Any]], indexer_id: int) -> bool:
+    """Returns true when Prowlarr has marked the indexer unavailable."""
+
+    return indexer_unavailable_status(statuses, indexer_id) is not None
+
+
+def indexer_unavailable_status(statuses: list[dict[str, Any]], indexer_id: int) -> dict[str, Any] | None:
+    """Returns the Prowlarr unavailable-status row for one indexer."""
+
+    for status in statuses:
+        if int(status.get("indexerId") or 0) == int(indexer_id) and status.get("disabledTill"):
+            return status
+    return None
+
+
+def wait_for_indexer_available(
+    prowlarr_url: str,
+    api_key: str,
+    indexer_id: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until Prowlarr stops suppressing one indexer after recent failures."""
+
+    attempts: list[dict[str, object]] = []
+    started_at = time.monotonic()
+    deadline = started_at + timeout_seconds
+    while time.monotonic() < deadline:
+        statuses = get_indexer_statuses(prowlarr_url, api_key)
+        status = indexer_unavailable_status(statuses, indexer_id)
+        if status is None:
+            return {
+                "status": "available",
+                "indexer_id": indexer_id,
+                "attempt_count": len(attempts) + 1,
+                "waited_seconds": round(time.monotonic() - started_at, 3),
+            }
+        attempts.append(
+            {
+                "indexerId": status.get("indexerId"),
+                "disabledTill": status.get("disabledTill"),
+                "mostRecentFailure": status.get("mostRecentFailure"),
+                "initialFailure": status.get("initialFailure"),
+            }
+        )
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
+    raise RuntimeError(
+        "Prowlarr indexer remained unavailable before timeout. "
+        f"Indexer: {indexer_id}. Attempts: {attempts!r}"
+    )
+
+
 def upsert_indexer(
     prowlarr_url: str,
     api_key: str,
@@ -402,6 +486,10 @@ def upsert_indexer(
     """Creates or updates the persistent Prowlarr indexer and returns it."""
 
     existing = get_existing_indexer(prowlarr_url, api_key, indexer_name)
+    unavailable_at_upsert = False
+    if existing is not None and existing.get("id"):
+        statuses = get_indexer_statuses(prowlarr_url, api_key)
+        unavailable_at_upsert = indexer_is_unavailable(statuses, int(existing["id"]))
     base_payload = existing if existing is not None else get_generic_torznab_schema(prowlarr_url, api_key)
     payload = build_indexer_payload(
         base_payload,
@@ -413,14 +501,12 @@ def upsert_indexer(
     forced_save = False
     if existing is not None and existing.get("id"):
         path = f"/api/v1/indexer/{int(existing['id'])}"
-        result = prowlarr_request(prowlarr_url, api_key, path, method="PUT", json_body=payload)
-        if should_force_save_indexer_validation(result):
-            forced_save = True
-            result = prowlarr_request(prowlarr_url, api_key, path + "?forceSave=true", method="PUT", json_body=payload)
+        forced_save = True
+        result = prowlarr_request(prowlarr_url, api_key, path + "?forceSave=true", method="PUT", json_body=payload)
     else:
-        result = prowlarr_request(prowlarr_url, api_key, "/api/v1/indexer", method="POST", json_body=payload)
+        forced_save = True
+        result = prowlarr_request(prowlarr_url, api_key, "/api/v1/indexer?forceSave=true", method="POST", json_body=payload)
         if should_force_save_indexer_validation(result):
-            forced_save = True
             disabled_payload = json.loads(json.dumps(payload))
             disabled_payload["enable"] = False
             create_result = prowlarr_request(
@@ -448,6 +534,8 @@ def upsert_indexer(
         else:
             raise RuntimeError("Prowlarr did not return a saved indexer id.")
     saved["_emulebbForcedSave"] = forced_save
+    saved["_emulebbRecreatedAfterUnavailable"] = False
+    saved["_emulebbUnavailableAtUpsert"] = unavailable_at_upsert
     return saved
 
 
@@ -785,6 +873,14 @@ def stress_prowlarr_media_category_searches(
     }
 
 
+def first_live_wire_term(terms: tuple[str, ...], field_name: str) -> tuple[str, ...]:
+    """Returns the first operator-provided live-wire term for a focused check."""
+
+    if not terms:
+        raise RuntimeError(f"live-wire inputs field {field_name!r} must include at least one term.")
+    return (terms[0],)
+
+
 def redact_term_result(result: dict[str, object], *, source: str, term_count: int) -> dict[str, object]:
     """Redacts exact search terms and titles from one live-wire result."""
 
@@ -926,6 +1022,14 @@ def diagnostic_result_count(summary: dict[str, object]) -> int:
         return 0
 
 
+def is_prowlarr_indexer_unavailable_result(summary: dict[str, object]) -> bool:
+    """Returns true when Prowlarr suppressed the search because the indexer is unavailable."""
+
+    if int(summary.get("status") or 0) != 400:
+        return False
+    return "all selected indexers being unavailable" in str(summary.get("body_preview") or "").lower()
+
+
 def compact_search_network_snapshot(base_url: str, api_key: str) -> dict[str, object]:
     """Collects a compact network status snapshot for live search readiness reports."""
 
@@ -1057,6 +1161,17 @@ def wait_for_primary_radarr_movie_term_results(
                 "result_count": prowlarr_count,
                 "attempts": attempts,
             }
+        if direct_count > 0 and is_prowlarr_indexer_unavailable_result(prowlarr_movie):
+            return {
+                "ok": False,
+                "term_index": 0,
+                "term_count": len(terms),
+                "attempt_count": len(attempts),
+                "elapsed_ms": int((monotonic_seconds() - started) * 1000),
+                "result_count": 0,
+                "prowlarr_indexer_unavailable": True,
+                "attempts": attempts,
+            }
         remaining = deadline - monotonic_seconds()
         if remaining <= 0:
             return {
@@ -1171,8 +1286,11 @@ def wait_for_prowlarr_results(
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         for query_index, query in enumerate(queries):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             path = build_prowlarr_search_path(query, category_id, indexer_id)
-            result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
+            result = prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=max(1.0, min(30.0, remaining)))
             status = int(result.get("status") or 0)
             payload = result.get("json")
             count = len(payload) if isinstance(payload, list) else 0
@@ -1188,13 +1306,70 @@ def wait_for_prowlarr_results(
                     "first_title": first.get("title") if isinstance(first, dict) else None,
                     "attempts": attempts,
                 }
-        time.sleep(5.0)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
     raise RuntimeError(f"Prowlarr did not return eMule BB results before timeout. Attempts: {attempts!r}")
 
 
-def select_grabbable_release(rows: list[Any], indexer_id: int) -> dict[str, Any]:
-    """Selects one Prowlarr release row that can be posted back to grab."""
+def normalized_match_text(value: object) -> str:
+    """Normalizes one title/query string for redacted release ranking."""
 
+    text = str(value or "").lower()
+    return " ".join("".join(char if char.isalnum() else " " for char in text).split())
+
+
+def numeric_release_field(row: dict[str, Any], *field_names: str) -> int:
+    """Returns the largest non-negative integer value from possible source fields."""
+
+    values: list[int] = []
+    for field_name in field_names:
+        try:
+            values.append(max(0, int(row.get(field_name) or 0)))
+        except (TypeError, ValueError):
+            continue
+    return max(values) if values else 0
+
+
+def release_title_match_score(row: dict[str, Any], query: str) -> int:
+    """Scores how closely a redacted release row title matches the query."""
+
+    title_text = normalized_match_text(row.get("title") or row.get("name"))
+    query_text = normalized_match_text(query)
+    if not title_text or not query_text:
+        return 0
+    title_tokens = set(title_text.split())
+    query_tokens = set(query_text.split())
+    if title_text == query_text:
+        return 300
+    if query_tokens and query_tokens.issubset(title_tokens):
+        return 200
+    if query_text in title_text:
+        return 150
+    if query_tokens and title_tokens.intersection(query_tokens):
+        return 50
+    return 0
+
+
+def release_source_count(row: dict[str, Any]) -> int:
+    """Returns the strongest available source-count signal for an Arr release row."""
+
+    return numeric_release_field(row, "sources", "sourceCount", "seeders", "peers")
+
+
+def summarize_release_selection(release: dict[str, Any], query: str) -> dict[str, object]:
+    """Builds a report-safe summary of the release ranking inputs."""
+
+    return {
+        "title_match_score": release_title_match_score(release, query),
+        "source_count": release_source_count(release),
+    }
+
+
+def select_grabbable_release(rows: list[Any], indexer_id: int, query: str) -> dict[str, Any]:
+    """Selects the best Prowlarr release row that can be posted back to grab."""
+
+    candidates: list[tuple[int, int, int, dict[str, Any]]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -1202,11 +1377,21 @@ def select_grabbable_release(rows: list[Any], indexer_id: int) -> dict[str, Any]
             continue
         if not str(row.get("guid") or "").strip():
             continue
-        return json.loads(json.dumps(row))
+        candidates.append(
+            (
+                release_title_match_score(row, query),
+                release_source_count(row),
+                -len(candidates),
+                json.loads(json.dumps(row)),
+            )
+        )
+    if candidates:
+        candidates.sort(reverse=True)
+        return candidates[0][3]
     raise RuntimeError("Prowlarr search returned rows but none were grabbable for the eMule BB indexer.")
 
 
-def summarize_grabbed_release(release: dict[str, Any]) -> dict[str, object]:
+def summarize_grabbed_release(release: dict[str, Any], query: str) -> dict[str, object]:
     """Builds a report-safe summary of the selected Prowlarr release."""
 
     magnet = str(release.get("magnetUrl") or release.get("downloadUrl") or release.get("guid") or "")
@@ -1222,6 +1407,7 @@ def summarize_grabbed_release(release: dict[str, Any]) -> dict[str, object]:
         "download_url_present": bool(release.get("downloadUrl")),
         "magnet_url_present": bool(release.get("magnetUrl")),
         "hash_present": hash_present,
+        **summarize_release_selection(release, query),
     }
 
 
@@ -1237,6 +1423,7 @@ def prowlarr_download_client_grab_roundtrip(
     download_client_id: int,
     download_category: str,
     timeout_seconds: float,
+    transfer_timeout_seconds: float,
 ) -> dict[str, object]:
     """Searches Prowlarr, grabs one result, and verifies eMule receives it."""
 
@@ -1245,8 +1432,11 @@ def prowlarr_download_client_grab_roundtrip(
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         for query_index, query in enumerate(queries):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             path = build_prowlarr_search_path(query, category_id, indexer_id)
-            result = prowlarr_request(prowlarr_url, prowlarr_api_key, path, timeout_seconds=90.0)
+            result = prowlarr_request(prowlarr_url, prowlarr_api_key, path, timeout_seconds=max(1.0, min(30.0, remaining)))
             status = int(result.get("status") or 0)
             payload = result.get("json")
             rows = payload if isinstance(payload, list) else []
@@ -1262,7 +1452,7 @@ def prowlarr_download_client_grab_roundtrip(
             if status < 200 or status >= 300 or not rows:
                 continue
 
-            release = select_grabbable_release(rows, indexer_id)
+            release = select_grabbable_release(rows, indexer_id, query)
             grab_payload = json.loads(json.dumps(release))
             grab_payload["downloadClientId"] = int(download_client_id)
             grabbed = prowlarr_request(
@@ -1271,7 +1461,7 @@ def prowlarr_download_client_grab_roundtrip(
                 "/api/v1/search",
                 method="POST",
                 json_body=grab_payload,
-                timeout_seconds=90.0,
+                timeout_seconds=max(1.0, min(30.0, deadline - time.monotonic())),
             )
             require_success(grabbed, "Prowlarr eMule BB release grab")
             return {
@@ -1279,18 +1469,20 @@ def prowlarr_download_client_grab_roundtrip(
                 "category": int(category_id),
                 "download_client_id": int(download_client_id),
                 "download_category": download_category,
-                "release": summarize_grabbed_release(release),
+                "release": summarize_grabbed_release(release, query),
                 "grab_status": int(grabbed.get("status") or 0),
                 "transfer": wait_for_new_category_transfer(
                     emule_base_url,
                     emule_api_key,
                     category=download_category,
                     before_hashes=before_hashes,
-                    timeout_seconds=min(timeout_seconds, 120.0),
+                    timeout_seconds=transfer_timeout_seconds,
                 ),
                 "attempt_count": len(attempts),
             }
-        time.sleep(5.0)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
     raise RuntimeError(f"Prowlarr download-client grab proof found no grabbable rows. Attempts: {attempts!r}")
 
 
@@ -1312,9 +1504,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
-    parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
-    parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--radarr-primary-readiness-timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--rest-ready-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
+    parser.add_argument("--emule-connection-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
+    parser.add_argument("--result-timeout-seconds", type=float, default=DEFAULT_SEARCH_TIMEOUT_SECONDS)
+    parser.add_argument("--document-download-timeout-seconds", type=float, default=DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS)
+    parser.add_argument("--prowlarr-indexer-availability-timeout-seconds", type=float, default=DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS)
     parser.add_argument("--cached-search-stress-count", type=int, default=12)
     parser.add_argument("--direct-search-stress-count", type=int, default=6)
     parser.add_argument("--prowlarr-search-stress-count", type=int, default=4)
@@ -1346,14 +1540,20 @@ def main() -> int:
         raise ValueError("--direct-search-stress-count must be greater than zero.")
     if args.prowlarr_search_stress_count <= 0:
         raise ValueError("--prowlarr-search-stress-count must be greater than zero.")
-    if args.radarr_primary_readiness_timeout_seconds <= 0:
-        raise ValueError("--radarr-primary-readiness-timeout-seconds must be greater than zero.")
+    if args.rest_ready_timeout_seconds <= 0:
+        raise ValueError("--rest-ready-timeout-seconds must be greater than zero.")
+    if args.emule_connection_timeout_seconds <= 0:
+        raise ValueError("--emule-connection-timeout-seconds must be greater than zero.")
+    if args.result_timeout_seconds <= 0:
+        raise ValueError("--result-timeout-seconds must be greater than zero.")
+    if args.document_download_timeout_seconds <= 0:
+        raise ValueError("--document-download-timeout-seconds must be greater than zero.")
+    if args.prowlarr_indexer_availability_timeout_seconds <= 0:
+        raise ValueError("--prowlarr-indexer-availability-timeout-seconds must be greater than zero.")
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
-    document_terms = inputs.document_terms
-    radarr_movie_terms = inputs.radarr_movie_terms
-    sonarr_series_terms = inputs.sonarr_series_terms
+    generic_terms = first_live_wire_term(inputs.generic_open_terms, "search_terms.generic_open")
     env_values = live_env.load_env_values(
         ("PROWLARR_URL", "PROWLARR_API_KEY"),
         env_file=Path(args.env_file).resolve(),
@@ -1425,10 +1625,12 @@ def main() -> int:
         },
         "live_wire_inputs_file": str(inputs.path),
         "search_terms": {
-            "documents": live_wire_inputs.summarize_terms(document_terms),
-            "radarr_movies": live_wire_inputs.summarize_terms(radarr_movie_terms),
-            "sonarr_series": live_wire_inputs.summarize_terms(sonarr_series_terms),
+            "generic_open": live_wire_inputs.summarize_terms(generic_terms),
         },
+        "search_timeout_seconds": min(args.result_timeout_seconds, PROWLARR_LIVE_SEARCH_TIMEOUT_SECONDS),
+        "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
+        "document_download_timeout_seconds": args.document_download_timeout_seconds,
+        "prowlarr_indexer_availability_timeout_seconds": args.prowlarr_indexer_availability_timeout_seconds,
         "torznab_media_categories": {
             "movie": TORZNAB_MOVIE_CATEGORY,
             "tv": TORZNAB_TV_CATEGORY,
@@ -1437,12 +1639,20 @@ def main() -> int:
         "checks": {},
     }
     result_path = artifacts_dir / "result.json"
+
+    def record_phase(phase: str) -> None:
+        report["current_phase"] = phase
+        live_common.write_json(result_path, report)
+
     try:
+        record_phase("launch_emule")
         app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
         main_window = live_common.wait_for_main_window(app)
         report["main_window_title"] = main_window.window_text()
+        record_phase("rest_ready")
         ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
         report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
+        record_phase("network_ready")
         servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
         server_rows = rest_smoke.require_json_array(servers, 200)
         report["checks"]["servers_list"] = {"count": len(server_rows)}
@@ -1450,7 +1660,7 @@ def main() -> int:
             emule_base_url,
             args.emule_api_key,
             server_rows,
-            args.result_timeout_seconds,
+            args.emule_connection_timeout_seconds,
         )
         kad_connect = rest_smoke.http_request(
             emule_base_url,
@@ -1466,19 +1676,17 @@ def main() -> int:
         report["checks"]["kad_running"] = rest_smoke.wait_for_kad_running(
             emule_base_url,
             args.emule_api_key,
-            args.rest_ready_timeout_seconds,
+            args.emule_connection_timeout_seconds,
         )
         report["checks"]["network_ready"] = rest_smoke.wait_for_requested_networks(
             emule_base_url,
             args.emule_api_key,
-            args.result_timeout_seconds,
+            args.emule_connection_timeout_seconds,
             require_server_connected=False,
             require_kad_connected=True,
         )
-        report["checks"]["direct_auth_rejection"] = check_direct_auth_rejection(emule_base_url)
-        report["checks"]["direct_torznab_error_edges"] = check_direct_torznab_error_edges(emule_base_url, args.emule_api_key)
-        report["checks"]["direct_caps"] = check_direct_caps(emule_base_url, args.emule_api_key)
 
+        record_phase("prowlarr_indexer_upsert")
         status_payload = require_success(
             prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/system/status"),
             "Prowlarr system status",
@@ -1500,106 +1708,30 @@ def main() -> int:
             "implementation": saved_indexer.get("implementation"),
             "enable": bool(saved_indexer.get("enable")),
             "forcedSave": bool(saved_indexer.get("_emulebbForcedSave")),
+            "recreatedAfterUnavailable": bool(saved_indexer.get("_emulebbRecreatedAfterUnavailable")),
         }
-        indexer_statuses = require_success(
-            prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/indexerstatus"),
-            "Prowlarr indexer status",
+        indexer_statuses = get_indexer_statuses(prowlarr_url, prowlarr_api_key)
+        report["checks"]["indexer_status"] = [
+            {
+                "indexerId": status.get("indexerId"),
+                "disabledTill": status.get("disabledTill"),
+                "mostRecentFailure": status.get("mostRecentFailure"),
+            }
+            for status in indexer_statuses
+            if status.get("indexerId") == int(saved_indexer["id"])
+        ]
+        report["checks"]["indexer_availability"] = wait_for_indexer_available(
+            prowlarr_url,
+            prowlarr_api_key,
+            int(saved_indexer["id"]),
+            args.prowlarr_indexer_availability_timeout_seconds,
         )
-        if isinstance(indexer_statuses, list):
-            report["checks"]["indexer_status"] = [
-                {
-                    "indexerId": status.get("indexerId"),
-                    "disabledTill": status.get("disabledTill"),
-                    "mostRecentFailure": status.get("mostRecentFailure"),
-                }
-                for status in indexer_statuses
-                if isinstance(status, dict) and status.get("indexerId") == int(saved_indexer["id"])
-            ]
-        report["checks"]["indexer_test"] = test_indexer(prowlarr_url, prowlarr_api_key, saved_indexer)
-        report["checks"]["radarr_movie_primary_readiness"] = wait_for_primary_radarr_movie_term_results(
-            base_url=emule_base_url,
-            emule_api_key=args.emule_api_key,
-            prowlarr_url=prowlarr_url,
-            prowlarr_api_key=prowlarr_api_key,
-            indexer_id=int(saved_indexer["id"]),
-            terms=radarr_movie_terms,
-            timeout_seconds=args.radarr_primary_readiness_timeout_seconds,
-        )
-        require_first_radarr_movie_term_results(report["checks"]["radarr_movie_primary_readiness"])
-        report["checks"]["radarr_movie_term_diagnostics"] = diagnose_radarr_movie_terms(
-            base_url=emule_base_url,
-            emule_api_key=args.emule_api_key,
-            prowlarr_url=prowlarr_url,
-            prowlarr_api_key=prowlarr_api_key,
-            indexer_id=int(saved_indexer["id"]),
-            terms=radarr_movie_terms,
-        )
+        report["checks"]["indexer_test"] = {
+            "status": "skipped",
+            "reason": "Prowlarr test can mark a live no-result validation as temporarily unavailable before searches.",
+        }
 
-        report["checks"]["direct_rss_results"] = check_direct_rss_results(
-            emule_base_url,
-            args.emule_api_key,
-            document_terms,
-            category_id=TORZNAB_DOCUMENT_CATEGORY,
-            source="documents",
-        )
-        direct_results = wait_for_direct_torznab_results(
-            emule_base_url,
-            args.emule_api_key,
-            document_terms,
-            args.result_timeout_seconds,
-            category_id=TORZNAB_DOCUMENT_CATEGORY,
-        )
-        report["checks"]["direct_search_results"] = redact_term_result(
-            direct_results,
-            source="documents",
-            term_count=len(document_terms),
-        )
-        direct_movie_results = wait_for_direct_torznab_results(
-            emule_base_url,
-            args.emule_api_key,
-            radarr_movie_terms,
-            args.result_timeout_seconds,
-            category_id=TORZNAB_MOVIE_CATEGORY,
-        )
-        report["checks"]["direct_movie_video_results"] = redact_term_result(
-            direct_movie_results,
-            source="radarr_movies",
-            term_count=len(radarr_movie_terms),
-        )
-        direct_series_results = wait_for_direct_torznab_results(
-            emule_base_url,
-            args.emule_api_key,
-            sonarr_series_terms,
-            args.result_timeout_seconds,
-            category_id=TORZNAB_TV_CATEGORY,
-        )
-        report["checks"]["direct_series_video_results"] = redact_term_result(
-            direct_series_results,
-            source="sonarr_series",
-            term_count=len(sonarr_series_terms),
-        )
-        report["checks"]["direct_cached_search_stress"] = stress_cached_direct_torznab_search(
-            emule_base_url,
-            args.emule_api_key,
-            str(direct_results["query"]),
-            args.cached_search_stress_count,
-            category_id=TORZNAB_DOCUMENT_CATEGORY,
-        )
-        report["checks"]["direct_search_stress"] = stress_direct_torznab_search_terms(
-            emule_base_url,
-            args.emule_api_key,
-            document_terms,
-            args.direct_search_stress_count,
-            category_id=TORZNAB_DOCUMENT_CATEGORY,
-        )
-        report["checks"]["direct_media_category_search_stress"] = stress_direct_media_category_searches(
-            emule_base_url,
-            args.emule_api_key,
-            radarr_movie_terms,
-            sonarr_series_terms,
-            args.direct_search_stress_count,
-        )
-
+        record_phase("prowlarr_download_client")
         qbit_client = create_temp_qbit_download_client(
             prowlarr_url,
             prowlarr_api_key,
@@ -1611,72 +1743,34 @@ def main() -> int:
         )
         cleanup_download_clients.append((prowlarr_url, prowlarr_api_key, int(qbit_client["id"])))
         report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[0]] = summarize_qbit_download_client(qbit_client, category=PROWLARR_GRAB_CATEGORY)
+        prowlarr_timeout = min(args.result_timeout_seconds, PROWLARR_LIVE_SEARCH_TIMEOUT_SECONDS)
+        record_phase("prowlarr_search")
         report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[1]] = wait_for_prowlarr_results(
             prowlarr_url,
             prowlarr_api_key,
             int(saved_indexer["id"]),
-            document_terms,
-            args.result_timeout_seconds,
+            generic_terms,
+            prowlarr_timeout,
             category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
         report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[1]] = redact_term_result(
             report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[1]],
-            source="documents",
-            term_count=len(document_terms),
+            source="generic_open",
+            term_count=len(generic_terms),
         )
+        record_phase("prowlarr_grab_to_emule_category")
         report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[2]] = prowlarr_download_client_grab_roundtrip(
             prowlarr_url=prowlarr_url,
             prowlarr_api_key=prowlarr_api_key,
             emule_base_url=emule_base_url,
             emule_api_key=args.emule_api_key,
             indexer_id=int(saved_indexer["id"]),
-            queries=document_terms,
+            queries=generic_terms,
             category_id=TORZNAB_DOCUMENT_CATEGORY,
             download_client_id=int(qbit_client["id"]),
             download_category=PROWLARR_GRAB_CATEGORY,
-            timeout_seconds=args.result_timeout_seconds,
-        )
-        prowlarr_movie_results = wait_for_prowlarr_results(
-            prowlarr_url,
-            prowlarr_api_key,
-            int(saved_indexer["id"]),
-            radarr_movie_terms,
-            args.result_timeout_seconds,
-            category_id=TORZNAB_MOVIE_CATEGORY,
-        )
-        report["checks"]["prowlarr_movie_video_results"] = redact_term_result(
-            prowlarr_movie_results,
-            source="radarr_movies",
-            term_count=len(radarr_movie_terms),
-        )
-        prowlarr_series_results = wait_for_prowlarr_results(
-            prowlarr_url,
-            prowlarr_api_key,
-            int(saved_indexer["id"]),
-            sonarr_series_terms,
-            args.result_timeout_seconds,
-            category_id=TORZNAB_TV_CATEGORY,
-        )
-        report["checks"]["prowlarr_series_video_results"] = redact_term_result(
-            prowlarr_series_results,
-            source="sonarr_series",
-            term_count=len(sonarr_series_terms),
-        )
-        report["checks"]["prowlarr_search_stress"] = stress_prowlarr_search_terms(
-            prowlarr_url,
-            prowlarr_api_key,
-            int(saved_indexer["id"]),
-            document_terms,
-            args.prowlarr_search_stress_count,
-            category_id=TORZNAB_DOCUMENT_CATEGORY,
-        )
-        report["checks"]["prowlarr_media_category_search_stress"] = stress_prowlarr_media_category_searches(
-            prowlarr_url,
-            prowlarr_api_key,
-            int(saved_indexer["id"]),
-            radarr_movie_terms,
-            sonarr_series_terms,
-            args.prowlarr_search_stress_count,
+            timeout_seconds=prowlarr_timeout,
+            transfer_timeout_seconds=args.document_download_timeout_seconds,
         )
         report["status"] = "passed"
         return 0

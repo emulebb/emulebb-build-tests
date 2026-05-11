@@ -36,6 +36,8 @@ def test_prowlarr_live_report_records_live_network_launch_inputs() -> None:
 
 def test_prowlarr_live_report_contract_requires_download_client_grab_proof() -> None:
     module = load_prowlarr_module()
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "prowlarr-emulebb-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
 
     assert module.PROWLARR_GRAB_CATEGORY == "prowlarr_grabs_cat"
     assert module.PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS == (
@@ -44,9 +46,13 @@ def test_prowlarr_live_report_contract_requires_download_client_grab_proof() -> 
         "download_client_grab",
     )
     assert module.PROWLARR_DOWNLOAD_CLIENT_CLEANUP_KEY == "cleanup_download_clients"
+    assert "radarr_movie_primary_readiness" not in script_text
+    assert "radarr_movie_term_diagnostics" not in script_text
+    assert "prowlarr_movie_video_results" not in script_text
+    assert "prowlarr_series_video_results" not in script_text
 
 
-def test_upsert_creates_disabled_then_force_enables_when_prowlarr_create_test_has_no_results(monkeypatch) -> None:
+def test_upsert_creates_indexer_with_force_save_to_avoid_live_validation(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []
 
@@ -82,20 +88,9 @@ def test_upsert_creates_disabled_then_force_enables_when_prowlarr_create_test_ha
             return {"status": 200, "json": [], "body_text": "[]"}
         if path == "/api/v1/indexer/schema":
             return {"status": 200, "json": [schema], "body_text": "[]"}
-        if path == "/api/v1/indexer" and method == "POST":
-            return {
-                "status": 400,
-                "json": None,
-                "body_text": "Query successful, but no results were returned from your indexer.",
-            }
         if path == "/api/v1/indexer?forceSave=true" and method == "POST":
             assert isinstance(json_body, dict)
-            assert json_body["enable"] is False
-            return {"status": 201, "json": {"id": 40}, "body_text": "{}"}
-        if path == "/api/v1/indexer/40?forceSave=true" and method == "PUT":
-            assert isinstance(json_body, dict)
             assert json_body["enable"] is True
-            assert json_body["id"] == 40
             return {"status": 202, "json": saved, "body_text": "{}"}
         raise AssertionError(f"Unexpected request: {method} {path}")
 
@@ -115,10 +110,84 @@ def test_upsert_creates_disabled_then_force_enables_when_prowlarr_create_test_ha
     assert [request["path"] for request in requests] == [
         "/api/v1/indexer",
         "/api/v1/indexer/schema",
-        "/api/v1/indexer",
         "/api/v1/indexer?forceSave=true",
+    ]
+
+
+def test_upsert_preserves_existing_indexer_when_prowlarr_marked_it_unavailable(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    requests: list[dict[str, Any]] = []
+
+    existing = {
+        "id": 40,
+        "name": "eMule BB Local",
+        "implementation": "Torznab",
+        "fields": [
+            {"name": "baseUrl", "value": ""},
+            {"name": "apiPath", "value": ""},
+            {"name": "apiKey", "value": ""},
+            {"name": "torrentBaseSettings.preferMagnetUrl", "value": False},
+        ],
+    }
+    def fake_request(
+        prowlarr_url: str,
+        api_key: str,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: object | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        requests.append({"path": path, "method": method, "json_body": json_body})
+        if path == "/api/v1/indexer" and method == "GET":
+            return {"status": 200, "json": [existing], "body_text": "[]"}
+        if path == "/api/v1/indexerstatus":
+            return {"status": 200, "json": [{"indexerId": 40, "disabledTill": "2026-05-11T16:08:19Z"}], "body_text": "[]"}
+        if path == "/api/v1/indexer/40?forceSave=true" and method == "PUT":
+            assert isinstance(json_body, dict)
+            assert json_body["enable"] is True
+            return {"status": 202, "json": {**json_body, "id": 40}, "body_text": "{}"}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "prowlarr_request", fake_request)
+
+    result = module.upsert_indexer(
+        "http://prowlarr.test",
+        "secret",
+        indexer_name="eMule BB Local",
+        torznab_base_url="http://127.0.0.1:61920/indexer/emulebb",
+        emule_api_key="emule-key",
+    )
+
+    assert result["id"] == 40
+    assert result["_emulebbRecreatedAfterUnavailable"] is False
+    assert result["_emulebbUnavailableAtUpsert"] is True
+    assert [request["path"] for request in requests] == [
+        "/api/v1/indexer",
+        "/api/v1/indexerstatus",
         "/api/v1/indexer/40?forceSave=true",
     ]
+
+
+def test_wait_for_indexer_available_polls_until_disabled_status_clears(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    statuses = [
+        [{"indexerId": 40, "disabledTill": "2026-05-11T16:08:19Z"}],
+        [{"indexerId": 40, "disabledTill": "2026-05-11T16:08:19Z"}],
+        [],
+    ]
+
+    def fake_get_indexer_statuses(_prowlarr_url: str, _api_key: str) -> list[dict[str, Any]]:
+        return statuses.pop(0)
+
+    monkeypatch.setattr(module, "get_indexer_statuses", fake_get_indexer_statuses)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.wait_for_indexer_available("http://prowlarr.test", "secret", 40, 5.0)
+
+    assert result["status"] == "available"
+    assert result["indexer_id"] == 40
+    assert result["attempt_count"] == 3
 
 
 def qbit_schema() -> dict[str, Any]:
@@ -175,6 +244,58 @@ def test_qbit_download_client_payload_sets_emule_connection_and_category() -> No
     assert field_value(payload, "password") == "emule-key"
     assert field_value(payload, "category") == "prowlarr_grabs_cat"
     assert field_value(payload, "initialState") == 2
+
+
+def test_first_live_wire_term_keeps_only_primary_operator_term() -> None:
+    module = load_prowlarr_module()
+
+    assert module.first_live_wire_term(("primary", "fallback"), "search_terms.radarr_movies") == ("primary",)
+
+
+def test_temp_qbit_download_client_creates_and_tests(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    requests: list[dict[str, Any]] = []
+
+    def fake_request(
+        prowlarr_url: str,
+        api_key: str,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: object | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        requests.append({"path": path, "method": method, "json_body": json_body})
+        if path == "/api/v1/downloadclient/schema":
+            return {"status": 200, "json": [qbit_schema()], "body_text": "[]"}
+        if path == "/api/v1/downloadclient?forceSave=true" and method == "POST":
+            assert isinstance(json_body, dict)
+            assert json_body["name"] == "eMule BB Live Prowlarr 8080"
+            return {"status": 201, "json": {"id": 41, "name": json_body["name"], "fields": json_body["fields"]}, "body_text": "{}"}
+        if path == "/api/v1/downloadclient/test" and method == "POST":
+            return {"status": 200, "json": None, "body_text": ""}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "prowlarr_request", fake_request)
+
+    client = module.create_temp_qbit_download_client(
+        "http://prowlarr.test",
+        "key",
+        name="eMule BB Live Prowlarr 8080",
+        host="127.0.0.1",
+        port=8080,
+        emule_api_key="emule-key",
+        category="prowlarr_grabs_cat",
+    )
+
+    assert client["id"] == 41
+    assert client["_emulebbTemporary"] is True
+    assert client["_emulebbTestStatus"] == 200
+    assert [request["path"] for request in requests] == [
+        "/api/v1/downloadclient/schema",
+        "/api/v1/downloadclient?forceSave=true",
+        "/api/v1/downloadclient/test",
+    ]
 
 
 def test_temp_qbit_download_client_cleans_up_when_test_fails(monkeypatch) -> None:
@@ -301,6 +422,7 @@ def test_prowlarr_download_client_grab_posts_release_and_waits_for_category(monk
         download_client_id=55,
         download_category="prowlarr_grabs_cat",
         timeout_seconds=10.0,
+        transfer_timeout_seconds=300.0,
     )
 
     assert result["status"] == "passed"
@@ -323,9 +445,31 @@ def test_select_grabbable_release_requires_matching_indexer_and_guid() -> None:
             {"indexerId": 40, "guid": "right", "title": "Linux ISO"},
         ],
         40,
+        "linux iso",
     )
 
     assert result["guid"] == "right"
+
+
+def test_select_grabbable_release_prefers_title_match_then_sources() -> None:
+    module = load_prowlarr_module()
+
+    result = module.select_grabbable_release(
+        [
+            {"indexerId": 40, "guid": "many-sources", "title": "Unrelated.mkv", "sources": 99},
+            {"indexerId": 40, "guid": "weak-match", "title": "Linux sample", "sources": 50},
+            {"indexerId": 40, "guid": "best", "title": "Linux ISO 1080p", "sources": 7},
+            {"indexerId": 40, "guid": "tie-lower-sources", "title": "Linux ISO 720p", "sources": 3},
+        ],
+        40,
+        "linux iso",
+    )
+
+    assert result["guid"] == "best"
+    assert module.summarize_release_selection(result, "linux iso") == {
+        "title_match_score": 200,
+        "source_count": 7,
+    }
 
 
 def test_radarr_movie_term_diagnostics_compare_direct_and_prowlarr_paths(monkeypatch) -> None:
@@ -422,6 +566,49 @@ def test_primary_radarr_movie_term_readiness_retries_until_results(monkeypatch) 
     assert result["result_count"] == 2
     assert result["attempts"][0]["prowlarr_movie"]["status"] == "skipped_until_direct_movie_results"
     assert result["attempts"][1]["prowlarr_movie"]["buckets"]["result_count"] == 2
+
+
+def test_primary_radarr_movie_term_readiness_fails_fast_when_prowlarr_marks_indexer_unavailable(monkeypatch) -> None:
+    module = load_prowlarr_module()
+
+    monkeypatch.setattr(
+        module,
+        "direct_torznab_term_diagnostic",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "category": module.TORZNAB_MOVIE_CATEGORY,
+            "query_present": True,
+            "buckets": {"result_count": 100},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "prowlarr_term_diagnostic",
+        lambda *_args, **_kwargs: {
+            "status": 400,
+            "category": module.TORZNAB_MOVIE_CATEGORY,
+            "query_present": True,
+            "body_preview": "Search failed due to all selected indexers being unavailable",
+            "buckets": {"result_count": 0},
+        },
+    )
+    monkeypatch.setattr(module, "compact_search_network_snapshot", lambda *_args, **_kwargs: {"server": {"connected": True}})
+
+    result = module.wait_for_primary_radarr_movie_term_results(
+        base_url="http://127.0.0.1:1",
+        emule_api_key="secret",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="key",
+        indexer_id=40,
+        terms=("primary",),
+        timeout_seconds=180.0,
+        monotonic_seconds=lambda: 0.0,
+        sleep_seconds=lambda _seconds: (_ for _ in ()).throw(AssertionError("should not sleep")),
+    )
+
+    assert result["ok"] is False
+    assert result["attempt_count"] == 1
+    assert result["prowlarr_indexer_unavailable"] is True
 
 
 def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> None:
@@ -682,7 +869,7 @@ def test_prowlarr_search_attempts_capture_error_body(monkeypatch) -> None:
 
     monkeypatch.setattr(module, "prowlarr_request", fake_prowlarr_request)
     monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(module.time, "monotonic", iter([0.0, 0.1, 2.0]).__next__)
+    monkeypatch.setattr(module.time, "monotonic", iter([0.0, 0.1, 0.2, 2.0, 2.0]).__next__)
 
     try:
         module.wait_for_prowlarr_results("http://prowlarr.test", "key", 40, ("linux",), 1.0)

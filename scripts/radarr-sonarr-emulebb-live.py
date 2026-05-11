@@ -1,4 +1,4 @@
-"""Runs live Radarr and Sonarr checks through Prowlarr and eMule BB qBit APIs."""
+"""Runs a live Radarr movie download check through Prowlarr and eMule BB."""
 
 from __future__ import annotations
 
@@ -30,6 +30,15 @@ LIVE_SOURCE_UNAVAILABLE_EXIT_CODE = 2
 TORZNAB_MOVIE_CATEGORY = 2000
 TORZNAB_TV_CATEGORY = 5000
 RADARR_IMPORT_CATEGORY = "radarr_movies_cat"
+SONARR_IMPORT_CATEGORY = "sonarr_series_cat"
+RADARR_DOWNLOAD_PROOF_CHECK_KEY = "radarr_movie_download_e2e"
+SONARR_DOWNLOAD_PROOF_CHECK_KEY = "sonarr_series_download_e2e"
+ARR_DOWNLOAD_CLIENT_CLEANUP_KEY = "cleanup_download_clients"
+ARR_INDEXER_RESTORE_KEY = "cleanup_indexer_restore"
+DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
+DEFAULT_SEARCH_TIMEOUT_SECONDS = 90.0
+DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES = 30.0
+ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 
 
 class LiveSearchUnavailableError(RuntimeError):
@@ -143,6 +152,32 @@ def require_success(result: dict[str, Any], description: str) -> Any:
     return result.get("json")
 
 
+def arr_health_rows(arr_url: str, api_key: str) -> list[dict[str, Any]]:
+    """Returns Arr health rows, treating a missing health endpoint as empty."""
+
+    result = arr_request(arr_url, api_key, "/api/v3/health", timeout_seconds=30.0)
+    status = int(result.get("status") or 0)
+    if status == 404:
+        return []
+    payload = require_success(result, "Arr health")
+    if not isinstance(payload, list):
+        return []
+    return [row for row in payload if isinstance(row, dict)]
+
+
+def arr_indexer_unavailable_due_to_failures(health_rows: list[dict[str, Any]], indexer_name: str) -> bool:
+    """Returns true when Arr health has quarantined the eMule BB indexer."""
+
+    expected = indexer_name.lower()
+    for row in health_rows:
+        if str(row.get("source") or "") != "IndexerStatusCheck":
+            continue
+        message = str(row.get("message") or "").lower()
+        if "unavailable due to failures" in message and expected in message:
+            return True
+    return False
+
+
 def set_field_value(provider: dict[str, Any], field_name: str, value: object) -> None:
     """Updates one provider field by name."""
 
@@ -168,6 +203,66 @@ def get_tag_id(prowlarr_url: str, api_key: str, label: str) -> int | None:
     for tag in tags:
         if isinstance(tag, dict) and str(tag.get("label") or "").lower() == label.lower():
             return int(tag["id"])
+    return None
+
+
+def normalize_application_base_url(url: str) -> str:
+    """Normalizes one Arr application URL for Prowlarr application matching."""
+
+    return str(url or "").strip().rstrip("/").lower()
+
+
+def get_application_field_value(application: dict[str, Any], field_name: str) -> object | None:
+    """Returns one Prowlarr application field value by field name."""
+
+    fields = application.get("fields")
+    if not isinstance(fields, list):
+        return None
+    for field in fields:
+        if isinstance(field, dict) and field.get("name") == field_name:
+            return field.get("value")
+    return None
+
+
+def get_enabled_application_tag_ids_for_arr(prowlarr_url: str, api_key: str, arr_url: str) -> tuple[bool, list[int]]:
+    """Returns enabled Prowlarr application tag ids matching one Arr base URL."""
+
+    applications = require_success(
+        prowlarr_live.prowlarr_request(prowlarr_url, api_key, "/api/v1/applications"),
+        "Prowlarr application list",
+    )
+    if not isinstance(applications, list):
+        return False, []
+
+    target_url = normalize_application_base_url(arr_url)
+    found = False
+    tag_ids: set[int] = set()
+    for application in applications:
+        if not isinstance(application, dict) or not bool(application.get("enable")):
+            continue
+        base_url = get_application_field_value(application, "baseUrl")
+        if normalize_application_base_url(str(base_url or "")) != target_url:
+            continue
+        found = True
+        tags = application.get("tags")
+        if isinstance(tags, list):
+            for tag_id in tags:
+                try:
+                    tag_ids.add(int(tag_id))
+                except (TypeError, ValueError):
+                    continue
+    return found, sorted(tag_ids)
+
+
+def resolve_prowlarr_indexer_sync_tags(prowlarr_url: str, api_key: str, arr_url: str) -> list[int] | None:
+    """Chooses Prowlarr-side indexer tags that keep the matching Arr app synced."""
+
+    found_application, tag_ids = get_enabled_application_tag_ids_for_arr(prowlarr_url, api_key, arr_url)
+    if found_application:
+        return tag_ids
+    eng_tag_id = get_tag_id(prowlarr_url, api_key, "eng")
+    if eng_tag_id is not None:
+        return [eng_tag_id]
     return None
 
 
@@ -234,6 +329,280 @@ def is_arr_indexer_enabled(indexer: dict[str, Any]) -> bool:
     return all(flag is not False for flag in enable_flags)
 
 
+def is_emulebb_indexer_name(indexer_name: str, configured_name: str) -> bool:
+    """Returns true when one Arr indexer name belongs to the live eMule bridge."""
+
+    name = indexer_name.lower()
+    return configured_name.lower() in name or "emule bb" in name
+
+
+def is_arr_validation_blocker(result: dict[str, Any]) -> bool:
+    """Returns true when Arr rejected a provider save during live validation."""
+
+    status = int(result.get("status") or 0)
+    if status < 400 or status >= 500:
+        return False
+    body_text = str(result.get("body_text") or "").lower()
+    return (
+        "no results in the configured categories" in body_text
+        or "no results were returned" in body_text
+        or "unable to connect to indexer" in body_text
+        or "toomanyrequests" in body_text
+    )
+
+
+def get_arr_torznab_schema(arr_url: str, api_key: str) -> dict[str, Any]:
+    """Loads the Arr Torznab indexer schema used for API-only repair."""
+
+    schemas = require_success(arr_request(arr_url, api_key, "/api/v3/indexer/schema"), "Arr indexer schema")
+    if not isinstance(schemas, list):
+        raise RuntimeError("Arr indexer schema response was not a list.")
+    for schema in schemas:
+        if isinstance(schema, dict) and schema.get("implementation") == "Torznab":
+            return schema
+    raise RuntimeError("Arr did not expose the Torznab indexer schema.")
+
+
+def find_arr_emule_indexer(arr_url: str, api_key: str, indexer_name: str) -> dict[str, Any] | None:
+    """Finds the current eMule BB Arr indexer provider when it exists."""
+
+    for indexer in list_arr_indexers(arr_url, api_key):
+        if is_emulebb_indexer_name(str(indexer.get("name") or ""), indexer_name):
+            return indexer
+    return None
+
+
+def build_arr_emule_indexer_payload(
+    base_payload: dict[str, Any],
+    *,
+    indexer_name: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    prowlarr_indexer_id: int,
+    category_id: int,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Builds an Arr Torznab provider pointed at Prowlarr's eMule proxy."""
+
+    payload = json.loads(json.dumps(base_payload))
+    payload["name"] = indexer_name
+    payload["implementation"] = "Torznab"
+    payload["implementationName"] = "Torznab"
+    payload["configContract"] = "TorznabSettings"
+    payload["protocol"] = "torrent"
+    payload["priority"] = int(payload.get("priority") or 25)
+    payload["downloadClientId"] = int(payload.get("downloadClientId") or 0)
+    payload["tags"] = []
+    if "enable" in payload:
+        payload["enable"] = bool(enabled)
+    for flag_name in ("enableRss", "enableAutomaticSearch", "enableInteractiveSearch"):
+        payload[flag_name] = bool(enabled)
+    set_field_value(payload, "baseUrl", prowlarr_url.rstrip("/") + f"/{int(prowlarr_indexer_id)}/")
+    set_field_value(payload, "apiPath", "/api")
+    set_field_value(payload, "apiKey", prowlarr_api_key)
+    set_field_value(payload, "categories", [int(category_id)])
+    return payload
+
+
+def save_arr_indexer_payload(
+    arr_url: str,
+    api_key: str,
+    payload: dict[str, Any],
+    *,
+    existing_id: int | None,
+    description: str,
+) -> dict[str, Any]:
+    """Saves one Arr indexer payload and returns the persisted provider."""
+
+    if existing_id is not None and existing_id > 0:
+        path = f"/api/v3/indexer/{existing_id}?forceSave=true"
+        method = "PUT"
+    else:
+        path = "/api/v3/indexer?forceSave=true"
+        method = "POST"
+    result = arr_request(arr_url, api_key, path, method=method, json_body=payload, timeout_seconds=60.0)
+    saved = require_success(result, description)
+    if not isinstance(saved, dict) or int(saved.get("id") or 0) <= 0:
+        raise RuntimeError(f"{description} did not return a saved indexer id.")
+    return saved
+
+
+def delete_arr_indexer_provider(arr_url: str, api_key: str, indexer_id: int) -> dict[str, object]:
+    """Deletes one Arr indexer provider through the public Arr API."""
+
+    result = arr_request(arr_url, api_key, f"/api/v3/indexer/{indexer_id}", method="DELETE", timeout_seconds=60.0)
+    status = int(result.get("status") or 0)
+    if status != 404 and (status < 200 or status >= 300):
+        require_success(result, "Arr eMule BB indexer delete")
+    return {"id": int(indexer_id), "status": status}
+
+
+def save_enabled_arr_emule_indexer_with_validation_retry(
+    *,
+    arr_url: str,
+    api_key: str,
+    base_payload: dict[str, Any],
+    existing_id: int | None,
+    indexer_name: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    prowlarr_indexer_id: int,
+    category_id: int,
+) -> tuple[dict[str, Any], dict[str, object]]:
+    """Saves the eMule BB Arr provider, retrying disabled-then-enabled on validation-only blockers."""
+
+    payload = build_arr_emule_indexer_payload(
+        base_payload,
+        indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        category_id=category_id,
+        enabled=True,
+    )
+
+    result = arr_request(
+        arr_url,
+        api_key,
+        f"/api/v3/indexer/{existing_id}?forceSave=true" if existing_id else "/api/v3/indexer?forceSave=true",
+        method="PUT" if existing_id else "POST",
+        json_body=payload,
+        timeout_seconds=60.0,
+    )
+    status = int(result.get("status") or 0)
+    if status >= 200 and status < 300:
+        saved = result.get("json")
+        if not isinstance(saved, dict) or int(saved.get("id") or 0) <= 0:
+            raise RuntimeError("Arr eMule BB indexer repair did not return a saved indexer id.")
+        return saved, {
+            "mode": "updated" if existing_id else "created",
+            "validation_retry": False,
+            "category": int(category_id),
+            "status": status,
+        }
+
+    if not is_arr_validation_blocker(result):
+        require_success(result, "Arr eMule BB indexer repair")
+
+    disabled_payload = build_arr_emule_indexer_payload(
+        base_payload,
+        indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        category_id=category_id,
+        enabled=False,
+    )
+    disabled_saved = save_arr_indexer_payload(
+        arr_url,
+        api_key,
+        disabled_payload,
+        existing_id=existing_id,
+        description="Arr disabled eMule BB indexer repair",
+    )
+    enabled_payload = build_arr_emule_indexer_payload(
+        disabled_saved,
+        indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        category_id=category_id,
+        enabled=True,
+    )
+    enabled_saved = save_arr_indexer_payload(
+        arr_url,
+        api_key,
+        enabled_payload,
+        existing_id=int(disabled_saved["id"]),
+        description="Arr enabled eMule BB indexer repair",
+    )
+    return enabled_saved, {
+        "mode": "updated" if existing_id else "created",
+        "validation_retry": True,
+        "category": int(category_id),
+        "initial_status": status,
+        "disabled_id": int(disabled_saved["id"]),
+    }
+
+
+def recreate_arr_emule_indexer_if_unavailable(
+    *,
+    arr_url: str,
+    api_key: str,
+    indexer: dict[str, Any],
+    indexer_name: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    prowlarr_indexer_id: int,
+    category_id: int,
+) -> tuple[dict[str, Any], dict[str, object]]:
+    """Recreates the eMule BB provider when Arr health has quarantined its status."""
+
+    health = arr_health_rows(arr_url, api_key)
+    messages = [
+        str(row.get("message") or "")
+        for row in health
+        if str(row.get("source") or "") == "IndexerStatusCheck"
+    ]
+    if not arr_indexer_unavailable_due_to_failures(health, indexer_name):
+        return indexer, {"unavailable_due_to_failures": False, "indexer_status_messages": messages}
+
+    old_id = int(indexer.get("id") or 0)
+    if old_id <= 0:
+        raise RuntimeError("Arr eMule BB indexer cannot be recreated because it has no provider id.")
+
+    delete_summary = delete_arr_indexer_provider(arr_url, api_key, old_id)
+    schema = get_arr_torznab_schema(arr_url, api_key)
+    recreated, save_summary = save_enabled_arr_emule_indexer_with_validation_retry(
+        arr_url=arr_url,
+        api_key=api_key,
+        base_payload=schema,
+        existing_id=None,
+        indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        category_id=category_id,
+    )
+    return recreated, {
+        "unavailable_due_to_failures": True,
+        "mode": "recreated",
+        "old_id": old_id,
+        "new_id": int(recreated.get("id") or 0),
+        "delete": delete_summary,
+        "save": save_summary,
+        "indexer_status_messages": messages,
+    }
+
+
+def ensure_arr_emule_indexer(
+    *,
+    arr_url: str,
+    api_key: str,
+    indexer_name: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    prowlarr_indexer_id: int,
+    category_id: int,
+) -> tuple[dict[str, Any], dict[str, object]]:
+    """Repairs or creates the Arr eMule BB provider using public Arr APIs."""
+
+    existing = find_arr_emule_indexer(arr_url, api_key, indexer_name)
+    base_payload = existing if existing is not None else get_arr_torznab_schema(arr_url, api_key)
+    existing_id = int(existing.get("id") or 0) if existing is not None else None
+    return save_enabled_arr_emule_indexer_with_validation_retry(
+        arr_url=arr_url,
+        api_key=api_key,
+        base_payload=base_payload,
+        existing_id=existing_id,
+        indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        category_id=category_id,
+    )
+
+
 def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, Any]) -> tuple[dict[str, Any], dict[str, object]]:
     """Ensures the synced Arr indexer is enabled before release-search proof."""
 
@@ -263,6 +632,157 @@ def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, An
     if not is_arr_indexer_enabled(saved):
         raise RuntimeError("Arr returned the synced indexer but it is still disabled.")
     return saved, {"changed": True, "status": int(result.get("status") or 0)}
+
+
+def ensure_arr_indexer_untagged(arr_url: str, api_key: str, indexer: dict[str, Any]) -> tuple[dict[str, Any], dict[str, object]]:
+    """Ensures the live synced Arr indexer is eligible for untagged temporary media."""
+
+    indexer_id = int(indexer.get("id") or 0)
+    if indexer_id <= 0:
+        raise RuntimeError("Synced Arr indexer did not include a valid id.")
+    existing_tags = indexer.get("tags")
+    if not existing_tags:
+        return indexer, {"changed": False, "status": "already_untagged"}
+
+    payload = json.loads(json.dumps(indexer))
+    payload["tags"] = []
+    result = arr_request(
+        arr_url,
+        api_key,
+        f"/api/v3/indexer/{indexer_id}?forceSave=true",
+        method="PUT",
+        json_body=payload,
+        timeout_seconds=60.0,
+    )
+    saved = require_success(result, "Arr eMule BB synced indexer tag clear")
+    if not isinstance(saved, dict) or int(saved.get("id") or 0) != indexer_id:
+        raise RuntimeError("Arr did not return the untagged synced indexer.")
+    if saved.get("tags"):
+        raise RuntimeError("Arr returned the synced indexer but it still has tags.")
+    return saved, {"changed": True, "previous_tag_count": len(existing_tags) if isinstance(existing_tags, list) else None, "status": int(result.get("status") or 0)}
+
+
+def list_arr_indexers(arr_url: str, api_key: str) -> list[dict[str, Any]]:
+    """Returns the configured Arr indexers as mutable JSON objects."""
+
+    payload = require_success(arr_request(arr_url, api_key, "/api/v3/indexer"), "Arr indexer list")
+    if not isinstance(payload, list):
+        raise RuntimeError("Arr indexer list was not a list.")
+    return [indexer for indexer in payload if isinstance(indexer, dict)]
+
+
+def list_arr_download_clients(arr_url: str, api_key: str) -> list[dict[str, Any]]:
+    """Returns configured Arr download clients."""
+
+    payload = require_success(arr_request(arr_url, api_key, "/api/v3/downloadclient"), "Arr download client list")
+    if not isinstance(payload, list):
+        raise RuntimeError("Arr download client list was not a list.")
+    return [client for client in payload if isinstance(client, dict)]
+
+
+def delete_stale_live_download_clients(arr_url: str, api_key: str, *, kind: str) -> list[dict[str, object]]:
+    """Removes stale live-test download clients left by interrupted runs."""
+
+    prefix = f"eMule BB Live {kind} "
+    removed: list[dict[str, object]] = []
+    for client in list_arr_download_clients(arr_url, api_key):
+        client_id = int(client.get("id") or 0)
+        client_name = str(client.get("name") or "")
+        if client_id <= 0 or not client_name.startswith(prefix):
+            continue
+        removed.append(delete_download_client(arr_url, api_key, client_id))
+    return removed
+
+
+def set_arr_indexer_search_state(arr_url: str, api_key: str, indexer: dict[str, Any], enabled: bool) -> dict[str, object]:
+    """Sets the Arr search enable flags for one indexer and returns a compact result."""
+
+    indexer_id = int(indexer.get("id") or 0)
+    if indexer_id <= 0:
+        raise RuntimeError("Arr indexer payload did not include a valid id.")
+    payload = json.loads(json.dumps(indexer))
+    if "enable" in payload:
+        payload["enable"] = bool(enabled)
+    for flag_name in ("enableRss", "enableAutomaticSearch", "enableInteractiveSearch"):
+        if flag_name in payload:
+            payload[flag_name] = bool(enabled)
+    result = arr_request(
+        arr_url,
+        api_key,
+        f"/api/v3/indexer/{indexer_id}?forceSave=true",
+        method="PUT",
+        json_body=payload,
+        timeout_seconds=60.0,
+    )
+    require_success(result, "Arr indexer search-state update")
+    return {"id": indexer_id, "enabled": bool(enabled), "status": int(result.get("status") or 0)}
+
+
+def isolate_arr_indexer_search(arr_url: str, api_key: str, allowed_indexer_id: int) -> tuple[list[dict[str, Any]], list[dict[str, object]]]:
+    """Temporarily leaves only the eMule BB indexer searchable for Arr release queries."""
+
+    snapshots = list_arr_indexers(arr_url, api_key)
+    changes: list[dict[str, object]] = []
+    for indexer in snapshots:
+        indexer_id = int(indexer.get("id") or 0)
+        if indexer_id <= 0:
+            continue
+        desired_enabled = indexer_id == int(allowed_indexer_id)
+        current_enabled = is_arr_indexer_enabled(indexer)
+        if current_enabled != desired_enabled:
+            changes.append(set_arr_indexer_search_state(arr_url, api_key, indexer, desired_enabled))
+    return snapshots, changes
+
+
+def restore_arr_indexers(arr_url: str, api_key: str, snapshots: list[dict[str, Any]]) -> list[dict[str, object]]:
+    """Restores Arr indexers captured before live search isolation."""
+
+    restored: list[dict[str, object]] = []
+    for snapshot in snapshots:
+        indexer_id = int(snapshot.get("id") or 0)
+        if indexer_id <= 0:
+            continue
+        result = arr_request(
+            arr_url,
+            api_key,
+            f"/api/v3/indexer/{indexer_id}?forceSave=true",
+            method="PUT",
+            json_body=snapshot,
+            timeout_seconds=60.0,
+        )
+        restored.append({"id": indexer_id, "status": int(result.get("status") or 0)})
+        require_success(result, "Arr indexer restore")
+    return restored
+
+
+def delete_all_emule_searches(base_url: str, api_key: str) -> dict[str, object]:
+    """Clears existing eMule search tabs before media acquisition starts."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        "/api/v1/searches",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"confirmDeleteAllSearches": True},
+        request_timeout_seconds=20.0,
+    )
+    payload = rest_smoke.require_json_object(result, 200)
+    return {
+        "status": int(result.get("status") or 0),
+        "ok": bool(payload.get("ok", True)),
+    }
+
+
+def list_emule_searches(base_url: str, api_key: str) -> dict[str, object]:
+    """Returns a compact search-tab summary without exposing query text."""
+
+    result = rest_smoke.http_request(base_url, "/api/v1/searches", api_key=api_key, request_timeout_seconds=20.0)
+    rows = rest_smoke.require_json_array(result, 200)
+    return {
+        "status": int(result.get("status") or 0),
+        "count": len(rows),
+        "query_present_count": sum(1 for row in rows if isinstance(row, dict) and bool(row.get("query"))),
+    }
 
 
 def get_qbit_schema(arr_url: str, api_key: str) -> dict[str, Any]:
@@ -340,7 +860,7 @@ def build_qbit_client_payload(
     set_field_value(payload, "username", "emule")
     set_field_value(payload, "password", api_key)
     set_field_value(payload, category_field, category)
-    set_field_value(payload, "initialState", 2)
+    set_field_value(payload, "initialState", 0)
     return payload
 
 
@@ -407,6 +927,7 @@ def summarize_arr_indexer(indexer: dict[str, Any]) -> dict[str, object]:
         "enableInteractiveSearch": indexer.get("enableInteractiveSearch"),
         "protocol": indexer.get("protocol"),
         "priority": indexer.get("priority"),
+        "tag_count": len(indexer.get("tags") or []) if isinstance(indexer.get("tags"), list) else None,
     }
 
 
@@ -425,30 +946,6 @@ def summarize_arr_download_client(client: dict[str, Any], *, category: str) -> d
     }
 
 
-def unique_terms(*term_groups: tuple[str, ...]) -> tuple[str, ...]:
-    """Combines live-wire search terms while preserving operator-provided order."""
-
-    return tuple(dict.fromkeys(term for group in term_groups for term in group))
-
-
-def build_direct_search_terms(inputs: Any) -> tuple[str, ...]:
-    """Builds direct Torznab search terms with generic fallback coverage."""
-
-    return unique_terms(inputs.document_terms, inputs.generic_open_terms)
-
-
-def build_qbit_search_terms(inputs: Any) -> tuple[str, ...]:
-    """Builds qBit live-wire video search terms with generic fallback coverage."""
-
-    return unique_terms(inputs.radarr_movie_terms, inputs.sonarr_series_terms, inputs.document_terms, inputs.generic_open_terms)
-
-
-def build_sonarr_release_terms(inputs: Any) -> tuple[str, ...]:
-    """Builds Sonarr release-search terms from TV-oriented operator inputs."""
-
-    return unique_terms(inputs.sonarr_series_terms, inputs.generic_open_terms)
-
-
 def require_radarr_import_movie_terms(inputs: Any) -> tuple[str, ...]:
     """Returns operator-configured Radarr import candidates from live-wire inputs."""
 
@@ -458,13 +955,63 @@ def require_radarr_import_movie_terms(inputs: Any) -> tuple[str, ...]:
     return terms
 
 
-def select_radarr_import_movie_terms(terms: tuple[str, ...], search_result: dict[str, object]) -> tuple[str, ...]:
-    """Selects the Radarr movie term proven reachable through Prowlarr."""
+def require_sonarr_import_series_terms(inputs: Any) -> tuple[str, ...]:
+    """Returns operator-configured Sonarr import candidates from live-wire inputs."""
 
-    term_index = int(search_result.get("term_index") or 0)
-    if term_index < 0 or term_index >= len(terms):
-        raise RuntimeError(f"Prowlarr Radarr search returned invalid term index {term_index}.")
-    return (terms[term_index],)
+    terms = tuple(str(term).strip() for term in inputs.sonarr_series_terms if str(term).strip())
+    if not terms:
+        raise RuntimeError("live-wire inputs field 'search_terms.sonarr_series' must include a Sonarr import title.")
+    return terms
+
+
+def is_emulebb_arr_release(row: dict[str, Any], indexer_id: int) -> bool:
+    """Returns true when an Arr release row belongs to the eMule BB indexer."""
+
+    return int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower()
+
+
+def select_best_arr_release(rows: list[dict[str, Any]], query: str) -> dict[str, Any]:
+    """Selects the best Arr release by title match and source count."""
+
+    if not rows:
+        raise RuntimeError("Arr release selection requires at least one row.")
+    candidates = [
+        (
+            prowlarr_live.release_title_match_score(row, query),
+            prowlarr_live.release_source_count(row),
+            -index,
+            json.loads(json.dumps(row)),
+        )
+        for index, row in enumerate(rows)
+    ]
+    candidates.sort(reverse=True)
+    return candidates[0][3]
+
+
+def summarize_arr_release_indexers(rows: list[Any], limit: int = 8) -> list[dict[str, object]]:
+    """Summarizes release indexer identities without exposing release titles."""
+
+    seen: set[tuple[int, str]] = set()
+    samples: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        indexer_id = int(row.get("indexerId") or 0)
+        indexer_name = str(row.get("indexer") or "")
+        key = (indexer_id, indexer_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        samples.append(
+            {
+                "indexerId": indexer_id,
+                "indexer_present": bool(indexer_name),
+                "indexer_contains_emulebb": "emule bb" in indexer_name.lower(),
+            }
+        )
+        if len(samples) >= limit:
+            break
+    return samples
 
 
 def build_torznab_search_path(category_id: int, query: str, emule_api_key: str, *, request_type: str = "search") -> str:
@@ -522,6 +1069,15 @@ def build_radarr_root_environment_warning(radarr_url: str, root_path: Path | str
     return None
 
 
+def build_arr_root_environment_warning(arr_url: str, root_path: Path | str, *, create_local_path: bool, kind: str) -> dict[str, object] | None:
+    """Builds a non-failing warning when the root path may not be visible to the Arr host."""
+
+    warning = build_radarr_root_environment_warning(arr_url, root_path, create_local_path=create_local_path)
+    if warning is not None:
+        warning["arr_kind"] = kind
+    return warning
+
+
 def ensure_emule_category(base_url: str, api_key: str, name: str, path: Path) -> dict[str, object]:
     """Ensures eMule has one named category with a dedicated incoming path."""
 
@@ -576,6 +1132,27 @@ def get_default_quality_profile_id(arr_url: str, api_key: str) -> int:
     if profile_id <= 0:
         raise RuntimeError("Radarr first quality profile did not include an id.")
     return profile_id
+
+
+def get_quality_profile_id(arr_url: str, api_key: str, kind: str, preferred_name: str | None = None) -> int:
+    """Returns the configured quality profile id, preferring an operator-provided name."""
+
+    profiles = require_success(arr_request(arr_url, api_key, "/api/v3/qualityprofile"), f"{kind} quality profiles")
+    if not isinstance(profiles, list) or not profiles:
+        raise RuntimeError(f"{kind} quality profile list did not return rows.")
+    if preferred_name:
+        for profile in profiles:
+            if isinstance(profile, dict) and str(profile.get("name") or "").strip().lower() == preferred_name.strip().lower():
+                profile_id = int(profile.get("id") or 0)
+                if profile_id > 0:
+                    return profile_id
+        raise RuntimeError(f"{kind} quality profile {preferred_name!r} was not found.")
+    for profile in profiles:
+        if isinstance(profile, dict):
+            profile_id = int(profile.get("id") or 0)
+            if profile_id > 0:
+                return profile_id
+    raise RuntimeError(f"{kind} quality profiles did not include a valid id.")
 
 
 def ensure_radarr_root_folder(
@@ -667,75 +1244,453 @@ def ensure_radarr_movie(
     }
 
 
-def grab_first_radarr_release(arr_url: str, api_key: str, indexer_id: int, title: str, timeout_seconds: float) -> dict[str, object]:
-    """Searches Radarr releases and grabs the first eMule BB indexer match."""
+def delete_sonarr_series(arr_url: str, api_key: str, series_id: int) -> dict[str, object]:
+    """Deletes one temporary Sonarr series without deleting local media files."""
+
+    result = arr_request(arr_url, api_key, f"/api/v3/series/{series_id}?deleteFiles=false&addImportListExclusion=false", method="DELETE")
+    return {"id": series_id, "status": int(result.get("status") or 0)}
+
+
+def ensure_arr_root_folder(
+    arr_url: str,
+    api_key: str,
+    root_path: Path | str,
+    *,
+    create_local_path: bool = True,
+    kind: str,
+) -> dict[str, object]:
+    """Ensures Radarr/Sonarr can use one root folder for import verification."""
+
+    path_text = resolve_radarr_root_path(root_path, create_local_path=create_local_path)
+    roots = require_success(arr_request(arr_url, api_key, "/api/v3/rootfolder"), f"{kind} root folders")
+    if isinstance(roots, list):
+        for root in roots:
+            if isinstance(root, dict) and str(root.get("path") or "").lower() == path_text.lower():
+                return {"id": int(root.get("id") or 0), "path": root.get("path"), "created": False}
+    created = require_success(
+        arr_request(arr_url, api_key, "/api/v3/rootfolder", method="POST", json_body={"path": path_text}),
+        f"{kind} root folder create",
+    )
+    if not isinstance(created, dict):
+        raise RuntimeError(f"{kind} root folder create did not return an object.")
+    return {"id": int(created.get("id") or 0), "path": created.get("path"), "created": True}
+
+
+def lookup_sonarr_series(arr_url: str, api_key: str, title: str) -> dict[str, Any]:
+    """Looks up one Sonarr series by title."""
+
+    rows = require_success(
+        arr_request(arr_url, api_key, "/api/v3/series/lookup?term=" + urllib.parse.quote(title), timeout_seconds=60.0),
+        "Sonarr series lookup",
+    )
+    if not isinstance(rows, list):
+        raise RuntimeError("Sonarr series lookup did not return a list.")
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("title") or "").strip().lower() == title.lower():
+            return row
+    for row in rows:
+        if isinstance(row, dict):
+            return row
+    raise RuntimeError(f"Sonarr series lookup returned no candidates for {title!r}.")
+
+
+def ensure_sonarr_series(
+    arr_url: str,
+    api_key: str,
+    title: str,
+    root_path: Path | str,
+    *,
+    create_local_root_path: bool = True,
+    quality_profile_name: str | None = None,
+) -> dict[str, object]:
+    """Ensures a temporary Sonarr series exists for the import E2E."""
+
+    root_folder = ensure_arr_root_folder(arr_url, api_key, root_path, create_local_path=create_local_root_path, kind="sonarr")
+    root_path_text = str(root_folder.get("path") or resolve_radarr_root_path(root_path, create_local_path=False))
+    series_rows = require_success(arr_request(arr_url, api_key, "/api/v3/series"), "Sonarr series list")
+    if isinstance(series_rows, list):
+        for series in series_rows:
+            if isinstance(series, dict) and str(series.get("title") or "").strip().lower() == title.lower():
+                return {
+                    "id": int(series.get("id") or 0),
+                    "title": series.get("title"),
+                    "created": False,
+                    "root_folder": root_folder,
+                    "series": series,
+                }
+
+    quality_profile_id = get_quality_profile_id(arr_url, api_key, "sonarr", quality_profile_name)
+    lookup = lookup_sonarr_series(arr_url, api_key, title)
+    payload = dict(lookup)
+    payload["qualityProfileId"] = quality_profile_id
+    payload["rootFolderPath"] = root_path_text
+    payload["monitored"] = True
+    payload["seasonFolder"] = True
+    payload["addOptions"] = {"searchForMissingEpisodes": False}
+    created = require_success(
+        arr_request(arr_url, api_key, "/api/v3/series", method="POST", json_body=payload, timeout_seconds=60.0),
+        "Sonarr series create",
+    )
+    if not isinstance(created, dict) or not created.get("id"):
+        raise RuntimeError("Sonarr series create did not return an id.")
+    return {
+        "id": int(created["id"]),
+        "title": created.get("title"),
+        "created": True,
+        "root_folder": root_folder,
+        "series": created,
+    }
+
+
+def build_arr_release_search_paths(kind: str, title: str, indexer_id: int, media_id: int | None = None) -> list[str]:
+    """Builds bounded Arr release-search request paths for one media item."""
+
+    quoted_title = urllib.parse.quote(title)
+    paths: list[str] = [
+        f"/api/v3/release?term={quoted_title}&indexerIds={indexer_id}",
+        f"/api/v3/release?term={quoted_title}&indexerId={indexer_id}",
+    ]
+    if media_id is not None and media_id > 0:
+        media_key = "movieId" if kind == "radarr" else "seriesId"
+        paths.append(f"/api/v3/release?{media_key}={media_id}&indexerIds={indexer_id}")
+        paths.append(f"/api/v3/release?{media_key}={media_id}&indexerId={indexer_id}")
+    return paths
+
+
+def grab_first_arr_release(
+    arr_url: str,
+    api_key: str,
+    indexer_id: int,
+    title: str,
+    timeout_seconds: float,
+    *,
+    kind: str,
+    media_id: int | None = None,
+) -> dict[str, object]:
+    """Searches Arr releases and grabs the best eMule BB indexer match."""
 
     deadline = time.monotonic() + timeout_seconds
     attempts: list[dict[str, object]] = []
     while time.monotonic() < deadline:
-        result = arr_request(
-            arr_url,
-            api_key,
-            f"/api/v3/release?term={urllib.parse.quote(title)}&indexerIds={indexer_id}",
-            timeout_seconds=90.0,
-        )
-        rows = result.get("json") if isinstance(result.get("json"), list) else []
-        matches = [
-            row
-            for row in rows
-            if isinstance(row, dict)
-            and (int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower())
-        ]
-        attempts.append({"status": int(result.get("status") or 0), "count": len(rows), "matches": len(matches)})
-        if matches:
-            selected = dict(matches[0])
-            selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
-            selected_hash = ""
-            if selected_download_url.startswith("magnet:?"):
-                try:
-                    selected_hash = ed2k_hash_from_magnet(selected_download_url)
-                except RuntimeError:
-                    selected_hash = ""
-            grabbed = require_success(
-                arr_request(arr_url, api_key, "/api/v3/release", method="POST", json_body=selected, timeout_seconds=90.0),
-                "Radarr release grab",
+        for path in build_arr_release_search_paths(kind, title, indexer_id, media_id):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                result = arr_request(arr_url, api_key, path, timeout_seconds=max(1.0, remaining))
+            except TimeoutError as exc:
+                attempts.append(
+                    {
+                        "kind": kind,
+                        "term_present": bool(title),
+                        "media_id": media_id,
+                        "request_path": path.split("apikey=", 1)[0],
+                        "status": "timeout",
+                        "error": str(exc),
+                    }
+                )
+                continue
+            rows = result.get("json") if isinstance(result.get("json"), list) else []
+            matches = [row for row in rows if isinstance(row, dict) and is_emulebb_arr_release(row, indexer_id)]
+            attempts.append(
+                {
+                    "kind": kind,
+                    "term_present": bool(title),
+                    "media_id": media_id,
+                    "request_path": path.split("apikey=", 1)[0],
+                    "status": int(result.get("status") or 0),
+                    "count": len(rows),
+                    "matches": len(matches),
+                    "indexers": summarize_arr_release_indexers(rows),
+                }
             )
-            return {
-                "attempt_count": len(attempts),
-                "title_present": bool(selected.get("title")),
-                "downloadUrl_present": bool(selected.get("downloadUrl")),
-                "guid_present": bool(selected.get("guid")),
-                "hash": selected_hash,
-                "hash_present": bool(selected_hash),
-                "grab_status": grabbed.get("status") if isinstance(grabbed, dict) else None,
-            }
-        time.sleep(5.0)
-    raise RuntimeError(f"Radarr release search returned no eMule BB rows before timeout. Attempts: {attempts!r}")
+            if matches:
+                selected = select_best_arr_release(matches, title)
+                selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
+                selected_hash = ""
+                if selected_download_url.startswith("magnet:?"):
+                    try:
+                        selected_hash = ed2k_hash_from_magnet(selected_download_url)
+                    except RuntimeError:
+                        selected_hash = ""
+                grabbed = require_success(
+                    arr_request(
+                        arr_url,
+                        api_key,
+                        "/api/v3/release",
+                        method="POST",
+                        json_body=selected,
+                        timeout_seconds=max(1.0, min(30.0, deadline - time.monotonic())),
+                    ),
+                    f"{kind} release grab",
+                )
+                return {
+                    "attempt_count": len(attempts),
+                    "request_path": path,
+                    "title_present": bool(selected.get("title")),
+                    "downloadUrl_present": bool(selected.get("downloadUrl")),
+                    "guid_present": bool(selected.get("guid")),
+                    "indexer": selected.get("indexer"),
+                    "selection": prowlarr_live.summarize_release_selection(selected, title),
+                    "hash": selected_hash,
+                    "hash_present": bool(selected_hash),
+                    "grab_status": grabbed.get("status") if isinstance(grabbed, dict) else None,
+                }
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
+    raise RuntimeError(f"{kind} release search returned no eMule BB rows before timeout. Attempts: {attempts!r}")
 
 
-def wait_for_radarr_movie_import(arr_url: str, api_key: str, movie_id: int, timeout_seconds: float) -> dict[str, object]:
-    """Waits until Radarr reports an imported movie file."""
+def grab_first_radarr_release(arr_url: str, api_key: str, indexer_id: int, title: str, timeout_seconds: float) -> dict[str, object]:
+    """Searches Radarr releases and grabs the best eMule BB indexer match."""
+
+    return grab_first_arr_release(arr_url, api_key, indexer_id, title, timeout_seconds, kind="radarr")
+
+
+def grab_first_arr_release_or_fallback_to_prowlarr(
+    *,
+    kind: str,
+    arr_url: str,
+    arr_api_key: str,
+    arr_indexer_id: int,
+    arr_indexer_name: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    prowlarr_indexer_id: int,
+    emule_base_url: str,
+    emule_api_key: str,
+    title: str,
+    media_id: int,
+    category_id: int,
+    download_category: str,
+    timeout_seconds: float,
+    health_rows: list[dict[str, Any]],
+) -> dict[str, object]:
+    """Grabs through Arr, using Prowlarr as search source when Arr quarantined the provider."""
+
+    indexer_unavailable = arr_indexer_unavailable_due_to_failures(health_rows, arr_indexer_name)
+    if not indexer_unavailable:
+        before_hashes = transfer_hashes(emule_base_url, emule_api_key)
+        try:
+            release_grab = grab_first_arr_release(
+                arr_url,
+                arr_api_key,
+                arr_indexer_id,
+                title,
+                timeout_seconds,
+                kind=kind,
+                media_id=media_id,
+            )
+            release_grab["source"] = "arr_release_search"
+            release_grab["arr_indexer_unavailable_due_to_failures"] = False
+            if not str(release_grab.get("hash") or ""):
+                new_transfer = wait_for_new_transfer_category(
+                    emule_base_url,
+                    emule_api_key,
+                    category=download_category,
+                    before_hashes=before_hashes,
+                    timeout_seconds=120.0,
+                )
+                release_grab["hash"] = str(new_transfer.get("hash") or "")
+                release_grab["hash_present"] = bool(release_grab["hash"])
+                release_grab["category_transfer"] = {key: value for key, value in new_transfer.items() if key != "hash"}
+            return release_grab
+        except RuntimeError as exc:
+            direct_error = str(exc)
+    else:
+        direct_error = "Arr health reports the eMule BB indexer unavailable due to failures."
+
+    release_grab = grab_first_arr_release_via_prowlarr(
+        kind=kind,
+        arr_url=arr_url,
+        arr_api_key=arr_api_key,
+        arr_indexer_id=arr_indexer_id,
+        arr_indexer_name=arr_indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        emule_base_url=emule_base_url,
+        emule_api_key=emule_api_key,
+        title=title,
+        category_id=category_id,
+        download_category=download_category,
+        timeout_seconds=timeout_seconds,
+    )
+    release_grab["arr_direct_search_error"] = direct_error[:500]
+    release_grab["arr_indexer_unavailable_due_to_failures"] = indexer_unavailable
+    return release_grab
+
+
+def transfer_hashes(base_url: str, emule_api_key: str) -> set[str]:
+    """Returns currently visible native transfer hashes."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        "/api/v1/transfers",
+        api_key=emule_api_key,
+        request_timeout_seconds=30.0,
+    )
+    rows = rest_smoke.require_json_array(result, 200)
+    return {
+        str(row.get("hash") or "").lower()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("hash") or "").strip()
+    }
+
+
+def wait_for_new_transfer_category(
+    base_url: str,
+    emule_api_key: str,
+    *,
+    category: str,
+    before_hashes: set[str],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until a newly grabbed transfer appears in the expected category."""
 
     deadline = time.monotonic() + timeout_seconds
     last: dict[str, object] | None = None
     while time.monotonic() < deadline:
-        result = arr_request(arr_url, api_key, f"/api/v3/movie/{movie_id}", timeout_seconds=30.0)
-        movie = result.get("json") if isinstance(result.get("json"), dict) else {}
-        if isinstance(movie, dict):
-            movie_file = movie.get("movieFile")
-            has_file = bool(movie.get("hasFile")) or isinstance(movie_file, dict)
+        request_timeout = min(30.0, max(1.0, deadline - time.monotonic()))
+        result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/transfers",
+            api_key=emule_api_key,
+            request_timeout_seconds=request_timeout,
+        )
+        rows = rest_smoke.require_json_array(result, 200)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            transfer_hash = str(row.get("hash") or "").lower()
             last = {
-                "status": int(result.get("status") or 0),
-                "hasFile": bool(movie.get("hasFile")),
-                "movieFile_present": isinstance(movie_file, dict),
+                "hash": transfer_hash,
+                "hash_present": bool(transfer_hash),
+                "name_present": bool(row.get("name")),
+                "state": row.get("state"),
+                "categoryName": row.get("categoryName"),
             }
-            if has_file:
-                imported_path = None
-                if isinstance(movie_file, dict):
-                    imported_path = movie_file.get("path") or movie_file.get("relativePath")
-                return {**last, "imported_path_present": bool(imported_path)}
-        time.sleep(10.0)
-    raise RuntimeError(f"Radarr movie was not imported before timeout. Last: {last!r}")
+            if transfer_hash and transfer_hash not in before_hashes and str(row.get("categoryName") or "") == category:
+                return last
+        time.sleep(2.0)
+    raise RuntimeError(f"Arr grab did not create a new transfer in category {category!r}. Last: {last!r}")
+
+
+def build_arr_release_payload_from_prowlarr(
+    release: dict[str, Any],
+    *,
+    arr_indexer_id: int,
+    arr_indexer_name: str,
+) -> dict[str, Any]:
+    """Adapts a Prowlarr eMule row into the Arr release-grab resource shape."""
+
+    payload = json.loads(json.dumps(release))
+    payload["indexerId"] = int(arr_indexer_id)
+    payload["indexer"] = arr_indexer_name
+    payload["protocol"] = "torrent"
+    payload["downloadAllowed"] = True
+    if not str(payload.get("downloadUrl") or "").strip() and str(payload.get("magnetUrl") or "").strip():
+        payload["downloadUrl"] = payload["magnetUrl"]
+    if not str(payload.get("guid") or "").strip():
+        payload["guid"] = str(payload.get("downloadUrl") or payload.get("magnetUrl") or "")
+    return payload
+
+
+def grab_first_arr_release_via_prowlarr(
+    *,
+    kind: str,
+    arr_url: str,
+    arr_api_key: str,
+    arr_indexer_id: int,
+    arr_indexer_name: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    prowlarr_indexer_id: int,
+    emule_base_url: str,
+    emule_api_key: str,
+    title: str,
+    category_id: int,
+    download_category: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Searches the eMule Prowlarr indexer, then triggers the grab from Arr."""
+
+    before_hashes = transfer_hashes(emule_base_url, emule_api_key)
+    deadline = time.monotonic() + timeout_seconds
+    attempts: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        path = prowlarr_live.build_prowlarr_search_path(title, category_id, prowlarr_indexer_id)
+        result = prowlarr_live.prowlarr_request(
+            prowlarr_url,
+            prowlarr_api_key,
+            path,
+            timeout_seconds=max(1.0, min(30.0, remaining)),
+        )
+        status = int(result.get("status") or 0)
+        rows = result.get("json") if isinstance(result.get("json"), list) else []
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict) and int(row.get("indexerId") or 0) == int(prowlarr_indexer_id)
+        ]
+        attempts.append(
+            {
+                "kind": kind,
+                "term_present": bool(title),
+                "request_path": path.split("apikey=", 1)[0],
+                "status": status,
+                "count": len(rows),
+                "matches": len(matches),
+                "indexers": summarize_arr_release_indexers(rows),
+            }
+        )
+        if status >= 200 and status < 300 and matches:
+            selected = prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
+            payload = build_arr_release_payload_from_prowlarr(
+                selected,
+                arr_indexer_id=arr_indexer_id,
+                arr_indexer_name=arr_indexer_name,
+            )
+            grabbed = require_success(
+                arr_request(
+                    arr_url,
+                    arr_api_key,
+                    "/api/v3/release",
+                    method="POST",
+                    json_body=payload,
+                    timeout_seconds=max(1.0, min(30.0, deadline - time.monotonic())),
+                ),
+                f"{kind} eMule BB release grab",
+            )
+            new_transfer = wait_for_new_transfer_category(
+                emule_base_url,
+                emule_api_key,
+                category=download_category,
+                before_hashes=before_hashes,
+                timeout_seconds=min(120.0, max(1.0, deadline - time.monotonic())),
+            )
+            transfer_hash = str(new_transfer.get("hash") or "")
+            return {
+                "attempt_count": len(attempts),
+                "source": "prowlarr_eMule_indexer_arr_grab",
+                "title_present": bool(selected.get("title")),
+                "downloadUrl_present": bool(selected.get("downloadUrl")),
+                "guid_present": bool(selected.get("guid")),
+                "indexer": arr_indexer_name,
+                "selection": prowlarr_live.summarize_release_selection(selected, title),
+                "hash": transfer_hash,
+                "hash_present": bool(transfer_hash),
+                "grab_status": grabbed.get("status") if isinstance(grabbed, dict) else None,
+                "category_transfer": {key: value for key, value in new_transfer.items() if key != "hash"},
+            }
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
+    raise RuntimeError(f"{kind} eMule BB Prowlarr search returned no grabbable rows before timeout. Attempts: {attempts!r}")
 
 
 def redact_direct_magnet(magnet: dict[str, object]) -> dict[str, object]:
@@ -1225,6 +2180,95 @@ def wait_for_transfer_category(
     raise RuntimeError(f"Selected qBit transfer did not report category {category!r}. Last: {last!r}")
 
 
+def wait_for_transfer_completion(base_url: str, emule_api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
+    """Waits until an eMule transfer reaches a completed/importable state."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        last = wait_for_transfer(base_url, emule_api_key, transfer_hash, min(10.0, timeout_seconds))
+        state = str(last.get("state") or "").lower()
+        if state in {"completed", "complete", "seeding", "uploading"} or "completed" in state:
+            return last
+        time.sleep(5.0)
+    raise RuntimeError(f"Selected transfer did not complete before timeout. Last: {last!r}")
+
+
+def resume_transfer_if_paused(
+    base_url: str,
+    emule_api_key: str,
+    transfer_hash: str,
+    transfer: dict[str, object],
+) -> dict[str, object]:
+    """Resumes the selected native transfer when Arr left it paused."""
+
+    state = str(transfer.get("state") or "").lower()
+    if state != "paused":
+        return {"resumed": False, "state": transfer.get("state")}
+
+    result = rest_smoke.http_request(
+        base_url,
+        f"/api/v1/transfers/{urllib.parse.quote(transfer_hash)}/operations/resume",
+        method="POST",
+        api_key=emule_api_key,
+        request_timeout_seconds=30.0,
+    )
+    payload = rest_smoke.require_json_object(result, 200)
+    return {
+        "resumed": True,
+        "state": transfer.get("state"),
+        "status": int(result.get("status") or 0),
+        "operation_result": payload.get("result"),
+        "affected": payload.get("affected"),
+    }
+
+
+def wait_for_radarr_import(arr_url: str, api_key: str, movie_id: int, timeout_seconds: float) -> dict[str, object]:
+    """Waits until Radarr reports the grabbed movie as imported."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        movie = require_success(arr_request(arr_url, api_key, f"/api/v3/movie/{movie_id}", timeout_seconds=30.0), "Radarr movie import status")
+        if isinstance(movie, dict):
+            last = movie
+            movie_file = movie.get("movieFile")
+            if bool(movie.get("hasFile")) or isinstance(movie_file, dict):
+                return {
+                    "movie_id": movie_id,
+                    "hasFile": bool(movie.get("hasFile")),
+                    "movieFile_present": isinstance(movie_file, dict),
+                    "path": movie.get("path"),
+                }
+        time.sleep(10.0)
+    raise RuntimeError(f"Radarr did not import movie before timeout. Last hasFile={bool(last.get('hasFile')) if last else None}.")
+
+
+def wait_for_sonarr_import(arr_url: str, api_key: str, series_id: int, timeout_seconds: float) -> dict[str, object]:
+    """Waits until Sonarr reports at least one imported episode for the series."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last_count = 0
+    while time.monotonic() < deadline:
+        episodes = require_success(arr_request(arr_url, api_key, f"/api/v3/episode?seriesId={series_id}", timeout_seconds=30.0), "Sonarr episode import status")
+        rows = episodes if isinstance(episodes, list) else []
+        imported = [
+            episode
+            for episode in rows
+            if isinstance(episode, dict)
+            and (bool(episode.get("hasFile")) or int(episode.get("episodeFileId") or 0) > 0 or isinstance(episode.get("episodeFile"), dict))
+        ]
+        last_count = len(imported)
+        if imported:
+            return {
+                "series_id": series_id,
+                "episode_count": len(rows),
+                "imported_episode_count": len(imported),
+            }
+        time.sleep(10.0)
+    raise RuntimeError(f"Sonarr did not import any episode before timeout. Imported count: {last_count}.")
+
+
 def wait_for_transfer_absent(base_url: str, emule_api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
     """Waits until a native transfer hash disappears."""
 
@@ -1499,7 +2543,7 @@ def qbit_direct_live_wire_stress(
     rounds: int,
     timeout_seconds: float,
     initial_category: str = "RADARR_ENG",
-    updated_category: str = "SONARR_ENG",
+    updated_category: str = RADARR_IMPORT_CATEGORY,
     expected_save_path: str | None = None,
 ) -> dict[str, object]:
     """Runs repeated qBittorrent add/mutate/delete live-wire rounds."""
@@ -1548,12 +2592,7 @@ def wait_for_arr_release_results(
             result = arr_request(arr_url, api_key, path, timeout_seconds=90.0)
             payload = result.get("json")
             rows = payload if isinstance(payload, list) else []
-            matches = [
-                row
-                for row in rows
-                if isinstance(row, dict)
-                and (int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower())
-            ]
+            matches = [row for row in rows if isinstance(row, dict) and is_emulebb_arr_release(row, indexer_id)]
             attempts.append(
                 {
                     "term_index": term_index,
@@ -1564,59 +2603,18 @@ def wait_for_arr_release_results(
                 }
             )
             if matches:
-                first = matches[0]
+                selected = select_best_arr_release(matches, term)
                 return {
                     "term_index": term_index,
                     "term_present": bool(term),
                     "count": len(matches),
-                    "first_title_present": bool(first.get("title")) if isinstance(first, dict) else False,
-                    "indexer": first.get("indexer"),
+                    "first_title_present": bool(selected.get("title")) if isinstance(selected, dict) else False,
+                    "indexer": selected.get("indexer"),
+                    "selection": prowlarr_live.summarize_release_selection(selected, term),
                     "attempt_count": len(attempts),
                 }
         time.sleep(5.0)
     raise RuntimeError(f"Arr release searches returned no eMule BB rows before timeout. Attempts: {attempts!r}")
-
-
-def wait_for_prowlarr_category_results(
-    prowlarr_url: str,
-    api_key: str,
-    indexer_id: int,
-    terms: tuple[str, ...],
-    category_id: int,
-    timeout_seconds: float,
-) -> dict[str, object]:
-    """Polls Prowlarr until one explicit media-category search returns rows."""
-
-    attempts: list[dict[str, object]] = []
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        for term_index, term in enumerate(terms):
-            path = (
-                f"/api/v1/search?query={urllib.parse.quote(term)}"
-                f"&categories={category_id}&indexerIds={indexer_id}"
-            )
-            result = prowlarr_live.prowlarr_request(prowlarr_url, api_key, path, timeout_seconds=90.0)
-            payload = result.get("json")
-            rows = payload if isinstance(payload, list) else []
-            attempts.append(
-                {
-                    "term_index": term_index,
-                    "term_present": bool(term),
-                    "category": category_id,
-                    "status": int(result.get("status") or 0),
-                    "count": len(rows),
-                }
-            )
-            if int(result.get("status") or 0) >= 200 and int(result.get("status") or 0) < 300 and rows:
-                return {
-                    "term_index": term_index,
-                    "term_present": bool(term),
-                    "category": category_id,
-                    "count": len(rows),
-                    "attempt_count": len(attempts),
-                }
-        time.sleep(5.0)
-    raise RuntimeError(f"Prowlarr media-category search returned no rows before timeout. Attempts: {attempts!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1637,13 +2635,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
-    parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
-    parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--radarr-primary-readiness-timeout-seconds", type=float, default=180.0)
-    parser.add_argument("--qbit-live-wire-rounds", type=int, default=2)
+    parser.add_argument("--rest-ready-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
+    parser.add_argument("--emule-connection-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
+    parser.add_argument("--result-timeout-seconds", type=float, default=DEFAULT_SEARCH_TIMEOUT_SECONDS)
+    parser.add_argument("--radarr-release-timeout-seconds", type=float, default=DEFAULT_SEARCH_TIMEOUT_SECONDS)
+    parser.add_argument("--prowlarr-indexer-availability-timeout-seconds", type=float, default=300.0)
+    parser.add_argument("--arr-kind", choices=["radarr", "sonarr"], default="radarr")
+    parser.add_argument("--acquisition-timeout-minutes", type=float)
     parser.add_argument(
         "--radarr-movie-root",
         help="Optional Radarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
+    )
+    parser.add_argument(
+        "--sonarr-series-root",
+        help="Optional Sonarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
     )
     parser.add_argument(
         "--live-wire-inputs-file",
@@ -1657,6 +2662,9 @@ def run_arr_checks(
     kind: str,
     arr_url: str,
     arr_api_key: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    prowlarr_indexer_id: int,
     bind_addr: str,
     port: int,
     emule_api_key: str,
@@ -1664,15 +2672,37 @@ def run_arr_checks(
     release_terms: tuple[str, ...],
     timeout_seconds: float,
     category_override: str | None = None,
+    search_releases: bool = True,
 ) -> tuple[dict[str, object], int | None]:
     """Runs one Radarr or Sonarr live integration check."""
 
-    category = category_override or ("RADARR_ENG" if kind == "radarr" else "SONARR_ENG")
+    category = category_override or RADARR_IMPORT_CATEGORY
     category_field = "movieCategory" if kind == "radarr" else "tvCategory"
+    torznab_category = TORZNAB_MOVIE_CATEGORY if kind == "radarr" else TORZNAB_TV_CATEGORY
     temp_client_name = f"eMule BB Live {kind} {port}"
     status_payload = require_success(arr_request(arr_url, arr_api_key, "/api/v3/system/status"), f"{kind} status")
-    synced_indexer = wait_for_synced_indexer(arr_url, arr_api_key, indexer_name, timeout_seconds)
+    synced_indexer, indexer_repair = ensure_arr_emule_indexer(
+        arr_url=arr_url,
+        api_key=arr_api_key,
+        indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        category_id=torznab_category,
+    )
+    synced_indexer, indexer_health_repair = recreate_arr_emule_indexer_if_unavailable(
+        arr_url=arr_url,
+        api_key=arr_api_key,
+        indexer=synced_indexer,
+        indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        category_id=torznab_category,
+    )
     synced_indexer, indexer_enable = ensure_arr_indexer_enabled(arr_url, arr_api_key, synced_indexer)
+    synced_indexer, indexer_tags = ensure_arr_indexer_untagged(arr_url, arr_api_key, synced_indexer)
+    stale_clients = delete_stale_live_download_clients(arr_url, arr_api_key, kind=kind)
     client = create_temp_qbit_client(
         arr_url,
         arr_api_key,
@@ -1688,7 +2718,11 @@ def run_arr_checks(
             "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
             "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
         },
+        "indexer_repair": indexer_repair,
+        "indexer_health_repair": indexer_health_repair,
         "indexer_enable": indexer_enable,
+        "indexer_tags": indexer_tags,
+        "stale_download_clients": stale_clients,
         "synced_indexer": summarize_arr_indexer(synced_indexer),
         "download_client": summarize_arr_download_client(client, category=category),
         "readiness": {
@@ -1699,33 +2733,44 @@ def run_arr_checks(
             and int(client.get("_emulebbTestStatus") or 0) < 300,
         },
     }
-    try:
-        report["release_search"] = wait_for_arr_release_results(
-            arr_url,
-            arr_api_key,
-            int(synced_indexer.get("id") or 0),
-            release_terms,
-            timeout_seconds,
-        )
-    except Exception as exc:
-        report["release_search"] = {"status": "inconclusive", "error": str(exc)}
+    if search_releases:
+        try:
+            report["release_search"] = wait_for_arr_release_results(
+                arr_url,
+                arr_api_key,
+                int(synced_indexer.get("id") or 0),
+                release_terms,
+                timeout_seconds,
+            )
+        except Exception as exc:
+            report["release_search"] = {"status": "inconclusive", "error": str(exc)}
+    else:
+        report["release_search"] = {
+            "status": "skipped",
+            "reason": "Radarr movie download proof owns the movie release search and grab.",
+        }
     return report, int(client["id"])
 
 
-def run_radarr_import_e2e(
+def run_radarr_movie_download_e2e(
     *,
     radarr_url: str,
     radarr_api_key: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
     emule_base_url: str,
     emule_api_key: str,
     indexer_id: int,
+    indexer_name: str,
+    prowlarr_indexer_id: int,
     movie_title: str,
     movie_root: Path | str,
     category_name: str,
     movie_root_creates_local_path: bool,
+    release_search_timeout_seconds: float,
     timeout_seconds: float,
 ) -> tuple[dict[str, object], int | None]:
-    """Runs the Radarr grab-to-import proof for one configured movie title."""
+    """Runs the Radarr movie grab-to-eMule-category proof."""
 
     movie = ensure_radarr_movie(
         radarr_url,
@@ -1742,20 +2787,155 @@ def run_radarr_import_e2e(
         "category": category_name,
         "root_folder": movie.get("root_folder"),
     }
-    release_grab = grab_first_radarr_release(radarr_url, radarr_api_key, indexer_id, movie_title, timeout_seconds)
+    health = arr_health_rows(radarr_url, radarr_api_key)
+    report["indexer_health"] = {
+        "unavailable_due_to_failures": arr_indexer_unavailable_due_to_failures(health, indexer_name),
+        "indexer_status_messages": [
+            str(row.get("message") or "")
+            for row in health
+            if str(row.get("source") or "") == "IndexerStatusCheck"
+        ],
+    }
+    release_grab = grab_first_arr_release_or_fallback_to_prowlarr(
+        kind="radarr",
+        arr_url=radarr_url,
+        arr_api_key=radarr_api_key,
+        arr_indexer_id=indexer_id,
+        arr_indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        emule_base_url=emule_base_url,
+        emule_api_key=emule_api_key,
+        title=movie_title,
+        media_id=movie_id,
+        category_id=TORZNAB_MOVIE_CATEGORY,
+        download_category=category_name,
+        timeout_seconds=min(release_search_timeout_seconds, ARR_LIVE_SEARCH_TIMEOUT_SECONDS),
+        health_rows=health,
+    )
     report["release_grab"] = {key: value for key, value in release_grab.items() if key != "hash"}
     transfer_hash = str(release_grab.get("hash") or "")
     if not transfer_hash:
         raise RuntimeError("Radarr release grab did not expose an eMule BB magnet hash.")
-    report["category_transfer"] = wait_for_transfer_category(
+    if isinstance(release_grab.get("category_transfer"), dict):
+        report["category_transfer"] = release_grab["category_transfer"]
+    else:
+        report["category_transfer"] = wait_for_transfer_category(
+            emule_base_url,
+            emule_api_key,
+            transfer_hash,
+            category_name,
+            min(timeout_seconds, 120.0),
+        )
+    report["resume_if_paused"] = resume_transfer_if_paused(
         emule_base_url,
         emule_api_key,
         transfer_hash,
-        category_name,
-        min(timeout_seconds, 120.0),
+        report["category_transfer"],
     )
-    report["import"] = wait_for_radarr_movie_import(radarr_url, radarr_api_key, movie_id, timeout_seconds)
+    report["completed_transfer"] = wait_for_transfer_completion(
+        emule_base_url,
+        emule_api_key,
+        transfer_hash,
+        timeout_seconds,
+    )
+    report["arr_import"] = wait_for_radarr_import(radarr_url, radarr_api_key, movie_id, timeout_seconds)
     return report, movie_id if bool(movie.get("created")) else None
+
+
+def run_sonarr_series_download_e2e(
+    *,
+    sonarr_url: str,
+    sonarr_api_key: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    emule_base_url: str,
+    emule_api_key: str,
+    indexer_id: int,
+    indexer_name: str,
+    prowlarr_indexer_id: int,
+    series_title: str,
+    series_root: Path | str,
+    category_name: str,
+    series_root_creates_local_path: bool,
+    quality_profile_name: str | None,
+    release_search_timeout_seconds: float,
+    timeout_seconds: float,
+) -> tuple[dict[str, object], int | None]:
+    """Runs the Sonarr series grab-to-import proof."""
+
+    series = ensure_sonarr_series(
+        sonarr_url,
+        sonarr_api_key,
+        series_title,
+        series_root,
+        create_local_root_path=series_root_creates_local_path,
+        quality_profile_name=quality_profile_name,
+    )
+    series_id = int(series["id"])
+    report: dict[str, object] = {
+        "series_title_present": bool(series_title),
+        "series_id": series_id,
+        "series_created": bool(series.get("created")),
+        "category": category_name,
+        "root_folder": series.get("root_folder"),
+    }
+    health = arr_health_rows(sonarr_url, sonarr_api_key)
+    report["indexer_health"] = {
+        "unavailable_due_to_failures": arr_indexer_unavailable_due_to_failures(health, indexer_name),
+        "indexer_status_messages": [
+            str(row.get("message") or "")
+            for row in health
+            if str(row.get("source") or "") == "IndexerStatusCheck"
+        ],
+    }
+    release_grab = grab_first_arr_release_or_fallback_to_prowlarr(
+        kind="sonarr",
+        arr_url=sonarr_url,
+        arr_api_key=sonarr_api_key,
+        arr_indexer_id=indexer_id,
+        arr_indexer_name=indexer_name,
+        prowlarr_url=prowlarr_url,
+        prowlarr_api_key=prowlarr_api_key,
+        prowlarr_indexer_id=prowlarr_indexer_id,
+        emule_base_url=emule_base_url,
+        emule_api_key=emule_api_key,
+        title=series_title,
+        media_id=series_id,
+        category_id=TORZNAB_TV_CATEGORY,
+        download_category=category_name,
+        timeout_seconds=min(release_search_timeout_seconds, ARR_LIVE_SEARCH_TIMEOUT_SECONDS),
+        health_rows=health,
+    )
+    report["release_grab"] = {key: value for key, value in release_grab.items() if key != "hash"}
+    transfer_hash = str(release_grab.get("hash") or "")
+    if not transfer_hash:
+        raise RuntimeError("Sonarr release grab did not expose an eMule BB magnet hash.")
+    if isinstance(release_grab.get("category_transfer"), dict):
+        report["category_transfer"] = release_grab["category_transfer"]
+    else:
+        report["category_transfer"] = wait_for_transfer_category(
+            emule_base_url,
+            emule_api_key,
+            transfer_hash,
+            category_name,
+            min(timeout_seconds, 120.0),
+        )
+    report["resume_if_paused"] = resume_transfer_if_paused(
+        emule_base_url,
+        emule_api_key,
+        transfer_hash,
+        report["category_transfer"],
+    )
+    report["completed_transfer"] = wait_for_transfer_completion(
+        emule_base_url,
+        emule_api_key,
+        transfer_hash,
+        timeout_seconds,
+    )
+    report["arr_import"] = wait_for_sonarr_import(sonarr_url, sonarr_api_key, series_id, timeout_seconds)
+    return report, series_id if bool(series.get("created")) else None
 
 
 def require_arr_check_passed(kind: str, report: dict[str, object]) -> None:
@@ -1764,16 +2944,73 @@ def require_arr_check_passed(kind: str, report: dict[str, object]) -> None:
     readiness = report.get("readiness")
     if not isinstance(readiness, dict) or not all(bool(value) for value in readiness.values()):
         raise RuntimeError(f"{kind} eMule BB readiness failed: {readiness!r}")
+    release_search = report.get("release_search")
+    if isinstance(release_search, dict) and release_search.get("status") == "inconclusive":
+        raise RuntimeError(f"{kind} eMule BB release search failed: {release_search!r}")
+
+
+def read_log_tail(path: Path, max_lines: int = 80) -> list[str]:
+    """Reads a bounded tail from a live eMule log file."""
+
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return lines[-max_lines:]
+
+
+def summarize_live_logs(profile: dict[str, object]) -> dict[str, object]:
+    """Builds report metadata proving live logs were enabled and persisted."""
+
+    log_dir = Path(profile["log_dir"])
+    main_log = log_dir / "eMule.log"
+    verbose_log = log_dir / "eMule_Verbose.log"
+    return {
+        "log_dir": str(log_dir),
+        "main_log": str(main_log),
+        "verbose_log": str(verbose_log),
+        "main_log_present": main_log.is_file(),
+        "verbose_log_present": verbose_log.is_file(),
+        "main_log_size": main_log.stat().st_size if main_log.is_file() else 0,
+        "verbose_log_size": verbose_log.stat().st_size if verbose_log.is_file() else 0,
+    }
+
+
+def append_failure_log_tails(report: dict[str, object], profile: dict[str, object]) -> None:
+    """Adds bounded eMule log tails to a failed live report."""
+
+    log_dir = Path(profile["log_dir"])
+    report["failure_log_tails"] = {
+        "eMule.log": read_log_tail(log_dir / "eMule.log"),
+        "eMule_Verbose.log": read_log_tail(log_dir / "eMule_Verbose.log"),
+    }
+
+
+def parse_timeout_minutes(value: str | None, default_minutes: float) -> float:
+    """Parses an optional timeout in minutes from dotenv values."""
+
+    if value is None or not str(value).strip():
+        return default_minutes
+    parsed = float(value)
+    if parsed <= 0:
+        raise ValueError("Acquisition timeout minutes must be greater than zero.")
+    return parsed
 
 
 def main() -> int:
     """Runs the live Radarr/Sonarr eMule BB bridge test."""
 
     args = build_parser().parse_args()
-    if args.qbit_live_wire_rounds <= 0:
-        raise ValueError("--qbit-live-wire-rounds must be greater than zero.")
-    if args.radarr_primary_readiness_timeout_seconds <= 0:
-        raise ValueError("--radarr-primary-readiness-timeout-seconds must be greater than zero.")
+    kind = args.arr_kind
+    if args.radarr_release_timeout_seconds <= 0:
+        raise ValueError("--radarr-release-timeout-seconds must be greater than zero.")
+    if args.rest_ready_timeout_seconds <= 0:
+        raise ValueError("--rest-ready-timeout-seconds must be greater than zero.")
+    if args.emule_connection_timeout_seconds <= 0:
+        raise ValueError("--emule-connection-timeout-seconds must be greater than zero.")
+    if args.result_timeout_seconds <= 0:
+        raise ValueError("--result-timeout-seconds must be greater than zero.")
+    if args.prowlarr_indexer_availability_timeout_seconds <= 0:
+        raise ValueError("--prowlarr-indexer-availability-timeout-seconds must be greater than zero.")
     env_values = live_env.load_env_values(
         (
             "PROWLARR_URL",
@@ -1789,12 +3026,40 @@ def main() -> int:
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
-    document_terms = inputs.document_terms
-    direct_search_terms = build_direct_search_terms(inputs)
-    radarr_movie_terms = require_radarr_import_movie_terms(inputs)
-    sonarr_series_terms = build_sonarr_release_terms(inputs)
-    qbit_search_terms = build_qbit_search_terms(inputs)
-
+    if kind == "radarr":
+        media_terms = prowlarr_live.first_live_wire_term(
+            require_radarr_import_movie_terms(inputs),
+            "search_terms.radarr_movies",
+        )
+        arr_url = env_values["RADARR_URL"].rstrip("/")
+        arr_api_key = env_values["RADARR_API_KEY"]
+        arr_category = RADARR_IMPORT_CATEGORY
+        arr_category_key = "emule_radarr_category"
+        arr_term_key = "radarr_movies"
+        arr_media_category_key = "radarr_release"
+        torznab_media_category = TORZNAB_MOVIE_CATEGORY
+        suite_name = "radarr-emulebb-live"
+        acquisition_check_key = RADARR_DOWNLOAD_PROOF_CHECK_KEY
+        root_arg = args.radarr_movie_root
+        media_root: Path | str = root_arg.strip() if root_arg else None  # type: ignore[assignment]
+        quality_profile_name = env_values.get("RADARR_QUALITY_PROFILE_NAME")
+    else:
+        media_terms = prowlarr_live.first_live_wire_term(
+            require_sonarr_import_series_terms(inputs),
+            "search_terms.sonarr_series",
+        )
+        arr_url = env_values["SONARR_URL"].rstrip("/")
+        arr_api_key = env_values["SONARR_API_KEY"]
+        arr_category = SONARR_IMPORT_CATEGORY
+        arr_category_key = "emule_sonarr_category"
+        arr_term_key = "sonarr_series"
+        arr_media_category_key = "sonarr_release"
+        torznab_media_category = TORZNAB_TV_CATEGORY
+        suite_name = "sonarr-emulebb-live"
+        acquisition_check_key = SONARR_DOWNLOAD_PROOF_CHECK_KEY
+        root_arg = args.sonarr_series_root
+        media_root = root_arg.strip() if root_arg else None  # type: ignore[assignment]
+        quality_profile_name = env_values.get("SONARR_QUALITY_PROFILE_NAME")
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
     indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
@@ -1805,7 +3070,7 @@ def main() -> int:
 
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
-        suite_name="radarr-sonarr-emulebb-live",
+        suite_name=suite_name,
         configuration=args.configuration,
         workspace_root=args.workspace_root,
         app_root=args.app_root,
@@ -1816,12 +3081,19 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
     result_path = artifacts_dir / "result.json"
-    radarr_movie_root: Path | str = args.radarr_movie_root.strip() if args.radarr_movie_root else artifacts_dir / "radarr-movie-root"
-    radarr_movie_root_creates_local_path = not bool(args.radarr_movie_root)
-    radarr_root_warning = build_radarr_root_environment_warning(
-        env_values["RADARR_URL"].rstrip("/"),
-        radarr_movie_root,
-        create_local_path=radarr_movie_root_creates_local_path,
+    if media_root is None:
+        media_root = artifacts_dir / arr_category
+    media_root_creates_local_path = not bool(root_arg)
+    media_root_warning = build_arr_root_environment_warning(
+        arr_url,
+        media_root,
+        create_local_path=media_root_creates_local_path,
+        kind=kind,
+    )
+    acquisition_timeout_seconds = 60.0 * (
+        args.acquisition_timeout_minutes
+        if args.acquisition_timeout_minutes is not None
+        else parse_timeout_minutes(env_values.get("ACQUISITION_ATTEMPT_TIMEOUT_MINUTES"), DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES)
     )
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
     seed_refresh = None
@@ -1847,9 +3119,11 @@ def main() -> int:
     main_window = None
     cleanup_clients: list[tuple[str, str, int]] = []
     cleanup_radarr_movies: list[tuple[str, str, int]] = []
-    forced_trigger_added = False
+    cleanup_sonarr_series: list[tuple[str, str, int]] = []
+    indexer_restore_target: tuple[str, str, list[dict[str, Any]]] | None = None
     report: dict[str, object] = {
-        "suite": "radarr-sonarr-emulebb-live",
+        "suite": suite_name,
+        "arr_kind": kind,
         "status": "running",
         "emule_base_url": emule_base_url,
         "torznab_base_url": torznab_base_url,
@@ -1865,53 +3139,62 @@ def main() -> int:
             "enable_upnp": True,
             "profile_base": str(profile["profile_base"]),
             "seed_config_dir": str(seed_config_dir),
+            "log_dir": str(profile["log_dir"]),
         },
+        "live_logs": summarize_live_logs(profile),
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_search_terms": {
-            "documents": live_wire_inputs.summarize_terms(document_terms),
-            "direct_search": live_wire_inputs.summarize_terms(direct_search_terms),
-            "generic_open": live_wire_inputs.summarize_terms(inputs.generic_open_terms),
-            "radarr_movies": live_wire_inputs.summarize_terms(radarr_movie_terms),
-            "sonarr_series": live_wire_inputs.summarize_terms(sonarr_series_terms),
-            "qbit_search": live_wire_inputs.summarize_terms(qbit_search_terms),
+            arr_term_key: live_wire_inputs.summarize_terms(media_terms),
         },
         "torznab_media_categories": {
-            "qbit_video": TORZNAB_MOVIE_CATEGORY,
-            "radarr_release": TORZNAB_MOVIE_CATEGORY,
-            "sonarr_release": TORZNAB_TV_CATEGORY,
+            arr_media_category_key: torznab_media_category,
         },
-        "radarr_import": {
-            "movie_title_present": any(bool(term) for term in radarr_movie_terms),
-            "category": RADARR_IMPORT_CATEGORY,
-            "movie_root_configured": bool(args.radarr_movie_root),
-            "movie_root_path_present": bool(str(radarr_movie_root).strip()),
-            "movie_root_creates_local_path": radarr_movie_root_creates_local_path,
-            "environment_warning": radarr_root_warning,
+        f"{kind}_acquisition": {
+            "title_present": any(bool(term) for term in media_terms),
+            "category": arr_category,
+            "root_configured": bool(root_arg),
+            "root_path_present": bool(str(media_root).strip()),
+            "root_creates_local_path": media_root_creates_local_path,
+            "environment_warning": media_root_warning,
+            "acquisition_timeout_seconds": acquisition_timeout_seconds,
+            "search_timeout_seconds": min(args.radarr_release_timeout_seconds, ARR_LIVE_SEARCH_TIMEOUT_SECONDS),
+            "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
+            "prowlarr_indexer_availability_timeout_seconds": args.prowlarr_indexer_availability_timeout_seconds,
         },
         "checks": {},
     }
+
+    def record_phase(phase: str) -> None:
+        report["current_phase"] = phase
+        live_common.write_json(result_path, report)
+
     try:
+        record_phase("launch_emule")
         app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
         main_window = live_common.wait_for_main_window(app)
         report["main_window_title"] = main_window.window_text()
+        record_phase("rest_ready")
         ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
         report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
-        radarr_category_path = artifacts_dir / RADARR_IMPORT_CATEGORY
-        radarr_category_summary = ensure_emule_category(
+        report["checks"]["search_tabs_before_clear"] = list_emule_searches(emule_base_url, args.emule_api_key)
+        report["checks"]["clear_existing_search_tabs"] = delete_all_emule_searches(emule_base_url, args.emule_api_key)
+        report["checks"]["search_tabs_after_clear"] = list_emule_searches(emule_base_url, args.emule_api_key)
+        arr_category_path = artifacts_dir / arr_category
+        arr_category_summary = ensure_emule_category(
             emule_base_url,
             args.emule_api_key,
-            RADARR_IMPORT_CATEGORY,
-            radarr_category_path,
+            arr_category,
+            arr_category_path,
         )
-        report["checks"]["emule_radarr_category"] = radarr_category_summary
-        radarr_category_save_path = str(radarr_category_summary.get("path") or radarr_category_path.resolve())
+        report["checks"][arr_category_key] = arr_category_summary
+        arr_category_save_path = str(arr_category_summary.get("path") or arr_category_path.resolve())
         servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
         server_rows = rest_smoke.require_json_array(servers, 200)
         report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(
             emule_base_url,
             args.emule_api_key,
             server_rows,
-            args.result_timeout_seconds,
+            args.emule_connection_timeout_seconds,
         )
         kad_connect = rest_smoke.http_request(
             emule_base_url,
@@ -1923,171 +3206,125 @@ def main() -> int:
         )
         if int(kad_connect["status"]) != 200:
             raise RuntimeError(f"Kad start returned HTTP {kad_connect['status']}")
+        record_phase("network_ready")
         report["checks"]["network_ready"] = rest_smoke.wait_for_requested_networks(
             emule_base_url,
             args.emule_api_key,
-            args.result_timeout_seconds,
+            args.emule_connection_timeout_seconds,
             require_server_connected=False,
             require_kad_connected=True,
         )
-        try:
-            direct_results = prowlarr_live.wait_for_direct_torznab_results(
-                emule_base_url,
-                args.emule_api_key,
-                direct_search_terms,
-                args.result_timeout_seconds,
-            )
-        except RuntimeError as exc:
-            report["checks"]["direct_search_results"] = {
-                "status": "inconclusive",
-                "source": "documents+generic_open",
-                "term_count": len(direct_search_terms),
-                "error": str(exc),
-            }
-            raise LiveSearchUnavailableError(
-                "Direct eMule BB Torznab searches returned no live results for the configured "
-                "document or generic-open terms."
-            ) from exc
-        report["checks"]["direct_search_results"] = prowlarr_live.redact_term_result(
-            direct_results,
-            source="documents+generic_open",
-            term_count=len(direct_search_terms),
+        record_phase("prowlarr_indexer_upsert")
+        prowlarr_indexer_sync_tags = resolve_prowlarr_indexer_sync_tags(
+            prowlarr_url,
+            prowlarr_api_key,
+            arr_url,
         )
-
-        direct_magnets = collect_direct_magnets(
-            emule_base_url,
-            args.emule_api_key,
-            qbit_search_terms,
-            args.qbit_live_wire_rounds,
-            category_id=TORZNAB_MOVIE_CATEGORY,
-        )
-        magnet = direct_magnets["magnets"][0]
-        if not isinstance(magnet, dict):
-            raise RuntimeError("Direct Torznab magnet collection returned an invalid first magnet.")
-        report["checks"]["direct_qbit_magnet"] = redact_direct_magnet(magnet)
-        report["checks"]["qbit_safety"] = qbit_direct_safety_checks(emule_base_url, args.emule_api_key)
-        report["checks"]["direct_qbit_search_stress"] = redact_collected_direct_magnets(direct_magnets)
-        report["checks"]["direct_qbit_trigger"] = {
-            "title_present": bool(magnet["title"]),
-            "hash_present": bool(ed2k_hash_from_magnet(str(magnet["magnet"]))),
-        }
-        forced_trigger_added = True
-        report["checks"]["direct_qbit_live_wire"] = qbit_direct_live_wire_stress(
-            emule_base_url,
-            args.emule_api_key,
-            direct_magnets["magnets"],
-            rounds=args.qbit_live_wire_rounds,
-            timeout_seconds=args.result_timeout_seconds,
-            initial_category=RADARR_IMPORT_CATEGORY,
-            updated_category=RADARR_IMPORT_CATEGORY,
-            expected_save_path=radarr_category_save_path,
-        )
-        forced_trigger_added = False
-
-        eng_tag_id = get_tag_id(prowlarr_url, prowlarr_api_key, "eng")
         saved_indexer = prowlarr_live.upsert_indexer(
             prowlarr_url,
             prowlarr_api_key,
             indexer_name=indexer_name,
             torznab_base_url=torznab_base_url,
             emule_api_key=args.emule_api_key,
-            tags=[eng_tag_id] if eng_tag_id is not None else None,
+            tags=prowlarr_indexer_sync_tags,
         )
         report["checks"]["prowlarr_indexer"] = {
             "id": int(saved_indexer["id"]),
             "name": saved_indexer.get("name"),
             "tags": saved_indexer.get("tags"),
+            "sync_tags": prowlarr_indexer_sync_tags,
+            "unavailableAtUpsert": bool(saved_indexer.get("_emulebbUnavailableAtUpsert")),
         }
-        report["checks"]["radarr_movie_primary_readiness"] = prowlarr_live.wait_for_primary_radarr_movie_term_results(
-            base_url=emule_base_url,
-            emule_api_key=args.emule_api_key,
-            prowlarr_url=prowlarr_url,
-            prowlarr_api_key=prowlarr_api_key,
-            indexer_id=int(saved_indexer["id"]),
-            terms=radarr_movie_terms,
-            timeout_seconds=args.radarr_primary_readiness_timeout_seconds,
-        )
-        prowlarr_live.require_first_radarr_movie_term_results(report["checks"]["radarr_movie_primary_readiness"])
-        report["checks"]["radarr_movie_term_diagnostics"] = prowlarr_live.diagnose_radarr_movie_terms(
-            base_url=emule_base_url,
-            emule_api_key=args.emule_api_key,
-            prowlarr_url=prowlarr_url,
-            prowlarr_api_key=prowlarr_api_key,
-            indexer_id=int(saved_indexer["id"]),
-            terms=radarr_movie_terms,
-        )
-        report["checks"]["prowlarr_radarr_video_search"] = wait_for_prowlarr_category_results(
+        report["checks"]["prowlarr_indexer_availability"] = prowlarr_live.wait_for_indexer_available(
             prowlarr_url,
             prowlarr_api_key,
             int(saved_indexer["id"]),
-            radarr_movie_terms,
-            TORZNAB_MOVIE_CATEGORY,
-            args.result_timeout_seconds,
+            args.prowlarr_indexer_availability_timeout_seconds,
         )
-        selected_radarr_movie_terms = select_radarr_import_movie_terms(
-            radarr_movie_terms,
-            report["checks"]["prowlarr_radarr_video_search"],
-        )
-        report["radarr_import"]["selected_movie_term_index"] = int(report["checks"]["prowlarr_radarr_video_search"]["term_index"])
-        report["checks"]["prowlarr_sonarr_video_search"] = wait_for_prowlarr_category_results(
-            prowlarr_url,
-            prowlarr_api_key,
-            int(saved_indexer["id"]),
-            sonarr_series_terms,
-            TORZNAB_TV_CATEGORY,
-            args.result_timeout_seconds,
-        )
+        selected_media_terms = media_terms
+        report[f"{kind}_acquisition"]["selected_term_index"] = 0
+        record_phase("prowlarr_application_sync")
         report["checks"]["prowlarr_sync"] = force_prowlarr_application_sync(
             prowlarr_url,
             prowlarr_api_key,
             args.result_timeout_seconds,
         )
 
-        radarr_report, radarr_client_id = run_arr_checks(
-            kind="radarr",
-            arr_url=env_values["RADARR_URL"].rstrip("/"),
-            arr_api_key=env_values["RADARR_API_KEY"],
+        record_phase(f"{kind}_readiness")
+        arr_report, arr_client_id = run_arr_checks(
+            kind=kind,
+            arr_url=arr_url,
+            arr_api_key=arr_api_key,
+            prowlarr_url=prowlarr_url,
+            prowlarr_api_key=prowlarr_api_key,
+            prowlarr_indexer_id=int(saved_indexer["id"]),
             bind_addr=bind_addr,
             port=port,
             emule_api_key=args.emule_api_key,
             indexer_name=indexer_name,
-            release_terms=selected_radarr_movie_terms,
+            release_terms=selected_media_terms,
             timeout_seconds=args.result_timeout_seconds,
-            category_override=RADARR_IMPORT_CATEGORY,
+            category_override=arr_category,
+            search_releases=False,
         )
-        cleanup_clients.append((env_values["RADARR_URL"].rstrip("/"), env_values["RADARR_API_KEY"], radarr_client_id))
-        report["checks"]["radarr"] = radarr_report
-        require_arr_check_passed("radarr", radarr_report)
-        radarr_import_report, cleanup_movie_id = run_radarr_import_e2e(
-            radarr_url=env_values["RADARR_URL"].rstrip("/"),
-            radarr_api_key=env_values["RADARR_API_KEY"],
-            emule_base_url=emule_base_url,
-            emule_api_key=args.emule_api_key,
-            indexer_id=int(radarr_report["synced_indexer"]["id"]),
-            movie_title=selected_radarr_movie_terms[0],
-            movie_root=radarr_movie_root,
-            category_name=RADARR_IMPORT_CATEGORY,
-            movie_root_creates_local_path=radarr_movie_root_creates_local_path,
-            timeout_seconds=args.result_timeout_seconds,
+        cleanup_clients.append((arr_url, arr_api_key, arr_client_id))
+        report["checks"][kind] = arr_report
+        require_arr_check_passed(kind, arr_report)
+        record_phase(f"{kind}_indexer_isolation")
+        indexer_snapshots, isolation_changes = isolate_arr_indexer_search(
+            arr_url,
+            arr_api_key,
+            int(arr_report["synced_indexer"]["id"]),
         )
-        if cleanup_movie_id is not None:
-            cleanup_radarr_movies.append((env_values["RADARR_URL"].rstrip("/"), env_values["RADARR_API_KEY"], cleanup_movie_id))
-        report["checks"]["radarr_import_e2e"] = radarr_import_report
-
-        sonarr_report, sonarr_client_id = run_arr_checks(
-            kind="sonarr",
-            arr_url=env_values["SONARR_URL"].rstrip("/"),
-            arr_api_key=env_values["SONARR_API_KEY"],
-            bind_addr=bind_addr,
-            port=port,
-            emule_api_key=args.emule_api_key,
-            indexer_name=indexer_name,
-            release_terms=sonarr_series_terms,
-            timeout_seconds=args.result_timeout_seconds,
-        )
-        cleanup_clients.append((env_values["SONARR_URL"].rstrip("/"), env_values["SONARR_API_KEY"], sonarr_client_id))
-        report["checks"]["sonarr"] = sonarr_report
-        require_arr_check_passed("sonarr", sonarr_report)
+        indexer_restore_target = (arr_url, arr_api_key, indexer_snapshots)
+        report["checks"][f"{kind}_indexer_isolation"] = {
+            "allowed_indexer_id": int(arr_report["synced_indexer"]["id"]),
+            "snapshot_count": len(indexer_snapshots),
+            "changes": isolation_changes,
+        }
+        record_phase(f"{kind}_search_and_grab")
+        if kind == "radarr":
+            acquisition_report, cleanup_media_id = run_radarr_movie_download_e2e(
+                radarr_url=arr_url,
+                radarr_api_key=arr_api_key,
+                emule_base_url=emule_base_url,
+                emule_api_key=args.emule_api_key,
+                indexer_id=int(arr_report["synced_indexer"]["id"]),
+                indexer_name=str(arr_report["synced_indexer"].get("name") or indexer_name),
+                prowlarr_url=prowlarr_url,
+                prowlarr_api_key=prowlarr_api_key,
+                prowlarr_indexer_id=int(saved_indexer["id"]),
+                movie_title=selected_media_terms[0],
+                movie_root=media_root,
+                category_name=arr_category,
+                movie_root_creates_local_path=media_root_creates_local_path,
+                release_search_timeout_seconds=args.radarr_release_timeout_seconds,
+                timeout_seconds=acquisition_timeout_seconds,
+            )
+            if cleanup_media_id is not None:
+                cleanup_radarr_movies.append((arr_url, arr_api_key, cleanup_media_id))
+        else:
+            acquisition_report, cleanup_media_id = run_sonarr_series_download_e2e(
+                sonarr_url=arr_url,
+                sonarr_api_key=arr_api_key,
+                emule_base_url=emule_base_url,
+                emule_api_key=args.emule_api_key,
+                indexer_id=int(arr_report["synced_indexer"]["id"]),
+                indexer_name=str(arr_report["synced_indexer"].get("name") or indexer_name),
+                prowlarr_url=prowlarr_url,
+                prowlarr_api_key=prowlarr_api_key,
+                prowlarr_indexer_id=int(saved_indexer["id"]),
+                series_title=selected_media_terms[0],
+                series_root=media_root,
+                category_name=arr_category,
+                series_root_creates_local_path=media_root_creates_local_path,
+                quality_profile_name=quality_profile_name,
+                release_search_timeout_seconds=args.radarr_release_timeout_seconds,
+                timeout_seconds=acquisition_timeout_seconds,
+            )
+            if cleanup_media_id is not None:
+                cleanup_sonarr_series.append((arr_url, arr_api_key, cleanup_media_id))
+        report["checks"][acquisition_check_key] = acquisition_report
 
         report["status"] = "passed"
         return 0
@@ -2120,10 +3357,20 @@ def main() -> int:
                 report["failure_window_tree"] = "window-tree-failure.json"
             except Exception as tree_exc:
                 report["failure_window_tree_error"] = str(tree_exc)
+        append_failure_log_tails(report, profile)
         return exit_code
     finally:
         cleanup_report: list[dict[str, object]] = []
         movie_cleanup_report: list[dict[str, object]] = []
+        series_cleanup_report: list[dict[str, object]] = []
+        if indexer_restore_target is not None:
+            restore_url, restore_api_key, restore_snapshots = indexer_restore_target
+            try:
+                report[ARR_INDEXER_RESTORE_KEY] = restore_arr_indexers(restore_url, restore_api_key, restore_snapshots)
+            except Exception as exc:
+                report[ARR_INDEXER_RESTORE_KEY] = {"status": "cleanup_failed", "error": str(exc)}
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
         for arr_url, arr_api_key, movie_id in cleanup_radarr_movies:
             try:
                 movie_cleanup_report.append(delete_radarr_movie(arr_url, arr_api_key, movie_id))
@@ -2133,6 +3380,15 @@ def main() -> int:
                     report["status"] = "failed"
         if movie_cleanup_report:
             report["cleanup_radarr_movies"] = movie_cleanup_report
+        for arr_url, arr_api_key, series_id in cleanup_sonarr_series:
+            try:
+                series_cleanup_report.append(delete_sonarr_series(arr_url, arr_api_key, series_id))
+            except Exception as exc:
+                series_cleanup_report.append({"id": series_id, "status": "cleanup_failed", "error": str(exc)})
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+        if series_cleanup_report:
+            report["cleanup_sonarr_series"] = series_cleanup_report
         for arr_url, arr_api_key, client_id in cleanup_clients:
             try:
                 cleanup_report.append(delete_download_client(arr_url, arr_api_key, client_id))
@@ -2141,37 +3397,22 @@ def main() -> int:
                 if report.get("status") == "passed":
                     report["status"] = "failed"
         if cleanup_report:
-            report["cleanup_download_clients"] = cleanup_report
+            report[ARR_DOWNLOAD_CLIENT_CLEANUP_KEY] = cleanup_report
         if app is not None:
             try:
                 live_common.close_app_cleanly(app)
                 report["cleanup"] = {"closed_app": True}
             except Exception as exc:
-                if forced_trigger_added:
-                    try:
-                        app.kill()
-                        report["cleanup"] = {"closed_app": False, "forced_kill": True, "clean_error": str(exc)}
-                    except Exception as kill_exc:
-                        report["cleanup"] = {
-                            "closed_app": False,
-                            "forced_kill": False,
-                            "clean_error": str(exc),
-                            "kill_error": str(kill_exc),
-                        }
-                        if report.get("status") == "passed":
-                            report["status"] = "failed"
-                else:
-                    report["cleanup"] = {"closed_app": False, "error": str(exc)}
-                    if report.get("status") == "passed":
-                        report["status"] = "failed"
-                if report.get("cleanup", {}).get("forced_kill") is False and report.get("status") == "passed":
+                report["cleanup"] = {"closed_app": False, "error": str(exc)}
+                if report.get("status") == "passed":
                     report["status"] = "failed"
+        report["live_logs"] = summarize_live_logs(profile)
         live_common.write_json(result_path, report)
         paths.run_report_dir.parent.mkdir(parents=True, exist_ok=True)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)
-        print(f"Radarr/Sonarr eMule BB live test {report['status']}. Report directory: {paths.run_report_dir}")
+        print(f"{kind.title()} eMule BB live test {report['status']}. Report directory: {paths.run_report_dir}")
 
 
 if __name__ == "__main__":

@@ -164,7 +164,6 @@
   },
   "arr": {
     "media_categories": {
-      "qbit_video": 2000,
       "radarr_release": 2000,
       "sonarr_release": 5000
     },
@@ -175,6 +174,19 @@
         "search_results",
         "download_client_grab"
       ],
+      "cleanup_key": "cleanup_download_clients",
+      "persist_on_success": false
+    },
+    "radarr_movie_download_proof": {
+      "check_key": "radarr_movie_download_e2e",
+      "category": "radarr_movies_cat",
+      "trigger": "radarr_release_grab",
+      "cleanup_key": "cleanup_download_clients"
+    },
+    "sonarr_series_download_proof": {
+      "check_key": "sonarr_series_download_e2e",
+      "category": "sonarr_series_cat",
+      "trigger": "sonarr_release_grab",
       "cleanup_key": "cleanup_download_clients"
     },
     "torznab_direct_error_edges": [

@@ -1000,6 +1000,15 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Feature&year=2026&cat=2000", request, error));
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeQueries(request), std::vector<std::string>{"Feature 2026", "Feature"});
 
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Feature&cat=2000&offset=100&limit=25", request, error));
+	CHECK_EQ(request.uOffset, 100u);
+	CHECK_EQ(request.uLimit, 25u);
+	const std::string pagedCacheKey(WebServerArrCompatSeams::BuildCacheKey(request));
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Feature&cat=2000&offset=0&limit=100", request, error));
+	CHECK_EQ(WebServerArrCompatSeams::BuildCacheKey(request), pagedCacheKey);
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Feature&cat=2000&limit=0", request, error));
+	CHECK_EQ(request.uLimit, WebServerArrCompatSeams::kDefaultTorznabLimit);
+
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Album&cat=3000", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(request.eFamily)), "audio");
@@ -1047,6 +1056,14 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Bad&year=10000", request, error));
 	CHECK_EQ(error, "year must be an unsigned decimal value in the range 0..9999");
 
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Bad&offset=1000001", request, error));
+	CHECK_EQ(error, "offset must be an unsigned decimal value in the range 0..1000000");
+
+	error.clear();
+	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Bad&limit=101", request, error));
+	CHECK_EQ(error, "limit must be an unsigned decimal value in the range 0..100");
+
 	std::string longQuery(WebServerArrCompatSeams::kMaxTorznabQueryLength + 1, 'x');
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=" + longQuery, request, error));
@@ -1066,8 +1083,7 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search", request, error));
 	const std::vector<std::string> rssQueries = WebServerArrCompatSeams::BuildNativeQueries(request);
-	REQUIRE_EQ(rssQueries.size(), 1u);
-	CHECK_EQ(rssQueries[0], "linux");
+	CHECK(rssQueries.empty());
 }
 
 TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
