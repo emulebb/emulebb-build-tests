@@ -737,6 +737,24 @@ def test_openapi_search_type_enums_match_native_tokens() -> None:
     assert "not remapped" in schemas["SearchResult"]["properties"]["fileType"]["description"]
 
 
+def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
+    docs = "\n".join(
+        (rest_docs_dir / name).read_text(encoding="utf-8")
+        for name in ("REST-API-CONTRACT.md", "REST-API-ADAPTERS.md", "REST-API-PARITY-INVENTORY.md")
+    )
+    normalized_docs = re.sub(r"\s+", " ", docs)
+
+    assert "No aliases, alternate casing, or request-time type remapping are accepted." in normalized_docs
+    assert "`SearchResult.fileType` remains row metadata" in normalized_docs
+    assert "adapter-side result filter" in normalized_docs
+    assert "family-to-native-type mapping still resolves to native REST tokens" in normalized_docs
+
+    for forbidden in ("`video`", "`cdimage`", "`iso`", "normalized to", "normalizes to"):
+        assert forbidden not in docs
+
+
 def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_boundary() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
@@ -1295,6 +1313,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert 'return "Video";' in seams
     assert "native `Video` searches" in adapter_docs
     assert "native `video` searches" not in adapter_docs
+    assert "adapter-side result filter" in adapter_docs
     assert "native `Video` searches" in parity_docs
     assert "native `video` searches" not in parity_docs
 

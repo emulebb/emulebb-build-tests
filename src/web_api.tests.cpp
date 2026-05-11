@@ -10,6 +10,8 @@
 #include "WebSocketHttpSeams.h"
 #include "WebSocketTlsSeams.h"
 
+#include <utility>
+
 TEST_SUITE_BEGIN("web_api");
 
 TEST_CASE("WebSocket TLS seam loads cert and key bytes from overlong unicode paths")
@@ -1045,6 +1047,22 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Tv)), "Video");
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"Video"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"Doc"});
+	const std::vector<std::pair<WebServerArrCompatSeams::ETorznabFamily, std::string>> familySearchTypes = {
+		{WebServerArrCompatSeams::ETorznabFamily::Movie, "Video"},
+		{WebServerArrCompatSeams::ETorznabFamily::Tv, "Video"},
+		{WebServerArrCompatSeams::ETorznabFamily::Audio, "Audio"},
+		{WebServerArrCompatSeams::ETorznabFamily::Book, "Doc"},
+		{WebServerArrCompatSeams::ETorznabFamily::Other, ""},
+		{WebServerArrCompatSeams::ETorznabFamily::Any, ""},
+		{WebServerArrCompatSeams::ETorznabFamily::Unknown, ""}
+	};
+	for (const auto &rFamilySearchType : familySearchTypes) {
+		const std::vector<std::string> searchTypes = WebServerArrCompatSeams::BuildNativeSearchTypeNames(rFamilySearchType.first);
+		CAPTURE(static_cast<int>(rFamilySearchType.first));
+		REQUIRE_EQ(searchTypes.size(), 1u);
+		CHECK_EQ(searchTypes[0], rFamilySearchType.second);
+		CHECK(WebServerJsonSeams::IsSearchFileTypeName(searchTypes[0]));
+	}
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Tv), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"automatic"});
