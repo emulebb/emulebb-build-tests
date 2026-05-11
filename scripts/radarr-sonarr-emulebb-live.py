@@ -1683,12 +1683,24 @@ def grab_first_arr_release_via_prowlarr(
         if remaining <= 0:
             break
         path = prowlarr_live.build_prowlarr_search_path(title, category_id, prowlarr_indexer_id)
-        result = prowlarr_live.prowlarr_request(
-            prowlarr_url,
-            prowlarr_api_key,
-            path,
-            timeout_seconds=max(1.0, min(30.0, remaining)),
-        )
+        try:
+            result = prowlarr_live.prowlarr_request(
+                prowlarr_url,
+                prowlarr_api_key,
+                path,
+                timeout_seconds=max(1.0, remaining),
+            )
+        except TimeoutError as exc:
+            attempts.append(
+                {
+                    "kind": kind,
+                    "term_present": bool(title),
+                    "request_path": path.split("apikey=", 1)[0],
+                    "status": "timeout",
+                    "error": str(exc),
+                }
+            )
+            continue
         status = int(result.get("status") or 0)
         rows = result.get("json") if isinstance(result.get("json"), list) else []
         matches = [
