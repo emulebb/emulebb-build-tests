@@ -371,15 +371,29 @@ TEST_CASE("Web API normalizes search method and type names case-insensitively")
 	CHECK_FALSE(WebServerJsonSeams::IsSearchMethodName("contentdb"));
 	CHECK(WebServerJsonSeams::IsSearchFileTypeName("ISO"));
 	CHECK(WebServerJsonSeams::IsSearchFileTypeName(""));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("any"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("archive"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("audio"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("cdimage"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("image"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("program"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("video"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("document"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("emulecollection"));
 	CHECK_FALSE(WebServerJsonSeams::IsSearchFileTypeName("ebook"));
 
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName("AUTOMATIC"), WebApiCommandSeams::ESearchMethod::Automatic);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName("gLoBaL"), WebApiCommandSeams::ESearchMethod::Global);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(""), WebApiCommandSeams::ESearchMethod::Invalid);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(nullptr), WebApiCommandSeams::ESearchMethod::Invalid);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("any"), WebApiCommandSeams::ESearchFileType::Any);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("archive"), WebApiCommandSeams::ESearchFileType::Archive);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("audio"), WebApiCommandSeams::ESearchFileType::Audio);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("VIDEO"), WebApiCommandSeams::ESearchFileType::Video);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("document"), WebApiCommandSeams::ESearchFileType::Document);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("iso"), WebApiCommandSeams::ESearchFileType::CdImage);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("image"), WebApiCommandSeams::ESearchFileType::Image);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("program"), WebApiCommandSeams::ESearchFileType::Program);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("emulecollection"), WebApiCommandSeams::ESearchFileType::EmuleCollection);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName(nullptr), WebApiCommandSeams::ESearchFileType::Invalid);
 }

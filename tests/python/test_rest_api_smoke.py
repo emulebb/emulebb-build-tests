@@ -1256,17 +1256,45 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     source = (app_source / "WebServerArrCompat.cpp").read_text(encoding="utf-8")
     seams = (app_source / "WebServerArrCompatSeams.h").read_text(encoding="utf-8")
 
-    assert "WebApiCommandSeams.h" in source
-    assert "WebApiCommandSeams::GetDefaultSearchMethodName()" in source
     assert 'BuildInternalCommand("search/start"' in source
     assert 'BuildInternalCommand("search/results"' in source
     assert 'BuildInternalCommand("search/stop"' in source
+    assert '"method", rMethod' in source
+    assert '"type", rSearchType' in source
+    assert "BuildNativeSearchMethodNames(rRequest.eFamily)" in source
+    assert "BuildNativeSearchTypeNames(rRequest.eFamily)" in source
     assert "WebServerJsonSeams::TryValidateRequestPathEscapes" in seams
     assert "WebServerJsonSeams::TryParseQueryString" in seams
     assert "WebServerJsonSeams::TryNormalizeSearchText" in seams
     assert "WebServerJsonSeams::TryParseUnsignedDecimalValue" in seams
     assert "WebServerJsonSeams::TryValidatePublicFileNameText" in seams
     assert "WebServerJsonSeams::NormalizeAsciiWhitespace" in seams
+    assert 'methods.push_back("kad")' in seams
+    assert 'methods.push_back("global")' in seams
+    assert 'return "video";' in seams
+
+
+def test_native_search_resources_echo_selected_type() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source = source_path.read_text(encoding="utf-8")
+
+    for native_token, public_token in (
+        ("ED2KFTSTR_ANY", "any"),
+        ("ED2KFTSTR_ARCHIVE", "archive"),
+        ("ED2KFTSTR_AUDIO", "audio"),
+        ("ED2KFTSTR_CDIMAGE", "cdimage"),
+        ("ED2KFTSTR_IMAGE", "image"),
+        ("ED2KFTSTR_PROGRAM", "program"),
+        ("ED2KFTSTR_VIDEO", "video"),
+        ("ED2KFTSTR_DOCUMENT", "document"),
+        ("ED2KFTSTR_EMULECOLLECTION", "emulecollection"),
+    ):
+        assert native_token in source
+        assert f'return "{public_token}";' in source
+
+    assert "GetSearchTypeName(pSearchParams->strFileType)" in source
+    assert "GetSearchTypeName(rSearchParams.strFileType)" in source
 
 
 def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None:
@@ -1659,9 +1687,13 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
             "json": {
                 "id": "42",
                 "query": "linux",
+                "method": "kad",
+                "type": "cdimage",
                 "status": "running",
                 "results": [
                     {
+                        "method": "kad",
+                        "type": "cdimage",
                         "hash": "0123456789abcdef0123456789abcdef",
                         "name": "linux.iso",
                         "sizeBytes": 1024,
@@ -1675,9 +1707,13 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                 "data": {
                     "id": "42",
                     "query": "linux",
+                    "method": "kad",
+                    "type": "cdimage",
                     "status": "running",
                     "results": [
                         {
+                            "method": "kad",
+                            "type": "cdimage",
                             "hash": "0123456789abcdef0123456789abcdef",
                             "name": "linux.iso",
                             "sizeBytes": 1024,
@@ -1739,6 +1775,8 @@ def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch
             "json": {
                 "id": "42",
                 "query": "linux",
+                "method": "kad",
+                "type": "any",
                 "status": "running",
                 "results": [],
             },
@@ -1746,6 +1784,8 @@ def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch
                 "data": {
                     "id": "42",
                     "query": "linux",
+                    "method": "kad",
+                    "type": "any",
                     "status": "running",
                     "results": [],
                 },
