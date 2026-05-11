@@ -450,12 +450,21 @@ def build_sonarr_release_terms(inputs: Any) -> tuple[str, ...]:
 
 
 def require_radarr_import_movie_terms(inputs: Any) -> tuple[str, ...]:
-    """Returns the operator-configured Radarr import title from live-wire inputs."""
+    """Returns operator-configured Radarr import candidates from live-wire inputs."""
 
     terms = tuple(str(term).strip() for term in inputs.radarr_movie_terms if str(term).strip())
     if not terms:
         raise RuntimeError("live-wire inputs field 'search_terms.radarr_movies' must include a Radarr import title.")
-    return (terms[0],)
+    return terms
+
+
+def select_radarr_import_movie_terms(terms: tuple[str, ...], search_result: dict[str, object]) -> tuple[str, ...]:
+    """Selects the Radarr movie term proven reachable through Prowlarr."""
+
+    term_index = int(search_result.get("term_index") or 0)
+    if term_index < 0 or term_index >= len(terms):
+        raise RuntimeError(f"Prowlarr Radarr search returned invalid term index {term_index}.")
+    return (terms[term_index],)
 
 
 def build_torznab_search_path(category_id: int, query: str, emule_api_key: str, *, request_type: str = "search") -> str:
@@ -1869,7 +1878,7 @@ def main() -> int:
             "sonarr_release": TORZNAB_TV_CATEGORY,
         },
         "radarr_import": {
-            "movie_title_present": bool(radarr_movie_terms[0]),
+            "movie_title_present": any(bool(term) for term in radarr_movie_terms),
             "category": RADARR_IMPORT_CATEGORY,
             "movie_root_configured": bool(args.radarr_movie_root),
             "movie_root_path_present": bool(str(radarr_movie_root).strip()),
@@ -1994,6 +2003,11 @@ def main() -> int:
             TORZNAB_MOVIE_CATEGORY,
             args.result_timeout_seconds,
         )
+        selected_radarr_movie_terms = select_radarr_import_movie_terms(
+            radarr_movie_terms,
+            report["checks"]["prowlarr_radarr_video_search"],
+        )
+        report["radarr_import"]["selected_movie_term_index"] = int(report["checks"]["prowlarr_radarr_video_search"]["term_index"])
         report["checks"]["prowlarr_sonarr_video_search"] = wait_for_prowlarr_category_results(
             prowlarr_url,
             prowlarr_api_key,
@@ -2016,7 +2030,7 @@ def main() -> int:
             port=port,
             emule_api_key=args.emule_api_key,
             indexer_name=indexer_name,
-            release_terms=radarr_movie_terms,
+            release_terms=selected_radarr_movie_terms,
             timeout_seconds=args.result_timeout_seconds,
             category_override=RADARR_IMPORT_CATEGORY,
         )
@@ -2029,7 +2043,7 @@ def main() -> int:
             emule_base_url=emule_base_url,
             emule_api_key=args.emule_api_key,
             indexer_id=int(radarr_report["synced_indexer"]["id"]),
-            movie_title=radarr_movie_terms[0],
+            movie_title=selected_radarr_movie_terms[0],
             movie_root=radarr_movie_root,
             category_name=RADARR_IMPORT_CATEGORY,
             movie_root_creates_local_path=radarr_movie_root_creates_local_path,

@@ -54,7 +54,16 @@ def test_radarr_import_movie_title_comes_from_live_wire_inputs() -> None:
     module = load_radarr_sonarr_module()
     inputs = types.SimpleNamespace(radarr_movie_terms=(" operator configured title ", "fallback"))
 
-    assert module.require_radarr_import_movie_terms(inputs) == ("operator configured title",)
+    assert module.require_radarr_import_movie_terms(inputs) == ("operator configured title", "fallback")
+
+
+def test_radarr_import_movie_selection_uses_prowlarr_reachable_term() -> None:
+    module = load_radarr_sonarr_module()
+
+    assert module.select_radarr_import_movie_terms(
+        ("first operator title", "reachable operator title"),
+        {"term_index": 1, "term_present": True, "count": 100},
+    ) == ("reachable operator title",)
 
 
 def test_radarr_sonarr_live_script_does_not_define_static_movie_title() -> None:
