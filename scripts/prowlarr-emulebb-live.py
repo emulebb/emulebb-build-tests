@@ -25,6 +25,7 @@ TORZNAB_MOVIE_CATEGORY = 2000
 TORZNAB_TV_CATEGORY = 5000
 TORZNAB_DOCUMENT_CATEGORY = 7000
 TORZNAB_LIVE_CATEGORY = TORZNAB_DOCUMENT_CATEGORY
+PROWLARR_GRAB_CATEGORY = "prowlarr_grabs_cat"
 
 TORZNAB_DIRECT_ERROR_SCENARIOS: tuple[dict[str, object], ...] = (
     {
@@ -201,6 +202,162 @@ def build_indexer_payload(
     set_field_value(payload, "apiKey", emule_api_key)
     set_field_value(payload, "torrentBaseSettings.preferMagnetUrl", True)
     return payload
+
+
+def get_qbit_download_client_schema(prowlarr_url: str, api_key: str) -> dict[str, Any]:
+    """Loads Prowlarr's qBittorrent download-client schema."""
+
+    schemas = require_success(
+        prowlarr_request(prowlarr_url, api_key, "/api/v1/downloadclient/schema"),
+        "Prowlarr download client schema lookup",
+    )
+    if not isinstance(schemas, list):
+        raise RuntimeError("Prowlarr download client schema response was not a list.")
+    for schema in schemas:
+        if isinstance(schema, dict) and schema.get("implementation") == "QBittorrent":
+            return schema
+    raise RuntimeError("Prowlarr did not expose the qBittorrent download client schema.")
+
+
+def get_provider_field_names(provider: dict[str, Any]) -> set[str]:
+    """Returns provider field names from one Prowlarr schema or saved provider."""
+
+    fields = provider.get("fields")
+    if not isinstance(fields, list):
+        return set()
+    return {
+        str(field.get("name"))
+        for field in fields
+        if isinstance(field, dict) and isinstance(field.get("name"), str)
+    }
+
+
+def summarize_qbit_download_client_schema(schema: dict[str, Any]) -> dict[str, object]:
+    """Builds a report-safe qBittorrent download-client schema summary."""
+
+    field_names = get_provider_field_names(schema)
+    required_fields = {"host", "port", "username", "password", "initialState", "category"}
+    missing_fields = sorted(required_fields - field_names)
+    return {
+        "implementation": schema.get("implementation"),
+        "implementationName": schema.get("implementationName"),
+        "protocol": schema.get("protocol"),
+        "configContract": schema.get("configContract"),
+        "required_field_count": len(required_fields),
+        "missing_required_fields": missing_fields,
+        "ok": not missing_fields,
+    }
+
+
+def build_qbit_download_client_payload(
+    schema: dict[str, Any],
+    *,
+    name: str,
+    host: str,
+    port: int,
+    emule_api_key: str,
+    category: str,
+) -> dict[str, Any]:
+    """Builds a temporary Prowlarr qBittorrent client payload for eMule BB."""
+
+    schema_summary = summarize_qbit_download_client_schema(schema)
+    if not bool(schema_summary["ok"]):
+        raise RuntimeError(f"Prowlarr qBittorrent schema is missing required fields: {schema_summary['missing_required_fields']!r}")
+
+    payload = json.loads(json.dumps(schema))
+    payload["name"] = name
+    payload["enable"] = True
+    payload["priority"] = int(payload.get("priority") or 1)
+    payload["implementation"] = "QBittorrent"
+    payload["implementationName"] = "qBittorrent"
+    payload["configContract"] = "QBittorrentSettings"
+    payload["protocol"] = "torrent"
+    set_field_value(payload, "host", host)
+    set_field_value(payload, "port", int(port))
+    set_field_value(payload, "useSsl", False)
+    set_field_value(payload, "urlBase", "")
+    set_field_value(payload, "username", "emule")
+    set_field_value(payload, "password", emule_api_key)
+    set_field_value(payload, "category", category)
+    set_field_value(payload, "initialState", 2)
+    return payload
+
+
+def delete_download_client(prowlarr_url: str, api_key: str, client_id: int) -> dict[str, object]:
+    """Deletes one temporary Prowlarr download client."""
+
+    result = prowlarr_request(prowlarr_url, api_key, f"/api/v1/downloadclient/{client_id}", method="DELETE")
+    return {"id": client_id, "status": int(result.get("status") or 0)}
+
+
+def create_temp_qbit_download_client(
+    prowlarr_url: str,
+    api_key: str,
+    *,
+    name: str,
+    host: str,
+    port: int,
+    emule_api_key: str,
+    category: str,
+) -> dict[str, Any]:
+    """Creates and validates a temporary Prowlarr qBittorrent client."""
+
+    created_client_id: int | None = None
+    schema = get_qbit_download_client_schema(prowlarr_url, api_key)
+    schema_summary = summarize_qbit_download_client_schema(schema)
+    payload = build_qbit_download_client_payload(
+        schema,
+        name=name,
+        host=host,
+        port=port,
+        emule_api_key=emule_api_key,
+        category=category,
+    )
+    try:
+        created = require_success(
+            prowlarr_request(prowlarr_url, api_key, "/api/v1/downloadclient?forceSave=true", method="POST", json_body=payload),
+            "Prowlarr eMule BB qBittorrent client create",
+        )
+        if not isinstance(created, dict) or not created.get("id"):
+            raise RuntimeError("Prowlarr did not return a created qBittorrent client id.")
+        created_client_id = int(created["id"])
+
+        test_payload = json.loads(json.dumps(created))
+        test_result = prowlarr_request(
+            prowlarr_url,
+            api_key,
+            "/api/v1/downloadclient/test",
+            method="POST",
+            json_body=test_payload,
+            timeout_seconds=60.0,
+        )
+        require_success(test_result, "Prowlarr eMule BB qBittorrent client test")
+        created["_emulebbSchemaSummary"] = schema_summary
+        created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
+        return created
+    except Exception as exc:
+        if created_client_id is not None:
+            try:
+                delete_download_client(prowlarr_url, api_key, created_client_id)
+            except Exception as cleanup_exc:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(f"Temporary Prowlarr download client cleanup failed: {cleanup_exc}")
+        raise
+
+
+def summarize_qbit_download_client(client: dict[str, Any], *, category: str) -> dict[str, object]:
+    """Builds a compact report for the temporary Prowlarr qBit client."""
+
+    return {
+        "id": int(client["id"]),
+        "name": client.get("name"),
+        "implementation": client.get("implementation"),
+        "protocol": client.get("protocol"),
+        "enable": bool(client.get("enable")),
+        "category": category,
+        "schema": client.get("_emulebbSchemaSummary"),
+        "test_status": client.get("_emulebbTestStatus"),
+    }
 
 
 def get_existing_indexer(prowlarr_url: str, api_key: str, indexer_name: str) -> dict[str, Any] | None:
@@ -643,6 +800,72 @@ def redact_term_result(result: dict[str, object], *, source: str, term_count: in
     return redacted
 
 
+def ed2k_hash_from_magnet(magnet: str) -> str:
+    """Extracts the eMule BB fake BTIH hash from a magnet URL."""
+
+    parsed = urllib.parse.urlparse(magnet)
+    query = urllib.parse.parse_qs(parsed.query)
+    xt = query.get("xt", [""])[0].lower()
+    prefix = "urn:btih:"
+    if not xt.startswith(prefix) or len(xt) < len(prefix) + 40:
+        raise RuntimeError("Magnet does not contain an eMule BB fake BTIH hash.")
+    return xt[len(prefix) : len(prefix) + 32]
+
+
+def transfer_hashes(base_url: str, emule_api_key: str) -> set[str]:
+    """Returns currently visible native transfer hashes."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        "/api/v1/transfers",
+        api_key=emule_api_key,
+        request_timeout_seconds=30.0,
+    )
+    rows = rest_smoke.require_json_array(result, 200)
+    return {
+        str(row.get("hash") or "").lower()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("hash") or "").strip()
+    }
+
+
+def wait_for_new_category_transfer(
+    base_url: str,
+    emule_api_key: str,
+    *,
+    category: str,
+    before_hashes: set[str],
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until a newly grabbed transfer appears in the expected category."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        request_timeout = min(30.0, max(1.0, deadline - time.monotonic()))
+        result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/transfers",
+            api_key=emule_api_key,
+            request_timeout_seconds=request_timeout,
+        )
+        rows = rest_smoke.require_json_array(result, 200)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            transfer_hash = str(row.get("hash") or "").lower()
+            last = {
+                "hash_present": bool(transfer_hash),
+                "name_present": bool(row.get("name")),
+                "state": row.get("state"),
+                "categoryName": row.get("categoryName"),
+            }
+            if transfer_hash and transfer_hash not in before_hashes and str(row.get("categoryName") or "") == category:
+                return last
+        time.sleep(2.0)
+    raise RuntimeError(f"Prowlarr grab did not create a new transfer in category {category!r}. Last: {last!r}")
+
+
 def choose_listen_port(bind_addr: str) -> int:
     """Returns one free TCP port on the actual eMule web bind address."""
 
@@ -685,6 +908,108 @@ def wait_for_prowlarr_results(
                 }
         time.sleep(5.0)
     raise RuntimeError(f"Prowlarr did not return eMule BB results before timeout. Attempts: {attempts!r}")
+
+
+def select_grabbable_release(rows: list[Any], indexer_id: int) -> dict[str, Any]:
+    """Selects one Prowlarr release row that can be posted back to grab."""
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("indexerId") or 0) != int(indexer_id):
+            continue
+        if not str(row.get("guid") or "").strip():
+            continue
+        return json.loads(json.dumps(row))
+    raise RuntimeError("Prowlarr search returned rows but none were grabbable for the eMule BB indexer.")
+
+
+def summarize_grabbed_release(release: dict[str, Any]) -> dict[str, object]:
+    """Builds a report-safe summary of the selected Prowlarr release."""
+
+    magnet = str(release.get("magnetUrl") or release.get("downloadUrl") or release.get("guid") or "")
+    hash_present = False
+    if magnet.startswith("magnet:?"):
+        try:
+            hash_present = bool(ed2k_hash_from_magnet(magnet))
+        except RuntimeError:
+            hash_present = False
+    return {
+        "title_present": bool(release.get("title")),
+        "guid_present": bool(release.get("guid")),
+        "download_url_present": bool(release.get("downloadUrl")),
+        "magnet_url_present": bool(release.get("magnetUrl")),
+        "hash_present": hash_present,
+    }
+
+
+def prowlarr_download_client_grab_roundtrip(
+    *,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    emule_base_url: str,
+    emule_api_key: str,
+    indexer_id: int,
+    queries: tuple[str, ...],
+    category_id: int,
+    download_client_id: int,
+    download_category: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Searches Prowlarr, grabs one result, and verifies eMule receives it."""
+
+    attempts: list[dict[str, object]] = []
+    before_hashes = transfer_hashes(emule_base_url, emule_api_key)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        for query_index, query in enumerate(queries):
+            path = build_prowlarr_search_path(query, category_id, indexer_id)
+            result = prowlarr_request(prowlarr_url, prowlarr_api_key, path, timeout_seconds=90.0)
+            status = int(result.get("status") or 0)
+            payload = result.get("json")
+            rows = payload if isinstance(payload, list) else []
+            attempt = {
+                "query_index": query_index,
+                "query_present": bool(query),
+                "status": status,
+                "count": len(rows),
+            }
+            if status < 200 or status >= 300:
+                attempt["body_preview"] = compact_body_preview(result)
+            attempts.append(attempt)
+            if status < 200 or status >= 300 or not rows:
+                continue
+
+            release = select_grabbable_release(rows, indexer_id)
+            grab_payload = json.loads(json.dumps(release))
+            grab_payload["downloadClientId"] = int(download_client_id)
+            grabbed = prowlarr_request(
+                prowlarr_url,
+                prowlarr_api_key,
+                "/api/v1/search",
+                method="POST",
+                json_body=grab_payload,
+                timeout_seconds=90.0,
+            )
+            require_success(grabbed, "Prowlarr eMule BB release grab")
+            return {
+                "status": "passed",
+                "category": int(category_id),
+                "download_client_id": int(download_client_id),
+                "download_category": download_category,
+                "release": summarize_grabbed_release(release),
+                "grab_status": int(grabbed.get("status") or 0),
+                "transfer": wait_for_new_category_transfer(
+                    emule_base_url,
+                    emule_api_key,
+                    category=download_category,
+                    before_hashes=before_hashes,
+                    timeout_seconds=min(timeout_seconds, 120.0),
+                ),
+                "attempt_count": len(attempts),
+            }
+        time.sleep(5.0)
+    raise RuntimeError(f"Prowlarr download-client grab proof found no grabbable rows. Attempts: {attempts!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -791,6 +1116,7 @@ def main() -> int:
         )
 
     app = None
+    cleanup_download_clients: list[tuple[str, str, int]] = []
     report: dict[str, object] = {
         "suite": "prowlarr-emulebb-live",
         "status": "running",
@@ -970,6 +1296,17 @@ def main() -> int:
                 if isinstance(status, dict) and status.get("indexerId") == int(saved_indexer["id"])
             ]
         report["checks"]["indexer_test"] = test_indexer(prowlarr_url, prowlarr_api_key, saved_indexer)
+        qbit_client = create_temp_qbit_download_client(
+            prowlarr_url,
+            prowlarr_api_key,
+            name=f"eMule BB Live Prowlarr {port}",
+            host=bind_addr,
+            port=port,
+            emule_api_key=args.emule_api_key,
+            category=PROWLARR_GRAB_CATEGORY,
+        )
+        cleanup_download_clients.append((prowlarr_url, prowlarr_api_key, int(qbit_client["id"])))
+        report["checks"]["download_client"] = summarize_qbit_download_client(qbit_client, category=PROWLARR_GRAB_CATEGORY)
         report["checks"]["search_results"] = wait_for_prowlarr_results(
             prowlarr_url,
             prowlarr_api_key,
@@ -982,6 +1319,18 @@ def main() -> int:
             report["checks"]["search_results"],
             source="documents",
             term_count=len(document_terms),
+        )
+        report["checks"]["download_client_grab"] = prowlarr_download_client_grab_roundtrip(
+            prowlarr_url=prowlarr_url,
+            prowlarr_api_key=prowlarr_api_key,
+            emule_base_url=emule_base_url,
+            emule_api_key=args.emule_api_key,
+            indexer_id=int(saved_indexer["id"]),
+            queries=document_terms,
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
+            download_client_id=int(qbit_client["id"]),
+            download_category=PROWLARR_GRAB_CATEGORY,
+            timeout_seconds=args.result_timeout_seconds,
         )
         prowlarr_movie_results = wait_for_prowlarr_results(
             prowlarr_url,
@@ -1032,6 +1381,16 @@ def main() -> int:
         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
         return 1
     finally:
+        cleanup_report: list[dict[str, object]] = []
+        for client_url, client_api_key, client_id in cleanup_download_clients:
+            try:
+                cleanup_report.append(delete_download_client(client_url, client_api_key, client_id))
+            except Exception as exc:
+                cleanup_report.append({"id": client_id, "status": "cleanup_failed", "error": str(exc)})
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+        if cleanup_report:
+            report["cleanup_download_clients"] = cleanup_report
         if app is not None:
             try:
                 live_common.close_app_cleanly(app)

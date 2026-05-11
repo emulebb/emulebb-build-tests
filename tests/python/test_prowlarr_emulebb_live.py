@@ -107,6 +107,213 @@ def test_upsert_creates_disabled_then_force_enables_when_prowlarr_create_test_ha
     ]
 
 
+def qbit_schema() -> dict[str, Any]:
+    """Returns a minimal Prowlarr qBittorrent schema fixture."""
+
+    return {
+        "implementation": "QBittorrent",
+        "implementationName": "qBittorrent",
+        "protocol": "torrent",
+        "configContract": "QBittorrentSettings",
+        "fields": [
+            {"name": "host", "value": ""},
+            {"name": "port", "value": 0},
+            {"name": "useSsl", "value": True},
+            {"name": "urlBase", "value": "/qbittorrent"},
+            {"name": "username", "value": ""},
+            {"name": "password", "value": ""},
+            {"name": "category", "value": ""},
+            {"name": "priority", "value": 1},
+            {"name": "initialState", "value": 0},
+        ],
+    }
+
+
+def field_value(provider: dict[str, Any], name: str) -> object:
+    """Returns one provider field value from a fixture payload."""
+
+    for field in provider["fields"]:
+        if field["name"] == name:
+            return field["value"]
+    raise AssertionError(f"Missing field {name}")
+
+
+def test_qbit_download_client_payload_sets_emule_connection_and_category() -> None:
+    module = load_prowlarr_module()
+
+    payload = module.build_qbit_download_client_payload(
+        qbit_schema(),
+        name="eMule BB Live Prowlarr 12345",
+        host="192.168.1.210",
+        port=12345,
+        emule_api_key="emule-key",
+        category="prowlarr_grabs_cat",
+    )
+
+    assert payload["name"] == "eMule BB Live Prowlarr 12345"
+    assert payload["enable"] is True
+    assert payload["implementation"] == "QBittorrent"
+    assert field_value(payload, "host") == "192.168.1.210"
+    assert field_value(payload, "port") == 12345
+    assert field_value(payload, "useSsl") is False
+    assert field_value(payload, "urlBase") == ""
+    assert field_value(payload, "username") == "emule"
+    assert field_value(payload, "password") == "emule-key"
+    assert field_value(payload, "category") == "prowlarr_grabs_cat"
+    assert field_value(payload, "initialState") == 2
+
+
+def test_temp_qbit_download_client_cleans_up_when_test_fails(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    requests: list[dict[str, Any]] = []
+
+    def fake_request(
+        prowlarr_url: str,
+        api_key: str,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: object | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        requests.append({"path": path, "method": method, "json_body": json_body})
+        if path == "/api/v1/downloadclient/schema":
+            return {"status": 200, "json": [qbit_schema()], "body_text": "[]"}
+        if path == "/api/v1/downloadclient?forceSave=true" and method == "POST":
+            return {"status": 201, "json": {"id": 41, "fields": qbit_schema()["fields"]}, "body_text": "{}"}
+        if path == "/api/v1/downloadclient/test" and method == "POST":
+            return {"status": 400, "json": None, "body_text": "cannot connect"}
+        if path == "/api/v1/downloadclient/41" and method == "DELETE":
+            return {"status": 200, "json": None, "body_text": ""}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "prowlarr_request", fake_request)
+
+    try:
+        module.create_temp_qbit_download_client(
+            "http://prowlarr.test",
+            "key",
+            name="client",
+            host="127.0.0.1",
+            port=8080,
+            emule_api_key="emule-key",
+            category="prowlarr_grabs_cat",
+        )
+    except RuntimeError as exc:
+        assert "qBittorrent client test" in str(exc)
+    else:
+        raise AssertionError("Expected client test failure")
+
+    assert [request["path"] for request in requests] == [
+        "/api/v1/downloadclient/schema",
+        "/api/v1/downloadclient?forceSave=true",
+        "/api/v1/downloadclient/test",
+        "/api/v1/downloadclient/41",
+    ]
+
+
+def test_prowlarr_download_client_grab_posts_release_and_waits_for_category(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    prowlarr_requests: list[dict[str, Any]] = []
+    transfer_calls = 0
+    release = {
+        "title": "Linux ISO",
+        "guid": "guid-1",
+        "indexerId": 40,
+        "downloadUrl": "http://prowlarr.test/download/1",
+        "magnetUrl": "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000",
+    }
+
+    def fake_prowlarr_request(
+        prowlarr_url: str,
+        api_key: str,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: object | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        prowlarr_requests.append({"path": path, "method": method, "json_body": json_body})
+        if path == "/api/v1/search?query=linux&categories=7000&indexerIds=40" and method == "GET":
+            return {"status": 200, "json": [release], "body_text": "[]"}
+        if path == "/api/v1/search" and method == "POST":
+            assert isinstance(json_body, dict)
+            assert json_body["guid"] == "guid-1"
+            assert json_body["downloadClientId"] == 55
+            return {"status": 200, "json": json_body, "body_text": "{}"}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        nonlocal transfer_calls
+        assert path == "/api/v1/transfers"
+        transfer_calls += 1
+        if transfer_calls == 1:
+            return {"status": 200, "json": [], "raw_json": {"data": [], "meta": {"apiVersion": "v1"}}, "body_text": "[]"}
+        return {
+            "status": 200,
+            "json": [
+                {
+                    "hash": "fedcba9876543210fedcba9876543210",
+                    "name": "Linux ISO",
+                    "state": "downloading",
+                    "categoryName": "prowlarr_grabs_cat",
+                }
+            ],
+            "raw_json": {
+                "data": [
+                    {
+                        "hash": "fedcba9876543210fedcba9876543210",
+                        "name": "Linux ISO",
+                        "state": "downloading",
+                        "categoryName": "prowlarr_grabs_cat",
+                    }
+                ],
+                "meta": {"apiVersion": "v1"},
+            },
+            "body_text": "[]",
+        }
+
+    monkeypatch.setattr(module, "prowlarr_request", fake_prowlarr_request)
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.prowlarr_download_client_grab_roundtrip(
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="key",
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        indexer_id=40,
+        queries=("linux",),
+        category_id=module.TORZNAB_DOCUMENT_CATEGORY,
+        download_client_id=55,
+        download_category="prowlarr_grabs_cat",
+        timeout_seconds=10.0,
+    )
+
+    assert result["status"] == "passed"
+    assert result["release"]["title_present"] is True
+    assert result["release"]["hash_present"] is True
+    assert result["transfer"]["categoryName"] == "prowlarr_grabs_cat"
+    assert [request["path"] for request in prowlarr_requests] == [
+        "/api/v1/search?query=linux&categories=7000&indexerIds=40",
+        "/api/v1/search",
+    ]
+
+
+def test_select_grabbable_release_requires_matching_indexer_and_guid() -> None:
+    module = load_prowlarr_module()
+
+    result = module.select_grabbable_release(
+        [
+            {"indexerId": 39, "guid": "wrong"},
+            {"indexerId": 40, "guid": ""},
+            {"indexerId": 40, "guid": "right", "title": "Linux ISO"},
+        ],
+        40,
+    )
+
+    assert result["guid"] == "right"
+
+
 def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> None:
     module = load_prowlarr_module()
     calls: list[str] = []
