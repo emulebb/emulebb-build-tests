@@ -52,6 +52,16 @@ def test_radarr_import_movie_title_comes_from_live_wire_inputs() -> None:
     assert module.require_radarr_import_movie_terms(inputs) == ("operator configured title", "fallback")
 
 
+def test_media_acquisition_defaults_to_small_quality_profile() -> None:
+    module = load_radarr_sonarr_module()
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "radarr-sonarr-emulebb-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert module.DEFAULT_MEDIA_QUALITY_PROFILE_NAME == "AnyAnyLang"
+    assert 'env_values.get("RADARR_QUALITY_PROFILE_NAME")' not in script_text
+    assert 'env_values.get("SONARR_QUALITY_PROFILE_NAME")' not in script_text
+
+
 def test_radarr_stage_does_not_duplicate_prowlarr_movie_readiness() -> None:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "radarr-sonarr-emulebb-live.py"
     script_text = script_path.read_text(encoding="utf-8")

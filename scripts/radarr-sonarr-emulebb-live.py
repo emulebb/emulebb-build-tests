@@ -3112,11 +3112,7 @@ def main() -> int:
         acquisition_check_key = RADARR_DOWNLOAD_PROOF_CHECK_KEY
         root_arg = args.radarr_movie_root
         media_root: Path | str = root_arg.strip() if root_arg else None  # type: ignore[assignment]
-        quality_profile_name = (
-            args.radarr_quality_profile_name
-            or env_values.get("RADARR_QUALITY_PROFILE_NAME")
-            or DEFAULT_MEDIA_QUALITY_PROFILE_NAME
-        )
+        quality_profile_name = args.radarr_quality_profile_name or DEFAULT_MEDIA_QUALITY_PROFILE_NAME
     else:
         media_terms = prowlarr_live.first_live_wire_term(
             require_sonarr_import_series_terms(inputs),
@@ -3133,11 +3129,7 @@ def main() -> int:
         acquisition_check_key = SONARR_DOWNLOAD_PROOF_CHECK_KEY
         root_arg = args.sonarr_series_root
         media_root = root_arg.strip() if root_arg else None  # type: ignore[assignment]
-        quality_profile_name = (
-            args.sonarr_quality_profile_name
-            or env_values.get("SONARR_QUALITY_PROFILE_NAME")
-            or DEFAULT_MEDIA_QUALITY_PROFILE_NAME
-        )
+        quality_profile_name = args.sonarr_quality_profile_name or DEFAULT_MEDIA_QUALITY_PROFILE_NAME
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
     indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
