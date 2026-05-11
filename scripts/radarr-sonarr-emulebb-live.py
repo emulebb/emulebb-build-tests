@@ -38,6 +38,7 @@ ARR_INDEXER_RESTORE_KEY = "cleanup_indexer_restore"
 DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 90.0
 DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES = 30.0
+DEFAULT_SHARED_HASH_IDLE_TIMEOUT_SECONDS = 60.0
 ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 DEFAULT_MEDIA_QUALITY_PROFILE_NAME = "AnyAnyLang"
 
@@ -1596,6 +1597,54 @@ def transfer_hashes(base_url: str, emule_api_key: str) -> set[str]:
         for row in rows
         if isinstance(row, dict) and str(row.get("hash") or "").strip()
     }
+
+
+def shared_hashing_snapshot(base_url: str, emule_api_key: str, timeout_seconds: float = 5.0) -> dict[str, object]:
+    """Returns the current shared-hashing state from the cheap status route."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        "/api/v1/status",
+        api_key=emule_api_key,
+        request_timeout_seconds=timeout_seconds,
+    )
+    status = int(result.get("status") or 0)
+    snapshot: dict[str, object] = {"status": status}
+    if status != 200:
+        snapshot["response"] = rest_smoke.compact_http_result(result)
+        return snapshot
+
+    payload = rest_smoke.require_json_object(result, 200)
+    stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else {}
+    hashing_count = int(stats.get("sharedHashingCount") or 0)
+    snapshot["hashingCount"] = hashing_count
+    snapshot["hashingActive"] = bool(stats.get("sharedHashingActive") or hashing_count > 0)
+    return snapshot
+
+
+def wait_for_shared_hashing_idle(
+    base_url: str,
+    emule_api_key: str,
+    timeout_seconds: float = DEFAULT_SHARED_HASH_IDLE_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Waits for shared hashing to finish before starting Arr acquisition."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        try:
+            last = shared_hashing_snapshot(base_url, emule_api_key, timeout_seconds=min(5.0, max(1.0, deadline - time.monotonic())))
+        except TimeoutError as exc:
+            last = {"status": "timeout", "error": str(exc)}
+        except OSError as exc:
+            last = {"status": type(exc).__name__, "error": str(exc)}
+
+        status_value = last.get("status")
+        if isinstance(status_value, int) and status_value == 200 and int(last.get("hashingCount") or 0) == 0:
+            return {**last, "idle": True}
+        time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
+
+    raise RuntimeError(f"Shared file hashing did not become idle before Arr acquisition. Last: {last!r}")
 
 
 def wait_for_new_transfer_category(
@@ -3262,6 +3311,10 @@ def main() -> int:
         record_phase("rest_ready")
         ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
         report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
+        report["checks"]["shared_hashing_idle_after_rest_ready"] = wait_for_shared_hashing_idle(
+            emule_base_url,
+            args.emule_api_key,
+        )
         report["checks"]["search_tabs_before_clear"] = list_emule_searches(emule_base_url, args.emule_api_key)
         report["checks"]["clear_existing_search_tabs"] = delete_all_emule_searches(emule_base_url, args.emule_api_key)
         report["checks"]["search_tabs_after_clear"] = list_emule_searches(emule_base_url, args.emule_api_key)
@@ -3274,6 +3327,10 @@ def main() -> int:
         )
         report["checks"][arr_category_key] = arr_category_summary
         arr_category_save_path = str(arr_category_summary.get("path") or arr_category_path.resolve())
+        report["checks"]["shared_hashing_idle_after_category_setup"] = wait_for_shared_hashing_idle(
+            emule_base_url,
+            args.emule_api_key,
+        )
         servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
         server_rows = rest_smoke.require_json_array(servers, 200)
         report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(

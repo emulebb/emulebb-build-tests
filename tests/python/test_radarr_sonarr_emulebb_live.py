@@ -29,6 +29,45 @@ def test_radarr_sonarr_live_report_records_live_network_launch_inputs() -> None:
     assert 'BindAddr=hide.me' not in script_text
 
 
+def test_shared_hashing_snapshot_reads_status_stats(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+
+    def fake_http_request(_base_url, path, **kwargs):
+        assert path == "/api/v1/status"
+        assert kwargs["request_timeout_seconds"] == 3.0
+        return {
+            "status": 200,
+            "json": {"stats": {"sharedHashingCount": 2, "sharedHashingActive": True}},
+            "raw_json": {"data": {"stats": {"sharedHashingCount": 2, "sharedHashingActive": True}}, "meta": {"apiVersion": "v1"}},
+        }
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: result["json"])
+
+    assert module.shared_hashing_snapshot("http://127.0.0.1:1", "key", timeout_seconds=3.0) == {
+        "status": 200,
+        "hashingCount": 2,
+        "hashingActive": True,
+    }
+
+
+def test_wait_for_shared_hashing_idle_polls_until_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    snapshots = [
+        {"status": 200, "hashingCount": 3, "hashingActive": True},
+        {"status": 200, "hashingCount": 0, "hashingActive": False},
+    ]
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(module, "shared_hashing_snapshot", lambda *_args, **_kwargs: snapshots.pop(0))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = module.wait_for_shared_hashing_idle("http://127.0.0.1:1", "key", timeout_seconds=10.0)
+
+    assert result == {"status": 200, "hashingCount": 0, "hashingActive": False, "idle": True}
+    assert sleeps == [2.0]
+
+
 def test_radarr_stage_keeps_movie_and_generic_terms_separate() -> None:
     module = load_radarr_sonarr_module()
     inputs = types.SimpleNamespace(

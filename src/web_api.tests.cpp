@@ -520,6 +520,11 @@ TEST_CASE("Web API UI dispatch uses a bounded wait result")
 	CHECK_FALSE(WebServerJsonSeams::DidRestUiDispatchComplete(FALSE));
 }
 
+TEST_CASE("Web API busy errors map to service unavailable")
+{
+	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("SERVICE_BUSY"), 503);
+}
+
 TEST_CASE("Web API parses the search start command vocabulary and trims the query")
 {
 	WebApiCommandSeams::SSearchStartRequest request;
