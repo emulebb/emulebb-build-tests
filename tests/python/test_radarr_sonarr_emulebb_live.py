@@ -122,6 +122,14 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
                 and kwargs.get("form", {}).get("hashes") == "bad"
             ):
                 return {"status": 400, "body_text": "Fails."}
+            if (
+                path == "/api/v2/torrents/setShareLimits"
+                and (
+                    kwargs.get("form", {}).get("ratioLimit") == "bad"
+                    or kwargs.get("form", {}).get("seedingTimeLimit") == "1.5"
+                )
+            ):
+                return {"status": 400, "body_text": "Fails."}
             if method == "POST" and path in {
                 "/api/v2/torrents/setShareLimits",
                 "/api/v2/torrents/topPrio",
@@ -198,6 +206,8 @@ def test_qbit_safety_checks_cover_auth_boundaries(monkeypatch: pytest.MonkeyPatc
         "delete_duplicate_hash",
         "pause_too_many_hashes",
         "set_force_start_bad_hash",
+        "set_share_limits_bad_ratio",
+        "set_share_limits_bad_seed_time",
         "add_json_content_type",
         "create_category_empty",
         "create_category_control_character",
@@ -408,6 +418,63 @@ def test_ensure_radarr_movie_ensures_root_folder_before_create(monkeypatch: pyte
     assert calls[:2] == ["/api/v3/rootfolder", "/api/v3/rootfolder"]
 
 
+def test_ensure_radarr_movie_accepts_explicit_remote_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    remote_root = "/media/radarr-import-root"
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        if path == "/api/v3/rootfolder":
+            if kwargs.get("method") == "POST":
+                assert kwargs["json_body"]["path"] == remote_root
+                return {"status": 201, "json": {"id": 5, "path": remote_root}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/movie":
+            if kwargs.get("method") == "POST":
+                assert kwargs["json_body"]["rootFolderPath"] == remote_root
+                return {"status": 201, "json": {"id": 17, "title": kwargs["json_body"]["title"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/qualityprofile":
+            return {"status": 200, "json": [{"id": 3}], "body_text": "[]"}
+        if path.startswith("/api/v3/movie/lookup?term="):
+            return {"status": 200, "json": [{"title": "operator configured title", "tmdbId": 123}], "body_text": "[]"}
+        raise AssertionError(f"Unexpected Radarr request: {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    summary = module.ensure_radarr_movie(
+        "http://radarr.test",
+        "key",
+        "operator configured title",
+        remote_root,
+        create_local_root_path=False,
+    )
+
+    assert summary["id"] == 17
+    assert not (tmp_path / "media" / "radarr-import-root").exists()
+
+
+def test_radarr_root_environment_warning_marks_remote_local_roots(tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+
+    warning = module.build_radarr_root_environment_warning(
+        "http://192.0.2.10:7878",
+        tmp_path / "radarr-root",
+        create_local_path=True,
+    )
+
+    assert warning == {
+        "remote_arr_url": True,
+        "local_or_windows_root": True,
+        "root_path_present": True,
+        "message": "Radarr is not local; ensure the configured movie root is visible from the Radarr host/container.",
+    }
+    assert module.build_radarr_root_environment_warning(
+        "http://127.0.0.1:7878",
+        tmp_path / "radarr-root",
+        create_local_path=True,
+    ) is None
+
+
 def test_ensure_arr_indexer_enabled_reenables_disabled_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     requests: list[dict[str, object]] = []
@@ -487,6 +554,10 @@ def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pyte
     module = load_radarr_sonarr_module()
     calls: list[str] = []
     transfer_hash = "0123456789abcdef0123456789abcdef"
+    save_path = r"C:\arr\radarr_movies_cat"
+    content_path = save_path + r"\test.bin"
+    escaped_save_path = save_path.replace("\\", "\\\\")
+    escaped_content_path = content_path.replace("\\", "\\\\")
 
     monkeypatch.setattr(module, "qbit_login", lambda _base_url, _api_key: ("opener", {"status": 200, "body_text": "Ok."}))
     monkeypatch.setattr(
@@ -514,11 +585,11 @@ def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pyte
     def fake_qbit_request(_base_url, path, **_kwargs):
         calls.append(path.rsplit("/", 1)[-1])
         if path == "/api/v2/torrents/info":
-            return {"status": 200, "body_text": f'[{{"hash":"{transfer_hash}"}}]'}
+            return {"status": 200, "body_text": f'[{{"hash":"{transfer_hash}","name":"test.bin","save_path":"{escaped_save_path}","content_path":"{escaped_content_path}"}}]'}
         if path.startswith("/api/v2/torrents/info?category="):
             return {"status": 200, "body_text": f'[{{"hash":"{transfer_hash}"}}]'}
         if path.startswith("/api/v2/torrents/properties?hash="):
-            return {"status": 200, "body_text": f'{{"hash":"{transfer_hash}","save_path":""}}'}
+            return {"status": 200, "body_text": f'{{"hash":"{transfer_hash}","save_path":"{escaped_save_path}","content_path":"{escaped_content_path}"}}'}
         if path.startswith("/api/v2/torrents/files?hash="):
             return {"status": 200, "body_text": '[{"name":"test.bin"}]'}
         return {"status": 200, "body_text": "Ok."}
@@ -532,6 +603,7 @@ def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pyte
         initial_category="RADARR_ENG",
         updated_category="SONARR_ENG",
         timeout_seconds=30.0,
+        expected_save_path=save_path,
     )
 
     assert calls == [
@@ -549,8 +621,36 @@ def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pyte
     ]
     assert result["add"]["hash"] == transfer_hash
     assert result["active_metadata"]["files_count"] == 1
+    assert result["active_metadata"]["path_contract"]["info_save_path_matches_expected"] is True
+    assert result["active_metadata"]["path_contract"]["properties_save_path_matches_expected"] is True
+    assert result["active_metadata"]["path_contract"]["content_path_matches_name"] is True
     assert result["delete_status"] == 200
     assert result["deleted_transfer"]["absent"] is True
+
+
+def test_qbit_direct_add_sends_arr_share_limit_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    observed_form: dict[str, object] = {}
+
+    def fake_qbit_request(_base_url, _path, **kwargs):
+        observed_form.update(kwargs["form"])
+        return {"status": 200, "body_text": "Ok."}
+
+    monkeypatch.setattr(module, "qbit_request", fake_qbit_request)
+    monkeypatch.setattr(module, "qbit_login", lambda _base_url, _api_key: ("opener", {"status": 200, "body_text": "Ok."}))
+
+    result = module.qbit_direct_add(
+        "http://127.0.0.1:4711",
+        "secret",
+        module.SYNTHETIC_TRIGGER_MAGNET,
+        module.RADARR_IMPORT_CATEGORY,
+    )
+
+    assert result["hash"] == module.ed2k_hash_from_magnet(module.SYNTHETIC_TRIGGER_MAGNET)
+    assert observed_form["category"] == module.RADARR_IMPORT_CATEGORY
+    assert observed_form["ratioLimit"] == "-1"
+    assert observed_form["seedingTimeLimit"] == "-1"
+    assert observed_form["inactiveSeedingTimeLimit"] == "-1"
 
 
 def test_qbit_live_wire_roundtrip_cleans_up_added_transfer_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -633,7 +733,7 @@ def test_collect_direct_magnets_deduplicates_search_results(monkeypatch: pytest.
 
 def test_qbit_live_wire_stress_runs_requested_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
-    calls: list[tuple[str, str, str]] = []
+    calls: list[tuple[str, str, str, str | None]] = []
     magnets = [
         {"query": "operator movie one", "title": "A", "magnet": "magnet-a", "hash": "a"},
         {"query": "operator movie two", "title": "B", "magnet": "magnet-b", "hash": "b"},
@@ -641,7 +741,7 @@ def test_qbit_live_wire_stress_runs_requested_rounds(monkeypatch: pytest.MonkeyP
     ]
 
     def fake_roundtrip(_base_url, _api_key, magnet, **kwargs):
-        calls.append((magnet, kwargs["initial_category"], kwargs["updated_category"]))
+        calls.append((magnet, kwargs["initial_category"], kwargs["updated_category"], kwargs["expected_save_path"]))
         kwargs["progress"]["delete_status"] = 200
         return kwargs["progress"]
 
@@ -655,11 +755,12 @@ def test_qbit_live_wire_stress_runs_requested_rounds(monkeypatch: pytest.MonkeyP
         timeout_seconds=30.0,
         initial_category=module.RADARR_IMPORT_CATEGORY,
         updated_category=module.RADARR_IMPORT_CATEGORY,
+        expected_save_path=r"C:\arr\radarr_movies_cat",
     )
 
     assert calls == [
-        ("magnet-a", module.RADARR_IMPORT_CATEGORY, module.RADARR_IMPORT_CATEGORY),
-        ("magnet-b", module.RADARR_IMPORT_CATEGORY, module.RADARR_IMPORT_CATEGORY),
+        ("magnet-a", module.RADARR_IMPORT_CATEGORY, module.RADARR_IMPORT_CATEGORY, r"C:\arr\radarr_movies_cat"),
+        ("magnet-b", module.RADARR_IMPORT_CATEGORY, module.RADARR_IMPORT_CATEGORY, r"C:\arr\radarr_movies_cat"),
     ]
     assert result["rounds"] == 2
     assert result["runs"][1]["expected_hash_present"] is True

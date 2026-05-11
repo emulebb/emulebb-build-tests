@@ -238,6 +238,7 @@ def build_suite_command(
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
     arr_prowlarr_search_stress_count: int = DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT,
     arr_qbit_live_wire_rounds: int = DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS,
+    radarr_movie_root: str | None = None,
     rest_cold_start_dump_stress_waves: int = DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES,
     rest_cold_start_dump_stress_searches_per_wave: int = DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE,
     rest_cold_start_dump_stress_max_concurrent_searches: int = DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES,
@@ -344,6 +345,8 @@ def build_suite_command(
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
         command.extend(["--qbit-live-wire-rounds", str(arr_qbit_live_wire_rounds)])
+        if radarr_movie_root is not None:
+            command.extend(["--radarr-movie-root", str(radarr_movie_root)])
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -457,6 +460,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-qbit-live-wire-rounds", type=int, default=DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)
+    parser.add_argument("--radarr-movie-root")
     parser.add_argument("--rest-cold-start-dump-stress-waves", type=int, default=DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES)
     parser.add_argument(
         "--rest-cold-start-dump-stress-searches-per-wave",
@@ -657,6 +661,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     python_executable = harness_cli_common.find_python_executable()
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
     shared_root = Path(args.shared_root).resolve() if args.shared_root else None
+    radarr_movie_root = args.radarr_movie_root.strip() if args.radarr_movie_root else None
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     live_wire_inputs_file = live_wire_inputs.resolve_inputs_path(
         Path(__file__).resolve().parent.parent,
@@ -691,6 +696,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
         "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
         "arr_qbit_live_wire_rounds": args.arr_qbit_live_wire_rounds,
+        "radarr_movie_root_configured": bool(args.radarr_movie_root),
+        "radarr_movie_root_present": bool(args.radarr_movie_root),
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
             "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
@@ -770,6 +777,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
             arr_qbit_live_wire_rounds=args.arr_qbit_live_wire_rounds,
+            radarr_movie_root=radarr_movie_root,
             rest_cold_start_dump_stress_waves=args.rest_cold_start_dump_stress_waves,
             rest_cold_start_dump_stress_searches_per_wave=args.rest_cold_start_dump_stress_searches_per_wave,
             rest_cold_start_dump_stress_max_concurrent_searches=args.rest_cold_start_dump_stress_max_concurrent_searches,
@@ -846,6 +854,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 )
             if spec.is_arr_emulebb:
                 arr_result["arr_qbit_live_wire_rounds"] = args.arr_qbit_live_wire_rounds
+                arr_result["radarr_movie_root_configured"] = bool(args.radarr_movie_root)
             result.update(arr_result)
         if spec.is_rest_cold_start_dump_stress:
             result.update(

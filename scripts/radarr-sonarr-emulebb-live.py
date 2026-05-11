@@ -483,6 +483,36 @@ def delete_radarr_movie(arr_url: str, api_key: str, movie_id: int) -> dict[str, 
     return {"id": movie_id, "status": int(result.get("status") or 0)}
 
 
+def resolve_radarr_root_path(root_path: Path | str, *, create_local_path: bool) -> str:
+    """Returns the Radarr root folder path, optionally creating local roots."""
+
+    if create_local_path:
+        local_path = Path(root_path)
+        local_path.mkdir(parents=True, exist_ok=True)
+        return str(local_path.resolve())
+    path_text = str(root_path).strip()
+    if not path_text:
+        raise RuntimeError("Radarr movie root path must not be empty.")
+    return path_text
+
+
+def build_radarr_root_environment_warning(radarr_url: str, root_path: Path | str, *, create_local_path: bool) -> dict[str, object] | None:
+    """Builds a non-failing warning when the root path may not be visible to Radarr."""
+
+    hostname = urllib.parse.urlparse(radarr_url).hostname or ""
+    is_remote_arr = bool(hostname) and hostname.lower() not in {"localhost", "127.0.0.1", "::1"}
+    path_text = str(root_path)
+    looks_windows_local = (len(path_text) >= 3 and path_text[1:3] in {":\\", ":/"}) or path_text.startswith("\\\\")
+    if is_remote_arr and (create_local_path or looks_windows_local):
+        return {
+            "remote_arr_url": True,
+            "local_or_windows_root": True,
+            "root_path_present": bool(path_text.strip()),
+            "message": "Radarr is not local; ensure the configured movie root is visible from the Radarr host/container.",
+        }
+    return None
+
+
 def ensure_emule_category(base_url: str, api_key: str, name: str, path: Path) -> dict[str, object]:
     """Ensures eMule has one named category with a dedicated incoming path."""
 
@@ -539,11 +569,16 @@ def get_default_quality_profile_id(arr_url: str, api_key: str) -> int:
     return profile_id
 
 
-def ensure_radarr_root_folder(arr_url: str, api_key: str, root_path: Path) -> dict[str, object]:
+def ensure_radarr_root_folder(
+    arr_url: str,
+    api_key: str,
+    root_path: Path | str,
+    *,
+    create_local_path: bool = True,
+) -> dict[str, object]:
     """Ensures Radarr can use one local root folder for import verification."""
 
-    root_path.mkdir(parents=True, exist_ok=True)
-    path_text = str(root_path.resolve())
+    path_text = resolve_radarr_root_path(root_path, create_local_path=create_local_path)
     roots = require_success(arr_request(arr_url, api_key, "/api/v3/rootfolder"), "Radarr root folders")
     if isinstance(roots, list):
         for root in roots:
@@ -576,10 +611,18 @@ def lookup_radarr_movie(arr_url: str, api_key: str, title: str) -> dict[str, Any
     raise RuntimeError(f"Radarr movie lookup returned no candidates for {title!r}.")
 
 
-def ensure_radarr_movie(arr_url: str, api_key: str, title: str, root_path: Path) -> dict[str, object]:
+def ensure_radarr_movie(
+    arr_url: str,
+    api_key: str,
+    title: str,
+    root_path: Path | str,
+    *,
+    create_local_root_path: bool = True,
+) -> dict[str, object]:
     """Ensures a temporary Radarr movie exists for the import E2E."""
 
-    root_folder = ensure_radarr_root_folder(arr_url, api_key, root_path)
+    root_folder = ensure_radarr_root_folder(arr_url, api_key, root_path, create_local_path=create_local_root_path)
+    root_path_text = str(root_folder.get("path") or resolve_radarr_root_path(root_path, create_local_path=False))
     movies = require_success(arr_request(arr_url, api_key, "/api/v3/movie"), "Radarr movie list")
     if isinstance(movies, list):
         for movie in movies:
@@ -596,7 +639,7 @@ def ensure_radarr_movie(arr_url: str, api_key: str, title: str, root_path: Path)
     lookup = lookup_radarr_movie(arr_url, api_key, title)
     payload = dict(lookup)
     payload["qualityProfileId"] = quality_profile_id
-    payload["rootFolderPath"] = str(root_path.resolve())
+    payload["rootFolderPath"] = root_path_text
     payload["monitored"] = True
     payload["minimumAvailability"] = "released"
     payload["addOptions"] = {"searchForMovie": False}
@@ -906,7 +949,14 @@ def qbit_direct_add(
         base_url,
         "/api/v2/torrents/add",
         cookie=cookie,
-        form={"urls": magnet, "category": category, "stopped": "true"},
+        form={
+            "urls": magnet,
+            "category": category,
+            "stopped": "true",
+            "ratioLimit": "-1",
+            "seedingTimeLimit": "-1",
+            "inactiveSeedingTimeLimit": "-1",
+        },
         method="POST",
         timeout_seconds=45.0,
     )
@@ -1025,6 +1075,20 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
             "/api/v2/torrents/setForceStart",
             cookie=cookie,
             form={"hashes": "bad", "value": "true"},
+            method="POST",
+        ),
+        "set_share_limits_bad_ratio": qbit_request(
+            base_url,
+            "/api/v2/torrents/setShareLimits",
+            cookie=cookie,
+            form={"hashes": rest_smoke.REST_SURFACE_MISSING_HASH, "ratioLimit": "bad"},
+            method="POST",
+        ),
+        "set_share_limits_bad_seed_time": qbit_request(
+            base_url,
+            "/api/v2/torrents/setShareLimits",
+            cookie=cookie,
+            form={"hashes": rest_smoke.REST_SURFACE_MISSING_HASH, "seedingTimeLimit": "1.5"},
             method="POST",
         ),
         "add_json_content_type": qbit_request(
@@ -1196,6 +1260,7 @@ def qbit_direct_live_wire_roundtrip(
     initial_category: str,
     updated_category: str,
     timeout_seconds: float,
+    expected_save_path: str | None = None,
     progress: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Exercises qBittorrent-compatible add, mutate, verify, and delete flow."""
@@ -1216,6 +1281,7 @@ def qbit_direct_live_wire_roundtrip(
         matching_info_rows = [row for row in info_rows if isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash]
         if not matching_info_rows:
             raise RuntimeError("qBit torrents info after add did not include the selected transfer.")
+        matching_info_row = matching_info_rows[0]
         report["info_after_add"] = {"status": int(info_after_add.get("status") or 0), "count": len(info_rows)}
 
         filtered_info = qbit_request(
@@ -1250,10 +1316,23 @@ def qbit_direct_live_wire_roundtrip(
         files_body = require_qbit_json(files, "qBit torrent files after add")
         if not isinstance(files_body, list):
             raise RuntimeError("qBit torrent files after add did not return a list.")
+        path_contract = summarize_qbit_import_path_contract(
+            matching_info_row,
+            properties_body,
+            files_body,
+            expected_save_path=expected_save_path,
+        )
+        if expected_save_path and (
+            not path_contract.get("info_save_path_matches_expected")
+            or not path_contract.get("properties_save_path_matches_expected")
+            or not path_contract.get("content_path_matches_name")
+        ):
+            raise RuntimeError(f"qBit import path contract mismatch: {path_contract!r}")
         report["active_metadata"] = {
             "filtered_info_count": len(filtered_rows),
             "properties_status": int(properties.get("status") or 0),
             "files_count": len(files_body),
+            "path_contract": path_contract,
         }
 
         set_category = qbit_request(
@@ -1364,6 +1443,45 @@ def redact_qbit_roundtrip_report(report: dict[str, object]) -> dict[str, object]
     return redacted
 
 
+def normalize_path_for_compare(value: object) -> str:
+    """Normalizes an adapter path enough for Windows-style contract checks."""
+
+    return str(value or "").replace("/", "\\").rstrip("\\").lower()
+
+
+def summarize_qbit_import_path_contract(
+    info_row: dict[str, object],
+    properties_body: dict[str, object],
+    files_body: list[object],
+    *,
+    expected_save_path: str | None,
+) -> dict[str, object]:
+    """Returns redacted qBit import path contract diagnostics."""
+
+    info_save_path = str(info_row.get("save_path") or "")
+    properties_save_path = str(properties_body.get("save_path") or "")
+    content_path = str(info_row.get("content_path") or properties_body.get("content_path") or "")
+    first_file = files_body[0] if files_body and isinstance(files_body[0], dict) else {}
+    file_name = str(first_file.get("name") or info_row.get("name") or "")
+    expected_norm = normalize_path_for_compare(expected_save_path)
+    info_norm = normalize_path_for_compare(info_save_path)
+    properties_norm = normalize_path_for_compare(properties_save_path)
+    content_norm = normalize_path_for_compare(content_path)
+    file_norm = normalize_path_for_compare(file_name)
+    rooted_content = bool(expected_norm) and content_norm.startswith(expected_norm + "\\")
+    return {
+        "expected_save_path_present": bool(expected_save_path),
+        "info_save_path_present": bool(info_save_path),
+        "properties_save_path_present": bool(properties_save_path),
+        "info_save_path_matches_expected": None if not expected_save_path else info_norm == expected_norm,
+        "properties_save_path_matches_expected": None if not expected_save_path else properties_norm == expected_norm,
+        "content_path_present": bool(content_path),
+        "file_name_present": bool(file_name),
+        "content_path_under_save_path": None if not expected_save_path else rooted_content,
+        "content_path_matches_name": bool(content_norm and file_norm and (content_norm == file_norm or content_norm.endswith("\\" + file_norm))),
+    }
+
+
 def qbit_direct_live_wire_stress(
     base_url: str,
     emule_api_key: str,
@@ -1373,6 +1491,7 @@ def qbit_direct_live_wire_stress(
     timeout_seconds: float,
     initial_category: str = "RADARR_ENG",
     updated_category: str = "SONARR_ENG",
+    expected_save_path: str | None = None,
 ) -> dict[str, object]:
     """Runs repeated qBittorrent add/mutate/delete live-wire rounds."""
 
@@ -1394,6 +1513,7 @@ def qbit_direct_live_wire_stress(
             initial_category=initial_category,
             updated_category=updated_category,
             timeout_seconds=timeout_seconds,
+            expected_save_path=expected_save_path,
             progress=run_report,
         )
         runs.append(redact_qbit_roundtrip_report(run_report))
@@ -1512,6 +1632,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--qbit-live-wire-rounds", type=int, default=2)
     parser.add_argument(
+        "--radarr-movie-root",
+        help="Optional Radarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
+    )
+    parser.add_argument(
         "--live-wire-inputs-file",
         default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)),
     )
@@ -1586,19 +1710,27 @@ def run_radarr_import_e2e(
     emule_api_key: str,
     indexer_id: int,
     movie_title: str,
-    movie_root: Path,
+    movie_root: Path | str,
     category_name: str,
+    movie_root_creates_local_path: bool,
     timeout_seconds: float,
 ) -> tuple[dict[str, object], int | None]:
     """Runs the Radarr grab-to-import proof for one configured movie title."""
 
-    movie = ensure_radarr_movie(radarr_url, radarr_api_key, movie_title, movie_root)
+    movie = ensure_radarr_movie(
+        radarr_url,
+        radarr_api_key,
+        movie_title,
+        movie_root,
+        create_local_root_path=movie_root_creates_local_path,
+    )
     movie_id = int(movie["id"])
     report: dict[str, object] = {
         "movie_title_present": bool(movie_title),
         "movie_id": movie_id,
         "movie_created": bool(movie.get("created")),
         "category": category_name,
+        "root_folder": movie.get("root_folder"),
     }
     release_grab = grab_first_radarr_release(radarr_url, radarr_api_key, indexer_id, movie_title, timeout_seconds)
     report["release_grab"] = {key: value for key, value in release_grab.items() if key != "hash"}
@@ -1672,6 +1804,13 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
     result_path = artifacts_dir / "result.json"
+    radarr_movie_root: Path | str = args.radarr_movie_root.strip() if args.radarr_movie_root else artifacts_dir / "radarr-movie-root"
+    radarr_movie_root_creates_local_path = not bool(args.radarr_movie_root)
+    radarr_root_warning = build_radarr_root_environment_warning(
+        env_values["RADARR_URL"].rstrip("/"),
+        radarr_movie_root,
+        create_local_path=radarr_movie_root_creates_local_path,
+    )
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
     seed_refresh = None
     if not args.skip_live_seed_refresh:
@@ -1732,6 +1871,10 @@ def main() -> int:
         "radarr_import": {
             "movie_title_present": bool(radarr_movie_terms[0]),
             "category": RADARR_IMPORT_CATEGORY,
+            "movie_root_configured": bool(args.radarr_movie_root),
+            "movie_root_path_present": bool(str(radarr_movie_root).strip()),
+            "movie_root_creates_local_path": radarr_movie_root_creates_local_path,
+            "environment_warning": radarr_root_warning,
         },
         "checks": {},
     }
@@ -1742,12 +1885,14 @@ def main() -> int:
         ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
         report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
         radarr_category_path = artifacts_dir / RADARR_IMPORT_CATEGORY
-        report["checks"]["emule_radarr_category"] = ensure_emule_category(
+        radarr_category_summary = ensure_emule_category(
             emule_base_url,
             args.emule_api_key,
             RADARR_IMPORT_CATEGORY,
             radarr_category_path,
         )
+        report["checks"]["emule_radarr_category"] = radarr_category_summary
+        radarr_category_save_path = str(radarr_category_summary.get("path") or radarr_category_path.resolve())
         servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
         server_rows = rest_smoke.require_json_array(servers, 200)
         report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(
@@ -1823,6 +1968,7 @@ def main() -> int:
             timeout_seconds=args.result_timeout_seconds,
             initial_category=RADARR_IMPORT_CATEGORY,
             updated_category=RADARR_IMPORT_CATEGORY,
+            expected_save_path=radarr_category_save_path,
         )
         forced_trigger_added = False
 
@@ -1884,8 +2030,9 @@ def main() -> int:
             emule_api_key=args.emule_api_key,
             indexer_id=int(radarr_report["synced_indexer"]["id"]),
             movie_title=radarr_movie_terms[0],
-            movie_root=artifacts_dir / "radarr-movie-root",
+            movie_root=radarr_movie_root,
             category_name=RADARR_IMPORT_CATEGORY,
+            movie_root_creates_local_path=radarr_movie_root_creates_local_path,
             timeout_seconds=args.result_timeout_seconds,
         )
         if cleanup_movie_id is not None:

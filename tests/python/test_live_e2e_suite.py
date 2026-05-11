@@ -164,6 +164,8 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["arr_direct_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT
     assert summary["arr_prowlarr_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT
     assert summary["arr_qbit_live_wire_rounds"] == live_e2e_suite.DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS
+    assert summary["radarr_movie_root_configured"] is False
+    assert summary["radarr_movie_root_present"] is False
     assert summary["suites"][6]["rest_contract_completeness_expected"] is True
 
     browser_command = commands[7]
@@ -187,9 +189,11 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(arr_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(arr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(arr_command, "--qbit-live-wire-rounds") == [str(live_e2e_suite.DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS)]
+    assert "--radarr-movie-root" not in arr_command
     assert "--skip-live-seed-refresh" not in arr_command
     assert summary["suites"][9]["arr_integration"] is True
     assert summary["suites"][9]["arr_qbit_live_wire_rounds"] == live_e2e_suite.DEFAULT_ARR_QBIT_LIVE_WIRE_ROUNDS
+    assert summary["suites"][9]["radarr_movie_root_configured"] is False
 
     auto_browse_command = commands[10]
     assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
@@ -221,6 +225,34 @@ def test_shared_files_ui_scenario_selector_limits_child_scenarios(tmp_path: Path
     assert summary["shared_files_ui_scenarios"] == ["dynamic-folder-lifecycle"]
     assert option_values(commands[0], "--scenario") == ["dynamic-folder-lifecycle"]
     assert summary["suites"][0]["scenario_names"] == ["dynamic-folder-lifecycle"]
+
+
+def test_radarr_movie_root_option_reaches_arr_suite(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+    root_path = "/media/radarr-import-root"
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--suite",
+            "radarr-sonarr-emulebb",
+            "--radarr-movie-root",
+            root_path,
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["radarr_movie_root_configured"] is True
+    assert summary["radarr_movie_root_present"] is True
+    assert option_values(commands[0], "--radarr-movie-root") == [root_path]
+    assert summary["suites"][0]["radarr_movie_root_configured"] is True
 
 
 def test_search_ui_live_suite_is_selectable_with_live_network_policy(tmp_path: Path, monkeypatch) -> None:
