@@ -29,6 +29,7 @@ SYNTHETIC_TRIGGER_MAGNET = (
 LIVE_SOURCE_UNAVAILABLE_EXIT_CODE = 2
 TORZNAB_MOVIE_CATEGORY = 2000
 TORZNAB_TV_CATEGORY = 5000
+RADARR_IMPORT_CATEGORY = "radarr_movies_cat"
 
 
 class LiveSearchUnavailableError(RuntimeError):
@@ -448,6 +449,15 @@ def build_sonarr_release_terms(inputs: Any) -> tuple[str, ...]:
     return unique_terms(inputs.sonarr_series_terms, inputs.generic_open_terms)
 
 
+def require_radarr_import_movie_terms(inputs: Any) -> tuple[str, ...]:
+    """Returns the operator-configured Radarr import title from live-wire inputs."""
+
+    terms = tuple(str(term).strip() for term in inputs.radarr_movie_terms if str(term).strip())
+    if not terms:
+        raise RuntimeError("live-wire inputs field 'search_terms.radarr_movies' must include a Radarr import title.")
+    return (terms[0],)
+
+
 def build_torznab_search_path(category_id: int, query: str, emule_api_key: str, *, request_type: str = "search") -> str:
     """Builds one direct Torznab search URL using an explicit media category."""
 
@@ -464,6 +474,216 @@ def delete_download_client(arr_url: str, api_key: str, client_id: int) -> dict[s
 
     result = arr_request(arr_url, api_key, f"/api/v3/downloadclient/{client_id}", method="DELETE")
     return {"id": client_id, "status": int(result.get("status") or 0)}
+
+
+def delete_radarr_movie(arr_url: str, api_key: str, movie_id: int) -> dict[str, object]:
+    """Deletes one temporary Radarr movie without deleting local media files."""
+
+    result = arr_request(arr_url, api_key, f"/api/v3/movie/{movie_id}?deleteFiles=false&addImportExclusion=false", method="DELETE")
+    return {"id": movie_id, "status": int(result.get("status") or 0)}
+
+
+def ensure_emule_category(base_url: str, api_key: str, name: str, path: Path) -> dict[str, object]:
+    """Ensures eMule has one named category with a dedicated incoming path."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    path_text = str(path.resolve())
+    categories = rest_smoke.http_request(base_url, "/api/v1/categories", api_key=api_key)
+    rows = rest_smoke.require_json_array(categories, 200)
+    for row in rows:
+        if not isinstance(row, dict) or row.get("name") != name:
+            continue
+        category_id = int(row.get("id") or 0)
+        current_path = str(row.get("path") or "")
+        if current_path.lower() != path_text.lower():
+            patched = rest_smoke.http_request(
+                base_url,
+                f"/api/v1/categories/{category_id}",
+                method="PATCH",
+                api_key=api_key,
+                json_body={"path": path_text},
+                request_timeout_seconds=20.0,
+            )
+            updated = rest_smoke.require_json_object(patched, 200)
+            return {"id": category_id, "name": name, "path": updated.get("path"), "created": False, "updated": True}
+        return {"id": category_id, "name": name, "path": current_path, "created": False, "updated": False}
+
+    created = rest_smoke.http_request(
+        base_url,
+        "/api/v1/categories",
+        method="POST",
+        api_key=api_key,
+        json_body={"name": name, "path": path_text},
+        request_timeout_seconds=20.0,
+    )
+    payload = rest_smoke.require_json_object(created, 200)
+    return {"id": int(payload.get("id") or 0), "name": payload.get("name"), "path": payload.get("path"), "created": True, "updated": False}
+
+
+def first_arr_row(result: dict[str, Any], description: str) -> dict[str, Any]:
+    """Returns the first object row from one Arr list response."""
+
+    rows = require_success(result, description)
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        raise RuntimeError(f"{description} did not return any rows.")
+    return rows[0]
+
+
+def get_default_quality_profile_id(arr_url: str, api_key: str) -> int:
+    """Returns the first Radarr quality profile id."""
+
+    profile = first_arr_row(arr_request(arr_url, api_key, "/api/v3/qualityprofile"), "Radarr quality profiles")
+    profile_id = int(profile.get("id") or 0)
+    if profile_id <= 0:
+        raise RuntimeError("Radarr first quality profile did not include an id.")
+    return profile_id
+
+
+def ensure_radarr_root_folder(arr_url: str, api_key: str, root_path: Path) -> dict[str, object]:
+    """Ensures Radarr can use one local root folder for import verification."""
+
+    root_path.mkdir(parents=True, exist_ok=True)
+    path_text = str(root_path.resolve())
+    roots = require_success(arr_request(arr_url, api_key, "/api/v3/rootfolder"), "Radarr root folders")
+    if isinstance(roots, list):
+        for root in roots:
+            if isinstance(root, dict) and str(root.get("path") or "").lower() == path_text.lower():
+                return {"id": int(root.get("id") or 0), "path": root.get("path"), "created": False}
+    created = require_success(
+        arr_request(arr_url, api_key, "/api/v3/rootfolder", method="POST", json_body={"path": path_text}),
+        "Radarr root folder create",
+    )
+    if not isinstance(created, dict):
+        raise RuntimeError("Radarr root folder create did not return an object.")
+    return {"id": int(created.get("id") or 0), "path": created.get("path"), "created": True}
+
+
+def lookup_radarr_movie(arr_url: str, api_key: str, title: str) -> dict[str, Any]:
+    """Looks up one Radarr movie by title."""
+
+    rows = require_success(
+        arr_request(arr_url, api_key, "/api/v3/movie/lookup?term=" + urllib.parse.quote(title), timeout_seconds=60.0),
+        "Radarr movie lookup",
+    )
+    if not isinstance(rows, list):
+        raise RuntimeError("Radarr movie lookup did not return a list.")
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("title") or "").strip().lower() == title.lower():
+            return row
+    for row in rows:
+        if isinstance(row, dict):
+            return row
+    raise RuntimeError(f"Radarr movie lookup returned no candidates for {title!r}.")
+
+
+def ensure_radarr_movie(arr_url: str, api_key: str, title: str, root_path: Path) -> dict[str, object]:
+    """Ensures a temporary Radarr movie exists for the import E2E."""
+
+    root_folder = ensure_radarr_root_folder(arr_url, api_key, root_path)
+    movies = require_success(arr_request(arr_url, api_key, "/api/v3/movie"), "Radarr movie list")
+    if isinstance(movies, list):
+        for movie in movies:
+            if isinstance(movie, dict) and str(movie.get("title") or "").strip().lower() == title.lower():
+                return {
+                    "id": int(movie.get("id") or 0),
+                    "title": movie.get("title"),
+                    "created": False,
+                    "root_folder": root_folder,
+                    "movie": movie,
+                }
+
+    quality_profile_id = get_default_quality_profile_id(arr_url, api_key)
+    lookup = lookup_radarr_movie(arr_url, api_key, title)
+    payload = dict(lookup)
+    payload["qualityProfileId"] = quality_profile_id
+    payload["rootFolderPath"] = str(root_path.resolve())
+    payload["monitored"] = True
+    payload["minimumAvailability"] = "released"
+    payload["addOptions"] = {"searchForMovie": False}
+    created = require_success(
+        arr_request(arr_url, api_key, "/api/v3/movie", method="POST", json_body=payload, timeout_seconds=60.0),
+        "Radarr movie create",
+    )
+    if not isinstance(created, dict) or not created.get("id"):
+        raise RuntimeError("Radarr movie create did not return an id.")
+    return {
+        "id": int(created["id"]),
+        "title": created.get("title"),
+        "created": True,
+        "root_folder": root_folder,
+        "movie": created,
+    }
+
+
+def grab_first_radarr_release(arr_url: str, api_key: str, indexer_id: int, title: str, timeout_seconds: float) -> dict[str, object]:
+    """Searches Radarr releases and grabs the first eMule BB indexer match."""
+
+    deadline = time.monotonic() + timeout_seconds
+    attempts: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        result = arr_request(
+            arr_url,
+            api_key,
+            f"/api/v3/release?term={urllib.parse.quote(title)}&indexerIds={indexer_id}",
+            timeout_seconds=90.0,
+        )
+        rows = result.get("json") if isinstance(result.get("json"), list) else []
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and (int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower())
+        ]
+        attempts.append({"status": int(result.get("status") or 0), "count": len(rows), "matches": len(matches)})
+        if matches:
+            selected = dict(matches[0])
+            selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
+            selected_hash = ""
+            if selected_download_url.startswith("magnet:?"):
+                try:
+                    selected_hash = ed2k_hash_from_magnet(selected_download_url)
+                except RuntimeError:
+                    selected_hash = ""
+            grabbed = require_success(
+                arr_request(arr_url, api_key, "/api/v3/release", method="POST", json_body=selected, timeout_seconds=90.0),
+                "Radarr release grab",
+            )
+            return {
+                "attempt_count": len(attempts),
+                "title_present": bool(selected.get("title")),
+                "downloadUrl_present": bool(selected.get("downloadUrl")),
+                "guid_present": bool(selected.get("guid")),
+                "hash": selected_hash,
+                "hash_present": bool(selected_hash),
+                "grab_status": grabbed.get("status") if isinstance(grabbed, dict) else None,
+            }
+        time.sleep(5.0)
+    raise RuntimeError(f"Radarr release search returned no eMule BB rows before timeout. Attempts: {attempts!r}")
+
+
+def wait_for_radarr_movie_import(arr_url: str, api_key: str, movie_id: int, timeout_seconds: float) -> dict[str, object]:
+    """Waits until Radarr reports an imported movie file."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        result = arr_request(arr_url, api_key, f"/api/v3/movie/{movie_id}", timeout_seconds=30.0)
+        movie = result.get("json") if isinstance(result.get("json"), dict) else {}
+        if isinstance(movie, dict):
+            movie_file = movie.get("movieFile")
+            has_file = bool(movie.get("hasFile")) or isinstance(movie_file, dict)
+            last = {
+                "status": int(result.get("status") or 0),
+                "hasFile": bool(movie.get("hasFile")),
+                "movieFile_present": isinstance(movie_file, dict),
+            }
+            if has_file:
+                imported_path = None
+                if isinstance(movie_file, dict):
+                    imported_path = movie_file.get("path") or movie_file.get("relativePath")
+                return {**last, "imported_path_present": bool(imported_path)}
+        time.sleep(10.0)
+    raise RuntimeError(f"Radarr movie was not imported before timeout. Last: {last!r}")
 
 
 def redact_direct_magnet(magnet: dict[str, object]) -> dict[str, object]:
@@ -1151,6 +1371,8 @@ def qbit_direct_live_wire_stress(
     *,
     rounds: int,
     timeout_seconds: float,
+    initial_category: str = "RADARR_ENG",
+    updated_category: str = "SONARR_ENG",
 ) -> dict[str, object]:
     """Runs repeated qBittorrent add/mutate/delete live-wire rounds."""
 
@@ -1169,8 +1391,8 @@ def qbit_direct_live_wire_stress(
             base_url,
             emule_api_key,
             magnet["magnet"],
-            initial_category="RADARR_ENG",
-            updated_category="SONARR_ENG",
+            initial_category=initial_category,
+            updated_category=updated_category,
             timeout_seconds=timeout_seconds,
             progress=run_report,
         )
@@ -1307,10 +1529,11 @@ def run_arr_checks(
     indexer_name: str,
     release_terms: tuple[str, ...],
     timeout_seconds: float,
+    category_override: str | None = None,
 ) -> tuple[dict[str, object], int | None]:
     """Runs one Radarr or Sonarr live integration check."""
 
-    category = "RADARR_ENG" if kind == "radarr" else "SONARR_ENG"
+    category = category_override or ("RADARR_ENG" if kind == "radarr" else "SONARR_ENG")
     category_field = "movieCategory" if kind == "radarr" else "tvCategory"
     temp_client_name = f"eMule BB Live {kind} {port}"
     status_payload = require_success(arr_request(arr_url, arr_api_key, "/api/v3/system/status"), f"{kind} status")
@@ -1355,6 +1578,44 @@ def run_arr_checks(
     return report, int(client["id"])
 
 
+def run_radarr_import_e2e(
+    *,
+    radarr_url: str,
+    radarr_api_key: str,
+    emule_base_url: str,
+    emule_api_key: str,
+    indexer_id: int,
+    movie_title: str,
+    movie_root: Path,
+    category_name: str,
+    timeout_seconds: float,
+) -> tuple[dict[str, object], int | None]:
+    """Runs the Radarr grab-to-import proof for one configured movie title."""
+
+    movie = ensure_radarr_movie(radarr_url, radarr_api_key, movie_title, movie_root)
+    movie_id = int(movie["id"])
+    report: dict[str, object] = {
+        "movie_title_present": bool(movie_title),
+        "movie_id": movie_id,
+        "movie_created": bool(movie.get("created")),
+        "category": category_name,
+    }
+    release_grab = grab_first_radarr_release(radarr_url, radarr_api_key, indexer_id, movie_title, timeout_seconds)
+    report["release_grab"] = {key: value for key, value in release_grab.items() if key != "hash"}
+    transfer_hash = str(release_grab.get("hash") or "")
+    if not transfer_hash:
+        raise RuntimeError("Radarr release grab did not expose an eMule BB magnet hash.")
+    report["category_transfer"] = wait_for_transfer_category(
+        emule_base_url,
+        emule_api_key,
+        transfer_hash,
+        category_name,
+        min(timeout_seconds, 120.0),
+    )
+    report["import"] = wait_for_radarr_movie_import(radarr_url, radarr_api_key, movie_id, timeout_seconds)
+    return report, movie_id if bool(movie.get("created")) else None
+
+
 def require_arr_check_passed(kind: str, report: dict[str, object]) -> None:
     """Fails the live suite when a Radarr/Sonarr proof only recorded diagnostics."""
 
@@ -1386,7 +1647,7 @@ def main() -> int:
     )
     document_terms = inputs.document_terms
     direct_search_terms = build_direct_search_terms(inputs)
-    radarr_movie_terms = inputs.radarr_movie_terms
+    radarr_movie_terms = require_radarr_import_movie_terms(inputs)
     sonarr_series_terms = build_sonarr_release_terms(inputs)
     qbit_search_terms = build_qbit_search_terms(inputs)
 
@@ -1434,6 +1695,7 @@ def main() -> int:
     app = None
     main_window = None
     cleanup_clients: list[tuple[str, str, int]] = []
+    cleanup_radarr_movies: list[tuple[str, str, int]] = []
     forced_trigger_added = False
     report: dict[str, object] = {
         "suite": "radarr-sonarr-emulebb-live",
@@ -1467,6 +1729,10 @@ def main() -> int:
             "radarr_release": TORZNAB_MOVIE_CATEGORY,
             "sonarr_release": TORZNAB_TV_CATEGORY,
         },
+        "radarr_import": {
+            "movie_title_present": bool(radarr_movie_terms[0]),
+            "category": RADARR_IMPORT_CATEGORY,
+        },
         "checks": {},
     }
     try:
@@ -1475,6 +1741,13 @@ def main() -> int:
         report["main_window_title"] = main_window.window_text()
         ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
         report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
+        radarr_category_path = artifacts_dir / RADARR_IMPORT_CATEGORY
+        report["checks"]["emule_radarr_category"] = ensure_emule_category(
+            emule_base_url,
+            args.emule_api_key,
+            RADARR_IMPORT_CATEGORY,
+            radarr_category_path,
+        )
         servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
         server_rows = rest_smoke.require_json_array(servers, 200)
         report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(
@@ -1548,6 +1821,8 @@ def main() -> int:
             direct_magnets["magnets"],
             rounds=args.qbit_live_wire_rounds,
             timeout_seconds=args.result_timeout_seconds,
+            initial_category=RADARR_IMPORT_CATEGORY,
+            updated_category=RADARR_IMPORT_CATEGORY,
         )
         forced_trigger_added = False
 
@@ -1597,10 +1872,25 @@ def main() -> int:
             indexer_name=indexer_name,
             release_terms=radarr_movie_terms,
             timeout_seconds=args.result_timeout_seconds,
+            category_override=RADARR_IMPORT_CATEGORY,
         )
         cleanup_clients.append((env_values["RADARR_URL"].rstrip("/"), env_values["RADARR_API_KEY"], radarr_client_id))
         report["checks"]["radarr"] = radarr_report
         require_arr_check_passed("radarr", radarr_report)
+        radarr_import_report, cleanup_movie_id = run_radarr_import_e2e(
+            radarr_url=env_values["RADARR_URL"].rstrip("/"),
+            radarr_api_key=env_values["RADARR_API_KEY"],
+            emule_base_url=emule_base_url,
+            emule_api_key=args.emule_api_key,
+            indexer_id=int(radarr_report["synced_indexer"]["id"]),
+            movie_title=radarr_movie_terms[0],
+            movie_root=artifacts_dir / "radarr-movie-root",
+            category_name=RADARR_IMPORT_CATEGORY,
+            timeout_seconds=args.result_timeout_seconds,
+        )
+        if cleanup_movie_id is not None:
+            cleanup_radarr_movies.append((env_values["RADARR_URL"].rstrip("/"), env_values["RADARR_API_KEY"], cleanup_movie_id))
+        report["checks"]["radarr_import_e2e"] = radarr_import_report
 
         sonarr_report, sonarr_client_id = run_arr_checks(
             kind="sonarr",
@@ -1651,6 +1941,16 @@ def main() -> int:
         return exit_code
     finally:
         cleanup_report: list[dict[str, object]] = []
+        movie_cleanup_report: list[dict[str, object]] = []
+        for arr_url, arr_api_key, movie_id in cleanup_radarr_movies:
+            try:
+                movie_cleanup_report.append(delete_radarr_movie(arr_url, arr_api_key, movie_id))
+            except Exception as exc:
+                movie_cleanup_report.append({"id": movie_id, "status": "cleanup_failed", "error": str(exc)})
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+        if movie_cleanup_report:
+            report["cleanup_radarr_movies"] = movie_cleanup_report
         for arr_url, arr_api_key, client_id in cleanup_clients:
             try:
                 cleanup_report.append(delete_download_client(arr_url, arr_api_key, client_id))

@@ -1156,23 +1156,23 @@ TEST_CASE("Web API validates qBittorrent login form credentials exactly")
 
 TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams")
 {
-	const std::string encoded(WebServerJsonSeams::UrlEncodeUtf8("La Dolce Vita + [test].mkv"));
-	CHECK_EQ(encoded, "La%20Dolce%20Vita%20%2B%20%5Btest%5D.mkv");
-	CHECK_EQ(WebServerJsonSeams::UrlDecodeUtf8(encoded), "La Dolce Vita + [test].mkv");
+	const std::string encoded(WebServerJsonSeams::UrlEncodeUtf8("operator-movie-title + [test].mkv"));
+	CHECK_EQ(encoded, "operator-movie-title%20%2B%20%5Btest%5D.mkv");
+	CHECK_EQ(WebServerJsonSeams::UrlDecodeUtf8(encoded), "operator-movie-title + [test].mkv");
 	std::string decoded;
 	std::string error;
 	CHECK(WebServerJsonSeams::TryUrlDecodeUtf8(encoded, decoded, error));
-	CHECK_EQ(decoded, "La Dolce Vita + [test].mkv");
-	CHECK(WebServerJsonSeams::TryUrlDecodeUtf8("La+Dolce", decoded, error));
-	CHECK_EQ(decoded, "La Dolce");
-	CHECK(WebServerJsonSeams::TryUrlDecodePathSegmentUtf8("La+Dolce", decoded, error));
-	CHECK_EQ(decoded, "La+Dolce");
+	CHECK_EQ(decoded, "operator-movie-title + [test].mkv");
+	CHECK(WebServerJsonSeams::TryUrlDecodeUtf8("operator+movie", decoded, error));
+	CHECK_EQ(decoded, "operator movie");
+	CHECK(WebServerJsonSeams::TryUrlDecodePathSegmentUtf8("operator+movie", decoded, error));
+	CHECK_EQ(decoded, "operator+movie");
 	CHECK_FALSE(WebServerJsonSeams::TryUrlDecodeUtf8("bad%2xescape", decoded, error));
 	CHECK_EQ(error, "malformed percent escape");
 
 	const std::string magnet(WebServerArrCompatSeams::BuildMagnetFromEd2k(
 		"0123456789abcdef0123456789abcdef",
-		"La Dolce Vita + [test].mkv",
+		"operator-movie-title + [test].mkv",
 		42));
 	CHECK(magnet.find("&dn=" + encoded + "&xl=42") != std::string::npos);
 }

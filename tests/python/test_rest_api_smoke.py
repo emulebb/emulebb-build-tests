@@ -753,6 +753,11 @@ def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_bounda
 
     for required_text in (
         "/indexer/emulebb/api",
+        "https://github.com/qbittorrent/qbittorrent/wiki/webui-api-%28qbittorrent-4.1%29",
+        "https://torznab.github.io/spec-1.3-draft/",
+        "save_path",
+        "content_path",
+        "setsharelimits",
         "`t`",
         "`apikey`",
         "`season`",

@@ -34,20 +34,35 @@ def test_radarr_sonarr_direct_search_terms_include_generic_fallback() -> None:
     inputs = types.SimpleNamespace(
         document_terms=("linux", "ubuntu"),
         generic_open_terms=("ubuntu", "emule", "fedora"),
-        radarr_movie_terms=("La Dolce Vita", "linux"),
-        sonarr_series_terms=("Star Trek", "linux"),
+        radarr_movie_terms=("operator movie term", "linux"),
+        sonarr_series_terms=("operator series term", "linux"),
     )
 
     assert module.build_direct_search_terms(inputs) == ("linux", "ubuntu", "emule", "fedora")
     assert module.build_qbit_search_terms(inputs) == (
-        "La Dolce Vita",
+        "operator movie term",
         "linux",
-        "Star Trek",
+        "operator series term",
         "ubuntu",
         "emule",
         "fedora",
     )
-    assert module.build_sonarr_release_terms(inputs) == ("Star Trek", "linux", "ubuntu", "emule", "fedora")
+    assert module.build_sonarr_release_terms(inputs) == ("operator series term", "linux", "ubuntu", "emule", "fedora")
+
+
+def test_radarr_import_movie_title_comes_from_live_wire_inputs() -> None:
+    module = load_radarr_sonarr_module()
+    inputs = types.SimpleNamespace(radarr_movie_terms=(" operator configured title ", "fallback"))
+
+    assert module.require_radarr_import_movie_terms(inputs) == ("operator configured title",)
+
+
+def test_radarr_sonarr_live_script_does_not_define_static_movie_title() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "radarr-sonarr-emulebb-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "RADARR_IMPORT_MOVIE_TITLE" not in script_text
+    assert "movie_title = " not in script_text
 
 
 def test_radarr_sonarr_direct_magnet_collection_uses_explicit_video_category(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -332,6 +347,67 @@ def test_arr_readiness_summaries_are_compact() -> None:
     assert "fields" not in client
 
 
+def test_ensure_emule_category_creates_dedicated_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[dict[str, object]] = []
+
+    def fake_http_request(_base_url, path, **kwargs):
+        calls.append({"path": path, **kwargs})
+        if path == "/api/v1/categories":
+            if kwargs.get("method") == "POST":
+                return {"status": 200, "json": {"id": 9, "name": module.RADARR_IMPORT_CATEGORY, "path": kwargs["json_body"]["path"]}}
+            return {"status": 200, "json": []}
+        raise AssertionError(f"Unexpected native request: {path}")
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_array", lambda result, status: result["json"] if result["status"] == status else [])
+    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, status: result["json"] if result["status"] == status else {})
+
+    summary = module.ensure_emule_category(
+        "http://127.0.0.1:4711",
+        "secret",
+        module.RADARR_IMPORT_CATEGORY,
+        tmp_path / module.RADARR_IMPORT_CATEGORY,
+    )
+
+    assert summary["created"] is True
+    assert summary["name"] == module.RADARR_IMPORT_CATEGORY
+    assert Path(str(summary["path"])).name == module.RADARR_IMPORT_CATEGORY
+    assert calls[1]["json_body"]["path"] == str((tmp_path / module.RADARR_IMPORT_CATEGORY).resolve())
+
+
+def test_ensure_radarr_movie_ensures_root_folder_before_create(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[str] = []
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        calls.append(path)
+        if path == "/api/v3/rootfolder":
+            if kwargs.get("method") == "POST":
+                return {"status": 201, "json": {"id": 5, "path": kwargs["json_body"]["path"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/movie":
+            if kwargs.get("method") == "POST":
+                payload = kwargs["json_body"]
+                assert payload["rootFolderPath"] == str(tmp_path.resolve())
+                return {"status": 201, "json": {"id": 17, "title": payload["title"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/qualityprofile":
+            return {"status": 200, "json": [{"id": 3}], "body_text": "[]"}
+        if path.startswith("/api/v3/movie/lookup?term="):
+            return {"status": 200, "json": [{"title": "operator configured title", "tmdbId": 123}], "body_text": "[]"}
+        raise AssertionError(f"Unexpected Radarr request: {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    summary = module.ensure_radarr_movie("http://radarr.test", "key", "operator configured title", tmp_path)
+
+    assert summary["id"] == 17
+    assert summary["created"] is True
+    assert summary["root_folder"] == {"id": 5, "path": str(tmp_path.resolve()), "created": True}
+    assert calls[:2] == ["/api/v3/rootfolder", "/api/v3/rootfolder"]
+
+
 def test_ensure_arr_indexer_enabled_reenables_disabled_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     requests: list[dict[str, object]] = []
@@ -521,17 +597,17 @@ def test_collect_direct_magnets_deduplicates_search_results(monkeypatch: pytest.
     module = load_radarr_sonarr_module()
     magnet_a = (
         "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000"
-        "&dn=La%20Dolce%20Vita.mkv&xl=42"
+        "&dn=operator-movie-one.mkv&xl=42"
     )
     magnet_b = (
         "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000"
-        "&dn=Roma%20citta%20aperta.mkv&xl=84"
+        "&dn=operator-movie-two.mkv&xl=84"
     )
     rss = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss><channel>
-<item><title>La Dolce Vita</title><link>{magnet_a.replace("&", "&amp;")}</link></item>
+<item><title>operator movie one</title><link>{magnet_a.replace("&", "&amp;")}</link></item>
 <item><title>Duplicate</title><link>{magnet_a.replace("&", "&amp;")}</link></item>
-<item><title>Roma citta aperta</title><link>{magnet_b.replace("&", "&amp;")}</link></item>
+<item><title>operator movie two</title><link>{magnet_b.replace("&", "&amp;")}</link></item>
 </channel></rss>"""
 
     monkeypatch.setattr(
@@ -543,7 +619,7 @@ def test_collect_direct_magnets_deduplicates_search_results(monkeypatch: pytest.
     result = module.collect_direct_magnets(
         "http://127.0.0.1:4711",
         "secret",
-        ("La Dolce Vita",),
+        ("operator movie one",),
         2,
         category_id=module.TORZNAB_MOVIE_CATEGORY,
     )
@@ -557,15 +633,15 @@ def test_collect_direct_magnets_deduplicates_search_results(monkeypatch: pytest.
 
 def test_qbit_live_wire_stress_runs_requested_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
-    calls: list[str] = []
+    calls: list[tuple[str, str, str]] = []
     magnets = [
-        {"query": "La Dolce Vita", "title": "A", "magnet": "magnet-a", "hash": "a"},
-        {"query": "Roma citta aperta", "title": "B", "magnet": "magnet-b", "hash": "b"},
-        {"query": "Ladri di biciclette", "title": "C", "magnet": "magnet-c", "hash": "c"},
+        {"query": "operator movie one", "title": "A", "magnet": "magnet-a", "hash": "a"},
+        {"query": "operator movie two", "title": "B", "magnet": "magnet-b", "hash": "b"},
+        {"query": "operator movie three", "title": "C", "magnet": "magnet-c", "hash": "c"},
     ]
 
     def fake_roundtrip(_base_url, _api_key, magnet, **kwargs):
-        calls.append(magnet)
+        calls.append((magnet, kwargs["initial_category"], kwargs["updated_category"]))
         kwargs["progress"]["delete_status"] = 200
         return kwargs["progress"]
 
@@ -577,9 +653,14 @@ def test_qbit_live_wire_stress_runs_requested_rounds(monkeypatch: pytest.MonkeyP
         magnets,
         rounds=2,
         timeout_seconds=30.0,
+        initial_category=module.RADARR_IMPORT_CATEGORY,
+        updated_category=module.RADARR_IMPORT_CATEGORY,
     )
 
-    assert calls == ["magnet-a", "magnet-b"]
+    assert calls == [
+        ("magnet-a", module.RADARR_IMPORT_CATEGORY, module.RADARR_IMPORT_CATEGORY),
+        ("magnet-b", module.RADARR_IMPORT_CATEGORY, module.RADARR_IMPORT_CATEGORY),
+    ]
     assert result["rounds"] == 2
     assert result["runs"][1]["expected_hash_present"] is True
     assert "expected_hash" not in result["runs"][1]
@@ -594,7 +675,7 @@ def test_qbit_live_wire_stress_requires_enough_unique_magnets() -> None:
         module.qbit_direct_live_wire_stress(
             "http://127.0.0.1:4711",
             "secret",
-            [{"query": "La Dolce Vita", "title": "A", "magnet": "magnet-a", "hash": "a"}],
+            [{"query": "operator movie one", "title": "A", "magnet": "magnet-a", "hash": "a"}],
             rounds=2,
             timeout_seconds=30.0,
         )
