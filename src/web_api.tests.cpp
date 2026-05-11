@@ -397,6 +397,7 @@ TEST_CASE("Web API normalizes search method names and validates native search ty
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Doc"), WebApiCommandSeams::ESearchFileType::Document);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("iso"), WebApiCommandSeams::ESearchFileType::Invalid);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Iso"), WebApiCommandSeams::ESearchFileType::CdImage);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName(std::string("Iso\0Video", 9)), WebApiCommandSeams::ESearchFileType::Invalid);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("CDIMAGE"), WebApiCommandSeams::ESearchFileType::Invalid);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Image"), WebApiCommandSeams::ESearchFileType::Image);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Pro"), WebApiCommandSeams::ESearchFileType::Program);
@@ -534,6 +535,10 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"type", "video"}}, request, error));
+	CHECK_EQ(error, "type is not supported");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"type", std::string("Iso\0Video", 9)}}, request, error));
 	CHECK_EQ(error, "type is not supported");
 
 	error.clear();

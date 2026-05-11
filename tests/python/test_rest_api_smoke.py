@@ -1253,8 +1253,11 @@ def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
 def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    tooling_docs = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
     source = (app_source / "WebServerArrCompat.cpp").read_text(encoding="utf-8")
     seams = (app_source / "WebServerArrCompatSeams.h").read_text(encoding="utf-8")
+    adapter_docs = (tooling_docs / "REST-API-ADAPTERS.md").read_text(encoding="utf-8")
+    parity_docs = (tooling_docs / "REST-API-PARITY-INVENTORY.md").read_text(encoding="utf-8")
 
     assert 'BuildInternalCommand("search/start"' in source
     assert 'BuildInternalCommand("search/results"' in source
@@ -1278,6 +1281,10 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "BuildNativeSearchMethodsCacheToken" in seams
     assert "IsConnectedNetworkSearchMethod" in seams
     assert 'return "Video";' in seams
+    assert "native `Video` searches" in adapter_docs
+    assert "native `video` searches" not in adapter_docs
+    assert "native `Video` searches" in parity_docs
+    assert "native `video` searches" not in parity_docs
 
 
 def test_native_search_resources_echo_selected_type() -> None:
