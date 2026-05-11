@@ -1995,6 +1995,15 @@ def main() -> int:
             "name": saved_indexer.get("name"),
             "tags": saved_indexer.get("tags"),
         }
+        report["checks"]["radarr_movie_term_diagnostics"] = prowlarr_live.diagnose_radarr_movie_terms(
+            base_url=emule_base_url,
+            emule_api_key=args.emule_api_key,
+            prowlarr_url=prowlarr_url,
+            prowlarr_api_key=prowlarr_api_key,
+            indexer_id=int(saved_indexer["id"]),
+            terms=radarr_movie_terms,
+        )
+        prowlarr_live.require_first_radarr_movie_term_results(report["checks"]["radarr_movie_term_diagnostics"])
         report["checks"]["prowlarr_radarr_video_search"] = wait_for_prowlarr_category_results(
             prowlarr_url,
             prowlarr_api_key,

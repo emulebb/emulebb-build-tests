@@ -483,15 +483,13 @@ def check_direct_caps(base_url: str, emule_api_key: str) -> dict[str, object]:
     return {"status": 200, "root": root.tag, "length": len(body_text)}
 
 
-def build_direct_torznab_search_path(emule_api_key: str, query: str, category_id: int) -> str:
+def build_direct_torznab_search_path(emule_api_key: str, query: str, category_id: int | None) -> str:
     """Builds one direct eMule BB Torznab search path."""
 
-    return (
-        f"/indexer/emulebb/api?t=search&cat={int(category_id)}&q="
-        + urllib.parse.quote(query)
-        + "&apikey="
-        + urllib.parse.quote(emule_api_key)
-    )
+    path = "/indexer/emulebb/api?t=search"
+    if category_id is not None:
+        path += f"&cat={int(category_id)}"
+    return path + "&q=" + urllib.parse.quote(query) + "&apikey=" + urllib.parse.quote(emule_api_key)
 
 
 def build_prowlarr_search_path(query: str, category_id: int, indexer_id: int) -> str:
@@ -798,6 +796,164 @@ def redact_term_result(result: dict[str, object], *, source: str, term_count: in
     if "first_title" in result:
         redacted["first_title_present"] = bool(result.get("first_title"))
     return redacted
+
+
+def lower_file_extension(name: str) -> str:
+    """Returns one lower-case file extension without exposing the file name."""
+
+    dot_index = name.rfind(".")
+    if dot_index < 0 or dot_index + 1 >= len(name):
+        return ""
+    extension = name[dot_index + 1 :].lower()
+    return extension if extension.isascii() and extension.isalnum() else ""
+
+
+def summarize_media_result_buckets(rows: list[dict[str, object]]) -> dict[str, object]:
+    """Summarizes result media shape without persisting titles or links."""
+
+    video_extensions = {"avi", "mkv", "mp4", "m4v", "mov", "mpg", "mpeg", "ts", "wmv", "webm", "iso"}
+    extension_counts: dict[str, int] = {}
+    video_extension_count = 0
+    extensionless_large_count = 0
+    non_video_count = 0
+    size_present_count = 0
+    for row in rows:
+        name = str(row.get("name") or row.get("title") or "")
+        extension = lower_file_extension(name)
+        if extension:
+            extension_counts[extension] = extension_counts.get(extension, 0) + 1
+        size_value = row.get("size") if row.get("size") is not None else row.get("sizeBytes")
+        try:
+            size_bytes = int(size_value or 0)
+        except (TypeError, ValueError):
+            size_bytes = 0
+        if size_bytes > 0:
+            size_present_count += 1
+        if extension in video_extensions:
+            video_extension_count += 1
+        elif not extension and size_bytes >= 100 * 1024 * 1024:
+            extensionless_large_count += 1
+        else:
+            non_video_count += 1
+    return {
+        "result_count": len(rows),
+        "title_present_count": sum(1 for row in rows if bool(row.get("name") or row.get("title"))),
+        "size_present_count": size_present_count,
+        "video_extension_count": video_extension_count,
+        "extensionless_large_count": extensionless_large_count,
+        "non_video_count": non_video_count,
+        "extension_counts": dict(sorted(extension_counts.items())),
+    }
+
+
+def parse_torznab_item_summaries(body_text: str) -> list[dict[str, object]]:
+    """Parses Torznab RSS items into redacted title and size summaries."""
+
+    if not body_text:
+        return []
+    root = ET.fromstring(body_text)
+    items: list[dict[str, object]] = []
+    for item in root.findall("./channel/item"):
+        title = item.findtext("title") or ""
+        size = 0
+        for child in list(item):
+            if child.tag.endswith("attr") and child.attrib.get("name") == "size":
+                try:
+                    size = int(child.attrib.get("value") or 0)
+                except ValueError:
+                    size = 0
+                break
+        items.append({"name": title, "size": size})
+    return items
+
+
+def direct_torznab_term_diagnostic(base_url: str, emule_api_key: str, query: str, category_id: int | None) -> dict[str, object]:
+    """Runs one direct Torznab diagnostic search for a live-wire term."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        build_direct_torznab_search_path(emule_api_key, query, category_id),
+        request_timeout_seconds=45.0,
+    )
+    status = int(result.get("status") or 0)
+    rows = parse_torznab_item_summaries(str(result.get("body_text") or "")) if status == 200 else []
+    summary = {
+        "status": status,
+        "category": category_id,
+        "query_present": bool(query),
+        "buckets": summarize_media_result_buckets(rows),
+    }
+    if status < 200 or status >= 300:
+        summary["body_preview"] = compact_body_preview(result)
+    return summary
+
+
+def prowlarr_term_diagnostic(prowlarr_url: str, api_key: str, query: str, indexer_id: int, category_id: int) -> dict[str, object]:
+    """Runs one Prowlarr diagnostic search for a live-wire term."""
+
+    result = prowlarr_request(
+        prowlarr_url,
+        api_key,
+        build_prowlarr_search_path(query, category_id, indexer_id),
+        timeout_seconds=90.0,
+    )
+    status = int(result.get("status") or 0)
+    payload = result.get("json")
+    rows = payload if isinstance(payload, list) else []
+    summary = {
+        "status": status,
+        "category": category_id,
+        "query_present": bool(query),
+        "buckets": summarize_media_result_buckets(rows),
+    }
+    if status < 200 or status >= 300:
+        summary["body_preview"] = compact_body_preview(result)
+    return summary
+
+
+def diagnose_radarr_movie_terms(
+    *,
+    base_url: str,
+    emule_api_key: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    indexer_id: int,
+    terms: tuple[str, ...],
+) -> dict[str, object]:
+    """Compares direct and Prowlarr movie search behavior for each Radarr term."""
+
+    diagnostics = []
+    for term_index, term in enumerate(terms):
+        diagnostics.append(
+            {
+                "term_index": term_index,
+                "term_present": bool(term),
+                "direct_any": direct_torznab_term_diagnostic(base_url, emule_api_key, term, None),
+                "direct_movie": direct_torznab_term_diagnostic(base_url, emule_api_key, term, TORZNAB_MOVIE_CATEGORY),
+                "prowlarr_movie": prowlarr_term_diagnostic(prowlarr_url, prowlarr_api_key, term, indexer_id, TORZNAB_MOVIE_CATEGORY),
+            }
+        )
+    first = diagnostics[0] if diagnostics else None
+    first_movie_count = 0
+    if isinstance(first, dict):
+        prowlarr_movie = first.get("prowlarr_movie")
+        if isinstance(prowlarr_movie, dict):
+            buckets = prowlarr_movie.get("buckets")
+            if isinstance(buckets, dict):
+                first_movie_count = int(buckets.get("result_count") or 0)
+    return {
+        "term_count": len(terms),
+        "first_term_movie_result_count": first_movie_count,
+        "first_term_movie_results_ok": first_movie_count > 0,
+        "terms": diagnostics,
+    }
+
+
+def require_first_radarr_movie_term_results(diagnostic: dict[str, object]) -> None:
+    """Fails fast when the primary Radarr movie term has no movie results."""
+
+    if not bool(diagnostic.get("first_term_movie_results_ok")):
+        raise RuntimeError("Primary Radarr movie live-wire term returned no Prowlarr movie-category rows.")
 
 
 def ed2k_hash_from_magnet(magnet: str) -> str:
@@ -1193,6 +1349,54 @@ def main() -> int:
         report["checks"]["direct_auth_rejection"] = check_direct_auth_rejection(emule_base_url)
         report["checks"]["direct_torznab_error_edges"] = check_direct_torznab_error_edges(emule_base_url, args.emule_api_key)
         report["checks"]["direct_caps"] = check_direct_caps(emule_base_url, args.emule_api_key)
+
+        status_payload = require_success(
+            prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/system/status"),
+            "Prowlarr system status",
+        )
+        report["checks"]["prowlarr_status"] = {
+            "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
+            "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
+        }
+        saved_indexer = upsert_indexer(
+            prowlarr_url,
+            prowlarr_api_key,
+            indexer_name=indexer_name,
+            torznab_base_url=torznab_base_url,
+            emule_api_key=args.emule_api_key,
+        )
+        report["checks"]["indexer_upsert"] = {
+            "id": int(saved_indexer["id"]),
+            "name": saved_indexer.get("name"),
+            "implementation": saved_indexer.get("implementation"),
+            "enable": bool(saved_indexer.get("enable")),
+            "forcedSave": bool(saved_indexer.get("_emulebbForcedSave")),
+        }
+        indexer_statuses = require_success(
+            prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/indexerstatus"),
+            "Prowlarr indexer status",
+        )
+        if isinstance(indexer_statuses, list):
+            report["checks"]["indexer_status"] = [
+                {
+                    "indexerId": status.get("indexerId"),
+                    "disabledTill": status.get("disabledTill"),
+                    "mostRecentFailure": status.get("mostRecentFailure"),
+                }
+                for status in indexer_statuses
+                if isinstance(status, dict) and status.get("indexerId") == int(saved_indexer["id"])
+            ]
+        report["checks"]["indexer_test"] = test_indexer(prowlarr_url, prowlarr_api_key, saved_indexer)
+        report["checks"]["radarr_movie_term_diagnostics"] = diagnose_radarr_movie_terms(
+            base_url=emule_base_url,
+            emule_api_key=args.emule_api_key,
+            prowlarr_url=prowlarr_url,
+            prowlarr_api_key=prowlarr_api_key,
+            indexer_id=int(saved_indexer["id"]),
+            terms=radarr_movie_terms,
+        )
+        require_first_radarr_movie_term_results(report["checks"]["radarr_movie_term_diagnostics"])
+
         report["checks"]["direct_rss_results"] = check_direct_rss_results(
             emule_base_url,
             args.emule_api_key,
@@ -1258,44 +1462,6 @@ def main() -> int:
             args.direct_search_stress_count,
         )
 
-        status_payload = require_success(
-            prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/system/status"),
-            "Prowlarr system status",
-        )
-        report["checks"]["prowlarr_status"] = {
-            "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
-            "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
-        }
-
-        saved_indexer = upsert_indexer(
-            prowlarr_url,
-            prowlarr_api_key,
-            indexer_name=indexer_name,
-            torznab_base_url=torznab_base_url,
-            emule_api_key=args.emule_api_key,
-        )
-        report["checks"]["indexer_upsert"] = {
-            "id": int(saved_indexer["id"]),
-            "name": saved_indexer.get("name"),
-            "implementation": saved_indexer.get("implementation"),
-            "enable": bool(saved_indexer.get("enable")),
-            "forcedSave": bool(saved_indexer.get("_emulebbForcedSave")),
-        }
-        indexer_statuses = require_success(
-            prowlarr_request(prowlarr_url, prowlarr_api_key, "/api/v1/indexerstatus"),
-            "Prowlarr indexer status",
-        )
-        if isinstance(indexer_statuses, list):
-            report["checks"]["indexer_status"] = [
-                {
-                    "indexerId": status.get("indexerId"),
-                    "disabledTill": status.get("disabledTill"),
-                    "mostRecentFailure": status.get("mostRecentFailure"),
-                }
-                for status in indexer_statuses
-                if isinstance(status, dict) and status.get("indexerId") == int(saved_indexer["id"])
-            ]
-        report["checks"]["indexer_test"] = test_indexer(prowlarr_url, prowlarr_api_key, saved_indexer)
         qbit_client = create_temp_qbit_download_client(
             prowlarr_url,
             prowlarr_api_key,

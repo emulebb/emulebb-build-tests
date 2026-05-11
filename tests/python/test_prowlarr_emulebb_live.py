@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from emule_test_harness import live_env
 
 
@@ -312,6 +314,50 @@ def test_select_grabbable_release_requires_matching_indexer_and_guid() -> None:
     )
 
     assert result["guid"] == "right"
+
+
+def test_radarr_movie_term_diagnostics_compare_direct_and_prowlarr_paths(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    rss_empty = """<?xml version="1.0" encoding="UTF-8"?><rss><channel /></rss>"""
+    rss_video = """<?xml version="1.0" encoding="UTF-8"?>
+<rss><channel><item><title>Fixture.mkv</title><torznab:attr xmlns:torznab="http://torznab.com/schemas/2015/feed" name="size" value="123456789" /></item></channel></rss>"""
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        if "q=second" in path and "cat=2000" in path:
+            return {"status": 200, "body_text": rss_video}
+        return {"status": 200, "body_text": rss_empty}
+
+    def fake_prowlarr_request(prowlarr_url: str, api_key: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        if "query=second" in path:
+            return {"status": 200, "json": [{"title": "Fixture.mkv", "size": 123456789}], "body_text": "[]"}
+        return {"status": 200, "json": [], "body_text": "[]"}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module, "prowlarr_request", fake_prowlarr_request)
+
+    diagnostic = module.diagnose_radarr_movie_terms(
+        base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="key",
+        indexer_id=40,
+        terms=("first", "second"),
+    )
+
+    assert diagnostic["term_count"] == 2
+    assert diagnostic["first_term_movie_results_ok"] is False
+    assert diagnostic["terms"][0]["prowlarr_movie"]["buckets"]["result_count"] == 0
+    assert diagnostic["terms"][1]["direct_movie"]["buckets"]["video_extension_count"] == 1
+    assert diagnostic["terms"][1]["prowlarr_movie"]["buckets"]["video_extension_count"] == 1
+
+
+def test_primary_radarr_movie_term_gate_requires_first_term_results() -> None:
+    module = load_prowlarr_module()
+
+    with pytest.raises(RuntimeError, match="Primary Radarr movie"):
+        module.require_first_radarr_movie_term_results({"first_term_movie_results_ok": False})
+
+    module.require_first_radarr_movie_term_results({"first_term_movie_results_ok": True})
 
 
 def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> None:
