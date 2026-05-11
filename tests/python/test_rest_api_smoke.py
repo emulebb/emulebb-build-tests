@@ -253,7 +253,6 @@ def test_rest_error_path_matrix_summarizes_release_statuses() -> None:
                 "bad_payload": {"status": 400, "content_type": "application/json"},
             },
             "conflict": {"response": {"status": 409, "content_type": "application/json"}},
-            "legacy": {"root": {"status": 200, "content_type": "text/html"}},
         }
     )
 
@@ -731,6 +730,7 @@ def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_bounda
     rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
     adapter_doc = (rest_docs_dir / "REST-API-ADAPTERS.md").read_text(encoding="utf-8")
     contract_doc = (rest_docs_dir / "REST-API-CONTRACT.md").read_text(encoding="utf-8")
+    parity_doc = (rest_docs_dir / "REST-API-PARITY-INVENTORY.md").read_text(encoding="utf-8")
     qbit_seams = (
         workspace_root
         / "workspaces"
@@ -768,6 +768,12 @@ def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_bounda
     assert "deprecated" in contract_doc_lower
     assert "legacy template-based webserver" in contract_doc_lower
     assert "compile preservation" in contract_doc_lower
+
+    parity_doc_lower = parity_doc.lower()
+    assert "migrated action inventory" in parity_doc_lower
+    assert "not a functional parity promise" in parity_doc_lower
+    assert "compile-only" in parity_doc_lower
+    assert "legacy action" not in parity_doc_lower
 
 
 def test_rest_error_response_requires_json_not_html() -> None:
@@ -819,52 +825,13 @@ def test_rest_error_response_requires_json_not_html() -> None:
 
     html_content_type = {**error_result, "content_type": "text/html; charset=utf-8"}
     assert module.is_native_rest_json_response(html_content_type) is False
-    assert module.response_matches_kind({**html_content_type, "body_text": "<html></html>"}, "html") is True
+    assert module.response_matches_kind({**html_content_type, "body_text": "<html></html>"}, "native-json") is False
     with pytest.raises(AssertionError):
         module.require_error_response(html_content_type, 404, "NOT_FOUND")
 
     html_body = {**error_result, "body_text": "<html><body>login</body></html>"}
     with pytest.raises(AssertionError):
         module.require_error_response(html_body, 404, "NOT_FOUND")
-
-
-def test_legacy_response_helper_rejects_native_json_envelopes() -> None:
-    module = load_rest_api_smoke_module()
-
-    module.require_legacy_non_json_response(
-        {
-            "status": 200,
-            "content_type": "text/html",
-            "body_text": "<html></html>",
-            "raw_json": None,
-            "json": None,
-        },
-        200,
-    )
-
-    with pytest.raises(AssertionError):
-        module.require_legacy_non_json_response(
-            {
-                "status": 404,
-                "content_type": "application/json; charset=utf-8",
-                "body_text": '{"error":{"code":"NOT_FOUND","message":"API route not found","details":{}}}',
-                "raw_json": {
-                    "error": {
-                        "code": "NOT_FOUND",
-                        "message": "API route not found",
-                        "details": {},
-                    },
-                },
-                "json": {
-                    "error": "NOT_FOUND",
-                    "message": "API route not found",
-                    "details": {},
-                },
-            },
-            404,
-        )
-
-
 def test_missing_transfer_bulk_result_rejects_success_rows() -> None:
     module = load_rest_api_smoke_module()
 
@@ -2018,7 +1985,7 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
                 "duration_ms": 9.0,
                 "error": "timeout",
                 "scenario": "read",
-                "content_type": "text/html",
+                "content_type": "application/xml",
                 "native_rest_json": False,
             },
         ],
@@ -2034,7 +2001,7 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["status_counts"] == {"200": 1, "404": 1, "exception": 1}
     assert summary["method_counts"] == {"UNKNOWN": 3}
     assert summary["scenario_counts"] == {"read": 2, "safe_mutation": 1}
-    assert summary["content_type_counts"] == {"application/json; charset=utf-8": 2, "text/html": 1}
+    assert summary["content_type_counts"] == {"application/json; charset=utf-8": 2, "application/xml": 1}
     assert summary["error_counts"] == {"timeout": 1}
     assert summary["timeout_count"] == 1
     assert summary["native_rest_non_json_count"] == 1

@@ -1809,28 +1809,15 @@ def response_matches_kind(result: dict[str, object], response_kind: str) -> bool
     """Returns whether one stress response matches its expected adapter shape."""
 
     content_type = str(result.get("content_type") or "").lower()
-    body_text = str(result.get("body_text") or "").lower()
     if response_kind == "native-json":
         return is_native_rest_json_response(result)
     if response_kind == "json":
         return "application/json" in content_type
     if response_kind == "xml":
         return "application/xml" in content_type
-    if response_kind == "html":
-        return "text/html" in content_type and "<html" in body_text
     if response_kind == "text":
         return "application/json" not in content_type and "text/html" not in content_type
     return True
-
-
-def require_legacy_non_json_response(result: dict[str, object], expected_status: int) -> None:
-    """Asserts one legacy WebServer response did not enter the native REST envelope path."""
-
-    content_type = str(result.get("content_type") or "").lower()
-    assert int(result["status"]) == expected_status, compact_http_result(result)
-    assert "application/json" not in content_type, compact_http_result(result)
-    assert result.get("raw_json") is None, compact_http_result(result)
-    assert result.get("json") is None, compact_http_result(result)
 
 
 def require_missing_transfer_bulk_result(result: dict[str, object]) -> dict[str, object]:
