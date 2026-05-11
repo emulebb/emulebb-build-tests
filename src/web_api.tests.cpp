@@ -362,39 +362,45 @@ TEST_CASE("Web API preference bounds match UI and INI persistence ranges")
 	CHECK_FALSE(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(WebApiSurfaceSeams::kMutablePreferenceMaxUploadSlots + 1));
 }
 
-TEST_CASE("Web API normalizes search method and type names case-insensitively")
+TEST_CASE("Web API normalizes search method names and validates native search type tokens")
 {
 	CHECK_EQ(std::string(WebServerJsonSeams::GetDefaultSearchMethodName()), "automatic");
 	CHECK(WebServerJsonSeams::IsSearchMethodName("AUTOMATIC"));
 	CHECK(WebServerJsonSeams::IsSearchMethodName("KaD"));
 	CHECK_FALSE(WebServerJsonSeams::IsSearchMethodName(""));
 	CHECK_FALSE(WebServerJsonSeams::IsSearchMethodName("contentdb"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("ISO"));
+	CHECK_FALSE(WebServerJsonSeams::IsSearchFileTypeName("ISO"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("Iso"));
 	CHECK(WebServerJsonSeams::IsSearchFileTypeName(""));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("any"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("archive"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("audio"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("cdimage"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("image"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("program"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("video"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("document"));
-	CHECK(WebServerJsonSeams::IsSearchFileTypeName("emulecollection"));
+	CHECK_FALSE(WebServerJsonSeams::IsSearchFileTypeName("any"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("Arc"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("Audio"));
+	CHECK_FALSE(WebServerJsonSeams::IsSearchFileTypeName("audio"));
+	CHECK_FALSE(WebServerJsonSeams::IsSearchFileTypeName("cdimage"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("Image"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("Pro"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("Video"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("Doc"));
+	CHECK(WebServerJsonSeams::IsSearchFileTypeName("EmuleCollection"));
 	CHECK_FALSE(WebServerJsonSeams::IsSearchFileTypeName("ebook"));
 
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName("AUTOMATIC"), WebApiCommandSeams::ESearchMethod::Automatic);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName("gLoBaL"), WebApiCommandSeams::ESearchMethod::Global);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(""), WebApiCommandSeams::ESearchMethod::Invalid);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(nullptr), WebApiCommandSeams::ESearchMethod::Invalid);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("any"), WebApiCommandSeams::ESearchFileType::Any);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("archive"), WebApiCommandSeams::ESearchFileType::Archive);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("audio"), WebApiCommandSeams::ESearchFileType::Audio);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("VIDEO"), WebApiCommandSeams::ESearchFileType::Video);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("document"), WebApiCommandSeams::ESearchFileType::Document);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("iso"), WebApiCommandSeams::ESearchFileType::CdImage);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("image"), WebApiCommandSeams::ESearchFileType::Image);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("program"), WebApiCommandSeams::ESearchFileType::Program);
-	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("emulecollection"), WebApiCommandSeams::ESearchFileType::EmuleCollection);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName(""), WebApiCommandSeams::ESearchFileType::Any);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("any"), WebApiCommandSeams::ESearchFileType::Invalid);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Arc"), WebApiCommandSeams::ESearchFileType::Archive);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Audio"), WebApiCommandSeams::ESearchFileType::Audio);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("VIDEO"), WebApiCommandSeams::ESearchFileType::Invalid);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Video"), WebApiCommandSeams::ESearchFileType::Video);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Doc"), WebApiCommandSeams::ESearchFileType::Document);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("iso"), WebApiCommandSeams::ESearchFileType::Invalid);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Iso"), WebApiCommandSeams::ESearchFileType::CdImage);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("CDIMAGE"), WebApiCommandSeams::ESearchFileType::Invalid);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Image"), WebApiCommandSeams::ESearchFileType::Image);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("Pro"), WebApiCommandSeams::ESearchFileType::Program);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("EmuleCollection"), WebApiCommandSeams::ESearchFileType::EmuleCollection);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName(nullptr), WebApiCommandSeams::ESearchFileType::Invalid);
 }
 
@@ -479,7 +485,7 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 	const WebApiCommandSeams::json params = {
 		{"query", "\t 1080p \n"},
 		{"method", "KaD"},
-		{"type", "ISO"},
+		{"type", "Iso"},
 		{"extension", ".mkv"},
 		{"minSizeBytes", 700u},
 		{"maxSizeBytes", 4096u}
@@ -497,7 +503,7 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 	CHECK_EQ(request.ullMaxSize, 4096u);
 
 	error.clear();
-	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "feature film"}, {"method", "global"}, {"type", "video"}}, request, error));
+	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "feature film"}, {"method", "global"}, {"type", "Video"}}, request, error));
 	CHECK_EQ(request.eMethod, WebApiCommandSeams::ESearchMethod::Global);
 	CHECK_EQ(request.eFileType, WebApiCommandSeams::ESearchFileType::Video);
 
@@ -520,6 +526,14 @@ TEST_CASE("Web API rejects invalid search start payloads before they touch the U
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"type", "ebook"}}, request, error));
+	CHECK_EQ(error, "type is not supported");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"type", "iso"}}, request, error));
+	CHECK_EQ(error, "type is not supported");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "1080p"}, {"type", "video"}}, request, error));
 	CHECK_EQ(error, "type is not supported");
 
 	error.clear();
@@ -919,7 +933,7 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Example+++Name&season=1&ep=2&cat=5000", request, error));
 	CHECK_EQ(request.strQuery, "Example Name");
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Tv);
-	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "video");
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "Video");
 	const std::vector<std::string> queries = WebServerArrCompatSeams::BuildNativeQueries(request);
 	REQUIRE_EQ(queries.size(), 3u);
 	CHECK_EQ(queries[0], "Example Name S01E02");
@@ -931,7 +945,7 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Album&cat=3000", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
-	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "audio");
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "Audio");
 
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Unknown&cat=9999", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
@@ -1016,10 +1030,10 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Audio, "release.mkv", 10));
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Book, "manual.pdf", 10));
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "manual.pdf", 10));
-	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Movie)), "video");
-	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Tv)), "video");
-	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"video"});
-	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"document"});
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Movie)), "Video");
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Tv)), "Video");
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"Video"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"Doc"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Tv), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"automatic"});
@@ -2247,12 +2261,12 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({"deleteFiles":false})", "shared/remove");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 
-	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
-	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"any","minAvailability":5})", "search/start");
+	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"Pro"})", "search/start");
+	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"","minAvailability":5})", "search/start");
 	CHECK_EQ(route.params["minAvailability"].get<int>(), 5);
-	assertRoute("POST", "/api/v1/searches", R"({"query":"feature film","method":"global","type":"video"})", "search/start");
+	assertRoute("POST", "/api/v1/searches", R"({"query":"feature film","method":"global","type":"Video"})", "search/start");
 	CHECK_EQ(route.params["method"].get<std::string>(), "global");
-	CHECK_EQ(route.params["type"].get<std::string>(), "video");
+	CHECK_EQ(route.params["type"].get<std::string>(), "Video");
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"contentdb"})", route, errorCode, errorMessage));
@@ -2261,6 +2275,11 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","type":"ebook"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "type is not supported");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","type":"iso"})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "type is not supported");
 	errorCode.clear();
@@ -2337,14 +2356,14 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"POST",
 		"/api/v1/searches",
-		R"({"query":"ubuntu","method":"automatic","type":"program"})",
+		R"({"query":"ubuntu","method":"automatic","type":"Pro"})",
 		route,
 		errorCode,
 		errorMessage));
 	CHECK_EQ(route.strCommand, "search/start");
 	CHECK_EQ(route.params["query"].get<std::string>(), "ubuntu");
 	CHECK_EQ(route.params["method"].get<std::string>(), "automatic");
-	CHECK_EQ(route.params["type"].get<std::string>(), "program");
+	CHECK_EQ(route.params["type"].get<std::string>(), "Pro");
 
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"DELETE",

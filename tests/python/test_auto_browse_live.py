@@ -62,7 +62,7 @@ def test_transfer_acquisition_plan_covers_bootstrap_and_public_queries() -> None
     assert module.DEFAULT_NATURAL_AUTO_BROWSE_TIMEOUT_SECONDS < module.DEFAULT_FALLBACK_AUTO_BROWSE_TIMEOUT_SECONDS
 
 
-def test_transfer_search_uses_file_oriented_iso_filter(monkeypatch) -> None:
+def test_transfer_search_uses_native_iso_type_with_iso_extension(monkeypatch) -> None:
     module = load_auto_browse_module()
     requests: list[dict[str, object]] = []
 
@@ -84,7 +84,7 @@ def test_transfer_search_uses_file_oriented_iso_filter(monkeypatch) -> None:
     assert requests[0]["json_body"] == {
         "query": "ubuntu",
         "method": "server",
-        "type": "iso",
+        "type": "Iso",
         "extension": "iso",
     }
 

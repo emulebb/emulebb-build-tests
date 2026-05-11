@@ -722,7 +722,7 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     {
         "method": "POST",
         "path": "/api/v1/searches",
-        "json_body": {"query": "", "method": "automatic", "type": "any"},
+        "json_body": {"query": "", "method": "automatic", "type": ""},
         "family": "searches",
         "scenario": "safe_mutation",
         "expected_statuses": (400,),
@@ -799,7 +799,7 @@ REST_STRESS_EDGE_OPERATIONS: tuple[dict[str, object], ...] = (
     {
         "method": "POST",
         "path": "/api/v1/searches",
-        "json_body": {"query": REST_STRESS_LONG_SEARCH_QUERY, "method": "automatic", "type": "any"},
+        "json_body": {"query": REST_STRESS_LONG_SEARCH_QUERY, "method": "automatic", "type": ""},
         "family": "searches",
         "scenario": "unicode_query_length_rejected",
         "expected_statuses": (400,),
@@ -2564,7 +2564,7 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name in {"kad_start", "kad_patch", "kad_stop", "kad_bootstrap", "startKad", "recheckKadFirewall", "stopKad", "bootstrapKad"}:
         return {}
     if route_name in {"searches_start", "createSearch"}:
-        return {"query": "", "method": "automatic", "type": "any"}
+        return {"query": "", "method": "automatic", "type": ""}
     if route_name in {"searches_download_result", "downloadSearchResult"}:
         return {"paused": True, "categoryId": 0}
     if route_name in {"searches_delete_all", "deleteSearches"}:
@@ -3704,7 +3704,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "/api/v1/searches",
         method="POST",
         api_key=api_key,
-        json_body={"query": "ubuntu", "method": "contentdb", "type": "any"},
+        json_body={"query": "ubuntu", "method": "contentdb", "type": ""},
     )
     search_bad_range = http_request(
         base_url,
@@ -4906,7 +4906,7 @@ def start_live_search(
             json_body={
                 "query": query,
                 "method": method_name,
-                "type": "any",
+                "type": "",
             },
         )
         attempt = {
@@ -5070,7 +5070,7 @@ def is_safe_live_download_result(result_row: object) -> bool:
     file_type = str(result_row.get("fileType") or "").strip().lower()
     size_bytes = result_row.get("sizeBytes", result_row.get("size"))
     sources = result_row.get("sources")
-    if not file_name or file_name.endswith(UNSAFE_LIVE_DOWNLOAD_SUFFIXES) or file_type in {"arc", "archive", "program"}:
+    if not file_name or file_name.endswith(UNSAFE_LIVE_DOWNLOAD_SUFFIXES) or file_type in {"arc", "archive", "program", "pro"}:
         return False
     if not isinstance(sources, int) or isinstance(sources, bool) or sources < MIN_SAFE_LIVE_DOWNLOAD_SOURCES:
         return False

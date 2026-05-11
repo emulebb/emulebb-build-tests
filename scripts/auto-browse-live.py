@@ -194,7 +194,7 @@ def is_safe_download_result(result_row: dict[str, Any]) -> bool:
 
     file_name = str(result_row.get("name") or "").strip().lower()
     file_type = str(result_row.get("fileType") or "").strip().lower()
-    return not file_name.endswith(".exe") and file_type != "program"
+    return not file_name.endswith(".exe") and file_type not in {"program", "pro"}
 
 
 def fetch_search_results(base_url: str, api_key: str, search_id: str) -> dict[str, Any]:
@@ -215,7 +215,7 @@ def start_transfer_search(base_url: str, api_key: str, method: str, query: str) 
         json_body={
             "query": query,
             "method": method,
-            "type": "iso",
+            "type": "Iso",
             "extension": "iso",
         },
     )
@@ -227,7 +227,7 @@ def start_transfer_search(base_url: str, api_key: str, method: str, query: str) 
                 "request": {
                     "query": query,
                     "method": method,
-                    "type": "iso",
+                    "type": "Iso",
                     "extension": "iso",
                 },
                 "response": response,

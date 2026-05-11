@@ -1277,7 +1277,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "BuildAvailableNativeSearchMethodNames" in seams
     assert "BuildNativeSearchMethodsCacheToken" in seams
     assert "IsConnectedNetworkSearchMethod" in seams
-    assert 'return "video";' in seams
+    assert 'return "Video";' in seams
 
 
 def test_native_search_resources_echo_selected_type() -> None:
@@ -1285,19 +1285,7 @@ def test_native_search_resources_echo_selected_type() -> None:
     source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
-    for native_token, public_token in (
-        ("ED2KFTSTR_ANY", "any"),
-        ("ED2KFTSTR_ARCHIVE", "archive"),
-        ("ED2KFTSTR_AUDIO", "audio"),
-        ("ED2KFTSTR_CDIMAGE", "cdimage"),
-        ("ED2KFTSTR_IMAGE", "image"),
-        ("ED2KFTSTR_PROGRAM", "program"),
-        ("ED2KFTSTR_VIDEO", "video"),
-        ("ED2KFTSTR_DOCUMENT", "document"),
-        ("ED2KFTSTR_EMULECOLLECTION", "emulecollection"),
-    ):
-        assert native_token in source
-        assert f'return "{public_token}";' in source
+    assert 'return StdUtf8FromCString(rFileType);' in source
 
     assert "GetSearchTypeName(pSearchParams->strFileType)" in source
     assert "GetSearchTypeName(rSearchParams.strFileType)" in source
@@ -1450,7 +1438,7 @@ def test_live_search_start_uses_broad_file_type_for_release_terms(monkeypatch) -
     assert requests[0]["json_body"] == {
         "query": "fedora",
         "method": "server",
-        "type": "any",
+        "type": "",
     }
 
 
@@ -1636,7 +1624,7 @@ def test_live_download_candidate_filter_rejects_unsafe_rows() -> None:
         "hash": "0123456789abcdef0123456789abcdef",
         "name": "linux.iso",
         "sizeBytes": 1024,
-        "fileType": "cdimage",
+        "fileType": "Iso",
         "sources": module.MIN_SAFE_LIVE_DOWNLOAD_SOURCES,
         "completeSources": 0,
     }
@@ -1645,7 +1633,7 @@ def test_live_download_candidate_filter_rejects_unsafe_rows() -> None:
     assert module.is_safe_live_download_result({**safe, "name": "setup.exe"}) is False
     assert module.is_safe_live_download_result({**safe, "name": "installer.msi"}) is False
     assert module.is_safe_live_download_result({**safe, "name": "bundle.rar", "fileType": "Arc"}) is False
-    assert module.is_safe_live_download_result({**safe, "fileType": "program"}) is False
+    assert module.is_safe_live_download_result({**safe, "fileType": "Pro"}) is False
     assert module.is_safe_live_download_result({**safe, "hash": "0123456789ABCDEF0123456789ABCDEF"}) is False
     assert module.is_safe_live_download_result({**safe, "sizeBytes": 0}) is False
     assert module.is_safe_live_download_result({**safe, "sizeBytes": module.MAX_SAFE_LIVE_DOWNLOAD_BYTES + 1}) is False
@@ -1694,16 +1682,16 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                 "id": "42",
                 "query": "linux",
                 "method": "kad",
-                "type": "cdimage",
+                "type": "Iso",
                 "status": "running",
                 "results": [
                     {
                         "method": "kad",
-                        "type": "cdimage",
+                        "type": "Iso",
                         "hash": "0123456789abcdef0123456789abcdef",
                         "name": "linux.iso",
                         "sizeBytes": 1024,
-                        "fileType": "cdimage",
+                        "fileType": "Iso",
                         "sources": 2,
                         "completeSources": 0,
                     }
@@ -1714,16 +1702,16 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                     "id": "42",
                     "query": "linux",
                     "method": "kad",
-                    "type": "cdimage",
+                    "type": "Iso",
                     "status": "running",
                     "results": [
                         {
                             "method": "kad",
-                            "type": "cdimage",
+                            "type": "Iso",
                             "hash": "0123456789abcdef0123456789abcdef",
                             "name": "linux.iso",
                             "sizeBytes": 1024,
-                            "fileType": "cdimage",
+                            "fileType": "Iso",
                             "sources": 2,
                             "completeSources": 0,
                         }
@@ -1782,7 +1770,7 @@ def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch
                 "id": "42",
                 "query": "linux",
                 "method": "kad",
-                "type": "any",
+                "type": "",
                 "status": "running",
                 "results": [],
             },
@@ -1791,7 +1779,7 @@ def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch
                     "id": "42",
                     "query": "linux",
                     "method": "kad",
-                    "type": "any",
+                    "type": "",
                     "status": "running",
                     "results": [],
                 },
