@@ -725,13 +725,13 @@ def test_openapi_core_public_dtos_reject_undocumented_fields() -> None:
     assert schemas["SnapshotEnvelope"]["allOf"][1]["properties"]["data"]["additionalProperties"] is False
 
 
-def test_openapi_search_type_enums_match_native_tokens() -> None:
+def test_openapi_search_type_enums_match_rest_tokens() -> None:
     module = load_rest_api_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
-    native_tokens = ["", "Arc", "Audio", "Iso", "Image", "Pro", "Video", "Doc", "EmuleCollection"]
+    rest_tokens = ["", "arc", "audio", "iso", "image", "pro", "video", "doc", "emulecollection"]
 
     for schema_name in ("SearchSession", "Search", "SearchCreateRequest", "SearchResult"):
-        assert schemas[schema_name]["properties"]["type"]["enum"] == native_tokens
+        assert schemas[schema_name]["properties"]["type"]["enum"] == rest_tokens
 
     assert "enum" not in schemas["SearchResult"]["properties"]["fileType"]
     assert "not remapped" in schemas["SearchResult"]["properties"]["fileType"]["description"]
@@ -749,9 +749,9 @@ def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
     assert "No aliases, alternate casing, or request-time type remapping are accepted." in normalized_docs
     assert "`SearchResult.fileType` remains row metadata" in normalized_docs
     assert "adapter-side result filter" in normalized_docs
-    assert "family-to-native-type mapping still resolves to native REST tokens" in normalized_docs
+    assert "family-to-search-type mapping still resolves to REST tokens" in normalized_docs
 
-    for forbidden in ("`video`", "`cdimage`", "`iso`", "normalized to", "normalizes to"):
+    for forbidden in ("`Video`", "`cdimage`", "normalized to", "normalizes to"):
         assert forbidden not in docs
 
 
@@ -1299,7 +1299,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "BuildCacheKey(request, nativeSearchMethods)" in source
     assert "RunNativeSearches(request, nativeSearchMethods)" in source
     assert "BuildNativeSearchMethodNames(eFamily)" in source
-    assert "BuildNativeSearchTypeNames(rRequest.eFamily)" in source
+    assert "BuildRestSearchTypeNames(rRequest.eFamily)" in source
     assert "WebServerJsonSeams::TryValidateRequestPathEscapes" in seams
     assert "WebServerJsonSeams::TryParseQueryString" in seams
     assert "WebServerJsonSeams::TryNormalizeSearchText" in seams
@@ -1310,12 +1310,10 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "BuildAvailableNativeSearchMethodNames" in seams
     assert "BuildNativeSearchMethodsCacheToken" in seams
     assert "IsConnectedNetworkSearchMethod" in seams
-    assert 'return "Video";' in seams
-    assert "native `Video` searches" in adapter_docs
-    assert "native `video` searches" not in adapter_docs
+    assert 'return "video";' in seams
+    assert "REST `video` searches" in adapter_docs
     assert "adapter-side result filter" in adapter_docs
-    assert "native `Video` searches" in parity_docs
-    assert "native `video` searches" not in parity_docs
+    assert "REST `video` searches" in parity_docs
 
 
 def test_native_search_resources_echo_selected_type() -> None:
@@ -1323,8 +1321,13 @@ def test_native_search_resources_echo_selected_type() -> None:
     source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
-    assert 'return StdUtf8FromCString(rFileType);' in source
-    assert "pSearchParams->strFileType = CStringFromStdUtf8(request.strFileType);" in source
+    rest_type_formatter = "WebServerJsonSeams::GetRestSearchFileTypeName(StdUtf8FromCString(rFileType))"
+    native_type_assignment = (
+        "pSearchParams->strFileType = CStringFromStdUtf8("
+        "WebServerJsonSeams::GetNativeSearchFileTypeName(request.strFileType));"
+    )
+    assert rest_type_formatter in source
+    assert native_type_assignment in source
 
     assert "GetSearchTypeName(pSearchParams->strFileType)" in source
     assert "GetSearchTypeName(rSearchParams.strFileType)" in source
@@ -1721,12 +1724,12 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                 "id": "42",
                 "query": "linux",
                 "method": "kad",
-                "type": "Iso",
+                "type": "iso",
                 "status": "running",
                 "results": [
                     {
                         "method": "kad",
-                        "type": "Iso",
+                        "type": "iso",
                         "hash": "0123456789abcdef0123456789abcdef",
                         "name": "linux.iso",
                         "sizeBytes": 1024,
@@ -1741,12 +1744,12 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                     "id": "42",
                     "query": "linux",
                     "method": "kad",
-                    "type": "Iso",
+                    "type": "iso",
                     "status": "running",
                     "results": [
                         {
                             "method": "kad",
-                            "type": "Iso",
+                            "type": "iso",
                             "hash": "0123456789abcdef0123456789abcdef",
                             "name": "linux.iso",
                             "sizeBytes": 1024,

@@ -84,7 +84,7 @@ def test_transfer_search_uses_native_iso_type_with_iso_extension(monkeypatch) ->
     assert requests[0]["json_body"] == {
         "query": "ubuntu",
         "method": "server",
-        "type": "Iso",
+        "type": "iso",
         "extension": "iso",
     }
 

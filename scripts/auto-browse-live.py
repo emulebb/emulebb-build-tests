@@ -215,7 +215,7 @@ def start_transfer_search(base_url: str, api_key: str, method: str, query: str) 
         json_body={
             "query": query,
             "method": method,
-            "type": "Iso",
+            "type": "iso",
             "extension": "iso",
         },
     )
@@ -227,7 +227,7 @@ def start_transfer_search(base_url: str, api_key: str, method: str, query: str) 
                 "request": {
                     "query": query,
                     "method": method,
-                    "type": "Iso",
+                    "type": "iso",
                     "extension": "iso",
                 },
                 "response": response,
