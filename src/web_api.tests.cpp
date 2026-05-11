@@ -297,6 +297,26 @@ TEST_CASE("Web API exposes stable upload state names for the REST surface")
 	CHECK(std::string(WebApiSurfaceSeams::GetUploadStateName(255)) == "idle");
 }
 
+TEST_CASE("Web API exposes stable download source state names for the REST surface")
+{
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(0)) == "downloading");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(1)) == "onqueue");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(2)) == "connected");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(3)) == "connecting");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(4)) == "waitcallback");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(5)) == "waitcallbackkad");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(6)) == "reqhashset");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(7)) == "noneededparts");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(8)) == "toomanyconns");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(9)) == "toomanyconnskad");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(10)) == "lowtolowip");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(11)) == "banned");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(12)) == "error");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(13)) == "none");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(14)) == "remotequeuefull");
+	CHECK(std::string(WebApiSurfaceSeams::GetDownloadStateName(255)) == "unknown");
+}
+
 TEST_CASE("Web API shares bounded transfer progress ratios across native and Arr surfaces")
 {
 	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(0, 0), 0.0);
@@ -320,6 +340,15 @@ TEST_CASE("Web API parses the final transfer priority vocabulary")
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("very_high"), WebApiSurfaceSeams::ETransferPriority::Invalid);
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("invalid"), WebApiSurfaceSeams::ETransferPriority::Invalid);
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName(nullptr), WebApiSurfaceSeams::ETransferPriority::Invalid);
+	CHECK(WebApiSurfaceSeams::IsTransferPriorityName("auto"));
+	CHECK(WebApiSurfaceSeams::IsTransferPriorityName("veryhigh"));
+	CHECK_FALSE(WebApiSurfaceSeams::IsTransferPriorityName("release"));
+	CHECK(WebApiSurfaceSeams::IsCategoryPriorityName("verylow"));
+	CHECK_FALSE(WebApiSurfaceSeams::IsCategoryPriorityName("auto"));
+	CHECK(WebApiSurfaceSeams::IsSharedUploadPriorityName("release"));
+	CHECK_FALSE(WebApiSurfaceSeams::IsSharedUploadPriorityName("Release"));
+	CHECK(WebApiSurfaceSeams::IsServerPriorityName("normal"));
+	CHECK_FALSE(WebApiSurfaceSeams::IsServerPriorityName("veryhigh"));
 }
 
 TEST_CASE("Web API parses the expanded mutable preference vocabulary")
@@ -417,6 +446,7 @@ TEST_CASE("Web API validates lowercase compact search method and type tokens")
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName(nullptr), WebApiCommandSeams::ESearchFileType::Invalid);
 	CHECK_EQ(std::string(WebServerJsonSeams::GetNativeSearchFileTypeName("video")), "Video");
 	CHECK_EQ(WebServerJsonSeams::GetRestSearchFileTypeName("Video"), "video");
+	CHECK_EQ(WebServerJsonSeams::GetRestSearchFileTypeName("ebook"), "");
 }
 
 TEST_CASE("Web API command helpers share REST parser primitives")
@@ -1296,9 +1326,9 @@ TEST_CASE("Web API shares strict percent decoding across native and Arr adapters
 	CHECK(fields.empty());
 
 	error.clear();
-	CHECK(WebServerJsonSeams::TryParseQueryString("/api/v1/transfers?state=downloading+stalled", fields, error));
-	REQUIRE(fields.find("state") != fields.end());
-	CHECK_EQ(fields["state"], "downloading stalled");
+	CHECK(WebServerJsonSeams::TryParseQueryString("/api/v1/transfers?q=downloading+stalled", fields, error));
+	REQUIRE(fields.find("q") != fields.end());
+	CHECK_EQ(fields["q"], "downloading stalled");
 
 	error.clear();
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabQueryParameters("/indexer/emulebb/api?t=search&q=%2x", fields, error));
@@ -1628,6 +1658,18 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
 		"PATCH",
 		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
+		R"({"priority":"release"})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "priority must be one of auto, verylow, low, normal, high, veryhigh");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/transfers/0123456789abcdef0123456789abcdef",
 		R"({"name":"   "})",
 		route,
 		errorCode,
@@ -1670,6 +1712,18 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 		errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "priority must be a string");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
+		R"({"priority":"very_high"})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "priority must be one of auto, verylow, low, normal, high, veryhigh, release");
 
 	errorCode.clear();
 	errorMessage.clear();
@@ -2232,6 +2286,11 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers", R"({"address":"1.2.3.4","port":4661,"connect":"yes"})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "connect must be a boolean");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers", R"({"address":"1.2.3.4","port":4661,"priority":"veryhigh"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "priority must be one of low, normal, high");
 	assertRoute("POST", "/api/v1/servers/operations/import-met-url", R"({"url":"https://example.invalid/server.met"})", "servers/import_met_url");
 	CHECK_EQ(route.params["url"].get<std::string>(), "https://example.invalid/server.met");
 	errorCode.clear();
@@ -2257,6 +2316,11 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/servers/1.2.3.4:4661", R"({"static":"yes"})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "static must be a boolean");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/servers/1.2.3.4:4661", R"({"priority":"veryhigh"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "priority must be one of low, normal, high");
 	assertRoute("POST", "/api/v1/servers/1.2.3.4:4661/operations/connect", R"({})", "servers/connect");
 	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);

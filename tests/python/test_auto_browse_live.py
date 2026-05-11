@@ -337,7 +337,7 @@ def test_source_browse_candidate_wait_prefers_handshaken_sources(monkeypatch) ->
                                     "userHash": "a" * 32,
                                     "ip": "1.2.3.4",
                                     "port": 4662,
-                                    "downloadState": "Connecting",
+                                    "downloadState": "connecting",
                                     "viewSharedFiles": True,
                                 }
                             ],
@@ -352,7 +352,7 @@ def test_source_browse_candidate_wait_prefers_handshaken_sources(monkeypatch) ->
                             "userHash": "a" * 32,
                         "ip": "1.2.3.4",
                         "port": 4662,
-                        "downloadState": "Connecting",
+                        "downloadState": "connecting",
                         "viewSharedFiles": True,
                     }
                 ],
@@ -369,7 +369,7 @@ def test_source_browse_candidate_wait_prefers_handshaken_sources(monkeypatch) ->
                                     "ip": "5.6.7.8",
                                     "port": 4662,
                                     "clientSoftware": "eMule v0.50a",
-                                    "downloadState": "OnQueue",
+                                    "downloadState": "onqueue",
                                     "viewSharedFiles": True,
                                 }
                             ],
@@ -385,7 +385,7 @@ def test_source_browse_candidate_wait_prefers_handshaken_sources(monkeypatch) ->
                         "ip": "5.6.7.8",
                         "port": 4662,
                         "clientSoftware": "eMule v0.50a",
-                        "downloadState": "OnQueue",
+                        "downloadState": "onqueue",
                         "viewSharedFiles": True,
                     }
                 ],

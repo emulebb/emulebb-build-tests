@@ -47,12 +47,12 @@ DEFAULT_SOURCE_BROWSE_TRANSFER_TIMEOUT_SECONDS = 120.0
 DEFAULT_SOURCE_BROWSE_ATTEMPT_TIMEOUT_SECONDS = 20.0
 DEFAULT_SOURCE_BROWSE_READY_SOURCE_TIMEOUT_SECONDS = 60.0
 SOURCE_BROWSE_READY_STATES = {
-    "Connected",
-    "Downloading",
-    "NoNeededParts",
-    "OnQueue",
-    "RemoteQueueFull",
-    "ReqHashSet",
+    "connected",
+    "downloading",
+    "noneededparts",
+    "onqueue",
+    "remotequeuefull",
+    "reqhashset",
 }
 
 

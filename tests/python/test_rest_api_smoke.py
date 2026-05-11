@@ -737,6 +737,44 @@ def test_openapi_search_type_enums_match_rest_tokens() -> None:
     assert "not remapped" in schemas["SearchResult"]["properties"]["fileType"]["description"]
 
 
+def test_openapi_rest_consistency_cleanup_contracts() -> None:
+    module = load_rest_api_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    assert schemas["Category"]["properties"]["priority"] == {"type": "integer", "minimum": 0}
+    assert schemas["CategoryCreateRequest"]["properties"]["priority"] == {
+        "$ref": "#/components/schemas/CategoryPriorityInput"
+    }
+    assert schemas["CategoryPatch"]["properties"]["priority"] == {
+        "$ref": "#/components/schemas/CategoryPriorityInput"
+    }
+    assert schemas["CategoryPriorityInput"]["oneOf"] == [
+        {"type": "string", "enum": ["verylow", "low", "normal", "high", "veryhigh"]},
+        {"type": "integer", "minimum": 0},
+    ]
+
+    source_properties = schemas["TransferSource"]["properties"]
+    assert "state" not in source_properties
+    assert source_properties["downloadState"]["enum"] == [
+        "downloading",
+        "onqueue",
+        "connected",
+        "connecting",
+        "waitcallback",
+        "waitcallbackkad",
+        "reqhashset",
+        "noneededparts",
+        "toomanyconns",
+        "toomanyconnskad",
+        "lowtolowip",
+        "banned",
+        "error",
+        "none",
+        "remotequeuefull",
+        "unknown",
+    ]
+
+
 def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
