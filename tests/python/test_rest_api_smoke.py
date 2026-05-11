@@ -749,6 +749,8 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert schemas["CategoryPatch"]["properties"]["priority"] == {
         "$ref": "#/components/schemas/CategoryPriorityInput"
     }
+    assert schemas["CategoryCreateRequest"]["properties"]["path"]["minLength"] == 1
+    assert schemas["CategoryPatch"]["properties"]["path"]["minLength"] == 1
     assert schemas["CategoryPriorityInput"]["oneOf"] == [
         {"type": "string", "enum": ["verylow", "low", "normal", "high", "veryhigh"]},
         {"type": "integer", "minimum": 0},
@@ -771,6 +773,23 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
         "comment": ["rating"],
         "rating": ["comment"],
     }
+    assert schemas["SharedFileCreateRequest"]["properties"]["path"]["minLength"] == 1
+    assert schemas["SharedDirectoryReplaceRequest"]["properties"]["roots"]["items"] == {
+        "$ref": "#/components/schemas/SharedDirectoryRootInput"
+    }
+    assert schemas["SharedDirectoryRootInput"]["oneOf"] == [
+        {"type": "string", "minLength": 1},
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "recursive": {"type": "boolean"},
+            },
+        },
+    ]
+    assert schemas["PreferencesPatch"]["minProperties"] == 1
     assert schemas["ServerPatch"]["minProperties"] == 1
     assert schemas["ServerCreateRequest"]["properties"]["address"]["minLength"] == 1
     assert schemas["ServerCreateRequest"]["properties"]["port"]["minimum"] == 1

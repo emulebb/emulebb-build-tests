@@ -2026,6 +2026,28 @@ TEST_CASE("Web API requires explicit confirmation for broad native operations")
 	CHECK(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/shared-directories", R"({"confirmReplaceRoots":true,"roots":[]})", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "shared_directories/set");
 	CHECK(route.params["confirmReplaceRoots"].get<bool>());
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/shared-directories", R"({"confirmReplaceRoots":true,"roots":["  incoming  ",{"path":" recursive incoming ","recursive":true}]})", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "shared_directories/set");
+	REQUIRE(route.params["roots"].is_array());
+	REQUIRE_EQ(route.params["roots"].size(), 2u);
+	CHECK_EQ(route.params["roots"][0].get<std::string>(), "incoming");
+	CHECK_EQ(route.params["roots"][1]["path"].get<std::string>(), "recursive incoming");
+	CHECK(route.params["roots"][1]["recursive"].get<bool>());
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/shared-directories", R"({"confirmReplaceRoots":true,"roots":["   "]})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "path must not be empty");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/shared-directories", R"({"confirmReplaceRoots":true,"roots":[{"path":"incoming","exists":true}]})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "unknown shared-directory root field: exists");
 }
 
 TEST_CASE("Web API requires explicit confirmation for destructive native routes")
