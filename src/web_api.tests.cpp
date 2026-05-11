@@ -921,8 +921,13 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Tv);
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(request.eFamily)), "video");
 	const std::vector<std::string> queries = WebServerArrCompatSeams::BuildNativeQueries(request);
-	CHECK(std::find(queries.begin(), queries.end(), "Example Name S01E02") != queries.end());
-	CHECK(std::find(queries.begin(), queries.end(), "Example Name 1x02") != queries.end());
+	REQUIRE_EQ(queries.size(), 3u);
+	CHECK_EQ(queries[0], "Example Name S01E02");
+	CHECK_EQ(queries[1], "Example Name 1x02");
+	CHECK_EQ(queries[2], "Example Name");
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Feature&year=2026&cat=2000", request, error));
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeQueries(request), std::vector<std::string>{"Feature 2026", "Feature"});
 
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Album&cat=3000", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
@@ -1018,9 +1023,20 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Tv), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"automatic"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildAvailableNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie, true, true), std::vector<std::string>{"global", "kad"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildAvailableNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie, true, false), std::vector<std::string>{"global"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildAvailableNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie, false, true), std::vector<std::string>{"kad"});
+	CHECK(WebServerArrCompatSeams::BuildAvailableNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie, false, false).empty());
+	CHECK_EQ(WebServerArrCompatSeams::BuildAvailableNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Book, false, false), std::vector<std::string>{"automatic"});
 	CHECK(WebServerArrCompatSeams::IsConnectedNetworkSearchMethod("GLOBAL"));
 	CHECK(WebServerArrCompatSeams::IsConnectedNetworkSearchMethod("kad"));
 	CHECK_FALSE(WebServerArrCompatSeams::IsConnectedNetworkSearchMethod("automatic"));
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodsCacheToken(std::vector<std::string>{"global", "kad"}), "global,kad");
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodsCacheToken(std::vector<std::string>()), "none");
+	WebServerArrCompatSeams::STorznabRequest cacheRequest;
+	std::string cacheError;
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Feature&cat=2000", cacheRequest, cacheError));
+	CHECK(WebServerArrCompatSeams::BuildCacheKey(cacheRequest, std::vector<std::string>{"global"}) != WebServerArrCompatSeams::BuildCacheKey(cacheRequest, std::vector<std::string>{"kad"}));
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs);
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Book), WebServerArrCompatSeams::kTorznabDefaultSearchTimeoutMs);
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchMethodProbeTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie, 2), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs / 2);

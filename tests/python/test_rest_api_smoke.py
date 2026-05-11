@@ -1262,8 +1262,10 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert '"method", rMethod' in source
     assert '"type", rSearchType' in source
     assert 'BuildInternalCommand("status/get"' in source
-    assert "IsNativeSearchMethodAvailable(rMethod)" in source
-    assert "BuildNativeSearchMethodNames(rRequest.eFamily)" in source
+    assert "BuildAvailableNativeSearchMethods(request.eFamily)" in source
+    assert "BuildCacheKey(request, nativeSearchMethods)" in source
+    assert "RunNativeSearches(request, nativeSearchMethods)" in source
+    assert "BuildNativeSearchMethodNames(eFamily)" in source
     assert "BuildNativeSearchTypeNames(rRequest.eFamily)" in source
     assert "WebServerJsonSeams::TryValidateRequestPathEscapes" in seams
     assert "WebServerJsonSeams::TryParseQueryString" in seams
@@ -1272,6 +1274,8 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "WebServerJsonSeams::TryValidatePublicFileNameText" in seams
     assert "WebServerJsonSeams::NormalizeAsciiWhitespace" in seams
     assert seams.index('methods.push_back("global")') < seams.index('methods.push_back("kad")')
+    assert "BuildAvailableNativeSearchMethodNames" in seams
+    assert "BuildNativeSearchMethodsCacheToken" in seams
     assert "IsConnectedNetworkSearchMethod" in seams
     assert 'return "video";' in seams
 
