@@ -26,6 +26,7 @@ TORZNAB_TV_CATEGORY = 5000
 TORZNAB_DOCUMENT_CATEGORY = 7000
 TORZNAB_LIVE_CATEGORY = TORZNAB_DOCUMENT_CATEGORY
 PROWLARR_GRAB_CATEGORY = "prowlarr_grabs_cat"
+TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS = 70.0
 
 TORZNAB_DIRECT_ERROR_SCENARIOS: tuple[dict[str, object], ...] = (
     {
@@ -514,7 +515,7 @@ def check_direct_rss_results(
     attempts: list[dict[str, object]] = []
     for query_index, query in enumerate(queries):
         path = build_direct_torznab_search_path(emule_api_key, query, category_id)
-        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS)
         status = int(result.get("status") or 0)
         body_text = str(result.get("body_text") or "")
         count = count_torznab_items(body_text) if status == 200 and body_text else 0
@@ -603,7 +604,7 @@ def wait_for_direct_torznab_results(
         for query_index, query in enumerate(queries):
             path = build_direct_torznab_search_path(emule_api_key, query, category_id)
             try:
-                result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+                result = rest_smoke.http_request(base_url, path, request_timeout_seconds=TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS)
             except (ConnectionResetError, TimeoutError, OSError) as exc:
                 attempts.append({"query_index": query_index, "query_present": bool(query), "status": type(exc).__name__, "count": 0})
                 continue
@@ -662,7 +663,7 @@ def stress_direct_torznab_search_terms(
         query = queries[query_index]
         path = build_direct_torznab_search_path(emule_api_key, query, category_id)
         started = time.monotonic()
-        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=45.0)
+        result = rest_smoke.http_request(base_url, path, request_timeout_seconds=TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         status = int(result.get("status") or 0)
         body_text = str(result.get("body_text") or "")
@@ -873,7 +874,7 @@ def direct_torznab_term_diagnostic(base_url: str, emule_api_key: str, query: str
     result = rest_smoke.http_request(
         base_url,
         build_direct_torznab_search_path(emule_api_key, query, category_id),
-        request_timeout_seconds=45.0,
+        request_timeout_seconds=TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS,
     )
     status = int(result.get("status") or 0)
     rows = parse_torznab_item_summaries(str(result.get("body_text") or "")) if status == 200 else []
@@ -909,6 +910,44 @@ def prowlarr_term_diagnostic(prowlarr_url: str, api_key: str, query: str, indexe
     if status < 200 or status >= 300:
         summary["body_preview"] = compact_body_preview(result)
     return summary
+
+
+def diagnostic_result_count(summary: dict[str, object]) -> int:
+    """Returns the result count from one redacted diagnostic summary."""
+
+    buckets = summary.get("buckets")
+    if not isinstance(buckets, dict):
+        return 0
+    try:
+        return int(buckets.get("result_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def compact_search_network_snapshot(base_url: str, api_key: str) -> dict[str, object]:
+    """Collects a compact network status snapshot for live search readiness reports."""
+
+    snapshot: dict[str, object] = {"observed_at": round(time.time(), 3)}
+    try:
+        server_result = rest_smoke.http_request(base_url, "/api/v1/status", api_key=api_key, request_timeout_seconds=10.0)
+        if int(server_result.get("status") or 0) == 200:
+            server_payload = rest_smoke.get_server_status_payload(rest_smoke.require_json_object(server_result, 200))
+            snapshot["server"] = rest_smoke.compact_server_status(server_payload)
+        else:
+            snapshot["server_status"] = int(server_result.get("status") or 0)
+    except Exception as exc:  # pragma: no cover - diagnostics must not mask search readiness
+        snapshot["server_error"] = type(exc).__name__
+
+    try:
+        kad_result = rest_smoke.http_request(base_url, "/api/v1/kad", api_key=api_key, request_timeout_seconds=10.0)
+        if int(kad_result.get("status") or 0) == 200:
+            snapshot["kad"] = rest_smoke.compact_kad_status(rest_smoke.require_json_object(kad_result, 200))
+        else:
+            snapshot["kad_status"] = int(kad_result.get("status") or 0)
+    except Exception as exc:  # pragma: no cover - diagnostics must not mask search readiness
+        snapshot["kad_error"] = type(exc).__name__
+
+    return snapshot
 
 
 def diagnose_radarr_movie_terms(
@@ -949,10 +988,95 @@ def diagnose_radarr_movie_terms(
     }
 
 
+def wait_for_primary_radarr_movie_term_results(
+    *,
+    base_url: str,
+    emule_api_key: str,
+    prowlarr_url: str,
+    prowlarr_api_key: str,
+    indexer_id: int,
+    terms: tuple[str, ...],
+    timeout_seconds: float,
+    poll_interval_seconds: float = 5.0,
+    monotonic_seconds=time.monotonic,
+    sleep_seconds=time.sleep,
+) -> dict[str, object]:
+    """Polls the primary Radarr movie term through the startup search window."""
+
+    if not terms:
+        raise RuntimeError("Primary Radarr movie readiness requires at least one live-wire term.")
+    if timeout_seconds <= 0:
+        raise RuntimeError("Primary Radarr movie readiness timeout must be greater than zero.")
+    if poll_interval_seconds <= 0:
+        raise RuntimeError("Primary Radarr movie readiness poll interval must be greater than zero.")
+
+    primary_term = terms[0]
+    attempts: list[dict[str, object]] = []
+    started = monotonic_seconds()
+    deadline = started + timeout_seconds
+    attempt_index = 0
+    while True:
+        attempt_started = monotonic_seconds()
+        direct_movie = direct_torznab_term_diagnostic(base_url, emule_api_key, primary_term, TORZNAB_MOVIE_CATEGORY)
+        direct_count = diagnostic_result_count(direct_movie)
+        if direct_count > 0:
+            prowlarr_movie = prowlarr_term_diagnostic(
+                prowlarr_url,
+                prowlarr_api_key,
+                primary_term,
+                indexer_id,
+                TORZNAB_MOVIE_CATEGORY,
+            )
+        else:
+            prowlarr_movie = {
+                "status": "skipped_until_direct_movie_results",
+                "category": TORZNAB_MOVIE_CATEGORY,
+                "query_present": bool(primary_term),
+                "buckets": summarize_media_result_buckets([]),
+            }
+        attempt = {
+            "attempt_index": attempt_index,
+            "elapsed_ms": int((monotonic_seconds() - started) * 1000),
+            "request_elapsed_ms": int((monotonic_seconds() - attempt_started) * 1000),
+            "term_present": bool(primary_term),
+            "direct_movie": direct_movie,
+            "prowlarr_movie": prowlarr_movie,
+            "network": compact_search_network_snapshot(base_url, emule_api_key),
+        }
+        attempts.append(attempt)
+        prowlarr_count = diagnostic_result_count(prowlarr_movie)
+        if direct_count > 0 and prowlarr_count > 0:
+            return {
+                "ok": True,
+                "term_index": 0,
+                "term_count": len(terms),
+                "attempt_count": len(attempts),
+                "elapsed_ms": int((monotonic_seconds() - started) * 1000),
+                "result_count": prowlarr_count,
+                "attempts": attempts,
+            }
+        remaining = deadline - monotonic_seconds()
+        if remaining <= 0:
+            return {
+                "ok": False,
+                "term_index": 0,
+                "term_count": len(terms),
+                "attempt_count": len(attempts),
+                "elapsed_ms": int((monotonic_seconds() - started) * 1000),
+                "result_count": 0,
+                "attempts": attempts,
+            }
+        sleep_seconds(min(poll_interval_seconds, remaining))
+        attempt_index += 1
+
+
 def require_first_radarr_movie_term_results(diagnostic: dict[str, object]) -> None:
     """Fails fast when the primary Radarr movie term has no movie results."""
 
-    if not bool(diagnostic.get("first_term_movie_results_ok")):
+    ok = diagnostic.get("ok")
+    if ok is None:
+        ok = diagnostic.get("first_term_movie_results_ok")
+    if not bool(ok):
         raise RuntimeError("Primary Radarr movie live-wire term returned no Prowlarr movie-category rows.")
 
 
@@ -1188,6 +1312,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
+    parser.add_argument("--radarr-primary-readiness-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--cached-search-stress-count", type=int, default=12)
     parser.add_argument("--direct-search-stress-count", type=int, default=6)
     parser.add_argument("--prowlarr-search-stress-count", type=int, default=4)
@@ -1219,6 +1344,8 @@ def main() -> int:
         raise ValueError("--direct-search-stress-count must be greater than zero.")
     if args.prowlarr_search_stress_count <= 0:
         raise ValueError("--prowlarr-search-stress-count must be greater than zero.")
+    if args.radarr_primary_readiness_timeout_seconds <= 0:
+        raise ValueError("--radarr-primary-readiness-timeout-seconds must be greater than zero.")
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
@@ -1387,6 +1514,16 @@ def main() -> int:
                 if isinstance(status, dict) and status.get("indexerId") == int(saved_indexer["id"])
             ]
         report["checks"]["indexer_test"] = test_indexer(prowlarr_url, prowlarr_api_key, saved_indexer)
+        report["checks"]["radarr_movie_primary_readiness"] = wait_for_primary_radarr_movie_term_results(
+            base_url=emule_base_url,
+            emule_api_key=args.emule_api_key,
+            prowlarr_url=prowlarr_url,
+            prowlarr_api_key=prowlarr_api_key,
+            indexer_id=int(saved_indexer["id"]),
+            terms=radarr_movie_terms,
+            timeout_seconds=args.radarr_primary_readiness_timeout_seconds,
+        )
+        require_first_radarr_movie_term_results(report["checks"]["radarr_movie_primary_readiness"])
         report["checks"]["radarr_movie_term_diagnostics"] = diagnose_radarr_movie_terms(
             base_url=emule_base_url,
             emule_api_key=args.emule_api_key,
@@ -1395,7 +1532,6 @@ def main() -> int:
             indexer_id=int(saved_indexer["id"]),
             terms=radarr_movie_terms,
         )
-        require_first_radarr_movie_term_results(report["checks"]["radarr_movie_term_diagnostics"])
 
         report["checks"]["direct_rss_results"] = check_direct_rss_results(
             emule_base_url,

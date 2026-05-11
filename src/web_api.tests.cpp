@@ -378,6 +378,8 @@ TEST_CASE("Web API normalizes search method and type names case-insensitively")
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(""), WebApiCommandSeams::ESearchMethod::Invalid);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchMethodName(nullptr), WebApiCommandSeams::ESearchMethod::Invalid);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("VIDEO"), WebApiCommandSeams::ESearchFileType::Video);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("document"), WebApiCommandSeams::ESearchFileType::Document);
+	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("iso"), WebApiCommandSeams::ESearchFileType::CdImage);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName("emulecollection"), WebApiCommandSeams::ESearchFileType::EmuleCollection);
 	CHECK_EQ(WebApiCommandSeams::ParseSearchFileTypeName(nullptr), WebApiCommandSeams::ESearchFileType::Invalid);
 }
@@ -479,6 +481,11 @@ TEST_CASE("Web API parses the search start command vocabulary and trims the quer
 	CHECK(request.bHasMaxSize);
 	CHECK_EQ(request.ullMinSize, 700u);
 	CHECK_EQ(request.ullMaxSize, 4096u);
+
+	error.clear();
+	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", "feature film"}, {"method", "global"}, {"type", "video"}}, request, error));
+	CHECK_EQ(request.eMethod, WebApiCommandSeams::ESearchMethod::Global);
+	CHECK_EQ(request.eFileType, WebApiCommandSeams::ESearchFileType::Video);
 
 	error.clear();
 	CHECK(WebApiCommandSeams::TryParseSearchStartRequest(WebApiCommandSeams::json{{"query", strUnicodeQuery}}, request, error));
@@ -990,6 +997,20 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Audio, "release.mkv", 10));
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Book, "manual.pdf", 10));
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "manual.pdf", 10));
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Movie)), "video");
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Tv)), "video");
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"video"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"document"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"kad", "global"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Tv), std::vector<std::string>{"kad", "global"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"automatic"});
+	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs);
+	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Book), WebServerArrCompatSeams::kTorznabDefaultSearchTimeoutMs);
+	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchMethodProbeTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie, 2), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs / 2);
+	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchMethodProbeTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Book, 1), WebServerArrCompatSeams::kTorznabDefaultSearchTimeoutMs);
+	CHECK_FALSE(WebServerArrCompatSeams::ShouldCacheTorznabResults(0));
+	CHECK(WebServerArrCompatSeams::ShouldCacheTorznabResults(1));
+	CHECK_EQ(WebServerArrCompatSeams::kTorznabBusyHttpStatus, 503);
 }
 
 TEST_CASE("Web API recognizes qBittorrent compatibility routes")
@@ -2196,6 +2217,9 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"program"})", "search/start");
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"any","minAvailability":5})", "search/start");
 	CHECK_EQ(route.params["minAvailability"].get<int>(), 5);
+	assertRoute("POST", "/api/v1/searches", R"({"query":"feature film","method":"global","type":"video"})", "search/start");
+	CHECK_EQ(route.params["method"].get<std::string>(), "global");
+	CHECK_EQ(route.params["type"].get<std::string>(), "video");
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"contentdb"})", route, errorCode, errorMessage));

@@ -1639,6 +1639,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--result-timeout-seconds", type=float, default=300.0)
+    parser.add_argument("--radarr-primary-readiness-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--qbit-live-wire-rounds", type=int, default=2)
     parser.add_argument(
         "--radarr-movie-root",
@@ -1771,6 +1772,8 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.qbit_live_wire_rounds <= 0:
         raise ValueError("--qbit-live-wire-rounds must be greater than zero.")
+    if args.radarr_primary_readiness_timeout_seconds <= 0:
+        raise ValueError("--radarr-primary-readiness-timeout-seconds must be greater than zero.")
     env_values = live_env.load_env_values(
         (
             "PROWLARR_URL",
@@ -1995,6 +1998,16 @@ def main() -> int:
             "name": saved_indexer.get("name"),
             "tags": saved_indexer.get("tags"),
         }
+        report["checks"]["radarr_movie_primary_readiness"] = prowlarr_live.wait_for_primary_radarr_movie_term_results(
+            base_url=emule_base_url,
+            emule_api_key=args.emule_api_key,
+            prowlarr_url=prowlarr_url,
+            prowlarr_api_key=prowlarr_api_key,
+            indexer_id=int(saved_indexer["id"]),
+            terms=radarr_movie_terms,
+            timeout_seconds=args.radarr_primary_readiness_timeout_seconds,
+        )
+        prowlarr_live.require_first_radarr_movie_term_results(report["checks"]["radarr_movie_primary_readiness"])
         report["checks"]["radarr_movie_term_diagnostics"] = prowlarr_live.diagnose_radarr_movie_terms(
             base_url=emule_base_url,
             emule_api_key=args.emule_api_key,
@@ -2003,7 +2016,6 @@ def main() -> int:
             indexer_id=int(saved_indexer["id"]),
             terms=radarr_movie_terms,
         )
-        prowlarr_live.require_first_radarr_movie_term_results(report["checks"]["radarr_movie_term_diagnostics"])
         report["checks"]["prowlarr_radarr_video_search"] = wait_for_prowlarr_category_results(
             prowlarr_url,
             prowlarr_api_key,

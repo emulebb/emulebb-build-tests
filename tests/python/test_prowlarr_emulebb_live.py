@@ -356,8 +356,60 @@ def test_primary_radarr_movie_term_gate_requires_first_term_results() -> None:
 
     with pytest.raises(RuntimeError, match="Primary Radarr movie"):
         module.require_first_radarr_movie_term_results({"first_term_movie_results_ok": False})
+    with pytest.raises(RuntimeError, match="Primary Radarr movie"):
+        module.require_first_radarr_movie_term_results({"ok": False})
 
     module.require_first_radarr_movie_term_results({"first_term_movie_results_ok": True})
+    module.require_first_radarr_movie_term_results({"ok": True})
+
+
+def test_primary_radarr_movie_term_readiness_retries_until_results(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    now = {"value": 0.0}
+    direct_counts = [0, 2]
+    prowlarr_counts = [2]
+
+    def fake_direct(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        count = direct_counts.pop(0)
+        return {
+            "status": 200,
+            "category": module.TORZNAB_MOVIE_CATEGORY,
+            "query_present": True,
+            "buckets": {"result_count": count},
+        }
+
+    def fake_prowlarr(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        count = prowlarr_counts.pop(0)
+        return {
+            "status": 200,
+            "category": module.TORZNAB_MOVIE_CATEGORY,
+            "query_present": True,
+            "buckets": {"result_count": count},
+        }
+
+    monkeypatch.setattr(module, "direct_torznab_term_diagnostic", fake_direct)
+    monkeypatch.setattr(module, "prowlarr_term_diagnostic", fake_prowlarr)
+    monkeypatch.setattr(module, "compact_search_network_snapshot", lambda *_args, **_kwargs: {"server": {"connected": True}})
+
+    result = module.wait_for_primary_radarr_movie_term_results(
+        base_url="http://127.0.0.1:1",
+        emule_api_key="secret",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="key",
+        indexer_id=40,
+        terms=("primary", "backup"),
+        timeout_seconds=20.0,
+        poll_interval_seconds=5.0,
+        monotonic_seconds=lambda: now["value"],
+        sleep_seconds=lambda seconds: now.__setitem__("value", now["value"] + seconds),
+    )
+
+    assert result["ok"] is True
+    assert result["term_index"] == 0
+    assert result["attempt_count"] == 2
+    assert result["result_count"] == 2
+    assert result["attempts"][0]["prowlarr_movie"]["status"] == "skipped_until_direct_movie_results"
+    assert result["attempts"][1]["prowlarr_movie"]["buckets"]["result_count"] == 2
 
 
 def test_cached_direct_torznab_stress_requires_item_bearing_rss(monkeypatch) -> None:
