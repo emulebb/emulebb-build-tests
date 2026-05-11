@@ -346,6 +346,7 @@ TEST_CASE("Web API parses the final transfer priority vocabulary")
 	CHECK(WebApiSurfaceSeams::IsCategoryPriorityName("verylow"));
 	CHECK_FALSE(WebApiSurfaceSeams::IsCategoryPriorityName("auto"));
 	CHECK(WebApiSurfaceSeams::IsSharedUploadPriorityName("release"));
+	CHECK_FALSE(WebApiSurfaceSeams::IsSharedUploadPriorityName("veryhigh"));
 	CHECK_FALSE(WebApiSurfaceSeams::IsSharedUploadPriorityName("Release"));
 	CHECK(WebApiSurfaceSeams::IsServerPriorityName("normal"));
 	CHECK_FALSE(WebApiSurfaceSeams::IsServerPriorityName("veryhigh"));
@@ -1723,7 +1724,19 @@ TEST_CASE("Web API carries path identifiers and JSON bodies into mutation routes
 		errorCode,
 		errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "priority must be one of auto, verylow, low, normal, high, veryhigh, release");
+	CHECK_EQ(errorMessage, "priority must be one of auto, verylow, low, normal, high, release");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"PATCH",
+		"/api/v1/shared-files/0123456789abcdef0123456789abcdef",
+		R"({"priority":"veryhigh"})",
+		route,
+		errorCode,
+		errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "priority must be one of auto, verylow, low, normal, high, release");
 
 	errorCode.clear();
 	errorMessage.clear();
@@ -2338,6 +2351,11 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("POST", "/api/v1/kad/operations/bootstrap", R"({"address":"bootstrap.example.invalid","port":4672})", "kad/bootstrap");
 	CHECK_EQ(route.params["address"].get<std::string>(), "bootstrap.example.invalid");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4672u);
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/kad/operations/bootstrap", R"({})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "address must be a non-empty string");
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/kad/operations/bootstrap", R"({"address":"bootstrap.example.invalid","port":65536})", route, errorCode, errorMessage));

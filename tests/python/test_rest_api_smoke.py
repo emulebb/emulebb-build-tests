@@ -739,7 +739,8 @@ def test_openapi_search_type_enums_match_rest_tokens() -> None:
 
 def test_openapi_rest_consistency_cleanup_contracts() -> None:
     module = load_rest_api_smoke_module()
-    schemas = module.load_openapi_document()["components"]["schemas"]
+    document = module.load_openapi_document()
+    schemas = document["components"]["schemas"]
 
     assert schemas["Category"]["properties"]["priority"] == {"type": "integer", "minimum": 0}
     assert schemas["CategoryCreateRequest"]["properties"]["priority"] == {
@@ -752,6 +753,35 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
         {"type": "string", "enum": ["verylow", "low", "normal", "high", "veryhigh"]},
         {"type": "integer", "minimum": 0},
     ]
+
+    assert schemas["TransferPriority"]["enum"] == ["auto", "verylow", "low", "normal", "high", "veryhigh"]
+    assert schemas["SharedFilePriority"]["enum"] == ["auto", "verylow", "low", "normal", "high", "release"]
+    assert "release" not in schemas["TransferPriority"]["enum"]
+    assert "veryhigh" not in schemas["SharedFilePriority"]["enum"]
+    assert schemas["Transfer"]["properties"]["priority"] == {"$ref": "#/components/schemas/TransferPriority"}
+    assert schemas["TransferPatch"]["properties"]["priority"] == {"$ref": "#/components/schemas/TransferPriority"}
+    assert schemas["SharedFile"]["properties"]["priority"] == {"$ref": "#/components/schemas/SharedFilePriority"}
+    assert schemas["SharedFilePatch"]["properties"]["priority"] == {"$ref": "#/components/schemas/SharedFilePriority"}
+
+    assert len(schemas["TransferCreateRequest"]["oneOf"]) == 2
+    assert schemas["TransferCreateRequest"]["not"] == {"required": ["categoryId", "categoryName"]}
+    assert len(schemas["TransferPatch"]["oneOf"]) == 4
+    assert schemas["SharedFilePatch"]["minProperties"] == 1
+    assert schemas["SharedFilePatch"]["dependentRequired"] == {
+        "comment": ["rating"],
+        "rating": ["comment"],
+    }
+    assert schemas["ServerPatch"]["minProperties"] == 1
+    assert schemas["ServerCreateRequest"]["properties"]["address"]["minLength"] == 1
+    assert schemas["ServerCreateRequest"]["properties"]["port"]["minimum"] == 1
+    assert schemas["ServerCreateRequest"]["properties"]["port"]["maximum"] == 65535
+    assert schemas["UrlImportRequest"]["properties"]["url"]["minLength"] == 1
+    assert schemas["KadBootstrapRequest"]["required"] == ["address", "port"]
+    assert schemas["KadBootstrapRequest"]["properties"]["address"]["minLength"] == 1
+    assert schemas["KadBootstrapRequest"]["properties"]["port"]["minimum"] == 1
+    assert schemas["KadBootstrapRequest"]["properties"]["port"]["maximum"] == 65535
+    assert document["paths"]["/kad/operations/bootstrap"]["post"]["requestBody"]["required"] is True
+    assert schemas["SearchResultDownloadRequest"]["not"] == {"required": ["categoryId", "categoryName"]}
 
     source_properties = schemas["TransferSource"]["properties"]
     assert "state" not in source_properties
