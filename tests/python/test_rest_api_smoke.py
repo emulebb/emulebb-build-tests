@@ -917,6 +917,239 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     ]
 
 
+def test_openapi_response_dtos_expose_runtime_required_fields() -> None:
+    module = load_rest_api_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    expected_required_fields = {
+        "Status": ["stats", "servers", "kad"],
+        "Stats": [
+            "connected",
+            "downloadSpeedKiBps",
+            "uploadSpeedKiBps",
+            "sessionDownloadedBytes",
+            "sessionUploadedBytes",
+            "activeUploads",
+            "waitingUploads",
+            "downloadCount",
+            "ed2kConnected",
+            "ed2kHighId",
+            "kadRunning",
+            "kadConnected",
+            "kadFirewalled",
+        ],
+        "TransferSource": [
+            "clientId",
+            "userName",
+            "userHash",
+            "address",
+            "port",
+            "downloadState",
+            "clientSoftware",
+            "downloadSpeedKiBps",
+            "availableParts",
+            "partCount",
+            "serverIp",
+            "serverPort",
+            "lowId",
+            "queueRank",
+            "viewSharedFiles",
+            "sharedFilesRequestPending",
+        ],
+        "SharedFile": [
+            "hash",
+            "name",
+            "path",
+            "directory",
+            "sizeBytes",
+            "priority",
+            "autoUploadPriority",
+            "requests",
+            "acceptedRequests",
+            "transferredBytes",
+            "allTimeRequests",
+            "allTimeAccepts",
+            "allTimeTransferred",
+            "partCount",
+            "partFile",
+            "complete",
+            "comment",
+            "rating",
+            "hasComment",
+            "userRating",
+            "publishedEd2k",
+            "sharedByRule",
+        ],
+        "Upload": [
+            "clientId",
+            "userName",
+            "userHash",
+            "clientSoftware",
+            "clientMod",
+            "uploadState",
+            "uploadSpeedKiBps",
+            "uploadedBytes",
+            "queueSessionUploaded",
+            "payloadBuffered",
+            "waitTimeMs",
+            "waitStartedTick",
+            "score",
+            "address",
+            "port",
+            "serverIp",
+            "serverPort",
+            "lowId",
+            "friendSlot",
+            "uploading",
+            "waitingQueue",
+            "requestedFileHash",
+            "requestedFileName",
+            "requestedFileSizeBytes",
+        ],
+        "Server": [
+            "address",
+            "port",
+            "name",
+            "priority",
+            "static",
+            "connected",
+            "connecting",
+            "current",
+            "description",
+            "dynIp",
+            "failedCount",
+            "hardFiles",
+            "ip",
+            "ping",
+            "softFiles",
+            "version",
+            "users",
+            "files",
+        ],
+        "ServerStatus": ["connected", "connecting", "currentServer", "lowId", "serverCount"],
+        "Kad": ["running", "connected", "firewalled", "bootstrapping", "bootstrapProgress", "users", "files"],
+    }
+
+    for schema_name, required_fields in expected_required_fields.items():
+        assert schemas[schema_name]["required"] == required_fields
+
+    assert "fileHash" not in schemas["Upload"]["required"]
+    assert "fileName" not in schemas["Upload"]["required"]
+    assert "active" not in schemas["ServerStatus"]["required"]
+    assert "nodes" not in schemas["Kad"]["required"]
+
+
+def test_openapi_response_numeric_bounds_match_runtime_domains() -> None:
+    module = load_rest_api_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+
+    minimum_zero_fields = {
+        "Status": ["downloadSpeedKiBps", "uploadSpeedKiBps"],
+        "Stats": [
+            "downloadSpeedKiBps",
+            "uploadSpeedKiBps",
+            "sessionDownloadedBytes",
+            "sessionUploadedBytes",
+            "totalDownloadedBytes",
+            "totalUploadedBytes",
+            "activeDownloads",
+            "activeUploads",
+            "waitingUploads",
+            "downloadCount",
+        ],
+        "Transfer": ["sizeBytes", "completedBytes", "downloadSpeedKiBps", "uploadSpeedKiBps"],
+        "TransferSource": ["downloadSpeedKiBps", "availableParts", "partCount", "queueRank"],
+        "SharedFile": [
+            "sizeBytes",
+            "allTimeRequests",
+            "allTimeAccepts",
+            "allTimeTransferred",
+            "partCount",
+            "userRating",
+            "requests",
+            "acceptedRequests",
+            "transferredBytes",
+        ],
+        "Upload": [
+            "uploadSpeedKiBps",
+            "uploadedBytes",
+            "queueSessionUploaded",
+            "payloadBuffered",
+            "waitTimeMs",
+            "waitStartedTick",
+            "score",
+            "requestedFileSizeBytes",
+        ],
+        "UploadScoreBreakdown": ["baseScore", "effectiveScore", "lowRatioBonus", "lowIdDivisor", "cooldownRemainingMs"],
+        "Server": ["failedCount", "hardFiles", "ping", "softFiles", "users", "files"],
+        "Kad": ["nodes", "users", "files", "bootstrapProgress", "indexedSources", "indexedKeywords"],
+        "SearchResult": ["sizeBytes", "sources", "completeSources", "clientCount", "serverCount", "kadPublishInfo", "rating"],
+    }
+
+    for schema_name, field_names in minimum_zero_fields.items():
+        for field_name in field_names:
+            assert schemas[schema_name]["properties"][field_name]["minimum"] == 0
+
+    bounded_port_fields = {
+        "TransferSource": ["port", "serverPort"],
+        "Upload": ["port", "serverPort"],
+        "SearchResult": ["clientPort", "serverPort"],
+        "Friend": ["port"],
+    }
+    for schema_name, field_names in bounded_port_fields.items():
+        for field_name in field_names:
+            assert schemas[schema_name]["properties"][field_name]["minimum"] == 0
+            assert schemas[schema_name]["properties"][field_name]["maximum"] == 65535
+
+    assert schemas["Server"]["properties"]["port"] == {"type": "integer", "minimum": 1, "maximum": 65535}
+    assert "enum" not in schemas["SearchResult"]["properties"]["fileType"]
+
+
+def test_rest_vocabulary_source_and_openapi_stay_in_sync() -> None:
+    module = load_rest_api_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+    workspace_root = Path(__file__).resolve().parents[4]
+    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    json_source = (app_source / "WebServerJson.cpp").read_text(encoding="utf-8")
+    surface_source = (app_source / "WebApiSurfaceSeams.h").read_text(encoding="utf-8")
+    command_source = (app_source / "WebApiCommandSeams.h").read_text(encoding="utf-8")
+    json_seams = (app_source / "WebServerJsonSeams.h").read_text(encoding="utf-8")
+    arr_seams = (app_source / "WebServerArrCompatSeams.h").read_text(encoding="utf-8")
+
+    search_methods = ["automatic", "server", "global", "kad"]
+    search_types = ["", "arc", "audio", "iso", "image", "pro", "video", "doc", "emulecollection"]
+    assert schemas["SearchCreateRequest"]["properties"]["method"]["enum"] == search_methods
+    assert schemas["SearchCreateRequest"]["properties"]["type"]["enum"] == search_types
+
+    for token in search_methods:
+        assert token in json_seams
+    for token in search_types:
+        assert token in json_seams
+
+    assert schemas["TransferState"]["enum"] == [
+        "downloading",
+        "paused",
+        "queued",
+        "checking",
+        "completing",
+        "completed",
+        "error",
+        "missingfiles",
+    ]
+    for token in schemas["TransferState"]["enum"]:
+        assert f'_T("{token}")' in json_source or token in command_source
+
+    assert schemas["TransferPriority"]["enum"] == ["auto", "verylow", "low", "normal", "high", "veryhigh"]
+    assert schemas["SharedFilePriority"]["enum"] == ["auto", "verylow", "low", "normal", "high", "release"]
+    for token in ("uploading", "queued", "connecting", "banned", "idle"):
+        assert f'return "{token}";' in surface_source
+    for token in schemas["TransferSource"]["properties"]["downloadState"]["enum"]:
+        assert f'return "{token}";' in surface_source
+
+    assert arr_seams.index('methods.push_back("global")') < arr_seams.index('methods.push_back("kad")')
+    assert 'return "video";' in arr_seams
+
+
 def test_native_transfer_operation_responses_use_stable_bulk_items() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
