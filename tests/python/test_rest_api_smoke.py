@@ -1261,6 +1261,8 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert 'BuildInternalCommand("search/stop"' in source
     assert '"method", rMethod' in source
     assert '"type", rSearchType' in source
+    assert 'BuildInternalCommand("status/get"' in source
+    assert "IsNativeSearchMethodAvailable(rMethod)" in source
     assert "BuildNativeSearchMethodNames(rRequest.eFamily)" in source
     assert "BuildNativeSearchTypeNames(rRequest.eFamily)" in source
     assert "WebServerJsonSeams::TryValidateRequestPathEscapes" in seams
@@ -1269,8 +1271,8 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "WebServerJsonSeams::TryParseUnsignedDecimalValue" in seams
     assert "WebServerJsonSeams::TryValidatePublicFileNameText" in seams
     assert "WebServerJsonSeams::NormalizeAsciiWhitespace" in seams
-    assert 'methods.push_back("kad")' in seams
-    assert 'methods.push_back("global")' in seams
+    assert seams.index('methods.push_back("global")') < seams.index('methods.push_back("kad")')
+    assert "IsConnectedNetworkSearchMethod" in seams
     assert 'return "video";' in seams
 
 

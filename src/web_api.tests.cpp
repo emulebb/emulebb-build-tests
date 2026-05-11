@@ -1015,9 +1015,12 @@ TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetNativeSearchType(WebServerArrCompatSeams::ETorznabFamily::Tv)), "video");
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"video"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"document"});
-	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"kad", "global"});
-	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Tv), std::vector<std::string>{"kad", "global"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"global", "kad"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Tv), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"automatic"});
+	CHECK(WebServerArrCompatSeams::IsConnectedNetworkSearchMethod("GLOBAL"));
+	CHECK(WebServerArrCompatSeams::IsConnectedNetworkSearchMethod("kad"));
+	CHECK_FALSE(WebServerArrCompatSeams::IsConnectedNetworkSearchMethod("automatic"));
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs);
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Book), WebServerArrCompatSeams::kTorznabDefaultSearchTimeoutMs);
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchMethodProbeTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie, 2), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs / 2);
