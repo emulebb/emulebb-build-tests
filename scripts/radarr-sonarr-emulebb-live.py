@@ -1540,17 +1540,20 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
             )
             release_grab["source"] = "arr_release_search"
             release_grab["arr_indexer_unavailable_due_to_failures"] = False
-            if not str(release_grab.get("hash") or ""):
+            try:
                 new_transfer = wait_for_new_transfer_category(
                     emule_base_url,
                     emule_api_key,
                     category=download_category,
                     before_hashes=before_hashes,
-                    timeout_seconds=120.0,
+                    timeout_seconds=180.0,
                 )
                 release_grab["hash"] = str(new_transfer.get("hash") or "")
                 release_grab["hash_present"] = bool(release_grab["hash"])
                 release_grab["category_transfer"] = {key: value for key, value in new_transfer.items() if key != "hash"}
+            except RuntimeError:
+                if not str(release_grab.get("hash") or ""):
+                    raise
             return release_grab
         except RuntimeError as exc:
             direct_error = str(exc)

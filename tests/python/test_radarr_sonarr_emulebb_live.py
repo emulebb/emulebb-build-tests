@@ -139,6 +139,17 @@ def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
     )
     monkeypatch.setattr(
         module,
+        "wait_for_new_transfer_category",
+        lambda *_args, **kwargs: calls.append(("new_category_transfer", kwargs["category"]))
+        or {
+            "hash": "fedcba9876543210fedcba9876543210",
+            "hash_present": True,
+            "categoryName": kwargs["category"],
+            "state": "downloading",
+        },
+    )
+    monkeypatch.setattr(
+        module,
         "wait_for_transfer_completion",
         lambda *_args, **_kwargs: calls.append(("transfer_complete", _args[2])) or {"hash": _args[2], "state": "completed"},
     )
@@ -180,7 +191,7 @@ def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
     assert calls == [
         ("movie", None),
         ("release_grab", "operator movie"),
-        ("category_transfer", ("fedcba9876543210fedcba9876543210", module.RADARR_IMPORT_CATEGORY)),
+        ("new_category_transfer", module.RADARR_IMPORT_CATEGORY),
         ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
         ("transfer_complete", "fedcba9876543210fedcba9876543210"),
         ("radarr_import", 77),
