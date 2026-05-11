@@ -703,6 +703,34 @@ def test_openapi_public_response_dtos_are_closed_except_explicit_extension_maps(
     }
 
 
+def test_openapi_inline_response_data_objects_are_closed() -> None:
+    module = load_rest_api_smoke_module()
+    schemas = module.load_openapi_document()["components"]["schemas"]
+    open_data_objects: list[str] = []
+
+    def visit(schema_name: str, node: object, path: tuple[str, ...] = ()) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if (
+                    key == "data"
+                    and isinstance(value, dict)
+                    and value.get("type") == "object"
+                    and not any(keyword in value for keyword in ("$ref", "allOf", "anyOf", "oneOf", "unevaluatedProperties"))
+                    and value.get("additionalProperties") is not False
+                ):
+                    open_data_objects.append("/".join((schema_name, *path, key)))
+                visit(schema_name, value, path + (str(key),))
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                visit(schema_name, value, path + (str(index),))
+
+    for schema_name, schema in schemas.items():
+        if schema_name.endswith("Envelope"):
+            visit(schema_name, schema)
+
+    assert open_data_objects == []
+
+
 def test_openapi_core_public_dtos_reject_undocumented_fields() -> None:
     module = load_rest_api_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
@@ -798,6 +826,8 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert schemas["ServerCreateRequest"]["properties"]["port"]["maximum"] == 65535
     assert schemas["UrlImportRequest"]["properties"]["url"]["minLength"] == 1
     assert "format" not in schemas["UrlImportRequest"]["properties"]["url"]
+    assert schemas["Ed2kLinkEnvelope"]["allOf"][1]["properties"]["data"]["additionalProperties"] is False
+    assert schemas["Ed2kLinkEnvelope"]["allOf"][1]["properties"]["data"]["required"] == ["hash", "link"]
     assert schemas["KadBootstrapRequest"]["required"] == ["address", "port"]
     assert schemas["KadBootstrapRequest"]["properties"]["address"]["minLength"] == 1
     assert schemas["KadBootstrapRequest"]["properties"]["port"]["minimum"] == 1
@@ -864,6 +894,15 @@ def test_native_transfer_operation_responses_use_stable_bulk_items() -> None:
     assert 'return json{{"items", json::array({result})}};' in source
     assert "json singleResource;" not in source
     assert 'return json{{"items", results}};' in source
+
+
+def test_peer_add_friend_never_returns_ok_for_friend_response() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source = source_path.read_text(encoding="utf-8")
+
+    assert 'pFriend != NULL ? BuildFriendJson(*pFriend) : json{{"ok", true}}' not in source
+    assert 'rError.strMessage = _T("friend was added but could not be resolved");' in source
 
 
 def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
