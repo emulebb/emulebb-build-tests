@@ -42,6 +42,7 @@ DEFAULT_SHARED_HASH_IDLE_TIMEOUT_SECONDS = 60.0
 ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 DEFAULT_MEDIA_QUALITY_PROFILE_NAME = "AnyAnyLang"
 MIN_ARR_RELEASE_SOURCES = 10
+MIN_ARR_RELEASE_TITLE_MATCH_SCORE = 150
 
 
 class LiveSearchUnavailableError(RuntimeError):
@@ -998,26 +999,35 @@ def arr_release_size_bytes(row: dict[str, Any]) -> int | None:
 
 
 def select_best_arr_release(rows: list[dict[str, Any]], query: str) -> dict[str, Any]:
-    """Selects the smallest manual Arr release with enough sources."""
+    """Selects the smallest manual Arr release with enough sources and a matching title."""
 
     if not rows:
         raise RuntimeError("Arr release selection requires at least one row.")
-    candidates = [
-        (
-            arr_release_size_bytes(row),
-            -prowlarr_live.release_title_match_score(row, query),
-            -prowlarr_live.release_source_count(row),
-            index,
-            json.loads(json.dumps(row)),
-        )
-        for index, row in enumerate(rows)
-        if prowlarr_live.release_source_count(row) >= MIN_ARR_RELEASE_SOURCES and arr_release_size_bytes(row) is not None
-    ]
+    candidates = []
+    for index, row in enumerate(rows):
+        title_score = prowlarr_live.release_title_match_score(row, query)
+        size = arr_release_size_bytes(row)
+        if (
+            prowlarr_live.release_source_count(row) >= MIN_ARR_RELEASE_SOURCES
+            and size is not None
+            and title_score >= MIN_ARR_RELEASE_TITLE_MATCH_SCORE
+        ):
+            candidates.append(
+                (
+                    size,
+                    -title_score,
+                    -prowlarr_live.release_source_count(row),
+                    index,
+                    json.loads(json.dumps(row)),
+                )
+            )
     if not candidates:
         max_sources = max((prowlarr_live.release_source_count(row) for row in rows), default=0)
+        max_title_score = max((prowlarr_live.release_title_match_score(row, query) for row in rows), default=0)
         raise RuntimeError(
-            f"Arr release selection found no release with at least {MIN_ARR_RELEASE_SOURCES} sources and a positive size. "
-            f"Rows={len(rows)}, max_sources={max_sources}."
+            f"Arr release selection found no release with at least {MIN_ARR_RELEASE_SOURCES} sources, "
+            f"a positive size, and a title match score of at least {MIN_ARR_RELEASE_TITLE_MATCH_SCORE}. "
+            f"Rows={len(rows)}, max_sources={max_sources}, max_title_match_score={max_title_score}."
         )
     candidates.sort()
     return candidates[0][4]

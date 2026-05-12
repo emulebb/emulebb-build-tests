@@ -120,7 +120,7 @@ def test_arr_release_selection_picks_smallest_release_with_enough_sources() -> N
             {"title": "Operator Movie 1080p", "sources": 40, "size": 4_000_000_000, "guid": "larger"},
             {"title": "Operator Movie 720p", "sources": 9, "size": 700_000_000, "guid": "too-few-sources"},
             {"title": "Operator Movie 1080p", "sources": 12, "size": 1_400_000_000, "guid": "smallest-ok"},
-            {"title": "Other Release", "sources": 100, "size": 2_000_000_000, "guid": "other-larger"},
+            {"title": "Other Release", "sources": 100, "size": 200_000_000, "guid": "other-smaller"},
         ],
         "operator movie",
     )
@@ -136,6 +136,7 @@ def test_arr_release_selection_requires_minimum_sources_and_positive_size() -> N
             [
                 {"title": "Operator Movie 720p", "sources": 9, "size": 700_000_000, "guid": "too-few-sources"},
                 {"title": "Operator Movie 1080p", "sources": 12, "size": 0, "guid": "missing-size"},
+                {"title": "Unrelated 1080p", "sources": 12, "size": 1_000_000_000, "guid": "weak-title-match"},
             ],
             "operator movie",
         )
