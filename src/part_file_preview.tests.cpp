@@ -65,17 +65,42 @@ TEST_CASE("Part-file preview seam unlocks partial videos after a capped percenta
 
 TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on progress")
 {
+	const std::uint64_t oneMegabyte = 1024ull * 1024ull;
+	const std::uint64_t hundredMegabytes = 100ull * oneMegabyte;
+	const std::uint64_t tenGigabytes = 10ull * 1024ull * oneMegabyte;
+
 	CHECK(PartFilePreviewSeams::kVideoThumbnailDisplayMaxWidth == 480);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshIntervalMs == 90000ull);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshDeltaPermille == 50ull);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshMaxDeltaBytes == 128ull * oneMegabyte);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailRefreshRequiredCompletedDelta(hundredMegabytes) == 5ull * oneMegabyte);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailRefreshRequiredCompletedDelta(tenGigabytes) == 128ull * oneMegabyte);
 
 	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 0ull));
 	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 1000ull));
 	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(91000ull, 1000ull));
 	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(1000ull, 91000ull));
 
-	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(4096ull, 4096ull));
-	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(8192ull, 4096ull));
-	CHECK(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(4096ull, 8192ull));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(40ull * oneMegabyte, 40ull * oneMegabyte, hundredMegabytes));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(45ull * oneMegabyte, 40ull * oneMegabyte, hundredMegabytes));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(40ull * oneMegabyte, 44ull * oneMegabyte, hundredMegabytes));
+	CHECK(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(40ull * oneMegabyte, 45ull * oneMegabyte, hundredMegabytes));
+	CHECK(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(99ull * oneMegabyte, hundredMegabytes, hundredMegabytes));
+}
+
+TEST_CASE("Part-file preview seam moves thumbnail capture deeper as progress increases")
+{
+	const std::uint64_t fileSize = 1000ull;
+
+	CHECK_FALSE(PartFilePreviewSeams::HasReachedCompletedPermille(fileSize, 49ull, 50ull));
+	CHECK(PartFilePreviewSeams::HasReachedCompletedPermille(fileSize, 50ull, 50ull));
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(0ull, 1000ull) == 15u);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 49ull) == 15u);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 50ull) == 30u);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 100ull) == 60u);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 250ull) == 90u);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 500ull) == 120u);
+	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 950ull) == 180u);
 }
 
 TEST_CASE("Part-file preview seam builds quoted VLC thumbnail command lines")
@@ -84,11 +109,17 @@ TEST_CASE("Part-file preview seam builds quoted VLC thumbnail command lines")
 		CString(_T("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe")),
 		CString(_T("C:\\Temp Files\\sample preview.mkv")),
 		CString(_T("C:\\Temp Files\\")),
-		CString(_T("emulebb_thumb_abc")));
+		CString(_T("emulebb_thumb_abc")),
+		60u);
 
 	CHECK(command.Find(_T("\"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\"")) >= 0);
 	CHECK(command.Find(_T("--intf dummy")) >= 0);
+	CHECK(command.Find(_T("--vout=dummy")) >= 0);
+	CHECK(command.Find(_T("--no-embedded-video")) >= 0);
+	CHECK(command.Find(_T("--no-video-deco")) >= 0);
+	CHECK(command.Find(_T("--no-qt-error-dialogs")) >= 0);
 	CHECK(command.Find(_T("--video-filter=scene")) >= 0);
+	CHECK(command.Find(_T("--start-time=60 --stop-time=61")) >= 0);
 	CHECK(command.Find(_T("\"--scene-prefix=emulebb_thumb_abc\"")) >= 0);
 	CHECK(command.Find(_T("\"--scene-path=C:\\Temp Files\\")) >= 0);
 	CHECK(command.Find(_T("\"C:\\Temp Files\\sample preview.mkv\"")) >= 0);
