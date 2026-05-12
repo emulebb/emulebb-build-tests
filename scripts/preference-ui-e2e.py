@@ -56,6 +56,7 @@ PAGE_TREE_ID = 0x7EEE
 IDC_EXT_OPTS = 2095
 TREE_OPTIONS_EDITBOX_ID = 101
 
+IDC_VIDEOPLAYER = 2020
 IDC_WSPORT = 2545
 IDC_WSENABLED = 2671
 IDC_TMPLPATH = 2682
@@ -65,6 +66,7 @@ IDC_WS_ALLOWEDIPS = 3069
 IDC_AUTOUPDATE_IPFILTER = 3070
 IDC_IPFILTERPERIOD = 3072
 IDC_UPDATEURL = 2797
+IDC_VIDEOTHUMBNAILS = 3084
 
 TV_FIRST = 0x1100
 TVM_EXPAND = TV_FIRST + 2
@@ -412,6 +414,8 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
             ("MaxLogBuff", "64"),
             ("LogFileFormat", "0"),
             ("PreviewSmallBlocks", "0"),
+            ("VideoPlayer", ""),
+            ("VideoPreviewThumbnails", "0"),
             ("TxtEditor", "notepad.exe"),
             ("MaxChatHistoryLines", "100"),
             ("MaxMessageSessions", "50"),
@@ -521,6 +525,10 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         ensure_checkbox(find_control(dialog_hwnd, IDC_AUTOUPDATE_IPFILTER, "Button"), True)
         set_edit_text(find_control(dialog_hwnd, IDC_IPFILTERPERIOD, "Edit"), "11")
 
+        select_page(dialog_hwnd, "Files")
+        set_edit_text(find_control(dialog_hwnd, IDC_VIDEOPLAYER, "Edit"), "vlc.exe")
+        ensure_checkbox(find_control(dialog_hwnd, IDC_VIDEOTHUMBNAILS, "Button"), True)
+
         select_page(dialog_hwnd, "Web Interface")
         ensure_checkbox(find_control(dialog_hwnd, IDC_WSENABLED, "Button"), True)
         set_edit_text(find_control(dialog_hwnd, IDC_WSPORT, "Edit"), str(rest_port))
@@ -563,6 +571,8 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
                 "MaxLogBuff": "128",
                 "LogFileFormat": "1",
                 "PreviewSmallBlocks": "2",
+                "VideoPlayer": "vlc.exe",
+                "VideoPreviewThumbnails": "1",
                 "TxtEditor": "notepad.exe /A",
                 "MaxChatHistoryLines": "321",
                 "MaxMessageSessions": "61",

@@ -33,6 +33,19 @@ TEST_CASE("Part-file preview seam handles slash variants and extensionless comma
 	CHECK(PartFilePreviewSeams::ExtractConfiguredVideoPlayerBaseName(CString(_T("C:/apps/VideoLAN/VLC.EXE"))) == CString(_T("VLC")));
 	CHECK(PartFilePreviewSeams::ExtractConfiguredVideoPlayerBaseName(CString(_T("vlc"))) == CString(_T("vlc")));
 	CHECK(PartFilePreviewSeams::ExtractConfiguredVideoPlayerBaseName(CString(_T("C:\\tools\\player.with.dots\\mpv.com"))) == CString(_T("mpv")));
+	CHECK(PartFilePreviewSeams::ExtractConfiguredVideoPlayerBaseName(CString(_T("\"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\""))) == CString(_T("vlc")));
+}
+
+TEST_CASE("Part-file preview seam recognizes only configured VLC players for thumbnail generation")
+{
+	CHECK(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc"))));
+	CHECK(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc.exe"))));
+	CHECK(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("C:/apps/VideoLAN/VLC.EXE"))));
+	CHECK(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("\"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\""))));
+
+	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T(""))));
+	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("mpv.exe"))));
+	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc-helper.exe"))));
 }
 
 TEST_SUITE_END;
