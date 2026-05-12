@@ -1175,6 +1175,26 @@ def test_transfer_add_response_uses_stable_bulk_items() -> None:
     assert module.require_transfer_add_result(result, expected_hash) == item
 
 
+def test_transfer_operation_response_uses_stable_bulk_items() -> None:
+    module = load_rest_api_smoke_module()
+    expected_hash = "fedcba98765432100123456789abcdef"
+
+    item = {"hash": expected_hash, "ok": True}
+    result = {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "json": {"items": [item]},
+        "raw_json": {"data": {"items": [item]}, "meta": {"apiVersion": "v1"}},
+    }
+
+    assert module.require_transfer_operation_result(result, expected_hash) == {
+        "hash": expected_hash,
+        "ok": True,
+        "state": None,
+        "stopped": None,
+    }
+
+
 def test_peer_add_friend_never_returns_ok_for_friend_response() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     source_path = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"

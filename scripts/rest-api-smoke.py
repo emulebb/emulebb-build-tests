@@ -1973,14 +1973,14 @@ def require_transfer_add_result(result: dict[str, object], expected_hash: str) -
 
 
 def require_transfer_operation_result(result: dict[str, object], expected_hash: str) -> dict[str, object]:
-    """Asserts one successful single-transfer operation returns the mutated transfer."""
+    """Asserts one successful single-transfer operation reports a bulk item outcome."""
 
-    payload = require_json_object(result, 200)
-    assert str(payload.get("hash") or "").lower() == expected_hash, compact_http_result(result)
+    item = require_transfer_bulk_result(result, expected_hash, True)
     return {
-        "hash": payload.get("hash"),
-        "state": payload.get("state"),
-        "stopped": payload.get("stopped"),
+        "hash": item.get("hash"),
+        "ok": item.get("ok"),
+        "state": item.get("state"),
+        "stopped": item.get("stopped"),
     }
 
 
