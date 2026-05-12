@@ -742,7 +742,7 @@ def isolate_arr_indexer_search(arr_url: str, api_key: str, allowed_indexer_id: i
             continue
         desired_enabled = indexer_id == int(allowed_indexer_id)
         current_enabled = is_arr_indexer_enabled(indexer)
-        if current_enabled != desired_enabled:
+        if current_enabled != desired_enabled or desired_enabled:
             changes.append(set_arr_indexer_search_state(arr_url, api_key, indexer, desired_enabled))
     return snapshots, changes
 

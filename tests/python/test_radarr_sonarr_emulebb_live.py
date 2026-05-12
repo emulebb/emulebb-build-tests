@@ -1393,6 +1393,32 @@ def test_is_arr_indexer_enabled_uses_modern_arr_flags() -> None:
     )
 
 
+def test_isolate_arr_indexer_search_force_refreshes_allowed_indexer(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    changes: list[tuple[int, bool]] = []
+
+    monkeypatch.setattr(
+        module,
+        "list_arr_indexers",
+        lambda *_args: [
+            {"id": 22, "name": "eMule BB Local", "enableAutomaticSearch": True, "enableInteractiveSearch": True},
+            {"id": 30, "name": "Other", "enableAutomaticSearch": True, "enableInteractiveSearch": True},
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "set_arr_indexer_search_state",
+        lambda _url, _key, indexer, enabled: changes.append((int(indexer["id"]), enabled))
+        or {"id": int(indexer["id"]), "enabled": enabled, "status": 202},
+    )
+
+    snapshots, summary = module.isolate_arr_indexer_search("http://radarr.test", "key", 22)
+
+    assert [row["id"] for row in snapshots] == [22, 30]
+    assert changes == [(22, True), (30, False)]
+    assert summary == [{"id": 22, "enabled": True, "status": 202}, {"id": 30, "enabled": False, "status": 202}]
+
+
 def test_qbit_live_wire_roundtrip_mutates_and_deletes_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[str] = []
