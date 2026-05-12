@@ -75,6 +75,7 @@ TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on p
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshIntervalMs == PartFilePreviewSeams::kVideoThumbnailRetryIntervalMs);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshDeltaPermille == 50ull);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshMaxDeltaBytes == 128ull * oneMegabyte);
+	CHECK(PartFilePreviewSeams::kVlcThumbnailTimeoutMs == 30000u);
 	CHECK(PartFilePreviewSeams::GetVideoThumbnailRefreshRequiredCompletedDelta(hundredMegabytes) == 5ull * oneMegabyte);
 	CHECK(PartFilePreviewSeams::GetVideoThumbnailRefreshRequiredCompletedDelta(tenGigabytes) == 128ull * oneMegabyte);
 
