@@ -112,19 +112,33 @@ def test_radarr_stage_does_not_duplicate_prowlarr_movie_readiness() -> None:
     assert "prowlarr_sonarr_video_search" not in script_text
 
 
-def test_arr_release_selection_prefers_title_match_then_sources() -> None:
+def test_arr_release_selection_picks_smallest_release_with_enough_sources() -> None:
     module = load_radarr_sonarr_module()
 
     result = module.select_best_arr_release(
         [
-            {"title": "Other Release", "sources": 100, "guid": "other"},
-            {"title": "Operator Movie 720p", "sources": 4, "guid": "lower"},
-            {"title": "Operator Movie 1080p", "sources": 12, "guid": "best"},
+            {"title": "Operator Movie 1080p", "sources": 40, "size": 4_000_000_000, "guid": "larger"},
+            {"title": "Operator Movie 720p", "sources": 9, "size": 700_000_000, "guid": "too-few-sources"},
+            {"title": "Operator Movie 1080p", "sources": 12, "size": 1_400_000_000, "guid": "smallest-ok"},
+            {"title": "Other Release", "sources": 100, "size": 2_000_000_000, "guid": "other-larger"},
         ],
         "operator movie",
     )
 
-    assert result["guid"] == "best"
+    assert result["guid"] == "smallest-ok"
+
+
+def test_arr_release_selection_requires_minimum_sources_and_positive_size() -> None:
+    module = load_radarr_sonarr_module()
+
+    with pytest.raises(RuntimeError, match="at least 10 sources"):
+        module.select_best_arr_release(
+            [
+                {"title": "Operator Movie 720p", "sources": 9, "size": 700_000_000, "guid": "too-few-sources"},
+                {"title": "Operator Movie 1080p", "sources": 12, "size": 0, "guid": "missing-size"},
+            ],
+            "operator movie",
+        )
 
 
 def test_arr_release_search_paths_try_media_cache_before_operator_term() -> None:

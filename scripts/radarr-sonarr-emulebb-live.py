@@ -41,6 +41,7 @@ DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES = 30.0
 DEFAULT_SHARED_HASH_IDLE_TIMEOUT_SECONDS = 60.0
 ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 DEFAULT_MEDIA_QUALITY_PROFILE_NAME = "AnyAnyLang"
+MIN_ARR_RELEASE_SOURCES = 10
 
 
 class LiveSearchUnavailableError(RuntimeError):
@@ -972,22 +973,45 @@ def is_emulebb_arr_release(row: dict[str, Any], indexer_id: int) -> bool:
     return int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower()
 
 
+def arr_release_size_bytes(row: dict[str, Any]) -> int | None:
+    """Returns the positive release size from an Arr/Prowlarr release row."""
+
+    for key in ("size", "sizeBytes"):
+        if row.get(key) is None:
+            continue
+        try:
+            size = int(row.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if size > 0:
+            return size
+    return None
+
+
 def select_best_arr_release(rows: list[dict[str, Any]], query: str) -> dict[str, Any]:
-    """Selects the best Arr release by title match and source count."""
+    """Selects the smallest manual Arr release with enough sources."""
 
     if not rows:
         raise RuntimeError("Arr release selection requires at least one row.")
     candidates = [
         (
-            prowlarr_live.release_title_match_score(row, query),
-            prowlarr_live.release_source_count(row),
-            -index,
+            arr_release_size_bytes(row),
+            -prowlarr_live.release_title_match_score(row, query),
+            -prowlarr_live.release_source_count(row),
+            index,
             json.loads(json.dumps(row)),
         )
         for index, row in enumerate(rows)
+        if prowlarr_live.release_source_count(row) >= MIN_ARR_RELEASE_SOURCES and arr_release_size_bytes(row) is not None
     ]
-    candidates.sort(reverse=True)
-    return candidates[0][3]
+    if not candidates:
+        max_sources = max((prowlarr_live.release_source_count(row) for row in rows), default=0)
+        raise RuntimeError(
+            f"Arr release selection found no release with at least {MIN_ARR_RELEASE_SOURCES} sources and a positive size. "
+            f"Rows={len(rows)}, max_sources={max_sources}."
+        )
+    candidates.sort()
+    return candidates[0][4]
 
 
 def summarize_arr_release_indexers(rows: list[Any], limit: int = 8) -> list[dict[str, object]]:
