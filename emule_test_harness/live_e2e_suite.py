@@ -196,13 +196,11 @@ PROFILE_SUITE_NAMES = {
     "beta-green": (
         "shared-directories-rest",
         "rest-api",
-        "amutorrent-browser-smoke",
         "prowlarr-emulebb",
     ),
     "beta-release": (
         "shared-directories-rest",
         "rest-api",
-        "amutorrent-browser-smoke",
         "prowlarr-emulebb",
         "radarr-emulebb",
         "sonarr-emulebb",

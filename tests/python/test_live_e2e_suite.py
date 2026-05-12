@@ -230,13 +230,11 @@ def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monk
     assert [script_name(command) for command in commands] == [
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
-        "amutorrent-browser-smoke.py",
         "prowlarr-emulebb-live.py",
     ]
     assert [suite["name"] for suite in summary["suites"]] == [
         "shared-directories-rest",
         "rest-api",
-        "amutorrent-browser-smoke",
         "prowlarr-emulebb",
     ]
     assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb"]
@@ -248,7 +246,7 @@ def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-stress-budget") == ["smoke"]
     assert option_values(rest_command, "--live-download-trigger-count") == [str(live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)]
 
-    prowlarr_command = commands[3]
+    prowlarr_command = commands[2]
     assert option_values(prowlarr_command, "--direct-search-stress-count") == [
         str(live_e2e_suite.BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT)
     ]
@@ -276,7 +274,6 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "rest-cold-start-dump-stress.py",
-        "amutorrent-browser-smoke.py",
         "prowlarr-emulebb-live.py",
         "radarr-emulebb-live.py",
         "sonarr-emulebb-live.py",
