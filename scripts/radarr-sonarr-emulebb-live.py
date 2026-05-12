@@ -1142,6 +1142,7 @@ def rank_arr_releases(
     *,
     min_sources: int = MIN_ARR_RELEASE_SOURCES,
     require_episode_like: bool = False,
+    prefer_sources: bool = False,
 ) -> list[dict[str, Any]]:
     """Ranks manual Arr releases by the live acquisition policy."""
 
@@ -1149,8 +1150,9 @@ def rank_arr_releases(
     for index, row in enumerate(rows):
         title_score = prowlarr_live.release_title_match_score(row, query)
         size = arr_release_size_bytes(row)
+        source_count = prowlarr_live.release_source_count(row)
         if (
-            prowlarr_live.release_source_count(row) >= min_sources
+            source_count >= min_sources
             and size is not None
             and title_score >= MIN_ARR_RELEASE_TITLE_MATCH_SCORE
             and (
@@ -1158,17 +1160,15 @@ def rank_arr_releases(
                 or (sonarr_release_title_is_episode_like(row) and sonarr_release_title_matches_series_episode(row, query))
             )
         ):
+            rank_key = (-source_count, size, -title_score, index) if prefer_sources else (size, -title_score, -source_count, index)
             candidates.append(
                 (
-                    size,
-                    -title_score,
-                    -prowlarr_live.release_source_count(row),
-                    index,
+                    rank_key,
                     json.loads(json.dumps(row)),
                 )
             )
     candidates.sort()
-    return [candidate[4] for candidate in candidates]
+    return [candidate[1] for candidate in candidates]
 
 
 def select_best_arr_release(
@@ -1177,12 +1177,19 @@ def select_best_arr_release(
     *,
     min_sources: int = MIN_ARR_RELEASE_SOURCES,
     require_episode_like: bool = False,
+    prefer_sources: bool = False,
 ) -> dict[str, Any]:
     """Selects the smallest manual Arr release with enough sources and a matching title."""
 
     if not rows:
         raise RuntimeError("Arr release selection requires at least one row.")
-    ranked = rank_arr_releases(rows, query, min_sources=min_sources, require_episode_like=require_episode_like)
+    ranked = rank_arr_releases(
+        rows,
+        query,
+        min_sources=min_sources,
+        require_episode_like=require_episode_like,
+        prefer_sources=prefer_sources,
+    )
     if ranked:
         return ranked[0]
     max_sources = max((prowlarr_live.release_source_count(row) for row in rows), default=0)
@@ -1771,9 +1778,22 @@ def grab_first_arr_release(
                     ranked_matches, enriched_count = enrich_arr_release_sources(matches, source_rows)
                     enrichment_summary["enriched_count"] = enriched_count
                     attempts[-1]["source_enrichment"] = enrichment_summary
-                ranked = rank_arr_releases(ranked_matches, title, min_sources=min_sources, require_episode_like=require_episode_like)
+                prefer_sources = kind == "sonarr"
+                ranked = rank_arr_releases(
+                    ranked_matches,
+                    title,
+                    min_sources=min_sources,
+                    require_episode_like=require_episode_like,
+                    prefer_sources=prefer_sources,
+                )
                 if not ranked:
-                    select_best_arr_release(ranked_matches, title, min_sources=min_sources, require_episode_like=require_episode_like)
+                    select_best_arr_release(
+                        ranked_matches,
+                        title,
+                        min_sources=min_sources,
+                        require_episode_like=require_episode_like,
+                        prefer_sources=prefer_sources,
+                    )
                 rejected: list[dict[str, object]] = []
                 for selected in ranked:
                     selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
@@ -2086,7 +2106,17 @@ def grab_first_arr_release_via_prowlarr(
             }
         )
         if status >= 200 and status < 300 and matches:
-            selected = prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
+            min_sources = MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1
+            require_episode_like = kind == "sonarr"
+            prefer_sources = kind == "sonarr"
+            ranked_matches = rank_arr_releases(
+                matches,
+                title,
+                min_sources=min_sources,
+                require_episode_like=require_episode_like,
+                prefer_sources=prefer_sources,
+            )
+            selected = ranked_matches[0] if ranked_matches else prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
             try:
                 magnet = get_release_magnet_url(selected)
             except RuntimeError:
@@ -2097,16 +2127,21 @@ def grab_first_arr_release_via_prowlarr(
                     category_id,
                     max(1.0, deadline - time.monotonic()),
                 )
-                min_sources = MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1
-                require_episode_like = kind == "sonarr"
                 ranked_direct_rows = rank_arr_releases(
                     direct_rows,
                     title,
                     min_sources=min_sources,
                     require_episode_like=require_episode_like,
+                    prefer_sources=prefer_sources,
                 )
                 if not ranked_direct_rows:
-                    select_best_arr_release(direct_rows, title, min_sources=min_sources, require_episode_like=require_episode_like)
+                    select_best_arr_release(
+                        direct_rows,
+                        title,
+                        min_sources=min_sources,
+                        require_episode_like=require_episode_like,
+                        prefer_sources=prefer_sources,
+                    )
                 selected = ranked_direct_rows[0]
                 magnet = get_release_magnet_url(selected)
                 attempts[-1]["direct_torznab_magnet_fallback"] = direct_summary

@@ -158,6 +158,24 @@ def test_arr_release_selection_can_use_lower_sonarr_source_floor() -> None:
     assert result["guid"] == "smallest-positive"
 
 
+def test_sonarr_release_selection_can_prefer_sources_over_size() -> None:
+    module = load_radarr_sonarr_module()
+
+    result = module.select_best_arr_release(
+        [
+            {"title": "Operator Series S01E01 480p", "sources": 1, "size": 400_000_000, "guid": "smallest-one-source"},
+            {"title": "Operator Series S01E01 720p", "sources": 6, "size": 1_400_000_000, "guid": "stronger-sources"},
+            {"title": "Operator Series S01E01 1080p", "sources": 6, "size": 2_000_000_000, "guid": "same-sources-larger"},
+        ],
+        "operator series",
+        min_sources=1,
+        require_episode_like=True,
+        prefer_sources=True,
+    )
+
+    assert result["guid"] == "stronger-sources"
+
+
 def test_sonarr_release_selection_requires_episode_like_title_when_requested() -> None:
     module = load_radarr_sonarr_module()
 
