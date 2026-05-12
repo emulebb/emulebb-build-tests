@@ -63,6 +63,21 @@ TEST_CASE("Part-file preview seam unlocks partial videos after a capped percenta
 	CHECK(PartFilePreviewSeams::HasEnoughCompletedDataForPartialVideoPreview(twoGigabytes, 10737419ull));
 }
 
+TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on progress")
+{
+	CHECK(PartFilePreviewSeams::kVideoThumbnailDisplayMaxWidth == 480);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshIntervalMs == 90000ull);
+
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 0ull));
+	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 1000ull));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(91000ull, 1000ull));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(1000ull, 91000ull));
+
+	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(4096ull, 4096ull));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(8192ull, 4096ull));
+	CHECK(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(4096ull, 8192ull));
+}
+
 TEST_CASE("Part-file preview seam builds quoted VLC thumbnail command lines")
 {
 	const CString command = PartFilePreviewSeams::BuildVlcThumbnailCommandLine(
