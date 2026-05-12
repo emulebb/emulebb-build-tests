@@ -1959,6 +1959,19 @@ def require_transfer_bulk_result(result: dict[str, object], expected_hash: str, 
     return first
 
 
+def require_transfer_add_result(result: dict[str, object], expected_hash: str) -> dict[str, object]:
+    """Asserts one transfer add response reports the newly queued transfer item."""
+
+    payload = require_json_object(result, 200)
+    rows = payload.get("items") or payload.get("results")
+    assert isinstance(rows, list) and rows, compact_http_result(result)
+    first = rows[0]
+    assert isinstance(first, dict), compact_http_result(result)
+    assert first.get("ok") is True, compact_http_result(result)
+    assert str(first.get("hash") or "").lower() == expected_hash
+    return first
+
+
 def require_transfer_operation_result(result: dict[str, object], expected_hash: str) -> dict[str, object]:
     """Asserts one successful single-transfer operation returns the mutated transfer."""
 
@@ -3081,7 +3094,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         },
         request_timeout_seconds=30.0,
     )
-    transfer_add_valid_payload = require_json_object(transfer_add_valid, 200)
+    transfer_add_valid_payload = require_transfer_add_result(transfer_add_valid, REST_SURFACE_VALID_DOWNLOAD_HASH)
     transfer_added = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}", api_key=api_key)
     transfer_added_payload = require_json_object(transfer_added, 200)
     transfer_added_details = http_request(
@@ -3148,10 +3161,9 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         },
         request_timeout_seconds=30.0,
     )
-    transfer_add_unicode_payload = require_json_object(transfer_add_unicode, 200)
+    transfer_add_unicode_payload = require_transfer_add_result(transfer_add_unicode, REST_SURFACE_UNICODE_DOWNLOAD_HASH)
     transfer_added_unicode = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_UNICODE_DOWNLOAD_HASH}", api_key=api_key)
     transfer_added_unicode_payload = require_json_object(transfer_added_unicode, 200)
-    assert transfer_add_unicode_payload.get("hash") == REST_SURFACE_UNICODE_DOWNLOAD_HASH, compact_http_result(transfer_add_unicode)
     assert transfer_added_unicode_payload.get("name") == unicode_transfer_name, compact_http_result(transfer_added_unicode)
     unicode_log_message = wait_for_log_message_containing(
         base_url,
@@ -3178,10 +3190,9 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         },
         request_timeout_seconds=30.0,
     )
-    transfer_add_reserved_payload = require_json_object(transfer_add_reserved, 200)
+    transfer_add_reserved_payload = require_transfer_add_result(transfer_add_reserved, REST_SURFACE_RESERVED_DOWNLOAD_HASH)
     transfer_added_reserved = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_RESERVED_DOWNLOAD_HASH}", api_key=api_key)
     transfer_added_reserved_payload = require_json_object(transfer_added_reserved, 200)
-    assert transfer_add_reserved_payload.get("hash") == REST_SURFACE_RESERVED_DOWNLOAD_HASH, compact_http_result(transfer_add_reserved)
     assert transfer_added_reserved_payload.get("name") == reserved_transfer_expected_name, compact_http_result(transfer_added_reserved)
     transfer_delete_added = http_request(
         base_url,
