@@ -456,6 +456,47 @@ def test_arr_release_grab_discovers_new_category_transfer_when_release_hash_miss
     ]
 
 
+def test_arr_release_grab_does_not_fallback_when_arr_indexer_is_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[str] = []
+
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("manual search failed")),
+    )
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release_via_prowlarr",
+        lambda **_kwargs: calls.append("fallback") or {},
+    )
+
+    with pytest.raises(RuntimeError, match="manual Arr release acquisition failed"):
+        module.grab_first_arr_release_or_fallback_to_prowlarr(
+            kind="radarr",
+            arr_url="http://radarr.test",
+            arr_api_key="key",
+            arr_indexer_id=40,
+            arr_indexer_name="eMule BB Local",
+            prowlarr_url="http://prowlarr.test",
+            prowlarr_api_key="prowlarr-key",
+            prowlarr_indexer_id=50,
+            emule_base_url="http://127.0.0.1:1",
+            emule_api_key="emule-key",
+            title="operator movie",
+            media_id=77,
+            category_id=module.TORZNAB_MOVIE_CATEGORY,
+            download_category=module.RADARR_IMPORT_CATEGORY,
+            timeout_seconds=10.0,
+            health_rows=[],
+        )
+
+    assert calls == []
+
+
 def test_radarr_sonarr_live_script_does_not_define_static_movie_title() -> None:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "radarr-sonarr-emulebb-live.py"
     script_text = script_path.read_text(encoding="utf-8")
