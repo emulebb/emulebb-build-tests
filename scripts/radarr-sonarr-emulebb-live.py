@@ -320,16 +320,20 @@ def wait_for_synced_indexer(arr_url: str, api_key: str, indexer_name: str, timeo
 
 
 def is_arr_indexer_enabled(indexer: dict[str, Any]) -> bool:
-    """Returns true when Radarr/Sonarr has enabled the synced indexer."""
+    """Returns true when Radarr/Sonarr can use the synced indexer for manual search."""
 
-    if "enable" in indexer:
-        return bool(indexer.get("enable"))
-    enable_flags = [
-        indexer.get("enableRss"),
+    if indexer.get("enable") is False:
+        return False
+    search_flags = [
         indexer.get("enableAutomaticSearch"),
         indexer.get("enableInteractiveSearch"),
     ]
-    return all(flag is not False for flag in enable_flags)
+    present_search_flags = [flag for flag in search_flags if flag is not None]
+    if present_search_flags:
+        return all(flag is not False for flag in present_search_flags)
+    if "enable" in indexer:
+        return bool(indexer.get("enable"))
+    return indexer.get("enableRss") is not False
 
 
 def is_emulebb_indexer_name(indexer_name: str, configured_name: str) -> bool:
@@ -398,8 +402,9 @@ def build_arr_emule_indexer_payload(
     payload["tags"] = []
     if "enable" in payload:
         payload["enable"] = bool(enabled)
-    for flag_name in ("enableRss", "enableAutomaticSearch", "enableInteractiveSearch"):
-        payload[flag_name] = bool(enabled)
+    payload["enableRss"] = False
+    payload["enableAutomaticSearch"] = bool(enabled)
+    payload["enableInteractiveSearch"] = bool(enabled)
     set_field_value(payload, "baseUrl", prowlarr_url.rstrip("/") + f"/{int(prowlarr_indexer_id)}/")
     set_field_value(payload, "apiPath", "/api")
     set_field_value(payload, "apiKey", prowlarr_api_key)
@@ -618,7 +623,9 @@ def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, An
     payload = json.loads(json.dumps(indexer))
     if "enable" in payload:
         payload["enable"] = True
-    for flag_name in ("enableRss", "enableAutomaticSearch", "enableInteractiveSearch"):
+    if "enableRss" in payload:
+        payload["enableRss"] = False
+    for flag_name in ("enableAutomaticSearch", "enableInteractiveSearch"):
         if flag_name in payload:
             payload[flag_name] = True
     result = arr_request(
@@ -706,7 +713,9 @@ def set_arr_indexer_search_state(arr_url: str, api_key: str, indexer: dict[str, 
     payload = json.loads(json.dumps(indexer))
     if "enable" in payload:
         payload["enable"] = bool(enabled)
-    for flag_name in ("enableRss", "enableAutomaticSearch", "enableInteractiveSearch"):
+    if "enableRss" in payload:
+        payload["enableRss"] = False
+    for flag_name in ("enableAutomaticSearch", "enableInteractiveSearch"):
         if flag_name in payload:
             payload[flag_name] = bool(enabled)
     result = arr_request(

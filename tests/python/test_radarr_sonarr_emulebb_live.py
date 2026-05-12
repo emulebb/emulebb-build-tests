@@ -1035,7 +1035,9 @@ def test_ensure_arr_emule_indexer_reuses_existing_provider(monkeypatch: pytest.M
             }
         if path == "/api/v3/indexer/14?forceSave=true" and method == "PUT":
             assert json_body["name"] == "eMule BB Local"
-            assert json_body["enableRss"] is True
+            assert json_body["enableRss"] is False
+            assert json_body["enableAutomaticSearch"] is True
+            assert json_body["enableInteractiveSearch"] is True
             assert json_body["fields"][0]["value"] == "http://prowlarr.test/40/"
             assert json_body["fields"][3]["value"] == [module.TORZNAB_MOVIE_CATEGORY]
             return {"status": 202, "json": {**json_body, "id": 14}, "body_text": "{}"}
@@ -1079,6 +1081,9 @@ def test_ensure_arr_emule_indexer_creates_missing_sonarr_provider(monkeypatch: p
         if path == "/api/v3/indexer/schema" and method == "GET":
             return {"status": 200, "json": [schema], "body_text": "[]"}
         if path == "/api/v3/indexer?forceSave=true" and method == "POST":
+            assert json_body["enableRss"] is False
+            assert json_body["enableAutomaticSearch"] is True
+            assert json_body["enableInteractiveSearch"] is True
             assert json_body["fields"][0]["value"] == "http://prowlarr.test/40/"
             assert json_body["fields"][3]["value"] == [module.TORZNAB_TV_CATEGORY]
             return {"status": 201, "json": {**json_body, "id": 16}, "body_text": "{}"}
@@ -1120,7 +1125,9 @@ def test_ensure_arr_emule_indexer_retries_disabled_save_on_validation_blocker(mo
     }
 
     def fake_arr_request(_arr_url, _api_key, path, *, method="GET", json_body=None, **_kwargs):
-        enabled = bool(json_body and json_body.get("enableRss"))
+        enabled = bool(json_body and json_body.get("enableAutomaticSearch") and json_body.get("enableInteractiveSearch"))
+        if enabled:
+            assert json_body["enableRss"] is False
         requests.append((method, path, enabled))
         if path == "/api/v3/indexer" and method == "GET":
             return {"status": 200, "json": [], "body_text": "[]"}
@@ -1340,7 +1347,15 @@ def test_is_arr_indexer_enabled_uses_modern_arr_flags() -> None:
 
     assert module.is_arr_indexer_enabled(
         {
-            "enableRss": True,
+            "enableRss": False,
+            "enableAutomaticSearch": True,
+            "enableInteractiveSearch": True,
+        }
+    )
+    assert module.is_arr_indexer_enabled(
+        {
+            "enable": True,
+            "enableRss": False,
             "enableAutomaticSearch": True,
             "enableInteractiveSearch": True,
         }
