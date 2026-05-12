@@ -1255,6 +1255,79 @@ def lookup_radarr_movie(arr_url: str, api_key: str, title: str) -> dict[str, Any
     raise RuntimeError(f"Radarr movie lookup returned no candidates for {title!r}.")
 
 
+def arr_path_text_equal(left: object, right: object) -> bool:
+    """Compares Arr paths across Windows and POSIX separators."""
+
+    left_text = str(left or "").strip().rstrip("\\/")
+    right_text = str(right or "").strip().rstrip("\\/")
+    return left_text.replace("/", "\\").lower() == right_text.replace("/", "\\").lower()
+
+
+def arr_path_under_root(path_text: object, root_path_text: str) -> bool:
+    """Returns true when one Arr media path already lives under a root."""
+
+    media_path = str(path_text or "").strip().rstrip("\\/")
+    root_path = root_path_text.strip().rstrip("\\/")
+    if not media_path or not root_path:
+        return False
+    media_windows = media_path.replace("/", "\\").lower()
+    root_windows = root_path.replace("/", "\\").lower()
+    return media_windows == root_windows or media_windows.startswith(root_windows + "\\")
+
+
+def arr_media_folder_name(media: dict[str, object], fallback_title: str) -> str:
+    """Returns a stable folder name for moving an existing Arr media item under a new root."""
+
+    current_path = str(media.get("path") or "").strip().rstrip("\\/")
+    if current_path:
+        parts = [part for part in current_path.replace("\\", "/").split("/") if part]
+        if parts:
+            return parts[-1]
+    folder_name = str(media.get("folderName") or "").strip()
+    if folder_name:
+        return folder_name
+    return fallback_title.strip() or "media"
+
+
+def arr_join_root_child(root_path_text: str, child_name: str) -> str:
+    """Joins an Arr root and child path without assuming the host path style."""
+
+    root = root_path_text.rstrip("\\/")
+    separator = "\\" if "\\" in root or (len(root) > 1 and root[1] == ":") else "/"
+    return f"{root}{separator}{child_name}"
+
+
+def update_existing_arr_media_payload(
+    media: dict[str, object],
+    *,
+    quality_profile_id: int,
+    root_path_text: str,
+    fallback_title: str,
+    radarr_movie: bool,
+) -> tuple[dict[str, object], bool]:
+    """Builds a corrected Arr media payload when an existing item is reused."""
+
+    payload = dict(media)
+    changed = False
+    if int(payload.get("qualityProfileId") or 0) != quality_profile_id:
+        payload["qualityProfileId"] = quality_profile_id
+        changed = True
+    if not arr_path_text_equal(payload.get("rootFolderPath"), root_path_text) or not arr_path_under_root(payload.get("path"), root_path_text):
+        payload["rootFolderPath"] = root_path_text
+        payload["path"] = arr_join_root_child(root_path_text, arr_media_folder_name(payload, fallback_title))
+        changed = True
+    if payload.get("monitored") is not True:
+        payload["monitored"] = True
+        changed = True
+    if radarr_movie and payload.get("minimumAvailability") != "released":
+        payload["minimumAvailability"] = "released"
+        changed = True
+    if not radarr_movie and payload.get("seasonFolder") is not True:
+        payload["seasonFolder"] = True
+        changed = True
+    return payload, changed
+
+
 def ensure_radarr_movie(
     arr_url: str,
     api_key: str,
@@ -1274,11 +1347,15 @@ def ensure_radarr_movie(
     if isinstance(movies, list):
         for movie in movies:
             if isinstance(movie, dict) and str(movie.get("title") or "").strip().lower() == title.lower():
-                updated = False
                 selected_movie = movie
-                if int(movie.get("qualityProfileId") or 0) != quality_profile_id:
-                    payload = dict(movie)
-                    payload["qualityProfileId"] = quality_profile_id
+                payload, updated = update_existing_arr_media_payload(
+                    movie,
+                    quality_profile_id=quality_profile_id,
+                    root_path_text=root_path_text,
+                    fallback_title=title,
+                    radarr_movie=True,
+                )
+                if updated:
                     updated_payload = require_success(
                         arr_request(
                             arr_url,
@@ -1292,7 +1369,6 @@ def ensure_radarr_movie(
                     )
                     if isinstance(updated_payload, dict):
                         selected_movie = updated_payload
-                    updated = True
                 return {
                     "id": int(movie.get("id") or 0),
                     "title": movie.get("title"),
@@ -1396,11 +1472,15 @@ def ensure_sonarr_series(
     if isinstance(series_rows, list):
         for series in series_rows:
             if isinstance(series, dict) and str(series.get("title") or "").strip().lower() == title.lower():
-                updated = False
                 selected_series = series
-                if int(series.get("qualityProfileId") or 0) != quality_profile_id:
-                    payload = dict(series)
-                    payload["qualityProfileId"] = quality_profile_id
+                payload, updated = update_existing_arr_media_payload(
+                    series,
+                    quality_profile_id=quality_profile_id,
+                    root_path_text=root_path_text,
+                    fallback_title=title,
+                    radarr_movie=False,
+                )
+                if updated:
                     updated_payload = require_success(
                         arr_request(
                             arr_url,
@@ -1414,7 +1494,6 @@ def ensure_sonarr_series(
                     )
                     if isinstance(updated_payload, dict):
                         selected_series = updated_payload
-                    updated = True
                 return {
                     "id": int(series.get("id") or 0),
                     "title": series.get("title"),

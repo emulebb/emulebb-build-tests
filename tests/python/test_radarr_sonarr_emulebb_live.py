@@ -1040,6 +1040,110 @@ def test_ensure_radarr_movie_prefers_named_quality_profile(monkeypatch: pytest.M
     assert summary["quality_profile"] == {"id": 9, "name": "AnyAnyLang", "preferred_name": "AnyAnyLang"}
 
 
+def test_ensure_radarr_movie_realigns_existing_movie_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    target_root = str(tmp_path.resolve())
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        if path == "/api/v3/rootfolder":
+            return {"status": 200, "json": [{"id": 5, "path": target_root}], "body_text": "[]"}
+        if path == "/api/v3/qualityprofile":
+            return {"status": 200, "json": [{"id": 9, "name": "AnyAnyLang"}], "body_text": "[]"}
+        if path == "/api/v3/movie":
+            return {
+                "status": 200,
+                "json": [
+                    {
+                        "id": 42,
+                        "title": "operator configured title",
+                        "qualityProfileId": 3,
+                        "rootFolderPath": r"C:\old\root",
+                        "path": r"C:\old\root\Movie Folder",
+                        "monitored": False,
+                        "minimumAvailability": "announced",
+                    }
+                ],
+                "body_text": "[]",
+            }
+        if path == "/api/v3/movie/42":
+            assert kwargs["method"] == "PUT"
+            payload = kwargs["json_body"]
+            assert payload["qualityProfileId"] == 9
+            assert payload["rootFolderPath"] == target_root
+            assert Path(payload["path"]) == tmp_path.resolve() / "Movie Folder"
+            assert payload["monitored"] is True
+            assert payload["minimumAvailability"] == "released"
+            return {"status": 202, "json": payload, "body_text": "{}"}
+        raise AssertionError(f"Unexpected Radarr request: {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    summary = module.ensure_radarr_movie(
+        "http://radarr.test",
+        "key",
+        "operator configured title",
+        tmp_path,
+        quality_profile_name="AnyAnyLang",
+    )
+
+    assert summary["id"] == 42
+    assert summary["created"] is False
+    assert summary["updated"] is True
+    assert summary["movie"]["rootFolderPath"] == target_root
+
+
+def test_ensure_sonarr_series_realigns_existing_series_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    target_root = str(tmp_path.resolve())
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        if path == "/api/v3/rootfolder":
+            return {"status": 200, "json": [{"id": 6, "path": target_root}], "body_text": "[]"}
+        if path == "/api/v3/qualityprofile":
+            return {"status": 200, "json": [{"id": 11, "name": "AnyAnyLang"}], "body_text": "[]"}
+        if path == "/api/v3/series":
+            return {
+                "status": 200,
+                "json": [
+                    {
+                        "id": 77,
+                        "title": "operator configured series",
+                        "qualityProfileId": 2,
+                        "rootFolderPath": r"C:\old\series",
+                        "path": r"C:\old\series\Series Folder",
+                        "monitored": False,
+                        "seasonFolder": False,
+                    }
+                ],
+                "body_text": "[]",
+            }
+        if path == "/api/v3/series/77":
+            assert kwargs["method"] == "PUT"
+            payload = kwargs["json_body"]
+            assert payload["qualityProfileId"] == 11
+            assert payload["rootFolderPath"] == target_root
+            assert Path(payload["path"]) == tmp_path.resolve() / "Series Folder"
+            assert payload["monitored"] is True
+            assert payload["seasonFolder"] is True
+            return {"status": 202, "json": payload, "body_text": "{}"}
+        raise AssertionError(f"Unexpected Sonarr request: {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    summary = module.ensure_sonarr_series(
+        "http://sonarr.test",
+        "key",
+        "operator configured series",
+        tmp_path,
+        quality_profile_name="AnyAnyLang",
+    )
+
+    assert summary["id"] == 77
+    assert summary["created"] is False
+    assert summary["updated"] is True
+    assert summary["series"]["rootFolderPath"] == target_root
+
+
 def test_radarr_root_environment_warning_marks_remote_local_roots(tmp_path: Path) -> None:
     module = load_radarr_sonarr_module()
 
