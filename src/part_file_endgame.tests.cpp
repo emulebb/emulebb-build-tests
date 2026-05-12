@@ -89,6 +89,70 @@ TEST_CASE("Part file endgame seam withholds final blocks briefly then falls back
 	CHECK_EQ(fallback.maxBytes, 40u * 1024u);
 }
 
+TEST_CASE("Part file endgame seam steals slow final reservations for active faster peers")
+{
+	CHECK(PartFileEndgameSeams::ShouldStealEndgameReservation(
+		true,
+		true,
+		10u * 1024u,
+		50u * 1024u,
+		120000u,
+		0u,
+		0u));
+	CHECK(PartFileEndgameSeams::ShouldStealEndgameReservation(
+		true,
+		true,
+		10u * 1024u,
+		50u * 1024u,
+		120000u,
+		0u,
+		64u * 1024u));
+}
+
+TEST_CASE("Part file endgame seam refuses slow-owner steals without endgame, matching part, fast peer, or cooldown")
+{
+	CHECK_FALSE(PartFileEndgameSeams::ShouldStealEndgameReservation(
+		false,
+		true,
+		10u * 1024u,
+		50u * 1024u,
+		120000u,
+		0u,
+		0u));
+	CHECK_FALSE(PartFileEndgameSeams::ShouldStealEndgameReservation(
+		true,
+		false,
+		10u * 1024u,
+		50u * 1024u,
+		120000u,
+		0u,
+		0u));
+	CHECK_FALSE(PartFileEndgameSeams::ShouldStealEndgameReservation(
+		true,
+		true,
+		10u * 1024u,
+		49u * 1024u,
+		120000u,
+		0u,
+		0u));
+	CHECK_FALSE(PartFileEndgameSeams::ShouldStealEndgameReservation(
+		true,
+		true,
+		10u * 1024u,
+		50u * 1024u,
+		120000u,
+		121000u,
+		0u));
+	CHECK(PartFileEndgameSeams::ShouldStealEndgameReservation(
+		true,
+		true,
+		10u * 1024u,
+		50u * 1024u,
+		121000u,
+		121000u,
+		0u));
+}
+
 TEST_CASE("Part file endgame seam clamps reservation sizes and preserves useful tails")
 {
 	const uint64 fullBlockBytes = 184320u;
