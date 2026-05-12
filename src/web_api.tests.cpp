@@ -885,6 +885,23 @@ TEST_CASE("Web API validates transfer rename payloads")
 		request,
 		error));
 	CHECK_EQ(error, "name must not be empty");
+
+	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferRenameRequest(
+		WebApiCommandSeams::json{{"name", std::string(256, 'a')}},
+		request,
+		error));
+	CHECK_EQ(error, "name must be at most 255 characters");
+
+	error.clear();
+	std::string strControlName("bad");
+	strControlName.push_back('\x01');
+	strControlName += "name.bin";
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferRenameRequest(
+		WebApiCommandSeams::json{{"name", strControlName}},
+		request,
+		error));
+	CHECK_EQ(error, "name must be valid UTF-8 without control characters");
 }
 
 TEST_CASE("Web API validates shared-file rating/comment payloads")
@@ -2354,6 +2371,21 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers/operations/import-met-url", R"({"url":"   "})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "url must not be empty");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers/operations/import-met-url", R"({"url":"ftp://example.invalid/server.met"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "url must start with http:// or https://");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers/operations/import-met-url", R"({"url":"https:///server.met"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "url must include a host");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/servers/operations/import-met-url", R"({"url":"https://example.invalid/server met"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "url must not contain whitespace");
 	assertRoute("POST", "/api/v1/servers/operations/connect", R"({})", "servers/connect");
 	assertRoute("POST", "/api/v1/servers/operations/disconnect", R"({})", "servers/disconnect");
 	assertRoute("PATCH", "/api/v1/servers/1.2.3.4:4661", R"({"name":"Pinned","priority":"high","static":true})", "servers/update");
@@ -2390,6 +2422,11 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("GET", "/api/v1/kad", "", "kad/status");
 	assertRoute("POST", "/api/v1/kad/operations/import-nodes-url", R"({"url":"https://example.invalid/nodes.dat"})", "kad/import_nodes_url");
 	CHECK_EQ(route.params["url"].get<std::string>(), "https://example.invalid/nodes.dat");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/kad/operations/import-nodes-url", R"({"url":"http:///"})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "url must include a host");
 	assertRoute("POST", "/api/v1/kad/operations/start", R"({})", "kad/connect");
 	assertRoute("POST", "/api/v1/kad/operations/bootstrap", R"({"address":"bootstrap.example.invalid","port":4672})", "kad/bootstrap");
 	CHECK_EQ(route.params["address"].get<std::string>(), "bootstrap.example.invalid");
