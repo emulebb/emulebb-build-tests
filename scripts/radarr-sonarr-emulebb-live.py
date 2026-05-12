@@ -1903,7 +1903,14 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
             return release_grab
         except RuntimeError as exc:
             direct_error = str(exc)
-            if kind != "sonarr" or "release search returned no eMule BB rows" not in direct_error:
+            sonarr_can_fallback = (
+                kind == "sonarr"
+                and (
+                    "release search returned no eMule BB rows" in direct_error
+                    or "Arr release selection found no release" in direct_error
+                )
+            )
+            if not sonarr_can_fallback:
                 raise RuntimeError(f"{kind} manual Arr release acquisition failed: {direct_error}") from exc
     else:
         direct_error = "Arr health reports the eMule BB indexer unavailable due to failures."
@@ -2116,7 +2123,35 @@ def grab_first_arr_release_via_prowlarr(
                 require_episode_like=require_episode_like,
                 prefer_sources=prefer_sources,
             )
-            selected = ranked_matches[0] if ranked_matches else prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
+            if ranked_matches:
+                selected = ranked_matches[0]
+            elif kind == "sonarr":
+                direct_rows, direct_summary = direct_torznab_source_rows(
+                    emule_base_url,
+                    emule_api_key,
+                    title,
+                    category_id,
+                    max(1.0, deadline - time.monotonic()),
+                )
+                ranked_direct_rows = rank_arr_releases(
+                    direct_rows,
+                    title,
+                    min_sources=min_sources,
+                    require_episode_like=require_episode_like,
+                    prefer_sources=prefer_sources,
+                )
+                if not ranked_direct_rows:
+                    select_best_arr_release(
+                        direct_rows,
+                        title,
+                        min_sources=min_sources,
+                        require_episode_like=require_episode_like,
+                        prefer_sources=prefer_sources,
+                    )
+                selected = ranked_direct_rows[0]
+                attempts[-1]["direct_torznab_rank_fallback"] = direct_summary
+            else:
+                selected = prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
             try:
                 magnet = get_release_magnet_url(selected)
             except RuntimeError:
