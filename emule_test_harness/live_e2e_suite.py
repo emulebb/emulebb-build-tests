@@ -203,6 +203,13 @@ PROFILE_SUITE_NAMES = {
         "rest-api",
         "prowlarr-emulebb",
     ),
+    "controller-surface": (
+        "rest-api",
+        "prowlarr-emulebb",
+        "radarr-emulebb",
+        "sonarr-emulebb",
+        "amutorrent-browser-smoke",
+    ),
     "beta-release": (
         "shared-directories-rest",
         "rest-api",
