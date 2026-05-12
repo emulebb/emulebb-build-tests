@@ -185,6 +185,7 @@
     <ClCompile Include="src\web_api.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerJsonSeams.h')" />
     <ClCompile Include="src\web_server_legacy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerLegacySeams.h')" />
     <ClCompile Include="src\part_file_completion.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileCompletionSeams.h')" />
+    <ClCompile Include="src\part_file_endgame.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileEndgameSeams.h')" />
     <ClCompile Include="src\part_file_majority_name.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileMajorityNameSeams.h')" />
     <ClCompile Include="src\part_file_persistence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePersistenceSeams.h')" />
     <ClCompile Include="src\part_file_preview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePreviewSeams.h')" />
@@ -270,6 +271,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\MappedFileReader.h" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\NullGuardSeams.h" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\OtherFunctionsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\OtherFunctionsSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\PartFileEndgameSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileEndgameSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFileMajorityNameSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileMajorityNameSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFilePersistenceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFilePersistenceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h')" />
