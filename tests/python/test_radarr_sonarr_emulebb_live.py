@@ -158,6 +158,22 @@ def test_arr_release_selection_can_use_lower_sonarr_source_floor() -> None:
     assert result["guid"] == "smallest-positive"
 
 
+def test_sonarr_release_selection_requires_episode_like_title_when_requested() -> None:
+    module = load_radarr_sonarr_module()
+
+    result = module.select_best_arr_release(
+        [
+            {"title": "Operator Series Deleted Scene", "sources": 8, "size": 100_000_000, "guid": "not-episode"},
+            {"title": "Operator Series S01E01", "sources": 2, "size": 700_000_000, "guid": "episode"},
+        ],
+        "operator series",
+        min_sources=1,
+        require_episode_like=True,
+    )
+
+    assert result["guid"] == "episode"
+
+
 def test_arr_release_grab_skips_ranked_rows_rejected_by_arr(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     requests: list[tuple[str, str]] = []
@@ -566,7 +582,7 @@ def test_prowlarr_fallback_adds_selected_magnet_through_qbit_category(monkeypatc
 def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[tuple[str, object]] = []
-    magnet = "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000&dn=Operator.Series.mkv&xl=42"
+    magnet = "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000&dn=Operator.Series.S01E01.mkv&xl=42"
 
     monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: {"oldhash"})
     monkeypatch.setattr(
@@ -579,7 +595,7 @@ def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatc
         "prowlarr_request",
         lambda *_args, **_kwargs: {
             "status": 200,
-            "json": [{"indexerId": 50, "title": "Operator Series 1080p", "guid": "ed2k:hash", "sources": 20}],
+            "json": [{"indexerId": 50, "title": "Operator Series S01E01 1080p", "guid": "ed2k:hash", "sources": 20}],
         },
     )
     monkeypatch.setattr(module.prowlarr_live, "select_grabbable_release", lambda rows, _indexer_id, _title: rows[0])
@@ -591,7 +607,7 @@ def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatc
 <rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
   <channel>
     <item>
-      <title>Operator Series 1080p</title>
+      <title>Operator Series S01E01 1080p</title>
       <link>{escaped_magnet}</link>
       <enclosure url="{escaped_magnet}" length="1400000000" />
       <torznab:attr name="size" value="1400000000" />

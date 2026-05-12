@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import socket
 import sys
 import time
@@ -43,6 +44,11 @@ ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 DEFAULT_MEDIA_QUALITY_PROFILE_NAME = "AnyAnyLang"
 MIN_ARR_RELEASE_SOURCES = 10
 MIN_ARR_RELEASE_TITLE_MATCH_SCORE = 150
+SONARR_EPISODE_TITLE_PATTERNS = (
+    re.compile(r"\bs\d{1,2}e\d{1,3}\b", re.IGNORECASE),
+    re.compile(r"\b\d{1,2}x\d{1,3}\b", re.IGNORECASE),
+    re.compile(r"\bseason[ ._-]?\d{1,2}[ ._-]?episode[ ._-]?\d{1,3}\b", re.IGNORECASE),
+)
 
 
 class LiveSearchUnavailableError(RuntimeError):
@@ -1102,7 +1108,20 @@ def enrich_arr_release_sources(rows: list[dict[str, Any]], source_rows: list[dic
     return enriched, enriched_count
 
 
-def rank_arr_releases(rows: list[dict[str, Any]], query: str, *, min_sources: int = MIN_ARR_RELEASE_SOURCES) -> list[dict[str, Any]]:
+def sonarr_release_title_is_episode_like(row: dict[str, Any]) -> bool:
+    """Returns true when a release title contains a parseable episode marker."""
+
+    title = str(row.get("title") or row.get("name") or "")
+    return any(pattern.search(title) for pattern in SONARR_EPISODE_TITLE_PATTERNS)
+
+
+def rank_arr_releases(
+    rows: list[dict[str, Any]],
+    query: str,
+    *,
+    min_sources: int = MIN_ARR_RELEASE_SOURCES,
+    require_episode_like: bool = False,
+) -> list[dict[str, Any]]:
     """Ranks manual Arr releases by the live acquisition policy."""
 
     candidates = []
@@ -1113,6 +1132,7 @@ def rank_arr_releases(rows: list[dict[str, Any]], query: str, *, min_sources: in
             prowlarr_live.release_source_count(row) >= min_sources
             and size is not None
             and title_score >= MIN_ARR_RELEASE_TITLE_MATCH_SCORE
+            and (not require_episode_like or sonarr_release_title_is_episode_like(row))
         ):
             candidates.append(
                 (
@@ -1127,19 +1147,26 @@ def rank_arr_releases(rows: list[dict[str, Any]], query: str, *, min_sources: in
     return [candidate[4] for candidate in candidates]
 
 
-def select_best_arr_release(rows: list[dict[str, Any]], query: str, *, min_sources: int = MIN_ARR_RELEASE_SOURCES) -> dict[str, Any]:
+def select_best_arr_release(
+    rows: list[dict[str, Any]],
+    query: str,
+    *,
+    min_sources: int = MIN_ARR_RELEASE_SOURCES,
+    require_episode_like: bool = False,
+) -> dict[str, Any]:
     """Selects the smallest manual Arr release with enough sources and a matching title."""
 
     if not rows:
         raise RuntimeError("Arr release selection requires at least one row.")
-    ranked = rank_arr_releases(rows, query, min_sources=min_sources)
+    ranked = rank_arr_releases(rows, query, min_sources=min_sources, require_episode_like=require_episode_like)
     if ranked:
         return ranked[0]
     max_sources = max((prowlarr_live.release_source_count(row) for row in rows), default=0)
     max_title_score = max((prowlarr_live.release_title_match_score(row, query) for row in rows), default=0)
+    episode_requirement = " and an episode-like title" if require_episode_like else ""
     raise RuntimeError(
         f"Arr release selection found no release with at least {min_sources} sources, "
-        f"a positive size, and a title match score of at least {MIN_ARR_RELEASE_TITLE_MATCH_SCORE}. "
+        f"a positive size, a title match score of at least {MIN_ARR_RELEASE_TITLE_MATCH_SCORE}{episode_requirement}. "
         f"Rows={len(rows)}, max_sources={max_sources}, max_title_match_score={max_title_score}."
     )
 
@@ -1702,6 +1729,7 @@ def grab_first_arr_release(
             )
             if matches:
                 min_sources = MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1
+                require_episode_like = kind == "sonarr"
                 ranked_matches = matches
                 if (
                     max((prowlarr_live.release_source_count(row) for row in matches), default=0) < min_sources
@@ -1719,9 +1747,9 @@ def grab_first_arr_release(
                     ranked_matches, enriched_count = enrich_arr_release_sources(matches, source_rows)
                     enrichment_summary["enriched_count"] = enriched_count
                     attempts[-1]["source_enrichment"] = enrichment_summary
-                ranked = rank_arr_releases(ranked_matches, title, min_sources=min_sources)
+                ranked = rank_arr_releases(ranked_matches, title, min_sources=min_sources, require_episode_like=require_episode_like)
                 if not ranked:
-                    select_best_arr_release(ranked_matches, title, min_sources=min_sources)
+                    select_best_arr_release(ranked_matches, title, min_sources=min_sources, require_episode_like=require_episode_like)
                 rejected: list[dict[str, object]] = []
                 for selected in ranked:
                     selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
@@ -2046,9 +2074,15 @@ def grab_first_arr_release_via_prowlarr(
                     max(1.0, deadline - time.monotonic()),
                 )
                 min_sources = MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1
-                ranked_direct_rows = rank_arr_releases(direct_rows, title, min_sources=min_sources)
+                require_episode_like = kind == "sonarr"
+                ranked_direct_rows = rank_arr_releases(
+                    direct_rows,
+                    title,
+                    min_sources=min_sources,
+                    require_episode_like=require_episode_like,
+                )
                 if not ranked_direct_rows:
-                    select_best_arr_release(direct_rows, title, min_sources=min_sources)
+                    select_best_arr_release(direct_rows, title, min_sources=min_sources, require_episode_like=require_episode_like)
                 selected = ranked_direct_rows[0]
                 magnet = get_release_magnet_url(selected)
                 attempts[-1]["direct_torznab_magnet_fallback"] = direct_summary
