@@ -48,6 +48,21 @@ TEST_CASE("Part-file preview seam recognizes only configured VLC players for thu
 	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc-helper.exe"))));
 }
 
+TEST_CASE("Part-file preview seam unlocks partial videos after a capped percentage threshold")
+{
+	const std::uint64_t oneMegabyte = 1024ull * 1024ull;
+	const std::uint64_t twoGigabytes = 2ull * 1024ull * 1024ull * 1024ull;
+	const std::uint64_t hundredGigabytes = 100ull * 1024ull * 1024ull * 1024ull;
+
+	CHECK(PartFilePreviewSeams::GetPartialVideoPreviewRequiredCompletedBytes(100ull * 1024ull * 1024ull) == oneMegabyte);
+	CHECK(PartFilePreviewSeams::GetPartialVideoPreviewRequiredCompletedBytes(twoGigabytes) == 10737419ull);
+	CHECK(PartFilePreviewSeams::GetPartialVideoPreviewRequiredCompletedBytes(hundredGigabytes) == 64ull * oneMegabyte);
+
+	CHECK_FALSE(PartFilePreviewSeams::HasEnoughCompletedDataForPartialVideoPreview(0, 64ull * oneMegabyte));
+	CHECK_FALSE(PartFilePreviewSeams::HasEnoughCompletedDataForPartialVideoPreview(twoGigabytes, 10737418ull));
+	CHECK(PartFilePreviewSeams::HasEnoughCompletedDataForPartialVideoPreview(twoGigabytes, 10737419ull));
+}
+
 TEST_CASE("Part-file preview seam builds quoted VLC thumbnail command lines")
 {
 	const CString command = PartFilePreviewSeams::BuildVlcThumbnailCommandLine(
