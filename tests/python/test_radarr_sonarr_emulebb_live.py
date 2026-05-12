@@ -142,6 +142,58 @@ def test_arr_release_selection_requires_minimum_sources_and_positive_size() -> N
         )
 
 
+def test_arr_release_grab_skips_ranked_rows_rejected_by_arr(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    requests: list[tuple[str, str]] = []
+    rejected = {
+        "title": "Operator Movie Small",
+        "indexerId": 14,
+        "indexer": "eMule BB Local",
+        "sources": 20,
+        "size": 1_000_000_000,
+        "downloadUrl": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000&dn=Operator.Movie.Small.mkv&xl=1000000000",
+    }
+    accepted = {
+        "title": "Operator Movie Larger",
+        "indexerId": 14,
+        "indexer": "eMule BB Local",
+        "sources": 20,
+        "size": 2_000_000_000,
+        "downloadUrl": "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000&dn=Operator.Movie.Larger.mkv&xl=2000000000",
+    }
+
+    def fake_arr_request(_arr_url, _api_key, path, *, method="GET", json_body=None, **_kwargs):
+        requests.append((method, path))
+        if method == "GET":
+            return {"status": 200, "json": [accepted, rejected], "body_text": "[]"}
+        if method == "POST" and json_body == rejected:
+            return {"status": 404, "json": None, "body_text": "Unable to find matching movie"}
+        if method == "POST" and json_body == accepted:
+            return {"status": 200, "json": {"status": 200}, "body_text": "{}"}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    result = module.grab_first_arr_release(
+        "http://radarr.test",
+        "key",
+        14,
+        "operator movie",
+        30.0,
+        kind="radarr",
+        media_id=99,
+    )
+
+    assert result["selection"]["source_count"] == 20
+    assert result["rejected_candidate_count"] == 1
+    assert result["hash"] == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    assert requests[:3] == [
+        ("GET", "/api/v3/release?movieId=99&indexerIds=14"),
+        ("POST", "/api/v3/release"),
+        ("POST", "/api/v3/release"),
+    ]
+
+
 def test_arr_release_search_paths_try_media_cache_before_operator_term() -> None:
     module = load_radarr_sonarr_module()
 

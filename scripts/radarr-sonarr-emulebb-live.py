@@ -998,11 +998,9 @@ def arr_release_size_bytes(row: dict[str, Any]) -> int | None:
     return None
 
 
-def select_best_arr_release(rows: list[dict[str, Any]], query: str) -> dict[str, Any]:
-    """Selects the smallest manual Arr release with enough sources and a matching title."""
+def rank_arr_releases(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    """Ranks manual Arr releases by the live acquisition policy."""
 
-    if not rows:
-        raise RuntimeError("Arr release selection requires at least one row.")
     candidates = []
     for index, row in enumerate(rows):
         title_score = prowlarr_live.release_title_match_score(row, query)
@@ -1021,16 +1019,25 @@ def select_best_arr_release(rows: list[dict[str, Any]], query: str) -> dict[str,
                     json.loads(json.dumps(row)),
                 )
             )
-    if not candidates:
-        max_sources = max((prowlarr_live.release_source_count(row) for row in rows), default=0)
-        max_title_score = max((prowlarr_live.release_title_match_score(row, query) for row in rows), default=0)
-        raise RuntimeError(
-            f"Arr release selection found no release with at least {MIN_ARR_RELEASE_SOURCES} sources, "
-            f"a positive size, and a title match score of at least {MIN_ARR_RELEASE_TITLE_MATCH_SCORE}. "
-            f"Rows={len(rows)}, max_sources={max_sources}, max_title_match_score={max_title_score}."
-        )
     candidates.sort()
-    return candidates[0][4]
+    return [candidate[4] for candidate in candidates]
+
+
+def select_best_arr_release(rows: list[dict[str, Any]], query: str) -> dict[str, Any]:
+    """Selects the smallest manual Arr release with enough sources and a matching title."""
+
+    if not rows:
+        raise RuntimeError("Arr release selection requires at least one row.")
+    ranked = rank_arr_releases(rows, query)
+    if ranked:
+        return ranked[0]
+    max_sources = max((prowlarr_live.release_source_count(row) for row in rows), default=0)
+    max_title_score = max((prowlarr_live.release_title_match_score(row, query) for row in rows), default=0)
+    raise RuntimeError(
+        f"Arr release selection found no release with at least {MIN_ARR_RELEASE_SOURCES} sources, "
+        f"a positive size, and a title match score of at least {MIN_ARR_RELEASE_TITLE_MATCH_SCORE}. "
+        f"Rows={len(rows)}, max_sources={max_sources}, max_title_match_score={max_title_score}."
+    )
 
 
 def summarize_arr_release_indexers(rows: list[Any], limit: int = 8) -> list[dict[str, object]]:
@@ -1508,37 +1515,50 @@ def grab_first_arr_release(
                 }
             )
             if matches:
-                selected = select_best_arr_release(matches, title)
-                selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
-                selected_hash = ""
-                if selected_download_url.startswith("magnet:?"):
-                    try:
-                        selected_hash = ed2k_hash_from_magnet(selected_download_url)
-                    except RuntimeError:
-                        selected_hash = ""
-                grabbed = require_success(
-                    arr_request(
+                ranked = rank_arr_releases(matches, title)
+                if not ranked:
+                    select_best_arr_release(matches, title)
+                rejected: list[dict[str, object]] = []
+                for selected in ranked:
+                    selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
+                    selected_hash = ""
+                    if selected_download_url.startswith("magnet:?"):
+                        try:
+                            selected_hash = ed2k_hash_from_magnet(selected_download_url)
+                        except RuntimeError:
+                            selected_hash = ""
+                    grab_result = arr_request(
                         arr_url,
                         api_key,
                         "/api/v3/release",
                         method="POST",
                         json_body=selected,
                         timeout_seconds=max(1.0, min(30.0, deadline - time.monotonic())),
-                    ),
-                    f"{kind} release grab",
-                )
-                return {
-                    "attempt_count": len(attempts),
-                    "request_path": path,
-                    "title_present": bool(selected.get("title")),
-                    "downloadUrl_present": bool(selected.get("downloadUrl")),
-                    "guid_present": bool(selected.get("guid")),
-                    "indexer": selected.get("indexer"),
-                    "selection": prowlarr_live.summarize_release_selection(selected, title),
-                    "hash": selected_hash,
-                    "hash_present": bool(selected_hash),
-                    "grab_status": grabbed.get("status") if isinstance(grabbed, dict) else None,
-                }
+                    )
+                    status = int(grab_result.get("status") or 0)
+                    if status >= 200 and status < 300:
+                        grabbed = grab_result.get("json")
+                        return {
+                            "attempt_count": len(attempts),
+                            "request_path": path,
+                            "title_present": bool(selected.get("title")),
+                            "downloadUrl_present": bool(selected.get("downloadUrl")),
+                            "guid_present": bool(selected.get("guid")),
+                            "indexer": selected.get("indexer"),
+                            "selection": prowlarr_live.summarize_release_selection(selected, title),
+                            "rejected_candidate_count": len(rejected),
+                            "hash": selected_hash,
+                            "hash_present": bool(selected_hash),
+                            "grab_status": grabbed.get("status") if isinstance(grabbed, dict) else status,
+                        }
+                    rejected.append(
+                        {
+                            "status": status,
+                            "selection": prowlarr_live.summarize_release_selection(selected, title),
+                            "body_preview": str(grab_result.get("body_text") or "")[:160],
+                        }
+                    )
+                raise RuntimeError(f"{kind} release grab rejected all ranked eMule BB rows: {rejected!r}")
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(5.0, remaining))
