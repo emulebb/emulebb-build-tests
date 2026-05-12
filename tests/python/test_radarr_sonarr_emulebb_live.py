@@ -174,6 +174,22 @@ def test_sonarr_release_selection_requires_episode_like_title_when_requested() -
     assert result["guid"] == "episode"
 
 
+def test_sonarr_release_selection_rejects_spinoff_before_episode_marker() -> None:
+    module = load_radarr_sonarr_module()
+
+    result = module.select_best_arr_release(
+        [
+            {"title": "Star Trek Prodigy 1x08", "sources": 8, "size": 100_000_000, "guid": "spinoff"},
+            {"title": "Star Trek S01E08", "sources": 2, "size": 700_000_000, "guid": "series-episode"},
+        ],
+        "Star Trek",
+        min_sources=1,
+        require_episode_like=True,
+    )
+
+    assert result["guid"] == "series-episode"
+
+
 def test_arr_release_grab_skips_ranked_rows_rejected_by_arr(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     requests: list[tuple[str, str]] = []

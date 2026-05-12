@@ -1115,6 +1115,27 @@ def sonarr_release_title_is_episode_like(row: dict[str, Any]) -> bool:
     return any(pattern.search(title) for pattern in SONARR_EPISODE_TITLE_PATTERNS)
 
 
+def sonarr_release_title_matches_series_episode(row: dict[str, Any], query: str) -> bool:
+    """Rejects broad-series false positives where another series name appears before the episode marker."""
+
+    title_text = prowlarr_live.normalized_match_text(row.get("title") or row.get("name"))
+    query_text = prowlarr_live.normalized_match_text(query)
+    title_tokens = title_text.split()
+    query_tokens = query_text.split()
+    if not title_tokens or not query_tokens or title_tokens[: len(query_tokens)] != query_tokens:
+        return False
+    if len(title_tokens) <= len(query_tokens):
+        return False
+    next_token = title_tokens[len(query_tokens)]
+    if re.fullmatch(r"s\d{1,2}e\d{1,3}", next_token, re.IGNORECASE):
+        return True
+    if re.fullmatch(r"\d{1,2}x\d{1,3}", next_token, re.IGNORECASE):
+        return True
+    if next_token == "season" and len(title_tokens) > len(query_tokens) + 2:
+        return title_tokens[len(query_tokens) + 2] == "episode"
+    return False
+
+
 def rank_arr_releases(
     rows: list[dict[str, Any]],
     query: str,
@@ -1132,7 +1153,10 @@ def rank_arr_releases(
             prowlarr_live.release_source_count(row) >= min_sources
             and size is not None
             and title_score >= MIN_ARR_RELEASE_TITLE_MATCH_SCORE
-            and (not require_episode_like or sonarr_release_title_is_episode_like(row))
+            and (
+                not require_episode_like
+                or (sonarr_release_title_is_episode_like(row) and sonarr_release_title_matches_series_episode(row, query))
+            )
         ):
             candidates.append(
                 (
