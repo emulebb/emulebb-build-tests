@@ -121,6 +121,8 @@ TEST_CASE("Part-file preview seam builds quoted VLC thumbnail command lines")
 
 	CHECK(command.Find(_T("\"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\"")) >= 0);
 	CHECK(command.Find(_T("--intf dummy")) >= 0);
+	CHECK(command.Find(_T("--no-interact")) >= 0);
+	CHECK(command.Find(_T("--no-crashdump")) >= 0);
 	CHECK(command.Find(_T("--vout=dummy")) >= 0);
 	CHECK(command.Find(_T("--no-embedded-video")) >= 0);
 	CHECK(command.Find(_T("--no-video-deco")) >= 0);
