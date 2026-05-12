@@ -1204,6 +1204,14 @@ def test_peer_add_friend_never_returns_ok_for_friend_response() -> None:
     assert 'rError.strMessage = _T("friend was added but could not be resolved");' in source
 
 
+def test_rest_smoke_uses_v1_upload_remove_operation_route() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "rest-api-smoke.py"
+    source = script_path.read_text(encoding="utf-8")
+
+    assert '"/api/v1/uploads/unknown/operations/remove"' in source
+    assert '"/api/v1/uploads/unknown",\n        method="DELETE"' not in source
+
+
 def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"

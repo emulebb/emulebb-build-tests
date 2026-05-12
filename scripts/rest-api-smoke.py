@@ -3424,8 +3424,8 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     upload_queue = http_request(base_url, "/api/v1/upload-queue", api_key=api_key)
     upload_remove_bad = http_request(
         base_url,
-        "/api/v1/uploads/unknown",
-        method="DELETE",
+        "/api/v1/uploads/unknown/operations/remove",
+        method="POST",
         api_key=api_key,
         json_body={},
     )
