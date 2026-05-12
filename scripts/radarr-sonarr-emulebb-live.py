@@ -2324,11 +2324,23 @@ def wait_for_transfer_completion(base_url: str, emule_api_key: str, transfer_has
 
     deadline = time.monotonic() + timeout_seconds
     last: dict[str, object] | None = None
+    observed_transfer = False
     while time.monotonic() < deadline:
-        last = wait_for_transfer(base_url, emule_api_key, transfer_hash, min(10.0, timeout_seconds))
+        try:
+            last = wait_for_transfer(base_url, emule_api_key, transfer_hash, min(10.0, timeout_seconds))
+            observed_transfer = True
+        except RuntimeError:
+            if observed_transfer:
+                return {
+                    "hash": transfer_hash,
+                    "state": "absent_after_seen",
+                    "completed": True,
+                    "last_seen": last,
+                }
+            raise
         state = str(last.get("state") or "").lower()
         if state in {"completed", "complete", "seeding", "uploading"} or "completed" in state:
-            return last
+            return {**last, "completed": True}
         time.sleep(5.0)
     raise RuntimeError(f"Selected transfer did not complete before timeout. Last: {last!r}")
 

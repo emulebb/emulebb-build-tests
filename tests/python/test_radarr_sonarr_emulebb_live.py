@@ -456,6 +456,29 @@ def test_arr_release_grab_discovers_new_category_transfer_when_release_hash_miss
     ]
 
 
+def test_transfer_completion_accepts_completed_handoff_absence(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    transfer_hash = "fedcba9876543210fedcba9876543210"
+    calls = 0
+
+    def fake_wait_for_transfer(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"hash": transfer_hash, "state": "downloading"}
+        raise RuntimeError("Added qBit transfer did not appear before timeout.")
+
+    monkeypatch.setattr(module, "wait_for_transfer", fake_wait_for_transfer)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args, **_kwargs: None)
+
+    result = module.wait_for_transfer_completion("http://emule.test", "key", transfer_hash, 30.0)
+
+    assert result["completed"] is True
+    assert result["state"] == "absent_after_seen"
+    assert result["last_seen"] == {"hash": transfer_hash, "state": "downloading"}
+    assert calls == 2
+
+
 def test_arr_release_grab_does_not_fallback_when_arr_indexer_is_healthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
