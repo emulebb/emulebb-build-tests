@@ -998,6 +998,110 @@ def arr_release_size_bytes(row: dict[str, Any]) -> int | None:
     return None
 
 
+def parse_torznab_int(value: object) -> int:
+    """Parses a non-negative Torznab integer field."""
+
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_direct_torznab_release_rows(body_text: str) -> list[dict[str, Any]]:
+    """Parses direct eMule Torznab rows with source-count fields preserved."""
+
+    if not body_text:
+        return []
+    root = ET.fromstring(body_text)
+    rows: list[dict[str, Any]] = []
+    for item in root.findall("./channel/item"):
+        row: dict[str, Any] = {
+            "title": item.findtext("title") or "",
+            "guid": item.findtext("guid") or "",
+            "downloadUrl": item.findtext("link") or "",
+        }
+        enclosure = item.find("enclosure")
+        if enclosure is not None:
+            if not row["downloadUrl"]:
+                row["downloadUrl"] = enclosure.attrib.get("url") or ""
+            row["size"] = parse_torznab_int(enclosure.attrib.get("length"))
+        for child in list(item):
+            if not child.tag.endswith("attr"):
+                continue
+            name = child.attrib.get("name")
+            if not name:
+                continue
+            value = child.attrib.get("value")
+            if name in {"size", "seeders", "peers", "grabs", "sources", "sourceCount"}:
+                row[name] = parse_torznab_int(value)
+            elif name in {"magneturl", "infohash"}:
+                row[name] = value or ""
+        row["sources"] = max(
+            parse_torznab_int(row.get("sources")),
+            parse_torznab_int(row.get("sourceCount")),
+            parse_torznab_int(row.get("seeders")),
+            parse_torznab_int(row.get("peers")),
+        )
+        rows.append(row)
+    return rows
+
+
+def direct_torznab_source_rows(
+    emule_base_url: str,
+    emule_api_key: str,
+    query: str,
+    category_id: int,
+    timeout_seconds: float,
+) -> tuple[list[dict[str, Any]], dict[str, object]]:
+    """Fetches direct eMule Torznab rows for source-count enrichment."""
+
+    result = rest_smoke.http_request(
+        emule_base_url,
+        prowlarr_live.build_direct_torznab_search_path(emule_api_key, query, category_id),
+        request_timeout_seconds=max(1.0, min(90.0, timeout_seconds)),
+    )
+    status = int(result.get("status") or 0)
+    rows = parse_direct_torznab_release_rows(str(result.get("body_text") or "")) if status == 200 else []
+    return rows, {
+        "status": status,
+        "count": len(rows),
+        "max_sources": max((prowlarr_live.release_source_count(row) for row in rows), default=0),
+    }
+
+
+def release_match_key(row: dict[str, Any]) -> tuple[str, int]:
+    """Builds a report-safe release key for matching direct Torznab and Arr rows."""
+
+    return (prowlarr_live.normalized_match_text(row.get("title") or row.get("name")), int(arr_release_size_bytes(row) or 0))
+
+
+def enrich_arr_release_sources(rows: list[dict[str, Any]], source_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Copies direct eMule source counts onto matching Arr release rows."""
+
+    source_by_key: dict[tuple[str, int], int] = {}
+    for source_row in source_rows:
+        source_count = prowlarr_live.release_source_count(source_row)
+        if source_count <= 0:
+            continue
+        key = release_match_key(source_row)
+        if key[0] and key[1] > 0:
+            source_by_key[key] = max(source_by_key.get(key, 0), source_count)
+
+    enriched: list[dict[str, Any]] = []
+    enriched_count = 0
+    for row in rows:
+        copied = json.loads(json.dumps(row))
+        if prowlarr_live.release_source_count(copied) <= 0:
+            source_count = source_by_key.get(release_match_key(copied), 0)
+            if source_count > 0:
+                copied["sources"] = source_count
+                copied["sourceCount"] = source_count
+                copied["_emulebbSourceEnriched"] = True
+                enriched_count += 1
+        enriched.append(copied)
+    return enriched, enriched_count
+
+
 def rank_arr_releases(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
     """Ranks manual Arr releases by the live acquisition policy."""
 
@@ -1555,6 +1659,9 @@ def grab_first_arr_release(
     *,
     kind: str,
     media_id: int | None = None,
+    emule_base_url: str | None = None,
+    emule_api_key: str | None = None,
+    category_id: int | None = None,
 ) -> dict[str, object]:
     """Searches Arr releases and grabs the best eMule BB indexer match."""
 
@@ -1594,9 +1701,26 @@ def grab_first_arr_release(
                 }
             )
             if matches:
-                ranked = rank_arr_releases(matches, title)
+                ranked_matches = matches
+                if (
+                    max((prowlarr_live.release_source_count(row) for row in matches), default=0) < MIN_ARR_RELEASE_SOURCES
+                    and emule_base_url
+                    and emule_api_key
+                    and category_id is not None
+                ):
+                    source_rows, enrichment_summary = direct_torznab_source_rows(
+                        emule_base_url,
+                        emule_api_key,
+                        title,
+                        category_id,
+                        max(1.0, deadline - time.monotonic()),
+                    )
+                    ranked_matches, enriched_count = enrich_arr_release_sources(matches, source_rows)
+                    enrichment_summary["enriched_count"] = enriched_count
+                    attempts[-1]["source_enrichment"] = enrichment_summary
+                ranked = rank_arr_releases(ranked_matches, title)
                 if not ranked:
-                    select_best_arr_release(matches, title)
+                    select_best_arr_release(ranked_matches, title)
                 rejected: list[dict[str, object]] = []
                 for selected in ranked:
                     selected_download_url = str(selected.get("downloadUrl") or selected.get("guid") or "")
@@ -1683,6 +1807,9 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
                 timeout_seconds,
                 kind=kind,
                 media_id=media_id,
+                emule_base_url=emule_base_url,
+                emule_api_key=emule_api_key,
+                category_id=category_id,
             )
             release_grab["source"] = "arr_release_search"
             release_grab["arr_indexer_unavailable_due_to_failures"] = False

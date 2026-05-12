@@ -194,6 +194,76 @@ def test_arr_release_grab_skips_ranked_rows_rejected_by_arr(monkeypatch: pytest.
     ]
 
 
+def test_arr_release_grab_enriches_zero_arr_sources_from_direct_torznab(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    posted: list[dict[str, object]] = []
+    larger = {
+        "title": "Operator Movie Large",
+        "indexerId": 14,
+        "indexer": "eMule BB Local",
+        "sources": 0,
+        "size": 4_000_000_000,
+        "downloadUrl": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000&dn=Operator.Movie.Large.mkv&xl=4000000000",
+    }
+    smaller = {
+        "title": "Operator Movie Small",
+        "indexerId": 14,
+        "indexer": "eMule BB Local",
+        "sources": 0,
+        "size": 1_400_000_000,
+        "downloadUrl": "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000&dn=Operator.Movie.Small.mkv&xl=1400000000",
+    }
+
+    def fake_arr_request(_arr_url, _api_key, _path, *, method="GET", json_body=None, **_kwargs):
+        if method == "GET":
+            return {"status": 200, "json": [larger, smaller], "body_text": "[]"}
+        posted.append(json_body)
+        return {"status": 200, "json": {"status": 200}, "body_text": "{}"}
+
+    def fake_http_request(_base_url, path, **_kwargs):
+        assert path.startswith("/indexer/emulebb/api?t=search&cat=2000&q=")
+        body = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Operator Movie Large</title>
+      <link>magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000</link>
+      <enclosure url="magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000" length="4000000000" />
+      <torznab:attr name="size" value="4000000000" />
+      <torznab:attr name="peers" value="30" />
+    </item>
+    <item>
+      <title>Operator Movie Small</title>
+      <link>magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000</link>
+      <enclosure url="magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000" length="1400000000" />
+      <torznab:attr name="size" value="1400000000" />
+      <torznab:attr name="peers" value="12" />
+    </item>
+  </channel>
+</rss>"""
+        return {"status": 200, "body_text": body}
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.grab_first_arr_release(
+        "http://radarr.test",
+        "key",
+        14,
+        "operator movie",
+        30.0,
+        kind="radarr",
+        media_id=99,
+        emule_base_url="http://emule.test",
+        emule_api_key="emule-key",
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+    )
+
+    assert posted == [{**smaller, "sources": 12, "sourceCount": 12, "_emulebbSourceEnriched": True}]
+    assert result["selection"]["source_count"] == 12
+    assert result["rejected_candidate_count"] == 0
+
+
 def test_arr_release_search_paths_try_media_cache_before_operator_term() -> None:
     module = load_radarr_sonarr_module()
 
