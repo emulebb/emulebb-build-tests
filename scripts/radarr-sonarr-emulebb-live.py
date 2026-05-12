@@ -1403,14 +1403,17 @@ def build_arr_release_search_paths(kind: str, title: str, indexer_id: int, media
     """Builds bounded Arr release-search request paths for one media item."""
 
     quoted_title = urllib.parse.quote(title)
-    paths: list[str] = [
-        f"/api/v3/release?term={quoted_title}&indexerIds={indexer_id}",
-        f"/api/v3/release?term={quoted_title}&indexerId={indexer_id}",
-    ]
+    paths: list[str] = []
     if media_id is not None and media_id > 0:
         media_key = "movieId" if kind == "radarr" else "seriesId"
         paths.append(f"/api/v3/release?{media_key}={media_id}&indexerIds={indexer_id}")
         paths.append(f"/api/v3/release?{media_key}={media_id}&indexerId={indexer_id}")
+    paths.extend(
+        [
+            f"/api/v3/release?term={quoted_title}&indexerIds={indexer_id}",
+            f"/api/v3/release?term={quoted_title}&indexerId={indexer_id}",
+        ]
+    )
     return paths
 
 
@@ -1685,24 +1688,14 @@ def wait_for_new_transfer_category(
     raise RuntimeError(f"Arr grab did not create a new transfer in category {category!r}. Last: {last!r}")
 
 
-def build_arr_release_payload_from_prowlarr(
-    release: dict[str, Any],
-    *,
-    arr_indexer_id: int,
-    arr_indexer_name: str,
-) -> dict[str, Any]:
-    """Adapts a Prowlarr eMule row into the Arr release-grab resource shape."""
+def get_release_magnet_url(release: dict[str, Any]) -> str:
+    """Returns the eMule magnet URL carried by one Arr/Prowlarr release row."""
 
-    payload = json.loads(json.dumps(release))
-    payload["indexerId"] = int(arr_indexer_id)
-    payload["indexer"] = arr_indexer_name
-    payload["protocol"] = "torrent"
-    payload["downloadAllowed"] = True
-    if not str(payload.get("downloadUrl") or "").strip() and str(payload.get("magnetUrl") or "").strip():
-        payload["downloadUrl"] = payload["magnetUrl"]
-    if not str(payload.get("guid") or "").strip():
-        payload["guid"] = str(payload.get("downloadUrl") or payload.get("magnetUrl") or "")
-    return payload
+    for key in ("downloadUrl", "magnetUrl", "guid"):
+        value = str(release.get(key) or "").strip()
+        if value.startswith("magnet:?"):
+            return value
+    raise RuntimeError("Prowlarr release did not expose a magnet URL.")
 
 
 def grab_first_arr_release_via_prowlarr(
@@ -1770,21 +1763,12 @@ def grab_first_arr_release_via_prowlarr(
         )
         if status >= 200 and status < 300 and matches:
             selected = prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
-            payload = build_arr_release_payload_from_prowlarr(
-                selected,
-                arr_indexer_id=arr_indexer_id,
-                arr_indexer_name=arr_indexer_name,
-            )
-            grabbed = require_success(
-                arr_request(
-                    arr_url,
-                    arr_api_key,
-                    "/api/v3/release",
-                    method="POST",
-                    json_body=payload,
-                    timeout_seconds=max(1.0, min(30.0, deadline - time.monotonic())),
-                ),
-                f"{kind} eMule BB release grab",
+            magnet = get_release_magnet_url(selected)
+            added = qbit_direct_add(
+                emule_base_url,
+                emule_api_key,
+                magnet,
+                download_category,
             )
             new_transfer = wait_for_new_transfer_category(
                 emule_base_url,
@@ -1796,7 +1780,7 @@ def grab_first_arr_release_via_prowlarr(
             transfer_hash = str(new_transfer.get("hash") or "")
             return {
                 "attempt_count": len(attempts),
-                "source": "prowlarr_eMule_indexer_arr_grab",
+                "source": "prowlarr_eMule_indexer_qbit_add",
                 "title_present": bool(selected.get("title")),
                 "downloadUrl_present": bool(selected.get("downloadUrl")),
                 "guid_present": bool(selected.get("guid")),
@@ -1804,7 +1788,8 @@ def grab_first_arr_release_via_prowlarr(
                 "selection": prowlarr_live.summarize_release_selection(selected, title),
                 "hash": transfer_hash,
                 "hash_present": bool(transfer_hash),
-                "grab_status": grabbed.get("status") if isinstance(grabbed, dict) else None,
+                "grab_status": int(added.get("add_status") or 0),
+                "magnet_hash_present": bool(added.get("hash")),
                 "category_transfer": {key: value for key, value in new_transfer.items() if key != "hash"},
             }
         remaining = deadline - time.monotonic()

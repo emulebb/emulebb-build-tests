@@ -127,18 +127,18 @@ def test_arr_release_selection_prefers_title_match_then_sources() -> None:
     assert result["guid"] == "best"
 
 
-def test_arr_release_search_paths_try_operator_term_before_media_id() -> None:
+def test_arr_release_search_paths_try_media_cache_before_operator_term() -> None:
     module = load_radarr_sonarr_module()
 
     paths = module.build_arr_release_search_paths("radarr", "operator movie", 14, media_id=77)
 
     assert paths[:2] == [
-        "/api/v3/release?term=operator%20movie&indexerIds=14",
-        "/api/v3/release?term=operator%20movie&indexerId=14",
-    ]
-    assert paths[2:] == [
         "/api/v3/release?movieId=77&indexerIds=14",
         "/api/v3/release?movieId=77&indexerId=14",
+    ]
+    assert paths[2:] == [
+        "/api/v3/release?term=operator%20movie&indexerIds=14",
+        "/api/v3/release?term=operator%20movie&indexerId=14",
     ]
 
 
@@ -268,7 +268,7 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
     def fake_prowlarr_source_grab(**kwargs):
         calls.append(("prowlarr_source_grab", (kwargs["title"], kwargs["category_id"], kwargs["download_category"])))
         return {
-            "source": "prowlarr_eMule_indexer_arr_grab",
+            "source": "prowlarr_eMule_indexer_qbit_add",
             "hash": "fedcba9876543210fedcba9876543210",
             "hash_present": True,
             "category_transfer": {"hash_present": True, "categoryName": module.RADARR_IMPORT_CATEGORY},
@@ -312,13 +312,85 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
 
     assert cleanup_movie_id == 77
     assert report["indexer_health"]["unavailable_due_to_failures"] is True
-    assert report["release_grab"]["source"] == "prowlarr_eMule_indexer_arr_grab"
+    assert report["release_grab"]["source"] == "prowlarr_eMule_indexer_qbit_add"
     assert report["category_transfer"]["categoryName"] == module.RADARR_IMPORT_CATEGORY
     assert calls == [
         ("prowlarr_source_grab", ("operator movie", module.TORZNAB_MOVIE_CATEGORY, module.RADARR_IMPORT_CATEGORY)),
         ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
         ("transfer_complete", "fedcba9876543210fedcba9876543210"),
         ("radarr_import", 77),
+    ]
+
+
+def test_prowlarr_fallback_adds_selected_magnet_through_qbit_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+    magnet = "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000&dn=Operator.Movie.mkv&xl=42"
+
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: {"oldhash"})
+    monkeypatch.setattr(
+        module.prowlarr_live,
+        "build_prowlarr_search_path",
+        lambda title, category_id, indexer_id: f"/api/v1/search?query={title}&categories={category_id}&indexerIds={indexer_id}",
+    )
+    monkeypatch.setattr(
+        module.prowlarr_live,
+        "prowlarr_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": [
+                {
+                    "indexerId": 50,
+                    "title": "Operator Movie 1080p",
+                    "downloadUrl": magnet,
+                    "guid": magnet,
+                    "sources": 9,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        module.prowlarr_live,
+        "select_grabbable_release",
+        lambda rows, _indexer_id, _title: rows[0],
+    )
+    monkeypatch.setattr(
+        module,
+        "qbit_direct_add",
+        lambda _base_url, _api_key, selected_magnet, category: calls.append(("qbit_add", (selected_magnet, category)))
+        or {"add_status": 200, "hash": "fedcba9876543210fedcba9876543210"},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_new_transfer_category",
+        lambda *_args, **kwargs: calls.append(("new_transfer", kwargs["category"]))
+        or {"hash": "fedcba9876543210fedcba9876543210", "categoryName": kwargs["category"]},
+    )
+
+    result = module.grab_first_arr_release_via_prowlarr(
+        kind="radarr",
+        arr_url="http://radarr.test",
+        arr_api_key="key",
+        arr_indexer_id=40,
+        arr_indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=50,
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        title="operator movie",
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+        download_category=module.RADARR_IMPORT_CATEGORY,
+        timeout_seconds=10.0,
+    )
+
+    assert result["source"] == "prowlarr_eMule_indexer_qbit_add"
+    assert result["grab_status"] == 200
+    assert result["hash_present"] is True
+    assert result["category_transfer"]["categoryName"] == module.RADARR_IMPORT_CATEGORY
+    assert calls == [
+        ("qbit_add", (magnet, module.RADARR_IMPORT_CATEGORY)),
+        ("new_transfer", module.RADARR_IMPORT_CATEGORY),
     ]
 
 
