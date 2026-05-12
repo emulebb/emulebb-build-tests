@@ -29,6 +29,15 @@ TEST_CASE("App keyboard shortcut seam leaves ordinary navigation and modal conte
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'q', false) == AppKeyboardShortcutsSeams::ECommand::None);
 }
 
+TEST_CASE("Search keyboard shortcut seam owns F6 focus toggle locally")
+{
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_F6, false, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::ToggleNameResults);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_F6, true, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_F6, false, true, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_F6, false, false, true, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_F6, false, false, false, true) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+}
+
 TEST_CASE("Search keyboard shortcut seam owns local non-toolbar mnemonics")
 {
 	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMenu(SC_KEYMENU, 'n', false) == AppKeyboardShortcutsSeams::ESearchCommand::FocusName);
