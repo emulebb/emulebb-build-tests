@@ -547,6 +547,83 @@ def test_prowlarr_fallback_adds_selected_magnet_through_qbit_category(monkeypatc
     ]
 
 
+def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+    magnet = "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000&dn=Operator.Series.mkv&xl=42"
+
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: {"oldhash"})
+    monkeypatch.setattr(
+        module.prowlarr_live,
+        "build_prowlarr_search_path",
+        lambda title, category_id, indexer_id: f"/api/v1/search?query={title}&categories={category_id}&indexerIds={indexer_id}",
+    )
+    monkeypatch.setattr(
+        module.prowlarr_live,
+        "prowlarr_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": [{"indexerId": 50, "title": "Operator Series 1080p", "guid": "ed2k:hash", "sources": 20}],
+        },
+    )
+    monkeypatch.setattr(module.prowlarr_live, "select_grabbable_release", lambda rows, _indexer_id, _title: rows[0])
+
+    def fake_http_request(_base_url, path, **_kwargs):
+        assert path.startswith("/indexer/emulebb/api?t=search&cat=5000&q=")
+        escaped_magnet = magnet.replace("&", "&amp;")
+        body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Operator Series 1080p</title>
+      <link>{escaped_magnet}</link>
+      <enclosure url="{escaped_magnet}" length="1400000000" />
+      <torznab:attr name="size" value="1400000000" />
+      <torznab:attr name="peers" value="20" />
+    </item>
+  </channel>
+</rss>"""
+        return {"status": 200, "body_text": body}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        module,
+        "qbit_direct_add",
+        lambda _base_url, _api_key, selected_magnet, category: calls.append(("qbit_add", (selected_magnet, category)))
+        or {"add_status": 200, "hash": "fedcba9876543210fedcba9876543210"},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_new_transfer_category",
+        lambda *_args, **kwargs: calls.append(("new_transfer", kwargs["category"]))
+        or {"hash": "fedcba9876543210fedcba9876543210", "categoryName": kwargs["category"]},
+    )
+
+    result = module.grab_first_arr_release_via_prowlarr(
+        kind="sonarr",
+        arr_url="http://sonarr.test",
+        arr_api_key="key",
+        arr_indexer_id=40,
+        arr_indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=50,
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        title="operator series",
+        category_id=module.TORZNAB_TV_CATEGORY,
+        download_category=module.SONARR_IMPORT_CATEGORY,
+        timeout_seconds=10.0,
+    )
+
+    assert result["source"] == "prowlarr_eMule_indexer_qbit_add"
+    assert result["hash_present"] is True
+    assert calls == [
+        ("qbit_add", (magnet, module.SONARR_IMPORT_CATEGORY)),
+        ("new_transfer", module.SONARR_IMPORT_CATEGORY),
+    ]
+
+
 def test_arr_release_grab_discovers_new_category_transfer_when_release_hash_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

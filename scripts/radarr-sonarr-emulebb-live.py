@@ -2034,7 +2034,22 @@ def grab_first_arr_release_via_prowlarr(
         )
         if status >= 200 and status < 300 and matches:
             selected = prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
-            magnet = get_release_magnet_url(selected)
+            try:
+                magnet = get_release_magnet_url(selected)
+            except RuntimeError:
+                direct_rows, direct_summary = direct_torznab_source_rows(
+                    emule_base_url,
+                    emule_api_key,
+                    title,
+                    category_id,
+                    max(1.0, deadline - time.monotonic()),
+                )
+                ranked_direct_rows = rank_arr_releases(direct_rows, title)
+                if not ranked_direct_rows:
+                    select_best_arr_release(direct_rows, title)
+                selected = ranked_direct_rows[0]
+                magnet = get_release_magnet_url(selected)
+                attempts[-1]["direct_torznab_magnet_fallback"] = direct_summary
             added = qbit_direct_add(
                 emule_base_url,
                 emule_api_key,
