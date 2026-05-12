@@ -795,6 +795,22 @@ def test_transfer_completion_accepts_completed_handoff_absence(monkeypatch: pyte
     assert calls == 2
 
 
+def test_completed_category_import_path_prefers_completed_file(tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    category = tmp_path / "sonarr_series_cat"
+    category.mkdir()
+    completed = category / "Operator Series S01E01.mkv"
+    completed.write_text("video", encoding="utf-8")
+
+    result = module.completed_category_import_path(
+        category,
+        {"last_seen": {"name": completed.name}},
+        {"name": "ignored.mkv"},
+    )
+
+    assert result == completed
+
+
 def test_arr_release_grab_does_not_fallback_when_arr_indexer_is_healthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

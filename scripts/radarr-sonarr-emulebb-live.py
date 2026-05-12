@@ -2723,9 +2723,35 @@ def trigger_arr_downloaded_scan(arr_url: str, api_key: str, kind: str, import_pa
     return {
         "name": command_name,
         "path_present": bool(str(import_path)),
+        "path_type": "file" if Path(str(import_path)).is_file() else "directory",
         "id": int(command.get("id") or 0) if isinstance(command, dict) else 0,
         "status": command.get("status") if isinstance(command, dict) else None,
     }
+
+
+def completed_category_import_path(
+    category_save_path: Path | str,
+    completed_transfer: dict[str, object],
+    category_transfer: dict[str, object],
+) -> Path:
+    """Returns the most specific completed category path Arr should scan."""
+
+    category_path = Path(str(category_save_path))
+    name = ""
+    last_seen = completed_transfer.get("last_seen")
+    if isinstance(last_seen, dict):
+        name = str(last_seen.get("name") or "")
+    if not name:
+        name = str(completed_transfer.get("name") or category_transfer.get("name") or "")
+    if name:
+        candidate = category_path / name
+        if candidate.is_file():
+            return candidate
+    if category_path.is_dir():
+        files = [path for path in category_path.iterdir() if path.is_file()]
+        if files:
+            return max(files, key=lambda path: path.stat().st_mtime)
+    return category_path
 
 
 def wait_for_sonarr_import(arr_url: str, api_key: str, series_id: int, timeout_seconds: float) -> dict[str, object]:
@@ -3337,11 +3363,12 @@ def run_radarr_movie_download_e2e(
         transfer_hash,
         timeout_seconds,
     )
+    import_path = completed_category_import_path(category_save_path, report["completed_transfer"], report["category_transfer"])
     report["downloaded_scan"] = trigger_arr_downloaded_scan(
         radarr_url,
         radarr_api_key,
         "radarr",
-        category_save_path,
+        import_path,
     )
     report["arr_import"] = wait_for_radarr_import(radarr_url, radarr_api_key, movie_id, timeout_seconds)
     return report, movie_id if bool(movie.get("created")) else None
@@ -3440,11 +3467,12 @@ def run_sonarr_series_download_e2e(
         transfer_hash,
         timeout_seconds,
     )
+    import_path = completed_category_import_path(category_save_path, report["completed_transfer"], report["category_transfer"])
     report["downloaded_scan"] = trigger_arr_downloaded_scan(
         sonarr_url,
         sonarr_api_key,
         "sonarr",
-        category_save_path,
+        import_path,
     )
     report["arr_import"] = wait_for_sonarr_import(sonarr_url, sonarr_api_key, series_id, timeout_seconds)
     return report, series_id if bool(series.get("created")) else None
