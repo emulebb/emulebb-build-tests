@@ -841,6 +841,9 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert schemas["SearchResultDownloadRequest"]["not"] == {"required": ["categoryId", "categoryName"]}
     assert schemas["SearchResultDownloadRequest"]["properties"]["categoryId"]["maximum"] == 4294967295
 
+    assert schemas["Stats"]["properties"]["sharedHashingActive"] == {"type": "boolean"}
+    assert schemas["Stats"]["properties"]["sharedHashingCount"] == {"type": "integer", "minimum": 0}
+
     category_id_schema_paths: list[str] = []
 
     def visit_category_id_schemas(node: object, path: tuple[str, ...] = ()) -> None:
