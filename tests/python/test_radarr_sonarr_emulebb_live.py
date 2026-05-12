@@ -142,6 +142,22 @@ def test_arr_release_selection_requires_minimum_sources_and_positive_size() -> N
         )
 
 
+def test_arr_release_selection_can_use_lower_sonarr_source_floor() -> None:
+    module = load_radarr_sonarr_module()
+
+    result = module.select_best_arr_release(
+        [
+            {"title": "Operator Series 1080p", "sources": 8, "size": 2_000_000_000, "guid": "larger"},
+            {"title": "Operator Series 720p", "sources": 2, "size": 700_000_000, "guid": "smallest-positive"},
+            {"title": "Operator Series 480p", "sources": 0, "size": 400_000_000, "guid": "no-sources"},
+        ],
+        "operator series",
+        min_sources=1,
+    )
+
+    assert result["guid"] == "smallest-positive"
+
+
 def test_arr_release_grab_skips_ranked_rows_rejected_by_arr(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     requests: list[tuple[str, str]] = []
