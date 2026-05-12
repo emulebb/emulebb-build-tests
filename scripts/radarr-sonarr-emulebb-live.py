@@ -1830,7 +1830,8 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
             return release_grab
         except RuntimeError as exc:
             direct_error = str(exc)
-            raise RuntimeError(f"{kind} manual Arr release acquisition failed: {direct_error}") from exc
+            if kind != "sonarr" or "release search returned no eMule BB rows" not in direct_error:
+                raise RuntimeError(f"{kind} manual Arr release acquisition failed: {direct_error}") from exc
     else:
         direct_error = "Arr health reports the eMule BB indexer unavailable due to failures."
 

@@ -595,6 +595,58 @@ def test_arr_release_grab_discovers_new_category_transfer_when_release_hash_miss
     ]
 
 
+def test_sonarr_release_grab_falls_back_to_prowlarr_when_healthy_arr_returns_no_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: {"oldhash"})
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release",
+        lambda *_args, **_kwargs: calls.append(("direct_arr_search", _args[3]))
+        or (_ for _ in ()).throw(RuntimeError("sonarr release search returned no eMule BB rows before timeout.")),
+    )
+
+    def fake_prowlarr_source_grab(**kwargs):
+        calls.append(("prowlarr_source_grab", (kwargs["kind"], kwargs["category_id"], kwargs["download_category"])))
+        return {
+            "source": "prowlarr_eMule_indexer_qbit_add",
+            "hash": "fedcba9876543210fedcba9876543210",
+            "hash_present": True,
+            "category_transfer": {"hash_present": True, "categoryName": module.SONARR_IMPORT_CATEGORY},
+        }
+
+    monkeypatch.setattr(module, "grab_first_arr_release_via_prowlarr", fake_prowlarr_source_grab)
+
+    result = module.grab_first_arr_release_or_fallback_to_prowlarr(
+        kind="sonarr",
+        arr_url="http://sonarr.test",
+        arr_api_key="key",
+        arr_indexer_id=40,
+        arr_indexer_name="eMule BB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=50,
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        title="operator series",
+        media_id=77,
+        category_id=module.TORZNAB_TV_CATEGORY,
+        download_category=module.SONARR_IMPORT_CATEGORY,
+        timeout_seconds=10.0,
+        health_rows=[],
+    )
+
+    assert result["source"] == "prowlarr_eMule_indexer_qbit_add"
+    assert result["arr_indexer_unavailable_due_to_failures"] is False
+    assert calls == [
+        ("direct_arr_search", "operator series"),
+        ("prowlarr_source_grab", ("sonarr", module.TORZNAB_TV_CATEGORY, module.SONARR_IMPORT_CATEGORY)),
+    ]
+
+
 def test_transfer_completion_accepts_completed_handoff_absence(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     transfer_hash = "fedcba9876543210fedcba9876543210"
