@@ -66,6 +66,11 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 30.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 60.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
+BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES = 1
+BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 3
+BETA_RELEASE_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 2
+BETA_RELEASE_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 0
+BETA_RELEASE_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -233,6 +238,18 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         args.arr_direct_search_stress_count = BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT
     if args.arr_prowlarr_search_stress_count == DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT:
         args.arr_prowlarr_search_stress_count = BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
+
+    if args.profile == "beta-release":
+        if args.rest_cold_start_dump_stress_waves == DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES:
+            args.rest_cold_start_dump_stress_waves = BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES
+        if args.rest_cold_start_dump_stress_searches_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE:
+            args.rest_cold_start_dump_stress_searches_per_wave = BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE
+        if args.rest_cold_start_dump_stress_max_concurrent_searches == DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES:
+            args.rest_cold_start_dump_stress_max_concurrent_searches = BETA_RELEASE_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES
+        if args.rest_cold_start_dump_stress_downloads_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE:
+            args.rest_cold_start_dump_stress_downloads_per_wave = BETA_RELEASE_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE
+        if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
+            args.rest_cold_start_dump_stress_post_drain_seconds = BETA_RELEASE_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS
 
 
 def build_python_command(python_executable: str) -> list[str]:

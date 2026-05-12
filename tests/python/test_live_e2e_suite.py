@@ -270,6 +270,13 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
 
     assert summary["status"] == "passed"
     assert summary["profile"] == "beta-release"
+    assert summary["rest_cold_start_dump_stress"]["waves"] == live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES
+    assert summary["rest_cold_start_dump_stress"]["searches_per_wave"] == (
+        live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE
+    )
+    assert summary["rest_cold_start_dump_stress"]["downloads_per_wave"] == (
+        live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE
+    )
     assert [script_name(command) for command in commands] == [
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
@@ -281,6 +288,15 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
     assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-emulebb", "sonarr-emulebb"]
     assert "auto-browse-live.py" not in [script_name(command) for command in commands]
     assert "shared-files-ui-e2e.py" not in [script_name(command) for command in commands]
+
+    cold_start_command = commands[2]
+    assert option_values(cold_start_command, "--waves") == [str(live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES)]
+    assert option_values(cold_start_command, "--searches-per-wave") == [
+        str(live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE)
+    ]
+    assert option_values(cold_start_command, "--downloads-per-wave") == [
+        str(live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE)
+    ]
 
 
 def test_profile_does_not_override_explicit_suite_selection(tmp_path: Path, monkeypatch) -> None:
