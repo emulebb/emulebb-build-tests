@@ -48,4 +48,21 @@ TEST_CASE("Part-file preview seam recognizes only configured VLC players for thu
 	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc-helper.exe"))));
 }
 
+TEST_CASE("Part-file preview seam builds quoted VLC thumbnail command lines")
+{
+	const CString command = PartFilePreviewSeams::BuildVlcThumbnailCommandLine(
+		CString(_T("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe")),
+		CString(_T("C:\\Temp Files\\sample preview.mkv")),
+		CString(_T("C:\\Temp Files\\")),
+		CString(_T("emulebb_thumb_abc")));
+
+	CHECK(command.Find(_T("\"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\"")) >= 0);
+	CHECK(command.Find(_T("--intf dummy")) >= 0);
+	CHECK(command.Find(_T("--video-filter=scene")) >= 0);
+	CHECK(command.Find(_T("\"--scene-prefix=emulebb_thumb_abc\"")) >= 0);
+	CHECK(command.Find(_T("\"--scene-path=C:\\Temp Files\\")) >= 0);
+	CHECK(command.Find(_T("\"C:\\Temp Files\\sample preview.mkv\"")) >= 0);
+	CHECK(command.Find(_T("vlc://quit")) >= 0);
+}
+
 TEST_SUITE_END;
