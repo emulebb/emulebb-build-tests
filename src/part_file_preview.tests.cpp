@@ -70,8 +70,8 @@ TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on p
 	const std::uint64_t tenGigabytes = 10ull * 1024ull * oneMegabyte;
 
 	CHECK(PartFilePreviewSeams::kVideoThumbnailDisplayMaxWidth == 480);
-	CHECK(PartFilePreviewSeams::kVideoThumbnailScanIntervalMs == 10000ull);
-	CHECK(PartFilePreviewSeams::kVideoThumbnailRetryIntervalMs == 15000ull);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailScanIntervalMs == 90000ull);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailRetryIntervalMs == 90000ull);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshIntervalMs == PartFilePreviewSeams::kVideoThumbnailRetryIntervalMs);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshDeltaPermille == 50ull);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshMaxDeltaBytes == 128ull * oneMegabyte);
@@ -80,9 +80,13 @@ TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on p
 
 	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 0ull));
 	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 1000ull));
-	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(15999ull, 1000ull));
-	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(16000ull, 1000ull));
-	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(1000ull, 16000ull));
+	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(90999ull, 1000ull));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(91000ull, 1000ull));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(1000ull, 91000ull));
+
+	CHECK(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(true, false));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(false, false));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(true, true));
 
 	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(40ull * oneMegabyte, 40ull * oneMegabyte, hundredMegabytes));
 	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(45ull * oneMegabyte, 40ull * oneMegabyte, hundredMegabytes));
