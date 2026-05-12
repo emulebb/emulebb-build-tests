@@ -336,6 +336,12 @@ def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
     )
     monkeypatch.setattr(
         module,
+        "trigger_arr_downloaded_scan",
+        lambda *_args, **_kwargs: calls.append(("downloaded_scan", (_args[2], str(_args[3]))))
+        or {"name": "DownloadedMoviesScan", "path_present": True},
+    )
+    monkeypatch.setattr(
+        module,
         "resume_transfer_if_paused",
         lambda *_args, **_kwargs: calls.append(("resume_if_paused", _args[2])) or {"resumed": False},
     )
@@ -354,6 +360,7 @@ def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
         movie_title="operator movie",
         movie_root=tmp_path,
         category_name=module.RADARR_IMPORT_CATEGORY,
+        category_save_path=tmp_path / module.RADARR_IMPORT_CATEGORY,
         movie_root_creates_local_path=True,
         quality_profile_name="AnyAnyLang",
         release_search_timeout_seconds=10.0,
@@ -370,6 +377,7 @@ def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
         ("new_category_transfer", module.RADARR_IMPORT_CATEGORY),
         ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
         ("transfer_complete", "fedcba9876543210fedcba9876543210"),
+        ("downloaded_scan", ("radarr", str(tmp_path / module.RADARR_IMPORT_CATEGORY))),
         ("radarr_import", 77),
     ]
 
@@ -424,6 +432,12 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
     )
     monkeypatch.setattr(
         module,
+        "trigger_arr_downloaded_scan",
+        lambda *_args, **_kwargs: calls.append(("downloaded_scan", (_args[2], str(_args[3]))))
+        or {"name": "DownloadedMoviesScan", "path_present": True},
+    )
+    monkeypatch.setattr(
+        module,
         "resume_transfer_if_paused",
         lambda *_args, **_kwargs: calls.append(("resume_if_paused", _args[2])) or {"resumed": False},
     )
@@ -441,6 +455,7 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
         movie_title="operator movie",
         movie_root=tmp_path,
         category_name=module.RADARR_IMPORT_CATEGORY,
+        category_save_path=tmp_path / module.RADARR_IMPORT_CATEGORY,
         movie_root_creates_local_path=True,
         quality_profile_name="AnyAnyLang",
         release_search_timeout_seconds=10.0,
@@ -455,6 +470,7 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
         ("prowlarr_source_grab", ("operator movie", module.TORZNAB_MOVIE_CATEGORY, module.RADARR_IMPORT_CATEGORY)),
         ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
         ("transfer_complete", "fedcba9876543210fedcba9876543210"),
+        ("downloaded_scan", ("radarr", str(tmp_path / module.RADARR_IMPORT_CATEGORY))),
         ("radarr_import", 77),
     ]
 

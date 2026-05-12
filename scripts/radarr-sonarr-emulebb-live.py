@@ -2631,6 +2631,27 @@ def wait_for_radarr_import(arr_url: str, api_key: str, movie_id: int, timeout_se
     raise RuntimeError(f"Radarr did not import movie before timeout. Last hasFile={bool(last.get('hasFile')) if last else None}.")
 
 
+def trigger_arr_downloaded_scan(arr_url: str, api_key: str, kind: str, import_path: Path | str) -> dict[str, object]:
+    """Asks Arr to scan the completed eMule category path for import."""
+
+    command_name = "DownloadedMoviesScan" if kind == "radarr" else "DownloadedEpisodesScan"
+    payload = {
+        "name": command_name,
+        "path": str(import_path),
+        "importMode": "Move",
+    }
+    command = require_success(
+        arr_request(arr_url, api_key, "/api/v3/command", method="POST", json_body=payload, timeout_seconds=60.0),
+        f"{kind} downloaded scan command",
+    )
+    return {
+        "name": command_name,
+        "path_present": bool(str(import_path)),
+        "id": int(command.get("id") or 0) if isinstance(command, dict) else 0,
+        "status": command.get("status") if isinstance(command, dict) else None,
+    }
+
+
 def wait_for_sonarr_import(arr_url: str, api_key: str, series_id: int, timeout_seconds: float) -> dict[str, object]:
     """Waits until Sonarr reports at least one imported episode for the series."""
 
@@ -3161,6 +3182,7 @@ def run_radarr_movie_download_e2e(
     movie_title: str,
     movie_root: Path | str,
     category_name: str,
+    category_save_path: Path | str,
     movie_root_creates_local_path: bool,
     quality_profile_name: str | None,
     release_search_timeout_seconds: float,
@@ -3239,6 +3261,12 @@ def run_radarr_movie_download_e2e(
         transfer_hash,
         timeout_seconds,
     )
+    report["downloaded_scan"] = trigger_arr_downloaded_scan(
+        radarr_url,
+        radarr_api_key,
+        "radarr",
+        category_save_path,
+    )
     report["arr_import"] = wait_for_radarr_import(radarr_url, radarr_api_key, movie_id, timeout_seconds)
     return report, movie_id if bool(movie.get("created")) else None
 
@@ -3257,6 +3285,7 @@ def run_sonarr_series_download_e2e(
     series_title: str,
     series_root: Path | str,
     category_name: str,
+    category_save_path: Path | str,
     series_root_creates_local_path: bool,
     quality_profile_name: str | None,
     release_search_timeout_seconds: float,
@@ -3334,6 +3363,12 @@ def run_sonarr_series_download_e2e(
         emule_api_key,
         transfer_hash,
         timeout_seconds,
+    )
+    report["downloaded_scan"] = trigger_arr_downloaded_scan(
+        sonarr_url,
+        sonarr_api_key,
+        "sonarr",
+        category_save_path,
     )
     report["arr_import"] = wait_for_sonarr_import(sonarr_url, sonarr_api_key, series_id, timeout_seconds)
     return report, series_id if bool(series.get("created")) else None
@@ -3707,6 +3742,7 @@ def main() -> int:
                 movie_title=selected_media_terms[0],
                 movie_root=media_root,
                 category_name=arr_category,
+                category_save_path=arr_category_save_path,
                 movie_root_creates_local_path=media_root_creates_local_path,
                 quality_profile_name=quality_profile_name,
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
@@ -3728,6 +3764,7 @@ def main() -> int:
                 series_title=selected_media_terms[0],
                 series_root=media_root,
                 category_name=arr_category,
+                category_save_path=arr_category_save_path,
                 series_root_creates_local_path=media_root_creates_local_path,
                 quality_profile_name=quality_profile_name,
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
