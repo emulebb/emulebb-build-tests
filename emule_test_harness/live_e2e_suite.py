@@ -40,6 +40,8 @@ DEFAULT_REST_SEARCH_COUNT = 6
 DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT = 1
 DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT = 6
 DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT = 4
+BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT = 2
+BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT = 1
 DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
 DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS = 90.0
 DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS = 300.0
@@ -190,6 +192,24 @@ SUITE_SPECS = (
 )
 SUITE_NAMES = tuple(spec.name for spec in SUITE_SPECS)
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
+PROFILE_SUITE_NAMES = {
+    "beta-green": (
+        "shared-directories-rest",
+        "rest-api",
+        "amutorrent-browser-smoke",
+        "prowlarr-emulebb",
+    ),
+    "beta-release": (
+        "shared-directories-rest",
+        "rest-api",
+        "amutorrent-browser-smoke",
+        "prowlarr-emulebb",
+        "radarr-emulebb",
+        "sonarr-emulebb",
+        "rest-cold-start-dump-stress",
+    ),
+}
+LIVE_E2E_PROFILES = ("default", *PROFILE_SUITE_NAMES.keys())
 
 
 def resolve_suite_specs(selected_names: list[str] | None) -> tuple[SuiteSpec, ...]:
@@ -200,6 +220,21 @@ def resolve_suite_specs(selected_names: list[str] | None) -> tuple[SuiteSpec, ..
 
     requested = set(selected_names)
     return tuple(spec for spec in SUITE_SPECS if spec.name in requested)
+
+
+def apply_profile_defaults(args: argparse.Namespace) -> None:
+    """Applies named live E2E profile defaults before validation and command building."""
+
+    if args.profile == "default":
+        return
+
+    if not args.suite:
+        args.suite = list(PROFILE_SUITE_NAMES[args.profile])
+
+    if args.arr_direct_search_stress_count == DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT:
+        args.arr_direct_search_stress_count = BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT
+    if args.arr_prowlarr_search_stress_count == DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT:
+        args.arr_prowlarr_search_stress_count = BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
 
 
 def build_python_command(python_executable: str) -> list[str]:
@@ -463,6 +498,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shared-files-ui-scenario", action="append", choices=SHARED_FILES_UI_SCENARIOS)
     parser.add_argument("--shared-files-tree-stress-churn-cycles", type=int)
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
+    parser.add_argument("--profile", choices=LIVE_E2E_PROFILES, default="default")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--rest-server-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
@@ -679,6 +715,8 @@ def validate_args(args: argparse.Namespace) -> None:
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
     """Runs the selected live E2E suites and returns the aggregate summary."""
 
+    explicit_suite_names = tuple(args.suite or ())
+    apply_profile_defaults(args)
     validate_args(args)
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -707,6 +745,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "status": "passed",
         "suite": "live-e2e-suite",
+        "profile": args.profile,
+        "profile_suite_selection_applied": args.profile != "default" and not explicit_suite_names,
+        "explicit_suite_names": list(explicit_suite_names),
         "configuration": args.configuration,
         "app_exe": str(paths.app_exe),
         "workspace_root": str(paths.workspace_root),
