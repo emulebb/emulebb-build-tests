@@ -192,6 +192,7 @@
     <ClCompile Include="src\part_file_pause_resume.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h')" />
     <ClCompile Include="src\part_file_numeric.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h')" />
     <ClCompile Include="src\perf_log.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PerfLogSeams.h')" />
+    <ClCompile Include="src\preference_validation_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PreferenceValidationSeams.h')" />
     <ClCompile Include="src\preference_ui_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PreferenceUiSeams.h')" />
     <ClCompile Include="src\pro_user_menu_copy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProUserMenuCopySeams.h')" />
     <ClCompile Include="src\part_status_ownership.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartStatusOwnershipSeams.h')" />
