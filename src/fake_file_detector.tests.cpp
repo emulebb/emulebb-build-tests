@@ -69,6 +69,10 @@ TEST_CASE("file-type classifier detects ebook archive and audio headers")
 	memcpy(epubHeader + 30 + sizeof epubName, epubMime, sizeof epubMime);
 	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(epubHeader, sizeof epubHeader, _T("book.epub")) == DOCUMENT_EPUB);
 
+	BYTE mzHeader[] = { 0x4D, 0x5A };
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(mzHeader, sizeof mzHeader, _T("comic.cbr")) == FILETYPE_EXECUTABLE);
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(mzHeader, sizeof mzHeader, _T("archive.rar")) == FILETYPE_UNKNOWN);
+
 	BYTE isoHeader[FileTypeClassifierSeams::kIsoHeaderCheckSize] = { 0x01, 0x43, 0x44, 0x30, 0x30, 0x31 };
 	CHECK(FileTypeClassifierSeams::DetectIsoTypeFromOffsetHeader(isoHeader, sizeof isoHeader) == IMAGE_ISO);
 }
