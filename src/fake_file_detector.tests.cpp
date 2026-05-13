@@ -61,11 +61,34 @@ TEST_CASE("file-type classifier detects ebook archive and audio headers")
 	memcpy(mobiHeader + 60, mobiId, sizeof mobiId);
 	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(mobiHeader, sizeof mobiHeader, _T("book.mobi")) == DOCUMENT_MOBI);
 
+	BYTE epubHeader[FileTypeClassifierSeams::kDeepHeaderCheckSize] = { 0x50, 0x4B, 0x03, 0x04 };
+	const BYTE epubName[] = { 0x6D, 0x69, 0x6D, 0x65, 0x74, 0x79, 0x70, 0x65 };
+	const BYTE epubMime[] = { 0x61, 0x70, 0x70, 0x6C, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6F, 0x6E, 0x2F, 0x65, 0x70, 0x75, 0x62, 0x2B, 0x7A, 0x69, 0x70 };
+	epubHeader[26] = sizeof epubName;
+	memcpy(epubHeader + 30, epubName, sizeof epubName);
+	memcpy(epubHeader + 30 + sizeof epubName, epubMime, sizeof epubMime);
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(epubHeader, sizeof epubHeader, _T("book.epub")) == DOCUMENT_EPUB);
+
 	BYTE isoHeader[FileTypeClassifierSeams::kIsoHeaderCheckSize] = { 0x01, 0x43, 0x44, 0x30, 0x30, 0x31 };
 	CHECK(FileTypeClassifierSeams::DetectIsoTypeFromOffsetHeader(isoHeader, sizeof isoHeader) == IMAGE_ISO);
 }
 
-TEST_CASE("fake-file analyzer accepts epub zip containers")
+TEST_CASE("fake-file analyzer accepts real epub headers")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"book.epub" };
+	evidence.extensionType = DOCUMENT_EPUB;
+	evidence.headerType = DOCUMENT_EPUB;
+	evidence.headerAvailable = true;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(report.severity == FakeFileDetectorSeams::Severity::None);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "header_extension_mismatch") == report.reasons.end());
+}
+
+TEST_CASE("fake-file analyzer flags generic zip renamed as epub")
 {
 	FakeFileDetectorSeams::RuleSet rules;
 	FakeFileDetectorSeams::Evidence evidence;
@@ -75,9 +98,9 @@ TEST_CASE("fake-file analyzer accepts epub zip containers")
 	evidence.headerAvailable = true;
 
 	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
-	CHECK(report.score == 0);
-	CHECK(report.severity == FakeFileDetectorSeams::Severity::None);
-	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "header_extension_mismatch") == report.reasons.end());
+	CHECK(report.score == 45);
+	CHECK(report.severity == FakeFileDetectorSeams::Severity::Medium);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "header_extension_mismatch") != report.reasons.end());
 }
 
 TEST_CASE("fake-file analyzer combines names bad signals and header mismatch")
