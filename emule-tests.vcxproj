@@ -201,6 +201,7 @@
     <ClCompile Include="src\protocol.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProtocolGuards.h')" />
     <ClCompile Include="src\resource_ownership.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ResourceOwnershipSeams.h')" />
     <ClCompile Include="src\release_update_check.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ReleaseUpdateCheckSeams.h')" />
+    <ClCompile Include="src\rar_file.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\RARFileSeams.h')" />
     <ClCompile Include="src\ring.tests.cpp" />
     <ClCompile Include="src\scheduler_removal.tests.cpp" />
     <ClCompile Include="src\search_params.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SearchParams.h') and Exists('$(AppRoot)\srchybrid\SearchParamsPolicy.h')" />
