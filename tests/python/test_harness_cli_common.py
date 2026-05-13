@@ -205,6 +205,9 @@ def test_collect_local_dump_files_filters_configured_images(tmp_path: Path) -> N
 
     assert summary["count"] == 2
     assert [row["name"] for row in summary["files"]] == ["emule.exe.1234.dmp", "umdh.exe.2222.dmp"]
+    assert [row["image_name"] for row in summary["files"]] == ["emule.exe", "umdh.exe"]
+    assert summary["image_counts"] == {"emule.exe": 1, "umdh.exe": 1}
+    assert summary["non_empty_image_counts"] == {"emule.exe": 1, "umdh.exe": 1}
     assert [row["name"] for row in module.local_dump_files_for_image(summary, "emule.exe")] == ["emule.exe.1234.dmp"]
 
 

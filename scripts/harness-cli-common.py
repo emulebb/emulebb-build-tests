@@ -255,16 +255,30 @@ def collect_local_dump_files(local_dumps: dict[str, object]) -> dict[str, object
         if isinstance(image_name, str) and image_name.strip()
     } if isinstance(image_names, list) else set()
     files: list[dict[str, object]] = []
+    image_counts: dict[str, int] = {}
+    non_empty_image_counts: dict[str, int] = {}
     if dump_dir and dump_dir.is_dir():
         for dump_path in sorted(dump_dir.glob("*.dmp"), key=lambda path: path.stat().st_mtime):
             lowered_name = dump_path.name.lower()
             if expected_prefixes and not any(lowered_name.startswith(prefix) for prefix in expected_prefixes):
                 continue
             stat = dump_path.stat()
+            matched_image = next(
+                (
+                    str(image_name)
+                    for image_name in image_names
+                    if isinstance(image_name, str) and lowered_name.startswith(str(image_name).lower() + ".")
+                ),
+                "unknown",
+            ) if isinstance(image_names, list) else "unknown"
+            image_counts[matched_image] = image_counts.get(matched_image, 0) + 1
+            if stat.st_size > 0:
+                non_empty_image_counts[matched_image] = non_empty_image_counts.get(matched_image, 0) + 1
             files.append(
                 {
                     "name": dump_path.name,
                     "path": str(dump_path),
+                    "image_name": matched_image,
                     "size_bytes": stat.st_size,
                     "mtime": round(stat.st_mtime, 3),
                 }
@@ -273,6 +287,8 @@ def collect_local_dump_files(local_dumps: dict[str, object]) -> dict[str, object
         "dump_folder": str(dump_dir) if dump_dir else None,
         "files": files,
         "count": len(files),
+        "image_counts": image_counts,
+        "non_empty_image_counts": non_empty_image_counts,
     }
 
 
