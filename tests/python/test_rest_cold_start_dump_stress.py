@@ -348,13 +348,45 @@ def test_summarize_resource_monitor_samples_reports_cpu_and_threads() -> None:
 
     assert summary == {
         "sample_count": 3,
+        "cpu_percent_sample_count": 2,
         "cpu_percent_avg": 20.0,
         "cpu_percent_p95": 30.0,
         "cpu_percent_max": 30.0,
+        "cpu_percent_over_50_count": 0,
+        "cpu_percent_over_80_count": 0,
+        "resource_sample_counts": {
+            "thread_count": 3,
+            "handles": 3,
+            "private_bytes": 3,
+            "working_set_bytes": 3,
+        },
         "thread_count_max": 7,
         "handles_max": 15,
         "private_bytes_max": 300,
         "working_set_bytes_max": 400,
+    }
+
+
+def test_summarize_resource_monitor_samples_counts_sustained_high_cpu() -> None:
+    module = load_script_module()
+
+    summary = module.summarize_resource_monitor_samples(
+        [
+            {"cpu_percent": 49.9},
+            {"cpu_percent": 50.0},
+            {"cpu_percent": 80.0},
+            {"cpu_percent": 95.0},
+        ]
+    )
+
+    assert summary["cpu_percent_sample_count"] == 4
+    assert summary["cpu_percent_over_50_count"] == 3
+    assert summary["cpu_percent_over_80_count"] == 2
+    assert summary["resource_sample_counts"] == {
+        "thread_count": 0,
+        "handles": 0,
+        "private_bytes": 0,
+        "working_set_bytes": 0,
     }
 
 

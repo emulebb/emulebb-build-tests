@@ -365,9 +365,18 @@ def summarize_resource_monitor_samples(samples: list[dict[str, object]]) -> dict
     working_set_values = [int(row["working_set_bytes"]) for row in samples if isinstance(row.get("working_set_bytes"), int)]
     return {
         "sample_count": len(samples),
+        "cpu_percent_sample_count": len(cpu_values),
         "cpu_percent_avg": round(sum(cpu_values) / len(cpu_values), 3) if cpu_values else None,
         "cpu_percent_p95": percentile_value(cpu_values, 95),
         "cpu_percent_max": max(cpu_values) if cpu_values else None,
+        "cpu_percent_over_50_count": len([value for value in cpu_values if value >= 50.0]),
+        "cpu_percent_over_80_count": len([value for value in cpu_values if value >= 80.0]),
+        "resource_sample_counts": {
+            "thread_count": len(thread_values),
+            "handles": len(handle_values),
+            "private_bytes": len(private_values),
+            "working_set_bytes": len(working_set_values),
+        },
         "thread_count_max": max(thread_values) if thread_values else None,
         "handles_max": max(handle_values) if handle_values else None,
         "private_bytes_max": max(private_values) if private_values else None,
