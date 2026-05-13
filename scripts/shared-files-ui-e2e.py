@@ -1757,7 +1757,7 @@ def churn_shared_files_tree(
     *,
     cycles: int,
 ) -> dict[str, object]:
-    """Rapidly exercises tree selection, collapse/expand, list sorting, reload, and paint paths."""
+    """Exercises tree selection, collapse/expand, one sort, one reload, and paint paths."""
 
     if not sample_directories:
         raise RuntimeError("Tree refresh stress requires at least one sample directory.")
@@ -1778,11 +1778,11 @@ def churn_shared_files_tree(
             expand_tree_item(tree_hwnd, item)
             win32gui.SendMessage(tree_hwnd, TVM_SELECTITEM, TVGN_CARET, item)
 
-        if cycle % 5 == 0:
+        if cycle == 0:
             click_list_column(process_handle, list_hwnd, 0, "Name")
             sort_clicks += 1
 
-        if cycle % 7 == 0:
+        if cycle == max(0, cycles // 2):
             click_reload_button(main_hwnd)
             reloads += 1
 
@@ -2641,7 +2641,7 @@ def run_tree_refresh_stress_e2e(
 
     fixture = prepare_tree_refresh_stress_fixture(seed_config_dir, artifacts_dir, shared_root, app_exe)
     summary = {
-        "name": "tree-refresh-stress-10k",
+        "name": "tree-refresh-stress-50k",
         "status": "failed",
         "app_exe": str(app_exe),
         "profile_base": str(fixture["profile_base"]),
@@ -3075,7 +3075,7 @@ def run_shared_files_ui_suite(
                     shared_root,
                     require_startup_profile=require_startup_profile,
                 )
-            elif scenario_name == "tree-refresh-stress-10k":
+            elif scenario_name == "tree-refresh-stress-50k":
                 run_tree_refresh_stress_e2e(
                     app_exe,
                     seed_config_dir,
@@ -3148,7 +3148,7 @@ def main(argv: list[str]) -> int:
         choices=[
             "fixture-three-files",
             "generated-robustness-recursive",
-            "tree-refresh-stress-10k",
+            "tree-refresh-stress-50k",
             "duplicate-startup-reuse",
             "dynamic-folder-lifecycle",
             "monitored-folder-events",

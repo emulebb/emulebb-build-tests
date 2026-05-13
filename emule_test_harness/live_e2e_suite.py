@@ -12,14 +12,17 @@ from pathlib import Path
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
 from emule_test_harness import cpu_profile, live_wire_inputs
 
-SHARED_FILES_UI_SCENARIOS = (
+SHARED_FILES_UI_CORE_SCENARIOS = (
     "fixture-three-files",
     "generated-robustness-recursive",
-    "tree-refresh-stress-10k",
     "duplicate-startup-reuse",
     "dynamic-folder-lifecycle",
     "monitored-folder-events",
 )
+SHARED_FILES_UI_STRESS_SCENARIOS = (
+    "tree-refresh-stress-50k",
+)
+SHARED_FILES_UI_SCENARIOS = SHARED_FILES_UI_CORE_SCENARIOS + SHARED_FILES_UI_STRESS_SCENARIOS
 CONFIG_STABILITY_UI_SCENARIOS = (
     "long-config-settings-roundtrip",
     "long-config-shared-stress",
@@ -111,7 +114,7 @@ SUITE_SPECS = (
         name="shared-files-ui",
         script_name="shared-files-ui-e2e.py",
         category="ui",
-        scenarios=SHARED_FILES_UI_SCENARIOS,
+        scenarios=SHARED_FILES_UI_CORE_SCENARIOS,
         accepts_startup_trace_mode=True,
         accepts_shared_root=True,
     ),
@@ -230,6 +233,7 @@ PROFILE_SUITE_NAMES = {
         "rest-cold-start-dump-stress",
     ),
     "stabilization-stress": (
+        "shared-files-ui",
         "rest-api",
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
@@ -263,6 +267,8 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         args.arr_prowlarr_search_stress_count = BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
 
     if args.profile == "stabilization-stress":
+        if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
+            args.shared_files_ui_scenario = list(SHARED_FILES_UI_STRESS_SCENARIOS)
         if args.rest_coverage_budget == "contract":
             args.rest_coverage_budget = "contract-stress"
         if args.rest_stress_budget == "smoke":
@@ -814,6 +820,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     radarr_movie_root = args.radarr_movie_root.strip() if args.radarr_movie_root else None
     sonarr_series_root = args.sonarr_series_root.strip() if args.sonarr_series_root else None
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
+    resolved_shared_files_ui_scenarios = list(
+        shared_files_ui_scenarios
+        or next(
+            (spec.scenarios for spec in selected_specs if spec.name == "shared-files-ui"),
+            (),
+        )
+    )
     live_wire_inputs_file = live_wire_inputs.resolve_inputs_path(
         Path(__file__).resolve().parent.parent,
         args.live_wire_inputs_file,
@@ -837,7 +850,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
         "live_wire_inputs_file": str(live_wire_inputs_file),
-        "shared_files_ui_scenarios": list(shared_files_ui_scenarios) if shared_files_ui_scenarios else list(SHARED_FILES_UI_SCENARIOS),
+        "shared_files_ui_scenarios": resolved_shared_files_ui_scenarios,
         "rest_coverage_budget": args.rest_coverage_budget,
         "rest_stress_budget": args.rest_stress_budget,
         "rest_stress_duration_seconds": args.rest_stress_duration_seconds,

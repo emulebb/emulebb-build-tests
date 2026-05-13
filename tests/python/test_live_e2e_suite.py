@@ -111,7 +111,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["status"] == "passed"
     assert summary["live_seed_source_url"] == EMULE_SECURITY_HOME_URL
     assert summary["live_wire_inputs_file"].endswith("live-wire-inputs.local.json")
-    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_SCENARIOS)
+    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_CORE_SCENARIOS)
     assert summary["rest_contract_completeness_expected"] is True
     assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-emulebb", "sonarr-emulebb"]
     assert [suite["name"] for suite in summary["suites"]] == [
@@ -133,8 +133,9 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     ]
 
     shared_files_command = commands[1]
-    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_SCENARIOS)
+    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_CORE_SCENARIOS)
     assert "dynamic-folder-lifecycle" in option_values(shared_files_command, "--scenario")
+    assert "tree-refresh-stress-50k" not in option_values(shared_files_command, "--scenario")
     assert "--tree-stress-churn-cycles" not in shared_files_command
     config_command = commands[2]
     assert option_values(config_command, "--scenario") == list(live_e2e_suite.CONFIG_STABILITY_UI_SCENARIOS)
@@ -367,10 +368,12 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["profile"] == "stabilization-stress"
     assert summary["profile_suite_selection_applied"] is True
     assert [script_name(command) for command in commands] == [
+        "shared-files-ui-e2e.py",
         "rest-api-smoke.py",
         "rest-cold-start-dump-stress.py",
         "local-dumps-crash-smoke.py",
     ]
+    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
     assert summary["arr_live_wire_suites"] == []
     assert summary["rest_coverage_budget"] == "contract-stress"
     assert summary["rest_stress_budget"] == "soak"
@@ -382,10 +385,13 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["rest_leak_churn_budget"] == "smoke"
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
-    assert summary["suites"][0]["rest_leak_churn_budget"] == "smoke"
-    assert summary["suites"][0]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
+    assert summary["suites"][1]["rest_leak_churn_budget"] == "smoke"
+    assert summary["suites"][1]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
 
-    rest_command = commands[0]
+    shared_files_command = commands[0]
+    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
+
+    rest_command = commands[1]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-stress-duration-seconds") == [
@@ -405,7 +411,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    cold_start_command = commands[1]
+    cold_start_command = commands[2]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
