@@ -71,6 +71,17 @@ BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 3
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 2
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 0
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 5.0
+STABILIZATION_REST_STRESS_DURATION_SECONDS = 120.0
+STABILIZATION_REST_STRESS_CONCURRENCY = 16
+STABILIZATION_REST_STRESS_MAX_FAILURES = 0
+STABILIZATION_REST_LEAK_CHURN_CYCLES = 8
+STABILIZATION_REST_COLD_START_DUMP_STRESS_WAVES = 2
+STABILIZATION_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 6
+STABILIZATION_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 4
+STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 150
+STABILIZATION_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 15.0
+STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS = 10.0
+STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN = 20
 
 
 @dataclass(frozen=True)
@@ -218,6 +229,11 @@ PROFILE_SUITE_NAMES = {
         "sonarr-emulebb",
         "rest-cold-start-dump-stress",
     ),
+    "stabilization-stress": (
+        "rest-api",
+        "rest-cold-start-dump-stress",
+        "local-dumps-crash-smoke",
+    ),
 }
 LIVE_E2E_PROFILES = ("default", *PROFILE_SUITE_NAMES.keys())
 
@@ -245,6 +261,46 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         args.arr_direct_search_stress_count = BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT
     if args.arr_prowlarr_search_stress_count == DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT:
         args.arr_prowlarr_search_stress_count = BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
+
+    if args.profile == "stabilization-stress":
+        if args.rest_coverage_budget == "contract":
+            args.rest_coverage_budget = "contract-stress"
+        if args.rest_stress_budget == "smoke":
+            args.rest_stress_budget = "soak"
+        if args.rest_stress_duration_seconds == 30.0:
+            args.rest_stress_duration_seconds = STABILIZATION_REST_STRESS_DURATION_SECONDS
+        if args.rest_stress_concurrency == 4:
+            args.rest_stress_concurrency = STABILIZATION_REST_STRESS_CONCURRENCY
+        if args.rest_stress_max_failures == 1:
+            args.rest_stress_max_failures = STABILIZATION_REST_STRESS_MAX_FAILURES
+        if args.rest_socket_adversity_budget == "off":
+            args.rest_socket_adversity_budget = "smoke"
+        if args.rest_tls_handshake_adversity_budget == "off":
+            args.rest_tls_handshake_adversity_budget = "smoke"
+        if args.rest_leak_churn_budget == "off":
+            args.rest_leak_churn_budget = "smoke"
+        if args.rest_leak_churn_cycles is None:
+            args.rest_leak_churn_cycles = STABILIZATION_REST_LEAK_CHURN_CYCLES
+        if not args.rest_stop_start_after_churn:
+            args.rest_stop_start_after_churn = True
+        if args.rest_cold_start_dump_stress_waves == DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES:
+            args.rest_cold_start_dump_stress_waves = STABILIZATION_REST_COLD_START_DUMP_STRESS_WAVES
+        if args.rest_cold_start_dump_stress_searches_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE:
+            args.rest_cold_start_dump_stress_searches_per_wave = STABILIZATION_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE
+        if args.rest_cold_start_dump_stress_max_concurrent_searches == DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES:
+            args.rest_cold_start_dump_stress_max_concurrent_searches = STABILIZATION_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES
+        if args.rest_cold_start_dump_stress_downloads_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE:
+            args.rest_cold_start_dump_stress_downloads_per_wave = STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE
+        if args.rest_cold_start_dump_stress_download_churn_interval_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS:
+            args.rest_cold_start_dump_stress_download_churn_interval_seconds = (
+                STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS
+            )
+        if args.rest_cold_start_dump_stress_download_remove_count_per_churn == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN:
+            args.rest_cold_start_dump_stress_download_remove_count_per_churn = (
+                STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN
+            )
+        if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
+            args.rest_cold_start_dump_stress_post_drain_seconds = STABILIZATION_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS
 
     if args.profile == "beta-release":
         if args.rest_cold_start_dump_stress_waves == DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES:

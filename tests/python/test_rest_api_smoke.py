@@ -2608,8 +2608,96 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["native_rest_non_json_count"] == 1
     assert summary["retry_attempt_count"] == 0
     assert summary["retried_success_count"] == 0
+    assert summary["operation_coverage"] is None
     assert summary["latency_ms"]["max"] == 9.0
     assert len(summary["failures_sample"]) == 1
+
+
+def test_rest_stress_summary_reports_operation_coverage_starvation() -> None:
+    module = load_rest_api_smoke_module()
+
+    operations = [
+        {"method": "GET", "path": "/api/v1/server", "scenario": "read"},
+        {"method": "GET", "path": "/api/v1/transfers", "scenario": "read"},
+        {"method": "POST", "path": "/api/v1/searches", "scenario": "safe_mutation"},
+    ]
+    summary = module.summarize_rest_stress_results(
+        [
+            {
+                "operation_key": module.rest_stress_operation_key(operations[0]),
+                "method": "GET",
+                "path": "/api/v1/server",
+                "status": 200,
+                "ok": True,
+                "scenario": "read",
+            },
+            {
+                "operation_key": module.rest_stress_operation_key(operations[0]),
+                "method": "GET",
+                "path": "/api/v1/server",
+                "status": 200,
+                "ok": True,
+                "scenario": "read",
+            },
+            {
+                "operation_key": module.rest_stress_operation_key(operations[1]),
+                "method": "GET",
+                "path": "/api/v1/transfers",
+                "status": 200,
+                "ok": True,
+                "scenario": "read",
+            },
+        ],
+        budget="smoke",
+        duration_seconds=30.0,
+        concurrency=4,
+        max_failures=0,
+        operations=operations,
+    )
+
+    assert summary["ok"] is False
+    assert summary["failure_count"] == 0
+    assert summary["operation_coverage"] == {
+        "expected_operation_count": 3,
+        "observed_operation_count": 2,
+        "missed_operation_count": 1,
+        "missed_operations_sample": ["POST /api/v1/searches [safe_mutation]"],
+        "unexpected_operation_count": 0,
+        "min_observed_per_operation": 0,
+        "max_observed_per_operation": 2,
+        "full_cycle_reached": True,
+        "ok": False,
+    }
+
+
+def test_rest_stress_summary_does_not_fail_coverage_before_full_cycle() -> None:
+    module = load_rest_api_smoke_module()
+
+    operations = [
+        {"method": "GET", "path": "/api/v1/server", "scenario": "read"},
+        {"method": "GET", "path": "/api/v1/transfers", "scenario": "read"},
+    ]
+    summary = module.summarize_rest_stress_results(
+        [
+            {
+                "operation_key": module.rest_stress_operation_key(operations[0]),
+                "method": "GET",
+                "path": "/api/v1/server",
+                "status": 200,
+                "ok": True,
+                "scenario": "read",
+            },
+        ],
+        budget="smoke",
+        duration_seconds=0.1,
+        concurrency=1,
+        max_failures=0,
+        operations=operations,
+    )
+
+    assert summary["ok"] is True
+    assert summary["operation_coverage"]["full_cycle_reached"] is False
+    assert summary["operation_coverage"]["missed_operation_count"] == 1
 
 
 def test_rest_stress_retry_classification_is_limited_to_transient_resets() -> None:

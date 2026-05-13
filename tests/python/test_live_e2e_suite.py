@@ -350,6 +350,76 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
     ]
 
 
+def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "stabilization-stress"),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["profile"] == "stabilization-stress"
+    assert summary["profile_suite_selection_applied"] is True
+    assert [script_name(command) for command in commands] == [
+        "rest-api-smoke.py",
+        "rest-cold-start-dump-stress.py",
+        "local-dumps-crash-smoke.py",
+    ]
+    assert summary["arr_live_wire_suites"] == []
+    assert summary["rest_coverage_budget"] == "contract-stress"
+    assert summary["rest_stress_budget"] == "soak"
+    assert summary["rest_stress_duration_seconds"] == live_e2e_suite.STABILIZATION_REST_STRESS_DURATION_SECONDS
+    assert summary["rest_stress_concurrency"] == live_e2e_suite.STABILIZATION_REST_STRESS_CONCURRENCY
+    assert summary["rest_stress_max_failures"] == live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES
+    assert summary["rest_stop_start_after_churn"] is True
+
+    rest_command = commands[0]
+    assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
+    assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
+    assert option_values(rest_command, "--rest-stress-duration-seconds") == [
+        str(live_e2e_suite.STABILIZATION_REST_STRESS_DURATION_SECONDS)
+    ]
+    assert option_values(rest_command, "--rest-stress-concurrency") == [
+        str(live_e2e_suite.STABILIZATION_REST_STRESS_CONCURRENCY)
+    ]
+    assert option_values(rest_command, "--rest-stress-max-failures") == [
+        str(live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES)
+    ]
+    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-leak-churn-cycles") == [
+        str(live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES)
+    ]
+    assert "--rest-stop-start-after-churn" in rest_command
+
+    cold_start_command = commands[1]
+    assert option_values(cold_start_command, "--waves") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_WAVES)
+    ]
+    assert option_values(cold_start_command, "--searches-per-wave") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE)
+    ]
+    assert option_values(cold_start_command, "--max-concurrent-searches") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES)
+    ]
+    assert option_values(cold_start_command, "--downloads-per-wave") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE)
+    ]
+    assert option_values(cold_start_command, "--download-churn-interval-seconds") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS)
+    ]
+    assert option_values(cold_start_command, "--download-remove-count-per-churn") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN)
+    ]
+
+
 def test_profile_does_not_override_explicit_suite_selection(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

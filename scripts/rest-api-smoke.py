@@ -2294,6 +2294,62 @@ def is_retryable_rest_stress_exception(exc: Exception) -> bool:
     return any(fragment in message for fragment in REST_STRESS_RETRYABLE_ERROR_FRAGMENTS)
 
 
+def build_rest_stress_operation_key(method: object, path: object, scenario: object) -> str:
+    """Builds a stable operation identity for stress scheduler coverage accounting."""
+
+    return f"{method or 'UNKNOWN'} {path or ''} [{scenario or 'unknown'}]"
+
+
+def rest_stress_operation_key(operation: dict[str, object]) -> str:
+    """Returns the stable coverage key for one configured REST stress operation."""
+
+    return build_rest_stress_operation_key(
+        operation.get("method"),
+        operation.get("path"),
+        operation.get("scenario"),
+    )
+
+
+def rest_stress_row_operation_key(row: dict[str, object]) -> str:
+    """Returns the stable coverage key recorded by one completed REST stress request."""
+
+    operation_key = row.get("operation_key")
+    if operation_key:
+        return str(operation_key)
+    return build_rest_stress_operation_key(row.get("method"), row.get("path"), row.get("scenario"))
+
+
+def summarize_rest_stress_operation_coverage(
+    rows: list[dict[str, object]],
+    operations: list[dict[str, object]],
+) -> dict[str, object]:
+    """Summarizes scheduler coverage for a bounded REST stress pass."""
+
+    expected_keys = [rest_stress_operation_key(operation) for operation in operations]
+    observed_counts: dict[str, int] = {}
+    for row in rows:
+        operation_key = rest_stress_row_operation_key(row)
+        observed_counts[operation_key] = observed_counts.get(operation_key, 0) + 1
+
+    expected_set = set(expected_keys)
+    observed_expected_keys = [key for key in observed_counts if key in expected_set]
+    missed_keys = [key for key in expected_keys if observed_counts.get(key, 0) == 0]
+    per_operation_counts = [observed_counts.get(key, 0) for key in expected_keys]
+    reached_full_cycle = len(rows) >= len(expected_keys)
+    coverage_ok = not reached_full_cycle or not missed_keys
+    return {
+        "expected_operation_count": len(expected_keys),
+        "observed_operation_count": len(observed_expected_keys),
+        "missed_operation_count": len(missed_keys),
+        "missed_operations_sample": missed_keys[:10],
+        "unexpected_operation_count": len([key for key in observed_counts if key not in expected_set]),
+        "min_observed_per_operation": min(per_operation_counts) if per_operation_counts else 0,
+        "max_observed_per_operation": max(per_operation_counts) if per_operation_counts else 0,
+        "full_cycle_reached": reached_full_cycle,
+        "ok": coverage_ok,
+    }
+
+
 def summarize_rest_stress_results(
     rows: list[dict[str, object]],
     *,
@@ -2301,6 +2357,7 @@ def summarize_rest_stress_results(
     duration_seconds: float,
     concurrency: int,
     max_failures: int,
+    operations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Builds a compact deterministic summary for one REST stress run."""
 
@@ -2333,6 +2390,12 @@ def summarize_rest_stress_results(
                 failures.append(row)
     failure_count = len([row for row in rows if not row.get("ok")])
     retry_attempt_count = sum(int(row.get("retry_count") or 0) for row in rows)
+    operation_coverage = (
+        summarize_rest_stress_operation_coverage(rows, operations)
+        if operations is not None
+        else None
+    )
+    operation_coverage_ok = operation_coverage is None or bool(operation_coverage["ok"])
     return {
         "budget": budget,
         "duration_seconds": duration_seconds,
@@ -2341,7 +2404,7 @@ def summarize_rest_stress_results(
         "requests_started": len(rows),
         "requests_completed": len(rows),
         "failure_count": failure_count,
-        "ok": failure_count <= max_failures,
+        "ok": failure_count <= max_failures and operation_coverage_ok,
         "retry_attempt_count": retry_attempt_count,
         "retried_success_count": len([row for row in rows if row.get("ok") and int(row.get("retry_count") or 0) > 0]),
         "status_counts": status_counts,
@@ -2359,6 +2422,7 @@ def summarize_rest_stress_results(
             "max": round(max(durations), 3) if durations else 0.0,
         },
         "failures_sample": failures,
+        "operation_coverage": operation_coverage,
     }
 
 
@@ -2636,6 +2700,7 @@ def exercise_rest_stress(
 
     def run_one(index: int) -> dict[str, object]:
         operation = operations[index % len(operations)]
+        operation_key = rest_stress_operation_key(operation)
         method = str(operation["method"])
         path = str(operation["path"]).replace("{api_key}", urllib.parse.quote(api_key, safe=""))
         json_body = operation.get("json_body")
@@ -2673,6 +2738,7 @@ def exercise_rest_stress(
                 body_match = expected_body_contains is None or str(expected_body_contains).lower() in str(result.get("body_text") or "").lower()
                 native_rest_json = response_kind != "native-json" or is_native_rest_json_response(result)
                 return {
+                    "operation_key": operation_key,
                     "method": method,
                     "path": path,
                     "family": family,
@@ -2694,6 +2760,7 @@ def exercise_rest_stress(
                 retry_count += 1
                 time.sleep(0.025 * retry_count)
         return {
+            "operation_key": operation_key,
             "method": method,
             "path": path,
             "family": family,
@@ -2726,6 +2793,7 @@ def exercise_rest_stress(
         duration_seconds=duration_seconds,
         concurrency=concurrency,
         max_failures=max_failures,
+        operations=operations,
     )
     if not summary["ok"]:
         raise AssertionError(f"REST stress failures exceeded budget: {summary}")
