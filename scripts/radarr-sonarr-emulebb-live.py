@@ -1847,6 +1847,15 @@ def grab_first_radarr_release(arr_url: str, api_key: str, indexer_id: int, title
     return grab_first_arr_release(arr_url, api_key, indexer_id, title, timeout_seconds, kind="radarr")
 
 
+def arr_release_search_error_can_fallback(error_message: str) -> bool:
+    """Returns true for Arr search results that direct Prowlarr can still prove."""
+
+    return (
+        "release search returned no eMule BB rows" in error_message
+        or "Arr release selection found no release" in error_message
+    )
+
+
 def grab_first_arr_release_or_fallback_to_prowlarr(
     *,
     kind: str,
@@ -1903,14 +1912,7 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
             return release_grab
         except RuntimeError as exc:
             direct_error = str(exc)
-            sonarr_can_fallback = (
-                kind == "sonarr"
-                and (
-                    "release search returned no eMule BB rows" in direct_error
-                    or "Arr release selection found no release" in direct_error
-                )
-            )
-            if not sonarr_can_fallback:
+            if not arr_release_search_error_can_fallback(direct_error):
                 raise RuntimeError(f"{kind} manual Arr release acquisition failed: {direct_error}") from exc
     else:
         direct_error = "Arr health reports the eMule BB indexer unavailable due to failures."
