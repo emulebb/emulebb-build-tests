@@ -377,7 +377,13 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["rest_stress_duration_seconds"] == live_e2e_suite.STABILIZATION_REST_STRESS_DURATION_SECONDS
     assert summary["rest_stress_concurrency"] == live_e2e_suite.STABILIZATION_REST_STRESS_CONCURRENCY
     assert summary["rest_stress_max_failures"] == live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES
+    assert summary["rest_socket_adversity_budget"] == "smoke"
+    assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
+    assert summary["rest_leak_churn_budget"] == "smoke"
+    assert summary["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
+    assert summary["suites"][0]["rest_leak_churn_budget"] == "smoke"
+    assert summary["suites"][0]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
 
     rest_command = commands[0]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
