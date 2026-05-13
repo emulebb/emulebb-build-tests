@@ -4,6 +4,8 @@
 #include "FileTypeClassifierSeams.h"
 #include "RegexMatchSeams.h"
 
+#include <cstring>
+
 TEST_SUITE_BEGIN("fake_file_detector");
 
 TEST_CASE("file-type classifier detects common headers and extension mismatches")
@@ -20,6 +22,56 @@ TEST_CASE("file-type classifier detects common headers and extension mismatches"
 	mp4Header[7] = 0x70;
 	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(mp4Header, sizeof mp4Header, _T("movie.mp4")) == VIDEO_MP4);
 	CHECK(FileTypeClassifierSeams::IsExtensionTypeOf(VIDEO_MP4, _T("MP4")) == 1);
+}
+
+TEST_CASE("file-type classifier detects ebook archive and audio extensions")
+{
+	CHECK(FileTypeClassifierSeams::GetFileTypeFromExtension(_T("book.epub")) == DOCUMENT_EPUB);
+	CHECK(FileTypeClassifierSeams::GetFileTypeFromExtension(_T("book.mobi")) == DOCUMENT_MOBI);
+	CHECK(FileTypeClassifierSeams::GetFileTypeFromExtension(_T("comic.cbr")) == ARCHIVE_RAR);
+	CHECK(FileTypeClassifierSeams::GetFileTypeFromExtension(_T("archive.gz")) == ARCHIVE_GZ);
+	CHECK(FileTypeClassifierSeams::GetFileTypeFromExtension(_T("track.flac")) == AUDIO_FLAC);
+	CHECK(FileTypeClassifierSeams::GetFileTypeFromExtension(_T("track.wav")) == AUDIO_WAV);
+	CHECK(FileTypeClassifierSeams::GetFileTypeFromExtension(_T("track.aac")) == AUDIO_AAC);
+}
+
+TEST_CASE("file-type classifier detects ebook archive and audio headers")
+{
+	BYTE gzHeader[FileTypeClassifierSeams::kHeaderCheckSize] = { 0x1F, 0x8B, 0x08 };
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(gzHeader, sizeof gzHeader, _T("archive.gz")) == ARCHIVE_GZ);
+
+	BYTE flacHeader[FileTypeClassifierSeams::kHeaderCheckSize] = { 0x66, 0x4C, 0x61, 0x43 };
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(flacHeader, sizeof flacHeader, _T("track.flac")) == AUDIO_FLAC);
+
+	BYTE wavHeader[FileTypeClassifierSeams::kHeaderCheckSize] = { 0x52, 0x49, 0x46, 0x46 };
+	wavHeader[8] = 0x57;
+	wavHeader[9] = 0x41;
+	wavHeader[10] = 0x56;
+	wavHeader[11] = 0x45;
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(wavHeader, sizeof wavHeader, _T("track.wav")) == AUDIO_WAV);
+
+	BYTE aacHeader[FileTypeClassifierSeams::kHeaderCheckSize] = { 0xFF, 0xF1 };
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(aacHeader, sizeof aacHeader, _T("track.aac")) == AUDIO_AAC);
+
+	BYTE mobiHeader[FileTypeClassifierSeams::kHeaderCheckSize] = {};
+	const BYTE mobiId[] = { 0x42, 0x4F, 0x4F, 0x4B, 0x4D, 0x4F, 0x42, 0x49 };
+	memcpy(mobiHeader + 60, mobiId, sizeof mobiId);
+	CHECK(FileTypeClassifierSeams::DetectFileTypeFromHeader(mobiHeader, sizeof mobiHeader, _T("book.mobi")) == DOCUMENT_MOBI);
+}
+
+TEST_CASE("fake-file analyzer accepts epub zip containers")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"book.epub" };
+	evidence.extensionType = DOCUMENT_EPUB;
+	evidence.headerType = ARCHIVE_ZIP;
+	evidence.headerAvailable = true;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(report.severity == FakeFileDetectorSeams::Severity::None);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "header_extension_mismatch") == report.reasons.end());
 }
 
 TEST_CASE("fake-file analyzer combines names bad signals and header mismatch")
