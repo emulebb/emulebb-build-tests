@@ -673,6 +673,22 @@ def test_diagnostics_completeness_requires_all_default_dumps() -> None:
     assert module.diagnostics_are_complete({}, skip_dumps=True) is True
 
 
+def test_resource_monitor_health_requires_enabled_samples_and_stopped_thread() -> None:
+    module = load_script_module()
+
+    assert module.resource_monitor_is_healthy({}) is True
+    assert module.resource_monitor_is_healthy({"diagnostics": {"resource_monitor": {"enabled": False}}}) is True
+    assert module.resource_monitor_is_healthy(
+        {"diagnostics": {"resource_monitor": {"enabled": True, "thread_alive_after_stop": False, "summary": {"sample_count": 1}}}}
+    ) is True
+    assert module.resource_monitor_is_healthy(
+        {"diagnostics": {"resource_monitor": {"enabled": True, "thread_alive_after_stop": True, "summary": {"sample_count": 1}}}}
+    ) is False
+    assert module.resource_monitor_is_healthy(
+        {"diagnostics": {"resource_monitor": {"enabled": True, "thread_alive_after_stop": False, "summary": {"sample_count": 0}}}}
+    ) is False
+
+
 def test_umdh_completeness_requires_snapshots_and_finished_diffs() -> None:
     module = load_script_module()
     report = {

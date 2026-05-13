@@ -2849,6 +2849,25 @@ def diagnostics_are_complete(report: dict[str, object], *, skip_dumps: bool) -> 
     return True
 
 
+def resource_monitor_is_healthy(report: dict[str, object]) -> bool:
+    """Returns true when enabled resource monitoring sampled and stopped cleanly."""
+
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return True
+    monitor = diagnostics.get("resource_monitor")
+    if not isinstance(monitor, dict):
+        return True
+    if not bool(monitor.get("enabled")):
+        return True
+    if bool(monitor.get("thread_alive_after_stop")):
+        return False
+    summary = monitor.get("summary")
+    if not isinstance(summary, dict):
+        return False
+    return int(summary.get("sample_count") or 0) > 0
+
+
 def umdh_diagnostics_are_complete(report: dict[str, object]) -> bool:
     """Returns true when UMDH snapshots and mandatory post-drain diff completed."""
 
@@ -3384,6 +3403,9 @@ def main(argv: list[str] | None = None) -> int:
         elif not diagnostics_are_complete(report, skip_dumps=args.skip_dumps):
             report["status"] = "failed"
             report["failure_reason"] = "required dump diagnostics were not captured"
+        elif not resource_monitor_is_healthy(report):
+            report["status"] = "failed"
+            report["failure_reason"] = "resource monitor did not sample and stop cleanly"
         elif not args.skip_transfer_cleanup and not stress_cleanup_is_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "stress transfer cleanup did not settle before post-drain diagnostics"
