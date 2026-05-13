@@ -541,6 +541,106 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
     ]
 
 
+def test_radarr_movie_download_e2e_uses_manual_import_when_downloaded_scan_stalls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+    import_attempts = 0
+    category_path = tmp_path / module.RADARR_IMPORT_CATEGORY
+    category_path.mkdir()
+    completed = category_path / "Operator Movie.mkv"
+    completed.write_text("video", encoding="utf-8")
+
+    monkeypatch.setattr(
+        module,
+        "ensure_radarr_movie",
+        lambda *_args, **_kwargs: {"id": 77, "created": True, "root_folder": {"path": str(tmp_path)}},
+    )
+    monkeypatch.setattr(module, "arr_health_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release",
+        lambda *_args, **_kwargs: {
+            "source": "arr_release_search",
+            "hash": "fedcba9876543210fedcba9876543210",
+            "hash_present": True,
+            "grab_status": 200,
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_new_transfer_category",
+        lambda *_args, **kwargs: {"hash": "fedcba9876543210fedcba9876543210", "categoryName": kwargs["category"]},
+    )
+    monkeypatch.setattr(
+        module,
+        "resume_transfer_if_paused",
+        lambda *_args, **_kwargs: calls.append(("resume_if_paused", _args[2])) or {"resumed": False},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_transfer_completion",
+        lambda *_args, **_kwargs: calls.append(("transfer_complete", _args[2]))
+        or {"hash": _args[2], "last_seen": {"name": completed.name}},
+    )
+    monkeypatch.setattr(
+        module,
+        "trigger_arr_downloaded_scan",
+        lambda *_args, **_kwargs: calls.append(("downloaded_scan", str(_args[3]))) or {"name": "DownloadedMoviesScan"},
+    )
+
+    def fake_wait_for_radarr_import(*_args, **_kwargs):
+        nonlocal import_attempts
+        import_attempts += 1
+        calls.append(("radarr_import", import_attempts))
+        if import_attempts == 1:
+            raise RuntimeError("Radarr did not import movie before timeout. Last hasFile=False.")
+        return {"movie_id": _args[2], "hasFile": True}
+
+    monkeypatch.setattr(module, "wait_for_radarr_import", fake_wait_for_radarr_import)
+    monkeypatch.setattr(
+        module,
+        "manual_import_radarr_movie",
+        lambda *_args, **_kwargs: calls.append(("manual_import", str(_args[3]))) or {"candidate_count": 1, "status": 202},
+    )
+
+    report, cleanup_movie_id = module.run_radarr_movie_download_e2e(
+        radarr_url="http://radarr.test",
+        radarr_api_key="key",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        indexer_id=40,
+        indexer_name="eMule BB Local (Prowlarr)",
+        prowlarr_indexer_id=50,
+        movie_title="operator movie",
+        movie_root=tmp_path,
+        category_name=module.RADARR_IMPORT_CATEGORY,
+        category_save_path=category_path,
+        movie_root_creates_local_path=True,
+        quality_profile_name="AnyAnyLang",
+        release_search_timeout_seconds=10.0,
+        timeout_seconds=10.0,
+    )
+
+    assert cleanup_movie_id == 77
+    assert report["manual_import"] == {"candidate_count": 1, "status": 202}
+    assert "downloaded_scan_import_error" in report
+    assert report["arr_import"]["hasFile"] is True
+    assert calls == [
+        ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
+        ("transfer_complete", "fedcba9876543210fedcba9876543210"),
+        ("downloaded_scan", str(completed)),
+        ("radarr_import", 1),
+        ("manual_import", str(completed)),
+        ("radarr_import", 2),
+    ]
+
+
 def test_prowlarr_fallback_adds_selected_magnet_through_qbit_category(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[tuple[str, object]] = []

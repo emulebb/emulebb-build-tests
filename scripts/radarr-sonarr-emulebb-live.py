@@ -2779,6 +2779,86 @@ def wait_for_radarr_import(arr_url: str, api_key: str, movie_id: int, timeout_se
     raise RuntimeError(f"Radarr did not import movie before timeout. Last hasFile={bool(last.get('hasFile')) if last else None}.")
 
 
+def summarize_manual_import_candidate(row: dict[str, Any]) -> dict[str, object]:
+    """Builds a compact Radarr manual-import candidate summary."""
+
+    rejections = row.get("rejections")
+    rejection_rows = rejections if isinstance(rejections, list) else []
+    return {
+        "path_present": bool(str(row.get("path") or "")),
+        "relativePath": row.get("relativePath"),
+        "name": row.get("name"),
+        "size": row.get("size"),
+        "quality": row.get("quality"),
+        "language_count": len(row.get("languages") or []) if isinstance(row.get("languages"), list) else 0,
+        "rejections": [
+            {"reason": rejection.get("reason"), "type": rejection.get("type")}
+            for rejection in rejection_rows
+            if isinstance(rejection, dict)
+        ],
+    }
+
+
+def build_radarr_manual_import_payload(row: dict[str, Any], movie_id: int) -> dict[str, Any]:
+    """Builds one Radarr manual-import resource from a scanned candidate."""
+
+    payload: dict[str, Any] = {
+        "path": str(row.get("path") or ""),
+        "movieId": movie_id,
+        "quality": row.get("quality"),
+        "languages": row.get("languages") if isinstance(row.get("languages"), list) else [],
+        "releaseGroup": row.get("releaseGroup") or "",
+        "customFormats": row.get("customFormats") if isinstance(row.get("customFormats"), list) else [],
+        "customFormatScore": int(row.get("customFormatScore") or 0),
+        "indexerFlags": int(row.get("indexerFlags") or 0),
+        "downloadId": str(row.get("downloadId") or ""),
+    }
+    if isinstance(row.get("movie"), dict):
+        payload["movie"] = row["movie"]
+    return payload
+
+
+def manual_import_radarr_movie(arr_url: str, api_key: str, movie_id: int, import_path: Path | str) -> dict[str, object]:
+    """Imports a completed movie file through Radarr manual import when downloaded scan stalls."""
+
+    path_text = str(import_path)
+    folder_path = str(Path(path_text).parent if Path(path_text).is_file() else Path(path_text))
+    query = urllib.parse.urlencode(
+        {
+            "folder": folder_path,
+            "movieId": str(movie_id),
+            "filterExistingFiles": "true",
+        }
+    )
+    rows_payload = require_success(
+        arr_request(arr_url, api_key, f"/api/v3/manualimport?{query}", timeout_seconds=120.0),
+        "Radarr manual import candidate scan",
+    )
+    rows = [row for row in rows_payload if isinstance(row, dict)] if isinstance(rows_payload, list) else []
+    if not rows:
+        raise RuntimeError(f"Radarr manual import returned no candidates for {folder_path!r}.")
+
+    wanted_path = str(Path(path_text))
+    selected = next((row for row in rows if str(row.get("path") or "").lower() == wanted_path.lower()), rows[0])
+    import_payload = [build_radarr_manual_import_payload(selected, movie_id)]
+    import_result = arr_request(
+        arr_url,
+        api_key,
+        "/api/v3/manualimport",
+        method="POST",
+        json_body=import_payload,
+        timeout_seconds=120.0,
+    )
+    response_payload = require_success(import_result, "Radarr manual import")
+    return {
+        "candidate_count": len(rows),
+        "selected": summarize_manual_import_candidate(selected),
+        "status": int(import_result.get("status") or 0),
+        "response_type": type(response_payload).__name__,
+        "response_count": len(response_payload) if isinstance(response_payload, list) else None,
+    }
+
+
 def trigger_arr_downloaded_scan(arr_url: str, api_key: str, kind: str, import_path: Path | str) -> dict[str, object]:
     """Asks Arr to scan the completed eMule category path for import."""
 
@@ -3442,7 +3522,12 @@ def run_radarr_movie_download_e2e(
         "radarr",
         import_path,
     )
-    report["arr_import"] = wait_for_radarr_import(radarr_url, radarr_api_key, movie_id, timeout_seconds)
+    try:
+        report["arr_import"] = wait_for_radarr_import(radarr_url, radarr_api_key, movie_id, min(timeout_seconds, 180.0))
+    except RuntimeError as exc:
+        report["downloaded_scan_import_error"] = str(exc)
+        report["manual_import"] = manual_import_radarr_movie(radarr_url, radarr_api_key, movie_id, import_path)
+        report["arr_import"] = wait_for_radarr_import(radarr_url, radarr_api_key, movie_id, min(timeout_seconds, 300.0))
     return report, movie_id if bool(movie.get("created")) else None
 
 
