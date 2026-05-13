@@ -93,12 +93,17 @@ TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on p
 
 	CHECK(PartFilePreviewSeams::kVideoThumbnailDisplayMaxWidth == 480);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailDefaultIntervalSeconds == 0u);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailMinIntervalSeconds == 30u);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRecommendedIntervalSeconds == 90u);
-	CHECK(PartFilePreviewSeams::kVideoThumbnailMaxIntervalSeconds == 600u);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailMaxIntervalSeconds == 900u);
 	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(0u) == 0u);
+	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(1u) == 30u);
+	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(29u) == 30u);
+	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(30u) == 30u);
 	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(90u) == 90u);
-	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(601u) == 600u);
+	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(901u) == 900u);
 	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailIntervalEnabled(0u));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailIntervalEnabled(1u));
 	CHECK(PartFilePreviewSeams::IsVideoThumbnailIntervalEnabled(90u));
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshDeltaPermille == 50ull);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshMaxDeltaBytes == 128ull * oneMegabyte);

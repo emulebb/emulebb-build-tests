@@ -533,7 +533,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         select_page(dialog_hwnd, "Files")
         set_edit_text(find_control(dialog_hwnd, IDC_VIDEOPLAYER, "Edit"), "mpv.exe")
         set_edit_text(find_control(dialog_hwnd, IDC_THUMBNAIL_FFMPEG, "Edit"), str(fake_ffmpeg))
-        set_edit_text(find_control(dialog_hwnd, IDC_THUMBNAIL_INTERVAL, "Edit"), "120")
+        set_edit_text(find_control(dialog_hwnd, IDC_THUMBNAIL_INTERVAL, "Edit"), "20")
 
         select_page(dialog_hwnd, "Web Interface")
         ensure_checkbox(find_control(dialog_hwnd, IDC_WSENABLED, "Button"), True)
@@ -580,7 +580,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
                 "VideoPlayer": "mpv.exe",
                 "VideoPreviewThumbnails": "0",
                 "VideoThumbnailFfmpegPath": str(fake_ffmpeg),
-                "VideoThumbnailIntervalSeconds": "120",
+                "VideoThumbnailIntervalSeconds": "30",
                 "TxtEditor": "notepad.exe /A",
                 "MaxChatHistoryLines": "321",
                 "MaxMessageSessions": "61",
