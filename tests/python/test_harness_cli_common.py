@@ -215,4 +215,5 @@ def test_process_exited_with_access_violation_matches_windows_code() -> None:
     module = load_harness_cli_common_module()
 
     assert module.process_exited_with_access_violation({"exit_code": 0xC0000005})
+    assert module.process_exited_with_access_violation({"exit_code": -1073741819})
     assert not module.process_exited_with_access_violation({"exit_code": 0})

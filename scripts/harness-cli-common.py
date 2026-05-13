@@ -312,9 +312,10 @@ def process_exited_with_access_violation(process_state: dict[str, object] | None
     if not isinstance(process_state, dict):
         return False
     try:
-        return int(process_state.get("exit_code")) == ACCESS_VIOLATION_EXIT_CODE
+        exit_code = int(process_state.get("exit_code"))
     except (TypeError, ValueError):
         return False
+    return exit_code == ACCESS_VIOLATION_EXIT_CODE or (exit_code & 0xFFFFFFFF) == ACCESS_VIOLATION_EXIT_CODE
 
 
 def to_windows_extended_path(path: Path) -> str:
