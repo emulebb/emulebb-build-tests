@@ -137,3 +137,19 @@ def test_dump_channel_summary_counts_independent_crash_channels(tmp_path: Path) 
     assert summary["procdump_dump_count"] == 1
     assert summary["app_crash_dump_count"] == 1
     assert summary["crash_dump_count"] == 3
+
+
+def test_crash_dump_requirements_require_access_violation_and_dump() -> None:
+    module = load_script_module()
+
+    passing = {
+        "manual_dump_ok": True,
+        "process_exited_with_access_violation": True,
+        "process_stopped": True,
+        "crash_dump_count": 1,
+    }
+
+    assert module.crash_dump_requirements_passed(passing) is True
+    assert module.crash_dump_requirements_passed({**passing, "process_exited_with_access_violation": False}) is False
+    assert module.crash_dump_requirements_passed({**passing, "process_stopped": False}) is False
+    assert module.crash_dump_requirements_passed({**passing, "crash_dump_count": 0}) is False

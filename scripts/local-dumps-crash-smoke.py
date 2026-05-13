@@ -403,6 +403,17 @@ def build_dump_channel_summary(checks: dict[str, object]) -> dict[str, object]:
     }
 
 
+def crash_dump_requirements_passed(summary: dict[str, object]) -> bool:
+    """Returns whether crash-smoke evidence proves an AV exit with a crash dump."""
+
+    return (
+        bool(summary.get("manual_dump_ok"))
+        and bool(summary.get("process_exited_with_access_violation"))
+        and bool(summary.get("process_stopped"))
+        and int(summary.get("crash_dump_count") or 0) > 0
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the LocalDumps crash smoke and returns a process exit code."""
 
@@ -492,11 +503,10 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["app_crash_dump_files"] = collect_dumps_in_directory(Path(profile["config_dir"]))
         report["checks"]["local_dump"] = wait_for_emule_local_dump(paths.local_dumps, args.dump_timeout_seconds)
         report["checks"]["dump_channel_summary"] = build_dump_channel_summary(report["checks"])
-        crash_dump_count = int(report["checks"]["dump_channel_summary"].get("crash_dump_count") or 0)
-        if report["checks"]["manual_dump"].get("ok") and report["checks"]["process_stopped"].get("ok") and crash_dump_count > 0:
+        if crash_dump_requirements_passed(report["checks"]["dump_channel_summary"]):
             report["status"] = "passed"
         else:
-            report["failure_reason"] = "crash trigger did not stop eMule and produce an eMule crash dump"
+            report["failure_reason"] = "crash trigger did not produce an access-violation exit and eMule crash dump"
     except Exception as exc:
         report["status"] = "failed"
         report["failure_reason"] = f"{type(exc).__name__}: {exc}"
