@@ -2667,6 +2667,7 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["native_rest_non_json_count"] == 1
     assert summary["retry_attempt_count"] == 0
     assert summary["retried_success_count"] == 0
+    assert summary["retried_failure_count"] == 0
     assert summary["operation_coverage"] is None
     assert summary["latency_ms"]["max"] == 9.0
     assert len(summary["failures_sample"]) == 1
@@ -2834,6 +2835,7 @@ def test_rest_stress_summary_reports_retry_recovery() -> None:
     assert summary["ok"] is True
     assert summary["retry_attempt_count"] == 3
     assert summary["retried_success_count"] == 1
+    assert summary["retried_failure_count"] == 1
 
 
 def test_server_connect_transport_loss_is_runtime_failure_signal() -> None:

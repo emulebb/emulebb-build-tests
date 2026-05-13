@@ -2469,6 +2469,7 @@ def summarize_rest_stress_results(
         "ok": failure_count <= max_failures and operation_coverage_ok,
         "retry_attempt_count": retry_attempt_count,
         "retried_success_count": len([row for row in rows if row.get("ok") and int(row.get("retry_count") or 0) > 0]),
+        "retried_failure_count": len([row for row in rows if not row.get("ok") and int(row.get("retry_count") or 0) > 0]),
         "status_counts": status_counts,
         "method_counts": method_counts,
         "family_counts": family_counts,
