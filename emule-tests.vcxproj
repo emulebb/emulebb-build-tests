@@ -159,6 +159,7 @@
     <ClCompile Include="src\udp_obfuscation_framing.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h')" />
     <ClCompile Include="src\encrypted_datagram_sequence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSequenceSeams.h')" />
     <ClCompile Include="src\encrypted_stream_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedStreamSocketSeams.h')" />
+    <ClCompile Include="src\fake_file_detector.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\FakeFileDetectorSeams.h')" />
     <ClCompile Include="src\encrypted_datagram_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h')" />
     <ClCompile Include="src\encrypted_stream_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedStreamSocketFlowSeams.h')" />
     <ClCompile Include="src\fastkad_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\FastKad.h') and Exists('$(VCToolsInstallDir)atlmfc\include\afximpl.h')" />
@@ -272,6 +273,8 @@
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedStreamSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedStreamSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\FormatSafetySeams.h" Condition="Exists('$(AppRoot)\srchybrid\FormatSafetySeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\FakeFileDetectorSeams.h" Condition="Exists('$(AppRoot)\srchybrid\FakeFileDetectorSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\FileTypeClassifierSeams.h" Condition="Exists('$(AppRoot)\srchybrid\FileTypeClassifierSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\HelperThreadLaunchSeams.h" Condition="Exists('$(AppRoot)\srchybrid\HelperThreadLaunchSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\MappedFileReader.h" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\NullGuardSeams.h" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
