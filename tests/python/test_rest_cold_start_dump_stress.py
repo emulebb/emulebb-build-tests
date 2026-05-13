@@ -390,6 +390,22 @@ def test_summarize_resource_monitor_samples_counts_sustained_high_cpu() -> None:
     }
 
 
+def test_resource_monitor_stop_reports_disabled_sampling() -> None:
+    module = load_script_module()
+    monitor = module.ProcessResourceMonitor(process_id=123, interval_seconds=0.0, counts_provider=lambda: {})
+
+    monitor.start()
+    result = monitor.stop()
+
+    assert result["enabled"] is False
+    assert result["process_id"] == 123
+    assert result["interval_seconds"] == 0.0
+    assert result["thread_started"] is False
+    assert result["thread_alive_after_stop"] is False
+    assert result["samples"] == []
+    assert result["summary"]["sample_count"] == 0
+
+
 def test_access_violation_without_emule_dump_is_release_blocking() -> None:
     module = load_script_module()
 

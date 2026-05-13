@@ -415,10 +415,17 @@ class ProcessResourceMonitor:
     def stop(self) -> dict[str, object]:
         """Stops the monitor and returns a summary plus retained samples."""
 
+        thread_alive_after_stop = False
         if self._thread is not None:
             self._stop_event.set()
             self._thread.join(timeout=max(2.0, self.interval_seconds + 1.0))
+            thread_alive_after_stop = self._thread.is_alive()
         return {
+            "enabled": self.interval_seconds > 0,
+            "process_id": self.process_id,
+            "interval_seconds": self.interval_seconds,
+            "thread_started": self._thread is not None,
+            "thread_alive_after_stop": thread_alive_after_stop,
             "samples": self.samples,
             "summary": summarize_resource_monitor_samples(self.samples),
         }
