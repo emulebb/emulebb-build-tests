@@ -332,6 +332,77 @@ def collect_procdump_crash_dumps(dump_dir: Path) -> dict[str, object]:
     }
 
 
+def dump_row_path(row: dict[str, object]) -> Path | None:
+    """Returns a resolved dump path from one summary row, when present."""
+
+    path_text = str(row.get("path") or "")
+    if not path_text:
+        return None
+    return Path(path_text).resolve()
+
+
+def non_empty_dump_rows(summary: dict[str, object]) -> list[dict[str, object]]:
+    """Returns non-empty dump rows from one dump collection summary."""
+
+    rows = summary.get("files")
+    if not isinstance(rows, list):
+        return []
+    return [
+        row
+        for row in rows
+        if isinstance(row, dict) and int(row.get("size_bytes") or 0) > 0
+    ]
+
+
+def exclude_dump_paths(rows: list[dict[str, object]], excluded_paths: set[Path]) -> list[dict[str, object]]:
+    """Filters dump rows by resolved path so setup dumps cannot count as crash dumps."""
+
+    filtered: list[dict[str, object]] = []
+    for row in rows:
+        row_path = dump_row_path(row)
+        if row_path is not None and row_path in excluded_paths:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def build_dump_channel_summary(checks: dict[str, object]) -> dict[str, object]:
+    """Builds crash-dump channel counts without counting the pre-crash manual dump."""
+
+    manual_dump = checks.get("manual_dump")
+    manual_dump_path = None
+    if isinstance(manual_dump, dict):
+        manual_dump_path_text = str(manual_dump.get("dump_path") or "")
+        if manual_dump_path_text:
+            manual_dump_path = Path(manual_dump_path_text).resolve()
+
+    excluded_paths = {manual_dump_path} if manual_dump_path is not None else set()
+    local_dump = checks.get("local_dump") if isinstance(checks.get("local_dump"), dict) else {}
+    procdump_dump_files = checks.get("procdump_dump_files") if isinstance(checks.get("procdump_dump_files"), dict) else {}
+    app_crash_dump_files = checks.get("app_crash_dump_files") if isinstance(checks.get("app_crash_dump_files"), dict) else {}
+    app_crash_rows = exclude_dump_paths(non_empty_dump_rows(app_crash_dump_files), excluded_paths)
+    app_crash_rows_before_exclusion = non_empty_dump_rows(app_crash_dump_files)
+    wer_emule_dump_count = len(local_dump.get("emule_dumps", [])) if isinstance(local_dump, dict) else 0
+    procdump_dump_count = len(non_empty_dump_rows(procdump_dump_files))
+    app_crash_dump_count = len(app_crash_rows)
+    return {
+        "manual_dump_ok": bool(isinstance(manual_dump, dict) and manual_dump.get("ok")),
+        "manual_dump_path": str(manual_dump_path) if manual_dump_path is not None else None,
+        "process_exited_with_access_violation": bool(
+            isinstance(checks.get("process_exit"), dict) and checks["process_exit"].get("ok")
+        ),
+        "process_stopped": bool(
+            isinstance(checks.get("process_stopped"), dict) and checks["process_stopped"].get("ok")
+        ),
+        "wer_emule_dump_count": wer_emule_dump_count,
+        "procdump_dump_count": procdump_dump_count,
+        "app_crash_dump_count": app_crash_dump_count,
+        "app_crash_dump_count_before_manual_exclusion": len(app_crash_rows_before_exclusion),
+        "manual_dump_excluded_from_app_crash_count": len(app_crash_rows_before_exclusion) - app_crash_dump_count,
+        "crash_dump_count": wer_emule_dump_count + procdump_dump_count + app_crash_dump_count,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the LocalDumps crash smoke and returns a process exit code."""
 
@@ -420,19 +491,8 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["procdump_dump_files"] = collect_procdump_crash_dumps(procdump_dump_dir)
         report["checks"]["app_crash_dump_files"] = collect_dumps_in_directory(Path(profile["config_dir"]))
         report["checks"]["local_dump"] = wait_for_emule_local_dump(paths.local_dumps, args.dump_timeout_seconds)
-        wer_dump_count = len(report["checks"]["local_dump"].get("emule_dumps", []))
-        crash_dump_count = wer_dump_count
-        crash_dump_count += int(report["checks"]["procdump_dump_files"].get("count", 0))
-        crash_dump_count += int(report["checks"]["app_crash_dump_files"].get("count", 0))
-        report["checks"]["dump_channel_summary"] = {
-            "manual_dump_ok": bool(report["checks"]["manual_dump"].get("ok")),
-            "process_exited_with_access_violation": bool(report["checks"]["process_exit"].get("ok")),
-            "process_stopped": bool(report["checks"]["process_stopped"].get("ok")),
-            "wer_emule_dump_count": wer_dump_count,
-            "procdump_dump_count": int(report["checks"]["procdump_dump_files"].get("count", 0)),
-            "app_crash_dump_count": int(report["checks"]["app_crash_dump_files"].get("count", 0)),
-            "crash_dump_count": crash_dump_count,
-        }
+        report["checks"]["dump_channel_summary"] = build_dump_channel_summary(report["checks"])
+        crash_dump_count = int(report["checks"]["dump_channel_summary"].get("crash_dump_count") or 0)
         if report["checks"]["manual_dump"].get("ok") and report["checks"]["process_stopped"].get("ok") and crash_dump_count > 0:
             report["status"] = "passed"
         else:

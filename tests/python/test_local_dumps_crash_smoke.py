@@ -75,3 +75,65 @@ def test_collect_dumps_in_directory_reports_non_empty_dumps(tmp_path: Path) -> N
     assert result["count"] == 1
     assert result["files"][0]["name"] == "emulebb-crash.dmp"
     assert result["files"][0]["size_bytes"] == 4
+
+
+def test_dump_channel_summary_does_not_count_manual_dump_as_crash_dump(tmp_path: Path) -> None:
+    module = load_script_module()
+    manual_dump = tmp_path / "manual.dmp"
+    manual_dump.write_bytes(b"manual")
+
+    summary = module.build_dump_channel_summary(
+        {
+            "manual_dump": {"ok": True, "dump_path": str(manual_dump)},
+            "process_exit": {"ok": True},
+            "process_stopped": {"ok": True},
+            "local_dump": {"emule_dumps": []},
+            "procdump_dump_files": {"files": []},
+            "app_crash_dump_files": {
+                "files": [
+                    {
+                        "name": manual_dump.name,
+                        "path": str(manual_dump),
+                        "size_bytes": manual_dump.stat().st_size,
+                    }
+                ]
+            },
+        }
+    )
+
+    assert summary["manual_dump_ok"] is True
+    assert summary["manual_dump_excluded_from_app_crash_count"] == 1
+    assert summary["app_crash_dump_count"] == 0
+    assert summary["crash_dump_count"] == 0
+
+
+def test_dump_channel_summary_counts_independent_crash_channels(tmp_path: Path) -> None:
+    module = load_script_module()
+    manual_dump = tmp_path / "manual.dmp"
+    app_crash_dump = tmp_path / "emule-crash.dmp"
+    procdump_crash_dump = tmp_path / "emule-procdump.dmp"
+    for path in (manual_dump, app_crash_dump, procdump_crash_dump):
+        path.write_bytes(b"dump")
+
+    summary = module.build_dump_channel_summary(
+        {
+            "manual_dump": {"ok": True, "dump_path": str(manual_dump)},
+            "process_exit": {"ok": True},
+            "process_stopped": {"ok": True},
+            "local_dump": {"emule_dumps": [{"name": "emule.exe.1234.dmp", "size_bytes": 4096}]},
+            "procdump_dump_files": {
+                "files": [{"name": procdump_crash_dump.name, "path": str(procdump_crash_dump), "size_bytes": 4}]
+            },
+            "app_crash_dump_files": {
+                "files": [
+                    {"name": manual_dump.name, "path": str(manual_dump), "size_bytes": 4},
+                    {"name": app_crash_dump.name, "path": str(app_crash_dump), "size_bytes": 4},
+                ]
+            },
+        }
+    )
+
+    assert summary["wer_emule_dump_count"] == 1
+    assert summary["procdump_dump_count"] == 1
+    assert summary["app_crash_dump_count"] == 1
+    assert summary["crash_dump_count"] == 3
