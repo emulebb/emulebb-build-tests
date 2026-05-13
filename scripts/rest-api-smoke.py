@@ -1847,6 +1847,26 @@ def response_matches_kind(result: dict[str, object], response_kind: str) -> bool
     return True
 
 
+def classify_rest_stress_response_error(
+    *,
+    expected_match: bool,
+    response_kind_match: bool,
+    body_match: bool,
+    native_rest_json: bool,
+) -> str | None:
+    """Returns a compact failure reason for one REST stress response."""
+
+    if not expected_match:
+        return "status mismatch"
+    if not response_kind_match:
+        return "response kind mismatch"
+    if not body_match:
+        return "response body mismatch"
+    if not native_rest_json:
+        return "native REST JSON mismatch"
+    return None
+
+
 def require_missing_transfer_bulk_result(result: dict[str, object]) -> dict[str, object]:
     """Asserts one bulk transfer mutation reports a per-item missing-transfer result."""
 
@@ -2787,6 +2807,12 @@ def exercise_rest_stress(
                 response_kind_match = response_matches_kind(result, response_kind)
                 body_match = expected_body_contains is None or str(expected_body_contains).lower() in str(result.get("body_text") or "").lower()
                 native_rest_json = response_kind != "native-json" or is_native_rest_json_response(result)
+                error = classify_rest_stress_response_error(
+                    expected_match=expected_match,
+                    response_kind_match=response_kind_match,
+                    body_match=body_match,
+                    native_rest_json=native_rest_json,
+                )
                 return {
                     "operation_key": operation_key,
                     "method": method,
@@ -2800,7 +2826,7 @@ def exercise_rest_stress(
                     "response_kind": response_kind,
                     "native_rest_json": native_rest_json,
                     "retry_count": retry_count,
-                    "error": None if native_rest_json and response_kind_match and body_match else "response shape mismatch",
+                    "error": error,
                     "duration_ms": round((time.monotonic() - start) * 1000.0, 3),
                 }
             except Exception as exc:

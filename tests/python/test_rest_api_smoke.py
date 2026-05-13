@@ -2774,6 +2774,41 @@ def test_rest_stress_retry_classification_is_limited_to_transient_resets() -> No
     assert not module.is_retryable_rest_stress_exception(TimeoutError("timed out"))
 
 
+def test_rest_stress_response_error_classification_is_specific() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.classify_rest_stress_response_error(
+        expected_match=True,
+        response_kind_match=True,
+        body_match=True,
+        native_rest_json=True,
+    ) is None
+    assert module.classify_rest_stress_response_error(
+        expected_match=False,
+        response_kind_match=False,
+        body_match=False,
+        native_rest_json=False,
+    ) == "status mismatch"
+    assert module.classify_rest_stress_response_error(
+        expected_match=True,
+        response_kind_match=False,
+        body_match=False,
+        native_rest_json=False,
+    ) == "response kind mismatch"
+    assert module.classify_rest_stress_response_error(
+        expected_match=True,
+        response_kind_match=True,
+        body_match=False,
+        native_rest_json=False,
+    ) == "response body mismatch"
+    assert module.classify_rest_stress_response_error(
+        expected_match=True,
+        response_kind_match=True,
+        body_match=True,
+        native_rest_json=False,
+    ) == "native REST JSON mismatch"
+
+
 def test_rest_stress_summary_reports_retry_recovery() -> None:
     module = load_rest_api_smoke_module()
 
