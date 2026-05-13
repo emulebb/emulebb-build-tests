@@ -287,6 +287,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\PreferenceUiSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PreferenceUiSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProUserMenuCopySeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProUserMenuCopySeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\RegexMatchSeams.h" Condition="Exists('$(AppRoot)\srchybrid\RegexMatchSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ResourceOwnershipSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ResourceOwnershipSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SearchListViewSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SearchListViewSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h')" />

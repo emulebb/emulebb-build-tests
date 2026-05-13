@@ -2,6 +2,7 @@
 
 #include "FakeFileDetectorSeams.h"
 #include "FileTypeClassifierSeams.h"
+#include "RegexMatchSeams.h"
 
 TEST_SUITE_BEGIN("fake_file_detector");
 
@@ -57,6 +58,60 @@ TEST_CASE("fake-file analyzer reports pending header without mismatch penalty")
 	CHECK(report.severity == FakeFileDetectorSeams::Severity::None);
 	CHECK(report.pendingHeaderCheck);
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "pending_header_check") != report.reasons.end());
+}
+
+TEST_CASE("fake-file analyzer score follows current bad-signal rules")
+{
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"release password.mp4" };
+	evidence.extensionType = VIDEO_MP4;
+
+	FakeFileDetectorSeams::RuleSet rules;
+	rules.tokens.push_back(L"password");
+	CHECK(FakeFileDetectorSeams::Analyze(evidence, rules).score == 25);
+
+	rules.tokens.clear();
+	CHECK(FakeFileDetectorSeams::Analyze(evidence, rules).score == 0);
+}
+
+TEST_CASE("file-type header probe keeps iso pending until offset signature is available")
+{
+	const FileTypeClassifierSeams::HeaderProbeSummary pendingIso = FileTypeClassifierSeams::SummarizeHeaderProbe(
+		FILETYPE_UNKNOWN,
+		IMAGE_ISO,
+		true,
+		false);
+	CHECK(pendingIso.status == FileTypeClassifierSeams::HeaderProbeStatus::Pending);
+	CHECK(pendingIso.type == FILETYPE_UNKNOWN);
+
+	const FileTypeClassifierSeams::HeaderProbeSummary checkedVideo = FileTypeClassifierSeams::SummarizeHeaderProbe(
+		FILETYPE_UNKNOWN,
+		VIDEO_MP4,
+		true,
+		false);
+	CHECK(checkedVideo.status == FileTypeClassifierSeams::HeaderProbeStatus::CheckedUnknown);
+
+	const FileTypeClassifierSeams::HeaderProbeSummary detectedZip = FileTypeClassifierSeams::SummarizeHeaderProbe(
+		ARCHIVE_ZIP,
+		VIDEO_MP4,
+		true,
+		false);
+	CHECK(detectedZip.status == FileTypeClassifierSeams::HeaderProbeStatus::Detected);
+	CHECK(detectedZip.type == ARCHIVE_ZIP);
+}
+
+TEST_CASE("regex helper preserves category full-match and fake-file search modes")
+{
+	const std::wstring pattern = L"release";
+	CHECK(RegexMatchSeams::Match(std::wstring(L"release"), pattern, RegexMatchSeams::MatchMode::Full));
+	CHECK_FALSE(RegexMatchSeams::Match(std::wstring(L"release.mp4"), pattern, RegexMatchSeams::MatchMode::Full));
+	CHECK(RegexMatchSeams::Match(std::wstring(L"release.mp4"), pattern, RegexMatchSeams::MatchMode::Search));
+	CHECK(RegexMatchSeams::Match(
+		std::wstring(L"Release.MP4.EXE"),
+		std::wstring(L"\\.mp4\\.exe$"),
+		RegexMatchSeams::MatchMode::Search,
+		std::regex_constants::icase | std::regex_constants::ECMAScript));
+	CHECK_FALSE(RegexMatchSeams::IsValidPattern(std::wstring(L"(")));
 }
 
 TEST_CASE("fake-file token matching uses separator boundaries")
