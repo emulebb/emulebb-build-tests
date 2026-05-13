@@ -2374,6 +2374,24 @@ def summarize_rest_stress_operation_coverage(
     }
 
 
+def compact_rest_stress_row(row: dict[str, object]) -> dict[str, object]:
+    """Returns a report-safe compact representation of one REST stress request."""
+
+    compact = {
+        "operation_key": rest_stress_row_operation_key(row),
+        "method": row.get("method"),
+        "family": row.get("family"),
+        "scenario": row.get("scenario"),
+        "status": row.get("status"),
+        "ok": bool(row.get("ok")),
+        "duration_ms": row.get("duration_ms"),
+        "retry_count": int(row.get("retry_count") or 0),
+    }
+    if row.get("error"):
+        compact["error"] = str(row.get("error"))
+    return compact
+
+
 def summarize_rest_stress_results(
     rows: list[dict[str, object]],
     *,
@@ -2411,7 +2429,7 @@ def summarize_rest_stress_results(
             error_key = str(row.get("error") or status)
             error_counts[error_key] = error_counts.get(error_key, 0) + 1
             if len(failures) < 10:
-                failures.append(row)
+                failures.append(compact_rest_stress_row(row))
     failure_count = len([row for row in rows if not row.get("ok")])
     retry_attempt_count = sum(int(row.get("retry_count") or 0) for row in rows)
     operation_coverage = (
@@ -2445,6 +2463,14 @@ def summarize_rest_stress_results(
             "p95": percentile(durations, 95.0),
             "max": round(max(durations), 3) if durations else 0.0,
         },
+        "slowest_requests_sample": [
+            compact_rest_stress_row(row)
+            for row in sorted(
+                [row for row in rows if isinstance(row.get("duration_ms"), int | float)],
+                key=lambda row: float(row.get("duration_ms") or 0.0),
+                reverse=True,
+            )[:10]
+        ],
         "failures_sample": failures,
         "operation_coverage": operation_coverage,
     }

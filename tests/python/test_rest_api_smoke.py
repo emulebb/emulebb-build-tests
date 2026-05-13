@@ -2662,6 +2662,14 @@ def test_rest_stress_summary_is_bounded_and_deterministic() -> None:
     assert summary["operation_coverage"] is None
     assert summary["latency_ms"]["max"] == 9.0
     assert len(summary["failures_sample"]) == 1
+    assert "path" not in summary["failures_sample"][0]
+    assert summary["failures_sample"][0]["operation_key"] == "UNKNOWN /boom [read]"
+    assert [row["duration_ms"] for row in summary["slowest_requests_sample"]] == [9.0, 4.0, 1.0]
+    assert [row["operation_key"] for row in summary["slowest_requests_sample"]] == [
+        "UNKNOWN /boom [read]",
+        "UNKNOWN /missing [safe_mutation]",
+        "UNKNOWN /ok [read]",
+    ]
 
 
 def test_rest_stress_summary_reports_operation_coverage_starvation() -> None:
