@@ -2,6 +2,8 @@
 
 #include "MediaInfoDllSeams.h"
 
+#include <climits>
+
 TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("MediaInfo DLL seam keeps the no-load marker explicit")
@@ -47,6 +49,44 @@ TEST_CASE("MediaInfo DLL seam treats zero open result as failure")
 	CHECK_FALSE(MediaInfoDllSeams::IsOpenSucceeded(0));
 	CHECK(MediaInfoDllSeams::IsOpenSucceeded(1));
 	CHECK(MediaInfoDllSeams::IsOpenSucceeded(42));
+}
+
+TEST_CASE("MediaInfo DLL seam shows hints only for actionable load failures")
+{
+	CHECK_FALSE(MediaInfoDllSeams::ShouldShowInstallHint(MediaInfoDllSeams::MediaInfoDll_NotInitialized));
+	CHECK_FALSE(MediaInfoDllSeams::ShouldShowInstallHint(MediaInfoDllSeams::MediaInfoDll_Loaded));
+	CHECK_FALSE(MediaInfoDllSeams::ShouldShowInstallHint(MediaInfoDllSeams::MediaInfoDll_Disabled));
+	CHECK(MediaInfoDllSeams::ShouldShowInstallHint(MediaInfoDllSeams::MediaInfoDll_Missing));
+	CHECK(MediaInfoDllSeams::ShouldShowInstallHint(MediaInfoDllSeams::MediaInfoDll_Incompatible));
+	CHECK(MediaInfoDllSeams::ShouldShowInstallHint(MediaInfoDllSeams::MediaInfoDll_BadExports));
+	CHECK(MediaInfoDllSeams::ShouldShowInstallHint(MediaInfoDllSeams::MediaInfoDll_LoadFailed));
+}
+
+TEST_CASE("MediaInfo DLL seam clamps reported stream counts before loop use")
+{
+	CHECK(MediaInfoDllSeams::NormalizeReportedCount(-4, 64) == 0);
+	CHECK(MediaInfoDllSeams::NormalizeReportedCount(0, 64) == 0);
+	CHECK(MediaInfoDllSeams::NormalizeReportedCount(7, 64) == 7);
+	CHECK(MediaInfoDllSeams::NormalizeReportedCount(7000, 64) == 64);
+	CHECK(MediaInfoDllSeams::NormalizeReportedCount(7, 0) == 0);
+}
+
+TEST_CASE("MediaInfo DLL seam clamps chapter ranges")
+{
+	CHECK(MediaInfoDllSeams::NormalizeChapterEnd(10, 8, 512) == 10);
+	CHECK(MediaInfoDllSeams::NormalizeChapterEnd(10, 12, 512) == 12);
+	CHECK(MediaInfoDllSeams::NormalizeChapterEnd(10, 10000, 512) == 522);
+	CHECK(MediaInfoDllSeams::NormalizeChapterEnd(10, 12, 0) == 10);
+	CHECK(MediaInfoDllSeams::NormalizeChapterEnd(INT_MAX - 2, INT_MAX, 512) == INT_MAX);
+}
+
+TEST_CASE("MediaInfo DLL seam requires four bytes before FOURCC extraction")
+{
+	CHECK_FALSE(MediaInfoDllSeams::CanReadFourCc(CStringA("")));
+	CHECK_FALSE(MediaInfoDllSeams::CanReadFourCc(CStringA("A")));
+	CHECK_FALSE(MediaInfoDllSeams::CanReadFourCc(CStringA("ABC")));
+	CHECK(MediaInfoDllSeams::CanReadFourCc(CStringA("XVID")));
+	CHECK(MediaInfoDllSeams::CanReadFourCc(CStringA("MPEG Video")));
 }
 
 TEST_SUITE_END;
