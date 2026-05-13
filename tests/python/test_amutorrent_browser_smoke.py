@@ -106,6 +106,16 @@ def test_browser_smoke_reports_live_network_launch_inputs() -> None:
     assert 'BindAddr=hide.me' not in script_text
 
 
+def test_browser_smoke_isolates_amutorrent_port_and_state() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert 'amutorrent_data_dir = artifacts_dir / "amutorrent-data"' in script_text
+    assert '"PORT": str(amutorrent_port)' in script_text
+    assert '"AMUTORRENT_DATA_DIR": str(amutorrent_data_dir)' in script_text
+    assert "repos\\\\amutorrent\\\\server\\\\data" not in script_text
+
+
 def test_amutorrent_ed2k_browser_routes_do_not_use_legacy_amule_paths() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     amutorrent_root = workspace_root / "repos" / "amutorrent"
