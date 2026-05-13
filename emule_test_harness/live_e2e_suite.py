@@ -899,6 +899,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         ],
         "fail_fast": bool(args.fail_fast),
         "has_inconclusive_suites": False,
+        "inconclusive_suite_names": [],
         "suites": [],
     }
 
@@ -1043,6 +1044,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         summary["suites"].append(result)  # type: ignore[index]
         if suite_status == "inconclusive":
             summary["has_inconclusive_suites"] = True
+            summary["inconclusive_suite_names"].append(spec.name)  # type: ignore[index, union-attr]
         if suite_status == "failed":
             summary["status"] = "failed"
             if args.fail_fast:

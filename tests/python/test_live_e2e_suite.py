@@ -592,6 +592,7 @@ def test_inconclusive_live_wire_suite_does_not_fail_aggregate(tmp_path: Path, mo
 
     assert summary["status"] == "passed"
     assert summary["has_inconclusive_suites"] is True
+    assert summary["inconclusive_suite_names"] == ["auto-browse-live"]
     assert summary["suites"][-1]["name"] == "auto-browse-live"
     assert summary["suites"][-1]["status"] == "inconclusive"
 
