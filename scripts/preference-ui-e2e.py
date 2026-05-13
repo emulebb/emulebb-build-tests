@@ -66,7 +66,8 @@ IDC_WS_ALLOWEDIPS = 3069
 IDC_AUTOUPDATE_IPFILTER = 3070
 IDC_IPFILTERPERIOD = 3072
 IDC_UPDATEURL = 2797
-IDC_VIDEOTHUMBNAILS = 3084
+IDC_THUMBNAIL_FFMPEG = 3087
+IDC_THUMBNAIL_INTERVAL = 3090
 
 TV_FIRST = 0x1100
 TVM_EXPAND = TV_FIRST + 2
@@ -416,6 +417,8 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
             ("PreviewSmallBlocks", "0"),
             ("VideoPlayer", ""),
             ("VideoPreviewThumbnails", "0"),
+            ("VideoThumbnailFfmpegPath", ""),
+            ("VideoThumbnailIntervalSeconds", "0"),
             ("TxtEditor", "notepad.exe"),
             ("MaxChatHistoryLines", "100"),
             ("MaxMessageSessions", "50"),
@@ -492,6 +495,8 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
     config_dir = Path(profile["config_dir"])
     preferences_path = config_dir / "preferences.ini"
     perf_log_file = artifacts_dir / "perf-ui-e2e.log"
+    fake_ffmpeg = artifacts_dir / "ffmpeg.exe"
+    fake_ffmpeg.write_bytes(b"fake ffmpeg executable for preference validation")
     configure_profile(config_dir, paths.app_exe, rest_port)
 
     app = None
@@ -526,8 +531,9 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         set_edit_text(find_control(dialog_hwnd, IDC_IPFILTERPERIOD, "Edit"), "11")
 
         select_page(dialog_hwnd, "Files")
-        set_edit_text(find_control(dialog_hwnd, IDC_VIDEOPLAYER, "Edit"), "vlc.exe")
-        ensure_checkbox(find_control(dialog_hwnd, IDC_VIDEOTHUMBNAILS, "Button"), True)
+        set_edit_text(find_control(dialog_hwnd, IDC_VIDEOPLAYER, "Edit"), "mpv.exe")
+        set_edit_text(find_control(dialog_hwnd, IDC_THUMBNAIL_FFMPEG, "Edit"), str(fake_ffmpeg))
+        set_edit_text(find_control(dialog_hwnd, IDC_THUMBNAIL_INTERVAL, "Edit"), "120")
 
         select_page(dialog_hwnd, "Web Interface")
         ensure_checkbox(find_control(dialog_hwnd, IDC_WSENABLED, "Button"), True)
@@ -571,8 +577,10 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
                 "MaxLogBuff": "128",
                 "LogFileFormat": "1",
                 "PreviewSmallBlocks": "2",
-                "VideoPlayer": "vlc.exe",
-                "VideoPreviewThumbnails": "1",
+                "VideoPlayer": "mpv.exe",
+                "VideoPreviewThumbnails": "0",
+                "VideoThumbnailFfmpegPath": str(fake_ffmpeg),
+                "VideoThumbnailIntervalSeconds": "120",
                 "TxtEditor": "notepad.exe /A",
                 "MaxChatHistoryLines": "321",
                 "MaxMessageSessions": "61",

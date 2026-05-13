@@ -36,7 +36,7 @@ TEST_CASE("Part-file preview seam handles slash variants and extensionless comma
 	CHECK(PartFilePreviewSeams::ExtractConfiguredVideoPlayerBaseName(CString(_T("\"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\""))) == CString(_T("vlc")));
 }
 
-TEST_CASE("Part-file preview seam recognizes only configured VLC players for thumbnail generation")
+TEST_CASE("Part-file preview seam recognizes configured VLC preview players")
 {
 	CHECK(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc"))));
 	CHECK(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc.exe"))));
@@ -46,6 +46,28 @@ TEST_CASE("Part-file preview seam recognizes only configured VLC players for thu
 	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T(""))));
 	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("mpv.exe"))));
 	CHECK_FALSE(PartFilePreviewSeams::IsConfiguredVlcPreviewPlayer(CString(_T("vlc-helper.exe"))));
+}
+
+TEST_CASE("Part-file preview seam validates external FFmpeg thumbnail helpers")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x46464Du));
+
+	const std::wstring ffmpegPath = fixture.MakeDirectoryChildPath(L"ffmpeg.exe");
+	const std::wstring missingPath = fixture.MakeDirectoryChildPath(L"missing-ffmpeg.exe");
+	const std::wstring scriptPath = fixture.MakeDirectoryChildPath(L"ffmpeg.cmd");
+	const std::vector<BYTE> payload = LongPathTestSupport::BuildDeterministicPayload(1024u, 0x46464Du);
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(ffmpegPath, payload));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(scriptPath, payload));
+
+	CHECK(PartFilePreviewSeams::IsValidConfiguredFfmpegPath(CString(ffmpegPath.c_str())));
+	CHECK_FALSE(PartFilePreviewSeams::IsValidConfiguredFfmpegPath(CString(missingPath.c_str())));
+	CHECK_FALSE(PartFilePreviewSeams::IsValidConfiguredFfmpegPath(CString(scriptPath.c_str())));
+	CHECK_FALSE(PartFilePreviewSeams::IsValidConfiguredFfmpegPath(CString()));
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(ffmpegPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(scriptPath));
 }
 
 TEST_CASE("Part-file preview seam unlocks partial videos after a capped percentage threshold")
@@ -70,20 +92,25 @@ TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on p
 	const std::uint64_t tenGigabytes = 10ull * 1024ull * oneMegabyte;
 
 	CHECK(PartFilePreviewSeams::kVideoThumbnailDisplayMaxWidth == 480);
-	CHECK(PartFilePreviewSeams::kVideoThumbnailScanIntervalMs == 90000ull);
-	CHECK(PartFilePreviewSeams::kVideoThumbnailRetryIntervalMs == 90000ull);
-	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshIntervalMs == PartFilePreviewSeams::kVideoThumbnailRetryIntervalMs);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailDefaultIntervalSeconds == 0u);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailRecommendedIntervalSeconds == 90u);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailMaxIntervalSeconds == 600u);
+	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(0u) == 0u);
+	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(90u) == 90u);
+	CHECK(PartFilePreviewSeams::NormalizeVideoThumbnailIntervalSeconds(601u) == 600u);
+	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailIntervalEnabled(0u));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailIntervalEnabled(90u));
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshDeltaPermille == 50ull);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRefreshMaxDeltaBytes == 128ull * oneMegabyte);
-	CHECK(PartFilePreviewSeams::kVlcThumbnailTimeoutMs == 30000u);
+	CHECK(PartFilePreviewSeams::kFfmpegThumbnailTimeoutMs == 30000u);
 	CHECK(PartFilePreviewSeams::GetVideoThumbnailRefreshRequiredCompletedDelta(hundredMegabytes) == 5ull * oneMegabyte);
 	CHECK(PartFilePreviewSeams::GetVideoThumbnailRefreshRequiredCompletedDelta(tenGigabytes) == 128ull * oneMegabyte);
 
-	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 0ull));
-	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 1000ull));
-	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(90999ull, 1000ull));
-	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(91000ull, 1000ull));
-	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(1000ull, 91000ull));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 0ull, 90000ull));
+	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(5000ull, 1000ull, 90000ull));
+	CHECK_FALSE(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(90999ull, 1000ull, 90000ull));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(91000ull, 1000ull, 90000ull));
+	CHECK(PartFilePreviewSeams::IsVideoThumbnailAttemptDue(1000ull, 91000ull, 90000ull));
 
 	CHECK(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(true, false));
 	CHECK_FALSE(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(false, false));
@@ -111,29 +138,26 @@ TEST_CASE("Part-file preview seam moves thumbnail capture deeper as progress inc
 	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 950ull) == 180u);
 }
 
-TEST_CASE("Part-file preview seam builds quoted VLC thumbnail command lines")
+TEST_CASE("Part-file preview seam builds quoted FFmpeg thumbnail command lines")
 {
-	const CString command = PartFilePreviewSeams::BuildVlcThumbnailCommandLine(
-		CString(_T("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe")),
+	const CString command = PartFilePreviewSeams::BuildFfmpegThumbnailCommandLine(
+		CString(_T("C:\\Program Files\\FFmpeg\\bin\\ffmpeg.exe")),
 		CString(_T("C:\\Temp Files\\sample preview.mkv")),
-		CString(_T("C:\\Temp Files\\")),
-		CString(_T("emulebb_thumb_abc")),
+		CString(_T("C:\\Temp Files\\thumb_sample.png")),
 		60u);
 
-	CHECK(command.Find(_T("\"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\"")) >= 0);
-	CHECK(command.Find(_T("--intf dummy")) >= 0);
-	CHECK(command.Find(_T("--no-interact")) >= 0);
-	CHECK(command.Find(_T("--no-crashdump")) >= 0);
-	CHECK(command.Find(_T("--vout=dummy")) >= 0);
-	CHECK(command.Find(_T("--no-embedded-video")) >= 0);
-	CHECK(command.Find(_T("--no-video-deco")) >= 0);
-	CHECK(command.Find(_T("--no-qt-error-dialogs")) >= 0);
-	CHECK(command.Find(_T("--video-filter=scene")) >= 0);
-	CHECK(command.Find(_T("--start-time=60 --stop-time=61")) >= 0);
-	CHECK(command.Find(_T("\"--scene-prefix=emulebb_thumb_abc\"")) >= 0);
-	CHECK(command.Find(_T("\"--scene-path=C:\\Temp Files\\")) >= 0);
+	CHECK(command.Find(_T("\"C:\\Program Files\\FFmpeg\\bin\\ffmpeg.exe\"")) >= 0);
+	CHECK(command.Find(_T("-hide_banner")) >= 0);
+	CHECK(command.Find(_T("-loglevel error")) >= 0);
+	CHECK(command.Find(_T("-y")) >= 0);
+	CHECK(command.Find(_T("-ss 60")) >= 0);
+	CHECK(command.Find(_T("-fflags +genpts+discardcorrupt")) >= 0);
+	CHECK(command.Find(_T("-err_detect ignore_err")) >= 0);
+	CHECK(command.Find(_T("-analyzeduration 5M -probesize 5M")) >= 0);
 	CHECK(command.Find(_T("\"C:\\Temp Files\\sample preview.mkv\"")) >= 0);
-	CHECK(command.Find(_T("vlc://quit")) >= 0);
+	CHECK(command.Find(_T("-an -frames:v 1")) >= 0);
+	CHECK(command.Find(_T("\"scale=480:-2:force_original_aspect_ratio=decrease\"")) >= 0);
+	CHECK(command.Find(_T("\"C:\\Temp Files\\thumb_sample.png\"")) >= 0);
 }
 
 TEST_SUITE_END;
