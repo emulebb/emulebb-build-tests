@@ -489,6 +489,14 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
     }
     assert summary["snapshots"]["before_shutdown"]["process_id"] == 111
     assert summary["snapshots"]["after_relaunch"]["process_id"] == 222
+    assert summary["resource_delta_after_relaunch"] == {
+        "handles": 0,
+        "thread_count": 0,
+        "gdi_objects": 0,
+        "user_objects": 0,
+        "private_bytes": 0,
+        "working_set_bytes": 0,
+    }
 
 
 def test_max_resource_snapshot_keeps_high_water_marks() -> None:

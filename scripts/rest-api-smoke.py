@@ -4868,6 +4868,7 @@ def restart_app_after_churn(
             "before_shutdown": before_shutdown,
             "after_relaunch": after_relaunch,
         },
+        "resource_delta_after_relaunch": diff_process_resource_snapshots(before_shutdown, after_relaunch),
     }
 
 
