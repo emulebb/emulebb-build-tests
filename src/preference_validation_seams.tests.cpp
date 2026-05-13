@@ -4,6 +4,8 @@
 #include "PartFilePreviewSeams.h"
 #include "WebApiSurfaceSeams.h"
 
+#include <limits>
+
 TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("Preference validation seam centralizes core numeric ranges")
@@ -61,6 +63,48 @@ TEST_CASE("Preference validation seam centralizes public REST preference ranges"
 	CHECK(WebApiSurfaceSeams::IsFiniteKiBpsPreferenceValue(PreferenceValidationSeams::kMaxFiniteBandwidthLimitKiB));
 	CHECK(WebApiSurfaceSeams::IsQueueSizePreferenceValue(PreferenceValidationSeams::kDefaultQueueSize));
 	CHECK(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(PreferenceValidationSeams::kMaxUploadSlots));
+}
+
+TEST_CASE("Preference validation seam centralizes broadband upload policy ranges")
+{
+	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(PreferenceValidationSeams::kDefaultMaxUploadSlots) == PreferenceValidationSeams::kDefaultMaxUploadSlots);
+
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.01f) == PreferenceValidationSeams::kMinSlowUploadThresholdFactor);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.33f) == 0.33f);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(2.0f) == PreferenceValidationSeams::kMaxSlowUploadThresholdFactor);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(std::numeric_limits<float>::quiet_NaN()) == PreferenceValidationSeams::kDefaultSlowUploadThresholdFactor);
+
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadGraceSeconds(0u) == PreferenceValidationSeams::kMinSlowUploadGraceSeconds);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadGraceSeconds(30u) == 30u);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadGraceSeconds(301u) == PreferenceValidationSeams::kMaxSlowUploadGraceSeconds);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadWarmupSeconds(0u) == 0u);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadWarmupSeconds(3601u) == PreferenceValidationSeams::kMaxSlowUploadWarmupSeconds);
+	CHECK(PreferenceValidationSeams::NormalizeZeroUploadRateGraceSeconds(0u) == PreferenceValidationSeams::kMinZeroUploadRateGraceSeconds);
+	CHECK(PreferenceValidationSeams::NormalizeZeroUploadRateGraceSeconds(121u) == PreferenceValidationSeams::kMaxZeroUploadRateGraceSeconds);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadCooldownSeconds(0u) == PreferenceValidationSeams::kMinSlowUploadCooldownSeconds);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadCooldownSeconds(3601u) == PreferenceValidationSeams::kMaxSlowUploadCooldownSeconds);
+
+	CHECK(PreferenceValidationSeams::NormalizeLowRatioThreshold(-1.0f) == PreferenceValidationSeams::kMinLowRatioThreshold);
+	CHECK(PreferenceValidationSeams::NormalizeLowRatioThreshold(0.5f) == PreferenceValidationSeams::kDefaultLowRatioThreshold);
+	CHECK(PreferenceValidationSeams::NormalizeLowRatioThreshold(3.0f) == PreferenceValidationSeams::kMaxLowRatioThreshold);
+	CHECK(PreferenceValidationSeams::NormalizeLowRatioBonus(501u) == PreferenceValidationSeams::kMaxLowRatioBonus);
+	CHECK(PreferenceValidationSeams::NormalizeLowIDDivisor(0u) == PreferenceValidationSeams::kMinLowIDDivisor);
+	CHECK(PreferenceValidationSeams::NormalizeLowIDDivisor(9u) == PreferenceValidationSeams::kMaxLowIDDivisor);
+
+	CHECK(PreferenceValidationSeams::NormalizeSessionTransferLimitMode(9) == PreferenceValidationSeams::kSessionTransferModePercentOfFile);
+	CHECK(PreferenceValidationSeams::NormalizeSessionTransferLimitValue(PreferenceValidationSeams::kSessionTransferModePercentOfFile, 0u) == PreferenceValidationSeams::kMinSessionTransferPercent);
+	CHECK(PreferenceValidationSeams::NormalizeSessionTransferLimitValue(PreferenceValidationSeams::kSessionTransferModeAbsoluteMiB, 4097u) == PreferenceValidationSeams::kMaxSessionTransferMiB);
+	CHECK(PreferenceValidationSeams::NormalizeSessionTransferLimitValue(PreferenceValidationSeams::kSessionTransferModeDisabled, 5000u) == PreferenceValidationSeams::kMaxSessionTransferMiB);
+	CHECK(PreferenceValidationSeams::NormalizeSessionTimeLimitSeconds(0u) == 0u);
+	CHECK(PreferenceValidationSeams::NormalizeSessionTimeLimitSeconds(86401u) == PreferenceValidationSeams::kMaxSessionTimeLimitSeconds);
+}
+
+TEST_CASE("Preference validation seam derives upload slots from requested client data rate")
+{
+	CHECK(PreferenceValidationSeams::DeriveUploadSlotsForClientDataRate(12u, 3u * 1024u) == 4u);
+	CHECK(PreferenceValidationSeams::DeriveUploadSlotsForClientDataRate(1u, 1024u * 1024u) == PreferenceValidationSeams::kMinUploadSlots);
+	CHECK(PreferenceValidationSeams::DeriveUploadSlotsForClientDataRate(1024u, 1u) == PreferenceValidationSeams::kMaxUploadSlots);
+	CHECK(PreferenceValidationSeams::DeriveUploadSlotsForClientDataRate(0u, 1024u) == 3u);
 }
 
 TEST_CASE("Preference validation seam centralizes video thumbnail interval bounds")
