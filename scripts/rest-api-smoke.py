@@ -1572,6 +1572,26 @@ def evaluate_rest_leak_churn_resources(
     }
 
 
+def evaluate_rest_leak_churn_resource_observability(
+    snapshots: tuple[dict[str, int | None], ...],
+) -> dict[str, object]:
+    """Requires enabled leak churn to capture each tracked resource metric."""
+
+    metrics = tuple(REST_LEAK_CHURN_RESOURCE_THRESHOLDS.keys())
+    available_metrics = [
+        metric
+        for metric in metrics
+        if any(snapshot.get(metric) is not None for snapshot in snapshots)
+    ]
+    missing_metrics = [metric for metric in metrics if metric not in available_metrics]
+    return {
+        "ok": not missing_metrics,
+        "required_metrics": list(metrics),
+        "available_metrics": available_metrics,
+        "missing_metrics": missing_metrics,
+    }
+
+
 def exercise_rest_leak_churn(
     base_url: str,
     api_key: str,
@@ -1690,6 +1710,9 @@ def exercise_rest_leak_churn(
     peak = max_resource_snapshot(peak, after)
     before_to_after_drain = diff_process_resource_snapshots(before, after)
     before_to_peak = diff_process_resource_snapshots(before, peak)
+    resource_observability = evaluate_rest_leak_churn_resource_observability((before, peak, after))
+    if not resource_observability["ok"]:
+        raise AssertionError(f"REST leak churn resource snapshots incomplete: {resource_observability!r}")
     resource_thresholds = evaluate_rest_leak_churn_resources(before_to_after_drain, before_to_peak)
     if not resource_thresholds["ok"]:
         raise AssertionError(f"REST leak churn resource thresholds exceeded: {resource_thresholds!r}")
@@ -1711,6 +1734,7 @@ def exercise_rest_leak_churn(
             "before_to_after_drain": before_to_after_drain,
             "before_to_peak": before_to_peak,
         },
+        "resource_observability": resource_observability,
         "resource_thresholds": resource_thresholds,
     }
 

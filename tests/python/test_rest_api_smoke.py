@@ -334,7 +334,18 @@ def test_rest_leak_churn_supports_https_cycles(monkeypatch: pytest.MonkeyPatch) 
         return {"outcome": "sent_reset", "status": None, "elapsed_ms": 1.0}
 
     monkeypatch.setattr(module, "raw_socket_chunk_probe", fake_chunk_probe)
-    monkeypatch.setattr(module, "get_process_resource_snapshot", lambda _pid: {"handles": 10})
+    monkeypatch.setattr(
+        module,
+        "get_process_resource_snapshot",
+        lambda _pid: {
+            "handles": 10,
+            "thread_count": 4,
+            "gdi_objects": 1,
+            "user_objects": 1,
+            "private_bytes": 4096,
+            "working_set_bytes": 8192,
+        },
+    )
 
     summary = module.exercise_rest_leak_churn(
         "https://127.0.0.1:4711",
@@ -353,6 +364,7 @@ def test_rest_leak_churn_supports_https_cycles(monkeypatch: pytest.MonkeyPatch) 
         "partial_tls_clienthello_reset",
     ]
     assert len(calls) == 3
+    assert summary["resource_observability"]["ok"] is True
 
 
 def test_rest_leak_churn_resource_thresholds_report_pass_and_failures() -> None:
@@ -378,6 +390,45 @@ def test_rest_leak_churn_resource_thresholds_report_pass_and_failures() -> None:
         ("thread_count", "after_drain"),
         ("private_bytes", "peak"),
     }
+
+
+def test_rest_leak_churn_resource_observability_requires_tracked_metrics() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.evaluate_rest_leak_churn_resource_observability(
+        (
+            {"handles": 10, "thread_count": None, "private_bytes": 4096},
+            {"handles": 12, "thread_count": None, "private_bytes": 8192},
+            {"handles": 11, "thread_count": None, "private_bytes": 4096},
+        )
+    )
+
+    assert summary["ok"] is False
+    assert "handles" in summary["available_metrics"]
+    assert "private_bytes" in summary["available_metrics"]
+    assert "thread_count" in summary["missing_metrics"]
+    assert "working_set_bytes" in summary["missing_metrics"]
+
+
+def test_rest_leak_churn_fails_when_resource_snapshots_are_unobservable(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "raw_socket_probe",
+        lambda *_args, **_kwargs: {"outcome": "sent_reset", "status": None, "elapsed_ms": 1.0},
+    )
+    monkeypatch.setattr(module, "get_process_resource_snapshot", lambda _pid: {"handles": None})
+
+    with pytest.raises(AssertionError, match="resource snapshots incomplete"):
+        module.exercise_rest_leak_churn(
+            "http://127.0.0.1:4711",
+            "api-key",
+            process_id=123,
+            budget="smoke",
+            cycles=1,
+            request_timeout_seconds=1.0,
+        )
 
 
 def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() -> None:
