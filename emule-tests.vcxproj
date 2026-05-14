@@ -279,6 +279,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EMSocketSendSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EMSocketSendSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\DownloadPriorityShortcutsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadPriorityShortcutsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedDatagramSequenceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSequenceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h')" />

@@ -12,6 +12,8 @@ TEST_CASE("App keyboard shortcut seam reserves native Alt-key commands")
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'U', false) == AppKeyboardShortcutsSeams::ECommand::ShowHotMenu);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 't', false) == AppKeyboardShortcutsSeams::ECommand::ShowToolsMenu);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'T', false) == AppKeyboardShortcutsSeams::ECommand::ShowToolsMenu);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'o', false) == AppKeyboardShortcutsSeams::ECommand::ShowOptions);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'O', false) == AppKeyboardShortcutsSeams::ECommand::ShowOptions);
 }
 
 TEST_CASE("App keyboard shortcut seam leaves ordinary navigation and modal contexts alone")
@@ -25,6 +27,7 @@ TEST_CASE("App keyboard shortcut seam leaves ordinary navigation and modal conte
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'x', true) == AppKeyboardShortcutsSeams::ECommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'u', true) == AppKeyboardShortcutsSeams::ECommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 't', true) == AppKeyboardShortcutsSeams::ECommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'o', true) == AppKeyboardShortcutsSeams::ECommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'm', false) == AppKeyboardShortcutsSeams::ECommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'q', false) == AppKeyboardShortcutsSeams::ECommand::None);
 }
