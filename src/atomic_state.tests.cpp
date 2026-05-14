@@ -3,6 +3,7 @@
 #include "../include/TestSupport.h"
 
 #include <atomic>
+#include <string>
 
 #include "AppStateSeams.h"
 #include "AtomicStateSeams.h"
@@ -61,6 +62,49 @@ TEST_CASE("App state helpers preserve the running and closing classifications")
 	CHECK_FALSE(IsAppStateClosing(APP_STATE_ASKCLOSE));
 	CHECK(IsAppStateClosing(APP_STATE_SHUTTINGDOWN));
 	CHECK(IsAppStateClosing(APP_STATE_DONE));
+}
+
+TEST_CASE("App lifecycle helpers expose the REST lifecycle contract")
+{
+	const SAppLifecycleStatus starting = BuildAppLifecycleStatus(APP_STATE_STARTING, false, false);
+	CHECK(std::string(starting.pszState) == "starting");
+	CHECK_FALSE(starting.bStartupComplete);
+	CHECK_FALSE(starting.bCoreReady);
+	CHECK_FALSE(starting.bSharedFilesReady);
+	CHECK(starting.bAcceptingRest);
+	CHECK_FALSE(starting.bAcceptingMutations);
+	CHECK_FALSE(starting.bShutdownInProgress);
+	CHECK_FALSE(ShouldRejectRestCommandForLifecycle(starting, false));
+	CHECK(ShouldRejectRestCommandForLifecycle(starting, true));
+
+	const SAppLifecycleStatus running = BuildAppLifecycleStatus(APP_STATE_RUNNING, true, true);
+	CHECK(std::string(running.pszState) == "running");
+	CHECK(running.bStartupComplete);
+	CHECK(running.bCoreReady);
+	CHECK(running.bSharedFilesReady);
+	CHECK(running.bAcceptingRest);
+	CHECK(running.bAcceptingMutations);
+	CHECK_FALSE(running.bShutdownInProgress);
+	CHECK_FALSE(ShouldRejectRestCommandForLifecycle(running, false));
+	CHECK_FALSE(ShouldRejectRestCommandForLifecycle(running, true));
+
+	const SAppLifecycleStatus askClose = BuildAppLifecycleStatus(APP_STATE_ASKCLOSE, true, true);
+	CHECK(std::string(askClose.pszState) == "running");
+	CHECK(askClose.bAcceptingRest);
+	CHECK(askClose.bAcceptingMutations);
+
+	const SAppLifecycleStatus shuttingDown = BuildAppLifecycleStatus(APP_STATE_SHUTTINGDOWN, true, true);
+	CHECK(std::string(shuttingDown.pszState) == "shuttingdown");
+	CHECK_FALSE(shuttingDown.bAcceptingRest);
+	CHECK_FALSE(shuttingDown.bAcceptingMutations);
+	CHECK(shuttingDown.bShutdownInProgress);
+	CHECK(ShouldRejectRestCommandForLifecycle(shuttingDown, false));
+	CHECK(ShouldRejectRestCommandForLifecycle(shuttingDown, true));
+
+	const SAppLifecycleStatus done = BuildAppLifecycleStatus(APP_STATE_DONE, true, true);
+	CHECK(std::string(done.pszState) == "done");
+	CHECK_FALSE(done.bAcceptingRest);
+	CHECK(done.bShutdownInProgress);
 }
 
 TEST_CASE("Atomic long flag helpers consume one raised request and then reset cleanly")

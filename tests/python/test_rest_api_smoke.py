@@ -796,6 +796,7 @@ def test_openapi_core_public_dtos_reject_undocumented_fields() -> None:
 
     for schema_name in (
         "EnvelopeMeta",
+        "AppLifecycle",
         "Preferences",
         "Stats",
         "Category",
@@ -902,6 +903,9 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
 
     assert schemas["Stats"]["properties"]["sharedHashingActive"] == {"type": "boolean"}
     assert schemas["Stats"]["properties"]["sharedHashingCount"] == {"type": "integer", "minimum": 0}
+    assert schemas["App"]["properties"]["lifecycle"] == {"$ref": "#/components/schemas/AppLifecycle"}
+    assert schemas["Status"]["properties"]["lifecycle"] == {"$ref": "#/components/schemas/AppLifecycle"}
+    assert schemas["AppLifecycle"]["properties"]["state"]["enum"] == ["starting", "running", "shuttingdown", "done"]
 
     category_id_schema_paths: list[str] = []
 
@@ -984,7 +988,17 @@ def test_openapi_response_dtos_expose_runtime_required_fields() -> None:
     schemas = module.load_openapi_document()["components"]["schemas"]
 
     expected_required_fields = {
-        "Status": ["stats", "servers", "kad", "sharedStartupCache"],
+        "App": ["name", "version", "apiVersion", "lifecycle", "capabilities"],
+        "AppLifecycle": [
+            "state",
+            "startupComplete",
+            "coreReady",
+            "sharedFilesReady",
+            "acceptingRest",
+            "acceptingMutations",
+            "shutdownInProgress",
+        ],
+        "Status": ["lifecycle", "stats", "servers", "kad", "sharedStartupCache"],
         "Stats": [
             "connected",
             "downloadSpeedKiBps",

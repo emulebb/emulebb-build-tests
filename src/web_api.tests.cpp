@@ -524,6 +524,10 @@ TEST_CASE("Web API rejects REST command execution during app shutdown")
 {
 	CHECK(WebServerJsonSeams::ShouldRejectRestCommandDuringShutdown(true));
 	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandDuringShutdown(false));
+	CHECK_FALSE(WebServerJsonSeams::IsRestMutationMethod("GET"));
+	CHECK(WebServerJsonSeams::IsRestMutationMethod("POST"));
+	CHECK(WebServerJsonSeams::IsRestMutationMethod("PATCH"));
+	CHECK(WebServerJsonSeams::IsRestMutationMethod("DELETE"));
 }
 
 TEST_CASE("Web API busy errors map to service unavailable")
