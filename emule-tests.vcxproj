@@ -153,6 +153,7 @@
     <ClCompile Include="src\collection.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
     <ClCompile Include="src\custom_auto_complete.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h')" />
     <ClCompile Include="src\direct_download.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
+    <ClCompile Include="src\diagnostic_snapshot.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h')" />
     <ClCompile Include="src\download_queue_diskspace.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
     <ClCompile Include="src\download_queue_hostname_resolver.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueHostnameResolverSeams.h')" />
     <ClCompile Include="src\download_list_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h')" />
@@ -265,6 +266,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\CollectionSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DirectDownloadSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h')" />
