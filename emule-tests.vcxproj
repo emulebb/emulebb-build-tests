@@ -92,7 +92,7 @@
       <WarningLevel>Level4</WarningLevel>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>bcrypt.lib;gdi32.lib;shell32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;gdi32.lib;shell32.lib;shlwapi.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IncrementalLink>true</IncrementalLink>
       <SubSystem>Console</SubSystem>
     </Link>
@@ -116,7 +116,7 @@
       <WarningLevel>Level4</WarningLevel>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>bcrypt.lib;gdi32.lib;shell32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;gdi32.lib;shell32.lib;shlwapi.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <IncrementalLink>false</IncrementalLink>
       <OptimizeReferences>true</OptimizeReferences>
@@ -155,6 +155,7 @@
     <ClCompile Include="src\direct_download.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
     <ClCompile Include="src\diagnostic_snapshot.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h')" />
     <ClCompile Include="src\download_queue_diskspace.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
+    <ClCompile Include="src\download_queue_autocat.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueAutoCatSeams.h')" />
     <ClCompile Include="src\download_queue_hostname_resolver.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueHostnameResolverSeams.h')" />
     <ClCompile Include="src\download_list_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h')" />
     <ClCompile Include="src\download_queue_overview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueOverviewSeams.h')" />
@@ -268,6 +269,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\DirectDownloadSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\DownloadQueueAutoCatSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueAutoCatSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\KnownFileListSeams.h" Condition="Exists('$(AppRoot)\srchybrid\KnownFileListSeams.h')" />
