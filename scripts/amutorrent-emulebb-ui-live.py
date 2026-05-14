@@ -21,9 +21,25 @@ SYNTHETIC_ED2K_HASH = "0123456789abcdef0123456789abcdef"
 REQUIRED_BUNDLE_HOOKS = (
     "view-home",
     "view-downloads",
+    "view-servers",
+    "view-logs",
+    "view-statistics",
     "emulebb-search-submit",
     "emulebb-search-result-checkbox",
     "emulebb-add-download-submit",
+    "emulebb-downloads-select-mode",
+    "emulebb-downloads-pause-selected",
+    "emulebb-downloads-resume-selected",
+    "emulebb-downloads-stop-selected",
+    "emulebb-downloads-category-selected",
+    "emulebb-downloads-delete-selected",
+    "file-category-modal",
+    "file-info-modal",
+    "delete-confirm-modal",
+    "shared-dirs-modal",
+    "emulebb-servers-refresh",
+    "stats-tree-modal",
+    "app-logs-section",
     "client-card-",
 )
 
@@ -283,6 +299,70 @@ def wait_for_snapshot_item(page: Any, transfer_hash: str, timeout_seconds: float
     return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=f"aMuTorrent snapshot item {expected}")
 
 
+def wait_for_snapshot_category(page: Any, transfer_hash: str, category_name: str, timeout_seconds: float) -> dict[str, Any]:
+    """Waits until a transfer has the expected unified category name."""
+
+    expected_hash = transfer_hash.lower()
+
+    def resolve() -> dict[str, Any] | None:
+        item = wait_for_snapshot_item(page, expected_hash, timeout_seconds=5.0)
+        return item if item.get("category") == category_name else None
+
+    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=f"aMuTorrent category {category_name!r}")
+
+
+def wait_for_enabled_test_id(page: Any, test_id: str, timeout_seconds: float = 15.0) -> None:
+    """Waits for a visible, enabled element with a data-testid hook."""
+
+    page.wait_for_function(
+        """(testId) => {
+            const nodes = Array.from(document.querySelectorAll(`[data-testid="${testId}"]`));
+            return nodes.some(element => {
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
+                return rect.width > 0
+                    && rect.height > 0
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && !element.disabled;
+            });
+        }""",
+        arg=test_id,
+        timeout=timeout_seconds * 1000,
+    )
+
+
+def ensure_downloads_view(page: Any) -> None:
+    """Navigates to the visible downloads view."""
+
+    click_visible_test_id(page, "nav-downloads")
+    page.locator('[data-testid="view-downloads"]').wait_for(timeout=15000)
+
+
+def exit_download_selection_mode_if_active(page: Any) -> bool:
+    """Exits downloads selection mode when visible checkboxes are present."""
+
+    if page.locator('[data-testid="emulebb-downloads-select-checkbox"]:visible').count() == 0:
+        return False
+    click_visible_test_id(page, "emulebb-downloads-select-mode")
+    page.locator('[data-testid="emulebb-downloads-select-checkbox"]:visible').first.wait_for(state="detached", timeout=15000)
+    return True
+
+
+def select_download_transfer(page: Any, transfer_hash: str) -> dict[str, Any]:
+    """Enables selection mode and selects one visible transfer by hash."""
+
+    ensure_downloads_view(page)
+    if page.locator('[data-testid="emulebb-downloads-select-checkbox"]:visible').count() == 0:
+        click_visible_test_id(page, "emulebb-downloads-select-mode")
+    selector = f'[data-testid="emulebb-downloads-select-checkbox"][data-file-hash="{transfer_hash.lower()}"]:visible'
+    checkbox = page.locator(selector).first
+    checkbox.wait_for(timeout=15000)
+    if not checkbox.is_checked():
+        checkbox.check()
+    return {"selector": selector, "checked": checkbox.is_checked()}
+
+
 def delete_transfer(page: Any, *, transfer_hash: str, instance_id: str, file_name: str, timeout_seconds: float) -> dict[str, Any]:
     """Deletes one harness-created eMule BB transfer and verifies it disappears."""
 
@@ -306,6 +386,147 @@ def delete_transfer(page: Any, *, transfer_hash: str, instance_id: str, file_nam
     require_browser_http_ok("delete-harness-transfer", delete_result)
     cleanup_snapshot = amutorrent_resilience.wait_for_transfer_absent(page, transfer_hash, timeout_seconds)
     return {"delete": delete_result, "cleanup_snapshot_status": cleanup_snapshot.get("status")}
+
+
+def cleanup_category(page: Any, category_name: str) -> dict[str, Any]:
+    """Deletes a temporary category created by the live UI proof."""
+
+    result = fetch_page_json(page, "/api/v1/categories", "DELETE", {"name": category_name})
+    try:
+        require_browser_http_ok("delete-temporary-category", result)
+    except RuntimeError as exc:
+        return {"status": result.get("status"), "error": str(exc)}
+    return {"status": result.get("status"), "payload": result.get("payload")}
+
+
+def run_visible_transfer_actions(
+    page: Any,
+    *,
+    transfer_hash: str,
+    instance_id: str,
+    file_name: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Exercises visible transfer actions on one live eMule BB download."""
+
+    batch_state: dict[str, Any] = {}
+    select_download_transfer(page, transfer_hash)
+
+    for action_name, test_id in (
+        ("pause", "emulebb-downloads-pause-selected"),
+        ("resume", "emulebb-downloads-resume-selected"),
+        ("stop", "emulebb-downloads-stop-selected"),
+        ("resume_after_stop", "emulebb-downloads-resume-selected"),
+    ):
+        wait_for_enabled_test_id(page, test_id)
+        click_visible_test_id(page, test_id)
+        item = wait_for_snapshot_item(page, transfer_hash, timeout_seconds)
+        batch_state[action_name] = {
+            "status": item.get("status"),
+            "client": item.get("client"),
+            "progress": item.get("progress"),
+        }
+
+    category_name = f"E2E Release Proof {transfer_hash[:8]}"
+    click_visible_test_id(page, "emulebb-downloads-category-selected")
+    page.locator('[data-testid="file-category-modal"]').wait_for(timeout=15000)
+    page.locator('[data-testid="file-category-select"]').select_option("__custom__")
+    page.locator('[data-testid="file-category-custom-input"]').fill(category_name)
+    click_visible_test_id(page, "file-category-submit")
+    page.locator('[data-testid="file-category-modal"]').wait_for(state="detached", timeout=15000)
+    categorized = wait_for_snapshot_category(page, transfer_hash, category_name, timeout_seconds)
+
+    exit_download_selection_mode_if_active(page)
+    page.locator(f'[data-testid="item-file-name"][data-file-hash="{transfer_hash.lower()}"]:visible').first.click()
+    page.locator('[data-testid="file-info-modal"]').wait_for(timeout=15000)
+    file_info_variant = page.locator('[data-testid="file-info-modal"]').get_attribute("data-variant")
+    click_visible_test_id(page, "file-info-close")
+    page.locator('[data-testid="file-info-modal"]').wait_for(state="detached", timeout=15000)
+
+    select_download_transfer(page, transfer_hash)
+    click_visible_test_id(page, "emulebb-downloads-delete-selected")
+    page.locator('[data-testid="delete-confirm-modal"]').wait_for(timeout=15000)
+    click_visible_test_id(page, "delete-confirm-cancel")
+    page.locator('[data-testid="delete-confirm-modal"]').wait_for(state="detached", timeout=15000)
+    still_present = wait_for_snapshot_item(page, transfer_hash, timeout_seconds)
+
+    click_visible_test_id(page, "emulebb-downloads-delete-selected")
+    page.locator('[data-testid="delete-confirm-modal"]').wait_for(timeout=15000)
+    click_visible_test_id(page, "delete-confirm-submit")
+    deleted_snapshot = amutorrent_resilience.wait_for_transfer_absent(page, transfer_hash, timeout_seconds)
+
+    history_result = fetch_page_json(page, "/api/history?limit=50")
+    history_payload = require_browser_http_ok("history-after-delete", history_result)
+    history_rows = history_payload.get("entries") or history_payload.get("data") or history_payload.get("items") or history_payload.get("history") or []
+    history_hash_present = any(
+        isinstance(row, dict) and str(row.get("hash") or row.get("fileHash") or "").lower() == transfer_hash.lower()
+        for row in history_rows
+    ) if isinstance(history_rows, list) else False
+    click_visible_test_id(page, "nav-history")
+    page.locator('[data-testid="view-history"]').wait_for(timeout=15000)
+
+    return {
+        "batch_actions": batch_state,
+        "category": {
+            "name": category_name,
+            "snapshot_category": categorized.get("category"),
+            "cleanup": cleanup_category(page, category_name),
+        },
+        "file_info": {"variant": file_info_variant},
+        "delete_cancel_preserved_transfer": str(still_present.get("hash") or "").lower() == transfer_hash.lower(),
+        "delete_confirm_removed_transfer": deleted_snapshot.get("status"),
+        "history": {
+            "status": history_result.get("status"),
+            "rows": len(history_rows) if isinstance(history_rows, list) else None,
+            "hash_present": history_hash_present,
+        },
+        "file_name_present": bool(file_name),
+        "instance_id": instance_id,
+    }
+
+
+def run_supporting_visible_views(page: Any, *, instance_id: str) -> dict[str, Any]:
+    """Exercises supporting visible eMule BB UI surfaces beyond downloads/search."""
+
+    checks: dict[str, Any] = {}
+
+    click_visible_test_id(page, "nav-shared")
+    page.locator('[data-testid="view-shared"]').wait_for(timeout=15000)
+    wait_for_enabled_test_id(page, "shared-dirs-open")
+    click_visible_test_id(page, "shared-dirs-open")
+    page.locator('[data-testid="shared-dirs-modal"]').wait_for(timeout=15000)
+    wait_for_enabled_test_id(page, "shared-dirs-rescan")
+    click_visible_test_id(page, "shared-dirs-rescan")
+    page.locator('[data-testid="shared-dirs-modal"]').wait_for(timeout=15000)
+    click_visible_test_id(page, "shared-dirs-close")
+    page.locator('[data-testid="shared-dirs-modal"]').wait_for(state="detached", timeout=15000)
+    checks["shared_dirs_modal"] = {"opened": True, "rescan_clicked": True}
+
+    click_visible_test_id(page, "nav-servers")
+    page.locator('[data-testid="view-servers"]').wait_for(timeout=15000)
+    wait_for_enabled_test_id(page, "emulebb-servers-refresh")
+    click_visible_test_id(page, "emulebb-servers-refresh")
+    servers = require_browser_http_ok("servers-visible-refresh", fetch_page_json(page, f"/api/v1/ed2k/servers?instanceId={instance_id}"))
+    server_rows = servers.get("data") or servers.get("items") or []
+    checks["servers"] = {"refresh_clicked": True, "rows": len(server_rows) if isinstance(server_rows, list) else None}
+
+    click_visible_test_id(page, "nav-statistics")
+    page.locator('[data-testid="view-statistics"]').wait_for(timeout=15000)
+    wait_for_enabled_test_id(page, "stats-tree-open")
+    click_visible_test_id(page, "stats-tree-open")
+    page.locator('[data-testid="stats-tree-modal"]').wait_for(timeout=15000)
+    checks["stats_tree"] = {"instance_id": page.locator('[data-testid="stats-tree-modal"]').get_attribute("data-instance-id")}
+    page.keyboard.press("Escape")
+    page.locator('[data-testid="stats-tree-modal"]').wait_for(state="detached", timeout=15000)
+
+    click_visible_test_id(page, "nav-logs")
+    page.locator('[data-testid="view-logs"]').wait_for(timeout=15000)
+    page.locator('[data-testid="app-logs-section"]').wait_for(timeout=15000)
+    page.locator('[data-testid="app-logs-records"]').wait_for(timeout=15000)
+    page.locator('[data-testid="client-log-section-emule-bb-logs"]').wait_for(timeout=15000)
+    checks["logs"] = {"app_logs_visible": True, "emulebb_logs_visible": True}
+
+    return checks
 
 
 def run_visible_search_download(
@@ -346,12 +567,13 @@ def run_visible_search_download(
         timeout_seconds=timeout_seconds,
     )
     snapshot_item = wait_for_snapshot_item(page, transfer_hash, timeout_seconds)
-    batch_items = [{"fileHash": transfer_hash, "clientType": "emulebb", "instanceId": instance_id, "fileName": file_name}]
-    pause = fetch_page_json(page, "/api/v1/downloads/pause", "POST", {"items": batch_items})
-    require_browser_http_ok("pause-harness-transfer", pause)
-    resume = fetch_page_json(page, "/api/v1/downloads/resume", "POST", {"items": batch_items})
-    require_browser_http_ok("resume-harness-transfer", resume)
-    cleanup = delete_transfer(page, transfer_hash=transfer_hash, instance_id=instance_id, file_name=file_name, timeout_seconds=timeout_seconds)
+    visible_actions = run_visible_transfer_actions(
+        page,
+        transfer_hash=transfer_hash,
+        instance_id=instance_id,
+        file_name=file_name,
+        timeout_seconds=timeout_seconds,
+    )
     return {
         "term_selection": live_wire_inputs.redact_term_selection(term_index, inputs.generic_open_terms, source="generic_open"),
         "candidate": amutorrent_clean.summarize_amutorrent_candidate(candidate),
@@ -363,9 +585,7 @@ def run_visible_search_download(
             "progress": snapshot_item.get("progress"),
             "has_detail_hydration": isinstance(snapshot_item.get("partStatus"), list) and isinstance(snapshot_item.get("peers"), list),
         },
-        "pause": {"status": pause.get("status"), "payload": pause.get("payload")},
-        "resume": {"status": resume.get("status"), "payload": resume.get("payload")},
-        "cleanup": cleanup,
+        "visible_actions": visible_actions,
     }
 
 
@@ -471,6 +691,7 @@ def run_browser_ui_workflows(
                 page.locator('[data-testid="client-card-emulebb"]').wait_for(timeout=15000)
                 checks["settings_emulebb_card_visible"] = True
             checks["supporting_endpoints"] = run_supporting_endpoint_checks(page, instance_id=instance_id)
+            checks["supporting_visible_views"] = run_supporting_visible_views(page, instance_id=instance_id)
             checks["visible_search_download"] = run_visible_search_download(
                 page,
                 emule_base_url=emule_base_url,
