@@ -10,8 +10,21 @@ TEST_CASE("MediaInfo DLL seam keeps the no-load marker explicit")
 {
 	CHECK(MediaInfoDllSeams::IsLoadingDisabled(_T("<noload>")));
 	CHECK(MediaInfoDllSeams::IsLoadingDisabled(_T("<NOLOAD>")));
+	CHECK(MediaInfoDllSeams::IsLoadingDisabled(_T("  <noload>  ")));
 	CHECK_FALSE(MediaInfoDllSeams::IsLoadingDisabled(_T("MEDIAINFO.DLL")));
 	CHECK_FALSE(MediaInfoDllSeams::IsLoadingDisabled(_T("")));
+}
+
+TEST_CASE("MediaInfo DLL seam recognizes the auto-discovery path token")
+{
+	CHECK(CString(MediaInfoDllSeams::GetDefaultConfiguredPath()) == _T("MEDIAINFO.DLL"));
+	CHECK(MediaInfoDllSeams::IsAutoDiscoveryPath(_T("MEDIAINFO.DLL")));
+	CHECK(MediaInfoDllSeams::IsAutoDiscoveryPath(_T("mediainfo.dll")));
+	CHECK(MediaInfoDllSeams::IsAutoDiscoveryPath(_T("")));
+	CHECK(MediaInfoDllSeams::IsAutoDiscoveryPath(_T("  MEDIAINFO.DLL  ")));
+	CHECK_FALSE(MediaInfoDllSeams::IsAutoDiscoveryPath(_T("<noload>")));
+	CHECK_FALSE(MediaInfoDllSeams::IsAutoDiscoveryPath(_T("tools\\MediaInfo.dll")));
+	CHECK_FALSE(MediaInfoDllSeams::IsAutoDiscoveryPath(_T("C:\\MediaInfo\\MEDIAINFO.DLL")));
 }
 
 TEST_CASE("MediaInfo DLL seam enforces the release minimum version")
