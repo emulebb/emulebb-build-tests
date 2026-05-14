@@ -1460,18 +1460,42 @@ def _component_ref_name(line: str, kind: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _native_route_token_value(token: str, workspace_root: Path) -> str:
+    token = token.strip()
+    if token.startswith('"') and token.endswith('"'):
+        return token[1:-1]
+    if token == "WebApiSurfaceSeams::kMutablePreferenceFieldListCsv":
+        surface_header = (
+            workspace_root
+            / "workspaces"
+            / "v0.72a"
+            / "app"
+            / "eMule-main"
+            / "srchybrid"
+            / "WebApiSurfaceSeams.h"
+        ).read_text(encoding="utf-8")
+        csv_block = re.search(
+            r"kMutablePreferenceFieldListCsv\s*=\s*(?P<body>.*?);",
+            surface_header,
+            flags=re.S,
+        )
+        assert csv_block is not None
+        return "".join(re.findall(r'"([^"]*)"', csv_block.group("body")))
+    raise AssertionError(f"unsupported native route field token: {token}")
+
+
 def _native_route_contracts() -> dict[tuple[str, str], dict[str, set[str]]]:
     workspace_root = Path(__file__).resolve().parents[4]
     route_header = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "WebServerJsonSeams.h"
     route_specs = re.findall(
-        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"(?:\s*,\s*([^}]+?))?\s*\}',
+        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*("[^"]*"|WebApiSurfaceSeams::kMutablePreferenceFieldListCsv)\s*,\s*("[^"]*")(?:\s*,\s*([^}]+?))?\s*\}',
         route_header.read_text(encoding="utf-8"),
     )
 
     return {
         (method, path): {
-            "body": _csv_fields(body_fields),
-            "query": _csv_fields(query_fields),
+            "body": _csv_fields(_native_route_token_value(body_fields, workspace_root)),
+            "query": _csv_fields(_native_route_token_value(query_fields, workspace_root)),
             "execution": {"direct"} if "kRestRouteExecutionDirect" in execution_model else {"ui-thread"},
         }
         for method, path, body_fields, query_fields, execution_model in route_specs

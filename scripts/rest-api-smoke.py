@@ -521,7 +521,7 @@ def load_native_route_execution_models(route_header_path: Path = NATIVE_ROUTE_HE
     """Extracts internal route execution ownership from the native REST seam."""
 
     route_specs = re.findall(
-        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*"[^"]*"(?:\s*,\s*([^}]+?))?\s*\}',
+        r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*(?:"[^"]*"|WebApiSurfaceSeams::kMutablePreferenceFieldListCsv)\s*,\s*"[^"]*"(?:\s*,\s*([^}]+?))?\s*\}',
         route_header_path.read_text(encoding="utf-8"),
     )
     models: dict[tuple[str, str], str] = {}
