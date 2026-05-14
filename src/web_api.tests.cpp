@@ -543,6 +543,12 @@ TEST_CASE("Web API rejects REST command execution during app shutdown")
 	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(starting, WebServerJsonSeams::ERestLifecyclePolicy::Shutdown));
 	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(starting, WebServerJsonSeams::ERestLifecyclePolicy::DiagnosticUnsafe));
 
+	const SAppLifecycleStatus runningBeforeStartupComplete = BuildAppLifecycleStatus(APP_STATE_RUNNING, false, false);
+	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(runningBeforeStartupComplete, WebServerJsonSeams::ERestLifecyclePolicy::Read));
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(runningBeforeStartupComplete, WebServerJsonSeams::ERestLifecyclePolicy::Mutation));
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(runningBeforeStartupComplete, WebServerJsonSeams::ERestLifecyclePolicy::Shutdown));
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(runningBeforeStartupComplete, WebServerJsonSeams::ERestLifecyclePolicy::DiagnosticUnsafe));
+
 	const SAppLifecycleStatus running = BuildAppLifecycleStatus(APP_STATE_RUNNING, true, true);
 	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(running, WebServerJsonSeams::ERestLifecyclePolicy::Read));
 	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(running, WebServerJsonSeams::ERestLifecyclePolicy::Mutation));

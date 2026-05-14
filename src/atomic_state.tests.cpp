@@ -77,6 +77,17 @@ TEST_CASE("App lifecycle helpers expose the REST lifecycle contract")
 	CHECK_FALSE(ShouldRejectRestCommandForLifecycle(starting, false));
 	CHECK(ShouldRejectRestCommandForLifecycle(starting, true));
 
+	const SAppLifecycleStatus runningBeforeStartupComplete = BuildAppLifecycleStatus(APP_STATE_RUNNING, false, false);
+	CHECK(std::string(runningBeforeStartupComplete.pszState) == "starting");
+	CHECK_FALSE(runningBeforeStartupComplete.bStartupComplete);
+	CHECK(runningBeforeStartupComplete.bCoreReady);
+	CHECK_FALSE(runningBeforeStartupComplete.bSharedFilesReady);
+	CHECK(runningBeforeStartupComplete.bAcceptingRest);
+	CHECK_FALSE(runningBeforeStartupComplete.bAcceptingMutations);
+	CHECK_FALSE(runningBeforeStartupComplete.bShutdownInProgress);
+	CHECK_FALSE(ShouldRejectRestCommandForLifecycle(runningBeforeStartupComplete, false));
+	CHECK(ShouldRejectRestCommandForLifecycle(runningBeforeStartupComplete, true));
+
 	const SAppLifecycleStatus running = BuildAppLifecycleStatus(APP_STATE_RUNNING, true, true);
 	CHECK(std::string(running.pszState) == "running");
 	CHECK(running.bStartupComplete);
