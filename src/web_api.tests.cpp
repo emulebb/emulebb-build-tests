@@ -2249,6 +2249,15 @@ TEST_CASE("Web API maps every current REST route family to a command")
 		errorMessage.clear();
 		CHECK(WebServerJsonSeams::TryBuildRoute(pszMethod, pszTarget, pszBody, route, errorCode, errorMessage));
 		CHECK_EQ(route.strCommand, pszCommand);
+		const WebServerJsonSeams::ERestLifecyclePolicy policy = WebServerJsonSeams::GetLifecyclePolicyForCommand(route.strCommand);
+		if (route.strMethod == "GET")
+			CHECK(policy == WebServerJsonSeams::ERestLifecyclePolicy::Read);
+		else if (route.strCommand == "app/shutdown")
+			CHECK(policy == WebServerJsonSeams::ERestLifecyclePolicy::Shutdown);
+		else if (route.strCommand == "app/capture_dump" || route.strCommand == "app/crash_test")
+			CHECK(policy == WebServerJsonSeams::ERestLifecyclePolicy::DiagnosticUnsafe);
+		else
+			CHECK(policy == WebServerJsonSeams::ERestLifecyclePolicy::Mutation);
 	};
 
 	assertRoute("GET", "/api/v1/app", "", "app/version");
