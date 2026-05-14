@@ -206,6 +206,34 @@ def click_visible_test_id(page: Any, test_id: str) -> None:
         raise RuntimeError(f"Could not find a visible element with data-testid={test_id!r}.")
 
 
+def click_visible_button_containing_text(page: Any, text: str) -> None:
+    """Clicks the first visible button whose text content contains a label."""
+
+    clicked = page.evaluate(
+        """(text) => {
+            const nodes = Array.from(document.querySelectorAll('button'));
+            const node = nodes.find(element => {
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
+                return element.textContent.includes(text)
+                    && rect.width > 0
+                    && rect.height > 0
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && style.pointerEvents !== 'none';
+            });
+            if (!node) {
+                return false;
+            }
+            node.click();
+            return true;
+        }""",
+        text,
+    )
+    if not clicked:
+        raise RuntimeError(f"Could not find a visible button containing text {text!r}.")
+
+
 def dismiss_first_run_version_modal(page: Any) -> bool:
     """Dismisses aMuTorrent's post-setup version modal when it appears."""
 
@@ -439,7 +467,7 @@ def run_browser_ui_workflows(
             checks["view_navigation"] = navigate_and_verify_views(page)
             checks["settings_emulebb_card_visible"] = page.locator('[data-testid="client-card-emulebb"]').count() > 0
             if not checks["settings_emulebb_card_visible"]:
-                page.get_by_text("Download Clients", exact=True).click()
+                click_visible_button_containing_text(page, "Download Clients")
                 page.locator('[data-testid="client-card-emulebb"]').wait_for(timeout=15000)
                 checks["settings_emulebb_card_visible"] = True
             checks["supporting_endpoints"] = run_supporting_endpoint_checks(page, instance_id=instance_id)
