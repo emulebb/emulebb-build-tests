@@ -14,7 +14,7 @@ namespace
 	void CheckAction(LPCTSTR pszFileName, ConfigDefaultFilesSeams::EDefaultFileAction eAction)
 	{
 		const ConfigDefaultFilesSeams::DefaultFileSpec *pSpec = FindSpec(pszFileName);
-		REQUIRE(pSpec != NULL);
+		REQUIRE(static_cast<bool>(pSpec));
 		CHECK(pSpec->eAction == eAction);
 	}
 }
@@ -46,8 +46,8 @@ TEST_CASE("Config default file seams classify editable templates and internal st
 	CheckAction(_T("PreviewApps.dat"), ConfigDefaultFilesSeams::SkipInternalState);
 	CheckAction(_T("desktop.ini"), ConfigDefaultFilesSeams::SkipInternalState);
 
-	CHECK(ConfigDefaultFilesSeams::FindKnownDefaultFileSpec(_T("category.ini")) != NULL);
-	CHECK(ConfigDefaultFilesSeams::FindKnownDefaultFileSpec(_T("unknown.dat")) == NULL);
+	CHECK(static_cast<bool>(ConfigDefaultFilesSeams::FindKnownDefaultFileSpec(_T("category.ini"))));
+	CHECK_FALSE(static_cast<bool>(ConfigDefaultFilesSeams::FindKnownDefaultFileSpec(_T("unknown.dat"))));
 }
 
 TEST_CASE("Config default file seams only create missing or blank template-backed files")
@@ -55,9 +55,9 @@ TEST_CASE("Config default file seams only create missing or blank template-backe
 	const ConfigDefaultFilesSeams::DefaultFileSpec *pTemplateSpec = FindSpec(_T("ipfilter.dat"));
 	const ConfigDefaultFilesSeams::DefaultFileSpec *pSkipSpec = FindSpec(_T("preferences.dat"));
 	const ConfigDefaultFilesSeams::DefaultFileSpec *pRuntimeSpec = FindSpec(_T("addresses.dat"));
-	REQUIRE(pTemplateSpec != NULL);
-	REQUIRE(pSkipSpec != NULL);
-	REQUIRE(pRuntimeSpec != NULL);
+	REQUIRE(static_cast<bool>(pTemplateSpec));
+	REQUIRE(static_cast<bool>(pSkipSpec));
+	REQUIRE(static_cast<bool>(pRuntimeSpec));
 
 	const std::vector<unsigned char> empty;
 	const std::vector<unsigned char> asciiWhitespace = { '\r', '\n', '\t', ' ' };
@@ -81,26 +81,28 @@ TEST_CASE("Config default file seams provide templates only for template-backed 
 {
 	size_t uSpecCount = 0;
 	const ConfigDefaultFilesSeams::DefaultFileSpec *pSpecs = ConfigDefaultFilesSeams::GetKnownDefaultFileSpecs(uSpecCount);
-	REQUIRE(pSpecs != NULL);
+	REQUIRE(static_cast<bool>(pSpecs));
 	REQUIRE(uSpecCount > 0);
 
 	for (size_t i = 0; i < uSpecCount; ++i) {
 		const ConfigDefaultFilesSeams::DefaultFileSpec &rSpec = pSpecs[i];
 		if (ConfigDefaultFilesSeams::IsTemplateAction(rSpec.eAction)) {
-			REQUIRE(rSpec.pszTemplateText != NULL);
+			REQUIRE(static_cast<bool>(rSpec.pszTemplateText));
 			CHECK(rSpec.pszTemplateText[0] != _T('\0'));
 		} else
-			CHECK(rSpec.pszTemplateText == NULL);
+			CHECK_FALSE(static_cast<bool>(rSpec.pszTemplateText));
 	}
 
 	const ConfigDefaultFilesSeams::DefaultFileSpec *pFakeFileSpec = FindSpec(_T("FakeFileFilter.dat"));
 	const ConfigDefaultFilesSeams::DefaultFileSpec *pWebServicesSpec = FindSpec(_T("webservices.dat"));
 	const ConfigDefaultFilesSeams::DefaultFileSpec *pShareIgnoreSpec = FindSpec(_T("shareignore.dat"));
-	REQUIRE(pFakeFileSpec != NULL);
-	REQUIRE(pWebServicesSpec != NULL);
-	REQUIRE(pShareIgnoreSpec != NULL);
+	REQUIRE(static_cast<bool>(pFakeFileSpec));
+	REQUIRE(static_cast<bool>(pWebServicesSpec));
+	REQUIRE(static_cast<bool>(pShareIgnoreSpec));
 	CHECK(CString(pFakeFileSpec->pszTemplateText).Find(_T("[tokens]")) >= 0);
 	CHECK(CString(pWebServicesSpec->pszTemplateText).Find(_T("#cleanfilename")) >= 0);
+	CHECK(CString(pWebServicesSpec->pszTemplateText).Find(_T("Search Web for Clean Filename,https://duckduckgo.com/?q=#cleanfilename")) >= 0);
+	CHECK(CString(pWebServicesSpec->pszTemplateText).Find(_T("# Search Web for ED2K Hash,https://duckduckgo.com/?q=#hashid")) >= 0);
 	CHECK(CString(pShareIgnoreSpec->pszTemplateText).Find(_T("prefix*")) >= 0);
 }
 
