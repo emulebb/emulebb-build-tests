@@ -158,4 +158,21 @@ TEST_CASE("File completion command seam validates existing executable configurat
 	CHECK_FALSE(FileCompletionCommandSeams::IsValidConfiguredProgramPath(CString()));
 }
 
+TEST_CASE("File completion command seam validates long executable paths")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x434345u));
+
+	const std::wstring executablePath = fixture.MakeDirectoryChildPath(L"complete.exe");
+	const std::wstring missingPath = fixture.MakeDirectoryChildPath(L"missing.exe");
+	const std::vector<BYTE> payload = LongPathTestSupport::BuildDeterministicPayload(513u, 0x434345u);
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(executablePath, payload));
+
+	CHECK(FileCompletionCommandSeams::IsValidConfiguredProgramPath(CString(executablePath.c_str())));
+	CHECK_FALSE(FileCompletionCommandSeams::IsValidConfiguredProgramPath(CString(missingPath.c_str())));
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(executablePath));
+}
+
 TEST_SUITE_END;
