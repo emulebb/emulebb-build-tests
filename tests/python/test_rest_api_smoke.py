@@ -984,7 +984,7 @@ def test_openapi_response_dtos_expose_runtime_required_fields() -> None:
     schemas = module.load_openapi_document()["components"]["schemas"]
 
     expected_required_fields = {
-        "Status": ["stats", "servers", "kad"],
+        "Status": ["stats", "servers", "kad", "sharedStartupCache"],
         "Stats": [
             "connected",
             "downloadSpeedKiBps",
