@@ -90,3 +90,4 @@ def test_ui_live_script_uses_runtime_live_inputs_and_stable_ui_hooks() -> None:
     assert "build_and_verify_frontend_bundle" in script_text
     assert "/api/metrics/dashboard?range=24h" in script_text
     assert "/api/metrics/dashboard?range=hour" not in script_text
+    assert ".first()" not in script_text
