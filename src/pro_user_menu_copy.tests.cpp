@@ -34,4 +34,10 @@ TEST_CASE("line joining keeps raw values one per line")
 	CHECK(ProUserMenuCopySeams::JoinLines(values) == _T("first\r\nsecond"));
 }
 
+TEST_CASE("copy field formatters use stable machine-readable values")
+{
+	CHECK(ProUserMenuCopySeams::FormatUInt64(1234567890123ULL) == _T("1234567890123"));
+	CHECK(ProUserMenuCopySeams::FormatPercent(12.345) == _T("12.3%"));
+}
+
 TEST_SUITE_END();

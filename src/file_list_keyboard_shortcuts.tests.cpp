@@ -36,6 +36,8 @@ TEST_CASE("file-list shortcuts leave unrelated and unsafe variants alone")
 	CHECK(FileListKeyboardShortcutsSeams::ClassifyKeyMessage(FileListKeyboardShortcutsSeams::EContext::Downloads, WM_KEYDOWN, 'I', false, false, false) == 0);
 	CHECK(FileListKeyboardShortcutsSeams::ClassifyKeyMessage(FileListKeyboardShortcutsSeams::EContext::Downloads, WM_KEYDOWN, 'I', true, true, false) == 0);
 	CHECK(FileListKeyboardShortcutsSeams::ClassifyKeyMessage(FileListKeyboardShortcutsSeams::EContext::SharedDirs, WM_KEYDOWN, 'O', true, false, false) == 0);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifyKeyMessage(FileListKeyboardShortcutsSeams::EContext::SharedDirs, WM_KEYDOWN, 'I', true, false, false) == 0);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifyKeyMessage(FileListKeyboardShortcutsSeams::EContext::SharedDirs, WM_KEYDOWN, 'L', true, false, false) == 0);
 }
 
 TEST_SUITE_END();
