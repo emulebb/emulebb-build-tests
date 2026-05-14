@@ -24,7 +24,7 @@ REQUIRED_BUNDLE_HOOKS = (
     "emulebb-search-submit",
     "emulebb-search-result-checkbox",
     "emulebb-add-download-submit",
-    "client-card-emulebb",
+    "client-card-",
 )
 
 
