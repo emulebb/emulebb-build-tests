@@ -19,4 +19,12 @@ TEST_CASE("Upload queue seam reclaims retired entries only after pending IO drai
 	CHECK_FALSE(CanReclaimUploadQueueEntry(false, 0));
 }
 
+TEST_CASE("Upload queue timer diagnostics count only loops slower than the interval budget")
+{
+	CHECK_EQ(kUploadTimerSlowLoopThresholdMs, static_cast<std::uint32_t>(100u));
+	CHECK_FALSE(ShouldCountSlowUploadTimerLoop(100u));
+	CHECK(ShouldCountSlowUploadTimerLoop(101u));
+	CHECK_FALSE(ShouldCountSlowUploadTimerLoop(1u, 0u));
+}
+
 TEST_SUITE_END;

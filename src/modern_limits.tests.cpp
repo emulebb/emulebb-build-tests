@@ -109,3 +109,9 @@ TEST_CASE("Broadband IO auto mode treats zero global budget as no adaptive cap")
 	constexpr std::uint64_t configured = 64ull * 1024ull * 1024ull;
 	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, 0u, 64u), configured);
 }
+
+TEST_CASE("Broadband IO seam exposes legacy metadata file buffer sizes")
+{
+	CHECK_EQ(BroadbandIoSeams::kLegacyStandardMetadataFileBufferBytes, static_cast<std::size_t>(16u * 1024u));
+	CHECK_EQ(BroadbandIoSeams::kLegacyLargeMetadataFileBufferBytes, static_cast<std::size_t>(32u * 1024u));
+}

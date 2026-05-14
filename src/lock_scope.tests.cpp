@@ -27,7 +27,7 @@ TEST_CASE("UDP control send requeue only retries would-block results")
 	CHECK_FALSE(ShouldRequeueUdpControlPacket(42));
 }
 
-TEST_CASE("UDP control send only yields after requeueing a would-block packet")
+TEST_CASE("UDP control send stops the current drain after requeueing a would-block packet")
 {
 	CHECK(ShouldYieldAfterUdpControlRequeue(-1));
 	CHECK_FALSE(ShouldYieldAfterUdpControlRequeue(0));

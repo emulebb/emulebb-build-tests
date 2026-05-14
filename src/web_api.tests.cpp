@@ -212,6 +212,7 @@ TEST_CASE("WebSocket HTTP seams parse request methods exactly")
 TEST_CASE("WebSocket HTTP seams bound accepted-client thread fanout")
 {
 	CHECK(WebSocketHttpSeams::kAcceptedClientIoTimeoutMs > 0u);
+	CHECK_EQ(WebSocketHttpSeams::kAcceptedClientReadBufferBytes, static_cast<size_t>(4u * 1024u));
 	CHECK(WebSocketHttpSeams::CanStartAcceptedClientThread(0u));
 	CHECK(WebSocketHttpSeams::CanStartAcceptedClientThread(WebSocketHttpSeams::kMaxAcceptedClientThreads - 1u));
 	CHECK_FALSE(WebSocketHttpSeams::CanStartAcceptedClientThread(WebSocketHttpSeams::kMaxAcceptedClientThreads));
