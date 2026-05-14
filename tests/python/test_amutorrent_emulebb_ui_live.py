@@ -91,5 +91,5 @@ def test_ui_live_script_uses_runtime_live_inputs_and_stable_ui_hooks() -> None:
     assert "/api/metrics/dashboard?range=24h" in script_text
     assert "/api/metrics/dashboard?range=hour" not in script_text
     assert ".first()" not in script_text
-    assert 'wait_for(state="attached"' in script_text
-    assert "check(force=True)" in script_text
+    assert "emulebb-search-result-checkbox" in script_text
+    assert ":visible" in script_text
