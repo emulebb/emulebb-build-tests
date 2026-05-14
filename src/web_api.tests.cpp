@@ -520,6 +520,12 @@ TEST_CASE("Web API UI dispatch uses a bounded wait result")
 	CHECK_FALSE(WebServerJsonSeams::DidRestUiDispatchComplete(FALSE));
 }
 
+TEST_CASE("Web API rejects REST command execution during app shutdown")
+{
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandDuringShutdown(true));
+	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandDuringShutdown(false));
+}
+
 TEST_CASE("Web API busy errors map to service unavailable")
 {
 	CHECK_EQ(WebServerJsonSeams::GetHttpStatusForError("SERVICE_BUSY"), 503);
