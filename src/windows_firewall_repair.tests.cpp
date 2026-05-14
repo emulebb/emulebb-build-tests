@@ -47,6 +47,9 @@ TEST_CASE("firewall repair script owns stable rule names and all firewall profil
 	CHECK(script.Find(_T("eMule BB UDP")) >= 0);
 	CHECK(script.Find(_T("eMule BB REST")) >= 0);
 	CHECK(script.Find(_T("-Profile Domain,Private,Public")) >= 0);
+	CHECK(script.Find(_T("Write-Host 'eMule BB Windows Firewall Repair'")) >= 0);
+	CHECK(script.Find(_T("Windows Firewall repair completed successfully.")) >= 0);
+	CHECK(script.Find(_T("Press Enter to close this window")) >= 0);
 	CHECK(script.Find(_T("Remove-NetFirewallRule")) >= 0);
 	CHECK(script.Find(_T("New-NetFirewallRule")) >= 0);
 	CHECK(script.Find(_T("ConvertTo-Json")) >= 0);
