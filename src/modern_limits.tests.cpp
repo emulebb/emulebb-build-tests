@@ -2,6 +2,7 @@
 #include "../include/TestSupport.h"
 
 #include "FileBufferSlider.h"
+#include "BroadbandIoSeams.h"
 #include "Opcodes.h"
 
 namespace
@@ -89,4 +90,22 @@ TEST_CASE("File buffer slider preserves small KiB values and reaches the larger 
 	CHECK_EQ(FileBufferSlider::PositionToBytes(FileBufferSlider::BytesToPosition(1024u * 1024u)), 1024u * 1024u);
 	CHECK_EQ(FileBufferSlider::PositionToBytes(FileBufferSlider::BytesToPosition(64u * 1024u * 1024u)), 64u * 1024u * 1024u);
 	CHECK_EQ(FileBufferSlider::PositionToBytes(FileBufferSlider::kMaxPosition), FileBufferSlider::kMaxFileBufferSizeBytes);
+}
+
+TEST_CASE("Broadband IO auto mode caps aggregate download buffers without raising manual limits")
+{
+	constexpr std::uint64_t configured = 64ull * 1024ull * 1024ull;
+	constexpr std::uint64_t budget = BroadbandIoSeams::kDefaultGlobalDownloadBufferBudgetBytes;
+
+	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(false, configured, budget, 16u), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 0u), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 1u), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 8u), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 16u), 32ull * 1024ull * 1024ull);
+}
+
+TEST_CASE("Broadband IO auto mode treats zero global budget as no adaptive cap")
+{
+	constexpr std::uint64_t configured = 64ull * 1024ull * 1024ull;
+	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, 0u, 64u), configured);
 }
