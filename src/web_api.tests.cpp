@@ -528,6 +528,30 @@ TEST_CASE("Web API rejects REST command execution during app shutdown")
 	CHECK(WebServerJsonSeams::IsRestMutationMethod("POST"));
 	CHECK(WebServerJsonSeams::IsRestMutationMethod("PATCH"));
 	CHECK(WebServerJsonSeams::IsRestMutationMethod("DELETE"));
+
+	CHECK(WebServerJsonSeams::GetLifecyclePolicyForCommand("app/version") == WebServerJsonSeams::ERestLifecyclePolicy::Read);
+	CHECK(WebServerJsonSeams::GetLifecyclePolicyForCommand("status/get") == WebServerJsonSeams::ERestLifecyclePolicy::Read);
+	CHECK(WebServerJsonSeams::GetLifecyclePolicyForCommand("transfers/list") == WebServerJsonSeams::ERestLifecyclePolicy::Read);
+	CHECK(WebServerJsonSeams::GetLifecyclePolicyForCommand("transfers/add") == WebServerJsonSeams::ERestLifecyclePolicy::Mutation);
+	CHECK(WebServerJsonSeams::GetLifecyclePolicyForCommand("app/preferences/set") == WebServerJsonSeams::ERestLifecyclePolicy::Mutation);
+	CHECK(WebServerJsonSeams::GetLifecyclePolicyForCommand("app/shutdown") == WebServerJsonSeams::ERestLifecyclePolicy::Shutdown);
+	CHECK(WebServerJsonSeams::GetLifecyclePolicyForCommand("app/capture_dump") == WebServerJsonSeams::ERestLifecyclePolicy::DiagnosticUnsafe);
+
+	const SAppLifecycleStatus starting = BuildAppLifecycleStatus(APP_STATE_STARTING, false, false);
+	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(starting, WebServerJsonSeams::ERestLifecyclePolicy::Read));
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(starting, WebServerJsonSeams::ERestLifecyclePolicy::Mutation));
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(starting, WebServerJsonSeams::ERestLifecyclePolicy::Shutdown));
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(starting, WebServerJsonSeams::ERestLifecyclePolicy::DiagnosticUnsafe));
+
+	const SAppLifecycleStatus running = BuildAppLifecycleStatus(APP_STATE_RUNNING, true, true);
+	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(running, WebServerJsonSeams::ERestLifecyclePolicy::Read));
+	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(running, WebServerJsonSeams::ERestLifecyclePolicy::Mutation));
+	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(running, WebServerJsonSeams::ERestLifecyclePolicy::Shutdown));
+	CHECK_FALSE(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(running, WebServerJsonSeams::ERestLifecyclePolicy::DiagnosticUnsafe));
+
+	const SAppLifecycleStatus shuttingDown = BuildAppLifecycleStatus(APP_STATE_SHUTTINGDOWN, true, true);
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(shuttingDown, WebServerJsonSeams::ERestLifecyclePolicy::Read));
+	CHECK(WebServerJsonSeams::ShouldRejectRestCommandForLifecycle(shuttingDown, WebServerJsonSeams::ERestLifecyclePolicy::Mutation));
 }
 
 TEST_CASE("Web API busy errors map to service unavailable")
