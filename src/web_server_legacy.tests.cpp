@@ -28,4 +28,17 @@ TEST_CASE("WebServer legacy search seam preserves failure fallback policy")
 	CHECK(WebServerLegacySeams::ShouldFallbackToUncompressedResponseAfterGzipFailure());
 }
 
+TEST_CASE("WebServer legacy UI policy keeps REST transport independent from templates")
+{
+	CHECK(WebServerLegacySeams::ShouldStartWebTransport(true));
+	CHECK_FALSE(WebServerLegacySeams::ShouldStartWebTransport(false));
+
+	CHECK_FALSE(WebServerLegacySeams::ShouldLoadLegacyTemplates(true, false));
+	CHECK(WebServerLegacySeams::ShouldLoadLegacyTemplates(true, true));
+	CHECK_FALSE(WebServerLegacySeams::ShouldLoadLegacyTemplates(false, true));
+
+	CHECK_FALSE(WebServerLegacySeams::ShouldServeLegacyWebUi(false));
+	CHECK(WebServerLegacySeams::ShouldServeLegacyWebUi(true));
+}
+
 TEST_SUITE_END();
