@@ -18,6 +18,14 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness import live_wire_inputs
 
 SYNTHETIC_ED2K_HASH = "0123456789abcdef0123456789abcdef"
+REQUIRED_BUNDLE_HOOKS = (
+    "view-home",
+    "view-downloads",
+    "emulebb-search-submit",
+    "emulebb-search-result-checkbox",
+    "emulebb-add-download-submit",
+    "client-card-emulebb",
+)
 
 
 def load_local_module(module_name: str, filename: str):
@@ -92,6 +100,47 @@ def resolve_live_wire_inputs_path(repo_root: Path, raw_path: str | None) -> Path
     return amutorrent_clean.resolve_clean_live_wire_inputs_path(repo_root, raw_path)
 
 
+def npm_command_for_node(node_path: Path) -> str:
+    """Returns the npm executable paired with the selected Node runtime."""
+
+    npm_path = node_path.with_name("npm.cmd" if os.name == "nt" else "npm")
+    return str(npm_path) if npm_path.exists() else "npm"
+
+
+def build_and_verify_frontend_bundle(amutorrent_root: Path, node_path: Path) -> dict[str, Any]:
+    """Rebuilds the generated aMuTorrent frontend bundle and verifies UI hooks."""
+
+    npm = npm_command_for_node(node_path)
+    env = dict(os.environ)
+    if node_path.is_absolute():
+        env["PATH"] = str(node_path.parent) + os.pathsep + env.get("PATH", "")
+    completed = subprocess.run(
+        [npm, "run", "build"],
+        cwd=str(amutorrent_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    output_tail = (completed.stdout + completed.stderr)[-4000:]
+    if completed.returncode != 0:
+        raise RuntimeError(f"aMuTorrent frontend bundle build failed with exit code {completed.returncode}: {output_tail}")
+
+    bundle_path = amutorrent_root / "static" / "dist" / "app.bundle.js"
+    if not bundle_path.is_file():
+        raise RuntimeError(f"aMuTorrent frontend bundle was not created: {bundle_path}")
+    bundle_text = bundle_path.read_text(encoding="utf-8", errors="replace")
+    missing = [hook for hook in REQUIRED_BUNDLE_HOOKS if hook not in bundle_text]
+    if missing:
+        raise RuntimeError(f"aMuTorrent frontend bundle is missing required UI hooks: {missing}")
+    return {
+        "bundle_path": str(bundle_path),
+        "bundle_size_bytes": bundle_path.stat().st_size,
+        "required_hooks": list(REQUIRED_BUNDLE_HOOKS),
+        "build_output_tail": output_tail,
+    }
+
+
 def ed2k_link_from_transfer(row: dict[str, object]) -> str:
     """Builds a direct ED2K link from one validated live-wire transfer row."""
 
@@ -155,6 +204,22 @@ def click_visible_test_id(page: Any, test_id: str) -> None:
     )
     if not clicked:
         raise RuntimeError(f"Could not find a visible element with data-testid={test_id!r}.")
+
+
+def dismiss_first_run_version_modal(page: Any) -> bool:
+    """Dismisses aMuTorrent's post-setup version modal when it appears."""
+
+    continue_button = page.get_by_role("button", name="Continue")
+    try:
+        continue_button.wait_for(timeout=5000)
+    except Exception:
+        return False
+    continue_button.click()
+    try:
+        continue_button.wait_for(state="detached", timeout=15000)
+    except Exception:
+        continue_button.wait_for(state="hidden", timeout=15000)
+    return True
 
 
 def navigate_and_verify_views(page: Any) -> list[dict[str, str]]:
@@ -368,6 +433,7 @@ def run_browser_ui_workflows(
         install_browser_diagnostics(page, checks["browser_diagnostics"])
         try:
             page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+            checks["dismissed_version_modal"] = dismiss_first_run_version_modal(page)
             page.locator('[data-testid="view-home"]').wait_for(timeout=30000)
             checks["view_navigation"] = navigate_and_verify_views(page)
             checks["settings_emulebb_card_visible"] = page.locator('[data-testid="client-card-emulebb"]').count() > 0
@@ -481,6 +547,8 @@ def main() -> int:
     pending_error: Exception | None = None
     try:
         amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
+        node_path = Path(str(node_info["path"]))
+        report["checks"]["amutorrent_frontend_bundle"] = build_and_verify_frontend_bundle(amutorrent_root, node_path)
         app = launch_app(paths.app_exe, Path(profile["profile_base"]))
         report["emule_process_id"] = get_app_process_id(app)
         main_window = wait_for_main_window(app)
@@ -494,7 +562,6 @@ def main() -> int:
             require_kad_connected=True,
         )
 
-        node_path = Path(str(node_info["path"]))
         env = amutorrent_clean.build_clean_amutorrent_environment(
             base_env=os.environ,
             amutorrent_port=amutorrent_port,

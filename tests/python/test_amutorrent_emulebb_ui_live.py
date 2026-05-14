@@ -65,6 +65,16 @@ def test_diagnostics_guard_rejects_browser_errors() -> None:
         raise AssertionError("Expected RuntimeError for browser diagnostic errors")
 
 
+def test_npm_command_prefers_node_sibling_npm(tmp_path: Path) -> None:
+    ui_live = load_ui_live_module()
+    node_path = tmp_path / "node.exe"
+    npm_path = tmp_path / "npm.cmd"
+    node_path.write_text("", encoding="utf-8")
+    npm_path.write_text("", encoding="utf-8")
+
+    assert ui_live.npm_command_for_node(node_path) == str(npm_path)
+
+
 def test_ui_live_script_uses_runtime_live_inputs_and_stable_ui_hooks() -> None:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-emulebb-ui-live.py"
     script_text = script_path.read_text(encoding="utf-8")
@@ -76,3 +86,5 @@ def test_ui_live_script_uses_runtime_live_inputs_and_stable_ui_hooks() -> None:
     assert "emulebb-search-submit" in script_text
     assert "emulebb-add-download-submit" in script_text
     assert "client-card-emulebb" in script_text
+    assert "dismiss_first_run_version_modal" in script_text
+    assert "build_and_verify_frontend_bundle" in script_text
