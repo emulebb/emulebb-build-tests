@@ -228,6 +228,7 @@
     <ClCompile Include="src\tickcount64.tests.cpp" />
     <ClCompile Include="src\tray_notification.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\TrayNotificationSeams.h')" />
     <ClCompile Include="src\transfer_wnd.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\TransferWndSeams.h')" />
+    <ClCompile Include="src\window_placement.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WindowPlacementSeams.h')" />
     <ClCompile Include="src\upload_bandwidth_throttler.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadBandwidthThrottlerSeams.h')" />
     <ClCompile Include="src\upload_bandwidth_throttler_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadBandwidthThrottlerFlowSeams.h')" />
     <ClCompile Include="src\upload_score.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadScoreSeams.h')" />

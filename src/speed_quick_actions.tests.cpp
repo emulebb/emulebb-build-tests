@@ -34,6 +34,21 @@ TEST_CASE("Speed quick actions expose fixed download percentages from ten throug
 	}
 }
 
+TEST_CASE("Speed quick actions expose fixed combined percentages from ten through ninety")
+{
+	REQUIRE(SpeedQuickActionsSeams::kBothPercentActions.size() == 9);
+
+	unsigned int uExpectedPercent = 10;
+	unsigned int uExpectedCommand = MP_QS_B10;
+	for (const SpeedQuickActionsSeams::CQuickSpeedPercentAction &action : SpeedQuickActionsSeams::kBothPercentActions) {
+		CHECK(action.uPercent == uExpectedPercent);
+		CHECK(action.uCommandId == uExpectedCommand);
+		CHECK(SpeedQuickActionsSeams::GetPercentForCommand(action.uCommandId) == uExpectedPercent);
+		uExpectedPercent += 10;
+		++uExpectedCommand;
+	}
+}
+
 TEST_CASE("Speed quick action limits are calculated from configured caps")
 {
 	CHECK(SpeedQuickActionsSeams::CalculatePercentLimitKiB(1000u, 10u) == 100u);
