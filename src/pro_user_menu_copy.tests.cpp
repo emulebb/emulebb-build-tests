@@ -14,6 +14,19 @@ TEST_CASE("summary formatting preserves field order and omits missing fields")
 	CHECK(ProUserMenuCopySeams::FormatSummary(fields) == _T("username=\"alice\"; ip=\"203.0.113.10\""));
 }
 
+TEST_CASE("file summary formatting preserves stable fields and omits missing details")
+{
+	CHECK(ProUserMenuCopySeams::FormatFileSummary(
+		_T("sample.iso"),
+		_T("0123456789ABCDEF0123456789ABCDEF"),
+		_T("12345"),
+		CString(),
+		CString(),
+		_T("C:\\Incoming\\sample.iso"),
+		_T("ed2k://|file|sample.iso|12345|hash|/"))
+		== _T("name=\"sample.iso\"; hash=\"0123456789ABCDEF0123456789ABCDEF\"; size=\"12345\"; path=\"C:\\Incoming\\sample.iso\"; link=\"ed2k://|file|sample.iso|12345|hash|/\""));
+}
+
 TEST_CASE("line joining keeps raw values one per line")
 {
 	std::vector<CString> values{ _T("first"), CString(), _T("second") };
