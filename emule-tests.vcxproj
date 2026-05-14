@@ -155,6 +155,7 @@
     <ClCompile Include="src\direct_download.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
     <ClCompile Include="src\download_queue_diskspace.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
     <ClCompile Include="src\download_queue_hostname_resolver.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueHostnameResolverSeams.h')" />
+    <ClCompile Include="src\download_list_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h')" />
     <ClCompile Include="src\download_queue_overview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueOverviewSeams.h')" />
     <ClCompile Include="src\emsocket_send.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EMSocketSendSeams.h')" />
     <ClCompile Include="src\udp_obfuscation_framing.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h')" />
@@ -270,6 +271,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\LongPathSeams.h" Condition="Exists('$(AppRoot)\srchybrid\LongPathSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EMSocketSendSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EMSocketSendSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedDatagramSequenceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSequenceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h')" />
