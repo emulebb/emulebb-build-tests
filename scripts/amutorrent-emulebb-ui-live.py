@@ -228,6 +228,7 @@ def navigate_and_verify_views(page: Any) -> list[dict[str, str]]:
     view_names = ("home", "search", "downloads", "shared", "uploads", "servers", "logs", "statistics", "history", "settings")
     visited: list[dict[str, str]] = []
     for view in view_names:
+        page.locator(f'[data-testid="nav-{view}"]').first.wait_for(timeout=30000)
         click_visible_test_id(page, f"nav-{view}")
         page.locator(f'[data-testid="view-{view}"]').wait_for(timeout=15000)
         visited.append({"view": view, "hook": f"view-{view}"})
