@@ -335,8 +335,8 @@ def run_visible_search_download(
     transfer_hash = str(candidate.get("fileHash") or candidate.get("hash") or "").strip().lower()
     file_name = str(candidate.get("fileName") or candidate.get("name") or "amutorrent-live-transfer").strip()
     checkbox = page.locator(f'[data-testid="emulebb-search-result-checkbox"][data-file-hash="{transfer_hash}"]').first
-    checkbox.wait_for(timeout=15000)
-    checkbox.check()
+    checkbox.wait_for(state="attached", timeout=15000)
+    checkbox.check(force=True)
     page.locator('[data-testid="emulebb-search-download-selected"]').click()
 
     materialized = amutorrent_clean.wait_for_emule_transfer_materialized(
