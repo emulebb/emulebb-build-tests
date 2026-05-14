@@ -782,7 +782,7 @@ def run_search_ui_live(
     app = None
     process_handle = 0
     try:
-        app = live_common.launch_app(app_exe, Path(str(profile["profile_base"])))
+        app = live_common.launch_app(app_exe, Path(str(profile["profile_base"])), minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)

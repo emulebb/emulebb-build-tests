@@ -365,7 +365,7 @@ def launch_and_capture_startup(
 ) -> tuple[Application, int, int, dict[str, object]]:
     """Launches the app, waits for readiness, and returns startup diagnostics."""
 
-    app = live_common.launch_app(app_exe, Path(str(fixture["profile_base"])))
+    app = live_common.launch_app(app_exe, Path(str(fixture["profile_base"])), minimized_to_tray=False)
     main_window = live_common.wait_for_main_window(app)
     main_hwnd = int(main_window.handle)
     live_common.bring_window_to_front(main_window)

@@ -169,7 +169,7 @@ def launch_app_with_fresh_startup_trace(app_exe: Path, fixture: dict[str, object
 
     startup_profile_path = Path(str(fixture["startup_profile_path"]))
     startup_profile_path.unlink(missing_ok=True)
-    return live_common.launch_app(app_exe, Path(str(fixture["profile_base"])))
+    return live_common.launch_app(app_exe, Path(str(fixture["profile_base"])), minimized_to_tray=False)
 
 
 def capture_sidecar_state(config_dir: Path) -> dict[str, dict[str, object]]:

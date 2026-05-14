@@ -73,6 +73,24 @@ def test_apply_live_network_profile_rejects_empty_interface(tmp_path: Path) -> N
         live_profiles.apply_live_network_profile(config_dir, live_profiles.LiveNetworkProfileSpec(" "))
 
 
+def test_apply_minimized_to_tray_startup_sets_tray_preferences(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    write_utf16_ini_text(
+        preferences_path,
+        "[eMule]\nStartupMinimized=0\nMinToTray=0\nMinToTray_Aero=0\nAlwaysShowTrayIcon=0\n",
+    )
+
+    live_profiles.apply_minimized_to_tray_startup(config_dir)
+
+    text = live_profiles.read_ini_text(preferences_path)
+    assert "StartupMinimized=1" in text
+    assert "MinToTray=1" in text
+    assert "MinToTray_Aero=1" in text
+    assert "AlwaysShowTrayIcon=1" in text
+
+
 def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

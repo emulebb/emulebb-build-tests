@@ -518,7 +518,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
     }
 
     try:
-        app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
+        app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]), minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         process_id = int(win32process.GetWindowThreadProcessId(main_window.handle)[1])
         report["launched_process_id"] = process_id

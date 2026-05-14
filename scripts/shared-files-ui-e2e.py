@@ -1887,7 +1887,7 @@ def run_shared_files_e2e(
     app = None
     process_handle = 0
     try:
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -2102,7 +2102,7 @@ def run_dynamic_folder_lifecycle_e2e(
     process_handle = 0
     list_hwnd = 0
     try:
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -2272,7 +2272,7 @@ def run_monitored_folder_events_e2e(
     process_handle = 0
     list_hwnd = 0
     try:
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -2495,7 +2495,7 @@ def run_generated_robustness_e2e(
     app = None
     process_handle = 0
     try:
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -2670,7 +2670,7 @@ def run_tree_refresh_stress_e2e(
     app = None
     process_handle = 0
     try:
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app, timeout=900.0)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -2777,7 +2777,7 @@ def run_tree_refresh_stress_e2e(
 
         Path(str(fixture["startup_profile_path"])).unlink(missing_ok=True)
 
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app, timeout=900.0)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -2911,7 +2911,7 @@ def run_duplicate_startup_reuse_e2e(
     app = None
     process_handle = 0
     try:
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -2959,7 +2959,7 @@ def run_duplicate_startup_reuse_e2e(
         shared_cache_path.unlink()
         summary["shared_cache_removed_before_relaunch"] = True
 
-        app = live_common.launch_app(app_exe, fixture["profile_base"])
+        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)

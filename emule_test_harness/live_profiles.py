@@ -121,6 +121,20 @@ def apply_live_network_profile(config_dir: Path, spec: LiveNetworkProfileSpec) -
     write_utf16_ini_text(preferences_path, text)
 
 
+def apply_minimized_to_tray_startup(config_dir: Path) -> None:
+    """Persists startup preferences for non-UI live tests to stay in the tray."""
+
+    apply_emule_preferences(
+        config_dir,
+        (
+            ("StartupMinimized", "1"),
+            ("MinToTray", "1"),
+            ("MinToTray_Aero", "1"),
+            ("AlwaysShowTrayIcon", "1"),
+        ),
+    )
+
+
 def apply_webserver_profile(config_dir: Path, spec: WebServerProfileSpec) -> None:
     """Applies a WebServer/REST overlay to one generated profile."""
 

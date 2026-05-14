@@ -157,8 +157,9 @@ def test_launch_app_with_fresh_startup_trace_removes_stale_trace(monkeypatch, tm
     trace_path.write_text('{"traceEvents":[]}', encoding="utf-8")
     launched: list[Path] = []
 
-    def launch_app(app_exe: Path, launched_profile_base: Path) -> object:
+    def launch_app(app_exe: Path, launched_profile_base: Path, *, minimized_to_tray: bool = True) -> object:
         launched.append(launched_profile_base)
+        assert minimized_to_tray is False
         assert not trace_path.exists()
         return {"app": str(app_exe)}
 

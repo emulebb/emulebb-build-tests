@@ -37,6 +37,7 @@ from emule_test_harness.live_profiles import (
     apply_emule_preferences,
     apply_live_network_policy,
     apply_live_network_profile,
+    apply_minimized_to_tray_startup,
     apply_section_preferences,
     apply_webserver_profile,
     build_profile_base,
@@ -226,10 +227,12 @@ def wait_for(predicate, timeout: float, interval: float, description: str):
     raise RuntimeError(f"Timed out waiting for {description}. Last value: {last_value!r}")
 
 
-def launch_app(app_exe: Path, profile_base: Path) -> Application:
+def launch_app(app_exe: Path, profile_base: Path, *, minimized_to_tray: bool = True) -> Application:
     """Starts the real app with the isolated `-c` override and startup profiling enabled."""
 
     require_pywinauto()
+    if minimized_to_tray:
+        apply_minimized_to_tray_startup(profile_base / "config")
     os.environ["EMULE_STARTUP_PROFILE"] = "1"
     command_line = subprocess.list2cmdline(
         [str(app_exe), "-ignoreinstances", "-c", str(profile_base)]
@@ -266,15 +269,17 @@ def is_expected_shutdown_progress_dialog(hwnd: int) -> bool:
     return title == "Shutting down eMule" or "eMule is shutting down" in body
 
 
-def wait_for_main_window(app: Application, *, timeout: float = 90.0):
-    """Waits until the started eMule process exposes a visible top-level window."""
+def wait_for_main_window(app: Application, *, timeout: float = 90.0, require_visible: bool = False):
+    """Waits until the started eMule process exposes its main top-level window."""
 
     def resolve():
         try:
             window = app.top_window()
         except Exception:
             return None
-        if not window.handle or not win32gui.IsWindowVisible(window.handle):
+        if not window.handle:
+            return None
+        if require_visible and not win32gui.IsWindowVisible(window.handle):
             return None
         if is_main_emule_window(window.handle):
             return window
