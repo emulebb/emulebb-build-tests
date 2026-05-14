@@ -15,6 +15,12 @@ TEST_CASE("Socket IO seam accepts bounded receive results and rejects impossible
 	CHECK_FALSE(HasValidSocketReceiveResult(2048, 1024u));
 }
 
+TEST_CASE("Socket IO seam exposes conservative broadband socket buffer targets")
+{
+	CHECK_EQ(kBroadbandUdpReceiveBufferBytes, static_cast<std::uint32_t>(1024u * 1024u));
+	CHECK_EQ(kBroadbandTcpUploadSendBufferBytes, static_cast<std::uint32_t>(1024u * 1024u));
+}
+
 TEST_CASE("Socket IO seam clamps receive-budget accounting without unsigned underflow")
 {
 	CHECK_EQ(ClampSocketReceiveBudget(4096u, 512), static_cast<std::uint32_t>(3584));
