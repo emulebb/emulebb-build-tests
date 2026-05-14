@@ -369,6 +369,7 @@ TEST_CASE("Web API parses the expanded mutable preference vocabulary")
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("safeServerConnect"), WebApiSurfaceSeams::EMutablePreference::SafeServerConnect);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("networkKademlia"), WebApiSurfaceSeams::EMutablePreference::NetworkKademlia);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("networkEd2k"), WebApiSurfaceSeams::EMutablePreference::NetworkEd2K);
+	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("autoBroadbandIo"), WebApiSurfaceSeams::EMutablePreference::AutoBroadbandIO);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("unsupported"), WebApiSurfaceSeams::EMutablePreference::Invalid);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName(nullptr), WebApiSurfaceSeams::EMutablePreference::Invalid);
 }
@@ -2262,9 +2263,10 @@ TEST_CASE("Web API maps every current REST route family to a command")
 
 	assertRoute("GET", "/api/v1/app", "", "app/version");
 	assertRoute("GET", "/api/v1/app/preferences", "", "app/preferences/get");
-	assertRoute("PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":true})", "app/preferences/set");
+	assertRoute("PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":true,"autoBroadbandIo":false})", "app/preferences/set");
 	CHECK(route.params.contains("prefs"));
 	CHECK(route.params["prefs"].contains("safeServerConnect"));
+	CHECK(route.params["prefs"].contains("autoBroadbandIo"));
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/app/preferences", R"({})", route, errorCode, errorMessage));
