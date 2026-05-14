@@ -409,7 +409,7 @@ def run_supporting_endpoint_checks(page: Any, *, instance_id: str) -> dict[str, 
         "stats_tree": fetch_page_json(page, f"/api/v1/ed2k/stats-tree?instanceId={instance_id}"),
         "app_logs": fetch_page_json(page, "/api/v1/logs/app"),
         "ed2k_logs": fetch_page_json(page, f"/api/v1/logs/ed2k?instanceId={instance_id}"),
-        "metrics_dashboard": fetch_page_json(page, "/api/metrics/dashboard?range=hour"),
+        "metrics_dashboard": fetch_page_json(page, "/api/metrics/dashboard?range=24h"),
         "history": fetch_page_json(page, "/api/history?limit=20"),
         "shared_refresh": fetch_page_json(page, "/api/v1/ed2k/refresh-shared", "POST", {"instanceId": instance_id}),
     }
