@@ -549,7 +549,7 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
 def prepare_directories_tree_stress_fixture(seed_config_dir: Path, artifacts_dir: Path, shared_root: Path) -> dict[str, object]:
     manifest = generated_fixture.ensure_fixture(shared_root, include_tree_stress=True)
     subtree = manifest["subtrees"]["shared_files_tree_stress"]
-    subtree_root = Path(str(subtree["root_path"])).resolve()
+    subtree_root = Path(str(subtree["root"])).resolve()
     shared_dirs = live_common.enumerate_recursive_directories(subtree_root)
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=shared_dirs)
     sample_directories = [Path(str(path)).resolve() for path in subtree["sample_directories"]]
@@ -560,8 +560,8 @@ def prepare_directories_tree_stress_fixture(seed_config_dir: Path, artifacts_dir
         "subtree_root": subtree_root,
         "shared_dirs": shared_dirs,
         "sample_directories": sample_directories,
-        "expected_file_count": int(subtree["expected_file_count"]),
-        "expected_observable_nodes": int(subtree["expected_observable_nodes"]),
+        "expected_file_count": int(subtree["expected_visible_file_count"]),
+        "expected_observable_nodes": int(subtree["observable_node_count"]),
     }
 
 
