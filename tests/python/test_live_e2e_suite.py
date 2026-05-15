@@ -95,6 +95,26 @@ def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, mo
     assert option_values(command, "--workspace-root") == [str(workspace_root.resolve())]
 
 
+def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
+    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    shared_root = tmp_path / "shared"
+    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+
+    command = live_e2e_suite.build_suite_command(
+        spec=live_e2e_suite.SUITE_SPECS[0],
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=workspace_root,
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        shared_root=shared_root,
+        preference_ui_directories_tree_stress=True,
+    )
+
+    assert "--directories-tree-stress" in command
+    assert option_values(command, "--shared-root") == [str(shared_root.resolve())]
+
+
 def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(
