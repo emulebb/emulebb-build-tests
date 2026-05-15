@@ -646,6 +646,28 @@
       "notes": ""
     },
     {
+      "id": "BBPreferenceSchema",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "BBPreferenceSchema",
+      "sourceExpression": "prefini::MigrationKeys::PreferenceSchema",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Int"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
       "id": "BackendMode",
       "storageFile": "preferences.ini",
       "sections": [

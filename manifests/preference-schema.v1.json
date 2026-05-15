@@ -698,6 +698,26 @@
       "notes": ""
     },
     {
+      "id": "BBPreferenceSchema",
+      "inventoryId": "BBPreferenceSchema",
+      "storageFile": "preferences.ini",
+      "section": "<default>",
+      "key": "BBPreferenceSchema",
+      "sourceExpression": "prefini::MigrationKeys::PreferenceSchema",
+      "valueType": "integer",
+      "access": [
+        "read",
+        "write"
+      ],
+      "classification": "persisted-runtime",
+      "ownerExpressions": [],
+      "defaultExpression": "",
+      "clampOrNormalizer": "",
+      "uiBindingIds": [],
+      "restBindings": [],
+      "notes": ""
+    },
+    {
       "id": "BeepOnError",
       "inventoryId": "BeepOnError",
       "storageFile": "preferences.ini",
@@ -905,8 +925,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:185:0:m_bCheckFileOpen",
-        "PPgSecurity.cpp:93:0:GetCheckFileOpen"
+        "PPgSecurity.cpp:103:0:GetCheckFileOpen",
+        "PPgSecurity.cpp:202:0:m_bCheckFileOpen"
       ],
       "restBindings": [],
       "notes": ""
@@ -1465,7 +1485,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:182:0:m_bCryptLayerRequested"
+        "PPgSecurity.cpp:199:0:m_bCryptLayerRequested"
       ],
       "restBindings": [],
       "notes": ""
@@ -1490,8 +1510,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:183:0:m_bCryptLayerRequired",
-        "PPgSecurity.cpp:91:0:IsCryptLayerRequired"
+        "PPgSecurity.cpp:101:0:IsCryptLayerRequired",
+        "PPgSecurity.cpp:200:0:m_bCryptLayerRequired"
       ],
       "restBindings": [],
       "notes": ""
@@ -1515,7 +1535,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:184:0:m_bCryptLayerSupported"
+        "PPgSecurity.cpp:201:0:m_bCryptLayerSupported"
       ],
       "restBindings": [],
       "notes": ""
@@ -3010,10 +3030,11 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:169:0:filterlevel",
-        "PPgSecurity.cpp:176:0:filterlevel",
-        "PPgSecurity.cpp:178:3:filterlevel",
-        "PPgSecurity.cpp:81:0:filterlevel"
+        "PPgSecurity.cpp:184:0:filterlevel",
+        "PPgSecurity.cpp:191:0:filterlevel",
+        "PPgSecurity.cpp:195:3:filterlevel",
+        "PPgSecurity.cpp:422:0:filterlevel",
+        "PPgSecurity.cpp:91:0:filterlevel"
       ],
       "restBindings": [],
       "notes": ""
@@ -3571,11 +3592,12 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:171:0:IsIPFilterEnabled",
-        "PPgSecurity.cpp:175:0:SetIPFilterEnabled",
-        "PPgSecurity.cpp:178:0:IsIPFilterEnabled",
-        "PPgSecurity.cpp:178:2:IsIPFilterEnabled",
-        "PPgSecurity.cpp:80:0:IsIPFilterEnabled"
+        "PPgSecurity.cpp:186:0:IsIPFilterEnabled",
+        "PPgSecurity.cpp:190:0:SetIPFilterEnabled",
+        "PPgSecurity.cpp:193:0:IsIPFilterEnabled",
+        "PPgSecurity.cpp:195:0:IsIPFilterEnabled",
+        "PPgSecurity.cpp:195:2:IsIPFilterEnabled",
+        "PPgSecurity.cpp:90:0:IsIPFilterEnabled"
       ],
       "restBindings": [],
       "notes": ""
@@ -3640,10 +3662,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:173:0:GetIPFilterUpdatePeriodDays",
-        "PPgSecurity.cpp:219:0:SetIPFilterUpdatePeriodDays",
-        "PPgSecurity.cpp:224:0:GetIPFilterUpdatePeriodDays",
-        "PPgSecurity.cpp:95:0:GetIPFilterUpdatePeriodDays"
+        "PPgSecurity.cpp:105:0:GetIPFilterUpdatePeriodDays",
+        "PPgSecurity.cpp:188:0:GetIPFilterUpdatePeriodDays",
+        "PPgSecurity.cpp:236:0:SetIPFilterUpdatePeriodDays",
+        "PPgSecurity.cpp:241:0:GetIPFilterUpdatePeriodDays"
       ],
       "restBindings": [],
       "notes": ""
@@ -3668,12 +3690,12 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:123:0:GetIPFilterUpdateUrl",
-        "PPgSecurity.cpp:132:0:GetIPFilterUpdateUrl",
-        "PPgSecurity.cpp:174:0:GetIPFilterUpdateUrl",
-        "PPgSecurity.cpp:198:0:SetIPFilterUpdateUrl",
-        "PPgSecurity.cpp:225:0:GetIPFilterUpdateUrl",
-        "PPgSecurity.cpp:285:0:SetIPFilterUpdateUrl"
+        "PPgSecurity.cpp:136:0:GetIPFilterUpdateUrl",
+        "PPgSecurity.cpp:146:0:GetIPFilterUpdateUrl",
+        "PPgSecurity.cpp:189:0:GetIPFilterUpdateUrl",
+        "PPgSecurity.cpp:215:0:SetIPFilterUpdateUrl",
+        "PPgSecurity.cpp:242:0:GetIPFilterUpdateUrl",
+        "PPgSecurity.cpp:313:0:SetIPFilterUpdateUrl"
       ],
       "restBindings": [],
       "notes": ""
@@ -8436,7 +8458,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:278:0:GetTxtEditor",
+        "PPgSecurity.cpp:306:0:GetTxtEditor",
         "PPgServer.cpp:150:0:GetTxtEditor",
         "PPgTweaks.cpp:1548:0:GetTxtEditor",
         "PPgTweaks.cpp:1675:0:m_strTxtEditor"
@@ -8754,11 +8776,11 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:172:0:GetAutoIPFilterUpdate",
-        "PPgSecurity.cpp:200:0:SetAutoIPFilterUpdate",
-        "PPgSecurity.cpp:222:0:GetAutoIPFilterUpdate",
-        "PPgSecurity.cpp:223:0:GetAutoIPFilterUpdate",
-        "PPgSecurity.cpp:94:0:GetAutoIPFilterUpdate"
+        "PPgSecurity.cpp:104:0:GetAutoIPFilterUpdate",
+        "PPgSecurity.cpp:187:0:GetAutoIPFilterUpdate",
+        "PPgSecurity.cpp:217:0:SetAutoIPFilterUpdate",
+        "PPgSecurity.cpp:239:0:GetAutoIPFilterUpdate",
+        "PPgSecurity.cpp:240:0:GetAutoIPFilterUpdate"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: autoipfilterupdate."
@@ -9043,8 +9065,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:86:0:IsCryptLayerEnabled",
-        "PPgSecurity.cpp:87:0:IsCryptLayerEnabled"
+        "PPgSecurity.cpp:96:0:IsCryptLayerEnabled",
+        "PPgSecurity.cpp:97:0:IsCryptLayerEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: cryptlayerenabled."
@@ -9067,8 +9089,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:88:0:IsCryptLayerPreferred",
-        "PPgSecurity.cpp:89:0:IsCryptLayerPreferred"
+        "PPgSecurity.cpp:98:0:IsCryptLayerPreferred",
+        "PPgSecurity.cpp:99:0:IsCryptLayerPreferred"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: cryptlayerpreferred."
@@ -9553,7 +9575,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:186:0:m_bEnableSearchResultFilter"
+        "PPgSecurity.cpp:203:0:m_bEnableSearchResultFilter"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: enablesearchresultfilter."
@@ -9700,11 +9722,11 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:170:0:filterserverbyip",
-        "PPgSecurity.cpp:177:0:filterserverbyip",
-        "PPgSecurity.cpp:178:1:filterserverbyip",
-        "PPgSecurity.cpp:272:0:GetFilterServerByIP",
-        "PPgSecurity.cpp:82:0:filterserverbyip"
+        "PPgSecurity.cpp:185:0:filterserverbyip",
+        "PPgSecurity.cpp:192:0:filterserverbyip",
+        "PPgSecurity.cpp:195:1:filterserverbyip",
+        "PPgSecurity.cpp:299:0:GetFilterServerByIP",
+        "PPgSecurity.cpp:92:0:filterserverbyip"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: filterserverbyip."
@@ -10342,8 +10364,8 @@
         "PPgDirectories.cpp:164:0:GetMuleDirectory",
         "PPgDirectories.cpp:265:0:GetMuleDirectory",
         "PPgGeneral.cpp:349:0:GetMuleDirectory",
-        "PPgSecurity.cpp:121:0:GetMuleDirectory",
-        "PPgSecurity.cpp:303:0:GetMuleDirectory",
+        "PPgSecurity.cpp:132:0:GetMuleDirectory",
+        "PPgSecurity.cpp:332:0:GetMuleDirectory",
         "PPgServer.cpp:149:0:GetMuleDirectory",
         "PPgWebServer.cpp:607:0:GetMuleDirectory"
       ],
@@ -10636,8 +10658,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:205:0:GetMaxIPFilterUpdatePeriodDays",
-        "PPgSecurity.cpp:210:0:GetMaxIPFilterUpdatePeriodDays"
+        "PPgSecurity.cpp:222:0:GetMaxIPFilterUpdatePeriodDays",
+        "PPgSecurity.cpp:227:0:GetMaxIPFilterUpdatePeriodDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxipfilterupdateperioddays."
@@ -11058,8 +11080,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:204:0:GetMinIPFilterUpdatePeriodDays",
-        "PPgSecurity.cpp:209:0:GetMinIPFilterUpdatePeriodDays"
+        "PPgSecurity.cpp:221:0:GetMinIPFilterUpdatePeriodDays",
+        "PPgSecurity.cpp:226:0:GetMinIPFilterUpdatePeriodDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nipfilterupdateperioddays."
@@ -11760,7 +11782,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:92:0:IsSearchSpamFilterEnabled"
+        "PPgSecurity.cpp:102:0:IsSearchSpamFilterEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: searchspamfilterenabled."
@@ -11783,10 +11805,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:104:0:m_iSeeShares",
-        "PPgSecurity.cpp:190:0:m_iSeeShares",
-        "PPgSecurity.cpp:192:0:m_iSeeShares",
-        "PPgSecurity.cpp:194:0:m_iSeeShares"
+        "PPgSecurity.cpp:115:0:m_iSeeShares",
+        "PPgSecurity.cpp:207:0:m_iSeeShares",
+        "PPgSecurity.cpp:209:0:m_iSeeShares",
+        "PPgSecurity.cpp:211:0:m_iSeeShares"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: seeshares."
@@ -12468,8 +12490,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgSecurity.cpp:181:0:m_bUseSecureIdent",
-        "PPgSecurity.cpp:84:0:m_bUseSecureIdent"
+        "PPgSecurity.cpp:198:0:m_bUseSecureIdent",
+        "PPgSecurity.cpp:94:0:m_bUseSecureIdent"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: usesecureident."
@@ -13209,7 +13231,7 @@
       "uiBindingIds": [
         "PPgDisplay.cpp:153:0:m_bUseAutocompl",
         "PPgDisplay.cpp:88:0:GetUseAutocompletion",
-        "PPgSecurity.cpp:116:0:GetUseAutocompletion"
+        "PPgSecurity.cpp:127:0:GetUseAutocompletion"
       ],
       "restBindings": [],
       "notes": ""
@@ -19700,785 +19722,10 @@
       ]
     },
     {
-      "id": "PPgSecurity.cpp:104:0:m_iSeeShares",
+      "id": "PPgSecurity.cpp:101:0:IsCryptLayerRequired",
       "page": "PPgSecurity.cpp",
       "dialogId": "IDD_PPG_SECURITY",
-      "line": 104,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "m_iSeeShares",
-      "controlIds": [
-        "IDC_SEESHARE1",
-        "IDC_SEESHARE3"
-      ],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::seeshares"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:116:0:GetUseAutocompletion",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 116,
-      "function": "OnInitDialog",
-      "access": "read",
-      "ownerExpression": "GetUseAutocompletion",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "UseAutocompletion"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:121:0:GetMuleDirectory",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 121,
-      "function": "OnInitDialog",
-      "access": "read",
-      "ownerExpression": "GetMuleDirectory",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::ledirectory"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:123:0:GetIPFilterUpdateUrl",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 123,
-      "function": "OnInitDialog",
-      "access": "read",
-      "ownerExpression": "GetIPFilterUpdateUrl",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdateUrl"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:132:0:GetIPFilterUpdateUrl",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 132,
-      "function": "OnInitDialog",
-      "access": "read",
-      "ownerExpression": "GetIPFilterUpdateUrl",
-      "controlIds": [
-        "IDC_UPDATEURL"
-      ],
-      "directControlIds": [
-        "IDC_UPDATEURL"
-      ],
-      "schemaIds": [
-        "IPFilterUpdateUrl"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:169:0:filterlevel",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 169,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "filterlevel",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "FilterLevel"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:170:0:filterserverbyip",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 170,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "filterserverbyip",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::filterserverbyip"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:171:0:IsIPFilterEnabled",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 171,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "IsIPFilterEnabled",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterEnabled"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:172:0:GetAutoIPFilterUpdate",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 172,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetAutoIPFilterUpdate",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::autoipfilterupdate"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:173:0:GetIPFilterUpdatePeriodDays",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 173,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetIPFilterUpdatePeriodDays",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdatePeriodDays"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:174:0:GetIPFilterUpdateUrl",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 174,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetIPFilterUpdateUrl",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdateUrl"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:175:0:SetIPFilterEnabled",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 175,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "SetIPFilterEnabled",
-      "controlIds": [
-        "IDC_ENABLE_IPFILTER"
-      ],
-      "directControlIds": [
-        "IDC_ENABLE_IPFILTER"
-      ],
-      "schemaIds": [
-        "IPFilterEnabled"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:176:0:filterlevel",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 176,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "filterlevel",
-      "controlIds": [
-        "IDC_FILTERLEVEL"
-      ],
-      "directControlIds": [
-        "IDC_FILTERLEVEL"
-      ],
-      "schemaIds": [
-        "FilterLevel"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:177:0:filterserverbyip",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 177,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "filterserverbyip",
-      "controlIds": [
-        "IDC_FILTERSERVERBYIPFILTER"
-      ],
-      "directControlIds": [
-        "IDC_FILTERSERVERBYIPFILTER"
-      ],
-      "schemaIds": [
-        "ui-runtime::filterserverbyip"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:178:0:IsIPFilterEnabled",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 178,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "IsIPFilterEnabled",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterEnabled"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:178:1:filterserverbyip",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 178,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "filterserverbyip",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::filterserverbyip"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:178:2:IsIPFilterEnabled",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 178,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "IsIPFilterEnabled",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterEnabled"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:178:3:filterlevel",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 178,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "filterlevel",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "FilterLevel"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:181:0:m_bUseSecureIdent",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 181,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bUseSecureIdent",
-      "controlIds": [
-        "IDC_USESECIDENT"
-      ],
-      "directControlIds": [
-        "IDC_USESECIDENT"
-      ],
-      "schemaIds": [
-        "ui-runtime::usesecureident"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:182:0:m_bCryptLayerRequested",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 182,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bCryptLayerRequested",
-      "controlIds": [
-        "IDC_ENABLEOBFUSCATION"
-      ],
-      "directControlIds": [
-        "IDC_ENABLEOBFUSCATION"
-      ],
-      "schemaIds": [
-        "CryptLayerRequested"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:183:0:m_bCryptLayerRequired",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 183,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bCryptLayerRequired",
-      "controlIds": [
-        "IDC_ONLYOBFUSCATED"
-      ],
-      "directControlIds": [
-        "IDC_ONLYOBFUSCATED"
-      ],
-      "schemaIds": [
-        "CryptLayerRequired"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:184:0:m_bCryptLayerSupported",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 184,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bCryptLayerSupported",
-      "controlIds": [
-        "IDC_DISABLEOBFUSCATION"
-      ],
-      "directControlIds": [
-        "IDC_DISABLEOBFUSCATION"
-      ],
-      "schemaIds": [
-        "CryptLayerSupported"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:185:0:m_bCheckFileOpen",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 185,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bCheckFileOpen",
-      "controlIds": [
-        "IDC_CHECK_FILE_OPEN"
-      ],
-      "directControlIds": [
-        "IDC_CHECK_FILE_OPEN"
-      ],
-      "schemaIds": [
-        "CheckFileOpen"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:186:0:m_bEnableSearchResultFilter",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 186,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bEnableSearchResultFilter",
-      "controlIds": [
-        "IDC_SEARCHSPAMFILTER"
-      ],
-      "directControlIds": [
-        "IDC_SEARCHSPAMFILTER"
-      ],
-      "schemaIds": [
-        "ui-runtime::enablesearchresultfilter"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:190:0:m_iSeeShares",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 190,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_iSeeShares",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::seeshares"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:192:0:m_iSeeShares",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 192,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_iSeeShares",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::seeshares"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:194:0:m_iSeeShares",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 194,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_iSeeShares",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::seeshares"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:198:0:SetIPFilterUpdateUrl",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 198,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "SetIPFilterUpdateUrl",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdateUrl"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:200:0:SetAutoIPFilterUpdate",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 200,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "SetAutoIPFilterUpdate",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::autoipfilterupdate"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:204:0:GetMinIPFilterUpdatePeriodDays",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 204,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetMinIPFilterUpdatePeriodDays",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::nipfilterupdateperioddays"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:205:0:GetMaxIPFilterUpdatePeriodDays",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 205,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetMaxIPFilterUpdatePeriodDays",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::maxipfilterupdateperioddays"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:209:0:GetMinIPFilterUpdatePeriodDays",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 209,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetMinIPFilterUpdatePeriodDays",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::nipfilterupdateperioddays"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:210:0:GetMaxIPFilterUpdatePeriodDays",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 210,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetMaxIPFilterUpdatePeriodDays",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::maxipfilterupdateperioddays"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:219:0:SetIPFilterUpdatePeriodDays",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 219,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "SetIPFilterUpdatePeriodDays",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdatePeriodDays"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:222:0:GetAutoIPFilterUpdate",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 222,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetAutoIPFilterUpdate",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::autoipfilterupdate"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:223:0:GetAutoIPFilterUpdate",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 223,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetAutoIPFilterUpdate",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::autoipfilterupdate"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:224:0:GetIPFilterUpdatePeriodDays",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 224,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetIPFilterUpdatePeriodDays",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdatePeriodDays"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:225:0:GetIPFilterUpdateUrl",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 225,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetIPFilterUpdateUrl",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdateUrl"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:272:0:GetFilterServerByIP",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 272,
-      "function": "OnReloadIPFilter",
-      "access": "read",
-      "ownerExpression": "GetFilterServerByIP",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::filterserverbyip"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:278:0:GetTxtEditor",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 278,
-      "function": "OnEditIPFilter",
-      "access": "read",
-      "ownerExpression": "GetTxtEditor",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "TxtEditor"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:285:0:SetIPFilterUpdateUrl",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 285,
-      "function": "OnLoadIPFFromURL",
-      "access": "read",
-      "ownerExpression": "SetIPFilterUpdateUrl",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IPFilterUpdateUrl"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:303:0:GetMuleDirectory",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 303,
-      "function": "DeleteDDB",
-      "access": "read",
-      "ownerExpression": "GetMuleDirectory",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "ui-runtime::ledirectory"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:80:0:IsIPFilterEnabled",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 80,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "IsIPFilterEnabled",
-      "controlIds": [
-        "IDC_ENABLE_IPFILTER"
-      ],
-      "directControlIds": [
-        "IDC_ENABLE_IPFILTER"
-      ],
-      "schemaIds": [
-        "IPFilterEnabled"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:81:0:filterlevel",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 81,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "filterlevel",
-      "controlIds": [
-        "IDC_FILTERLEVEL"
-      ],
-      "directControlIds": [
-        "IDC_FILTERLEVEL"
-      ],
-      "schemaIds": [
-        "FilterLevel"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:82:0:filterserverbyip",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 82,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "filterserverbyip",
-      "controlIds": [
-        "IDC_FILTERSERVERBYIPFILTER"
-      ],
-      "directControlIds": [
-        "IDC_FILTERSERVERBYIPFILTER"
-      ],
-      "schemaIds": [
-        "ui-runtime::filterserverbyip"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:84:0:m_bUseSecureIdent",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 84,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "m_bUseSecureIdent",
-      "controlIds": [
-        "IDC_USESECIDENT"
-      ],
-      "directControlIds": [
-        "IDC_USESECIDENT"
-      ],
-      "schemaIds": [
-        "ui-runtime::usesecureident"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:86:0:IsCryptLayerEnabled",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 86,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "IsCryptLayerEnabled",
-      "controlIds": [
-        "IDC_DISABLEOBFUSCATION"
-      ],
-      "directControlIds": [
-        "IDC_DISABLEOBFUSCATION"
-      ],
-      "schemaIds": [
-        "ui-runtime::cryptlayerenabled"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:87:0:IsCryptLayerEnabled",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 87,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "IsCryptLayerEnabled",
-      "controlIds": [
-        "IDC_ENABLEOBFUSCATION"
-      ],
-      "directControlIds": [
-        "IDC_ENABLEOBFUSCATION"
-      ],
-      "schemaIds": [
-        "ui-runtime::cryptlayerenabled"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:88:0:IsCryptLayerPreferred",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 88,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "IsCryptLayerPreferred",
-      "controlIds": [
-        "IDC_ENABLEOBFUSCATION"
-      ],
-      "directControlIds": [
-        "IDC_ENABLEOBFUSCATION"
-      ],
-      "schemaIds": [
-        "ui-runtime::cryptlayerpreferred"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:89:0:IsCryptLayerPreferred",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 89,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "IsCryptLayerPreferred",
-      "controlIds": [
-        "IDC_ONLYOBFUSCATED"
-      ],
-      "directControlIds": [
-        "IDC_ONLYOBFUSCATED"
-      ],
-      "schemaIds": [
-        "ui-runtime::cryptlayerpreferred"
-      ]
-    },
-    {
-      "id": "PPgSecurity.cpp:91:0:IsCryptLayerRequired",
-      "page": "PPgSecurity.cpp",
-      "dialogId": "IDD_PPG_SECURITY",
-      "line": 91,
+      "line": 101,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "IsCryptLayerRequired",
@@ -20493,10 +19740,10 @@
       ]
     },
     {
-      "id": "PPgSecurity.cpp:92:0:IsSearchSpamFilterEnabled",
+      "id": "PPgSecurity.cpp:102:0:IsSearchSpamFilterEnabled",
       "page": "PPgSecurity.cpp",
       "dialogId": "IDD_PPG_SECURITY",
-      "line": 92,
+      "line": 102,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "IsSearchSpamFilterEnabled",
@@ -20511,10 +19758,10 @@
       ]
     },
     {
-      "id": "PPgSecurity.cpp:93:0:GetCheckFileOpen",
+      "id": "PPgSecurity.cpp:103:0:GetCheckFileOpen",
       "page": "PPgSecurity.cpp",
       "dialogId": "IDD_PPG_SECURITY",
-      "line": 93,
+      "line": 103,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetCheckFileOpen",
@@ -20529,10 +19776,10 @@
       ]
     },
     {
-      "id": "PPgSecurity.cpp:94:0:GetAutoIPFilterUpdate",
+      "id": "PPgSecurity.cpp:104:0:GetAutoIPFilterUpdate",
       "page": "PPgSecurity.cpp",
       "dialogId": "IDD_PPG_SECURITY",
-      "line": 94,
+      "line": 104,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetAutoIPFilterUpdate",
@@ -20543,10 +19790,10 @@
       ]
     },
     {
-      "id": "PPgSecurity.cpp:95:0:GetIPFilterUpdatePeriodDays",
+      "id": "PPgSecurity.cpp:105:0:GetIPFilterUpdatePeriodDays",
       "page": "PPgSecurity.cpp",
       "dialogId": "IDD_PPG_SECURITY",
-      "line": 95,
+      "line": 105,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetIPFilterUpdatePeriodDays",
@@ -20554,6 +19801,805 @@
       "directControlIds": [],
       "schemaIds": [
         "IPFilterUpdatePeriodDays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:115:0:m_iSeeShares",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 115,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "m_iSeeShares",
+      "controlIds": [
+        "IDC_SEESHARE1",
+        "IDC_SEESHARE3"
+      ],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::seeshares"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:127:0:GetUseAutocompletion",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 127,
+      "function": "OnInitDialog",
+      "access": "read",
+      "ownerExpression": "GetUseAutocompletion",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "UseAutocompletion"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:132:0:GetMuleDirectory",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 132,
+      "function": "OnInitDialog",
+      "access": "read",
+      "ownerExpression": "GetMuleDirectory",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::ledirectory"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:136:0:GetIPFilterUpdateUrl",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 136,
+      "function": "OnInitDialog",
+      "access": "read",
+      "ownerExpression": "GetIPFilterUpdateUrl",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdateUrl"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:146:0:GetIPFilterUpdateUrl",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 146,
+      "function": "OnInitDialog",
+      "access": "read",
+      "ownerExpression": "GetIPFilterUpdateUrl",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdateUrl"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:184:0:filterlevel",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 184,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "filterlevel",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "FilterLevel"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:185:0:filterserverbyip",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 185,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "filterserverbyip",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::filterserverbyip"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:186:0:IsIPFilterEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 186,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "IsIPFilterEnabled",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterEnabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:187:0:GetAutoIPFilterUpdate",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 187,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetAutoIPFilterUpdate",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::autoipfilterupdate"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:188:0:GetIPFilterUpdatePeriodDays",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 188,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetIPFilterUpdatePeriodDays",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdatePeriodDays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:189:0:GetIPFilterUpdateUrl",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 189,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetIPFilterUpdateUrl",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdateUrl"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:190:0:SetIPFilterEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 190,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "SetIPFilterEnabled",
+      "controlIds": [
+        "IDC_ENABLE_IPFILTER"
+      ],
+      "directControlIds": [
+        "IDC_ENABLE_IPFILTER"
+      ],
+      "schemaIds": [
+        "IPFilterEnabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:191:0:filterlevel",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 191,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "filterlevel",
+      "controlIds": [
+        "IDC_FILTERLEVEL"
+      ],
+      "directControlIds": [
+        "IDC_FILTERLEVEL"
+      ],
+      "schemaIds": [
+        "FilterLevel"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:192:0:filterserverbyip",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 192,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "filterserverbyip",
+      "controlIds": [
+        "IDC_FILTERSERVERBYIPFILTER"
+      ],
+      "directControlIds": [
+        "IDC_FILTERSERVERBYIPFILTER"
+      ],
+      "schemaIds": [
+        "ui-runtime::filterserverbyip"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:193:0:IsIPFilterEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 193,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "IsIPFilterEnabled",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterEnabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:195:0:IsIPFilterEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 195,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "IsIPFilterEnabled",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterEnabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:195:1:filterserverbyip",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 195,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "filterserverbyip",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::filterserverbyip"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:195:2:IsIPFilterEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 195,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "IsIPFilterEnabled",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterEnabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:195:3:filterlevel",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 195,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "filterlevel",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "FilterLevel"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:198:0:m_bUseSecureIdent",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 198,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bUseSecureIdent",
+      "controlIds": [
+        "IDC_USESECIDENT"
+      ],
+      "directControlIds": [
+        "IDC_USESECIDENT"
+      ],
+      "schemaIds": [
+        "ui-runtime::usesecureident"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:199:0:m_bCryptLayerRequested",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 199,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bCryptLayerRequested",
+      "controlIds": [
+        "IDC_ENABLEOBFUSCATION"
+      ],
+      "directControlIds": [
+        "IDC_ENABLEOBFUSCATION"
+      ],
+      "schemaIds": [
+        "CryptLayerRequested"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:200:0:m_bCryptLayerRequired",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 200,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bCryptLayerRequired",
+      "controlIds": [
+        "IDC_ONLYOBFUSCATED"
+      ],
+      "directControlIds": [
+        "IDC_ONLYOBFUSCATED"
+      ],
+      "schemaIds": [
+        "CryptLayerRequired"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:201:0:m_bCryptLayerSupported",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 201,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bCryptLayerSupported",
+      "controlIds": [
+        "IDC_DISABLEOBFUSCATION"
+      ],
+      "directControlIds": [
+        "IDC_DISABLEOBFUSCATION"
+      ],
+      "schemaIds": [
+        "CryptLayerSupported"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:202:0:m_bCheckFileOpen",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 202,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bCheckFileOpen",
+      "controlIds": [
+        "IDC_CHECK_FILE_OPEN"
+      ],
+      "directControlIds": [
+        "IDC_CHECK_FILE_OPEN"
+      ],
+      "schemaIds": [
+        "CheckFileOpen"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:203:0:m_bEnableSearchResultFilter",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 203,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bEnableSearchResultFilter",
+      "controlIds": [
+        "IDC_SEARCHSPAMFILTER"
+      ],
+      "directControlIds": [
+        "IDC_SEARCHSPAMFILTER"
+      ],
+      "schemaIds": [
+        "ui-runtime::enablesearchresultfilter"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:207:0:m_iSeeShares",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 207,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_iSeeShares",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::seeshares"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:209:0:m_iSeeShares",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 209,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_iSeeShares",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::seeshares"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:211:0:m_iSeeShares",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 211,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_iSeeShares",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::seeshares"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:215:0:SetIPFilterUpdateUrl",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 215,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "SetIPFilterUpdateUrl",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdateUrl"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:217:0:SetAutoIPFilterUpdate",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 217,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "SetAutoIPFilterUpdate",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::autoipfilterupdate"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:221:0:GetMinIPFilterUpdatePeriodDays",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 221,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetMinIPFilterUpdatePeriodDays",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::nipfilterupdateperioddays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:222:0:GetMaxIPFilterUpdatePeriodDays",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 222,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetMaxIPFilterUpdatePeriodDays",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::maxipfilterupdateperioddays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:226:0:GetMinIPFilterUpdatePeriodDays",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 226,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetMinIPFilterUpdatePeriodDays",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::nipfilterupdateperioddays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:227:0:GetMaxIPFilterUpdatePeriodDays",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 227,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetMaxIPFilterUpdatePeriodDays",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::maxipfilterupdateperioddays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:236:0:SetIPFilterUpdatePeriodDays",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 236,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "SetIPFilterUpdatePeriodDays",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdatePeriodDays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:239:0:GetAutoIPFilterUpdate",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 239,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetAutoIPFilterUpdate",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::autoipfilterupdate"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:240:0:GetAutoIPFilterUpdate",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 240,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetAutoIPFilterUpdate",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::autoipfilterupdate"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:241:0:GetIPFilterUpdatePeriodDays",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 241,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetIPFilterUpdatePeriodDays",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdatePeriodDays"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:242:0:GetIPFilterUpdateUrl",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 242,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetIPFilterUpdateUrl",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdateUrl"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:299:0:GetFilterServerByIP",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 299,
+      "function": "OnReloadIPFilter",
+      "access": "read",
+      "ownerExpression": "GetFilterServerByIP",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::filterserverbyip"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:306:0:GetTxtEditor",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 306,
+      "function": "OnEditIPFilter",
+      "access": "read",
+      "ownerExpression": "GetTxtEditor",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "TxtEditor"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:313:0:SetIPFilterUpdateUrl",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 313,
+      "function": "OnLoadIPFFromURL",
+      "access": "read",
+      "ownerExpression": "SetIPFilterUpdateUrl",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IPFilterUpdateUrl"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:332:0:GetMuleDirectory",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 332,
+      "function": "DeleteDDB",
+      "access": "read",
+      "ownerExpression": "GetMuleDirectory",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::ledirectory"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:422:0:filterlevel",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 422,
+      "function": "UpdateIPFilterStats",
+      "access": "read",
+      "ownerExpression": "filterlevel",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "FilterLevel"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:90:0:IsIPFilterEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 90,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "IsIPFilterEnabled",
+      "controlIds": [
+        "IDC_ENABLE_IPFILTER"
+      ],
+      "directControlIds": [
+        "IDC_ENABLE_IPFILTER"
+      ],
+      "schemaIds": [
+        "IPFilterEnabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:91:0:filterlevel",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 91,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "filterlevel",
+      "controlIds": [
+        "IDC_FILTERLEVEL"
+      ],
+      "directControlIds": [
+        "IDC_FILTERLEVEL"
+      ],
+      "schemaIds": [
+        "FilterLevel"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:92:0:filterserverbyip",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 92,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "filterserverbyip",
+      "controlIds": [
+        "IDC_FILTERSERVERBYIPFILTER"
+      ],
+      "directControlIds": [
+        "IDC_FILTERSERVERBYIPFILTER"
+      ],
+      "schemaIds": [
+        "ui-runtime::filterserverbyip"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:94:0:m_bUseSecureIdent",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 94,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "m_bUseSecureIdent",
+      "controlIds": [
+        "IDC_USESECIDENT"
+      ],
+      "directControlIds": [
+        "IDC_USESECIDENT"
+      ],
+      "schemaIds": [
+        "ui-runtime::usesecureident"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:96:0:IsCryptLayerEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 96,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "IsCryptLayerEnabled",
+      "controlIds": [
+        "IDC_DISABLEOBFUSCATION"
+      ],
+      "directControlIds": [
+        "IDC_DISABLEOBFUSCATION"
+      ],
+      "schemaIds": [
+        "ui-runtime::cryptlayerenabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:97:0:IsCryptLayerEnabled",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 97,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "IsCryptLayerEnabled",
+      "controlIds": [
+        "IDC_ENABLEOBFUSCATION"
+      ],
+      "directControlIds": [
+        "IDC_ENABLEOBFUSCATION"
+      ],
+      "schemaIds": [
+        "ui-runtime::cryptlayerenabled"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:98:0:IsCryptLayerPreferred",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 98,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "IsCryptLayerPreferred",
+      "controlIds": [
+        "IDC_ENABLEOBFUSCATION"
+      ],
+      "directControlIds": [
+        "IDC_ENABLEOBFUSCATION"
+      ],
+      "schemaIds": [
+        "ui-runtime::cryptlayerpreferred"
+      ]
+    },
+    {
+      "id": "PPgSecurity.cpp:99:0:IsCryptLayerPreferred",
+      "page": "PPgSecurity.cpp",
+      "dialogId": "IDD_PPG_SECURITY",
+      "line": 99,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "IsCryptLayerPreferred",
+      "controlIds": [
+        "IDC_ONLYOBFUSCATED"
+      ],
+      "directControlIds": [
+        "IDC_ONLYOBFUSCATED"
+      ],
+      "schemaIds": [
+        "ui-runtime::cryptlayerpreferred"
       ]
     },
     {
