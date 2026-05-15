@@ -55,6 +55,7 @@ EN_CHANGE = 0x0300
 MP_HM_PREFS = 10217
 IDOK = 1
 IDCANCEL = 2
+ID_APPLY_NOW = 0x3021
 PAGE_TREE_ID = 0x7EEE
 IDC_EXT_OPTS = 2095
 TREE_OPTIONS_EDITBOX_ID = 101
@@ -554,7 +555,7 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
             ("TxtEditor", "notepad.exe"),
             ("MaxChatHistoryLines", "100"),
             ("MaxMessageSessions", "50"),
-            ("IPFilterEnabled", "1"),
+            ("IPFilterEnabled", "0"),
             ("IPFilterUpdateEnabled", "0"),
             ("IPFilterUpdatePeriodDays", "7"),
             ("IPFilterLastUpdateTime", str(int(time.time()))),
@@ -707,6 +708,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
     fake_ffmpeg = artifacts_dir / "ffmpeg.exe"
     fake_ffmpeg.write_bytes(b"fake ffmpeg executable for preference validation")
     configure_profile(config_dir, paths.app_exe, rest_port)
+    (config_dir / "ipfilter.dat").write_text("1.2.3.4 - 1.2.3.4 , 100 , preference-ui-e2e\r\n", encoding="ascii")
 
     app = None
     dialog_hwnd: int | None = None
@@ -760,14 +762,23 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
             "filter_servers": control_rect(ip_filter_servers),
         }
         wait_for(
-            lambda: "Status: Enabled" in get_control_text(ip_filter_stats) and "Rules loaded:" in get_control_text(ip_filter_stats),
+            lambda: "Status: Disabled" in get_control_text(ip_filter_stats) and "Rules loaded: 0" in get_control_text(ip_filter_stats),
             timeout=2.0,
             interval=0.1,
-            description="enabled IP filter stats text",
+            description="startup-disabled IP filter stats text",
         )
+        report["checks"]["ip_filter_startup_disabled_skip"] = {"stats_text": get_control_text(ip_filter_stats)}
         ensure_checkbox(ip_filter_enabled, True)
         assert_control_enabled(ip_filter_level, True, "IP filter level")
         assert_control_enabled(ip_filter_servers, True, "Filter servers too")
+        click_button(find_control(dialog_hwnd, ID_APPLY_NOW, "Button"))
+        wait_for(
+            lambda: "Status: Enabled" in get_control_text(ip_filter_stats) and "Rules loaded: 1" in get_control_text(ip_filter_stats),
+            timeout=5.0,
+            interval=0.1,
+            description="enabled IP filter stats text after apply",
+        )
+        report["checks"]["ip_filter_enable_apply_loads_rules"] = {"stats_text": get_control_text(ip_filter_stats)}
         ensure_checkbox(ip_filter_enabled, False)
         wait_for(
             lambda: "Status: Disabled" in get_control_text(ip_filter_stats),

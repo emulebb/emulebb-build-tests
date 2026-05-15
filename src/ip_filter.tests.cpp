@@ -96,6 +96,20 @@ TEST_CASE("IP-filter seam bypasses runtime filtering when disabled")
 	CHECK_FALSE(IPFilterSeams::ShouldEvaluateFilter(true, 1u, 0u));
 }
 
+TEST_CASE("IP-filter startup load follows enabled preference")
+{
+	CHECK(IPFilterSeams::ShouldLoadAtStartup(true));
+	CHECK_FALSE(IPFilterSeams::ShouldLoadAtStartup(false));
+}
+
+TEST_CASE("IP-filter automatic refresh requires filtering and auto update")
+{
+	CHECK(IPFilterSeams::ShouldQueueAutomaticRefresh(true, true));
+	CHECK_FALSE(IPFilterSeams::ShouldQueueAutomaticRefresh(false, true));
+	CHECK_FALSE(IPFilterSeams::ShouldQueueAutomaticRefresh(true, false));
+	CHECK_FALSE(IPFilterSeams::ShouldQueueAutomaticRefresh(false, false));
+}
+
 TEST_CASE("IP-filter normalization lets a lower-level narrow overlap win only inside the overlap")
 {
 	const std::vector<IPFilterSeams::IPRange> normalized = IPFilterSeams::NormalizeIPRanges({
