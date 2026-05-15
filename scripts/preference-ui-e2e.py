@@ -107,7 +107,6 @@ TWEAKS_LOGGING_GROUP_LABEL = "Logging & Diagnostics"
 
 IP_FILTER_UPDATE_URL_DEFAULTS = (
     "https://upd.emule-security.org/ipfilter.zip",
-    "http://upd.emule-security.org/ipfilter.zip",
     "https://emuling.gitlab.io/ipfilter.zip",
     "https://github.com/DavidMoore/ipfilter/releases/download/lists/ipfilter.zip",
     "https://raw.githubusercontent.com/Naunter/BT_BlockLists/master/bt_blocklists.gz",
@@ -545,7 +544,7 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
             ("IPFilterUpdateEnabled", "0"),
             ("IPFilterUpdatePeriodDays", "7"),
             ("IPFilterLastUpdateTime", str(int(time.time()))),
-            ("IPFilterUpdateUrl", "http://upd.emule-security.org/ipfilter.zip"),
+            ("IPFilterUpdateUrl", "https://upd.emule-security.org/ipfilter.zip"),
         ),
     )
     live_common.apply_webserver_profile(
@@ -761,7 +760,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         }
         update_url = find_control(dialog_hwnd, IDC_UPDATEURL, "Edit")
         update_url_parent = win32gui.GetParent(update_url)
-        ip_filter_update_url = "http://upd.emule-security.org/ipfilter.zip"
+        ip_filter_update_url = "https://upd.emule-security.org/ipfilter.zip"
         set_edit_text(update_url, ip_filter_update_url)
         ensure_checkbox(find_control(update_url_parent, IDC_AUTOUPDATE_IPFILTER, "Button"), True)
         set_edit_text(find_control(update_url_parent, IDC_IPFILTERPERIOD, "Edit"), "11")
@@ -843,7 +842,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
                 "IPFilterEnabled": "0",
                 "IPFilterUpdateEnabled": "1",
                 "IPFilterUpdatePeriodDays": "11",
-                "IPFilterUpdateUrl": "http://upd.emule-security.org/ipfilter.zip",
+                "IPFilterUpdateUrl": "https://upd.emule-security.org/ipfilter.zip",
             },
             "WebServer": {
                 "Enabled": "1",

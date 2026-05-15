@@ -25,3 +25,22 @@ def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
     combined = "\n".join([emule_cpp, preferences_cpp, release_tests_cpp])
     assert "github.com/itlezy" not in combined
     assert "api.github.com/repos/itlezy" not in combined
+
+
+def test_bootstrap_and_ip_filter_defaults_are_https_only() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+
+    preferences_h = (app_source / "Preferences.h").read_text(encoding="utf-8", errors="ignore")
+    preferences_cpp = (app_source / "Preferences.cpp").read_text(encoding="utf-8", errors="ignore")
+    ppg_security_cpp = (app_source / "PPgSecurity.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    assert "https://upd.emule-security.org/server.met" in preferences_h
+    assert "https://upd.emule-security.org/nodes.dat" in preferences_h
+    assert "https://upd.emule-security.org/ipfilter.zip" in ppg_security_cpp
+    assert "https://emuling.gitlab.io/server.met" in preferences_cpp
+
+    combined = "\n".join([preferences_h, preferences_cpp, ppg_security_cpp])
+    assert "http://upd.emule-security.org/server.met" not in combined
+    assert "http://upd.emule-security.org/nodes.dat" not in combined
+    assert "http://upd.emule-security.org/ipfilter.zip" not in combined
