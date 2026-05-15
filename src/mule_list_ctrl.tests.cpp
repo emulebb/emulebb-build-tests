@@ -2,6 +2,7 @@
 
 #include "BBPreferenceMigrationSeams.h"
 #include "MuleListCtrlSeams.h"
+#include "MuleListCtrlViewPresets.h"
 
 TEST_SUITE_BEGIN("parity");
 
@@ -49,6 +50,74 @@ TEST_CASE("Mule list column order validation requires a complete permutation")
 	CHECK_FALSE(MuleListCtrlSeams::IsCompleteColumnOrder(negative, _countof(negative)));
 	CHECK_FALSE(MuleListCtrlSeams::IsCompleteColumnOrder(nullptr, 4));
 	CHECK_FALSE(MuleListCtrlSeams::IsCompleteColumnOrder(valid, 0));
+}
+
+TEST_CASE("Mule list view preset commands map every Tools menu action")
+{
+	MuleListCtrlViewPresets::ETableViewPreset preset = MuleListCtrlViewPresets::ETableViewPreset::Stock;
+	MuleListCtrlViewPresets::EColumnWidthMode widthMode = MuleListCtrlViewPresets::EColumnWidthMode::Preserve;
+
+	CHECK(MuleListCtrlViewPresets::TryGetViewPresetCommand(MP_HM_VIEW_PRESET_STOCK_KEEP_WIDTHS, preset, widthMode));
+	CHECK(preset == MuleListCtrlViewPresets::ETableViewPreset::Stock);
+	CHECK(widthMode == MuleListCtrlViewPresets::EColumnWidthMode::Preserve);
+	CHECK(MuleListCtrlViewPresets::TryGetViewPresetCommand(MP_HM_VIEW_PRESET_STOCK_RESET_WIDTHS, preset, widthMode));
+	CHECK(preset == MuleListCtrlViewPresets::ETableViewPreset::Stock);
+	CHECK(widthMode == MuleListCtrlViewPresets::EColumnWidthMode::Reset);
+	CHECK(MuleListCtrlViewPresets::TryGetViewPresetCommand(MP_HM_VIEW_PRESET_EXTENDED_KEEP_WIDTHS, preset, widthMode));
+	CHECK(preset == MuleListCtrlViewPresets::ETableViewPreset::Extended);
+	CHECK(widthMode == MuleListCtrlViewPresets::EColumnWidthMode::Preserve);
+	CHECK(MuleListCtrlViewPresets::TryGetViewPresetCommand(MP_HM_VIEW_PRESET_EXTENDED_RESET_WIDTHS, preset, widthMode));
+	CHECK(preset == MuleListCtrlViewPresets::ETableViewPreset::Extended);
+	CHECK(widthMode == MuleListCtrlViewPresets::EColumnWidthMode::Reset);
+	CHECK(MuleListCtrlViewPresets::TryGetViewPresetCommand(MP_HM_VIEW_PRESET_FULL_KEEP_WIDTHS, preset, widthMode));
+	CHECK(preset == MuleListCtrlViewPresets::ETableViewPreset::Full);
+	CHECK(widthMode == MuleListCtrlViewPresets::EColumnWidthMode::Preserve);
+	CHECK(MuleListCtrlViewPresets::TryGetViewPresetCommand(MP_HM_VIEW_PRESET_FULL_RESET_WIDTHS, preset, widthMode));
+	CHECK(preset == MuleListCtrlViewPresets::ETableViewPreset::Full);
+	CHECK(widthMode == MuleListCtrlViewPresets::EColumnWidthMode::Reset);
+	CHECK_FALSE(MuleListCtrlViewPresets::TryGetViewPresetCommand(MP_HM_SAVE_PREFERENCES_NOW, preset, widthMode));
+}
+
+TEST_CASE("Mule list view preset profiles are complete and scoped to main grids")
+{
+	for (const MuleListCtrlViewPresets::SListControlViewPresetProfile &profile : MuleListCtrlViewPresets::kProfiles) {
+		CHECK(MuleListCtrlViewPresets::IsProfileValid(profile));
+		CHECK(BBPreferenceMigrationSeams::IsMainGridListControlName(profile.pszControlName));
+		CHECK(MuleListCtrlViewPresets::FindProfile(profile.pszControlName) == &profile);
+	}
+
+	const MuleListCtrlViewPresets::SListControlViewPresetProfile *download = MuleListCtrlViewPresets::FindProfile(_T("DownloadListCtrl"));
+	REQUIRE(download != nullptr);
+	CHECK(download->iStockHiddenColumnCount == 4);
+	CHECK(download->iExtendedHiddenColumnCount == 0);
+
+	const MuleListCtrlViewPresets::SListControlViewPresetProfile *search = MuleListCtrlViewPresets::FindProfile(_T("SearchListCtrl"));
+	REQUIRE(search != nullptr);
+	CHECK(search->iStockHiddenColumnCount == 3);
+	CHECK(search->iExtendedHiddenColumnCount == 2);
+
+	const MuleListCtrlViewPresets::SListControlViewPresetProfile *shared = MuleListCtrlViewPresets::FindProfile(_T("SharedFilesCtrl"));
+	REQUIRE(shared != nullptr);
+	CHECK(shared->iStockHiddenColumnCount == 9);
+	CHECK(shared->iExtendedHiddenColumnCount == 7);
+
+	const MuleListCtrlViewPresets::SListControlViewPresetProfile *server = MuleListCtrlViewPresets::FindProfile(_T("ServerListCtrl"));
+	REQUIRE(server != nullptr);
+	CHECK(server->iStockHiddenColumnCount == 2);
+	CHECK(server->iExtendedHiddenColumnCount == 0);
+	CHECK(MuleListCtrlViewPresets::FindProfile(_T("IPFilterDlg")) == nullptr);
+}
+
+TEST_CASE("Mule list view preset reset policy preserves widths only by request")
+{
+	CHECK(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("ColumnOrders"), MuleListCtrlViewPresets::EColumnWidthMode::Preserve));
+	CHECK(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("ColumnHidden"), MuleListCtrlViewPresets::EColumnWidthMode::Preserve));
+	CHECK(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("TableSortItem"), MuleListCtrlViewPresets::EColumnWidthMode::Preserve));
+	CHECK(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("TableSortAscending"), MuleListCtrlViewPresets::EColumnWidthMode::Preserve));
+	CHECK(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("SortHistory"), MuleListCtrlViewPresets::EColumnWidthMode::Preserve));
+	CHECK_FALSE(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("ColumnWidths"), MuleListCtrlViewPresets::EColumnWidthMode::Preserve));
+	CHECK(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("ColumnWidths"), MuleListCtrlViewPresets::EColumnWidthMode::Reset));
+	CHECK_FALSE(MuleListCtrlViewPresets::ShouldResetPresetSuffix(_T("Unknown"), MuleListCtrlViewPresets::EColumnWidthMode::Reset));
 }
 
 TEST_SUITE_END();
