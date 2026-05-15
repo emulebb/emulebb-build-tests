@@ -316,6 +316,12 @@ def control_rect(control_hwnd: int) -> dict[str, int]:
     return {"left": left, "top": top, "right": right, "bottom": bottom}
 
 
+def capture_dialog_screenshot(app: Application, dialog_hwnd: int, output_path: Path) -> str:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    app.window(handle=dialog_hwnd).capture_as_image().save(output_path)
+    return str(output_path)
+
+
 def assert_vertical_gap(upper_hwnd: int, lower_hwnd: int, minimum_pixels: int, label: str) -> None:
     upper = control_rect(upper_hwnd)
     lower = control_rect(lower_hwnd)
@@ -806,6 +812,15 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         set_edit_text(find_control(dialog_hwnd, IDC_THUMBNAIL_INTERVAL, "Edit"), "20")
 
         select_page(dialog_hwnd, "Web Interface")
+        web_interface_screenshot = artifacts_dir / args.web_interface_screenshot_name
+        report["checks"]["web_interface_screenshot"] = {
+            "path": capture_dialog_screenshot(app, dialog_hwnd, web_interface_screenshot),
+            "port": control_rect(find_control(dialog_hwnd, IDC_WSPORT, "Edit")),
+            "bind_address": control_rect(find_control(dialog_hwnd, IDC_WEBBINDADDR, "Edit")),
+            "template": control_rect(find_control(dialog_hwnd, IDC_TMPLPATH, "Edit")),
+            "max_upload": control_rect(find_control(dialog_hwnd, IDC_WS_MAXFILEUPLOAD, "Edit")),
+            "allowed_ips": control_rect(find_control(dialog_hwnd, IDC_WS_ALLOWEDIPS, "Edit")),
+        }
         ensure_checkbox(find_control(dialog_hwnd, IDC_WSENABLED, "Button"), True)
         set_edit_text(find_control(dialog_hwnd, IDC_WSPORT, "Edit"), str(rest_port))
         set_edit_text(find_control(dialog_hwnd, IDC_WEBBINDADDR, "Edit"), "127.0.0.1")
@@ -954,6 +969,7 @@ def main() -> None:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
     parser.add_argument("--directories-tree-stress", action="store_true")
+    parser.add_argument("--web-interface-screenshot-name", default="web-interface.png")
     args = parser.parse_args()
 
     paths = harness_cli_common.prepare_run_paths(
