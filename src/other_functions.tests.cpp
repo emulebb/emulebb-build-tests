@@ -297,6 +297,21 @@ TEST_CASE("Download filename normalization falls back when cleanup empties the n
 	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("\t\t"))) == CString(_T("download")));
 }
 
+TEST_CASE("Download filename majority candidates reject fallback-only names")
+{
+	CString normalized;
+	CHECK_FALSE(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T("")), normalized));
+	CHECK_FALSE(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T("...   ")), normalized));
+	CHECK_FALSE(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T("\t\t")), normalized));
+	CHECK_FALSE(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T("++__==")), normalized));
+	CHECK_FALSE(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T(".txt")), normalized));
+
+	CHECK(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T(" download... ")), normalized));
+	CHECK(normalized == CString(_T("download")));
+	CHECK(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T("  bad__name .txt. ")), normalized));
+	CHECK(normalized == CString(_T("bad name.txt")));
+}
+
 TEST_CASE("Always-on download normalization does not strip prettify cleanup tokens")
 {
 	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("shared_file.txt"))) == CString(_T("shared file.txt")));
