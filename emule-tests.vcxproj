@@ -150,6 +150,7 @@
     <ClCompile Include="src\client_credits.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
     <ClCompile Include="src\client_socket_lifetime.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
     <ClCompile Include="src\client_udp_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientUDPSocketSeams.h')" />
+    <ClCompile Include="src\category_dialog.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CategoryDialogSeams.h')" />
     <ClCompile Include="src\config_default_files.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ConfigDefaultFilesSeams.h')" />
     <ClCompile Include="src\config_startup_backup.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h')" />
     <ClCompile Include="src\collection.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
@@ -269,6 +270,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BackgroundRefreshSeams.h" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h" Condition="Exists('$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\CategoryDialogSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CategoryDialogSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ClientCreditsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CompressionBufferSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h')" />
