@@ -909,6 +909,7 @@ TEST_CASE("Web API validates transfer rename payloads")
 		request,
 		error));
 	CHECK_EQ(request.strName, "renamed.bin");
+	CHECK(request.bExplicitUserRename);
 
 	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseTransferRenameRequest(WebApiCommandSeams::json::object(), request, error));
