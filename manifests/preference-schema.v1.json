@@ -642,8 +642,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgGeneral.cpp:247:0:m_bAutoStart",
-        "PPgGeneral.cpp:248:0:m_bAutoStart",
+        "PPgGeneral.cpp:251:0:m_bAutoStart",
+        "PPgGeneral.cpp:252:0:m_bAutoStart",
+        "PPgGeneral.cpp:253:0:m_bAutoStart",
         "PPgGeneral.cpp:94:0:m_bAutoStart"
       ],
       "restBindings": [],
@@ -6097,7 +6098,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgGeneral.cpp:242:0:m_bPreventStandby",
+        "PPgGeneral.cpp:242:0:GetPreventStandby",
+        "PPgGeneral.cpp:243:0:m_bPreventStandby",
+        "PPgGeneral.cpp:244:0:GetPreventStandby",
         "PPgGeneral.cpp:96:0:GetPreventStandby"
       ],
       "restBindings": [],
@@ -7581,7 +7584,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgGeneral.cpp:245:0:splashscreen",
+        "PPgGeneral.cpp:248:0:splashscreen",
         "PPgGeneral.cpp:92:0:splashscreen"
       ],
       "restBindings": [],
@@ -10264,7 +10267,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgGeneral.cpp:335:0:GetLangDLLNameByID"
+        "PPgGeneral.cpp:345:0:GetLangDLLNameByID"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: langdllnamebyid."
@@ -10290,7 +10293,7 @@
       "uiBindingIds": [
         "PPgGeneral.cpp:210:0:GetLanguageID",
         "PPgGeneral.cpp:211:0:SetLanguageID",
-        "PPgGeneral.cpp:329:0:GetLanguageID",
+        "PPgGeneral.cpp:339:0:GetLanguageID",
         "PPgGeneral.cpp:67:0:GetLanguageID"
       ],
       "restBindings": [],
@@ -10337,8 +10340,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgGeneral.cpp:330:0:IsLanguageSupported",
-        "PPgGeneral.cpp:350:0:IsLanguageSupported"
+        "PPgGeneral.cpp:340:0:IsLanguageSupported",
+        "PPgGeneral.cpp:360:0:IsLanguageSupported"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: languagesupported."
@@ -10363,7 +10366,7 @@
       "uiBindingIds": [
         "PPgDirectories.cpp:164:0:GetMuleDirectory",
         "PPgDirectories.cpp:265:0:GetMuleDirectory",
-        "PPgGeneral.cpp:349:0:GetMuleDirectory",
+        "PPgGeneral.cpp:359:0:GetMuleDirectory",
         "PPgSecurity.cpp:132:0:GetMuleDirectory",
         "PPgSecurity.cpp:332:0:GetMuleDirectory",
         "PPgServer.cpp:149:0:GetMuleDirectory",
@@ -11973,7 +11976,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgGeneral.cpp:246:0:startMinimized",
+        "PPgGeneral.cpp:249:0:startMinimized",
         "PPgGeneral.cpp:93:0:startMinimized"
       ],
       "restBindings": [],
@@ -12295,7 +12298,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgGeneral.cpp:152:0:GetUpdateDays",
-        "PPgGeneral.cpp:244:0:SetUpdateDays"
+        "PPgGeneral.cpp:247:0:SetUpdateDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: updatedays."
@@ -12318,7 +12321,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgGeneral.cpp:243:0:updatenotify",
+        "PPgGeneral.cpp:246:0:updatenotify",
         "PPgGeneral.cpp:91:0:updatenotify"
       ],
       "restBindings": [],
@@ -17522,10 +17525,24 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:242:0:m_bPreventStandby",
+      "id": "PPgGeneral.cpp:242:0:GetPreventStandby",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
       "line": 242,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetPreventStandby",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "PreventStandby"
+      ]
+    },
+    {
+      "id": "PPgGeneral.cpp:243:0:m_bPreventStandby",
+      "page": "PPgGeneral.cpp",
+      "dialogId": "IDD_PPG_GENERAL",
+      "line": 243,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bPreventStandby",
@@ -17540,10 +17557,24 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:243:0:updatenotify",
+      "id": "PPgGeneral.cpp:244:0:GetPreventStandby",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 243,
+      "line": 244,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetPreventStandby",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "PreventStandby"
+      ]
+    },
+    {
+      "id": "PPgGeneral.cpp:246:0:updatenotify",
+      "page": "PPgGeneral.cpp",
+      "dialogId": "IDD_PPG_GENERAL",
+      "line": 246,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "updatenotify",
@@ -17558,10 +17589,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:244:0:SetUpdateDays",
+      "id": "PPgGeneral.cpp:247:0:SetUpdateDays",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 244,
+      "line": 247,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetUpdateDays",
@@ -17576,10 +17607,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:245:0:splashscreen",
+      "id": "PPgGeneral.cpp:248:0:splashscreen",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 245,
+      "line": 248,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "splashscreen",
@@ -17594,10 +17625,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:246:0:startMinimized",
+      "id": "PPgGeneral.cpp:249:0:startMinimized",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 246,
+      "line": 249,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "startMinimized",
@@ -17612,28 +17643,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:247:0:m_bAutoStart",
+      "id": "PPgGeneral.cpp:251:0:m_bAutoStart",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 247,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bAutoStart",
-      "controlIds": [
-        "IDC_STARTWIN"
-      ],
-      "directControlIds": [
-        "IDC_STARTWIN"
-      ],
-      "schemaIds": [
-        "AutoStart"
-      ]
-    },
-    {
-      "id": "PPgGeneral.cpp:248:0:m_bAutoStart",
-      "page": "PPgGeneral.cpp",
-      "dialogId": "IDD_PPG_GENERAL",
-      "line": 248,
+      "line": 251,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bAutoStart",
@@ -17644,10 +17657,38 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:329:0:GetLanguageID",
+      "id": "PPgGeneral.cpp:252:0:m_bAutoStart",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 329,
+      "line": 252,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bAutoStart",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "AutoStart"
+      ]
+    },
+    {
+      "id": "PPgGeneral.cpp:253:0:m_bAutoStart",
+      "page": "PPgGeneral.cpp",
+      "dialogId": "IDD_PPG_GENERAL",
+      "line": 253,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bAutoStart",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "AutoStart"
+      ]
+    },
+    {
+      "id": "PPgGeneral.cpp:339:0:GetLanguageID",
+      "page": "PPgGeneral.cpp",
+      "dialogId": "IDD_PPG_GENERAL",
+      "line": 339,
       "function": "OnLangChange",
       "access": "read",
       "ownerExpression": "GetLanguageID",
@@ -17658,10 +17699,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:330:0:IsLanguageSupported",
+      "id": "PPgGeneral.cpp:340:0:IsLanguageSupported",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 330,
+      "line": 340,
       "function": "OnLangChange",
       "access": "read",
       "ownerExpression": "IsLanguageSupported",
@@ -17672,10 +17713,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:335:0:GetLangDLLNameByID",
+      "id": "PPgGeneral.cpp:345:0:GetLangDLLNameByID",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 335,
+      "line": 345,
       "function": "OnLangChange",
       "access": "read",
       "ownerExpression": "GetLangDLLNameByID",
@@ -17686,10 +17727,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:349:0:GetMuleDirectory",
+      "id": "PPgGeneral.cpp:359:0:GetMuleDirectory",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 349,
+      "line": 359,
       "function": "OnLangChange",
       "access": "read",
       "ownerExpression": "GetMuleDirectory",
@@ -17700,10 +17741,10 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:350:0:IsLanguageSupported",
+      "id": "PPgGeneral.cpp:360:0:IsLanguageSupported",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
-      "line": 350,
+      "line": 360,
       "function": "OnLangChange",
       "access": "read",
       "ownerExpression": "IsLanguageSupported",

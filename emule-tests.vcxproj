@@ -226,6 +226,7 @@
     <ClCompile Include="src\socket_io.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SocketIoSeams.h')" />
     <ClCompile Include="src\socket_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SocketPolicySeams.h')" />
     <ClCompile Include="src\speed_quick_actions.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SpeedQuickActionsSeams.h')" />
+    <ClCompile Include="src\standby_prevention.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\StandbyPreventionSeams.h')" />
     <ClCompile Include="src\udp_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UDPSocketSeams.h')" />
     <ClCompile Include="src\startup_config_override.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\StartupConfigOverride.h')" />
     <ClCompile Include="src\status_bar_info.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\StatusBarInfo.h')" />
