@@ -88,8 +88,11 @@ TEST_CASE("Mule list view preset profiles are complete and scoped to main grids"
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *download = MuleListCtrlViewPresets::FindProfile(_T("DownloadListCtrl"));
 	REQUIRE(download != nullptr);
+	CHECK(download->iColumnCount == 19);
 	CHECK(download->iStockHiddenColumnCount == 4);
 	CHECK(download->iExtendedHiddenColumnCount == 0);
+	CHECK(download->piExtendedOrder[9] == 9);
+	CHECK(download->piExtendedOrder[18] == 18);
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *search = MuleListCtrlViewPresets::FindProfile(_T("SearchListCtrl"));
 	REQUIRE(search != nullptr);

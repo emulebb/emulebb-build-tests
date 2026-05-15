@@ -61,4 +61,24 @@ TEST_CASE("Search trust hint compares by bucket then score")
 	CHECK(SearchTrustHintSeams::CompareTrustHints(lowScore, lowScore) == 0);
 }
 
+TEST_CASE("Search trust hint classifies fake-file reason codes")
+{
+	using SearchTrustHintSeams::ExplanationReason;
+
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("multiple_names") == ExplanationReason::MultipleNames);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("bad_signal_name") == ExplanationReason::BadSignalName);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("bad_signal_comment") == ExplanationReason::BadSignalComment);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("header_extension_mismatch") == ExplanationReason::HeaderExtensionMismatch);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("executable_masquerade") == ExplanationReason::ExecutableMasquerade);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("archive_masquerade") == ExplanationReason::ArchiveMasquerade);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("pending_header_check") == ExplanationReason::PendingHeaderCheck);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("claimed_type_mismatch") == ExplanationReason::ClaimedTypeMismatch);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("spam_score") == ExplanationReason::SpamScore);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("spam_status") == ExplanationReason::SpamStatus);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("bad_rating") == ExplanationReason::BadRating);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("fake_rating") == ExplanationReason::FakeRating);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("multiple_aich") == ExplanationReason::MultipleAich);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("future_reason") == ExplanationReason::Unknown);
+}
+
 TEST_SUITE_END();
