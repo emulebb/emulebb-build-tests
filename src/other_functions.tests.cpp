@@ -192,6 +192,22 @@ TEST_CASE("Other-functions seam routes deep unicode deletes through the recycle-
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(filePath));
 }
 
+TEST_CASE("Other-functions seam quotes Windows autorun commands")
+{
+	CHECK(OtherFunctionsSeams::BuildAutoStartRunCommand(CString(_T(""))).IsEmpty());
+	CHECK(OtherFunctionsSeams::BuildAutoStartRunCommand(CString(_T("C:\\Program Files\\eMule BB\\eMule.exe")))
+		== CString(_T("\"C:\\Program Files\\eMule BB\\eMule.exe\" -AutoStart")));
+}
+
+TEST_CASE("Other-functions seam keeps debug builds from writing autorun registry state")
+{
+#ifdef _DEBUG
+	CHECK_FALSE(OtherFunctionsSeams::ShouldWriteAutoStartRegistry());
+#else
+	CHECK(OtherFunctionsSeams::ShouldWriteAutoStartRegistry());
+#endif
+}
+
 TEST_CASE("Path-helper seam grows module-path buffers past MAX_PATH")
 {
 	const CString strExpected = CString(_T("C:\\module-root\\")) + RepeatPathFragment(_T("segment\\"), 80) + CString(_T("emule.exe"));
