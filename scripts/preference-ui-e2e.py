@@ -73,6 +73,7 @@ IDC_DD = 2799
 IDC_AUTOUPDATE_IPFILTER = 3070
 IDC_IPFILTERPERIOD = 3072
 IDC_ENABLE_IPFILTER = 3093
+IDC_IPFILTER_STATS = 3095
 IDC_UPDATEURL = 2797
 IDC_THUMBNAIL_FFMPEG = 3087
 IDC_THUMBNAIL_INTERVAL = 3090
@@ -103,6 +104,14 @@ MEM_RELEASE = 0x8000
 PAGE_READWRITE = 0x04
 
 TWEAKS_LOGGING_GROUP_LABEL = "Logging & Diagnostics"
+
+IP_FILTER_UPDATE_URL_DEFAULTS = (
+    "https://upd.emule-security.org/ipfilter.zip",
+    "http://upd.emule-security.org/ipfilter.zip",
+    "https://emuling.gitlab.io/ipfilter.zip",
+    "https://github.com/DavidMoore/ipfilter/releases/download/lists/ipfilter.zip",
+    "https://raw.githubusercontent.com/Naunter/BT_BlockLists/master/bt_blocklists.gz",
+)
 
 TWEAKS_EXPECTED_LABELS = (
     TWEAKS_LOGGING_GROUP_LABEL,
@@ -656,6 +665,16 @@ def assert_ini_values(preferences_path: Path, expected: dict[str, dict[str, str]
         raise AssertionError("Persisted preferences mismatch:\n" + "\n".join(mismatches))
 
 
+def read_ip_filter_url_history(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return [line.strip() for line in path.read_text(encoding="utf-16").splitlines() if line.strip()]
+
+
+def write_ip_filter_url_history(path: Path, urls: list[str]) -> None:
+    path.write_text("".join(f"{url}\r\n" for url in urls), encoding="utf-16")
+
+
 def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: argparse.Namespace) -> dict[str, object]:
     require_pywinauto()
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
@@ -669,6 +688,8 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
     rest_port = rest_smoke.choose_listen_port()
     config_dir = Path(profile["config_dir"])
     preferences_path = config_dir / "preferences.ini"
+    ip_filter_url_history_path = config_dir / "AC_IPFilterUpdateURLs.dat"
+    ip_filter_url_history_path.unlink(missing_ok=True)
     perf_log_file = artifacts_dir / "perf-ui-e2e.log"
     fake_ffmpeg = artifacts_dir / "ffmpeg.exe"
     fake_ffmpeg.write_bytes(b"fake ffmpeg executable for preference validation")
@@ -714,13 +735,30 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         ip_filter_enabled = find_control(dialog_hwnd, IDC_ENABLE_IPFILTER, "Button")
         ip_filter_level = find_control(dialog_hwnd, IDC_FILTERLEVEL, "Edit")
         ip_filter_servers = find_control(dialog_hwnd, IDC_FILTERSERVERBYIPFILTER, "Button")
+        ip_filter_stats = find_control(dialog_hwnd, IDC_IPFILTER_STATS, "Static")
+        wait_for(
+            lambda: "Status: Enabled" in get_control_text(ip_filter_stats) and "Rules loaded:" in get_control_text(ip_filter_stats),
+            timeout=2.0,
+            interval=0.1,
+            description="enabled IP filter stats text",
+        )
         ensure_checkbox(ip_filter_enabled, True)
         assert_control_enabled(ip_filter_level, True, "IP filter level")
         assert_control_enabled(ip_filter_servers, True, "Filter servers too")
         ensure_checkbox(ip_filter_enabled, False)
+        wait_for(
+            lambda: "Status: Disabled" in get_control_text(ip_filter_stats),
+            timeout=2.0,
+            interval=0.1,
+            description="disabled IP filter stats text",
+        )
         assert_control_enabled(ip_filter_level, False, "IP filter level")
         assert_control_enabled(ip_filter_servers, False, "Filter servers too")
-        report["checks"]["ip_filter_enabled_toggle"] = {"persisted": False, "dependent_controls_disabled": True}
+        report["checks"]["ip_filter_enabled_toggle"] = {
+            "persisted": False,
+            "dependent_controls_disabled": True,
+            "stats_text": get_control_text(ip_filter_stats),
+        }
         update_url = find_control(dialog_hwnd, IDC_UPDATEURL, "Edit")
         update_url_parent = win32gui.GetParent(update_url)
         ip_filter_update_url = "http://upd.emule-security.org/ipfilter.zip"
@@ -823,6 +861,22 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         }
         assert_ini_values(preferences_path, expected)
         report["checks"]["persisted_preferences"] = expected
+        seeded_history = read_ip_filter_url_history(ip_filter_url_history_path)
+        if seeded_history != list(IP_FILTER_UPDATE_URL_DEFAULTS):
+            raise AssertionError(f"IP filter URL history defaults mismatch: {seeded_history!r}.")
+        report["checks"]["ip_filter_update_url_history_seed"] = seeded_history
+
+        custom_history = ["https://example.invalid/custom-ipfilter.gz"]
+        write_ip_filter_url_history(ip_filter_url_history_path, custom_history)
+        dialog_hwnd = open_preferences(main_window.handle, process_id)
+        select_page(dialog_hwnd, "Security")
+        click_button(find_control(dialog_hwnd, IDCANCEL, "Button"))
+        wait_for(lambda: not win32gui.IsWindow(dialog_hwnd), timeout=20.0, interval=0.2, description="Preferences dialog close after history preserve check")
+        dialog_hwnd = None
+        preserved_history = read_ip_filter_url_history(ip_filter_url_history_path)
+        if preserved_history != custom_history:
+            raise AssertionError(f"Non-empty IP filter URL history was changed: {preserved_history!r}.")
+        report["checks"]["ip_filter_update_url_history_preserve"] = preserved_history
         report["status"] = "passed"
     except Exception as exc:
         pending_error = exc
