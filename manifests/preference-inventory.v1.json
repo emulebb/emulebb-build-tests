@@ -426,6 +426,28 @@
       "notes": ""
     },
     {
+      "id": "AutoBroadbandIO",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "AutoBroadbandIO",
+      "sourceExpression": "_T(\"AutoBroadbandIO\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
       "id": "AutoCat",
       "storageFile": "Category.ini",
       "sections": [

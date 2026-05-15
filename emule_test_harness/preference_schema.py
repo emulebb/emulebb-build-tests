@@ -37,6 +37,7 @@ REST_FIELD_TO_SCHEMA_ID = {
     "safeServerConnect": "SafeServerConnect",
     "networkKademlia": "NetworkKademlia",
     "networkEd2k": "NetworkED2K",
+    "autoBroadbandIo": "AutoBroadbandIO",
 }
 
 
@@ -81,6 +82,7 @@ OWNER_TOKEN_TO_SCHEMA_ID = {
     "networked2k": "NetworkED2K",
     "networkkademlia": "NetworkKademlia",
     "safeserverconnect": "SafeServerConnect",
+    "autobroadbandioenabled": "AutoBroadbandIO",
     "exitonbindinterfaceloss": "ExitOnBindInterfaceLoss",
     "exitonbindinterfacelossenabled": "ExitOnBindInterfaceLoss",
     "port": "Port::<default>",
