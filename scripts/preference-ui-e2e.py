@@ -44,6 +44,8 @@ generated_fixture = load_local_module("create_long_paths_tree", "create-long-pat
 
 WM_COMMAND = 0x0111
 WM_SETTEXT = 0x000C
+WM_GETTEXT = 0x000D
+WM_GETTEXTLENGTH = 0x000E
 WM_CHAR = 0x0102
 BM_CLICK = 0x00F5
 BM_GETCHECK = 0x00F0
@@ -67,6 +69,7 @@ IDC_WS_ALLOWEDIPS = 3069
 IDC_SHARESELECTOR = 2266
 IDC_FILTERLEVEL = 2543
 IDC_FILTERSERVERBYIPFILTER = 2626
+IDC_DD = 2799
 IDC_AUTOUPDATE_IPFILTER = 3070
 IDC_IPFILTERPERIOD = 3072
 IDC_ENABLE_IPFILTER = 3093
@@ -289,6 +292,13 @@ def set_edit_text(edit_hwnd: int, text: str) -> None:
     win32gui.SendMessage(edit_hwnd, WM_SETTEXT, 0, text)
     win32gui.PostMessage(parent, WM_COMMAND, control_id | (EN_CHANGE << 16), edit_hwnd)
     time.sleep(0.1)
+
+
+def get_control_text(control_hwnd: int) -> str:
+    length = int(win32gui.SendMessage(control_hwnd, WM_GETTEXTLENGTH, 0, 0))
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    ctypes.windll.user32.SendMessageW(control_hwnd, WM_GETTEXT, len(buffer), buffer)
+    return buffer.value
 
 
 def get_process_handle(hwnd: int) -> int:
@@ -711,9 +721,12 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         assert_control_enabled(ip_filter_level, False, "IP filter level")
         assert_control_enabled(ip_filter_servers, False, "Filter servers too")
         report["checks"]["ip_filter_enabled_toggle"] = {"persisted": False, "dependent_controls_disabled": True}
-        set_edit_text(find_control(dialog_hwnd, IDC_UPDATEURL, "Edit"), "http://upd.emule-security.org/ipfilter.zip")
-        ensure_checkbox(find_control(dialog_hwnd, IDC_AUTOUPDATE_IPFILTER, "Button"), True)
-        set_edit_text(find_control(dialog_hwnd, IDC_IPFILTERPERIOD, "Edit"), "11")
+        update_url = find_control(dialog_hwnd, IDC_UPDATEURL, "Edit")
+        update_url_parent = win32gui.GetParent(update_url)
+        ip_filter_update_url = "http://upd.emule-security.org/ipfilter.zip"
+        set_edit_text(update_url, ip_filter_update_url)
+        ensure_checkbox(find_control(update_url_parent, IDC_AUTOUPDATE_IPFILTER, "Button"), True)
+        set_edit_text(find_control(update_url_parent, IDC_IPFILTERPERIOD, "Edit"), "11")
 
         select_page(dialog_hwnd, "Files")
         set_edit_text(find_control(dialog_hwnd, IDC_VIDEOPLAYER, "Edit"), "mpv.exe")
@@ -751,6 +764,26 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         set_tree_edit(tweaks_tree, "Maximum message sessions", "61")
 
         select_tree_item(tweaks_tree, find_tree_item_by_label(tweaks_tree, TWEAKS_LOGGING_GROUP_LABEL))
+        select_page(dialog_hwnd, "Security")
+        update_url = find_control(dialog_hwnd, IDC_UPDATEURL, "Edit")
+        update_url_parent = win32gui.GetParent(update_url)
+        update_url_dropdown = find_control(update_url_parent, IDC_DD, "Button")
+        if get_control_text(update_url) != ip_filter_update_url:
+            raise AssertionError(f"IP filter URL setup failed before dropdown command: {get_control_text(update_url)!r}.")
+        win32gui.SendMessage(update_url_parent, WM_COMMAND, IDC_DD, update_url_dropdown)
+        try:
+            wait_for(
+                lambda: get_control_text(update_url) == ip_filter_update_url,
+                timeout=2.0,
+                interval=0.1,
+                description="IP filter URL dropdown preservation",
+            )
+        except RuntimeError as exc:
+            raise AssertionError(
+                f"IP filter URL dropdown button cleared or changed the update URL: {get_control_text(update_url)!r}."
+            ) from exc
+        win32gui.SendMessage(update_url, win32con.WM_KEYDOWN, win32con.VK_ESCAPE, 0)
+        report["checks"]["ip_filter_update_url_dropdown"] = {"url_preserved": True}
         click_button(find_control(dialog_hwnd, IDOK, "Button"))
         wait_for(lambda: not win32gui.IsWindow(dialog_hwnd), timeout=20.0, interval=0.2, description="Preferences dialog close")
 
