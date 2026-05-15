@@ -40,6 +40,7 @@ def load_local_module(module_name: str, filename: str):
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
 rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
+generated_fixture = load_local_module("create_long_paths_tree", "create-long-paths-tree.py")
 
 WM_COMMAND = 0x0111
 WM_SETTEXT = 0x000C
@@ -63,6 +64,7 @@ IDC_TMPLPATH = 2682
 IDC_WEBBINDADDR = 3044
 IDC_WS_MAXFILEUPLOAD = 3067
 IDC_WS_ALLOWEDIPS = 3069
+IDC_SHARESELECTOR = 2266
 IDC_AUTOUPDATE_IPFILTER = 3070
 IDC_IPFILTERPERIOD = 3072
 IDC_UPDATEURL = 2797
@@ -75,6 +77,7 @@ TVM_GETNEXTITEM = TV_FIRST + 10
 TVM_SELECTITEM = TV_FIRST + 11
 TVM_ENSUREVISIBLE = TV_FIRST + 20
 TVM_GETITEMW = TV_FIRST + 62
+TVE_COLLAPSE = 0x0001
 TVE_EXPAND = 0x0002
 TVGN_ROOT = 0
 TVGN_NEXT = 1
@@ -365,8 +368,96 @@ def find_tree_item_by_label(tree_hwnd: int, label: str) -> int:
     raise RuntimeError(f"Tree item label was not found: {label!r}.")
 
 
-def select_tree_item(tree_hwnd: int, item: int) -> None:
+def iter_tree_siblings(tree_hwnd: int, first_item: int):
+    item = first_item
+    while item:
+        yield item
+        item = tree_get_next(tree_hwnd, item, TVGN_NEXT)
+
+
+def expand_tree_item(tree_hwnd: int, item: int, delay_seconds: float = 0.15) -> None:
     win32gui.SendMessage(tree_hwnd, TVM_EXPAND, TVE_EXPAND, item)
+    time.sleep(delay_seconds)
+
+
+def collapse_tree_item(tree_hwnd: int, item: int, delay_seconds: float = 0.05) -> None:
+    win32gui.SendMessage(tree_hwnd, TVM_EXPAND, TVE_COLLAPSE, item)
+    time.sleep(delay_seconds)
+
+
+def normalize_tree_label(label: str) -> str:
+    return label.rstrip("\\").lower()
+
+
+def tree_label_matches_path_component(label: str, component: str) -> bool:
+    target = component.rstrip("\\").lower()
+    normalized = normalize_tree_label(label)
+    if normalized == target:
+        return True
+    if target.endswith(":"):
+        return normalized.startswith(target)
+    return normalized.startswith(target + " ")
+
+
+def tree_label_matches_drive(label: str, drive_component: str) -> bool:
+    drive = drive_component.rstrip("\\").lower()
+    normalized = normalize_tree_label(label)
+    return normalized.startswith(drive) or f"({drive})" in normalized
+
+
+def find_tree_child_by_component(tree_hwnd: int, parent_item: int, component: str) -> int:
+    expand_tree_item(tree_hwnd, parent_item)
+
+    def resolve() -> int | None:
+        first_child = tree_get_next(tree_hwnd, parent_item, TVGN_CHILD)
+        if not first_child:
+            return None
+        for child in iter_tree_siblings(tree_hwnd, first_child):
+            if tree_label_matches_path_component(str(get_tree_item(tree_hwnd, child)["text"]), component):
+                return child
+        return None
+
+    return wait_for(resolve, timeout=20.0, interval=0.25, description=f"directory tree component {component!r}")
+
+
+def find_drive_tree_item(tree_hwnd: int, drive_component: str) -> int:
+    def resolve() -> int | None:
+        root = tree_get_next(tree_hwnd, 0, TVGN_ROOT)
+        queue: list[tuple[int, int]] = [(item, 0) for item in iter_tree_siblings(tree_hwnd, root)] if root else []
+        visited: set[int] = set()
+        while queue:
+            item, depth = queue.pop(0)
+            if item in visited:
+                continue
+            visited.add(item)
+            if tree_label_matches_drive(str(get_tree_item(tree_hwnd, item)["text"]), drive_component):
+                return item
+            if depth >= 3:
+                continue
+            expand_tree_item(tree_hwnd, item, delay_seconds=0.05)
+            first_child = tree_get_next(tree_hwnd, item, TVGN_CHILD)
+            if first_child:
+                queue.extend((child, depth + 1) for child in iter_tree_siblings(tree_hwnd, first_child))
+        return None
+
+    return wait_for(resolve, timeout=30.0, interval=0.25, description=f"directory tree drive {drive_component!r}")
+
+
+def select_directory_tree_path(tree_hwnd: int, directory_path: Path) -> int:
+    parts = list(directory_path.resolve().parts)
+    if not parts:
+        raise RuntimeError(f"Cannot select empty directory path: {directory_path}")
+    current_item = find_drive_tree_item(tree_hwnd, parts[0])
+    for component in parts[1:]:
+        current_item = find_tree_child_by_component(tree_hwnd, current_item, component)
+    win32gui.SendMessage(tree_hwnd, TVM_ENSUREVISIBLE, 0, current_item)
+    win32gui.SendMessage(tree_hwnd, TVM_SELECTITEM, TVGN_CARET, current_item)
+    time.sleep(0.15)
+    return current_item
+
+
+def select_tree_item(tree_hwnd: int, item: int) -> None:
+    expand_tree_item(tree_hwnd, item)
     win32gui.SendMessage(tree_hwnd, TVM_ENSUREVISIBLE, 0, item)
     win32gui.SendMessage(tree_hwnd, TVM_SELECTITEM, TVGN_CARET, item)
     time.sleep(0.3)
@@ -455,6 +546,65 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
     live_common.apply_live_network_policy(config_dir)
 
 
+def prepare_directories_tree_stress_fixture(seed_config_dir: Path, artifacts_dir: Path, shared_root: Path) -> dict[str, object]:
+    manifest = generated_fixture.ensure_fixture(shared_root, include_tree_stress=True)
+    subtree = manifest["subtrees"]["shared_files_tree_stress"]
+    subtree_root = Path(str(subtree["root_path"])).resolve()
+    shared_dirs = live_common.enumerate_recursive_directories(subtree_root)
+    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=shared_dirs)
+    sample_directories = [Path(str(path)).resolve() for path in subtree["sample_directories"]]
+    if subtree_root not in sample_directories:
+        sample_directories.insert(0, subtree_root)
+    return {
+        "profile": profile,
+        "subtree_root": subtree_root,
+        "shared_dirs": shared_dirs,
+        "sample_directories": sample_directories,
+        "expected_file_count": int(subtree["expected_file_count"]),
+        "expected_observable_nodes": int(subtree["expected_observable_nodes"]),
+    }
+
+
+def exercise_directories_tree_stress(dialog_hwnd: int, fixture: dict[str, object]) -> dict[str, object]:
+    start = time.perf_counter()
+    select_page(dialog_hwnd, "Directories")
+    tree_hwnd = find_control(dialog_hwnd, IDC_SHARESELECTOR, "SysTreeView32")
+    page_load_seconds = time.perf_counter() - start
+
+    sample_timings: list[dict[str, object]] = []
+    selected_items: list[int] = []
+    for directory_path in list(fixture["sample_directories"])[:8]:
+        select_start = time.perf_counter()
+        item = select_directory_tree_path(tree_hwnd, Path(str(directory_path)))
+        selected_items.append(item)
+        sample_timings.append(
+            {
+                "path": str(directory_path),
+                "elapsed_seconds": round(time.perf_counter() - select_start, 3),
+                "item_text": str(get_tree_item(tree_hwnd, item)["text"]),
+            }
+        )
+
+    churn_start = time.perf_counter()
+    for item in selected_items[:4]:
+        collapse_tree_item(tree_hwnd, item)
+        expand_tree_item(tree_hwnd, item)
+    tree_text_count = len(collect_tree_texts(tree_hwnd))
+
+    return {
+        "enabled": True,
+        "shared_directory_count": len(fixture["shared_dirs"]),
+        "expected_file_count": fixture["expected_file_count"],
+        "expected_observable_nodes": fixture["expected_observable_nodes"],
+        "subtree_root": str(fixture["subtree_root"]),
+        "page_load_seconds": round(page_load_seconds, 3),
+        "selected_sample_count": len(sample_timings),
+        "selection_timings": sample_timings,
+        "expand_collapse_elapsed_seconds": round(time.perf_counter() - churn_start, 3),
+        "expanded_tree_text_count": tree_text_count,
+    }
+
+
 def parse_ini_sections(path: Path) -> dict[str, dict[str, str]]:
     sections: dict[str, dict[str, str]] = {}
     current_section = ""
@@ -490,7 +640,12 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
     require_pywinauto()
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
-    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    directories_tree_fixture: dict[str, object] | None = None
+    if args.directories_tree_stress:
+        directories_tree_fixture = prepare_directories_tree_stress_fixture(seed_config_dir, artifacts_dir, Path(args.shared_root).resolve())
+        profile = directories_tree_fixture["profile"]
+    else:
+        profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
     rest_port = rest_smoke.choose_listen_port()
     config_dir = Path(profile["config_dir"])
     preferences_path = config_dir / "preferences.ini"
@@ -512,10 +667,18 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
             "profile_base": str(profile["profile_base"]),
             "config_dir": str(config_dir),
             "rest_port": rest_port,
+            "directories_tree_stress_enabled": bool(args.directories_tree_stress),
         },
         "checks": {},
         "cleanup": {},
     }
+    if directories_tree_fixture is not None:
+        report["launch_inputs"]["directories_tree_stress"] = {
+            "shared_root": str(Path(args.shared_root).resolve()),
+            "subtree_root": str(directories_tree_fixture["subtree_root"]),
+            "shared_directory_count": len(directories_tree_fixture["shared_dirs"]),
+            "expected_file_count": directories_tree_fixture["expected_file_count"],
+        }
 
     try:
         app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]), minimized_to_tray=False)
@@ -524,6 +687,8 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         report["launched_process_id"] = process_id
 
         dialog_hwnd = open_preferences(main_window.handle, process_id)
+        if directories_tree_fixture is not None:
+            report["checks"]["directories_tree_stress"] = exercise_directories_tree_stress(dialog_hwnd, directories_tree_fixture)
 
         select_page(dialog_hwnd, "Security")
         set_edit_text(find_control(dialog_hwnd, IDC_UPDATEURL, "Edit"), "http://upd.emule-security.org/ipfilter.zip")
@@ -645,6 +810,8 @@ def main() -> None:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
+    parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
+    parser.add_argument("--directories-tree-stress", action="store_true")
     args = parser.parse_args()
 
     paths = harness_cli_common.prepare_run_paths(
