@@ -389,6 +389,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["profile_suite_selection_applied"] is True
     assert [script_name(command) for command in commands] == [
         "shared-files-ui-e2e.py",
+        "search-ui-live.py",
         "rest-api-smoke.py",
         "rest-cold-start-dump-stress.py",
         "local-dumps-crash-smoke.py",
@@ -405,13 +406,20 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["rest_leak_churn_budget"] == "smoke"
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
-    assert summary["suites"][1]["rest_leak_churn_budget"] == "smoke"
-    assert summary["suites"][1]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
+    assert summary["search_ui"] == {"search_rounds": 3, "download_lifecycle_count": 2}
+    assert summary["suites"][1]["search_ui_search_rounds"] == 3
+    assert summary["suites"][1]["search_ui_download_lifecycle_count"] == 2
+    assert summary["suites"][2]["rest_leak_churn_budget"] == "smoke"
+    assert summary["suites"][2]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
 
     shared_files_command = commands[0]
     assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
 
-    rest_command = commands[1]
+    search_ui_command = commands[1]
+    assert option_values(search_ui_command, "--ui-search-rounds") == ["3"]
+    assert option_values(search_ui_command, "--ui-download-lifecycle-count") == ["2"]
+
+    rest_command = commands[2]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-stress-duration-seconds") == [
@@ -431,7 +439,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    cold_start_command = commands[2]
+    cold_start_command = commands[3]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
@@ -618,7 +626,41 @@ def test_search_ui_live_suite_is_selectable_with_live_network_policy(tmp_path: P
     assert [suite["name"] for suite in summary["suites"]] == ["search-ui-live"]
     assert script_name(commands[0]) == "search-ui-live.py"
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(commands[0], "--live-wire-inputs-file")
+    assert option_values(commands[0], "--ui-search-rounds") == ["1"]
+    assert option_values(commands[0], "--ui-download-lifecycle-count") == ["1"]
+    assert summary["search_ui"] == {"search_rounds": 1, "download_lifecycle_count": 1}
+    assert summary["suites"][0]["search_ui_search_rounds"] == 1
+    assert summary["suites"][0]["search_ui_download_lifecycle_count"] == 1
     assert "--skip-live-seed-refresh" not in commands[0]
+
+
+def test_stabilization_stress_profile_includes_expanded_search_ui_live(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--profile",
+            "stabilization-stress",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    suite_names = [suite["name"] for suite in summary["suites"]]
+    assert "search-ui-live" in suite_names
+    search_command = next(command for command in commands if script_name(command) == "search-ui-live.py")
+    assert option_values(search_command, "--ui-search-rounds") == ["3"]
+    assert option_values(search_command, "--ui-download-lifecycle-count") == ["2"]
+    assert option_values(search_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(search_command, "--live-wire-inputs-file")
+    assert summary["search_ui"] == {"search_rounds": 3, "download_lifecycle_count": 2}
 
 
 def test_suite_continues_after_failures_by_default(tmp_path: Path, monkeypatch) -> None:

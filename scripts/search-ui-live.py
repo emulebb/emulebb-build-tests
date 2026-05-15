@@ -37,6 +37,7 @@ harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common
 rest_smoke = load_local_module("rest_api_smoke_for_search_ui", "rest-api-smoke.py")
 
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL, refresh_seed_files
+from emule_test_harness import live_wire_inputs
 
 try:
     from pywinauto import Application
@@ -120,9 +121,11 @@ UNSAFE_DOWNLOAD_SUFFIXES = (
 UNSAFE_FILE_TYPES = {"program", "video"}
 
 DEFAULT_SEARCH_PLAN = (
-    {"query": "linux", "method": "server", "method_index": SEARCH_TYPE_ED2K_SERVER},
-    {"query": "ubuntu", "method": "kad", "method_index": SEARCH_TYPE_KADEMLIA},
+    {"method": "server", "method_index": SEARCH_TYPE_ED2K_SERVER},
+    {"method": "kad", "method_index": SEARCH_TYPE_KADEMLIA},
 )
+DEFAULT_UI_SEARCH_ROUNDS = 1
+DEFAULT_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
@@ -201,6 +204,48 @@ def write_json(path: Path, payload) -> None:
     """Writes a stable UTF-8 JSON artifact."""
 
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def build_search_plan(search_terms: tuple[str, ...], search_rounds: int) -> list[dict[str, object]]:
+    """Builds a live Search UI plan without exposing operator-owned terms in reports."""
+
+    if search_rounds <= 0:
+        raise ValueError("Search UI rounds must be greater than zero.")
+    if not search_terms:
+        raise ValueError("Search UI live testing requires at least one generic live-wire term.")
+
+    plan: list[dict[str, object]] = []
+    for round_index in range(search_rounds):
+        for method_index, method in enumerate(DEFAULT_SEARCH_PLAN):
+            term_index = (round_index * len(DEFAULT_SEARCH_PLAN) + method_index) % len(search_terms)
+            method_name = str(method["method"])
+            plan.append(
+                {
+                    "scenario": f"{method_name}-search-round-{round_index + 1}",
+                    "query": search_terms[term_index],
+                    "query_index": term_index,
+                    "query_count": len(search_terms),
+                    "round": round_index + 1,
+                    "method": method_name,
+                    "method_index": int(method["method_index"]),
+                }
+            )
+    return plan
+
+
+def summarize_search_plan(search_plan: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Returns a redacted summary of the UI search plan."""
+
+    return [
+        {
+            "scenario": row["scenario"],
+            "method": row["method"],
+            "round": row["round"],
+            "query_index": row["query_index"],
+            "query_count": row["query_count"],
+        }
+        for row in search_plan
+    ]
 
 
 def configure_search_ui_profile(config_dir: Path, app_exe: Path, api_key: str, port: int, bind_interface: str) -> None:
@@ -666,7 +711,7 @@ def exercise_transfer_lifecycle(
     return lifecycle
 
 
-def wait_for_ui_started_search(main_hwnd: int, previous_tab_count: int, query: str, method: str) -> dict[str, object]:
+def wait_for_ui_started_search(main_hwnd: int, previous_tab_count: int, scenario: str, method: str) -> dict[str, object]:
     """Waits until the Search tab control records the UI-started search."""
 
     observations: list[dict[str, object]] = []
@@ -684,7 +729,7 @@ def wait_for_ui_started_search(main_hwnd: int, previous_tab_count: int, query: s
             return {"tab_count": tab_count, "observations": observations}
         return None
 
-    return wait_for(resolve, timeout=30.0, interval=1.0, description=f"UI-started {method} search for {query!r}")
+    return wait_for(resolve, timeout=30.0, interval=1.0, description=f"UI-started {method} search scenario {scenario}")
 
 
 def wait_for_search_result_rows(main_hwnd: int, timeout_seconds: float) -> dict[str, object]:
@@ -741,14 +786,21 @@ def run_search_ui_live(
     app_exe: Path,
     seed_config_dir: Path,
     artifacts_dir: Path,
+    live_wire_inputs_file: Path,
     p2p_bind_interface_name: str,
     skip_live_seed_refresh: bool,
+    ui_search_rounds: int,
+    ui_download_lifecycle_count: int,
     network_ready_timeout_seconds: float,
     search_observation_timeout_seconds: float,
     transfer_materialization_timeout_seconds: float,
 ) -> dict[str, object]:
     """Runs the UI-driven search start scenario and returns the result report."""
 
+    if ui_download_lifecycle_count <= 0:
+        raise ValueError("Search UI download lifecycle count must be greater than zero.")
+    live_inputs = live_wire_inputs.load_live_wire_inputs(live_wire_inputs_file)
+    search_plan = build_search_plan(live_inputs.generic_open_terms, ui_search_rounds)
     rest_api_key = "search-ui-live-key"
     rest_port = choose_rest_listen_port()
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
@@ -772,12 +824,15 @@ def run_search_ui_live(
         "rest_base_url": base_url,
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh": seed_refresh,
+        "live_wire_inputs_file": str(live_inputs.path),
+        "live_wire_generic_terms": live_wire_inputs.summarize_terms(live_inputs.generic_open_terms),
         "p2p_bind_interface_name": p2p_bind_interface_name,
-        "search_plan": [
-            {"query": row["query"], "method": row["method"]}
-            for row in DEFAULT_SEARCH_PLAN
-        ],
+        "ui_search_rounds": ui_search_rounds,
+        "ui_download_lifecycle_count": ui_download_lifecycle_count,
+        "search_plan": summarize_search_plan(search_plan),
+        "scenarios": [],
         "searches": [],
+        "download_lifecycles": [],
     }
     app = None
     process_handle = 0
@@ -820,14 +875,18 @@ def run_search_ui_live(
 
         tab_hwnd = find_control(main_hwnd, IDC_TAB1, "SysTabControl32")
         previous_tab_count = get_tab_count(tab_hwnd)
-        for planned in DEFAULT_SEARCH_PLAN:
+        for planned in search_plan:
             query = str(planned["query"])
             method = str(planned["method"])
+            scenario = str(planned["scenario"])
             start_search_from_ui(main_hwnd, query, int(planned["method_index"]))
-            started = wait_for_ui_started_search(main_hwnd, previous_tab_count, query, method)
+            started = wait_for_ui_started_search(main_hwnd, previous_tab_count, scenario, method)
             previous_tab_count = int(started["tab_count"])
             search_report: dict[str, object] = {
-                "query": query,
+                "scenario": scenario,
+                "query_index": planned["query_index"],
+                "query_count": planned["query_count"],
+                "round": planned["round"],
                 "method": method,
                 "start_observations": started["observations"],
                 "tab_count_after_start": started["tab_count"],
@@ -840,37 +899,55 @@ def run_search_ui_live(
                 search_report["result_row_count"] = 0
                 search_report["result_error"] = f"{type(exc).__name__}: {exc}"
                 report["searches"].append(search_report)
+                report["scenarios"].append({**search_report, "status": "inconclusive"})
                 continue
 
             list_hwnd = find_control(main_hwnd, IDC_SEARCHLIST, "SysListView32")
             ui_download = trigger_paused_download_from_ui(process_handle, list_hwnd, int(result_rows["row_count"]))
             search_report["ui_download"] = ui_download
-            report["searches"].append(search_report)
             if not bool(ui_download.get("ok")):
+                report["searches"].append(search_report)
+                report["scenarios"].append({**search_report, "status": "inconclusive"})
                 continue
 
-            report["ui_download"] = ui_download
             candidate = ui_download["candidate"]
             assert isinstance(candidate, dict)
             transfer_hash = str(candidate["hash"])
-            report["ui_download_transfer"] = wait_for_transfer(
+            ui_download_transfer = wait_for_transfer(
                 base_url,
                 rest_api_key,
                 transfer_hash,
                 transfer_materialization_timeout_seconds,
             )
-            report["transfer_lifecycle"] = exercise_transfer_lifecycle(
+            transfer_lifecycle = exercise_transfer_lifecycle(
                 base_url,
                 rest_api_key,
                 transfer_hash,
                 transfer_materialization_timeout_seconds,
             )
-            break
+            lifecycle_report = {
+                "scenario": scenario,
+                "candidate_hash": transfer_hash,
+                "ui_download": ui_download,
+                "ui_download_transfer": ui_download_transfer,
+                "transfer_lifecycle": transfer_lifecycle,
+            }
+            report["download_lifecycles"].append(lifecycle_report)
+            report["ui_download"] = ui_download
+            report["ui_download_transfer"] = ui_download_transfer
+            report["transfer_lifecycle"] = transfer_lifecycle
+            search_report["download_lifecycle_index"] = len(report["download_lifecycles"])
+            report["searches"].append(search_report)
+            report["scenarios"].append({**search_report, "status": "passed"})
+            if len(report["download_lifecycles"]) >= ui_download_lifecycle_count:
+                break
 
-        if "ui_download_transfer" not in report:
+        if len(report["download_lifecycles"]) < ui_download_lifecycle_count:
             report["status"] = "inconclusive"
             report["inconclusive_reason"] = {
-                "reason": "no UI search yielded a safe downloadable candidate",
+                "reason": "too few UI searches yielded safe downloadable candidates",
+                "required_download_lifecycles": ui_download_lifecycle_count,
+                "actual_download_lifecycles": len(report["download_lifecycles"]),
                 "searches": report["searches"],
             }
             return report
@@ -914,7 +991,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
+    parser.add_argument(
+        "--live-wire-inputs-file",
+        default=str(live_wire_inputs.get_default_inputs_path(Path(__file__).resolve().parent.parent)),
+    )
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--ui-search-rounds", type=int, default=DEFAULT_UI_SEARCH_ROUNDS)
+    parser.add_argument("--ui-download-lifecycle-count", type=int, default=DEFAULT_UI_DOWNLOAD_LIFECYCLE_COUNT)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=240.0)
     parser.add_argument("--search-observation-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--transfer-materialization-timeout-seconds", type=float, default=60.0)
@@ -941,8 +1024,11 @@ def main(argv: list[str]) -> int:
             app_exe=paths.app_exe,
             seed_config_dir=seed_config_dir,
             artifacts_dir=artifacts_dir,
+            live_wire_inputs_file=live_wire_inputs.resolve_inputs_path(paths.repo_root, args.live_wire_inputs_file),
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             skip_live_seed_refresh=args.skip_live_seed_refresh,
+            ui_search_rounds=args.ui_search_rounds,
+            ui_download_lifecycle_count=args.ui_download_lifecycle_count,
             network_ready_timeout_seconds=args.network_ready_timeout_seconds,
             search_observation_timeout_seconds=args.search_observation_timeout_seconds,
             transfer_materialization_timeout_seconds=args.transfer_materialization_timeout_seconds,

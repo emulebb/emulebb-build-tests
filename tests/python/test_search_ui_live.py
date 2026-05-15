@@ -57,6 +57,38 @@ def test_parse_display_size_bytes_handles_common_units() -> None:
     assert module.parse_display_size_bytes("") is None
 
 
+def test_build_search_plan_rotates_live_wire_terms_without_reporting_text() -> None:
+    module = load_search_ui_module()
+
+    plan = module.build_search_plan(("alpha", "beta", "gamma"), 2)
+
+    assert [row["query"] for row in plan] == ["alpha", "beta", "gamma", "alpha"]
+    assert [(row["method"], row["round"]) for row in plan] == [
+        ("server", 1),
+        ("kad", 1),
+        ("server", 2),
+        ("kad", 2),
+    ]
+    assert module.summarize_search_plan(plan) == [
+        {"scenario": "server-search-round-1", "method": "server", "round": 1, "query_index": 0, "query_count": 3},
+        {"scenario": "kad-search-round-1", "method": "kad", "round": 1, "query_index": 1, "query_count": 3},
+        {"scenario": "server-search-round-2", "method": "server", "round": 2, "query_index": 2, "query_count": 3},
+        {"scenario": "kad-search-round-2", "method": "kad", "round": 2, "query_index": 0, "query_count": 3},
+    ]
+    assert "alpha" not in repr(module.summarize_search_plan(plan))
+
+
+def test_build_search_plan_rejects_empty_terms_and_rounds() -> None:
+    module = load_search_ui_module()
+
+    for terms, rounds in (((), 1), (("alpha",), 0)):
+        try:
+            module.build_search_plan(terms, rounds)
+        except ValueError:
+            continue
+        raise AssertionError("invalid Search UI live plan was accepted")
+
+
 def test_is_safe_ui_download_candidate_rejects_executables_video_and_bad_hash() -> None:
     module = load_search_ui_module()
     base = {

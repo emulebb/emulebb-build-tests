@@ -72,6 +72,8 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAUL
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
+DEFAULT_SEARCH_UI_SEARCH_ROUNDS = 1
+DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES = 1
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 3
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 2
@@ -88,6 +90,8 @@ STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 150
 STABILIZATION_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 15.0
 STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS = 10.0
 STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN = 20
+STABILIZATION_SEARCH_UI_SEARCH_ROUNDS = 3
+STABILIZATION_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 2
 
 
 @dataclass(frozen=True)
@@ -237,6 +241,7 @@ PROFILE_SUITE_NAMES = {
     ),
     "stabilization-stress": (
         "shared-files-ui",
+        "search-ui-live",
         "rest-api",
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
@@ -313,6 +318,10 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             )
         if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
             args.rest_cold_start_dump_stress_post_drain_seconds = STABILIZATION_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS
+        if args.search_ui_search_rounds == DEFAULT_SEARCH_UI_SEARCH_ROUNDS:
+            args.search_ui_search_rounds = STABILIZATION_SEARCH_UI_SEARCH_ROUNDS
+        if args.search_ui_download_lifecycle_count == DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT:
+            args.search_ui_download_lifecycle_count = STABILIZATION_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT
 
     if args.profile == "cpu-heavy":
         if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
@@ -379,6 +388,8 @@ def build_suite_command(
     rest_stop_start_after_churn: bool = False,
     p2p_bind_interface_name: str = "hide.me",
     live_wire_inputs_file: Path | None = None,
+    search_ui_search_rounds: int = DEFAULT_SEARCH_UI_SEARCH_ROUNDS,
+    search_ui_download_lifecycle_count: int = DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT,
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
     arr_prowlarr_search_stress_count: int = DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT,
     emule_connection_timeout_seconds: float = DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS,
@@ -483,8 +494,13 @@ def build_suite_command(
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_amutorrent_browser and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
-    if spec.is_search_ui_live and p2p_bind_interface_name:
-        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.is_search_ui_live:
+        if live_wire_inputs_file is not None:
+            command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
+        if p2p_bind_interface_name:
+            command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+        command.extend(["--ui-search-rounds", str(search_ui_search_rounds)])
+        command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
@@ -842,6 +858,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--live-wire-inputs-file",
         default=str(live_wire_inputs.get_default_inputs_path(Path(__file__).resolve().parent.parent)),
     )
+    parser.add_argument("--search-ui-search-rounds", type=int, default=DEFAULT_SEARCH_UI_SEARCH_ROUNDS)
+    parser.add_argument("--search-ui-download-lifecycle-count", type=int, default=DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT)
     return parser
 
 
@@ -918,6 +936,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Shared Files UI CPU profile max file MB must be greater than zero.")
     if args.shared_files_ui_cpu_profile_stack_min_hits <= 0:
         raise ValueError("Shared Files UI CPU profile stack min hits must be greater than zero.")
+    if args.search_ui_search_rounds <= 0:
+        raise ValueError("Search UI rounds must be greater than zero.")
+    if args.search_ui_download_lifecycle_count <= 0:
+        raise ValueError("Search UI download lifecycle count must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -974,6 +996,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
         "live_wire_inputs_file": str(live_wire_inputs_file),
+        "search_ui": {
+            "search_rounds": args.search_ui_search_rounds,
+            "download_lifecycle_count": args.search_ui_download_lifecycle_count,
+        },
         "shared_files_ui_scenarios": resolved_shared_files_ui_scenarios,
         "shared_files_ui_cpu_profile": {
             "enabled": bool(args.shared_files_ui_cpu_profile),
@@ -1084,6 +1110,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_stop_start_after_churn=args.rest_stop_start_after_churn,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             live_wire_inputs_file=live_wire_inputs_file,
+            search_ui_search_rounds=args.search_ui_search_rounds,
+            search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
             emule_connection_timeout_seconds=args.emule_connection_timeout_seconds,
@@ -1169,6 +1197,14 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                     "rest_download_trigger_count": args.rest_download_trigger_count,
                     "rest_search_method_override": args.rest_search_method_override,
                     "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",
+                }
+            )
+        if spec.is_search_ui_live:
+            result.update(
+                {
+                    "live_wire_inputs_file": str(live_wire_inputs_file),
+                    "search_ui_search_rounds": args.search_ui_search_rounds,
+                    "search_ui_download_lifecycle_count": args.search_ui_download_lifecycle_count,
                 }
             )
         if spec.is_prowlarr_emulebb or spec.is_arr_emulebb:
