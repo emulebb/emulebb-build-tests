@@ -189,6 +189,7 @@
     <ClCompile Include="src\mapped_file_reader.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
     <ClCompile Include="src\media_info_dll.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MediaInfoDllSeams.h')" />
     <ClCompile Include="src\modern_limits.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\FileBufferSlider.h')" />
+    <ClCompile Include="src\mule_list_ctrl.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MuleListCtrlSeams.h')" />
     <ClCompile Include="src\null_guard.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
     <ClCompile Include="src\other_functions.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\OtherFunctionsSeams.h')" />
     <ClCompile Include="src\web_api.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerJsonSeams.h')" />
