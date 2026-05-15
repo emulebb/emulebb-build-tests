@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -44,3 +45,22 @@ def test_bootstrap_and_ip_filter_defaults_are_https_only() -> None:
     assert "http://upd.emule-security.org/server.met" not in combined
     assert "http://upd.emule-security.org/nodes.dat" not in combined
     assert "http://upd.emule-security.org/ipfilter.zip" not in combined
+
+
+def test_server_met_dropdown_preserves_current_text() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+
+    server_wnd_cpp = (app_source / "ServerWnd.cpp").read_text(encoding="utf-8", errors="ignore")
+    server_wnd_h = (app_source / "ServerWnd.h").read_text(encoding="utf-8", errors="ignore")
+    on_dropdown = re.search(
+        r"void CServerWnd::OnDDClicked\(\)\s*\{(?P<body>.*?)\n\}",
+        server_wnd_cpp,
+        re.DOTALL,
+    )
+
+    assert on_dropdown is not None
+    assert "m_strServerMetUrlText" in server_wnd_h
+    assert "ON_MESSAGE(UM_RESTORE_SERVERMETURL, OnRestoreServerMetUrl)" in server_wnd_cpp
+    assert "PostMessage(UM_RESTORE_SERVERMETURL)" in on_dropdown.group("body")
+    assert 'SetWindowText(_T(""))' not in on_dropdown.group("body")
