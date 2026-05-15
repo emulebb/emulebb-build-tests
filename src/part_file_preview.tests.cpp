@@ -120,6 +120,11 @@ TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on p
 	CHECK(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(true, false));
 	CHECK_FALSE(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(false, false));
 	CHECK_FALSE(PartFilePreviewSeams::ShouldForceVideoThumbnailAttempt(true, true));
+	CHECK(PartFilePreviewSeams::kVideoThumbnailWorkerThreadPriority == THREAD_PRIORITY_LOWEST);
+	CHECK(PartFilePreviewSeams::ShouldStartVideoThumbnailWorker(false, true, false));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldStartVideoThumbnailWorker(true, true, false));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldStartVideoThumbnailWorker(false, false, false));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldStartVideoThumbnailWorker(false, true, true));
 
 	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(40ull * oneMegabyte, 40ull * oneMegabyte, hundredMegabytes));
 	CHECK_FALSE(PartFilePreviewSeams::ShouldRefreshVideoThumbnail(45ull * oneMegabyte, 40ull * oneMegabyte, hundredMegabytes));
