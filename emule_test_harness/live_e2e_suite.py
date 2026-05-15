@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import time
@@ -69,6 +70,8 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 30.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 60.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
+DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
+DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES = 1
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 3
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 2
@@ -238,6 +241,9 @@ PROFILE_SUITE_NAMES = {
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
     ),
+    "cpu-heavy": (
+        "shared-files-ui",
+    ),
 }
 LIVE_E2E_PROFILES = ("default", *PROFILE_SUITE_NAMES.keys())
 
@@ -307,6 +313,14 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             )
         if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
             args.rest_cold_start_dump_stress_post_drain_seconds = STABILIZATION_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS
+
+    if args.profile == "cpu-heavy":
+        if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
+            args.shared_files_ui_scenario = list(SHARED_FILES_UI_STRESS_SCENARIOS)
+        if args.shared_files_tree_stress_churn_cycles is None:
+            args.shared_files_tree_stress_churn_cycles = 80
+        args.shared_files_ui_cpu_profile = True
+        args.shared_files_ui_cpu_profile_stack = True
 
     if args.profile == "beta-release":
         if args.rest_cold_start_dump_stress_waves == DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES:
@@ -552,6 +566,89 @@ def run_suite_command(command: list[str]) -> int:
     return completed.returncode
 
 
+def should_profile_shared_files_ui_suite(spec: SuiteSpec, args: argparse.Namespace) -> bool:
+    """Returns whether the shared-files UI child suite should run under ETW CPU profiling."""
+
+    return spec.name == "shared-files-ui" and bool(args.shared_files_ui_cpu_profile)
+
+
+def run_suite_command_with_optional_cpu_profile(
+    command: list[str],
+    *,
+    spec: SuiteSpec,
+    args: argparse.Namespace,
+    child_artifacts_dir: Path,
+    app_exe: Path,
+) -> tuple[int, dict[str, object] | None]:
+    """Runs one child suite, optionally wrapped in a bounded xperf CPU profile."""
+
+    if not should_profile_shared_files_ui_suite(spec, args):
+        return run_suite_command(command), None
+
+    profile_paths = cpu_profile.build_cpu_profile_paths(child_artifacts_dir)
+    profile_result: dict[str, object] = {
+        "enabled": True,
+        "tool": "xperf",
+        "profile_paths": {
+            "etl": str(profile_paths.etl_path),
+            "detail": str(profile_paths.detail_path),
+            "summary": str(profile_paths.summary_path),
+            "stack": str(profile_paths.stack_path),
+        },
+        "max_file_mb": args.shared_files_ui_cpu_profile_max_file_mb,
+        "stack": bool(args.shared_files_ui_cpu_profile_stack),
+        "stack_min_hits": args.shared_files_ui_cpu_profile_stack_min_hits,
+    }
+    tools = cpu_profile.discover_cpu_profile_tools()
+    if not tools.xperf:
+        profile_result["status"] = "failed"
+        profile_result["error"] = "xperf was not found."
+        return run_suite_command(command), profile_result
+
+    pdb_path = cpu_profile.resolve_app_pdb_path(app_exe)
+    if args.shared_files_ui_cpu_profile_symbols_required and not pdb_path.is_file():
+        profile_result["status"] = "failed"
+        profile_result["error"] = f"Required app symbols were not found: {pdb_path}"
+        return run_suite_command(command), profile_result
+
+    start = cpu_profile.start_cpu_profile(
+        tools=tools,
+        paths=profile_paths,
+        max_file_mb=args.shared_files_ui_cpu_profile_max_file_mb,
+        timeout_seconds=30.0,
+    )
+    profile_result["start"] = start
+    return_code = run_suite_command(command)
+    stop = cpu_profile.stop_cpu_profile(tools=tools, paths=profile_paths, timeout_seconds=60.0)
+    profile_result["stop"] = stop
+
+    if start.get("return_code") == 0 and stop.get("return_code") == 0 and profile_paths.etl_path.is_file():
+        export = cpu_profile.export_cpu_profile(
+            tools=tools,
+            paths=profile_paths,
+            app_exe=app_exe,
+            timeout_seconds=90.0,
+            include_stack=bool(args.shared_files_ui_cpu_profile_stack),
+            stack_min_hits=args.shared_files_ui_cpu_profile_stack_min_hits,
+        )
+        detail_summary = cpu_profile.parse_xperf_profile_detail_file(profile_paths.detail_path)
+        stack_summary = (
+            cpu_profile.parse_xperf_stack_report_file(profile_paths.stack_path)
+            if args.shared_files_ui_cpu_profile_stack
+            else {"available": False, "reason": "stack export disabled"}
+        )
+        combined_summary = {"detail": detail_summary, "stack": stack_summary}
+        profile_paths.summary_path.parent.mkdir(parents=True, exist_ok=True)
+        profile_paths.summary_path.write_text(json.dumps(combined_summary, indent=2, sort_keys=True), encoding="utf-8")
+        profile_result["export"] = export
+        profile_result["summary"] = combined_summary
+        profile_result["status"] = "passed" if detail_summary.get("available") else "inconclusive"
+    else:
+        profile_result["status"] = "failed"
+
+    return return_code, profile_result
+
+
 def env_workspace_root_matches(workspace_root: Path) -> bool:
     """Returns whether EMULE_WORKSPACE_ROOT already covers a workspace child root."""
 
@@ -587,6 +684,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preference-ui-directories-tree-stress", action="store_true")
     parser.add_argument("--shared-files-ui-scenario", action="append", choices=SHARED_FILES_UI_SCENARIOS)
     parser.add_argument("--shared-files-tree-stress-churn-cycles", type=int)
+    parser.add_argument("--shared-files-ui-cpu-profile", action="store_true")
+    parser.add_argument(
+        "--shared-files-ui-cpu-profile-max-file-mb",
+        type=int,
+        default=DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB,
+    )
+    parser.add_argument("--shared-files-ui-cpu-profile-stack", action="store_true")
+    parser.add_argument(
+        "--shared-files-ui-cpu-profile-stack-min-hits",
+        type=int,
+        default=DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS,
+    )
+    parser.add_argument(
+        "--shared-files-ui-cpu-profile-symbols-required",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--profile", choices=LIVE_E2E_PROFILES, default="default")
     parser.add_argument("--fail-fast", action="store_true")
@@ -800,6 +914,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST cold-start dump stress CPU profile max file MB must be greater than zero.")
     if args.rest_cold_start_dump_stress_cpu_profile_stack_min_hits <= 0:
         raise ValueError("REST cold-start dump stress CPU profile stack min hits must be greater than zero.")
+    if args.shared_files_ui_cpu_profile_max_file_mb <= 0:
+        raise ValueError("Shared Files UI CPU profile max file MB must be greater than zero.")
+    if args.shared_files_ui_cpu_profile_stack_min_hits <= 0:
+        raise ValueError("Shared Files UI CPU profile stack min hits must be greater than zero.")
 
 
 def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str, object]:
@@ -857,6 +975,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
         "live_wire_inputs_file": str(live_wire_inputs_file),
         "shared_files_ui_scenarios": resolved_shared_files_ui_scenarios,
+        "shared_files_ui_cpu_profile": {
+            "enabled": bool(args.shared_files_ui_cpu_profile),
+            "max_file_mb": args.shared_files_ui_cpu_profile_max_file_mb,
+            "stack": bool(args.shared_files_ui_cpu_profile_stack),
+            "stack_min_hits": args.shared_files_ui_cpu_profile_stack_min_hits,
+            "symbols_required": bool(args.shared_files_ui_cpu_profile_symbols_required),
+        },
         "preference_ui_directories_tree_stress": bool(args.preference_ui_directories_tree_stress),
         "rest_coverage_budget": args.rest_coverage_budget,
         "rest_stress_budget": args.rest_stress_budget,
@@ -997,7 +1122,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
         )
         started = time.monotonic()
-        return_code = run_suite_command(command)
+        return_code, suite_cpu_profile = run_suite_command_with_optional_cpu_profile(
+            command,
+            spec=spec,
+            args=args,
+            child_artifacts_dir=child_artifacts_dir,
+            app_exe=paths.app_exe,
+        )
         suite_status = get_suite_status_from_return_code(return_code)
         result = {
             "name": spec.name,
@@ -1014,6 +1145,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             ),
             "uses_live_seed_refresh": bool(spec.uses_live_seed_refresh and not args.skip_live_seed_refresh),
         }
+        if suite_cpu_profile is not None:
+            result["cpu_profile"] = suite_cpu_profile
+            if suite_cpu_profile.get("status") == "failed" and suite_status == "passed":
+                suite_status = "failed"
+                result["status"] = suite_status
         if spec.name == "preference-ui":
             result["directories_tree_stress"] = bool(args.preference_ui_directories_tree_stress)
         if spec.is_rest_api:
