@@ -144,6 +144,7 @@
     <ClCompile Include="src\kad_guards.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\FastKad.h') and Exists('$(AppRoot)\srchybrid\kademlia\utils\NodesDatSupport.h') and Exists('$(AppRoot)\srchybrid\kademlia\utils\KadPublishGuard.h') and Exists('$(AppRoot)\srchybrid\kademlia\utils\SafeKad.h')" />
     <ClCompile Include="src\bind_runtime_loss_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BindRuntimeLossPolicy.h')" />
     <ClCompile Include="src\bind_startup_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BindStartupPolicy.h')" />
+    <ClCompile Include="src\background_refresh.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
     <ClCompile Include="src\community_core_divergence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueSeams.h')" />
     <ClCompile Include="src\compression_buffer.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
     <ClCompile Include="src\client_credits.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
@@ -265,6 +266,7 @@
     <ClInclude Include="include\TestSupport.h" />
     <ClInclude Include="$(AppRoot)\srchybrid\AICHSyncThreadSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AICHSyncThreadSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\BackgroundRefreshSeams.h" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h" Condition="Exists('$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ClientCreditsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CompressionBufferSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
