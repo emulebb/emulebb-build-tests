@@ -295,7 +295,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:345:0:GetWebAdminAllowedHiLevFunc"
+        "PPgWebServer.cpp:352:0:GetWebAdminAllowedHiLevFunc"
       ],
       "restBindings": [],
       "notes": ""
@@ -388,10 +388,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:344:0:GetWSApiKey",
-        "PPgWebServer.cpp:400:0:GetWSApiKey",
-        "PPgWebServer.cpp:401:0:SetWSApiKey",
-        "PPgWebServer.cpp:402:0:GetWSApiKey"
+        "PPgWebServer.cpp:351:0:GetWSApiKey",
+        "PPgWebServer.cpp:407:0:GetWSApiKey",
+        "PPgWebServer.cpp:408:0:SetWSApiKey",
+        "PPgWebServer.cpp:409:0:GetWSApiKey"
       ],
       "restBindings": [],
       "notes": ""
@@ -790,8 +790,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:428:0:GetWebBindAddr",
-        "PPgWebServer.cpp:429:0:SetWebBindAddr",
+        "PPgWebServer.cpp:435:0:GetWebBindAddr",
+        "PPgWebServer.cpp:436:0:SetWebBindAddr",
         "PPgWebServer.cpp:48:0:GetWebBindAddr"
       ],
       "restBindings": [],
@@ -3375,9 +3375,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:340:0:GetWebCertPath",
-        "PPgWebServer.cpp:377:0:GetWebCertPath",
-        "PPgWebServer.cpp:379:0:SetWebCertPath"
+        "PPgWebServer.cpp:347:0:GetWebCertPath",
+        "PPgWebServer.cpp:384:0:GetWebCertPath",
+        "PPgWebServer.cpp:386:0:SetWebCertPath"
       ],
       "restBindings": [],
       "notes": ""
@@ -3402,9 +3402,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:341:0:GetWebKeyPath",
-        "PPgWebServer.cpp:388:0:GetWebKeyPath",
-        "PPgWebServer.cpp:390:0:SetWebKeyPath"
+        "PPgWebServer.cpp:348:0:GetWebKeyPath",
+        "PPgWebServer.cpp:395:0:GetWebKeyPath",
+        "PPgWebServer.cpp:397:0:SetWebKeyPath"
       ],
       "restBindings": [],
       "notes": ""
@@ -4977,9 +4977,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:333:0:GetMaxWebUploadFileSizeMB",
-        "PPgWebServer.cpp:440:0:SetMaxWebUploadFileSizeMB",
-        "PPgWebServer.cpp:441:0:GetMaxWebUploadFileSizeMB"
+        "PPgWebServer.cpp:340:0:GetMaxWebUploadFileSizeMB",
+        "PPgWebServer.cpp:447:0:SetMaxWebUploadFileSizeMB",
+        "PPgWebServer.cpp:448:0:GetMaxWebUploadFileSizeMB"
       ],
       "restBindings": [],
       "notes": ""
@@ -5992,7 +5992,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:394:0:SetWSPass"
+        "PPgWebServer.cpp:401:0:SetWSPass"
       ],
       "restBindings": [],
       "notes": ""
@@ -6016,7 +6016,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:407:0:SetWSLowPass"
+        "PPgWebServer.cpp:414:0:SetWSLowPass"
       ],
       "restBindings": [],
       "notes": ""
@@ -6070,10 +6070,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:331:0:GetWSPort",
-        "PPgWebServer.cpp:414:0:GetWSPort",
-        "PPgWebServer.cpp:415:0:SetWSPort",
-        "PPgWebServer.cpp:474:0:GetWSPort"
+        "PPgWebServer.cpp:338:0:GetWSPort",
+        "PPgWebServer.cpp:421:0:GetWSPort",
+        "PPgWebServer.cpp:422:0:SetWSPort",
+        "PPgWebServer.cpp:481:0:GetWSPort"
       ],
       "restBindings": [],
       "notes": ""
@@ -8706,7 +8706,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:469:0:m_bAllowAdminHiLevFunc"
+        "PPgWebServer.cpp:476:0:m_bAllowAdminHiLevFunc"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: allowadminhilevfunc."
@@ -10370,7 +10370,7 @@
         "PPgSecurity.cpp:132:0:GetMuleDirectory",
         "PPgSecurity.cpp:332:0:GetMuleDirectory",
         "PPgServer.cpp:149:0:GetMuleDirectory",
-        "PPgWebServer.cpp:607:0:GetMuleDirectory"
+        "PPgWebServer.cpp:634:0:GetMuleDirectory"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ledirectory."
@@ -10394,8 +10394,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:326:0:GetLegacyWebUiEnabled",
-        "PPgWebServer.cpp:460:0:SetLegacyWebUiEnabled"
+        "PPgWebServer.cpp:333:0:GetLegacyWebUiEnabled",
+        "PPgWebServer.cpp:467:0:SetLegacyWebUiEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: legacywebuienabled."
@@ -12102,9 +12102,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:336:0:GetTemplate",
-        "PPgWebServer.cpp:367:0:SetTemplate",
-        "PPgWebServer.cpp:669:0:GetTemplate"
+        "PPgWebServer.cpp:343:0:GetTemplate",
+        "PPgWebServer.cpp:374:0:SetTemplate",
+        "PPgWebServer.cpp:696:0:GetTemplate"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: template."
@@ -12372,9 +12372,9 @@
       "uiBindingIds": [
         "PPgConnection.cpp:449:0:IsUPnPEnabled",
         "PPgConnection.cpp:575:0:IsUPnPEnabled",
-        "PPgWebServer.cpp:330:0:IsUPnPEnabled",
-        "PPgWebServer.cpp:473:1:IsUPnPEnabled",
-        "PPgWebServer.cpp:524:0:IsUPnPEnabled"
+        "PPgWebServer.cpp:337:0:IsUPnPEnabled",
+        "PPgWebServer.cpp:480:1:IsUPnPEnabled",
+        "PPgWebServer.cpp:533:0:IsUPnPEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: upnpenabled."
@@ -12637,9 +12637,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:325:0:GetWSIsEnabled",
-        "PPgWebServer.cpp:330:1:GetWSIsEnabled",
-        "PPgWebServer.cpp:459:0:SetWSIsEnabled"
+        "PPgWebServer.cpp:332:0:GetWSIsEnabled",
+        "PPgWebServer.cpp:337:1:GetWSIsEnabled",
+        "PPgWebServer.cpp:466:0:SetWSIsEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: wsisenabled."
@@ -12663,8 +12663,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:346:0:GetWSIsLowUserEnabled",
-        "PPgWebServer.cpp:463:0:SetWSIsLowUserEnabled"
+        "PPgWebServer.cpp:353:0:GetWSIsLowUserEnabled",
+        "PPgWebServer.cpp:470:0:SetWSIsLowUserEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: wsislowuserenabled."
@@ -13286,8 +13286,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:327:0:GetWebUseGzip",
-        "PPgWebServer.cpp:461:0:SetWebUseGzip"
+        "PPgWebServer.cpp:334:0:GetWebUseGzip",
+        "PPgWebServer.cpp:468:0:SetWebUseGzip"
       ],
       "restBindings": [],
       "notes": ""
@@ -13312,9 +13312,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:339:0:GetWebUseHttps",
-        "PPgWebServer.cpp:455:0:GetWebUseHttps",
-        "PPgWebServer.cpp:462:0:SetWebUseHttps"
+        "PPgWebServer.cpp:346:0:GetWebUseHttps",
+        "PPgWebServer.cpp:462:0:GetWebUseHttps",
+        "PPgWebServer.cpp:469:0:SetWebUseHttps"
       ],
       "restBindings": [],
       "notes": ""
@@ -13716,8 +13716,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:337:0:GetWebTimeoutMins",
-        "PPgWebServer.cpp:411:0:SetWebTimeoutMins"
+        "PPgWebServer.cpp:344:0:GetWebTimeoutMins",
+        "PPgWebServer.cpp:418:0:SetWebTimeoutMins"
       ],
       "restBindings": [],
       "notes": ""
@@ -13742,10 +13742,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgWebServer.cpp:329:0:m_bWebUseUPnP",
-        "PPgWebServer.cpp:361:0:GetWSUseUPnP",
-        "PPgWebServer.cpp:471:0:m_bWebUseUPnP",
-        "PPgWebServer.cpp:473:0:m_bWebUseUPnP"
+        "PPgWebServer.cpp:336:0:m_bWebUseUPnP",
+        "PPgWebServer.cpp:368:0:GetWSUseUPnP",
+        "PPgWebServer.cpp:478:0:m_bWebUseUPnP",
+        "PPgWebServer.cpp:480:0:m_bWebUseUPnP"
       ],
       "restBindings": [],
       "notes": ""
@@ -25316,10 +25316,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:325:0:GetWSIsEnabled",
+      "id": "PPgWebServer.cpp:332:0:GetWSIsEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 325,
+      "line": 332,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWSIsEnabled",
@@ -25334,10 +25334,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:326:0:GetLegacyWebUiEnabled",
+      "id": "PPgWebServer.cpp:333:0:GetLegacyWebUiEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 326,
+      "line": 333,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetLegacyWebUiEnabled",
@@ -25352,10 +25352,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:327:0:GetWebUseGzip",
+      "id": "PPgWebServer.cpp:334:0:GetWebUseGzip",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 327,
+      "line": 334,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWebUseGzip",
@@ -25370,10 +25370,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:329:0:m_bWebUseUPnP",
+      "id": "PPgWebServer.cpp:336:0:m_bWebUseUPnP",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 329,
+      "line": 336,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_bWebUseUPnP",
@@ -25388,10 +25388,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:330:0:IsUPnPEnabled",
+      "id": "PPgWebServer.cpp:337:0:IsUPnPEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 330,
+      "line": 337,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "IsUPnPEnabled",
@@ -25406,10 +25406,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:330:1:GetWSIsEnabled",
+      "id": "PPgWebServer.cpp:337:1:GetWSIsEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 330,
+      "line": 337,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWSIsEnabled",
@@ -25424,10 +25424,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:331:0:GetWSPort",
+      "id": "PPgWebServer.cpp:338:0:GetWSPort",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 331,
+      "line": 338,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWSPort",
@@ -25442,10 +25442,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:333:0:GetMaxWebUploadFileSizeMB",
+      "id": "PPgWebServer.cpp:340:0:GetMaxWebUploadFileSizeMB",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 333,
+      "line": 340,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetMaxWebUploadFileSizeMB",
@@ -25460,10 +25460,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:336:0:GetTemplate",
+      "id": "PPgWebServer.cpp:343:0:GetTemplate",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 336,
+      "line": 343,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetTemplate",
@@ -25478,10 +25478,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:337:0:GetWebTimeoutMins",
+      "id": "PPgWebServer.cpp:344:0:GetWebTimeoutMins",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 337,
+      "line": 344,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWebTimeoutMins",
@@ -25496,10 +25496,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:339:0:GetWebUseHttps",
+      "id": "PPgWebServer.cpp:346:0:GetWebUseHttps",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 339,
+      "line": 346,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWebUseHttps",
@@ -25514,10 +25514,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:340:0:GetWebCertPath",
+      "id": "PPgWebServer.cpp:347:0:GetWebCertPath",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 340,
+      "line": 347,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWebCertPath",
@@ -25532,10 +25532,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:341:0:GetWebKeyPath",
+      "id": "PPgWebServer.cpp:348:0:GetWebKeyPath",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 341,
+      "line": 348,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWebKeyPath",
@@ -25550,10 +25550,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:344:0:GetWSApiKey",
+      "id": "PPgWebServer.cpp:351:0:GetWSApiKey",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 344,
+      "line": 351,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWSApiKey",
@@ -25568,10 +25568,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:345:0:GetWebAdminAllowedHiLevFunc",
+      "id": "PPgWebServer.cpp:352:0:GetWebAdminAllowedHiLevFunc",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 345,
+      "line": 352,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWebAdminAllowedHiLevFunc",
@@ -25586,10 +25586,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:346:0:GetWSIsLowUserEnabled",
+      "id": "PPgWebServer.cpp:353:0:GetWSIsLowUserEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 346,
+      "line": 353,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetWSIsLowUserEnabled",
@@ -25604,10 +25604,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:361:0:GetWSUseUPnP",
+      "id": "PPgWebServer.cpp:368:0:GetWSUseUPnP",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 361,
+      "line": 368,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWSUseUPnP",
@@ -25618,10 +25618,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:367:0:SetTemplate",
+      "id": "PPgWebServer.cpp:374:0:SetTemplate",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 367,
+      "line": 374,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetTemplate",
@@ -25632,10 +25632,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:377:0:GetWebCertPath",
+      "id": "PPgWebServer.cpp:384:0:GetWebCertPath",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 377,
+      "line": 384,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWebCertPath",
@@ -25646,10 +25646,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:379:0:SetWebCertPath",
+      "id": "PPgWebServer.cpp:386:0:SetWebCertPath",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 379,
+      "line": 386,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWebCertPath",
@@ -25660,10 +25660,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:388:0:GetWebKeyPath",
+      "id": "PPgWebServer.cpp:395:0:GetWebKeyPath",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 388,
+      "line": 395,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWebKeyPath",
@@ -25674,10 +25674,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:390:0:SetWebKeyPath",
+      "id": "PPgWebServer.cpp:397:0:SetWebKeyPath",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 390,
+      "line": 397,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWebKeyPath",
@@ -25688,10 +25688,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:394:0:SetWSPass",
+      "id": "PPgWebServer.cpp:401:0:SetWSPass",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 394,
+      "line": 401,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWSPass",
@@ -25702,10 +25702,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:400:0:GetWSApiKey",
+      "id": "PPgWebServer.cpp:407:0:GetWSApiKey",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 400,
+      "line": 407,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWSApiKey",
@@ -25716,10 +25716,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:401:0:SetWSApiKey",
+      "id": "PPgWebServer.cpp:408:0:SetWSApiKey",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 401,
+      "line": 408,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWSApiKey",
@@ -25730,10 +25730,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:402:0:GetWSApiKey",
+      "id": "PPgWebServer.cpp:409:0:GetWSApiKey",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 402,
+      "line": 409,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWSApiKey",
@@ -25748,10 +25748,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:407:0:SetWSLowPass",
+      "id": "PPgWebServer.cpp:414:0:SetWSLowPass",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 407,
+      "line": 414,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWSLowPass",
@@ -25762,10 +25762,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:411:0:SetWebTimeoutMins",
+      "id": "PPgWebServer.cpp:418:0:SetWebTimeoutMins",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 411,
+      "line": 418,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWebTimeoutMins",
@@ -25780,10 +25780,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:414:0:GetWSPort",
+      "id": "PPgWebServer.cpp:421:0:GetWSPort",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 414,
+      "line": 421,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWSPort",
@@ -25794,10 +25794,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:415:0:SetWSPort",
+      "id": "PPgWebServer.cpp:422:0:SetWSPort",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 415,
+      "line": 422,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWSPort",
@@ -25808,10 +25808,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:428:0:GetWebBindAddr",
+      "id": "PPgWebServer.cpp:435:0:GetWebBindAddr",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 428,
+      "line": 435,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWebBindAddr",
@@ -25822,10 +25822,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:429:0:SetWebBindAddr",
+      "id": "PPgWebServer.cpp:436:0:SetWebBindAddr",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 429,
+      "line": 436,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWebBindAddr",
@@ -25836,10 +25836,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:440:0:SetMaxWebUploadFileSizeMB",
+      "id": "PPgWebServer.cpp:447:0:SetMaxWebUploadFileSizeMB",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 440,
+      "line": 447,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxWebUploadFileSizeMB",
@@ -25850,10 +25850,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:441:0:GetMaxWebUploadFileSizeMB",
+      "id": "PPgWebServer.cpp:448:0:GetMaxWebUploadFileSizeMB",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 441,
+      "line": 448,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetMaxWebUploadFileSizeMB",
@@ -25868,10 +25868,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:455:0:GetWebUseHttps",
+      "id": "PPgWebServer.cpp:462:0:GetWebUseHttps",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 455,
+      "line": 462,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWebUseHttps",
@@ -25882,10 +25882,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:459:0:SetWSIsEnabled",
+      "id": "PPgWebServer.cpp:466:0:SetWSIsEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 459,
+      "line": 466,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWSIsEnabled",
@@ -25896,10 +25896,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:460:0:SetLegacyWebUiEnabled",
+      "id": "PPgWebServer.cpp:467:0:SetLegacyWebUiEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 460,
+      "line": 467,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetLegacyWebUiEnabled",
@@ -25910,10 +25910,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:461:0:SetWebUseGzip",
+      "id": "PPgWebServer.cpp:468:0:SetWebUseGzip",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 461,
+      "line": 468,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWebUseGzip",
@@ -25928,10 +25928,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:462:0:SetWebUseHttps",
+      "id": "PPgWebServer.cpp:469:0:SetWebUseHttps",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 462,
+      "line": 469,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWebUseHttps",
@@ -25942,10 +25942,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:463:0:SetWSIsLowUserEnabled",
+      "id": "PPgWebServer.cpp:470:0:SetWSIsLowUserEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 463,
+      "line": 470,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetWSIsLowUserEnabled",
@@ -25960,10 +25960,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:469:0:m_bAllowAdminHiLevFunc",
+      "id": "PPgWebServer.cpp:476:0:m_bAllowAdminHiLevFunc",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 469,
+      "line": 476,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bAllowAdminHiLevFunc",
@@ -25978,10 +25978,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:471:0:m_bWebUseUPnP",
+      "id": "PPgWebServer.cpp:478:0:m_bWebUseUPnP",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 471,
+      "line": 478,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bWebUseUPnP",
@@ -25996,10 +25996,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:473:0:m_bWebUseUPnP",
+      "id": "PPgWebServer.cpp:480:0:m_bWebUseUPnP",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 473,
+      "line": 480,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bWebUseUPnP",
@@ -26010,10 +26010,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:473:1:IsUPnPEnabled",
+      "id": "PPgWebServer.cpp:480:1:IsUPnPEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 473,
+      "line": 480,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsUPnPEnabled",
@@ -26024,10 +26024,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:474:0:GetWSPort",
+      "id": "PPgWebServer.cpp:481:0:GetWSPort",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 474,
+      "line": 481,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetWSPort",
@@ -26052,10 +26052,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:524:0:IsUPnPEnabled",
+      "id": "PPgWebServer.cpp:533:0:IsUPnPEnabled",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 524,
+      "line": 533,
       "function": "SetUPnPState",
       "access": "read",
       "ownerExpression": "IsUPnPEnabled",
@@ -26064,18 +26064,17 @@
         "IDC_WSUPNP"
       ],
       "directControlIds": [
-        "IDC_WSENABLED",
-        "IDC_WSUPNP"
+        "IDC_WSENABLED"
       ],
       "schemaIds": [
         "ui-runtime::upnpenabled"
       ]
     },
     {
-      "id": "PPgWebServer.cpp:607:0:GetMuleDirectory",
+      "id": "PPgWebServer.cpp:634:0:GetMuleDirectory",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 607,
+      "line": 634,
       "function": "OnGenerateCertificate",
       "access": "read",
       "ownerExpression": "GetMuleDirectory",
@@ -26086,10 +26085,10 @@
       ]
     },
     {
-      "id": "PPgWebServer.cpp:669:0:GetTemplate",
+      "id": "PPgWebServer.cpp:696:0:GetTemplate",
       "page": "PPgWebServer.cpp",
       "dialogId": "IDD_PPG_WEBSRV",
-      "line": 669,
+      "line": 696,
       "function": "SetTmplButtonState",
       "access": "read",
       "ownerExpression": "GetTemplate",
@@ -26100,8 +26099,7 @@
       ],
       "directControlIds": [
         "IDC_WSENABLED",
-        "IDC_WSLEGACYUI",
-        "IDC_WSRELOADTMPL"
+        "IDC_WSLEGACYUI"
       ],
       "schemaIds": [
         "ui-runtime::template"
