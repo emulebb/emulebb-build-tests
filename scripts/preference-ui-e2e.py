@@ -73,6 +73,7 @@ IDC_DD = 2799
 IDC_AUTOUPDATE_IPFILTER = 3070
 IDC_IPFILTERPERIOD = 3072
 IDC_ENABLE_IPFILTER = 3093
+IDC_IPFILTER_EXPLANATION = 3094
 IDC_IPFILTER_STATS = 3095
 IDC_UPDATEURL = 2797
 IDC_THUMBNAIL_FFMPEG = 3087
@@ -307,6 +308,19 @@ def get_control_text(control_hwnd: int) -> str:
     buffer = ctypes.create_unicode_buffer(length + 1)
     ctypes.windll.user32.SendMessageW(control_hwnd, WM_GETTEXT, len(buffer), buffer)
     return buffer.value
+
+
+def control_rect(control_hwnd: int) -> dict[str, int]:
+    left, top, right, bottom = win32gui.GetWindowRect(control_hwnd)
+    return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+
+def assert_vertical_gap(upper_hwnd: int, lower_hwnd: int, minimum_pixels: int, label: str) -> None:
+    upper = control_rect(upper_hwnd)
+    lower = control_rect(lower_hwnd)
+    gap = lower["top"] - upper["bottom"]
+    if gap < minimum_pixels:
+        raise AssertionError(f"{label} vertical gap was {gap}px, expected at least {minimum_pixels}px: upper={upper}, lower={lower}.")
 
 
 def get_process_handle(hwnd: int) -> int:
@@ -732,9 +746,19 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
 
         select_page(dialog_hwnd, "Security")
         ip_filter_enabled = find_control(dialog_hwnd, IDC_ENABLE_IPFILTER, "Button")
+        ip_filter_explanation = find_control(dialog_hwnd, IDC_IPFILTER_EXPLANATION, "Static")
         ip_filter_level = find_control(dialog_hwnd, IDC_FILTERLEVEL, "Edit")
         ip_filter_servers = find_control(dialog_hwnd, IDC_FILTERSERVERBYIPFILTER, "Button")
         ip_filter_stats = find_control(dialog_hwnd, IDC_IPFILTER_STATS, "Static")
+        assert_vertical_gap(ip_filter_explanation, ip_filter_stats, 2, "IP filter explanation to stats")
+        assert_vertical_gap(ip_filter_stats, ip_filter_level, 2, "IP filter stats to filter level")
+        assert_vertical_gap(ip_filter_stats, ip_filter_servers, 2, "IP filter stats to filter servers")
+        report["checks"]["ip_filter_layout"] = {
+            "explanation": control_rect(ip_filter_explanation),
+            "stats": control_rect(ip_filter_stats),
+            "filter_level": control_rect(ip_filter_level),
+            "filter_servers": control_rect(ip_filter_servers),
+        }
         wait_for(
             lambda: "Status: Enabled" in get_control_text(ip_filter_stats) and "Rules loaded:" in get_control_text(ip_filter_stats),
             timeout=2.0,
