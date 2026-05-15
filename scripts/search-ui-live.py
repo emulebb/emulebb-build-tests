@@ -903,6 +903,12 @@ def run_search_ui_live(
                 continue
 
             list_hwnd = find_control(main_hwnd, IDC_SEARCHLIST, "SysListView32")
+            if len(report["download_lifecycles"]) >= ui_download_lifecycle_count:
+                search_report["download_skipped_reason"] = "download lifecycle target reached"
+                report["searches"].append(search_report)
+                report["scenarios"].append({**search_report, "status": "passed"})
+                continue
+
             ui_download = trigger_paused_download_from_ui(process_handle, list_hwnd, int(result_rows["row_count"]))
             search_report["ui_download"] = ui_download
             if not bool(ui_download.get("ok")):
@@ -939,8 +945,6 @@ def run_search_ui_live(
             search_report["download_lifecycle_index"] = len(report["download_lifecycles"])
             report["searches"].append(search_report)
             report["scenarios"].append({**search_report, "status": "passed"})
-            if len(report["download_lifecycles"]) >= ui_download_lifecycle_count:
-                break
 
         if len(report["download_lifecycles"]) < ui_download_lifecycle_count:
             report["status"] = "inconclusive"
