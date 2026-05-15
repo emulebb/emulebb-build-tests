@@ -128,6 +128,7 @@ TEST_CASE("Preference INI map uses dedicated upload-policy sections without lega
 	CHECK(CString(PreferenceIniMap::IPFilterUpdateKeys::PeriodDays) == CString(_T("IPFilterUpdatePeriodDays")));
 	CHECK(CString(PreferenceIniMap::IPFilterUpdateKeys::LastUpdateTime) == CString(_T("IPFilterLastUpdateTime")));
 	CHECK(CString(PreferenceIniMap::IPFilterUpdateKeys::Url) == CString(_T("IPFilterUpdateUrl")));
+	CHECK(CString(PreferenceIniMap::IPFilterKeys::Enabled) == CString(_T("IPFilterEnabled")));
 
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::MaxUploadClientsAllowed) == CString(_T("MaxUploadClientsAllowed")));
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SlowUploadThresholdFactor) == CString(_T("SlowUploadThresholdFactor")));

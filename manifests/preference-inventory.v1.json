@@ -3508,6 +3508,28 @@
       "notes": ""
     },
     {
+      "id": "IPFilterEnabled",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "IPFilterEnabled",
+      "sourceExpression": "prefini::IPFilterKeys::Enabled",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
       "id": "IPFilterUpdateEnabled",
       "storageFile": "preferences.ini",
       "sections": [

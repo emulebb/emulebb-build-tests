@@ -65,8 +65,11 @@ IDC_WEBBINDADDR = 3044
 IDC_WS_MAXFILEUPLOAD = 3067
 IDC_WS_ALLOWEDIPS = 3069
 IDC_SHARESELECTOR = 2266
+IDC_FILTERLEVEL = 2543
+IDC_FILTERSERVERBYIPFILTER = 2626
 IDC_AUTOUPDATE_IPFILTER = 3070
 IDC_IPFILTERPERIOD = 3072
+IDC_ENABLE_IPFILTER = 3093
 IDC_UPDATEURL = 2797
 IDC_THUMBNAIL_FFMPEG = 3087
 IDC_THUMBNAIL_INTERVAL = 3090
@@ -272,6 +275,12 @@ def ensure_checkbox(checkbox_hwnd: int, desired: bool) -> None:
     current = bool(win32gui.SendMessage(checkbox_hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED)
     if current != desired:
         click_button(checkbox_hwnd)
+
+
+def assert_control_enabled(control_hwnd: int, expected: bool, label: str) -> None:
+    current = bool(win32gui.IsWindowEnabled(control_hwnd))
+    if current != expected:
+        raise AssertionError(f"{label} enabled state was {current}, expected {expected}.")
 
 
 def set_edit_text(edit_hwnd: int, text: str) -> None:
@@ -513,6 +522,7 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
             ("TxtEditor", "notepad.exe"),
             ("MaxChatHistoryLines", "100"),
             ("MaxMessageSessions", "50"),
+            ("IPFilterEnabled", "1"),
             ("IPFilterUpdateEnabled", "0"),
             ("IPFilterUpdatePeriodDays", "7"),
             ("IPFilterLastUpdateTime", str(int(time.time()))),
@@ -691,6 +701,16 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
             report["checks"]["directories_tree_stress"] = exercise_directories_tree_stress(dialog_hwnd, directories_tree_fixture)
 
         select_page(dialog_hwnd, "Security")
+        ip_filter_enabled = find_control(dialog_hwnd, IDC_ENABLE_IPFILTER, "Button")
+        ip_filter_level = find_control(dialog_hwnd, IDC_FILTERLEVEL, "Edit")
+        ip_filter_servers = find_control(dialog_hwnd, IDC_FILTERSERVERBYIPFILTER, "Button")
+        ensure_checkbox(ip_filter_enabled, True)
+        assert_control_enabled(ip_filter_level, True, "IP filter level")
+        assert_control_enabled(ip_filter_servers, True, "Filter servers too")
+        ensure_checkbox(ip_filter_enabled, False)
+        assert_control_enabled(ip_filter_level, False, "IP filter level")
+        assert_control_enabled(ip_filter_servers, False, "Filter servers too")
+        report["checks"]["ip_filter_enabled_toggle"] = {"persisted": False, "dependent_controls_disabled": True}
         set_edit_text(find_control(dialog_hwnd, IDC_UPDATEURL, "Edit"), "http://upd.emule-security.org/ipfilter.zip")
         ensure_checkbox(find_control(dialog_hwnd, IDC_AUTOUPDATE_IPFILTER, "Button"), True)
         set_edit_text(find_control(dialog_hwnd, IDC_IPFILTERPERIOD, "Edit"), "11")
@@ -749,6 +769,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
                 "TxtEditor": "notepad.exe /A",
                 "MaxChatHistoryLines": "321",
                 "MaxMessageSessions": "61",
+                "IPFilterEnabled": "0",
                 "IPFilterUpdateEnabled": "1",
                 "IPFilterUpdatePeriodDays": "11",
                 "IPFilterUpdateUrl": "http://upd.emule-security.org/ipfilter.zip",

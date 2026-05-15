@@ -88,6 +88,14 @@ TEST_CASE("IP-filter update seam rejects markup download payloads")
 	CHECK_FALSE(IPFilterUpdateSeams::LooksLikeMarkupPayload("", 0u));
 }
 
+TEST_CASE("IP-filter seam bypasses runtime filtering when disabled")
+{
+	CHECK(IPFilterSeams::ShouldEvaluateFilter(true, 1u, 0x01020304u));
+	CHECK_FALSE(IPFilterSeams::ShouldEvaluateFilter(false, 1u, 0x01020304u));
+	CHECK_FALSE(IPFilterSeams::ShouldEvaluateFilter(true, 0u, 0x01020304u));
+	CHECK_FALSE(IPFilterSeams::ShouldEvaluateFilter(true, 1u, 0u));
+}
+
 TEST_CASE("IP-filter normalization lets a lower-level narrow overlap win only inside the overlap")
 {
 	const std::vector<IPFilterSeams::IPRange> normalized = IPFilterSeams::NormalizeIPRanges({
