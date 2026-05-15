@@ -2,6 +2,7 @@
 
 #include "../include/LongPathTestSupport.h"
 
+#include "AppRegistryIdentitySeams.h"
 #include "FilenameNormalizationPolicy.h"
 #include "LongPathSeams.h"
 #include "OtherFunctionsSeams.h"
@@ -206,6 +207,24 @@ TEST_CASE("Other-functions seam keeps debug builds from writing autorun registry
 #else
 	CHECK(OtherFunctionsSeams::ShouldWriteAutoStartRegistry());
 #endif
+}
+
+TEST_CASE("App registry identity seam keeps eMule BB registry ownership separate")
+{
+	CHECK(CString(AppRegistryIdentitySeams::GetAppSettingsKey()) == CString(_T("Software\\eMuleBB")));
+	CHECK(CString(AppRegistryIdentitySeams::GetAutoStartRunValueName()) == CString(_T("eMuleBBAutoStart")));
+	CHECK(CString(AppRegistryIdentitySeams::GetCollectionProgId()) == CString(_T("eMuleBB.Collection")));
+	CHECK(CString(AppRegistryIdentitySeams::GetCollectionClassesKey()) == CString(_T("Software\\Classes\\eMuleBB.Collection")));
+
+	CHECK(CString(AppRegistryIdentitySeams::GetAppSettingsKey()).CompareNoCase(_T("Software\\eMule")) != 0);
+	CHECK(CString(AppRegistryIdentitySeams::GetAutoStartRunValueName()).CompareNoCase(_T("eMuleAutoStart")) != 0);
+	CHECK(CString(AppRegistryIdentitySeams::GetCollectionProgId()).CompareNoCase(_T("eMule")) != 0);
+}
+
+TEST_CASE("App registry identity seam keeps ed2k as the intentionally shared URL scheme")
+{
+	CHECK(CString(AppRegistryIdentitySeams::GetEd2kScheme()) == CString(_T("ed2k")));
+	CHECK(CString(AppRegistryIdentitySeams::GetEd2kClassesKey()) == CString(_T("Software\\Classes\\ed2k")));
 }
 
 TEST_CASE("Path-helper seam grows module-path buffers past MAX_PATH")
