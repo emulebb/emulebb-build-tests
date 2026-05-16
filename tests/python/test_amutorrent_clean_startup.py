@@ -97,6 +97,7 @@ def test_clean_startup_script_does_not_hardcode_runtime_live_terms() -> None:
 
     assert "live_wire_inputs.load_live_wire_inputs" in script_text
     assert "SKIP_SETUP_WIZARD" in script_text
+    assert "require_kad_connected=False" in script_text
     assert '"SKIP_SETUP_WIZARD": "true"' not in script_text
     assert '"linux"' not in script_text
     assert '"ubuntu"' not in script_text

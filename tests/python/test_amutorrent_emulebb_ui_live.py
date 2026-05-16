@@ -80,6 +80,7 @@ def test_ui_live_script_uses_runtime_live_inputs_and_stable_ui_hooks() -> None:
     script_text = script_path.read_text(encoding="utf-8")
 
     assert "live_wire_inputs.load_live_wire_inputs" in script_text
+    assert "require_kad_connected=False" in script_text
     assert '"linux"' not in script_text
     assert '"ubuntu"' not in script_text
     assert '"debian"' not in script_text

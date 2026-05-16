@@ -438,7 +438,7 @@ def restart_emule_for_reconnect(
         api_key,
         network_ready_timeout_seconds,
         require_server_connected=True,
-        require_kad_connected=True,
+        require_kad_connected=False,
     )
     return restarted, {
         "closed_previous": True,
@@ -552,7 +552,7 @@ def main() -> int:
             args.api_key,
             args.network_ready_timeout_seconds,
             require_server_connected=True,
-            require_kad_connected=True,
+            require_kad_connected=False,
         )
 
         node_path = Path(str(node_info["path"]))

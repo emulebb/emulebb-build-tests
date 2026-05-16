@@ -94,6 +94,7 @@ def test_resilience_script_does_not_hardcode_runtime_live_terms() -> None:
     script_text = script_path.read_text(encoding="utf-8")
 
     assert "live_wire_inputs.load_live_wire_inputs" in script_text
+    assert script_text.count("require_kad_connected=False") == 2
     assert '"linux"' not in script_text
     assert '"ubuntu"' not in script_text
     assert '"debian"' not in script_text

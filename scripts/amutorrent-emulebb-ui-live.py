@@ -809,7 +809,7 @@ def main() -> int:
             args.api_key,
             args.network_ready_timeout_seconds,
             require_server_connected=True,
-            require_kad_connected=True,
+            require_kad_connected=False,
         )
 
         env = amutorrent_clean.build_clean_amutorrent_environment(
