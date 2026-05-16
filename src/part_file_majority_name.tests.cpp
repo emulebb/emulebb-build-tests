@@ -69,6 +69,31 @@ TEST_CASE("blank names are ignored and matching is case-insensitive")
 	CHECK(selection.TotalVotes == 3);
 }
 
+TEST_CASE("codec quality and source tokens vote as one majority filename group")
+{
+	const auto selection = SelectMajorityName(std::vector<CString>{
+		_T("Operator Movie DivX 1080p WEBRip.avi"),
+		_T("Operator.Movie.XviD.DVDRip.avi"),
+		_T("Other Movie XviD.avi"),
+	}, 0, 51);
+
+	CHECK(selection.HasCandidate);
+	CHECK(selection.CandidateVotes == 2);
+	CHECK(selection.TotalVotes == 3);
+	CHECK(selection.CanonicalName == _T("operator movie | ext:avi"));
+	CHECK_FALSE(selection.Name.IsEmpty());
+	CHECK(selection.Name.Find(_T("Operator")) >= 0);
+}
+
+TEST_CASE("source names without usable title tokens are ignored")
+{
+	const auto selection = SelectMajorityName(std::vector<CString>{_T("1080p.x264.avi"), _T("download"), _T(".avi")}, 0, 51);
+
+	CHECK_FALSE(selection.HasCandidate);
+	CHECK(selection.CandidateVotes == 0);
+	CHECK(selection.TotalVotes == 0);
+}
+
 TEST_CASE("required percent is normalized before agreement checks")
 {
 	CHECK(HasRequiredAgreement(1, 1, 0));

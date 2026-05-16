@@ -61,6 +61,27 @@ TEST_CASE("Search trust hint compares by bucket then score")
 	CHECK(SearchTrustHintSeams::CompareTrustHints(lowScore, lowScore) == 0);
 }
 
+TEST_CASE("Kad trust hint uses simple publish trust buckets")
+{
+	using SearchTrustHintSeams::KadTrustKind;
+
+	const SearchTrustHintSeams::KadTrustHint unknown = SearchTrustHintSeams::BuildKadTrustHint(0);
+	CHECK(unknown.kind == KadTrustKind::Unknown);
+
+	const SearchTrustHintSeams::KadTrustHint low = SearchTrustHintSeams::BuildKadTrustHint((2u << 24) | (4u << 16) | 99u);
+	CHECK(low.kind == KadTrustKind::Low);
+	CHECK(low.publishers == 4);
+	CHECK(low.differentNames == 2);
+
+	const SearchTrustHintSeams::KadTrustHint normal = SearchTrustHintSeams::BuildKadTrustHint((1u << 24) | (8u << 16) | 100u);
+	CHECK(normal.kind == KadTrustKind::Normal);
+
+	const SearchTrustHintSeams::KadTrustHint high = SearchTrustHintSeams::BuildKadTrustHint((1u << 24) | (8u << 16) | 300u);
+	CHECK(high.kind == KadTrustKind::High);
+	CHECK(SearchTrustHintSeams::CompareKadTrustHints(normal, high) < 0);
+	CHECK(SearchTrustHintSeams::CompareKadTrustHints(high, low) > 0);
+}
+
 TEST_CASE("Search trust hint classifies fake-file reason codes")
 {
 	using SearchTrustHintSeams::ExplanationReason;

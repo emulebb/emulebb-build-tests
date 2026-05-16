@@ -130,6 +130,42 @@ TEST_CASE("fake-file analyzer combines names bad signals and header mismatch")
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_aich") != report.reasons.end());
 }
 
+TEST_CASE("fake-file analyzer ignores codec quality and source name noise")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Operator Movie DivX 1080p WEBRip.avi",
+		L"Operator.Movie.XviD.DVDRip.avi",
+		L"Operator Movie x264 proper.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.canonicalNames.size() == 1);
+	CHECK(report.canonicalNames[0] == L"operator movie | ext:avi");
+	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"divx") != report.ignoredNameTokens.end());
+	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"1080p") != report.ignoredNameTokens.end());
+}
+
+TEST_CASE("fake-file analyzer still flags meaningful title divergence")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Operator Movie DivX 1080p.avi",
+		L"Different Movie XviD 1080p.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 15);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") != report.reasons.end());
+	CHECK(report.nameDivergenceGroups.size() == 2);
+}
+
 TEST_CASE("fake-file analyzer reports pending header without mismatch penalty")
 {
 	FakeFileDetectorSeams::RuleSet rules;
