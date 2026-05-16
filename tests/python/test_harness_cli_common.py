@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -37,6 +38,16 @@ def test_publish_directory_snapshot_skips_generated_shared_hash_payloads(tmp_pat
     assert (destination / "suite-result.json").is_file()
     assert (destination / "scenario" / "result.json").is_file()
     assert not (destination / "scenario" / "shared-hash-root").exists()
+
+
+def test_write_json_file_recreates_parent_directory(tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    result_path = tmp_path / "missing" / "result.json"
+
+    module.write_json_file(result_path, {"status": "failed"})
+
+    assert result_path.is_file()
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {"status": "failed"}
 
 
 def test_publish_directory_snapshot_preserves_exact_trailing_dot_space_names(tmp_path: Path) -> None:

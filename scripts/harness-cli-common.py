@@ -57,6 +57,7 @@ def read_json_file(path: Path):
 def write_json_file(path: Path, payload) -> None:
     """Writes one JSON artifact with stable formatting."""
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 

@@ -78,6 +78,16 @@ def test_partial_hash_progress_uses_trace_counters(tmp_path: Path) -> None:
     }
 
 
+def test_write_json_recreates_parent_directory(tmp_path: Path) -> None:
+    module = load_shared_hash_module()
+    result_path = tmp_path / "missing-scenario" / "result.json"
+
+    module.write_json(result_path, {"status": "failed"})
+
+    assert result_path.is_file()
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {"status": "failed"}
+
+
 def test_partial_hash_progress_rejects_completed_hashing(tmp_path: Path) -> None:
     module = load_shared_hash_module()
     trace_path = tmp_path / "startup-profile.trace.json"

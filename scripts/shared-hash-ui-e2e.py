@@ -100,6 +100,7 @@ HASH_STRESS_NESTED_SEGMENTS = [
 def write_json(path: Path, payload) -> None:
     """Writes one UTF-8 JSON artifact with stable formatting."""
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
