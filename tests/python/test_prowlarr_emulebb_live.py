@@ -797,6 +797,21 @@ def test_direct_auth_rejection_requires_401(monkeypatch) -> None:
     assert module.check_direct_auth_rejection("http://127.0.0.1:1") == {"status": 401}
 
 
+def test_direct_unknown_query_tolerance_accepts_extension_parameters(monkeypatch) -> None:
+    module = load_prowlarr_module()
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        assert path == "/indexer/emulebb/api?t=caps&unknownProviderField=ignored&apikey=secret%20key"
+        return {"status": 200, "body_text": "<caps></caps>"}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    assert module.check_direct_unknown_query_tolerance("http://127.0.0.1:1", "secret key") == {
+        "status": 200,
+        "root": "caps",
+    }
+
+
 def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
     module = load_prowlarr_module()
     calls: list[tuple[str, str]] = []

@@ -1976,6 +1976,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "adapter-side result filter" in adapter_docs
     assert "`offset`, `limit`" in adapter_docs
     assert "page only a cached first-page result set" in adapter_docs
+    assert "Unknown Torznab/Newznab extension query parameters are ignored" in adapter_docs
     assert "REST `video` searches" in parity_docs
 
 

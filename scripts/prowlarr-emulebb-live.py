@@ -646,6 +646,24 @@ def check_direct_auth_rejection(base_url: str) -> dict[str, object]:
     return {"status": status}
 
 
+def check_direct_unknown_query_tolerance(base_url: str, emule_api_key: str) -> dict[str, object]:
+    """Validates that Torznab ignores unknown extension parameters."""
+
+    path = (
+        "/indexer/emulebb/api?t=caps&unknownProviderField=ignored&apikey="
+        + urllib.parse.quote(emule_api_key)
+    )
+    result = rest_smoke.http_request(base_url, path, request_timeout_seconds=20.0)
+    status = int(result.get("status") or 0)
+    body_text = str(result.get("body_text") or "")
+    if status != 200:
+        raise RuntimeError(f"Direct Torznab unknown query tolerance returned HTTP {status}, expected 200.")
+    root = ET.fromstring(body_text)
+    if root.tag != "caps":
+        raise RuntimeError(f"Direct Torznab unknown query tolerance returned unexpected root: {root.tag}")
+    return {"status": status, "root": root.tag}
+
+
 def check_direct_torznab_error_edges(base_url: str, emule_api_key: str) -> dict[str, object]:
     """Validates strict Torznab parser rejections used by Arr live-wire runs."""
 
@@ -1770,6 +1788,12 @@ def main() -> int:
             args.emule_connection_timeout_seconds,
             require_server_connected=False,
             require_kad_connected=True,
+        )
+
+        record_phase("direct_torznab_unknown_query_tolerance")
+        report["checks"]["direct_torznab_unknown_query_tolerance"] = check_direct_unknown_query_tolerance(
+            emule_base_url,
+            args.emule_api_key,
         )
 
         record_phase("direct_torznab_cached_offset_page")
