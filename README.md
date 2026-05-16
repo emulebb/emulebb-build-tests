@@ -83,6 +83,7 @@ Script inventory:
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report/profile-seed resolution for Python-first live/UI harnesses |
 | `scripts\emule-live-profile-common.py` | internal Python helper | maintained | compatibility facade for live-profile launch and trace helpers |
 | `scripts\rest-api-smoke.py` | operator-facing Python E2E | maintained | canonical isolated REST live E2E lane |
+| `scripts\fake-kad-trust-soak.py` | operator-facing live soak | maintained | long-running Kad search soak for fake-file risk and Kad trust telemetry |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\auto-browse-live.py` | operator-facing Python E2E | maintained | isolated live auto-browse validation with `hide.me` bind and P2P UPnP |
 | `scripts\preference-ui-e2e.py` | operator-facing Python E2E | maintained | real Preferences dialog coverage for WebServer fields and Tweaks tree controls |
@@ -191,6 +192,18 @@ Cold-start REST dump stress lane:
 - run it explicitly with `python -m emule_workspace test live-e2e --suite
   rest-cold-start-dump-stress`; it is not part of the default aggregate suite
   because it captures full process dumps
+
+Fake/Kad trust soak lane:
+
+- run it through the workspace wrapper with
+  `python -m emule_workspace test fake-kad-trust-soak`
+- the default duration is 10,800 seconds (3 hours), with one Kad search at a
+  time and cleanup after every cycle
+- the report focuses on fake-file risk invariants, canonical name divergence,
+  ignored release-noise tokens, Kad publish-info buckets, result volume,
+  failed/zero-result cycles, and process resource/CPU samples
+- reports are written under `reports\fake-kad-trust-soak\...` and mirrored to
+  `reports\fake-kad-trust-soak-latest`
 
 Aggregate live E2E lane:
 
