@@ -883,6 +883,16 @@ def test_cached_direct_torznab_offset_page_requires_cached_rows(monkeypatch) -> 
         "offset_count": 1,
         "offset": 1,
         "total": 2,
+        "attempts": [
+            {
+                "first_status": 200,
+                "first_count": 1,
+                "offset_status": 200,
+                "offset_count": 1,
+                "offset": 1,
+                "total": 2,
+            }
+        ],
     }
     assert calls == [
         "/indexer/emulebb/api?t=search&cat=2000&limit=1&q=movie%20term&apikey=secret",
