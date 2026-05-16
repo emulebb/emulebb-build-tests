@@ -452,6 +452,12 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert option_values(cold_start_command, "--downloads-per-wave") == [
         str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE)
     ]
+    assert option_values(cold_start_command, "--downloads-per-search") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH)
+    ]
+    assert option_values(cold_start_command, "--synthetic-queue-fill-count") == [
+        str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT)
+    ]
     assert option_values(cold_start_command, "--download-churn-interval-seconds") == [
         str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS)
     ]
