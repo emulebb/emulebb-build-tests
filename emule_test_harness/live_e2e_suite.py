@@ -292,7 +292,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.rest_stress_max_failures = STABILIZATION_REST_STRESS_MAX_FAILURES
         if args.rest_socket_adversity_budget == "off":
             args.rest_socket_adversity_budget = "smoke"
-        if args.rest_tls_handshake_adversity_budget == "off":
+        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
             args.rest_tls_handshake_adversity_budget = "smoke"
         if args.rest_leak_churn_budget == "off":
             args.rest_leak_churn_budget = "smoke"

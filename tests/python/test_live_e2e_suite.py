@@ -402,7 +402,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["rest_stress_concurrency"] == live_e2e_suite.STABILIZATION_REST_STRESS_CONCURRENCY
     assert summary["rest_stress_max_failures"] == live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES
     assert summary["rest_socket_adversity_budget"] == "smoke"
-    assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
+    assert summary["rest_tls_handshake_adversity_budget"] == "off"
     assert summary["rest_leak_churn_budget"] == "smoke"
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
@@ -432,7 +432,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
         str(live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES)
     ]
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
-    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-leak-churn-cycles") == [
         str(live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES)
@@ -458,6 +458,33 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert option_values(cold_start_command, "--download-remove-count-per-churn") == [
         str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN)
     ]
+
+
+def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "v0.72a"),
+            "--profile",
+            "stabilization-stress",
+            "--rest-webserver-scheme",
+            "https",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
+
+    rest_command = commands[2]
+    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
 
 
 def test_cpu_heavy_profile_runs_shared_files_50k_under_cpu_profile(tmp_path: Path, monkeypatch) -> None:
