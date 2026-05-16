@@ -146,6 +146,7 @@ TEST_CASE("fake-file analyzer ignores codec quality and source name noise")
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
 	CHECK(report.canonicalNames.size() == 1);
 	CHECK(report.canonicalNames[0] == L"operator movie | ext:avi");
+	CHECK(report.nameDivergenceGroups.empty());
 	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"divx") != report.ignoredNameTokens.end());
 	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"1080p") != report.ignoredNameTokens.end());
 }
