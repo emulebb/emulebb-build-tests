@@ -50,6 +50,21 @@ wait_for_rest_ready = rest_api_smoke.wait_for_rest_ready
 write_json = live_common.write_json
 
 
+def observe_optional_main_window(app: Any, *, timeout: float = 5.0) -> dict[str, Any]:
+    """Returns best-effort eMule main-window evidence without failing tray-only runs."""
+
+    try:
+        window = wait_for_main_window(app, timeout=timeout)
+    except Exception as exc:
+        return {"observed": False, "reason": str(exc)}
+
+    return {
+        "observed": True,
+        "title": window.window_text(),
+        "handle": int(window.handle),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the aMuTorrent resilience live argument parser."""
 
@@ -431,7 +446,6 @@ def restart_emule_for_reconnect(
     close_app_cleanly(app)
     outage_started_at = time.monotonic()
     restarted = launch_app(app_exe, profile_base)
-    wait_for_main_window(restarted)
     rest_ready = wait_for_rest_ready(emule_base_url, api_key, ready_timeout_seconds)
     network_ready = wait_for_requested_networks(
         emule_base_url,
@@ -444,6 +458,7 @@ def restart_emule_for_reconnect(
         "closed_previous": True,
         "outage_seconds": round(time.monotonic() - outage_started_at, 3),
         "total_seconds": round(time.monotonic() - started_at, 3),
+        "main_window": observe_optional_main_window(restarted),
         "rest_ready": rest_ready,
         "network_ready": network_ready,
     }
@@ -544,8 +559,9 @@ def main() -> int:
         amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
         app = launch_app(paths.app_exe, Path(profile["profile_base"]))
         report["emule_process_id"] = get_app_process_id(app)
-        main_window = wait_for_main_window(app)
-        report["main_window_title"] = main_window.window_text()
+        report["main_window"] = observe_optional_main_window(app)
+        if report["main_window"].get("title"):
+            report["main_window_title"] = report["main_window"]["title"]
         report["checks"]["emule_rest_ready"] = wait_for_rest_ready(emule_base_url, args.api_key, args.ready_timeout_seconds)
         report["checks"]["emule_network_ready"] = wait_for_requested_networks(
             emule_base_url,
