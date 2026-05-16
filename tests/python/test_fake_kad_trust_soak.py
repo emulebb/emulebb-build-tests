@@ -58,6 +58,26 @@ def test_fake_report_validation_rejects_inconsistent_score_and_divergence() -> N
     assert "ignored token is not normalized: 'DivX'" in errors
 
 
+def test_fake_report_validation_rejects_removed_fake_file_contract() -> None:
+    module = load_soak_module()
+    row = {
+        "hash": "0123456789abcdef0123456789abcdef",
+        "fakeFile": {
+            "score": 15,
+            "severity": "low",
+            "reasons": ["multiple_names"],
+            "canonicalNames": ["one | ext:avi", "two | ext:avi"],
+            "ignoredNameTokens": [],
+            "nameDivergenceGroups": ["one | ext:avi", "two | ext:avi"],
+        },
+    }
+
+    errors, report = module.validate_fake_report(row)
+
+    assert errors == ["missing search risk evidence object"]
+    assert report == {"score": None, "severity": "missing", "reasons": []}
+
+
 def test_result_summary_counts_risk_and_kad_metrics() -> None:
     module = load_soak_module()
     rows = [

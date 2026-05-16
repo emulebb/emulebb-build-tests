@@ -138,7 +138,7 @@ def _list_of_strings(value: object) -> list[str]:
 
 
 def extract_search_risk_evidence(row: dict[str, Any]) -> dict[str, object] | None:
-    """Returns the current grouped risk evidence, falling back for old builds."""
+    """Returns the current grouped search risk evidence."""
 
     evidence = row.get("evidence")
     if isinstance(evidence, dict):
@@ -155,8 +155,7 @@ def extract_search_risk_evidence(row: dict[str, Any]) -> dict[str, object] | Non
                 report["pendingHeaderCheck"] = integrity.get("pendingHeaderCheck")
             return report
 
-    fake = row.get("fakeFile")
-    return fake if isinstance(fake, dict) else None
+    return None
 
 
 def validate_fake_report(row: dict[str, Any]) -> tuple[list[str], dict[str, object]]:
