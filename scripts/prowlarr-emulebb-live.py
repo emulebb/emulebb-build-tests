@@ -684,11 +684,23 @@ def check_direct_torznab_error_edges(base_url: str, emule_api_key: str) -> dict[
                 f"Direct Torznab {scenario['name']} returned HTTP {status}, "
                 f"expected {scenario['expected_status']}."
             )
+        body_text = str(result.get("body_text") or "")
+        root = ET.fromstring(body_text)
+        if root.tag != "error":
+            raise RuntimeError(f"Direct Torznab {scenario['name']} returned unexpected error root: {root.tag}")
+        if root.attrib.get("code") != str(status):
+            raise RuntimeError(
+                f"Direct Torznab {scenario['name']} returned error code {root.attrib.get('code')!r}, "
+                f"expected {status}."
+            )
         results.append(
             {
                 "name": scenario["name"],
                 "status": status,
                 "expected_status": scenario["expected_status"],
+                "root": root.tag,
+                "code": root.attrib.get("code"),
+                "description_present": bool(root.attrib.get("description")),
             }
         )
     return {"ok": True, "scenarios": results}
@@ -1792,6 +1804,12 @@ def main() -> int:
 
         record_phase("direct_torznab_unknown_query_tolerance")
         report["checks"]["direct_torznab_unknown_query_tolerance"] = check_direct_unknown_query_tolerance(
+            emule_base_url,
+            args.emule_api_key,
+        )
+
+        record_phase("direct_torznab_error_edges")
+        report["checks"]["direct_torznab_error_edges"] = check_direct_torznab_error_edges(
             emule_base_url,
             args.emule_api_key,
         )

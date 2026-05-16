@@ -819,7 +819,11 @@ def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
     def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
         method = str(kwargs.get("method") or "GET")
         calls.append((method, path))
-        return {"status": 404 if method == "POST" else 400, "body_text": ""}
+        status = 404 if method == "POST" else 400
+        return {
+            "status": status,
+            "body_text": f'<error code="{status}" description="fixture" />',
+        }
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
 
@@ -832,6 +836,9 @@ def test_direct_torznab_error_edges_are_expected_400s(monkeypatch) -> None:
     assert [scenario["expected_status"] for scenario in result["scenarios"]] == [
         scenario["expected_status"] for scenario in module.TORZNAB_DIRECT_ERROR_SCENARIOS
     ]
+    assert all(scenario["root"] == "error" for scenario in result["scenarios"])
+    assert all(scenario["code"] == str(scenario["status"]) for scenario in result["scenarios"])
+    assert all(scenario["description_present"] is True for scenario in result["scenarios"])
     assert all("apikey=secret%20key" in path for _method, path in calls)
     assert calls[2][0] == "POST"
     assert "q=bad%2xescape" in calls[0][1]

@@ -1955,6 +1955,8 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "BuildAvailableNativeSearchMethods(request.eFamily)" in source
     assert "BuildCacheKey(request, nativeSearchMethods)" in source
     assert "RunNativeSearches(request, nativeSearchMethods)" in source
+    assert "BuildErrorXml" in source
+    assert '<error code=\\"' in source
     assert source.index("BuildCacheKey(request, nativeSearchMethods)") < source.index("if (request.uOffset > 0)")
     assert source.index("if (TryGetCachedResults(strCacheKey, results))") < source.index("if (request.uOffset > 0)")
     assert "BuildNativeSearchMethodNames(eFamily)" in source
@@ -1977,6 +1979,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "`offset`, `limit`" in adapter_docs
     assert "page only a cached first-page result set" in adapter_docs
     assert "Unknown Torznab/Newznab extension query parameters are ignored" in adapter_docs
+    assert '<error code="HTTP_STATUS" description="..."/>' in adapter_docs
     assert "REST `video` searches" in parity_docs
 
 
