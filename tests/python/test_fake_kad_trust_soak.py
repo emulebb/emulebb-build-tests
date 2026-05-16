@@ -34,15 +34,21 @@ def test_fake_report_validation_rejects_inconsistent_score_and_divergence() -> N
     module = load_soak_module()
     row = {
         "hash": "0123456789abcdef0123456789abcdef",
-        "fakeFile": {
-            "score": 15,
-            "severity": "none",
-            "reasons": ["multiple_names"],
-            "pendingHeaderCheck": False,
-            "canonicalNames": ["one | ext:avi", "two | ext:avi"],
-            "ignoredNameTokens": ["DivX"],
-            "nameDivergenceGroups": ["one | ext:avi"],
-        },
+        "evidence": {
+            "riskEvidence": {
+                "score": 15,
+                "severity": "none",
+                "reasons": ["multiple_names"],
+            },
+            "nameEvidence": {
+                "canonicalNames": ["one | ext:avi", "two | ext:avi"],
+                "ignoredNameTokens": ["DivX"],
+                "divergenceGroups": ["one | ext:avi"],
+            },
+            "integrityEvidence": {
+                "pendingHeaderCheck": False,
+            },
+        }
     }
 
     errors, _report = module.validate_fake_report(row)
@@ -59,28 +65,40 @@ def test_result_summary_counts_risk_and_kad_metrics() -> None:
             "hash": "0123456789abcdef0123456789abcdef",
             "name": "Operator Movie DivX 1080p.avi",
             "kadPublishInfo": (2 << 24) | (4 << 16) | 99,
-            "fakeFile": {
-                "score": 0,
-                "severity": "none",
-                "reasons": [],
-                "pendingHeaderCheck": False,
-                "canonicalNames": ["operator movie | ext:avi"],
-                "ignoredNameTokens": ["divx", "1080p"],
-                "nameDivergenceGroups": [],
+            "evidence": {
+                "riskEvidence": {
+                    "score": 0,
+                    "severity": "none",
+                    "reasons": [],
+                },
+                "nameEvidence": {
+                    "canonicalNames": ["operator movie | ext:avi"],
+                    "ignoredNameTokens": ["divx", "1080p"],
+                    "divergenceGroups": [],
+                },
+                "integrityEvidence": {
+                    "pendingHeaderCheck": False,
+                },
             },
         },
         {
             "hash": "fedcba98765432100123456789abcdef",
             "name": "Different Movie.avi",
             "kadPublishInfo": (1 << 24) | (8 << 16) | 300,
-            "fakeFile": {
-                "score": 15,
-                "severity": "low",
-                "reasons": ["multiple_names"],
-                "pendingHeaderCheck": False,
-                "canonicalNames": ["different movie | ext:avi"],
-                "ignoredNameTokens": [],
-                "nameDivergenceGroups": ["operator movie | ext:avi", "different movie | ext:avi"],
+            "evidence": {
+                "riskEvidence": {
+                    "score": 15,
+                    "severity": "low",
+                    "reasons": ["multiple_names"],
+                },
+                "nameEvidence": {
+                    "canonicalNames": ["different movie | ext:avi"],
+                    "ignoredNameTokens": [],
+                    "divergenceGroups": ["operator movie | ext:avi", "different movie | ext:avi"],
+                },
+                "integrityEvidence": {
+                    "pendingHeaderCheck": False,
+                },
             },
         },
     ]

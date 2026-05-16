@@ -137,11 +137,33 @@ def _list_of_strings(value: object) -> list[str]:
     return [str(item) for item in value if isinstance(item, str)]
 
 
+def extract_search_risk_evidence(row: dict[str, Any]) -> dict[str, object] | None:
+    """Returns the current grouped risk evidence, falling back for old builds."""
+
+    evidence = row.get("evidence")
+    if isinstance(evidence, dict):
+        risk = evidence.get("riskEvidence")
+        name = evidence.get("nameEvidence")
+        integrity = evidence.get("integrityEvidence")
+        if isinstance(risk, dict):
+            report = dict(risk)
+            if isinstance(name, dict):
+                report["canonicalNames"] = name.get("canonicalNames")
+                report["ignoredNameTokens"] = name.get("ignoredNameTokens")
+                report["nameDivergenceGroups"] = name.get("divergenceGroups")
+            if isinstance(integrity, dict):
+                report["pendingHeaderCheck"] = integrity.get("pendingHeaderCheck")
+            return report
+
+    fake = row.get("fakeFile")
+    return fake if isinstance(fake, dict) else None
+
+
 def validate_fake_report(row: dict[str, Any]) -> tuple[list[str], dict[str, object]]:
     errors: list[str] = []
-    fake = row.get("fakeFile")
-    if not isinstance(fake, dict):
-        return ["missing fakeFile object"], {"score": None, "severity": "missing", "reasons": []}
+    fake = extract_search_risk_evidence(row)
+    if fake is None:
+        return ["missing search risk evidence object"], {"score": None, "severity": "missing", "reasons": []}
 
     score = fake.get("score")
     severity = str(fake.get("severity") or "")
