@@ -48,6 +48,45 @@ def test_get_list_count_uses_search_list_message(monkeypatch) -> None:
     assert module.get_list_count(200) == 42
 
 
+def test_get_search_status_text_reads_runtime_overlay(monkeypatch) -> None:
+    module = load_search_ui_module()
+
+    monkeypatch.setattr(module, "find_control", lambda hwnd, control_id, class_name: 300)
+
+    class FakeWin32Gui:
+        @staticmethod
+        def IsWindowVisible(hwnd: int) -> bool:
+            assert hwnd == 300
+            return True
+
+        @staticmethod
+        def GetWindowText(hwnd: int) -> str:
+            assert hwnd == 300
+            return "Searching Kad..."
+
+    monkeypatch.setattr(module, "win32gui", FakeWin32Gui)
+
+    assert module.get_search_status_text(100) == {
+        "present": True,
+        "visible": True,
+        "text": "Searching Kad...",
+    }
+
+
+def test_wait_for_search_progress_accepts_visible_status(monkeypatch) -> None:
+    module = load_search_ui_module()
+
+    monkeypatch.setattr(module, "get_search_status_text", lambda hwnd: {"present": True, "visible": True, "text": "Queued..."})
+    monkeypatch.setattr(module, "find_control", lambda hwnd, control_id, class_name: 200)
+    monkeypatch.setattr(module, "get_list_count", lambda hwnd: 0)
+
+    result = module.wait_for_search_progress_observation(100, timeout_seconds=0.1)
+
+    assert result["seen_status"] is True
+    assert result["status_text"] == "Queued..."
+    assert result["row_count"] == 0
+
+
 def test_parse_display_size_bytes_handles_common_units() -> None:
     module = load_search_ui_module()
 

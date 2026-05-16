@@ -60,6 +60,7 @@ IDC_STARTS = 2189
 IDC_COMBO1 = 2175
 IDC_SEARCHLIST = 2172
 IDC_TAB1 = 2442
+IDC_SEARCH_STATUS = 3106
 
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
@@ -353,6 +354,20 @@ def get_list_count(list_hwnd: int) -> int:
     """Returns the Search results list row count."""
 
     return int(win32gui.SendMessage(list_hwnd, LVM_GETITEMCOUNT, 0, 0))
+
+
+def get_search_status_text(main_hwnd: int) -> dict[str, object]:
+    """Returns the live Search activity overlay state."""
+
+    try:
+        status_hwnd = find_control(main_hwnd, IDC_SEARCH_STATUS, "Static")
+    except RuntimeError:
+        return {"present": False, "visible": False, "text": ""}
+    return {
+        "present": True,
+        "visible": bool(win32gui.IsWindowVisible(status_hwnd)),
+        "text": win32gui.GetWindowText(status_hwnd),
+    }
 
 
 def open_process(process_id: int) -> int:
@@ -753,6 +768,45 @@ def wait_for_search_result_rows(main_hwnd: int, timeout_seconds: float) -> dict[
     return wait_for(resolve, timeout=timeout_seconds, interval=2.0, description="Search result rows")
 
 
+def wait_for_search_progress_observation(main_hwnd: int, timeout_seconds: float = 8.0) -> dict[str, object]:
+    """Waits for either the Search progress overlay or fast-arriving rows."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        status = get_search_status_text(main_hwnd)
+        list_hwnd = find_control(main_hwnd, IDC_SEARCHLIST, "SysListView32")
+        row_count = get_list_count(list_hwnd)
+        observation = {
+            "observed_at": round(time.time(), 3),
+            "status": status,
+            "row_count": row_count,
+        }
+        observations.append(observation)
+        if bool(status.get("visible")) and str(status.get("text") or "").strip():
+            return {
+                "seen_status": True,
+                "status_text": status["text"],
+                "row_count": row_count,
+                "observations": observations,
+            }
+        if row_count > 0:
+            return {
+                "seen_status": False,
+                "reason": "results-arrived-before-progress-overlay",
+                "row_count": row_count,
+                "observations": observations,
+            }
+        return None
+
+    return wait_for(
+        resolve,
+        timeout=timeout_seconds,
+        interval=0.25,
+        description="Search progress overlay or first result rows",
+    )
+
+
 def capture_network_state(base_url: str, api_key: str) -> dict[str, object]:
     """Captures server and Kad state for inconclusive live-network reports."""
 
@@ -881,6 +935,7 @@ def run_search_ui_live(
             scenario = str(planned["scenario"])
             start_search_from_ui(main_hwnd, query, int(planned["method_index"]))
             started = wait_for_ui_started_search(main_hwnd, previous_tab_count, scenario, method)
+            progress_observation = wait_for_search_progress_observation(main_hwnd)
             previous_tab_count = int(started["tab_count"])
             search_report: dict[str, object] = {
                 "scenario": scenario,
@@ -889,6 +944,7 @@ def run_search_ui_live(
                 "round": planned["round"],
                 "method": method,
                 "start_observations": started["observations"],
+                "progress_observation": progress_observation,
                 "tab_count_after_start": started["tab_count"],
             }
             try:
