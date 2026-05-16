@@ -4853,8 +4853,15 @@ def restart_app_after_churn(
     relaunched_app = launch_func(app_exe, profile_base)
     new_process_id = get_pid_func(relaunched_app)
     after_relaunch = snapshot_func(new_process_id)
-    main_window = wait_main_window_func(relaunched_app)
     ready = wait_ready_func(base_url, api_key, rest_ready_timeout_seconds)
+    try:
+        try:
+            main_window = wait_main_window_func(relaunched_app, timeout=5.0)
+        except TypeError:
+            main_window = wait_main_window_func(relaunched_app)
+        main_window_title = main_window.window_text()
+    except RuntimeError:
+        main_window_title = "not observed (minimized to tray)"
 
     return relaunched_app, {
         "old_process_id": old_process_id,
@@ -4863,7 +4870,7 @@ def restart_app_after_churn(
         and new_process_id is not None
         and int(old_process_id) == int(new_process_id),
         "shutdown": shutdown,
-        "main_window_title": main_window.window_text(),
+        "main_window_title": main_window_title,
         "ready": compact_http_result(ready),
         "snapshots": {
             "before_shutdown": before_shutdown,

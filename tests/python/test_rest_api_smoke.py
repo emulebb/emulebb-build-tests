@@ -499,6 +499,46 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
     }
 
 
+def test_restart_app_after_churn_tolerates_tray_relaunch_window_absence() -> None:
+    module = load_rest_api_smoke_module()
+
+    def fake_pid(app: object) -> int:
+        return {"old-app": 111, "new-app": 222}[str(app)]
+
+    def fake_snapshot(process_id: int | None) -> dict[str, int | None]:
+        return {
+            "process_id": process_id,
+            "handles": 20,
+            "thread_count": 8,
+            "gdi_objects": 1,
+            "user_objects": 1,
+            "private_bytes": 4096,
+            "working_set_bytes": 8192,
+        }
+
+    def fail_wait_main_window(_app: object, *, timeout: float = 90.0):
+        raise RuntimeError("Timed out waiting for eMule main window. Last value: None")
+
+    relaunched, summary = module.restart_app_after_churn(
+        "old-app",
+        app_exe=Path("emule.exe"),
+        profile_base=Path("profile"),
+        base_url="http://127.0.0.1:4711",
+        api_key="api-key",
+        rest_ready_timeout_seconds=5.0,
+        close_func=lambda _app: None,
+        launch_func=lambda _app_exe, _profile_base: "new-app",
+        wait_main_window_func=fail_wait_main_window,
+        wait_ready_func=lambda _base_url, _api_key, _timeout: {"status": 200},
+        get_pid_func=fake_pid,
+        snapshot_func=fake_snapshot,
+    )
+
+    assert relaunched == "new-app"
+    assert summary["main_window_title"] == "not observed (minimized to tray)"
+    assert summary["ready"] == {"status": 200, "content_type": None}
+
+
 def test_max_resource_snapshot_keeps_high_water_marks() -> None:
     module = load_rest_api_smoke_module()
 
