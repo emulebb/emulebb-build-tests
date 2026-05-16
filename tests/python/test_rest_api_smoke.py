@@ -1955,6 +1955,8 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert "BuildAvailableNativeSearchMethods(request.eFamily)" in source
     assert "BuildCacheKey(request, nativeSearchMethods)" in source
     assert "RunNativeSearches(request, nativeSearchMethods)" in source
+    assert source.index("BuildCacheKey(request, nativeSearchMethods)") < source.index("if (request.uOffset > 0)")
+    assert source.index("if (TryGetCachedResults(strCacheKey, results))") < source.index("if (request.uOffset > 0)")
     assert "BuildNativeSearchMethodNames(eFamily)" in source
     assert "BuildRestSearchTypeNames(rRequest.eFamily)" in source
     assert "WebServerJsonSeams::TryValidateRequestPathEscapes" in seams
@@ -1966,10 +1968,14 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     assert seams.index('methods.push_back("global")') < seams.index('methods.push_back("kad")')
     assert "BuildAvailableNativeSearchMethodNames" in seams
     assert "BuildNativeSearchMethodsCacheToken" in seams
+    assert 'normalized.find("offset")' in seams
+    assert 'normalized.find("limit")' in seams
     assert "IsConnectedNetworkSearchMethod" in seams
     assert 'return "video";' in seams
     assert "REST `video` searches" in adapter_docs
     assert "adapter-side result filter" in adapter_docs
+    assert "`offset`, `limit`" in adapter_docs
+    assert "page only a cached first-page result set" in adapter_docs
     assert "REST `video` searches" in parity_docs
 
 
