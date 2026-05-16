@@ -213,10 +213,20 @@ Aggregate live E2E lane:
 
 - `scripts\run-live-e2e-suite.py` is the operator-facing aggregate runner for the maintained UI, REST API, and live-wire scenarios
 - the default run sequences Preferences UI, Shared Files UI, config-stability UI, shared-hash UI, startup-profile scenarios, REST live smoke, and auto-browse live coverage
+- `--profile release-expanded` is the bounded weak-path release gate: it runs
+  Preferences with directory-tree stress, Shared Files, shared-hash shutdown,
+  Search UI, shared-directories REST, REST API adversity, cold-start telemetry,
+  local dump/crash smoke, and aMuTorrent browser smoke
+- `release-expanded` requires 50 server searches plus 50 Kad searches and
+  100 successful paused download triggers; success means REST accepted the
+  download and the transfer materialized in the queue, not that the download
+  completed
 - Shared Files UI is always expanded to include `fixture-three-files`, `generated-robustness-recursive`, and `duplicate-startup-reuse`; config-stability and startup-profile scenarios are also passed explicitly
 - REST live smoke defaults to six server searches and six Kad searches using the configured live-wire open-term list, and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
 - aggregate reports mark whether REST contract completeness was expected and
-  which Arr/Prowlarr live-wire suites were included
+  which Arr/Prowlarr live-wire suites were included; expanded/stress reports
+  also include a `weak_path_matrix` with adversity, queued-download, UI, and
+  integration coverage targets
 - REST live smoke is invoked with `--rest-coverage-budget contract` and
   `--rest-stress-budget smoke` by default; use the aggregate runner's REST
   budget flags to reduce or expand that budget for a specific run
