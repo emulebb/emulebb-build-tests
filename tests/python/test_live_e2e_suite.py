@@ -500,6 +500,101 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     ]
 
 
+def test_release_expanded_profile_requires_100_live_download_triggers_and_adversity(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "release-expanded"),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["profile"] == "release-expanded"
+    assert summary["profile_suite_selection_applied"] is True
+    assert [script_name(command) for command in commands] == [
+        "preference-ui-e2e.py",
+        "shared-files-ui-e2e.py",
+        "search-ui-live.py",
+        "shared-hash-ui-e2e.py",
+        "shared-directories-rest-e2e.py",
+        "rest-api-smoke.py",
+        "rest-cold-start-dump-stress.py",
+        "local-dumps-crash-smoke.py",
+        "amutorrent-browser-smoke.py",
+    ]
+    assert summary["preference_ui_directories_tree_stress"] is True
+    assert summary["rest_coverage_budget"] == "contract-stress"
+    assert summary["rest_stress_budget"] == "smoke"
+    assert summary["rest_stress_duration_seconds"] == live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_DURATION_SECONDS
+    assert summary["rest_stress_concurrency"] == live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_CONCURRENCY
+    assert summary["rest_stress_max_failures"] == live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_MAX_FAILURES
+    assert summary["rest_socket_adversity_budget"] == "smoke"
+    assert summary["rest_leak_churn_budget"] == "smoke"
+    assert summary["rest_leak_churn_cycles"] == live_e2e_suite.RELEASE_EXPANDED_REST_LEAK_CHURN_CYCLES
+    assert summary["rest_stop_start_after_churn"] is True
+    assert summary["rest_download_trigger_count"] == live_e2e_suite.RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT
+    assert summary["search_ui"] == {"search_rounds": 2, "download_lifecycle_count": 2}
+    assert summary["weak_path_matrix"]["live_download_triggers"] == {
+        "server_search_count": live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK,
+        "kad_search_count": live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK,
+        "required_queued_triggers": live_e2e_suite.RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT,
+        "success_policy": "accepted_and_materialized_in_transfer_queue",
+    }
+    assert summary["weak_path_matrix"]["adversity"]["local_dumps_crash_smoke"] is True
+    assert summary["weak_path_matrix"]["integrations"]["amutorrent_browser_smoke"] is True
+
+    preference_command = commands[0]
+    assert "--directories-tree-stress" in preference_command
+
+    search_ui_command = commands[2]
+    assert option_values(search_ui_command, "--ui-search-rounds") == ["2"]
+    assert option_values(search_ui_command, "--ui-download-lifecycle-count") == ["2"]
+
+    rest_command = commands[5]
+    assert option_values(rest_command, "--server-search-count") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
+    ]
+    assert option_values(rest_command, "--kad-search-count") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
+    ]
+    assert option_values(rest_command, "--live-download-trigger-count") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT)
+    ]
+    assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
+    assert option_values(rest_command, "--rest-stress-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-stress-duration-seconds") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_DURATION_SECONDS)
+    ]
+    assert option_values(rest_command, "--rest-stress-concurrency") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_CONCURRENCY)
+    ]
+    assert option_values(rest_command, "--rest-stress-max-failures") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_MAX_FAILURES)
+    ]
+    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-leak-churn-cycles") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_LEAK_CHURN_CYCLES)
+    ]
+    assert "--rest-stop-start-after-churn" in rest_command
+
+    cold_start_command = commands[6]
+    assert option_values(cold_start_command, "--waves") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
+    ]
+    assert option_values(cold_start_command, "--searches-per-wave") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE)
+    ]
+    assert option_values(cold_start_command, "--downloads-per-wave") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE)
+    ]
+
+
 def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

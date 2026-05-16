@@ -75,6 +75,19 @@ DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFIL
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_SEARCH_UI_SEARCH_ROUNDS = 1
 DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
+RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK = 50
+RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT = 100
+RELEASE_EXPANDED_REST_STRESS_DURATION_SECONDS = 45.0
+RELEASE_EXPANDED_REST_STRESS_CONCURRENCY = 8
+RELEASE_EXPANDED_REST_STRESS_MAX_FAILURES = 0
+RELEASE_EXPANDED_REST_LEAK_CHURN_CYCLES = 4
+RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES = 1
+RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 3
+RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 2
+RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 0
+RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 5.0
+RELEASE_EXPANDED_SEARCH_UI_SEARCH_ROUNDS = 2
+RELEASE_EXPANDED_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 2
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES = 1
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 3
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 2
@@ -246,6 +259,17 @@ PROFILE_SUITE_NAMES = {
         "sonarr-emulebb",
         "rest-cold-start-dump-stress",
     ),
+    "release-expanded": (
+        "preference-ui",
+        "shared-files-ui",
+        "shared-hash-ui",
+        "search-ui-live",
+        "shared-directories-rest",
+        "rest-api",
+        "rest-cold-start-dump-stress",
+        "local-dumps-crash-smoke",
+        "amutorrent-browser-smoke",
+    ),
     "stabilization-stress": (
         "shared-files-ui",
         "search-ui-live",
@@ -286,6 +310,50 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
 
     if args.profile == "controller-surface" and args.arr_download_proof_mode == DEFAULT_ARR_DOWNLOAD_PROOF_MODE:
         args.arr_download_proof_mode = CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
+
+    if args.profile == "release-expanded":
+        if not args.preference_ui_directories_tree_stress:
+            args.preference_ui_directories_tree_stress = True
+        if args.rest_server_search_count == DEFAULT_REST_SEARCH_COUNT:
+            args.rest_server_search_count = RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK
+        if args.rest_kad_search_count == DEFAULT_REST_SEARCH_COUNT:
+            args.rest_kad_search_count = RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK
+        if args.rest_download_trigger_count == DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT:
+            args.rest_download_trigger_count = RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT
+        if args.rest_coverage_budget == "contract":
+            args.rest_coverage_budget = "contract-stress"
+        if args.rest_stress_duration_seconds == 30.0:
+            args.rest_stress_duration_seconds = RELEASE_EXPANDED_REST_STRESS_DURATION_SECONDS
+        if args.rest_stress_concurrency == 4:
+            args.rest_stress_concurrency = RELEASE_EXPANDED_REST_STRESS_CONCURRENCY
+        if args.rest_stress_max_failures == 1:
+            args.rest_stress_max_failures = RELEASE_EXPANDED_REST_STRESS_MAX_FAILURES
+        if args.rest_socket_adversity_budget == "off":
+            args.rest_socket_adversity_budget = "smoke"
+        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
+            args.rest_tls_handshake_adversity_budget = "smoke"
+        if args.rest_leak_churn_budget == "off":
+            args.rest_leak_churn_budget = "smoke"
+        if args.rest_leak_churn_cycles is None:
+            args.rest_leak_churn_cycles = RELEASE_EXPANDED_REST_LEAK_CHURN_CYCLES
+        if not args.rest_stop_start_after_churn:
+            args.rest_stop_start_after_churn = True
+        if args.rest_cold_start_dump_stress_waves == DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES:
+            args.rest_cold_start_dump_stress_waves = RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES
+        if args.rest_cold_start_dump_stress_searches_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE:
+            args.rest_cold_start_dump_stress_searches_per_wave = RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE
+        if args.rest_cold_start_dump_stress_max_concurrent_searches == DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES:
+            args.rest_cold_start_dump_stress_max_concurrent_searches = (
+                RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES
+            )
+        if args.rest_cold_start_dump_stress_downloads_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE:
+            args.rest_cold_start_dump_stress_downloads_per_wave = RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE
+        if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
+            args.rest_cold_start_dump_stress_post_drain_seconds = RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS
+        if args.search_ui_search_rounds == DEFAULT_SEARCH_UI_SEARCH_ROUNDS:
+            args.search_ui_search_rounds = RELEASE_EXPANDED_SEARCH_UI_SEARCH_ROUNDS
+        if args.search_ui_download_lifecycle_count == DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT:
+            args.search_ui_download_lifecycle_count = RELEASE_EXPANDED_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT
 
     if args.profile == "stabilization-stress":
         if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
@@ -1045,6 +1113,36 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "rest_search_method_override": args.rest_search_method_override,
+        "weak_path_matrix": {
+            "adversity": {
+                "rest_socket_adversity_budget": args.rest_socket_adversity_budget,
+                "rest_tls_handshake_adversity_budget": args.rest_tls_handshake_adversity_budget,
+                "rest_leak_churn_budget": args.rest_leak_churn_budget,
+                "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
+                "local_dumps_crash_smoke": any(spec.name == "local-dumps-crash-smoke" for spec in selected_specs),
+            },
+            "live_download_triggers": {
+                "server_search_count": args.rest_server_search_count,
+                "kad_search_count": args.rest_kad_search_count,
+                "required_queued_triggers": args.rest_download_trigger_count,
+                "success_policy": "accepted_and_materialized_in_transfer_queue",
+            },
+            "ui": {
+                "preference_ui": any(spec.name == "preference-ui" for spec in selected_specs),
+                "preference_ui_directories_tree_stress": bool(args.preference_ui_directories_tree_stress),
+                "shared_files_ui": any(spec.name == "shared-files-ui" for spec in selected_specs),
+                "shared_hash_ui": any(spec.name == "shared-hash-ui" for spec in selected_specs),
+                "search_ui_live": any(spec.name == "search-ui-live" for spec in selected_specs),
+            },
+            "integrations": {
+                "amutorrent_browser_smoke": any(spec.name == "amutorrent-browser-smoke" for spec in selected_specs),
+                "arr_live_wire_suites": [
+                    spec.name
+                    for spec in selected_specs
+                    if spec.is_prowlarr_emulebb or spec.is_arr_emulebb
+                ],
+            },
+        },
         "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
         "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
         "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
