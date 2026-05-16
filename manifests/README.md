@@ -12,3 +12,8 @@ direct ED2K bootstrap rows are intentionally externalized to the ignored repo-ro
 `live-wire-inputs.local.json`; use the tracked `live-wire-inputs.example.json`
 for the schema shape. Tracked manifests must keep only placeholders, stable
 contract vectors, or redacted summaries for live-wire runtime data.
+
+`protocol-oracle-golden.v1.json` tracks compact Kad/eD2K protocol oracle
+vectors and state-machine summaries. Raw tracing-harness JSONL dumps, packet
+hex, timestamps, peer addresses, and passive capture files must stay under
+generated `reports` artifacts and must not be committed as protocol goldens.

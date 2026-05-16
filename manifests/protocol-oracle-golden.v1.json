@@ -1,0 +1,161 @@
+{
+  "description": "Normalized Kad/eD2K protocol oracle evidence. Raw tracing-harness JSONL and packet captures stay in generated reports.",
+  "records": [
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x17F39CB63770AA53",
+      "payloadLength": 11,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "debian"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x27C377811D510298",
+      "payloadLength": 10,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "emule"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0xD13803A7A5A9EF97",
+      "payloadLength": 11,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "fedora"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x9AF6C316F24A8DD1",
+      "payloadLength": 12,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "freebsd"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0x3E754120FCC3EB84",
+      "payloadLength": 10,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "linux"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x16",
+      "opcodeName": "OP_SEARCHREQUEST",
+      "payloadDigest": "fnv1a64:0xCE7D5C38D51E41FD",
+      "payloadLength": 11,
+      "protocol": "ed2k",
+      "recordType": "wire-vector",
+      "scenarioId": "ed2k.search.request.v1",
+      "transport": "tcp",
+      "vectorId": "ubuntu"
+    },
+    {
+      "direction": "recv",
+      "flow": "tcp_receive",
+      "opcode": "0x01",
+      "opcodeName": "OP_HELLO",
+      "payloadDigest": "sha256:14d110fd136094d8419d1551433bc9009825baf4e1a6a577116295fb1f5faf8a",
+      "payloadLength": 3,
+      "protocol": "ed2k",
+      "recordType": "ed2k-state",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "stateId": "tcp.payload.emit",
+      "stateLabel": "payload_emit",
+      "transport": "tcp",
+      "transportMode": "plaintext"
+    },
+    {
+      "direction": "recv",
+      "flow": "tcp_receive",
+      "opcode": "0x38",
+      "opcodeName": "OP_MESSAGE",
+      "payloadDigest": "sha256:abeff5caaa824c8a904c69ddebcd6e99c68a7fb7d207426a3ba010f43c7c3dff",
+      "payloadLength": 2,
+      "protocol": "ed2k",
+      "recordType": "ed2k-state",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "stateId": "tcp.payload.emit",
+      "stateLabel": "payload_emit",
+      "transport": "tcp",
+      "transportMode": "plaintext"
+    },
+    {
+      "count": 1,
+      "protocol": "ed2k",
+      "recordType": "state-sequence",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "sequence": "tcp.header.partial -> tcp.payload.emit -> tcp.header.complete -> tcp.payload.emit",
+      "transport": "tcp"
+    },
+    {
+      "direction": "send",
+      "opcode": "0x11",
+      "opcodeName": "KADEMLIA2_HELLO_REQ",
+      "payloadDigest": "sha256:4a64a107f0cb32536e5bce6c98c393db21cca7f4ea187ba8c4dca8b51d4ea80a",
+      "protocol": "kad2",
+      "recordType": "udp-packet",
+      "scenarioId": "kad.udp.publish-search.v1",
+      "transport": "udp",
+      "transportMode": "plaintext",
+      "wireLength": 1
+    },
+    {
+      "direction": "send",
+      "opcode": "0x44",
+      "opcodeName": "KADEMLIA2_PUBLISH_SOURCE_REQ",
+      "payloadDigest": "sha256:3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "protocol": "kad2",
+      "recordType": "udp-packet",
+      "scenarioId": "kad.udp.publish-search.v1",
+      "transport": "udp",
+      "transportMode": "receiver_verify_key",
+      "wireLength": 1
+    }
+  ],
+  "scenarioSource": "main/community native protocol-parity plus tracing-harness JSONL normalizer contract",
+  "scenarios": [
+    {
+      "description": "Community-compatible compact eD2K search request vectors.",
+      "protocol": "ed2k",
+      "scenarioId": "ed2k.search.request.v1",
+      "source": "native-protocol-parity"
+    },
+    {
+      "description": "Fragmented eD2K TCP receive-flow packet boundary replay.",
+      "protocol": "ed2k",
+      "scenarioId": "ed2k.tcp.receive-flow.v1",
+      "source": "native-protocol-parity"
+    },
+    {
+      "description": "Kad UDP opcode and transport-mode buckets expected from tracing-harness oracle dumps.",
+      "protocol": "kad2",
+      "scenarioId": "kad.udp.publish-search.v1",
+      "source": "tracing-harness"
+    }
+  ],
+  "schemaVersion": "emule-build-tests.protocol-oracle-golden.v1"
+}

@@ -78,6 +78,10 @@ Script inventory:
 | `scripts\run-native-coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
 | `scripts\run-live-diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
 | `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
+| `scripts\validate-protocol-goldens.py` | protocol parity guard | maintained | validates compact Kad/eD2K oracle goldens and redaction rules |
+| `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes tracing-harness UDP/eD2K JSONL dumps into candidate goldens |
+| `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
+| `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under reports |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report/profile-seed resolution for Python-first live/UI harnesses |
