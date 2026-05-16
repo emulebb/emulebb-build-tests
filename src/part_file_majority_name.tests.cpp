@@ -87,7 +87,7 @@ TEST_CASE("codec quality and source tokens vote as one majority filename group")
 
 TEST_CASE("source names without usable title tokens are ignored")
 {
-	const auto selection = SelectMajorityName(std::vector<CString>{_T("1080p.x264.avi"), _T("download"), _T(".avi")}, 0, 51);
+	const auto selection = SelectMajorityName(std::vector<CString>{_T("1080p.x264.avi"), _T("download"), _T("download.iso"), _T(".avi")}, 0, 51);
 
 	CHECK_FALSE(selection.HasCandidate);
 	CHECK(selection.CandidateVotes == 0);

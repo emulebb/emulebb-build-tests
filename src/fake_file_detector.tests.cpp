@@ -167,6 +167,24 @@ TEST_CASE("fake-file analyzer still flags meaningful title divergence")
 	CHECK(report.nameDivergenceGroups.size() == 2);
 }
 
+TEST_CASE("fake-file analyzer ignores generic download fallback names")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Operator Movie.avi",
+		L"download.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.canonicalNames.size() == 1);
+	CHECK(report.canonicalNames[0] == L"operator movie | ext:avi");
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
 TEST_CASE("fake-file analyzer reports pending header without mismatch penalty")
 {
 	FakeFileDetectorSeams::RuleSet rules;
