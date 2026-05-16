@@ -53,3 +53,22 @@ def test_assert_equivalent_path_sets_handles_case_slashes_and_trailing_separator
         ["c:\\share\\one", "C:\\Share\\Two"],
         "test paths",
     )
+
+
+def test_launch_and_wait_tolerates_minimized_to_tray_startup(tmp_path: Path, monkeypatch) -> None:
+    module = load_shared_directories_rest_module()
+    launched = object()
+
+    monkeypatch.setattr(module, "launch_app", lambda _app_exe, _profile_base: launched)
+    monkeypatch.setattr(module, "wait_for_rest_ready", lambda _base_url, _api_key, _timeout_seconds: {"status": 200})
+
+    def fail_wait_for_main_window(_app, *, timeout=90.0, require_visible=False):
+        raise RuntimeError("Timed out waiting for eMule main window. Last value: None")
+
+    monkeypatch.setattr(module, "wait_for_main_window", fail_wait_for_main_window)
+
+    app, title, ready = module.launch_and_wait(tmp_path / "emule.exe", tmp_path / "profile", "http://127.0.0.1:4712", "k", 30.0)
+
+    assert app is launched
+    assert title == "not observed (minimized to tray)"
+    assert ready == {"status": 200, "content_type": None}

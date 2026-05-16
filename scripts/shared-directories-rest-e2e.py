@@ -434,12 +434,15 @@ def set_phase(report: dict[str, object], phase: str) -> str:
 
 
 def launch_and_wait(app_exe: Path, profile_base: Path, base_url: str, api_key: str, timeout_seconds: float):
-    """Launches eMule and waits for both the UI shell and REST listener."""
+    """Launches eMule and waits for REST readiness, tolerating tray startup."""
 
     app = launch_app(app_exe, profile_base)
-    main_window = wait_for_main_window(app)
     ready = wait_for_rest_ready(base_url, api_key, timeout_seconds)
-    return app, main_window.window_text(), compact_http_result(ready)
+    try:
+        title = wait_for_main_window(app, timeout=5.0).window_text()
+    except RuntimeError:
+        title = "not observed (minimized to tray)"
+    return app, title, compact_http_result(ready)
 
 
 def patch_shared_directories(base_url: str, api_key: str, payload: dict[str, object]) -> dict[str, object]:
