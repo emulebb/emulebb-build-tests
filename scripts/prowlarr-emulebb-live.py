@@ -574,13 +574,23 @@ def check_direct_caps(base_url: str, emule_api_key: str) -> dict[str, object]:
     return {"status": 200, "root": root.tag, "length": len(body_text)}
 
 
-def build_direct_torznab_search_path(emule_api_key: str, query: str, category_id: int | None) -> str:
+def build_direct_torznab_search_path(
+    emule_api_key: str,
+    query: str,
+    category_id: int | None,
+    *,
+    extra_params: dict[str, object] | None = None,
+) -> str:
     """Builds one direct eMule BB Torznab search path."""
 
-    path = "/indexer/emulebb/api?t=search"
+    params: dict[str, object] = {"t": "search"}
     if category_id is not None:
-        path += f"&cat={int(category_id)}"
-    return path + "&q=" + urllib.parse.quote(query) + "&apikey=" + urllib.parse.quote(emule_api_key)
+        params["cat"] = int(category_id)
+    if extra_params:
+        params.update(extra_params)
+    params["q"] = query
+    params["apikey"] = emule_api_key
+    return "/indexer/emulebb/api?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
 
 
 def build_prowlarr_search_path(query: str, category_id: int, indexer_id: int) -> str:
@@ -678,6 +688,24 @@ def count_torznab_items(body_text: str) -> int:
     return len(channel.findall("item"))
 
 
+def torznab_response_attrs(body_text: str) -> dict[str, int | None]:
+    """Returns Torznab paging metadata from one RSS response."""
+
+    root = ET.fromstring(body_text)
+    response = root.find(".//{http://torznab.com/schemas/2015/feed}response")
+    if response is None:
+        return {"offset": None, "total": None}
+
+    def parse_int(name: str) -> int | None:
+        value = response.attrib.get(name)
+        try:
+            return int(value) if value is not None else None
+        except ValueError:
+            return None
+
+    return {"offset": parse_int("offset"), "total": parse_int("total")}
+
+
 def wait_for_direct_torznab_results(
     base_url: str,
     emule_api_key: str,
@@ -732,6 +760,57 @@ def stress_cached_direct_torznab_search(
         if status != 200 or item_count <= 0:
             raise RuntimeError(f"Cached direct Torznab search stress failed: {attempts!r}")
     return {"query_present": bool(query), "requests": count, "attempts": attempts}
+
+
+def check_cached_direct_torznab_offset_page(
+    base_url: str,
+    emule_api_key: str,
+    query: str,
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
+) -> dict[str, object]:
+    """Proves non-zero Torznab offsets can page a cached first-page result set."""
+
+    first_path = build_direct_torznab_search_path(
+        emule_api_key,
+        query,
+        category_id,
+        extra_params={"limit": 1},
+    )
+    first_result = rest_smoke.http_request(base_url, first_path, request_timeout_seconds=TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS)
+    first_status = int(first_result.get("status") or 0)
+    first_body = str(first_result.get("body_text") or "")
+    first_count = count_torznab_items(first_body) if first_status == 200 and first_body else 0
+    if first_status != 200 or first_count <= 0:
+        raise RuntimeError(
+            "Direct Torznab first-page cache seed failed: "
+            f"status={first_status}, count={first_count}"
+        )
+
+    offset_path = build_direct_torznab_search_path(
+        emule_api_key,
+        query,
+        category_id,
+        extra_params={"offset": 1, "limit": 1},
+    )
+    offset_result = rest_smoke.http_request(base_url, offset_path, request_timeout_seconds=20.0)
+    offset_status = int(offset_result.get("status") or 0)
+    offset_body = str(offset_result.get("body_text") or "")
+    offset_count = count_torznab_items(offset_body) if offset_status == 200 and offset_body else 0
+    attrs = torznab_response_attrs(offset_body) if offset_status == 200 and offset_body else {"offset": None, "total": None}
+    if offset_status != 200 or attrs.get("offset") != 1 or offset_count <= 0:
+        raise RuntimeError(
+            "Direct Torznab cached offset page failed: "
+            f"status={offset_status}, count={offset_count}, attrs={attrs!r}"
+        )
+    return {
+        "query_present": bool(query),
+        "category": int(category_id),
+        "first_count": first_count,
+        "offset_count": offset_count,
+        "offset": attrs.get("offset"),
+        "total": attrs.get("total"),
+    }
 
 
 def stress_direct_torznab_search_terms(
@@ -1684,6 +1763,14 @@ def main() -> int:
             args.emule_connection_timeout_seconds,
             require_server_connected=False,
             require_kad_connected=True,
+        )
+
+        record_phase("direct_torznab_cached_offset_page")
+        report["checks"]["direct_torznab_cached_offset_page"] = check_cached_direct_torznab_offset_page(
+            emule_base_url,
+            args.emule_api_key,
+            generic_terms[0],
+            category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
 
         record_phase("prowlarr_indexer_upsert")
