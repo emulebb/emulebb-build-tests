@@ -382,18 +382,10 @@ def close_app_cleanly(app: Application, window_timeout: float = 30.0, process_ti
     try:
         main_window = app.top_window()
     except Exception:
-        if not process_id:
+        if not process_id or _is_process_exited(int(process_id)):
             return
-        try:
-            process_handle = win32api.OpenProcess(win32con.SYNCHRONIZE, False, int(process_id))
-        except Exception:
-            return
-        try:
-            if win32event.WaitForSingleObject(process_handle, 0) == win32event.WAIT_OBJECT_0:
-                return
-        finally:
-            win32api.CloseHandle(process_handle)
-        raise
+        _terminate_process_without_window(app, int(process_id), process_timeout)
+        return
     win32gui.PostMessage(main_window.handle, win32con.WM_CLOSE, 0, 0)
 
     def resolve() -> bool:
@@ -424,6 +416,50 @@ def close_app_cleanly(app: Application, window_timeout: float = 30.0, process_ti
         wait_result = win32event.WaitForSingleObject(process_handle, int(process_timeout * 1000))
         if wait_result != win32event.WAIT_OBJECT_0:
             raise RuntimeError(f"Timed out waiting for process {process_id} to exit after window shutdown.")
+    finally:
+        win32api.CloseHandle(process_handle)
+
+
+def _is_process_exited(process_id: int) -> bool:
+    """Returns whether a process handle is already signaled or inaccessible."""
+
+    try:
+        process_handle = win32api.OpenProcess(win32con.SYNCHRONIZE, False, process_id)
+    except Exception:
+        return True
+    try:
+        return win32event.WaitForSingleObject(process_handle, 0) == win32event.WAIT_OBJECT_0
+    finally:
+        win32api.CloseHandle(process_handle)
+
+
+def _terminate_process_without_window(app: Application, process_id: int, process_timeout: float) -> None:
+    """Stops a test-launched process when no UI window exists to receive WM_CLOSE."""
+
+    try:
+        app.kill(soft=False)
+    except Exception:
+        process_handle = win32api.OpenProcess(win32con.SYNCHRONIZE | 0x0001, False, process_id)
+        try:
+            win32api.TerminateProcess(process_handle, 1)
+            wait_result = win32event.WaitForSingleObject(process_handle, int(process_timeout * 1000))
+            if wait_result != win32event.WAIT_OBJECT_0:
+                raise RuntimeError(f"Timed out waiting for process {process_id} to exit after forced termination.")
+        finally:
+            win32api.CloseHandle(process_handle)
+        return
+
+    if _is_process_exited(process_id):
+        return
+
+    try:
+        process_handle = win32api.OpenProcess(win32con.SYNCHRONIZE, False, process_id)
+    except Exception:
+        return
+    try:
+        wait_result = win32event.WaitForSingleObject(process_handle, int(process_timeout * 1000))
+        if wait_result != win32event.WAIT_OBJECT_0:
+            raise RuntimeError(f"Timed out waiting for process {process_id} to exit after forced termination.")
     finally:
         win32api.CloseHandle(process_handle)
 
