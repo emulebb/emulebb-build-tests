@@ -308,6 +308,7 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
         "sonarr-emulebb",
     ]
     assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-emulebb", "sonarr-emulebb"]
+    assert summary["arr_download_proof_mode"] == live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
     assert summary["arr_direct_search_stress_count"] == live_e2e_suite.BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT
     assert summary["arr_prowlarr_search_stress_count"] == live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
 
@@ -324,6 +325,12 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     ]
     assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [
         str(live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT)
+    ]
+    assert option_values(commands[3], "--download-proof-mode") == [
+        live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
+    ]
+    assert option_values(commands[4], "--download-proof-mode") == [
+        live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
     ]
 
 
@@ -342,6 +349,7 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
 
     assert summary["status"] == "passed"
     assert summary["profile"] == "beta-release"
+    assert summary["arr_download_proof_mode"] == live_e2e_suite.DEFAULT_ARR_DOWNLOAD_PROOF_MODE
     assert summary["rest_cold_start_dump_stress"]["waves"] == live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES
     assert summary["rest_cold_start_dump_stress"]["searches_per_wave"] == (
         live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE

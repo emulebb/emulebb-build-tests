@@ -448,6 +448,75 @@ def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
     ]
 
 
+def test_radarr_movie_download_e2e_handoff_skips_completion_and_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        module,
+        "ensure_radarr_movie",
+        lambda *_args, **_kwargs: {"id": 77, "created": True, "root_folder": {"path": str(tmp_path)}},
+    )
+    monkeypatch.setattr(module, "arr_health_rows", lambda *_args, **_kwargs: [])
+
+    def fake_grab(**kwargs):
+        calls.append(("release_grab", (kwargs["title"], kwargs["download_category"])))
+        return {
+            "source": "arr_release_search",
+            "hash": "fedcba9876543210fedcba9876543210",
+            "hash_present": True,
+            "category_transfer": {
+                "hash": "fedcba9876543210fedcba9876543210",
+                "categoryName": kwargs["download_category"],
+                "state": "downloading",
+            },
+        }
+
+    monkeypatch.setattr(module, "grab_first_arr_release_or_fallback_to_prowlarr", fake_grab)
+    monkeypatch.setattr(
+        module,
+        "resume_transfer_if_paused",
+        lambda *_args, **_kwargs: calls.append(("resume_if_paused", _args[2])) or {"resumed": False},
+    )
+    monkeypatch.setattr(module, "wait_for_transfer_completion", lambda *_args, **_kwargs: pytest.fail("completion wait should be skipped"))
+    monkeypatch.setattr(module, "trigger_arr_downloaded_scan", lambda *_args, **_kwargs: pytest.fail("downloaded scan should be skipped"))
+    monkeypatch.setattr(module, "wait_for_radarr_import", lambda *_args, **_kwargs: pytest.fail("Arr import should be skipped"))
+
+    report, cleanup_movie_id = module.run_radarr_movie_download_e2e(
+        radarr_url="http://radarr.test",
+        radarr_api_key="key",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        indexer_id=40,
+        indexer_name="eMule BB Local (Prowlarr)",
+        prowlarr_indexer_id=50,
+        movie_title="operator movie",
+        movie_root=tmp_path,
+        category_name=module.RADARR_IMPORT_CATEGORY,
+        category_save_path=tmp_path / module.RADARR_IMPORT_CATEGORY,
+        movie_root_creates_local_path=True,
+        quality_profile_name="AnyAnyLang",
+        release_search_timeout_seconds=10.0,
+        timeout_seconds=10.0,
+        download_proof_mode="handoff",
+    )
+
+    assert cleanup_movie_id == 77
+    assert report["completed_transfer"]["skipped"] is True
+    assert report["downloaded_scan"]["skipped"] is True
+    assert report["arr_import"]["skipped"] is True
+    assert report["completed_transfer"]["last_seen"]["categoryName"] == module.RADARR_IMPORT_CATEGORY
+    assert calls == [
+        ("release_grab", ("operator movie", module.RADARR_IMPORT_CATEGORY)),
+        ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
+    ]
+
+
 def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_indexer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -3303,6 +3303,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--radarr-release-timeout-seconds", type=float, default=DEFAULT_SEARCH_TIMEOUT_SECONDS)
     parser.add_argument("--prowlarr-indexer-availability-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--arr-kind", choices=["radarr", "sonarr"], default="radarr")
+    parser.add_argument("--download-proof-mode", choices=["complete", "handoff"], default="complete")
     parser.add_argument("--acquisition-timeout-minutes", type=float)
     parser.add_argument(
         "--radarr-movie-root",
@@ -3441,6 +3442,7 @@ def run_radarr_movie_download_e2e(
     quality_profile_name: str | None,
     release_search_timeout_seconds: float,
     timeout_seconds: float,
+    download_proof_mode: str = "complete",
 ) -> tuple[dict[str, object], int | None]:
     """Runs the Radarr movie grab-to-eMule-category proof."""
 
@@ -3509,6 +3511,16 @@ def run_radarr_movie_download_e2e(
         transfer_hash,
         report["category_transfer"],
     )
+    if download_proof_mode == "handoff":
+        report["completed_transfer"] = {
+            "skipped": True,
+            "reason": "download-proof-mode=handoff",
+            "last_seen": report["category_transfer"],
+        }
+        report["downloaded_scan"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
+        report["arr_import"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
+        return report, movie_id if bool(movie.get("created")) else None
+
     report["completed_transfer"] = wait_for_transfer_completion(
         emule_base_url,
         emule_api_key,
@@ -3550,6 +3562,7 @@ def run_sonarr_series_download_e2e(
     quality_profile_name: str | None,
     release_search_timeout_seconds: float,
     timeout_seconds: float,
+    download_proof_mode: str = "complete",
 ) -> tuple[dict[str, object], int | None]:
     """Runs the Sonarr series grab-to-import proof."""
 
@@ -3618,6 +3631,16 @@ def run_sonarr_series_download_e2e(
         transfer_hash,
         report["category_transfer"],
     )
+    if download_proof_mode == "handoff":
+        report["completed_transfer"] = {
+            "skipped": True,
+            "reason": "download-proof-mode=handoff",
+            "last_seen": report["category_transfer"],
+        }
+        report["downloaded_scan"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
+        report["arr_import"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
+        return report, series_id if bool(series.get("created")) else None
+
     report["completed_transfer"] = wait_for_transfer_completion(
         emule_base_url,
         emule_api_key,
@@ -3855,6 +3878,7 @@ def main() -> int:
             "quality_profile_name": quality_profile_name,
             "environment_warning": media_root_warning,
             "acquisition_timeout_seconds": acquisition_timeout_seconds,
+            "download_proof_mode": args.download_proof_mode,
             "search_timeout_seconds": min(args.radarr_release_timeout_seconds, ARR_LIVE_SEARCH_TIMEOUT_SECONDS),
             "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
             "prowlarr_indexer_availability_timeout_seconds": args.prowlarr_indexer_availability_timeout_seconds,
@@ -4008,6 +4032,7 @@ def main() -> int:
                 quality_profile_name=quality_profile_name,
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
                 timeout_seconds=acquisition_timeout_seconds,
+                download_proof_mode=args.download_proof_mode,
             )
             if cleanup_media_id is not None:
                 cleanup_radarr_movies.append((arr_url, arr_api_key, cleanup_media_id))
@@ -4030,6 +4055,7 @@ def main() -> int:
                 quality_profile_name=quality_profile_name,
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
                 timeout_seconds=acquisition_timeout_seconds,
+                download_proof_mode=args.download_proof_mode,
             )
             if cleanup_media_id is not None:
                 cleanup_sonarr_series.append((arr_url, arr_api_key, cleanup_media_id))

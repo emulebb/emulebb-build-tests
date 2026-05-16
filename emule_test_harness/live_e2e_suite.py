@@ -50,6 +50,7 @@ DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
 DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS = 90.0
 DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS = 300.0
 DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES = 30.0
+DEFAULT_ARR_DOWNLOAD_PROOF_MODE = "complete"
 DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES = 4
 DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 12
 DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 8
@@ -94,6 +95,7 @@ STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_CHURN_INTERVAL_SECONDS = 10.0
 STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN = 20
 STABILIZATION_SEARCH_UI_SEARCH_ROUNDS = 3
 STABILIZATION_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 2
+CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE = "handoff"
 
 
 @dataclass(frozen=True)
@@ -279,6 +281,9 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
     if args.arr_prowlarr_search_stress_count == DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT:
         args.arr_prowlarr_search_stress_count = BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
 
+    if args.profile == "controller-surface" and args.arr_download_proof_mode == DEFAULT_ARR_DOWNLOAD_PROOF_MODE:
+        args.arr_download_proof_mode = CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
+
     if args.profile == "stabilization-stress":
         if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
             args.shared_files_ui_scenario = list(SHARED_FILES_UI_STRESS_SCENARIOS)
@@ -404,6 +409,7 @@ def build_suite_command(
     arr_search_timeout_seconds: float = DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS,
     document_download_timeout_seconds: float = DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS,
     media_acquisition_timeout_minutes: float = DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES,
+    arr_download_proof_mode: str = DEFAULT_ARR_DOWNLOAD_PROOF_MODE,
     radarr_movie_root: str | None = None,
     sonarr_series_root: str | None = None,
     rest_cold_start_dump_stress_waves: int = DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES,
@@ -529,6 +535,7 @@ def build_suite_command(
         command.extend(["--result-timeout-seconds", str(arr_search_timeout_seconds)])
         command.extend(["--radarr-release-timeout-seconds", str(arr_search_timeout_seconds)])
         command.extend(["--acquisition-timeout-minutes", str(media_acquisition_timeout_minutes)])
+        command.extend(["--download-proof-mode", arr_download_proof_mode])
         if spec.name == "radarr-emulebb" and radarr_movie_root is not None:
             command.extend(["--radarr-movie-root", str(radarr_movie_root)])
         if spec.name == "sonarr-emulebb" and sonarr_series_root is not None:
@@ -751,6 +758,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arr-search-timeout-seconds", type=float, default=DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS)
     parser.add_argument("--document-download-timeout-seconds", type=float, default=DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS)
     parser.add_argument("--media-acquisition-timeout-minutes", type=float, default=DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES)
+    parser.add_argument(
+        "--arr-download-proof-mode",
+        choices=["complete", "handoff"],
+        default=DEFAULT_ARR_DOWNLOAD_PROOF_MODE,
+    )
     parser.add_argument("--radarr-movie-root")
     parser.add_argument("--sonarr-series-root")
     parser.add_argument("--rest-cold-start-dump-stress-waves", type=int, default=DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES)
@@ -1036,6 +1048,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "arr_search_timeout_seconds": args.arr_search_timeout_seconds,
         "document_download_timeout_seconds": args.document_download_timeout_seconds,
         "media_acquisition_timeout_minutes": args.media_acquisition_timeout_minutes,
+        "arr_download_proof_mode": args.arr_download_proof_mode,
         "radarr_movie_root_configured": bool(args.radarr_movie_root),
         "radarr_movie_root_present": bool(args.radarr_movie_root),
         "sonarr_series_root_configured": bool(args.sonarr_series_root),
@@ -1126,6 +1139,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             arr_search_timeout_seconds=args.arr_search_timeout_seconds,
             document_download_timeout_seconds=args.document_download_timeout_seconds,
             media_acquisition_timeout_minutes=args.media_acquisition_timeout_minutes,
+            arr_download_proof_mode=args.arr_download_proof_mode,
             radarr_movie_root=radarr_movie_root,
             sonarr_series_root=sonarr_series_root,
             rest_cold_start_dump_stress_waves=args.rest_cold_start_dump_stress_waves,
