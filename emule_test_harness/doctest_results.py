@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from xml.etree import ElementTree
 
+STRICT_PARITY_SUITE_NAMES = frozenset({"parity", "protocol-parity"})
+
 
 @dataclass(frozen=True)
 class DoctestCaseResult:
@@ -114,13 +116,13 @@ def compare_case_sets(
             case_set_mismatch_count += 1
             continue
 
-        if suite_name == "parity":
+        if suite_name in STRICT_PARITY_SUITE_NAMES:
             if test_run_case.success and baseline_case.success:
-                lines.append(f"[PASS] parity: {name}")
+                lines.append(f"[PASS] {suite_name}: {name}")
                 pass_count += 1
             else:
                 lines.append(
-                    f"[FAIL] parity: {name} "
+                    f"[FAIL] {suite_name}: {name} "
                     f"(test_run={test_run_case.success}, baseline={baseline_case.success})"
                 )
                 has_failure = True

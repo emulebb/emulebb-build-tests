@@ -223,6 +223,9 @@ SUITE_SPECS = (
 SUITE_NAMES = tuple(spec.name for spec in SUITE_SPECS)
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
 PROFILE_SUITE_NAMES = {
+    "protocol-parity": (
+        "rest-api",
+    ),
     "beta-green": (
         "shared-directories-rest",
         "rest-api",

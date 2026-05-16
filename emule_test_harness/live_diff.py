@@ -14,7 +14,7 @@ from .paths import get_build_tag, get_test_binary_path
 from .processes import run_captured
 from .workspace_layout import get_default_workspace_root
 
-DEFAULT_SUITE_NAMES = ("parity", "divergence")
+DEFAULT_SUITE_NAMES = ("parity", "protocol-parity", "divergence")
 
 
 @dataclass(frozen=True)

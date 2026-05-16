@@ -59,7 +59,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
             app_root=config.main_app_root,
             configuration=config.configuration,
             platform=config.platform,
-            suite_names=("parity", "community-core-divergence"),
+            suite_names=("parity", "protocol-parity", "community-core-divergence"),
             preferred_coverage_root=config.preferred_coverage_root,
         )
     )
@@ -72,7 +72,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
             app_root=config.community_app_root,
             configuration=config.configuration,
             platform=config.platform,
-            suite_names=("parity",),
+            suite_names=("parity", "protocol-parity"),
             preferred_coverage_root=config.preferred_coverage_root,
         )
     )
@@ -87,7 +87,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
             baseline_app_root=config.community_app_root,
             configuration=config.configuration,
             platform=config.platform,
-            suite_names=("parity", "community-core-divergence"),
+            suite_names=("parity", "protocol-parity", "community-core-divergence"),
             report_root=config.test_repo_root / "reports",
         )
     )

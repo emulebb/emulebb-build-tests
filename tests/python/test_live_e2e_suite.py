@@ -231,6 +231,32 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert "--update-live-wire-inputs" not in auto_browse_command
 
 
+def test_protocol_parity_profile_runs_live_rest_protocol_smoke(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "protocol-parity"),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["profile"] == "protocol-parity"
+    assert summary["profile_suite_selection_applied"] is True
+    assert [script_name(command) for command in commands] == ["rest-api-smoke.py"]
+    assert [suite["name"] for suite in summary["suites"]] == ["rest-api"]
+
+    rest_command = commands[0]
+    assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
+    assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
+    assert option_values(rest_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(rest_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
+
+
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

@@ -1,0 +1,112 @@
+{
+  "description": "Protocol-sensitive Kad/eD2K paths that must stay explicit when main drifts from the community parity baseline.",
+  "protocol_path_globs": [
+    "srchybrid/opcodes.h",
+    "srchybrid/Protocol*",
+    "srchybrid/ClientUDPSocket*",
+    "srchybrid/ServerSocket*",
+    "srchybrid/ED2KLink*",
+    "srchybrid/BaseClient*",
+    "srchybrid/Search*",
+    "srchybrid/DownloadQueue*",
+    "srchybrid/kademlia/**"
+  ],
+  "allowlist": [
+    {
+      "path_glob": "srchybrid/BaseClient*",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers source-exchange, buddy advertisement, and Kad callback compatibility.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/ClientUDPSocket*",
+      "item_id": "BUG-085",
+      "reason": "Kad/client UDP encryption gating was intentionally hardened with compatibility proof.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/DownloadQueue*",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers source exchange and live search/download trigger behavior.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/ED2KLink*",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers stock-compatible eD2K search and link handling behavior.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/Search*",
+      "item_id": "FEAT-029",
+      "reason": "Search ceiling and Kad lifetime behavior intentionally expanded without changing packet formats.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/ServerSocket*",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers server search, source packets, and recoverable packet failure policy.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/io/**",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers Kad serialization, malformed UDP bounds, and nodes.dat compatibility.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/kademlia/**",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers Kad bootstrap, search, publish, and firewall lifecycle behavior.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/net/**",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers Kad UDP framing, packet tracking, and malformed packet resilience.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/routing/**",
+      "item_id": "CI-028",
+      "reason": "Community parity replay covers Kad routing behavior needed for bootstrap and search compatibility.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/**",
+      "item_id": "CI-028",
+      "reason": "Kad utility drift is covered by native protocol parity and community live replay evidence.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/FastKad*",
+      "item_id": "BUG-072",
+      "reason": "FastKad metadata is intentional bootstrap prioritization with guarded persistence ordering.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/KadPersistenceSeams.h",
+      "item_id": "BUG-072",
+      "reason": "Kad preferences and nodes.dat promotion guards intentionally preserve live files on failure.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/LookupHistory*",
+      "item_id": "CI-028",
+      "reason": "Kad lookup diagnostics are covered by community replay and do not define a new wire shape.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/NodesDatSupport*",
+      "item_id": "CI-028",
+      "reason": "Nodes.dat import, inspection, and replacement behavior is part of the Kad bootstrap parity gate.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/KadSupport.h",
+      "item_id": "CI-028",
+      "reason": "Kad support helpers are included in native protocol parity and community live replay evidence.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    }
+  ]
+}

@@ -64,6 +64,19 @@ def test_compare_parity_marks_any_side_failure_as_failure() -> None:
     assert "[FAIL] parity: regressed" in "\n".join(comparison.lines)
 
 
+def test_compare_protocol_parity_uses_strict_parity_semantics() -> None:
+    comparison = compare_case_sets(
+        {"same": case("same", True), "regressed": case("regressed", True)},
+        {"same": case("same", True), "regressed": case("regressed", False)},
+        suite_name="protocol-parity",
+    )
+
+    assert comparison.has_failure is True
+    assert comparison.summary.pass_count == 1
+    assert comparison.summary.fail_count == 1
+    assert "[FAIL] protocol-parity: regressed" in "\n".join(comparison.lines)
+
+
 def test_compare_divergence_accepts_test_run_pass_baseline_fail() -> None:
     comparison = compare_case_sets(
         {"fixed": case("fixed", True), "still_broken": case("still_broken", False)},
