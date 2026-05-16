@@ -9,10 +9,21 @@
 #include "WebServerStaticFileSeams.h"
 #include "WebSocketHttpSeams.h"
 #include "WebSocketTlsSeams.h"
+#include "SearchParamsPolicy.h"
 
 #include <utility>
 
 TEST_SUITE_BEGIN("web_api");
+
+#ifdef EMULE_BB_SEARCH_NETWORK_DEFAULTS
+TEST_CASE("Automatic search method uses connected network defaults")
+{
+	CHECK_EQ(SearchParamsPolicy::ResolveAutomaticSearchType(false, false), SearchParamsPolicy::kAutomaticSearchType);
+	CHECK_EQ(SearchParamsPolicy::ResolveAutomaticSearchType(true, false), SearchParamsPolicy::kEd2kGlobalSearchType);
+	CHECK_EQ(SearchParamsPolicy::ResolveAutomaticSearchType(false, true), SearchParamsPolicy::kKadSearchType);
+	CHECK_EQ(SearchParamsPolicy::ResolveAutomaticSearchType(true, true), SearchParamsPolicy::kEd2kGlobalSearchType);
+}
+#endif
 
 TEST_CASE("WebSocket TLS seam loads cert and key bytes from overlong unicode paths")
 {
