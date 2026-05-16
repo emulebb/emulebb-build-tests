@@ -96,13 +96,14 @@ TEST_CASE("Mule list view preset profiles are complete and scoped to main grids"
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *search = MuleListCtrlViewPresets::FindProfile(_T("SearchListCtrl"));
 	REQUIRE(search != nullptr);
-	CHECK(search->iColumnCount == 16);
+	CHECK(search->iColumnCount == 17);
 	CHECK(search->iStockHiddenColumnCount == 3);
 	CHECK(search->iExtendedHiddenColumnCount == 2);
 	CHECK(search->piExtendedOrder[6] == 14);
-	CHECK(search->piExtendedOrder[15] == 15);
-	CHECK(search->piStockHiddenColumns[2] == 15);
-	CHECK(search->piExtendedHiddenColumns[1] == 15);
+	CHECK(search->piExtendedOrder[15] == 5);
+	CHECK(search->piExtendedOrder[16] == 16);
+	CHECK(search->piStockHiddenColumns[2] == 16);
+	CHECK(search->piExtendedHiddenColumns[1] == 16);
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *shared = MuleListCtrlViewPresets::FindProfile(_T("SharedFilesCtrl"));
 	REQUIRE(shared != nullptr);
