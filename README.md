@@ -221,12 +221,19 @@ Aggregate live E2E lane:
   100 successful paused download triggers; success means REST accepted the
   download and the transfer materialized in the queue, not that the download
   completed
+- `--profile ui-resource-depth` is the release resource gate for language and
+  UI shell coverage: it runs `resource-ui-smoke` across the canonical stock
+  language manifest, hard-fails missing release language DLLs, then runs the
+  Preferences UI roundtrip
 - Shared Files UI is always expanded to include `fixture-three-files`, `generated-robustness-recursive`, and `duplicate-startup-reuse`; config-stability and startup-profile scenarios are also passed explicitly
 - REST live smoke defaults to six server searches and six Kad searches using the configured live-wire open-term list, and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
 - aggregate reports mark whether REST contract completeness was expected and
   which Arr/Prowlarr live-wire suites were included; expanded/stress reports
   also include a `weak_path_matrix` with adversity, queued-download, UI, and
   integration coverage targets
+- aggregate reports classify inconclusive live-network child suites separately
+  from blocking harness/app inconclusive states; UI/resource failures are hard
+  failures, not accepted inconclusive results
 - REST live smoke is invoked with `--rest-coverage-budget contract` and
   `--rest-stress-budget smoke` by default; use the aggregate runner's REST
   budget flags to reduce or expand that budget for a specific run

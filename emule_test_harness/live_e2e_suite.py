@@ -129,10 +129,18 @@ class SuiteSpec:
     is_arr_emulebb: bool = False
     is_rest_cold_start_dump_stress: bool = False
     is_search_ui_live: bool = False
+    is_resource_ui_smoke: bool = False
     default_enabled: bool = True
 
 
 SUITE_SPECS = (
+    SuiteSpec(
+        name="resource-ui-smoke",
+        script_name="resource-ui-smoke.py",
+        category="ui",
+        is_resource_ui_smoke=True,
+        default_enabled=False,
+    ),
     SuiteSpec(name="preference-ui", script_name="preference-ui-e2e.py", category="ui"),
     SuiteSpec(
         name="shared-files-ui",
@@ -279,6 +287,10 @@ PROFILE_SUITE_NAMES = {
     ),
     "cpu-heavy": (
         "shared-files-ui",
+    ),
+    "ui-resource-depth": (
+        "resource-ui-smoke",
+        "preference-ui",
     ),
 }
 LIVE_E2E_PROFILES = ("default", *PROFILE_SUITE_NAMES.keys())
@@ -540,6 +552,10 @@ def build_suite_command(
         command.append("--directories-tree-stress")
         if shared_root is not None:
             command.extend(["--shared-root", str(shared_root.resolve())])
+    if spec.is_resource_ui_smoke:
+        release_languages_json = workspace_root.parent.parent / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json"
+        command.extend(["--release-languages-json", str(release_languages_json.resolve())])
+        command.extend(["--language-scope", "release"])
     if spec.name == "shared-files-ui" and shared_files_tree_stress_churn_cycles is not None:
         command.extend(["--tree-stress-churn-cycles", str(shared_files_tree_stress_churn_cycles)])
     scenario_names = shared_files_ui_scenarios if spec.name == "shared-files-ui" and shared_files_ui_scenarios else spec.scenarios
@@ -768,6 +784,24 @@ def get_suite_status_from_return_code(return_code: int) -> str:
     if return_code == SUITE_INCONCLUSIVE_RETURN_CODE:
         return "inconclusive"
     return "failed"
+
+
+def classify_inconclusive_suite(spec: SuiteSpec) -> dict[str, object]:
+    """Classifies inconclusive child suites for release report triage."""
+
+    if spec.uses_live_seed_refresh or spec.category == "live-wire":
+        return {
+            "name": spec.name,
+            "category": spec.category,
+            "classification": "accepted_external_live_network_supply",
+            "blocking": False,
+        }
+    return {
+        "name": spec.name,
+        "category": spec.category,
+        "classification": "blocking_harness_or_app_state",
+        "blocking": True,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1128,6 +1162,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 "success_policy": "accepted_and_materialized_in_transfer_queue",
             },
             "ui": {
+                "resource_ui_smoke": any(spec.name == "resource-ui-smoke" for spec in selected_specs),
                 "preference_ui": any(spec.name == "preference-ui" for spec in selected_specs),
                 "preference_ui_directories_tree_stress": bool(args.preference_ui_directories_tree_stress),
                 "shared_files_ui": any(spec.name == "shared-files-ui" for spec in selected_specs),
@@ -1193,6 +1228,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "fail_fast": bool(args.fail_fast),
         "has_inconclusive_suites": False,
         "inconclusive_suite_names": [],
+        "inconclusive_classification": {
+            "accepted_external": [],
+            "blocking": [],
+        },
         "suites": [],
     }
 
@@ -1303,6 +1342,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 result["status"] = suite_status
         if spec.name == "preference-ui":
             result["directories_tree_stress"] = bool(args.preference_ui_directories_tree_stress)
+        if spec.is_resource_ui_smoke:
+            result["language_scope"] = "release"
         if spec.is_rest_api:
             result.update(
                 {
@@ -1363,6 +1404,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         if suite_status == "inconclusive":
             summary["has_inconclusive_suites"] = True
             summary["inconclusive_suite_names"].append(spec.name)  # type: ignore[index, union-attr]
+            classification = classify_inconclusive_suite(spec)
+            bucket = "blocking" if classification["blocking"] else "accepted_external"
+            summary["inconclusive_classification"][bucket].append(classification)  # type: ignore[index, union-attr]
         if suite_status == "failed":
             summary["status"] = "failed"
             if args.fail_fast:

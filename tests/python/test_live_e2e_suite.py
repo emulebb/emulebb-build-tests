@@ -63,12 +63,16 @@ def option_values(command: list[str], option: str) -> list[str]:
     return [command[index + 1] for index, value in enumerate(command[:-1]) if value == option]
 
 
+def suite_spec(name: str) -> live_e2e_suite.SuiteSpec:
+    return next(spec for spec in live_e2e_suite.SUITE_SPECS if spec.name == name)
+
+
 def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "v0.72a"
     monkeypatch.setenv("EMULE_WORKSPACE_ROOT", str(tmp_path))
 
     command = live_e2e_suite.build_suite_command(
-        spec=live_e2e_suite.SUITE_SPECS[0],
+        spec=suite_spec("preference-ui"),
         scripts_dir=tmp_path / "scripts",
         python_executable="python",
         workspace_root=workspace_root,
@@ -84,7 +88,7 @@ def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, mo
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
 
     command = live_e2e_suite.build_suite_command(
-        spec=live_e2e_suite.SUITE_SPECS[0],
+        spec=suite_spec("preference-ui"),
         scripts_dir=tmp_path / "scripts",
         python_executable="python",
         workspace_root=workspace_root,
@@ -101,7 +105,7 @@ def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path,
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
 
     command = live_e2e_suite.build_suite_command(
-        spec=live_e2e_suite.SUITE_SPECS[0],
+        spec=suite_spec("preference-ui"),
         scripts_dir=tmp_path / "scripts",
         python_executable="python",
         workspace_root=workspace_root,
@@ -657,6 +661,32 @@ def test_cpu_heavy_profile_runs_shared_files_50k_under_cpu_profile(tmp_path: Pat
     assert summary["suites"][0]["cpu_profile"]["status"] == "passed"
 
 
+def test_ui_resource_depth_profile_runs_resource_smoke_and_preferences(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args("--workspace-root", str(workspace_root), "--profile", "ui-resource-depth"),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["profile"] == "ui-resource-depth"
+    assert summary["weak_path_matrix"]["ui"]["resource_ui_smoke"] is True
+    assert [script_name(command) for command in commands] == ["resource-ui-smoke.py", "preference-ui-e2e.py"]
+    resource_command = commands[0]
+    assert option_values(resource_command, "--language-scope") == ["release"]
+    assert option_values(resource_command, "--release-languages-json") == [
+        str((tmp_path / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json").resolve())
+    ]
+    assert summary["suites"][0]["language_scope"] == "release"
+
+
 def test_profile_does_not_override_explicit_suite_selection(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(
@@ -858,6 +888,8 @@ def test_inconclusive_live_wire_suite_does_not_fail_aggregate(tmp_path: Path, mo
     assert summary["status"] == "passed"
     assert summary["has_inconclusive_suites"] is True
     assert summary["inconclusive_suite_names"] == ["auto-browse-live"]
+    assert summary["inconclusive_classification"]["accepted_external"][0]["name"] == "auto-browse-live"
+    assert summary["inconclusive_classification"]["blocking"] == []
     assert summary["suites"][-1]["name"] == "auto-browse-live"
     assert summary["suites"][-1]["status"] == "inconclusive"
 
