@@ -185,6 +185,57 @@ TEST_CASE("fake-file analyzer ignores generic download fallback names")
 	CHECK(report.nameDivergenceGroups.empty());
 }
 
+TEST_CASE("fake-file analyzer flags implausible video length metadata")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"Feature Film.avi" };
+	evidence.extensionType = VIDEO_AVI;
+	evidence.fileSizeBytes = 700ull * 1024ull * 1024ull;
+	evidence.mediaLengthAvailable = true;
+	evidence.mediaLengthSeconds = 30;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 10);
+	CHECK(report.severity == FakeFileDetectorSeams::Severity::Low);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "implausible_media_length") != report.reasons.end());
+}
+
+TEST_CASE("fake-file analyzer flags implausible audio bitrate metadata")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"Album Track.mp3" };
+	evidence.extensionType = AUDIO_MPEG;
+	evidence.fileSizeBytes = 4ull * 1024ull * 1024ull;
+	evidence.mediaBitrateAvailable = true;
+	evidence.mediaBitrateKbps = 8;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 10);
+	CHECK(report.severity == FakeFileDetectorSeams::Severity::Low);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "implausible_media_bitrate") != report.reasons.end());
+}
+
+TEST_CASE("fake-file analyzer accepts plausible media metadata")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"Feature Film.mp4" };
+	evidence.extensionType = VIDEO_MP4;
+	evidence.fileSizeBytes = 700ull * 1024ull * 1024ull;
+	evidence.mediaLengthAvailable = true;
+	evidence.mediaLengthSeconds = 5400;
+	evidence.mediaBitrateAvailable = true;
+	evidence.mediaBitrateKbps = 1500;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(report.severity == FakeFileDetectorSeams::Severity::None);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "implausible_media_length") == report.reasons.end());
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "implausible_media_bitrate") == report.reasons.end());
+}
+
 TEST_CASE("fake-file analyzer reports pending header without mismatch penalty")
 {
 	FakeFileDetectorSeams::RuleSet rules;
