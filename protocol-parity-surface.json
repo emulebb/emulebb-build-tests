@@ -73,12 +73,6 @@
       "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
     },
     {
-      "path_glob": "srchybrid/kademlia/utils/**",
-      "item_id": "CI-028",
-      "reason": "Kad utility drift is covered by native protocol parity and community live replay evidence.",
-      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
-    },
-    {
       "path_glob": "srchybrid/kademlia/utils/FastKad*",
       "item_id": "BUG-072",
       "reason": "FastKad metadata is intentional bootstrap prioritization with guarded persistence ordering.",
@@ -106,6 +100,12 @@
       "path_glob": "srchybrid/kademlia/utils/KadSupport.h",
       "item_id": "CI-028",
       "reason": "Kad support helpers are included in native protocol parity and community live replay evidence.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/UInt128*",
+      "item_id": "CI-028",
+      "reason": "UInt128 drift is covered through Kad identity, routing, and ByteIO protocol parity checks.",
       "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
     }
   ]

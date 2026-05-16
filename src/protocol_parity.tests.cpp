@@ -1,14 +1,19 @@
 #include "../third_party/doctest/doctest.h"
 #include "../include/TestSupport.h"
 
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
 #include "BaseClientFriendBuddySeams.h"
+#include "ClientUDPSocketSeams.h"
 #include "DownloadQueueHostnameResolverSeams.h"
 #include "EncryptedDatagramFramingSeams.h"
 #include "ProtocolParsers.h"
+#include "ProtocolReceiveFlowSeams.h"
+#include "SearchParamsPolicy.h"
 #include "ServerSocketSeams.h"
+#include "SourceExchangeSeams.h"
 #include "kademlia/kademlia/Defines.h"
 #include "opcodes.h"
 
@@ -60,6 +65,67 @@ namespace
 		for (size_t i = 0; i < uTermLength; ++i)
 			bytes.push_back(static_cast<BYTE>(pszTerm[i]));
 		return bytes;
+	}
+
+	/**
+	 * Replays a TCP packet stream through the receive-flow seam using caller-selected chunk sizes.
+	 */
+	std::vector<size_t> ReplayProtocolStream(const std::vector<BYTE> &rStream, const std::vector<size_t> &rChunkSizes, bool *pbRejected = nullptr)
+	{
+		std::vector<size_t> payloadLengths;
+		std::vector<BYTE> pendingHeaderBytes;
+		pendingHeaderBytes.reserve(PROTOCOL_PACKET_HEADER_SIZE);
+		ProtocolReceiveFlowState state = CreateProtocolReceiveFlowState();
+
+		size_t uStreamOffset = 0;
+		for (size_t uChunkSize : rChunkSizes) {
+			if (uStreamOffset >= rStream.size())
+				break;
+
+			size_t uChunkOffset = 0;
+			const size_t uReadableChunkSize = (uStreamOffset + uChunkSize <= rStream.size()) ? uChunkSize : (rStream.size() - uStreamOffset);
+			while (uChunkOffset < uReadableChunkSize) {
+				bool bHeaderValid = false;
+				size_t uPayloadLength = 0;
+				if (!state.bHeaderDecoded) {
+					const size_t uHeaderBytesNeeded = PROTOCOL_PACKET_HEADER_SIZE - state.nHeaderBytesBuffered;
+					const size_t uProbeBytes = (uReadableChunkSize - uChunkOffset < uHeaderBytesNeeded)
+						? (uReadableChunkSize - uChunkOffset)
+						: uHeaderBytesNeeded;
+					for (size_t i = 0; i < uProbeBytes; ++i)
+						pendingHeaderBytes.push_back(rStream[uStreamOffset + uChunkOffset + i]);
+
+					if (pendingHeaderBytes.size() == PROTOCOL_PACKET_HEADER_SIZE) {
+						ProtocolPacketHeader header = {};
+						bHeaderValid = TryParsePacketHeader(pendingHeaderBytes.data(), pendingHeaderBytes.size(), &header);
+						if (bHeaderValid)
+							uPayloadLength = header.nPayloadLength;
+					}
+				}
+
+				const ProtocolReceiveFlowAction action = AdvanceProtocolReceiveFlow(state, uReadableChunkSize - uChunkOffset, bHeaderValid, uPayloadLength);
+				uChunkOffset += action.nBytesConsumed;
+				if (action.bShouldAttemptHeaderParse && !action.bShouldRejectPacket)
+					pendingHeaderBytes.clear();
+				if (action.bShouldRejectPacket) {
+					if (pbRejected != nullptr)
+						*pbRejected = true;
+					return payloadLengths;
+				}
+				if (action.bShouldEmitPacket) {
+					payloadLengths.push_back(state.nPayloadBytesExpected);
+					ResetProtocolReceiveFlow(state);
+					pendingHeaderBytes.clear();
+				}
+				if (action.nBytesConsumed == 0)
+					break;
+			}
+			uStreamOffset += uReadableChunkSize;
+		}
+
+		if (pbRejected != nullptr)
+			*pbRejected = state.bRejected;
+		return payloadLengths;
 	}
 }
 
@@ -152,6 +218,35 @@ TEST_CASE("Kad and eD2K UDP obfuscation markers stay classified by community fra
 	CHECK(kadReceiverKey.bRequiresVerifyKeys);
 }
 
+TEST_CASE("Client UDP encryption gating preserves eD2K and Kad compatibility policy")
+{
+	CHECK(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, true, true, false, 0u));
+	CHECK(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, true, true, false));
+
+	CHECK(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, true, false, true, 0x12345678u));
+	CHECK(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, true, false, true));
+
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(false, true, true, false, 0u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(false, true, false, true, 0x12345678u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, false, true, false, 0u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldQueueOutgoingClientUdpEncryption(true, true, false, true, 0u));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, false, true, false));
+	CHECK_FALSE(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, true, false, false));
+}
+
+TEST_CASE("Client UDP diagnostics read opcodes only from complete protocol markers")
+{
+	const unsigned char packet[] = {0xC5, 0x91};
+	unsigned char opcode = 0xFF;
+
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetPacketOpcodeForLog(nullptr, 2, opcode));
+	CHECK_EQ(opcode, static_cast<unsigned char>(0xFF));
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetPacketOpcodeForLog(packet, 1, opcode));
+	CHECK_EQ(opcode, static_cast<unsigned char>(0xFF));
+	CHECK(ClientUDPSocketSeams::TryGetPacketOpcodeForLog(packet, 2, opcode));
+	CHECK_EQ(opcode, static_cast<unsigned char>(0x91));
+}
+
 TEST_CASE("Server packet failures keep search and source responses recoverable")
 {
 	CHECK(ServerSocketSeams::GetProcessPacketFailureAction(ServerSocketSeams::kServerOpcodeSearchResult) == ServerSocketSeams::EServerPacketFailureAction::KeepConnection);
@@ -176,6 +271,31 @@ TEST_CASE("Source exchange decisions keep buddy, packed source, and URL source o
 	CHECK(trace == std::vector<int>{1, 2, 3, 4});
 }
 
+TEST_CASE("Source exchange policy requires extended protocol peers and SX2 response shape")
+{
+	CHECK(SourceExchangeSeams::ShouldAllowSourceExchangeRequest(true, true));
+	CHECK_FALSE(SourceExchangeSeams::ShouldAllowSourceExchangeRequest(true, false));
+	CHECK_FALSE(SourceExchangeSeams::ShouldAllowSourceExchangeRequest(false, true));
+
+	const SourceExchangeSeams::ResponsePlan plan = SourceExchangeSeams::ResolveSourceExchangeResponsePlan(true, 9);
+	CHECK(plan.bShouldSend);
+	CHECK_EQ(plan.byUsedVersion, static_cast<std::uint8_t>(SOURCEEXCHANGE2_VERSION));
+	CHECK_EQ(plan.byAnswerOpcode, static_cast<std::uint8_t>(OP_ANSWERSOURCES2));
+	CHECK_EQ(plan.nCountSeekOffset, static_cast<std::uint8_t>(17u));
+	CHECK(SourceExchangeSeams::IsValidSourceExchange2Request(1));
+	CHECK_FALSE(SourceExchangeSeams::IsValidSourceExchange2Request(0));
+	CHECK_FALSE(SourceExchangeSeams::ResolveSourceExchangeResponsePlan(true, 0).bShouldSend);
+}
+
+TEST_CASE("Search method policy rejects unsupported persisted search types")
+{
+	CHECK_EQ(SearchParamsPolicy::NormalizeStoredSearchType(static_cast<std::uint8_t>(0)), static_cast<std::uint8_t>(0));
+	CHECK_EQ(SearchParamsPolicy::NormalizeStoredSearchType(static_cast<std::uint8_t>(1)), SearchParamsPolicy::kDefaultSearchType);
+	CHECK_EQ(SearchParamsPolicy::NormalizeStoredSearchType(static_cast<std::uint8_t>(2)), static_cast<std::uint8_t>(2));
+	CHECK_EQ(SearchParamsPolicy::NormalizeStoredSearchType(static_cast<std::uint8_t>(3)), static_cast<std::uint8_t>(3));
+	CHECK_EQ(SearchParamsPolicy::NormalizeStoredSearchType(static_cast<std::uint8_t>(4)), SearchParamsPolicy::kDefaultSearchType);
+}
+
 TEST_CASE("Kad search constants preserve community-compatible boundaries")
 {
 	CHECK_EQ(static_cast<unsigned>(K), 10u);
@@ -184,6 +304,31 @@ TEST_CASE("Kad search constants preserve community-compatible boundaries")
 	CHECK_EQ(static_cast<unsigned>(ALPHA_QUERY), 3u);
 	CHECK(SEARCHFILE_LIFETIME >= SEARCHNODECOMP_LIFETIME);
 	CHECK(SEARCHFINDSOURCE_TOTAL >= SEARCHSTOREFILE_TOTAL);
+}
+
+TEST_CASE("TCP protocol receive flow preserves fragmented eD2K packet boundaries")
+{
+	const std::vector<BYTE> stream = {
+		OP_EDONKEYPROT, 0x04, 0x00, 0x00, 0x00, OP_HELLO, 0xAA, 0xBB, 0xCC,
+		OP_EDONKEYPROT, 0x03, 0x00, 0x00, 0x00, OP_MESSAGE, 0xDD, 0xEE
+	};
+
+	const std::vector<size_t> payloadLengths = ReplayProtocolStream(stream, {2u, 4u, 3u, 2u, 6u});
+
+	CHECK(payloadLengths == std::vector<size_t>{3u, 2u});
+}
+
+TEST_CASE("TCP protocol receive flow rejects malformed zero-length packet headers")
+{
+	const std::vector<BYTE> stream = {
+		OP_EDONKEYPROT, 0x00, 0x00, 0x00, 0x00, OP_HELLO
+	};
+
+	bool bRejected = false;
+	const std::vector<size_t> payloadLengths = ReplayProtocolStream(stream, {stream.size()}, &bRejected);
+
+	CHECK(payloadLengths.empty());
+	CHECK(bRejected);
 }
 
 TEST_CASE("Protocol parsers reject malformed Kad/eD2K-adjacent frames before payload reads")
