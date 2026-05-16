@@ -574,6 +574,11 @@ def run_soak(args: argparse.Namespace) -> int:
                     except Exception as exc:
                         cycle["stop_error"] = {"type": type(exc).__name__, "message": str(exc)}
                     active_search_id = None
+                try:
+                    delete_all = rest_smoke.delete_all_searches(base_url, args.api_key)
+                    cycle["delete_all_searches"] = rest_smoke.compact_http_result(delete_all)
+                except Exception as exc:
+                    cycle["delete_all_searches_error"] = {"type": type(exc).__name__, "message": str(exc)}
                 report["cycles"].append(cycle)
 
             if time.time() >= next_resource_sample_at:
