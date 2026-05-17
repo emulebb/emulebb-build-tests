@@ -1311,6 +1311,38 @@ def test_transfer_operation_response_uses_stable_bulk_items() -> None:
     }
 
 
+def test_arr_adapter_http_step_records_transport_failure(monkeypatch) -> None:
+    module = load_rest_api_smoke_module()
+    smoke = {"ok": True}
+
+    def fail_request(*_args, **_kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(module, "http_request", fail_request)
+
+    with pytest.raises(module.ArrAdapterSmokeFailure) as raised:
+        module.record_arr_adapter_http_request(
+            smoke,
+            family="torznab",
+            step="search",
+            base_url="http://127.0.0.1:4711",
+            path="/indexer/emulebb/api?t=search&q=linux",
+            api_key="test-key",
+        )
+
+    assert raised.value.check_result is smoke
+    assert smoke["ok"] is False
+    assert smoke["failed_step"] == {
+        "family": "torznab",
+        "step": "search",
+        "path": "/indexer/emulebb/api?t=search&q=linux",
+    }
+    assert smoke["torznab"]["search"]["transport_error"] == {
+        "type": "TimeoutError",
+        "message": "timed out",
+    }
+
+
 def test_peer_add_friend_never_returns_ok_for_friend_response() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
