@@ -24,7 +24,6 @@ REQUIRED_SEED_KEYS = (
     "NetworkED2K",
     "NetworkKademlia",
     "ShowSharedFilesDetails",
-    "IgnoreInstances",
 )
 
 def ensure_seed_profile_initialized(text: str) -> None:
