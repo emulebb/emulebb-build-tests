@@ -5134,6 +5134,28 @@
       "notes": ""
     },
     {
+      "id": "MiniMule",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "MiniMule",
+      "sourceExpression": "_T(\"MiniMule\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
       "id": "MinToTray",
       "storageFile": "preferences.ini",
       "sections": [

@@ -66,6 +66,7 @@ OWNER_TOKEN_TO_SCHEMA_ID = {
     "wsport": "Port::WebServer",
     "webbindaddr": "BindAddr::WebServer",
     "maxwebuploadfilesizemb": "MaxFileUploadSizeMB",
+    "enableminimule": "MiniMule",
     "webtimeoutmins": "WebTimeoutMins",
     "webusehttps": "UseHTTPS",
     "webcertpath": "HTTPSCertificate",

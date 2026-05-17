@@ -1,0 +1,41 @@
+name: Fast Harness CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python-harness:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout test harness
+        uses: actions/checkout@v4
+        with:
+          path: repos/eMule-build-tests
+
+      - name: Checkout app source
+        uses: actions/checkout@v4
+        with:
+          repository: eMulebb/eMule
+          path: workspaces/v0.72a/app/eMule-main
+
+      - name: Checkout tooling docs
+        uses: actions/checkout@v4
+        with:
+          repository: eMulebb/eMule-tooling
+          path: repos/eMule-tooling
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install harness dependencies
+        working-directory: repos/eMule-build-tests
+        run: python -m pip install -e .[dev]
+
+      - name: Run fast harness tests
+        working-directory: repos/eMule-build-tests
+        run: python -m pytest
