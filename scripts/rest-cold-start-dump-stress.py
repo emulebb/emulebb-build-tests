@@ -3140,7 +3140,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             gflags_enabled = True
 
-        profile = rest_smoke.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+        profile = rest_smoke.prepare_profile_base(
+            seed_config_dir,
+            artifacts_dir,
+            shared_dirs=[],
+            scenario_id="rest-cold-start-dump-stress",
+        )
         seed_refresh = None
         if not args.skip_live_seed_refresh:
             seed_refresh = refresh_seed_files(

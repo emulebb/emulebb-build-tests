@@ -757,7 +757,7 @@ def main() -> int:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-emulebb-ui-data"
 
-    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-emulebb-ui-live")
     amutorrent_session.configure_session_profile(
         Path(profile["config_dir"]),
         paths.app_exe,

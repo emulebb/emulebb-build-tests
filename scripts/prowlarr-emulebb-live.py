@@ -1696,7 +1696,7 @@ def main() -> int:
     emule_base_url = f"http://{bind_addr}:{port}"
     torznab_base_url = f"{emule_base_url}/indexer/emulebb"
 
-    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="prowlarr-emulebb-live")
     seed_refresh = None
     if not args.skip_live_seed_refresh:
         seed_refresh = rest_smoke.refresh_seed_files(

@@ -413,7 +413,7 @@ def run_soak(args: argparse.Namespace) -> int:
     artifacts_dir = paths.source_artifacts_dir
     port = rest_smoke.choose_listen_port()
     base_url = f"http://127.0.0.1:{port}"
-    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="fake-kad-trust-soak")
     seed_refresh = None
     if not args.skip_live_seed_refresh:
         seed_refresh = refresh_seed_files(

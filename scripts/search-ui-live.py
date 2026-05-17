@@ -857,7 +857,7 @@ def run_search_ui_live(
     search_plan = build_search_plan(live_inputs.generic_open_terms, ui_search_rounds)
     rest_api_key = "search-ui-live-key"
     rest_port = choose_rest_listen_port()
-    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="search-ui-live")
     configure_search_ui_profile(
         Path(str(profile["config_dir"])),
         app_exe,
@@ -891,7 +891,12 @@ def run_search_ui_live(
     app = None
     process_handle = 0
     try:
-        app = live_common.launch_app(app_exe, Path(str(profile["profile_base"])), minimized_to_tray=False)
+        app = live_common.launch_app(
+            app_exe,
+            Path(str(profile["profile_base"])),
+            minimized_to_tray=False,
+            requires_interactive_ui=True,
+        )
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)

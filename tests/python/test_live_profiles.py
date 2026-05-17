@@ -31,6 +31,7 @@ def test_build_profile_base_creates_fresh_isolated_profile(tmp_path: Path) -> No
             seed_config_dir=seed_config_dir,
             artifacts_dir=artifacts_dir,
             shared_dirs=[shared_dir],
+            scenario_id="fixture-three-files",
         )
     )
 
@@ -38,12 +39,38 @@ def test_build_profile_base_creates_fresh_isolated_profile(tmp_path: Path) -> No
     preferences_path = config_dir / "preferences.ini"
     assert preferences_path.read_bytes().startswith(UTF16_LE_BOM)
     text = live_profiles.read_ini_text(preferences_path)
-    assert f"IncomingDir={live_profiles.win_path(artifacts_dir / 'incoming', trailing_slash=True)}" in text
-    assert f"TempDir={live_profiles.win_path(artifacts_dir / 'temp', trailing_slash=True)}" in text
-    assert f"TempDirs={live_profiles.win_path(artifacts_dir / 'temp', trailing_slash=True)}" in text
+    scenario_dir = artifacts_dir / "profiles" / "fixture-three-files"
+    assert profile["scenario_id"] == "fixture-three-files"
+    assert profile["scenario_artifacts_dir"] == scenario_dir
+    assert profile["profile_base"] == scenario_dir / "profile-base"
+    assert f"IncomingDir={live_profiles.win_path(scenario_dir / 'incoming', trailing_slash=True)}" in text
+    assert f"TempDir={live_profiles.win_path(scenario_dir / 'temp', trailing_slash=True)}" in text
+    assert f"TempDirs={live_profiles.win_path(scenario_dir / 'temp', trailing_slash=True)}" in text
+    assert "BindInterface=hide.me" in text
+    assert "BindAddr=" in text
+    assert "EnableUPnP=1" in text
     assert (config_dir / "preferences.dat").read_bytes() != b"prefs"
     assert live_profiles.read_ini_text(config_dir / "shareddir.dat") == shared_dir + "\r\n"
     assert profile["startup_profile_path"] == config_dir / live_profiles.STARTUP_PROFILE_TRACE_FILE_NAME
+
+
+def test_scenario_id_is_sanitized_for_profile_paths(tmp_path: Path) -> None:
+    seed_config_dir = write_valid_seed(tmp_path)
+
+    profile = live_profiles.prepare_scenario_profile(
+        seed_config_dir=seed_config_dir,
+        artifacts_dir=tmp_path / "artifacts",
+        shared_dirs=[],
+        scenario_id=" ar AE / modal ",
+    )
+
+    assert profile["scenario_id"] == "ar-AE-modal"
+    assert Path(profile["profile_base"]).parts[-3:] == ("profiles", "ar-AE-modal", "profile-base")
+
+
+def test_empty_scenario_id_is_rejected() -> None:
+    with pytest.raises(ValueError, match="scenario id"):
+        live_profiles.sanitize_profile_scenario_id(" /// ")
 
 
 def test_apply_live_network_profile_sets_bind_interface_and_upnp(tmp_path: Path) -> None:

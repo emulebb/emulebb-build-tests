@@ -46,3 +46,19 @@ def test_close_app_cleanly_kills_test_process_without_top_window(monkeypatch) ->
     module.close_app_cleanly(FakeApp(), process_timeout=0.1)
 
     assert calls == [("exited", 1234), ("kill", False), ("exited", 1234)]
+
+
+def test_launch_app_rejects_interactive_minimized_conflict(tmp_path: Path) -> None:
+    module = load_live_common_module()
+
+    try:
+        module.launch_app(
+            tmp_path / "emule.exe",
+            tmp_path / "profile-base",
+            minimized_to_tray=True,
+            requires_interactive_ui=True,
+        )
+    except ValueError as exc:
+        assert "Interactive UI" in str(exc)
+    else:
+        raise AssertionError("Expected interactive minimized-to-tray launch conflict to fail.")

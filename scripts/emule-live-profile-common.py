@@ -227,9 +227,17 @@ def wait_for(predicate, timeout: float, interval: float, description: str):
     raise RuntimeError(f"Timed out waiting for {description}. Last value: {last_value!r}")
 
 
-def launch_app(app_exe: Path, profile_base: Path, *, minimized_to_tray: bool = True) -> Application:
+def launch_app(
+    app_exe: Path,
+    profile_base: Path,
+    *,
+    minimized_to_tray: bool = True,
+    requires_interactive_ui: bool = False,
+) -> Application:
     """Starts the real app with the isolated `-c` override and startup profiling enabled."""
 
+    if minimized_to_tray and requires_interactive_ui:
+        raise ValueError("Interactive UI launches must not request minimized-to-tray startup.")
     require_pywinauto()
     if minimized_to_tray:
         apply_minimized_to_tray_startup(profile_base / "config")

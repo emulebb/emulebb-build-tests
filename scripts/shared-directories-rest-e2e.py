@@ -559,6 +559,7 @@ def main() -> int:
         shared_dirs=[],
         incoming_dir=artifacts_dir / "incoming",
         temp_dir=artifacts_dir / "temp",
+        scenario_id="shared-directories-rest",
     )
     config_dir = Path(profile["config_dir"])
     profile_base = Path(profile["profile_base"])

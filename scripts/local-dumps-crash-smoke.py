@@ -461,7 +461,12 @@ def main(argv: list[str] | None = None) -> int:
             report["failure_reason"] = "Windows Error Reporting is disabled after LocalDumps setup; WER LocalDumps cannot be captured"
             return 1
 
-        profile = rest_smoke.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+        profile = rest_smoke.prepare_profile_base(
+            seed_config_dir,
+            artifacts_dir,
+            shared_dirs=[],
+            scenario_id="local-dumps-crash-smoke",
+        )
         report["launch_inputs"] = {
             "seed_config_dir": str(seed_config_dir),
             "profile_base": str(profile["profile_base"]),

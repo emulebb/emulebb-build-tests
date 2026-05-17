@@ -5875,7 +5875,7 @@ def main() -> int:
 
     port = choose_listen_port()
     base_url = f"{args.webserver_scheme}://127.0.0.1:{port}"
-    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="rest-api-smoke")
     https_material = (
         create_https_certificate_pair(artifacts_dir)
         if args.webserver_scheme == "https"

@@ -146,6 +146,7 @@ def prepare_hash_interruption_fixture(
         seed_config_dir=seed_config_dir,
         artifacts_dir=scenario_dir,
         shared_dirs=live_common.enumerate_recursive_directories(shared_root),
+        scenario_id=scenario_dir.name,
     )
     live_common.apply_live_network_policy(Path(str(fixture["config_dir"])))
     fixture.update(
@@ -170,7 +171,12 @@ def launch_app_with_fresh_startup_trace(app_exe: Path, fixture: dict[str, object
 
     startup_profile_path = Path(str(fixture["startup_profile_path"]))
     startup_profile_path.unlink(missing_ok=True)
-    return live_common.launch_app(app_exe, Path(str(fixture["profile_base"])), minimized_to_tray=False)
+    return live_common.launch_app(
+        app_exe,
+        Path(str(fixture["profile_base"])),
+        minimized_to_tray=False,
+        requires_interactive_ui=True,
+    )
 
 
 def capture_sidecar_state(config_dir: Path) -> dict[str, dict[str, object]]:

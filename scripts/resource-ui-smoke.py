@@ -211,7 +211,6 @@ def configure_language_profile(config_dir: Path, language_id: int) -> None:
             ("Reconnect", "0"),
             ("NetworkED2K", "0"),
             ("NetworkKademlia", "0"),
-            ("EnableUPnP", "0"),
             ("StartupMinimized", "0"),
             ("MinToTray", "0"),
             ("AlwaysShowTrayIcon", "0"),
@@ -251,7 +250,12 @@ def smoke_one_language(
 ) -> dict[str, object]:
     dll_stem = str(language["dll_stem"])
     language_dir = output_root / dll_stem
-    profile = live_common.prepare_profile_base(seed_config_dir, language_dir, shared_dirs=[])
+    profile = live_common.prepare_scenario_profile(
+        seed_config_dir=seed_config_dir,
+        artifacts_dir=output_root.parent,
+        shared_dirs=[],
+        scenario_id=dll_stem,
+    )
     config_dir = Path(str(profile["config_dir"]))
     configure_language_profile(config_dir, int(language["language_id"]))
 
@@ -269,7 +273,12 @@ def smoke_one_language(
     dialog_hwnd: int | None = None
     main_hwnd: int | None = None
     try:
-        app = live_common.launch_app(paths.app_exe, Path(str(profile["profile_base"])), minimized_to_tray=False)
+        app = live_common.launch_app(
+            paths.app_exe,
+            Path(str(profile["profile_base"])),
+            minimized_to_tray=False,
+            requires_interactive_ui=True,
+        )
         main_window = live_common.wait_for_main_window(app, timeout=90.0, require_visible=True)
         live_common.bring_window_to_front(main_window)
         main_hwnd = int(main_window.handle)

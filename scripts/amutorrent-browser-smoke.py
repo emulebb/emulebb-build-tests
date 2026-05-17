@@ -768,7 +768,7 @@ def main() -> int:
     amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
 
-    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-browser-smoke")
     configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, args.bind_addr)
     rest_api_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
 

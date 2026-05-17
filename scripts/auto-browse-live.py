@@ -1078,7 +1078,7 @@ def main() -> int:
     port = rest_smoke.choose_listen_port()
     base_url = f"http://127.0.0.1:{port}"
 
-    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="auto-browse-live")
     seed_refresh = None
     if not args.skip_live_seed_refresh:
         seed_refresh = rest_smoke.refresh_seed_files(

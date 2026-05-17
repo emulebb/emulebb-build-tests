@@ -600,7 +600,12 @@ def prepare_directories_tree_stress_fixture(seed_config_dir: Path, artifacts_dir
     subtree = manifest["subtrees"]["shared_files_tree_stress"]
     subtree_root = Path(str(subtree["root"])).resolve()
     shared_dirs = live_common.enumerate_recursive_directories(subtree_root)
-    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=shared_dirs)
+    profile = live_common.prepare_profile_base(
+        seed_config_dir,
+        artifacts_dir,
+        shared_dirs=shared_dirs,
+        scenario_id="directories-tree-stress",
+    )
     sample_directories = [Path(str(path)).resolve() for path in subtree["sample_directories"]]
     if subtree_root not in sample_directories:
         sample_directories.insert(0, subtree_root)
@@ -704,7 +709,12 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         directories_tree_fixture = prepare_directories_tree_stress_fixture(seed_config_dir, artifacts_dir, Path(args.shared_root).resolve())
         profile = directories_tree_fixture["profile"]
     else:
-        profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+        profile = live_common.prepare_profile_base(
+            seed_config_dir,
+            artifacts_dir,
+            shared_dirs=[],
+            scenario_id="preference-roundtrip",
+        )
     rest_port = rest_smoke.choose_listen_port()
     config_dir = Path(profile["config_dir"])
     preferences_path = config_dir / "preferences.ini"
@@ -743,7 +753,12 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         }
 
     try:
-        app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]), minimized_to_tray=False)
+        app = live_common.launch_app(
+            paths.app_exe,
+            Path(profile["profile_base"]),
+            minimized_to_tray=False,
+            requires_interactive_ui=True,
+        )
         main_window = live_common.wait_for_main_window(app)
         process_id = int(win32process.GetWindowThreadProcessId(main_window.handle)[1])
         report["launched_process_id"] = process_id

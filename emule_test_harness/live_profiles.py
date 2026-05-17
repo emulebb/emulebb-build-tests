@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import struct
 from dataclasses import dataclass, field
@@ -21,6 +22,9 @@ WINDOW_SHOW_MAXIMIZED = 3
 DEFAULT_WINDOW_RECT = (10, 10, 700, 500)
 STARTUP_PROFILE_TRACE_FILE_NAME = "startup-profile.trace.json"
 DEFAULT_P2P_BIND_INTERFACE_NAME = "hide.me"
+DEFAULT_PROFILE_SCENARIO_ID = "default"
+PROFILE_ARTIFACTS_DIR_NAME = "profiles"
+SCENARIO_ID_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,7 @@ class ProfileBuildSpec:
     seed_config_dir: Path
     artifacts_dir: Path
     shared_dirs: list[str]
+    scenario_id: str = DEFAULT_PROFILE_SCENARIO_ID
     incoming_dir: Path | None = None
     temp_dir: Path | None = None
 
@@ -208,34 +213,67 @@ def write_shared_directories_file(path: Path, shared_dirs: list[str]) -> None:
     path.write_text(contents, encoding="utf-16", newline="")
 
 
-def prepare_profile_base(
+def sanitize_profile_scenario_id(scenario_id: str) -> str:
+    """Returns one filesystem-safe scenario id for profile artifact paths."""
+
+    normalized = SCENARIO_ID_PATTERN.sub("-", scenario_id.strip()).strip(".-_")
+    if not normalized:
+        raise ValueError("Profile scenario id must not be empty.")
+    return normalized
+
+
+def prepare_scenario_profile(
     seed_config_dir: Path,
     artifacts_dir: Path,
     shared_dirs: list[str],
+    scenario_id: str,
     incoming_dir: Path | None = None,
     temp_dir: Path | None = None,
 ) -> dict[str, object]:
-    """Copies the seed profile and patches per-run mutable paths into an isolated base."""
+    """Builds one scenario-scoped profile under `<artifacts>/profiles/<scenario>`."""
 
     return build_profile_base(
         ProfileBuildSpec(
             seed_config_dir=seed_config_dir,
             artifacts_dir=artifacts_dir,
             shared_dirs=shared_dirs,
+            scenario_id=scenario_id,
             incoming_dir=incoming_dir,
             temp_dir=temp_dir,
         )
     )
 
 
+def prepare_profile_base(
+    seed_config_dir: Path,
+    artifacts_dir: Path,
+    shared_dirs: list[str],
+    incoming_dir: Path | None = None,
+    temp_dir: Path | None = None,
+    scenario_id: str = DEFAULT_PROFILE_SCENARIO_ID,
+) -> dict[str, object]:
+    """Builds one scenario-scoped profile using the default scenario id."""
+
+    return prepare_scenario_profile(
+        seed_config_dir=seed_config_dir,
+        artifacts_dir=artifacts_dir,
+        shared_dirs=shared_dirs,
+        scenario_id=scenario_id,
+        incoming_dir=incoming_dir,
+        temp_dir=temp_dir,
+    )
+
+
 def build_profile_base(spec: ProfileBuildSpec) -> dict[str, object]:
     """Builds one fresh profile base from the checked-in deterministic seed."""
 
-    profile_base = spec.artifacts_dir / "profile-base"
+    scenario_id = sanitize_profile_scenario_id(spec.scenario_id)
+    scenario_artifacts_dir = spec.artifacts_dir / PROFILE_ARTIFACTS_DIR_NAME / scenario_id
+    profile_base = scenario_artifacts_dir / "profile-base"
     config_dir = profile_base / "config"
     log_dir = profile_base / "logs"
-    incoming_dir = spec.incoming_dir or (spec.artifacts_dir / "incoming")
-    temp_dir = spec.temp_dir or (spec.artifacts_dir / "temp")
+    incoming_dir = spec.incoming_dir or (scenario_artifacts_dir / "incoming")
+    temp_dir = spec.temp_dir or (scenario_artifacts_dir / "temp")
 
     validate_seed_config_dir(spec.seed_config_dir)
     shutil.copytree(spec.seed_config_dir, config_dir)
@@ -264,8 +302,11 @@ def build_profile_base(spec: ProfileBuildSpec) -> dict[str, object]:
 
     write_preferences_dat(config_dir / "preferences.dat")
     write_shared_directories_file(config_dir / "shareddir.dat", spec.shared_dirs)
+    apply_live_network_profile(config_dir, LiveNetworkProfileSpec())
 
     return {
+        "scenario_id": scenario_id,
+        "scenario_artifacts_dir": scenario_artifacts_dir,
         "profile_base": profile_base,
         "config_dir": config_dir,
         "log_dir": log_dir,

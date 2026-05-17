@@ -418,6 +418,7 @@ def run_scenario(
         seed_config_dir=seed_config_dir,
         artifacts_dir=scenario_dir,
         shared_dirs=list(scenario["shared_dirs"]),
+        scenario_id=name,
     )
 
     summary = {
@@ -439,7 +440,12 @@ def run_scenario(
 
     app = None
     try:
-        app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
+        app = live_common.launch_app(
+            app_exe,
+            fixture["profile_base"],
+            minimized_to_tray=False,
+            requires_interactive_ui=True,
+        )
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
@@ -479,7 +485,12 @@ def run_scenario(
                 "shared_directory_count": summary["shared_directory_count"],
                 "tree_summary": summary["tree_summary"],
             }
-            app = live_common.launch_app(app_exe, fixture["profile_base"], minimized_to_tray=False)
+            app = live_common.launch_app(
+                app_exe,
+                fixture["profile_base"],
+                minimized_to_tray=False,
+                requires_interactive_ui=True,
+            )
             main_window = live_common.wait_for_main_window(app)
             main_hwnd = main_window.handle
             live_common.bring_window_to_front(main_window)

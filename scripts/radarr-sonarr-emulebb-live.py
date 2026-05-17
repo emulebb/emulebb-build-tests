@@ -3815,7 +3815,7 @@ def main() -> int:
         if args.acquisition_timeout_minutes is not None
         else parse_timeout_minutes(env_values.get("ACQUISITION_ATTEMPT_TIMEOUT_MINUTES"), DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES)
     )
-    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[])
+    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="arr-emulebb-live")
     seed_refresh = None
     if not args.skip_live_seed_refresh:
         seed_refresh = rest_smoke.refresh_seed_files(

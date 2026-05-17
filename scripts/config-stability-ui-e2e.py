@@ -272,6 +272,7 @@ def build_fixture(
         seed_config_dir=seed_config_dir,
         artifacts_dir=long_root,
         shared_dirs=shared_dirs,
+        scenario_id=scenario_dir.name,
     )
     preferences_path = Path(str(fixture["config_dir"])) / "preferences.ini"
     return {
@@ -365,7 +366,12 @@ def launch_and_capture_startup(
 ) -> tuple[Application, int, int, dict[str, object]]:
     """Launches the app, waits for readiness, and returns startup diagnostics."""
 
-    app = live_common.launch_app(app_exe, Path(str(fixture["profile_base"])), minimized_to_tray=False)
+    app = live_common.launch_app(
+        app_exe,
+        Path(str(fixture["profile_base"])),
+        minimized_to_tray=False,
+        requires_interactive_ui=True,
+    )
     main_window = live_common.wait_for_main_window(app)
     main_hwnd = int(main_window.handle)
     live_common.bring_window_to_front(main_window)
