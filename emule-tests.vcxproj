@@ -62,7 +62,7 @@
   </ImportGroup>
   <PropertyGroup>
     <_ProjectFileVersion>11.0.60610.1</_ProjectFileVersion>
-    <WorkspaceRoot Condition="'$(WorkspaceRoot)'==''">$(MSBuildThisFileDirectory)..\..\workspaces\v0.72a</WorkspaceRoot>
+    <WorkspaceRoot Condition="'$(WorkspaceRoot)'==''">$(MSBuildThisFileDirectory)..\..\workspaces\workspace</WorkspaceRoot>
     <AppRoot Condition="'$(AppRoot)'==''">$(WorkspaceRoot)\app\eMule-main</AppRoot>
     <BuildTag Condition="'$(BuildTag)'==''">default</BuildTag>
     <HasMappedFileReader>0</HasMappedFileReader>

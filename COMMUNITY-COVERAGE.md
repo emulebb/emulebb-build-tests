@@ -1,9 +1,9 @@
 # Community Coverage Map
 
-Canonical app target: `release/v0.72a-community`
+Canonical app target: `baseline/community-0.72a`
 Canonical test branch: `main`
 
-`release/v0.72a-community` is a seam-enabled parity and regression baseline
+`baseline/community-0.72a` is a seam-enabled parity and regression baseline
 only. It is not a product release or public tag/package target.
 
 ## Automated Coverage
@@ -43,9 +43,9 @@ only. It is not a product release or public tag/package target.
 - Latest wrapper run:
   - combined summary: `reports/community-core-coverage/20260411-195801/community-core-coverage-summary.json`
   - canonical `main` coverage: `reports/native-coverage/20260411-195802-eMuleaz01-v0.72a-eMule-main-x64-Debug`
-  - canonical `release/v0.72a-community` coverage: `reports/native-coverage/20260411-195836-eMuleaz01-v0.72a-eMule-v0.72a-community-x64-Debug`
+  - canonical `baseline/community-0.72a` coverage: `reports/native-coverage/20260411-195836-eMuleaz01-v0.72a-eMule-community-baseline-x64-Debug`
   - live diff summary: `reports/live-diff-summary.json`
 - Latest wrapper metrics:
   - canonical `main`: `parity` 328 passed, `community-core-divergence` 3 passed, line rate `88.32%`
-  - canonical `release/v0.72a-community`: `parity` 268 passed, line rate `95.51%`
+  - canonical `baseline/community-0.72a`: `parity` 268 passed, line rate `95.51%`
   - focused divergence results: 3 expected `test-run pass / baseline fail` cases for upload score ordering, queue-score helpers, and part/met persistence seams

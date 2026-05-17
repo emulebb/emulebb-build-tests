@@ -53,7 +53,7 @@ def test_language_id_table_covers_canonical_release_manifest() -> None:
 
 def test_default_manifest_path_accepts_variant_workspace_root(tmp_path: Path) -> None:
     smoke = load_resource_ui_smoke()
-    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    workspace_root = tmp_path / "workspaces" / "workspace"
     manifest = tmp_path / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json"
     manifest.parent.mkdir(parents=True)
     manifest.write_text('{"languages": []}', encoding="utf-8")

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "featureId": "FEAT-060",
-  "source": "workspaces/v0.72a/app/eMule-main/srchybrid/Preferences.cpp CIni key references",
+  "source": "workspaces/workspace/app/eMule-main/srchybrid/Preferences.cpp CIni key references",
   "classifications": [
     "active-roundtrip",
     "read-only-legacy",

@@ -18,9 +18,9 @@ class FakeHarnessCliCommon:
         source_artifacts_dir.mkdir(parents=True)
         return SimpleNamespace(
             repo_root=self.root,
-            workspace_root=self.root / "workspaces" / "v0.72a",
-            app_root=self.root / "workspaces" / "v0.72a" / "app" / "eMule-main",
-            app_exe=self.root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid" / "x64" / kwargs["configuration"] / "emule.exe",
+            workspace_root=self.root / "workspaces" / "workspace",
+            app_root=self.root / "workspaces" / "workspace" / "app" / "eMule-main",
+            app_exe=self.root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / kwargs["configuration"] / "emule.exe",
             seed_config_dir=self.root / "repos" / "eMule-build-tests" / "manifests" / "live-profile-seed" / "config",
             configuration=kwargs["configuration"],
             suite_name=kwargs["suite_name"],
@@ -68,7 +68,7 @@ def suite_spec(name: str) -> live_e2e_suite.SuiteSpec:
 
 
 def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Path, monkeypatch) -> None:
-    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    workspace_root = tmp_path / "workspaces" / "workspace"
     monkeypatch.setenv("EMULE_WORKSPACE_ROOT", str(tmp_path))
 
     command = live_e2e_suite.build_suite_command(
@@ -84,7 +84,7 @@ def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Pat
 
 
 def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, monkeypatch) -> None:
-    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    workspace_root = tmp_path / "workspaces" / "workspace"
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
 
     command = live_e2e_suite.build_suite_command(
@@ -100,7 +100,7 @@ def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, mo
 
 
 def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
-    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    workspace_root = tmp_path / "workspaces" / "workspace"
     shared_root = tmp_path / "shared"
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
 
@@ -128,7 +128,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a")),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace")),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -244,7 +244,7 @@ def test_protocol_parity_profile_runs_live_rest_protocol_smoke(tmp_path: Path, m
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "protocol-parity"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "protocol-parity"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -270,7 +270,7 @@ def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monk
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "beta-green"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "beta-green"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -315,7 +315,7 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "controller-surface"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "controller-surface"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -373,7 +373,7 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "beta-release"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "beta-release"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -418,7 +418,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "stabilization-stress"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "stabilization-stress"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -513,7 +513,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "release-expanded"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "release-expanded"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -610,7 +610,7 @@ def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: 
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--profile",
             "stabilization-stress",
             "--rest-webserver-scheme",
@@ -644,7 +644,7 @@ def test_cpu_heavy_profile_runs_shared_files_50k_under_cpu_profile(tmp_path: Pat
     monkeypatch.setattr(live_e2e_suite, "run_suite_command_with_optional_cpu_profile", fake_run_profiled)
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--profile", "cpu-heavy"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "cpu-heavy"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -669,7 +669,7 @@ def test_ui_resource_depth_profile_runs_resource_smoke_and_preferences(tmp_path:
         lambda command: commands.append(command) or 0,
     )
 
-    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    workspace_root = tmp_path / "workspaces" / "workspace"
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args("--workspace-root", str(workspace_root), "--profile", "ui-resource-depth"),
         FakeHarnessCliCommon(tmp_path),
@@ -698,7 +698,7 @@ def test_profile_does_not_override_explicit_suite_selection(tmp_path: Path, monk
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--profile",
             "beta-green",
             "--suite",
@@ -725,7 +725,7 @@ def test_shared_files_ui_scenario_selector_limits_child_scenarios(tmp_path: Path
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "shared-files-ui",
             "--shared-files-ui-scenario",
@@ -752,7 +752,7 @@ def test_radarr_movie_root_option_reaches_arr_suite(tmp_path: Path, monkeypatch)
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "radarr-emulebb",
             "--radarr-movie-root",
@@ -780,7 +780,7 @@ def test_sonarr_series_root_option_reaches_arr_suite(tmp_path: Path, monkeypatch
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "sonarr-emulebb",
             "--sonarr-series-root",
@@ -807,7 +807,7 @@ def test_search_ui_live_suite_is_selectable_with_live_network_policy(tmp_path: P
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "search-ui-live",
         ),
@@ -838,7 +838,7 @@ def test_stabilization_stress_profile_includes_expanded_search_ui_live(tmp_path:
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--profile",
             "stabilization-stress",
         ),
@@ -866,7 +866,7 @@ def test_suite_continues_after_failures_by_default(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(live_e2e_suite, "run_suite_command", fail_first_suite)
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a")),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace")),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -881,7 +881,7 @@ def test_inconclusive_live_wire_suite_does_not_fail_aggregate(tmp_path: Path, mo
     monkeypatch.setattr(live_e2e_suite, "run_suite_command", return_inconclusive_for_auto_browse)
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a")),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace")),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -903,7 +903,7 @@ def test_fail_fast_stops_after_first_failed_suite(tmp_path: Path, monkeypatch) -
     )
 
     summary = live_e2e_suite.run_live_e2e_suite(
-        parse_args("--workspace-root", str(tmp_path / "workspaces" / "v0.72a"), "--fail-fast"),
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--fail-fast"),
         FakeHarnessCliCommon(tmp_path),
     )
 
@@ -922,7 +922,7 @@ def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "rest-api",
             "--rest-coverage-budget",
@@ -967,7 +967,7 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "rest-cold-start-dump-stress",
             "--rest-cold-start-dump-stress-waves",
@@ -1082,7 +1082,7 @@ def test_local_dumps_crash_smoke_forwards_live_bind_policy(tmp_path: Path, monke
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "local-dumps-crash-smoke",
         ),
@@ -1108,7 +1108,7 @@ def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Pat
     live_e2e_suite.run_live_e2e_suite(
         parse_args(
             "--workspace-root",
-            str(tmp_path / "workspaces" / "v0.72a"),
+            str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "rest-api",
             "--profile-seed-dir",

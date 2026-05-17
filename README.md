@@ -9,7 +9,7 @@ Minimum expected roots:
 
 - `EMULE_WORKSPACE_ROOT\repos\eMule-build`
 - `EMULE_WORKSPACE_ROOT\repos\eMule-build-tests`
-- `EMULE_WORKSPACE_ROOT\workspaces\v0.72a`
+- `EMULE_WORKSPACE_ROOT\workspaces\workspace`
 
 Use `repos\eMule-build\README.md` for the full workspace topology and
 materialization contract.
@@ -45,10 +45,10 @@ Current suite model:
 
 Community core comparison workflow:
 
-- `scripts\run-community-core-coverage.py` is the operator-facing wrapper for the canonical `main` vs `release/v0.72a-community` comparison
+- `scripts\run-community-core-coverage.py` is the operator-facing wrapper for the canonical `main` vs `baseline/community-0.72a` comparison
 - it runs native coverage for `app\eMule-main` with `parity` and `community-core-divergence`
 - it runs the focused `community-core-divergence` suite for main-only queue-scoring and persistence behavior
-- it runs native coverage for `app\eMule-v0.72a-community` with `parity`
+- it runs native coverage for `app\eMule-community-baseline` with `parity`
 - it runs `scripts\run-live-diff.py` against those two app roots and keeps the suite-level pass/fail split explicit
 - the wrapper writes a combined summary under `reports\community-core-coverage`
 
@@ -101,13 +101,13 @@ Script inventory:
 
 Workspace quick reference:
 
-- default canonical workspace: `EMULE_WORKSPACE_ROOT\workspaces\v0.72a`
-- canonical target app paths are `app\eMule-main`, `app\eMule-v0.72a-community`, `app\eMule-v0.72a-broadband`, and `app\eMule-v0.72a-tracing-harness-community`
+- default canonical workspace: `EMULE_WORKSPACE_ROOT\workspaces\workspace`
+- canonical target app paths are `app\eMule-main`, `app\eMule-community-baseline`, and `app\eMule-community-tracing-harness`
 - for live-diff runs, point `-TestRunWorkspaceRoot` and `-BaselineWorkspaceRoot` at the two workspace roots you want to compare
 - for cleanroom validation, pass both `-WorkspaceRoot` and `-AppRoot` explicitly so reports and build tags stay tied to the selected workspace root
 
 The default seam-enabled baseline for 0.72a comparisons is materialized as
-`app\eMule-v0.72a-community`. It is test-only and should stay
+`app\eMule-community-baseline`. It is test-only and should stay
 behavior-preserving during normal app execution. The tracing-harness workspace
 is reserved for explicit variant-client parity work and is not the default
 regression baseline.

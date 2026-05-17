@@ -13,11 +13,11 @@ def test_default_roots_use_canonical_repo_layout(tmp_path: Path, monkeypatch) ->
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
     test_repo_root = tmp_path / "repos" / "eMule-build-tests"
 
-    assert get_default_workspace_root(test_repo_root) == tmp_path / "workspaces" / "v0.72a"
+    assert get_default_workspace_root(test_repo_root) == tmp_path / "workspaces" / "workspace"
 
 
 def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> None:
-    workspace_root = tmp_path / "workspaces" / "v0.72a"
+    workspace_root = tmp_path / "workspaces" / "workspace"
     workspace_root.mkdir(parents=True)
     (workspace_root / "deps.json").write_text(
         """{
@@ -28,7 +28,7 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
       },
       "variants": [
         { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
-        { "name": "community", "path": "app\\\\eMule-v0.72a-community", "branch": "release/v0.72a-community" }
+        { "name": "community", "path": "app\\\\eMule-community-baseline", "branch": "baseline/community-0.72a" }
       ]
     }
   }
@@ -42,13 +42,13 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
     assert manifest.seed_repo_path == Path("..\\..\\repos\\eMule")
     assert [(variant.name, variant.path) for variant in manifest.variants] == [
         ("main", Path("app\\eMule-main")),
-        ("community", Path("app\\eMule-v0.72a-community")),
+        ("community", Path("app\\eMule-community-baseline")),
     ]
 
 
 def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path: Path) -> None:
-    workspace_root = tmp_path / "workspaces" / "v0.72a"
-    community_root = workspace_root / "app" / "eMule-v0.72a-community"
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    community_root = workspace_root / "app" / "eMule-community-baseline"
     community_root.mkdir(parents=True)
     (workspace_root / "deps.json").write_text(
         """{
@@ -57,7 +57,7 @@ def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path
       "seed_repo": { "path": "..\\\\..\\\\repos\\\\eMule" },
       "variants": [
         { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
-        { "name": "community", "path": "app\\\\eMule-v0.72a-community", "branch": "release/v0.72a-community" }
+        { "name": "community", "path": "app\\\\eMule-community-baseline", "branch": "baseline/community-0.72a" }
       ]
     }
   }

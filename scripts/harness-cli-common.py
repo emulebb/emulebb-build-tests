@@ -17,8 +17,12 @@ try:
 except ImportError:  # pragma: no cover - non-Windows import guard
     winreg = None  # type: ignore[assignment]
 
-WORKSPACE_NAME = "v0.72a"
-DEFAULT_APP_VARIANTS = ("main", "community", "broadband")
+WORKSPACE_NAME = "workspace"
+DEFAULT_APP_VARIANTS = ("main", "community", "tracing-harness")
+APP_VARIANT_WORKTREE_NAMES = {
+    "community": "eMule-community-baseline",
+    "tracing-harness": "eMule-community-tracing-harness",
+}
 REPORT_EXCLUDED_DIRECTORY_NAMES = frozenset(("shared-hash-root",))
 WER_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting"
 LOCAL_DUMPS_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps"
@@ -413,7 +417,9 @@ def resolve_app_root(
     for variant_name in preferred_variant_names:
         if variant_name == "main":
             continue
-        candidates.append(app_parent / f"eMule-v0.72a-{variant_name}")
+        mapped_name = APP_VARIANT_WORKTREE_NAMES.get(variant_name)
+        if mapped_name:
+            candidates.append(app_parent / mapped_name)
         candidates.append(app_parent / f"eMule-{variant_name}")
     candidates.extend(sorted(path for path in app_parent.glob("eMule-*") if path.is_dir()))
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
 
     emule_cpp = (app_source / "Emule.cpp").read_text(encoding="utf-8", errors="ignore")
     preferences_cpp = (app_source / "Preferences.cpp").read_text(encoding="utf-8", errors="ignore")
@@ -30,7 +30,7 @@ def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
 
 def test_bootstrap_and_ip_filter_defaults_are_https_only() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
 
     preferences_h = (app_source / "Preferences.h").read_text(encoding="utf-8", errors="ignore")
     preferences_cpp = (app_source / "Preferences.cpp").read_text(encoding="utf-8", errors="ignore")
@@ -49,7 +49,7 @@ def test_bootstrap_and_ip_filter_defaults_are_https_only() -> None:
 
 def test_server_met_dropdown_preserves_current_text() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_source = workspace_root / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
 
     server_wnd_cpp = (app_source / "ServerWnd.cpp").read_text(encoding="utf-8", errors="ignore")
     server_wnd_h = (app_source / "ServerWnd.h").read_text(encoding="utf-8", errors="ignore")

@@ -18,13 +18,13 @@ tab_width = 4
 
 [manifests/live-profile-seed/config/preferences.ini]
 charset = utf-16le
-end_of_line = crlf
+end_of_line = lf
 indent_style = tab
 tab_width = 4
 
 [*.{rc,rc2}]
 charset = utf-8
-end_of_line = crlf
+end_of_line = lf
 indent_style = tab
 tab_width = 4
 
@@ -48,7 +48,7 @@ indent_size = 2
 
 [*.{bat,cmd}]
 charset = utf-8
-end_of_line = crlf
+end_of_line = lf
 indent_style = space
 indent_size = 2
 

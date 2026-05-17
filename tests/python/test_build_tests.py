@@ -13,8 +13,8 @@ from emule_test_harness.build_tests import (
 def make_config(tmp_path: Path) -> BuildTestsConfig:
     return BuildTestsConfig(
         test_repo_root=tmp_path / "repos" / "eMule-build-tests",
-        workspace_root=tmp_path / "workspaces" / "v0.72a",
-        app_root=tmp_path / "workspaces" / "v0.72a" / "app" / "eMule-main",
+        workspace_root=tmp_path / "workspaces" / "workspace",
+        app_root=tmp_path / "workspaces" / "workspace" / "app" / "eMule-main",
         configuration="Debug",
         platform="x64",
         build_output_mode="ErrorsOnly",
@@ -33,7 +33,7 @@ def test_build_log_paths_match_workspace_state_layout(tmp_path: Path) -> None:
 
     paths = get_build_log_paths(config)
 
-    assert paths.text_log_path == tmp_path / "workspaces" / "v0.72a" / "state" / "build-logs" / "20260421-120000" / "emule-tests-tag-debug-x64.log"
+    assert paths.text_log_path == tmp_path / "workspaces" / "workspace" / "state" / "build-logs" / "20260421-120000" / "emule-tests-tag-debug-x64.log"
     assert paths.binary_log_path.name == "emule-tests-tag-debug-x64.binlog"
 
 

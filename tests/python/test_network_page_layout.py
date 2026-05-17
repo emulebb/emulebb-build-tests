@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def app_source_root() -> Path:
-    return Path(__file__).resolve().parents[4] / "workspaces" / "v0.72a" / "app" / "eMule-main" / "srchybrid"
+    return Path(__file__).resolve().parents[4] / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
 
 
 def dialog_block(resource_text: str, dialog_id: str) -> str:

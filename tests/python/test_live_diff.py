@@ -16,7 +16,7 @@ def test_get_default_workspace_root_uses_canonical_repo_layout(tmp_path: Path, m
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
     repo_root = tmp_path / "repos" / "eMule-build-tests"
 
-    assert get_default_workspace_root(repo_root) == tmp_path / "workspaces" / "v0.72a"
+    assert get_default_workspace_root(repo_root) == tmp_path / "workspaces" / "workspace"
 
 
 def test_get_default_workspace_root_prefers_environment(tmp_path: Path, monkeypatch) -> None:
@@ -24,14 +24,14 @@ def test_get_default_workspace_root_prefers_environment(tmp_path: Path, monkeypa
     workspace_root = tmp_path / "env-root"
     monkeypatch.setenv("EMULE_WORKSPACE_ROOT", str(workspace_root))
 
-    assert get_default_workspace_root(repo_root) == workspace_root / "workspaces" / "v0.72a"
+    assert get_default_workspace_root(repo_root) == workspace_root / "workspaces" / "workspace"
 
 
 def test_build_emule_tests_command_uses_python_build_wrapper() -> None:
     command = build_emule_tests_command(
         test_repo_root=Path("C:/repo/tests"),
-        workspace_root=Path("C:/repo/workspaces/v0.72a"),
-        app_root=Path("C:/repo/workspaces/v0.72a/app/eMule-main"),
+        workspace_root=Path("C:/repo/workspaces/workspace"),
+        app_root=Path("C:/repo/workspaces/workspace/app/eMule-main"),
         configuration="Debug",
         platform="x64",
         build_tag="tag",

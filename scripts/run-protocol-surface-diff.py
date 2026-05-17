@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     test_repo_root = args.test_repo_root.resolve()
     workspace_root = (args.workspace_root or get_default_workspace_root(test_repo_root)).resolve()
     test_run_app_root = (args.test_run_app_root or (workspace_root / "app" / "eMule-main")).resolve()
-    baseline_app_root = (args.baseline_app_root or (workspace_root / "app" / "eMule-v0.72a-community")).resolve()
+    baseline_app_root = (args.baseline_app_root or (workspace_root / "app" / "eMule-community-baseline")).resolve()
     manifest_path = (args.manifest_path or (test_repo_root / "protocol-parity-surface.json")).resolve()
     report_path = (args.report_path or (test_repo_root / "reports" / "protocol-surface-diff.json")).resolve()
 

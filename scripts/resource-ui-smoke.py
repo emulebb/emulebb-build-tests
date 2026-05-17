@@ -109,7 +109,7 @@ def write_json(path: Path, payload: object) -> None:
 
 
 def canonical_workspace_root(workspace_root: Path) -> Path:
-    if workspace_root.name == "v0.72a" and workspace_root.parent.name == "workspaces":
+    if workspace_root.name == "workspace" and workspace_root.parent.name == "workspaces":
         return workspace_root.parent.parent
     return workspace_root
 

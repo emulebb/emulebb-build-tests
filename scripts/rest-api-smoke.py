@@ -245,7 +245,7 @@ OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "rest" / "
 NATIVE_ROUTE_HEADER_PATH = (
     REPO_ROOT.parent.parent
     / "workspaces"
-    / "v0.72a"
+    / "workspace"
     / "app"
     / "eMule-main"
     / "srchybrid"

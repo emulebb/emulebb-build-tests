@@ -7,8 +7,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-WORKSPACE_NAME = "v0.72a"
-DEFAULT_APP_VARIANTS = ("community", "main", "broadband")
+WORKSPACE_NAME = "workspace"
+DEFAULT_APP_VARIANTS = ("community", "main", "tracing-harness")
 
 
 @dataclass(frozen=True)

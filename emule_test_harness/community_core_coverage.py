@@ -149,7 +149,7 @@ def build_config(
     resolved_community_app_root = (
         community_app_root.resolve()
         if community_app_root is not None
-        else (resolved_workspace_root / "app" / "eMule-v0.72a-community").resolve()
+        else (resolved_workspace_root / "app" / "eMule-community-baseline").resolve()
     )
     for label, path in (
         ("workspace root", resolved_workspace_root),
