@@ -6609,6 +6609,28 @@
       "notes": ""
     },
     {
+      "id": "SearchResultsFileSizeFormat",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "SearchResultsFileSizeFormat",
+      "sourceExpression": "_T(\"SearchResultsFileSizeFormat\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Int"
+      ],
+      "ownerField": "m_iSearchResultsFileSizeFormat",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "SetSearchResultsFileSizeFormat",
+      "classification": "active-roundtrip",
+      "notes": "Search results file-size display mode: default, KiB, or MiB."
+    },
+    {
       "id": "SecureIdent",
       "storageFile": "preferences.ini",
       "sections": [

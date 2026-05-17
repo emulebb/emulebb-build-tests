@@ -6891,6 +6891,26 @@
       "notes": ""
     },
     {
+      "id": "SearchResultsFileSizeFormat",
+      "inventoryId": "SearchResultsFileSizeFormat",
+      "storageFile": "preferences.ini",
+      "section": "<default>",
+      "key": "SearchResultsFileSizeFormat",
+      "sourceExpression": "_T(\"SearchResultsFileSizeFormat\")",
+      "valueType": "integer",
+      "access": [
+        "read",
+        "write"
+      ],
+      "classification": "persisted-runtime",
+      "ownerExpressions": [],
+      "defaultExpression": "",
+      "clampOrNormalizer": "SetSearchResultsFileSizeFormat",
+      "uiBindingIds": [],
+      "restBindings": [],
+      "notes": "Search results file-size display mode: default, KiB, or MiB."
+    },
+    {
       "id": "SecureIdent",
       "inventoryId": "SecureIdent",
       "storageFile": "preferences.ini",
