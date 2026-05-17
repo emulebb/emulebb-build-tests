@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
+SUPPORTED_NODE_MIN_MAJOR = 20
+SUPPORTED_NODE_MAX_MAJOR = 24
+DEFAULT_WINDOWS_NODE24 = Path(r"C:\bin\nodejs-v24\node.exe")
 DEFAULT_WINDOWS_NODE22 = Path(r"C:\bin\nodejs-v22-old\node.exe")
 DEFAULT_SEARCH_ROUNDS = 2
 AMUTORRENT_BROWSER_SMOKE_HASH = "0123456789abcdef0123456789abcdef"
@@ -100,6 +103,8 @@ def resolve_amutorrent_node() -> dict[str, Any]:
     configured = os.environ.get(AMUTORRENT_NODE_ENV)
     if configured:
         node_exe = Path(configured)
+    elif DEFAULT_WINDOWS_NODE24.exists():
+        node_exe = DEFAULT_WINDOWS_NODE24
     elif DEFAULT_WINDOWS_NODE22.exists():
         node_exe = DEFAULT_WINDOWS_NODE22
     else:
@@ -113,14 +118,18 @@ def resolve_amutorrent_node() -> dict[str, Any]:
             check=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(f"Unable to run Node.js executable '{node_exe}'. Set {AMUTORRENT_NODE_ENV} to a Node 20-22 runtime.") from exc
+        raise RuntimeError(
+            f"Unable to run Node.js executable '{node_exe}'. "
+            f"Set {AMUTORRENT_NODE_ENV} to a Node {SUPPORTED_NODE_MIN_MAJOR}-{SUPPORTED_NODE_MAX_MAJOR} runtime."
+        ) from exc
 
     version = completed.stdout.strip()
     major = parse_node_major(version)
-    if major < 20 or major > 22:
+    if major < SUPPORTED_NODE_MIN_MAJOR or major > SUPPORTED_NODE_MAX_MAJOR:
         raise RuntimeError(
-            f"aMuTorrent browser smoke requires Node.js 20-22 because its locked server dependencies include native addons; "
-            f"'{node_exe}' reports {version}. Set {AMUTORRENT_NODE_ENV} to a Node 22 executable."
+            f"aMuTorrent browser smoke requires Node.js {SUPPORTED_NODE_MIN_MAJOR}-{SUPPORTED_NODE_MAX_MAJOR} "
+            "because its locked server dependencies include native addons; "
+            f"'{node_exe}' reports {version}. Set {AMUTORRENT_NODE_ENV} to a Node 24 executable."
         )
 
     return {

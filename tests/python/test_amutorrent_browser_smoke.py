@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,8 +48,28 @@ def segment_download_item(smoke, **overrides):
 def test_parse_node_major_accepts_node_version() -> None:
     smoke = load_smoke_module()
 
+    assert smoke.parse_node_major("v24.15.0") == 24
     assert smoke.parse_node_major("v22.14.0") == 22
     assert smoke.parse_node_major("20.11.1") == 20
+
+
+def test_resolve_node_accepts_node24_env_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    smoke = load_smoke_module()
+    node_path = tmp_path / "node.exe"
+    node_path.write_text("", encoding="utf-8")
+
+    def fake_run(command, **_kwargs):
+        assert command[0] == str(node_path)
+        return SimpleNamespace(stdout="v24.15.0\n")
+
+    monkeypatch.setenv(smoke.AMUTORRENT_NODE_ENV, str(node_path))
+    monkeypatch.setattr(smoke.subprocess, "run", fake_run)
+
+    node_info = smoke.resolve_amutorrent_node()
+
+    assert node_info["path"] == str(node_path)
+    assert node_info["version"] == "v24.15.0"
+    assert node_info["major"] == 24
 
 
 def test_require_server_dependencies_reports_install_command(tmp_path: Path) -> None:
