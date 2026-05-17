@@ -8458,13 +8458,13 @@
       "notes": ""
     },
     {
-      "id": "UpdateNotifyTestClient",
+      "id": "UpdateNotify",
       "storageFile": "statistics.ini or preferences.ini statistics section",
       "sections": [
         "<default>"
       ],
-      "key": "UpdateNotifyTestClient",
-      "sourceExpression": "_T(\"UpdateNotifyTestClient\")",
+      "key": "UpdateNotify",
+      "sourceExpression": "_T(\"UpdateNotify\")",
       "kind": "literal",
       "access": [
         "read",

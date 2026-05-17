@@ -3761,8 +3761,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:146:0:GetIRCAddTimeStamp",
-        "PPgIRC.cpp:224:0:m_bIRCAddTimeStamp"
+        "PPgIRC.cpp:151:0:GetIRCAddTimeStamp",
+        "PPgIRC.cpp:229:0:m_bIRCAddTimeStamp"
       ],
       "restBindings": [],
       "notes": ""
@@ -3787,8 +3787,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:154:0:GetIRCAllowEmuleAddFriend",
-        "PPgIRC.cpp:232:0:m_bIRCAllowEmuleAddFriend"
+        "PPgIRC.cpp:159:0:GetIRCAllowEmuleAddFriend",
+        "PPgIRC.cpp:237:0:m_bIRCAllowEmuleAddFriend"
       ],
       "restBindings": [],
       "notes": ""
@@ -3813,11 +3813,11 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:160:0:GetIRCEnableSmileys",
-        "PPgIRC.cpp:238:0:GetIRCEnableSmileys",
-        "PPgIRC.cpp:239:0:m_bIRCEnableSmileys",
-        "PPgIRC.cpp:242:0:GetIRCEnableSmileys",
-        "PPgIRC.cpp:243:0:GetIRCEnableSmileys"
+        "PPgIRC.cpp:165:0:GetIRCEnableSmileys",
+        "PPgIRC.cpp:243:0:GetIRCEnableSmileys",
+        "PPgIRC.cpp:244:0:m_bIRCEnableSmileys",
+        "PPgIRC.cpp:247:0:GetIRCEnableSmileys",
+        "PPgIRC.cpp:248:0:GetIRCEnableSmileys"
       ],
       "restBindings": [],
       "notes": ""
@@ -3842,8 +3842,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:161:0:GetIRCEnableUTF8",
-        "PPgIRC.cpp:240:0:m_bIRCEnableUTF8"
+        "PPgIRC.cpp:166:0:GetIRCEnableUTF8",
+        "PPgIRC.cpp:245:0:m_bIRCEnableUTF8"
       ],
       "restBindings": [],
       "notes": ""
@@ -3928,8 +3928,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:153:0:GetIRCIgnoreEmuleAddFriendMsgs",
-        "PPgIRC.cpp:231:0:m_bIRCIgnoreEmuleAddFriendMsgs"
+        "PPgIRC.cpp:158:0:GetIRCIgnoreEmuleAddFriendMsgs",
+        "PPgIRC.cpp:236:0:m_bIRCIgnoreEmuleAddFriendMsgs"
       ],
       "restBindings": [],
       "notes": ""
@@ -3954,8 +3954,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:155:0:GetIRCIgnoreEmuleSendLinkMsgs",
-        "PPgIRC.cpp:233:0:m_bIRCIgnoreEmuleSendLinkMsgs"
+        "PPgIRC.cpp:160:0:GetIRCIgnoreEmuleSendLinkMsgs",
+        "PPgIRC.cpp:238:0:m_bIRCIgnoreEmuleSendLinkMsgs"
       ],
       "restBindings": [],
       "notes": ""
@@ -3980,8 +3980,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:149:0:GetIRCIgnoreJoinMessages",
-        "PPgIRC.cpp:227:0:m_bIRCIgnoreJoinMessages"
+        "PPgIRC.cpp:154:0:GetIRCIgnoreJoinMessages",
+        "PPgIRC.cpp:232:0:m_bIRCIgnoreJoinMessages"
       ],
       "restBindings": [],
       "notes": ""
@@ -4006,8 +4006,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:148:0:GetIRCIgnoreMiscMessages",
-        "PPgIRC.cpp:226:0:m_bIRCIgnoreMiscMessages"
+        "PPgIRC.cpp:153:0:GetIRCIgnoreMiscMessages",
+        "PPgIRC.cpp:231:0:m_bIRCIgnoreMiscMessages"
       ],
       "restBindings": [],
       "notes": ""
@@ -4032,8 +4032,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:150:0:GetIRCIgnorePartMessages",
-        "PPgIRC.cpp:228:0:m_bIRCIgnorePartMessages"
+        "PPgIRC.cpp:155:0:GetIRCIgnorePartMessages",
+        "PPgIRC.cpp:233:0:m_bIRCIgnorePartMessages"
       ],
       "restBindings": [],
       "notes": ""
@@ -4058,9 +4058,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:104:0:m_bIRCIgnorePingPongMessages",
-        "PPgIRC.cpp:152:0:GetIRCIgnorePingPongMessages",
-        "PPgIRC.cpp:230:0:m_bIRCIgnorePingPongMessages"
+        "PPgIRC.cpp:109:0:m_bIRCIgnorePingPongMessages",
+        "PPgIRC.cpp:157:0:GetIRCIgnorePingPongMessages",
+        "PPgIRC.cpp:235:0:m_bIRCIgnorePingPongMessages"
       ],
       "restBindings": [],
       "notes": ""
@@ -4085,8 +4085,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:151:0:GetIRCIgnoreQuitMessages",
-        "PPgIRC.cpp:229:0:m_bIRCIgnoreQuitMessages"
+        "PPgIRC.cpp:156:0:GetIRCIgnoreQuitMessages",
+        "PPgIRC.cpp:234:0:m_bIRCIgnoreQuitMessages"
       ],
       "restBindings": [],
       "notes": ""
@@ -4130,10 +4130,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:209:0:m_strIRCNick",
-        "PPgIRC.cpp:251:0:m_strIRCNick",
-        "PPgIRC.cpp:255:0:m_strIRCNick",
-        "PPgIRC.cpp:257:0:m_strIRCNick"
+        "PPgIRC.cpp:214:0:m_strIRCNick",
+        "PPgIRC.cpp:256:0:m_strIRCNick",
+        "PPgIRC.cpp:260:0:m_strIRCNick",
+        "PPgIRC.cpp:262:0:m_strIRCNick"
       ],
       "restBindings": [],
       "notes": ""
@@ -4157,8 +4157,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:211:0:m_strIRCPerformString",
-        "PPgIRC.cpp:265:0:m_strIRCPerformString"
+        "PPgIRC.cpp:216:0:m_strIRCPerformString",
+        "PPgIRC.cpp:270:0:m_strIRCPerformString"
       ],
       "restBindings": [],
       "notes": ""
@@ -4222,8 +4222,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:206:0:m_bIRCUsePerform",
-        "PPgIRC.cpp:247:0:m_bIRCUsePerform"
+        "PPgIRC.cpp:211:0:m_bIRCUsePerform",
+        "PPgIRC.cpp:252:0:m_bIRCUsePerform"
       ],
       "restBindings": [],
       "notes": ""
@@ -8927,8 +8927,8 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgDirectories.cpp:272:0:GetCatCount",
-        "PPgScheduler.cpp:386:0:GetCatCount",
-        "PPgScheduler.cpp:389:0:GetCatCount"
+        "PPgScheduler.cpp:401:0:GetCatCount",
+        "PPgScheduler.cpp:404:0:GetCatCount"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: catcount."
@@ -8953,7 +8953,7 @@
       "uiBindingIds": [
         "PPgDirectories.cpp:267:0:GetCategory",
         "PPgDirectories.cpp:281:0:GetCategory",
-        "PPgScheduler.cpp:390:0:GetCategory"
+        "PPgScheduler.cpp:405:0:GetCategory"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: category."
@@ -10022,8 +10022,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:156:0:GetIRCAcceptLinks",
-        "PPgIRC.cpp:234:0:m_bIRCAcceptLinks"
+        "PPgIRC.cpp:161:0:GetIRCAcceptLinks",
+        "PPgIRC.cpp:239:0:m_bIRCAcceptLinks"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircacceptlinks."
@@ -10047,8 +10047,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:157:0:GetIRCAcceptLinksFriendsOnly",
-        "PPgIRC.cpp:235:0:m_bIRCAcceptLinksFriendsOnly"
+        "PPgIRC.cpp:162:0:GetIRCAcceptLinksFriendsOnly",
+        "PPgIRC.cpp:240:0:m_bIRCAcceptLinksFriendsOnly"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircacceptlinksfriendsonly."
@@ -10071,8 +10071,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:210:0:m_strIRCChannelFilter",
-        "PPgIRC.cpp:264:0:m_strIRCChannelFilter"
+        "PPgIRC.cpp:215:0:m_strIRCChannelFilter",
+        "PPgIRC.cpp:269:0:m_strIRCChannelFilter"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircchannelfilter."
@@ -10095,8 +10095,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:212:0:m_uIRCChannelUserFilter",
-        "PPgIRC.cpp:267:0:m_uIRCChannelUserFilter"
+        "PPgIRC.cpp:217:0:m_uIRCChannelUserFilter",
+        "PPgIRC.cpp:272:0:m_uIRCChannelUserFilter"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircchanneluserfilter."
@@ -10120,8 +10120,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:159:0:GetIRCGetChannelsOnConnect",
-        "PPgIRC.cpp:237:0:m_bIRCGetChannelsOnConnect"
+        "PPgIRC.cpp:164:0:GetIRCGetChannelsOnConnect",
+        "PPgIRC.cpp:242:0:m_bIRCGetChannelsOnConnect"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircgetchannelsonconnect."
@@ -10145,8 +10145,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:158:0:GetIRCJoinHelpChannel",
-        "PPgIRC.cpp:236:0:m_bIRCJoinHelpChannel"
+        "PPgIRC.cpp:163:0:GetIRCJoinHelpChannel",
+        "PPgIRC.cpp:241:0:m_bIRCJoinHelpChannel"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircjoinhelpchannel."
@@ -10170,8 +10170,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:147:0:GetIRCPlaySoundEvents",
-        "PPgIRC.cpp:225:0:m_bIRCPlaySoundEvents"
+        "PPgIRC.cpp:152:0:GetIRCPlaySoundEvents",
+        "PPgIRC.cpp:230:0:m_bIRCPlaySoundEvents"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircplaysoundevents."
@@ -10194,8 +10194,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:208:0:m_strIRCServer",
-        "PPgIRC.cpp:263:0:m_strIRCServer"
+        "PPgIRC.cpp:213:0:m_strIRCServer",
+        "PPgIRC.cpp:268:0:m_strIRCServer"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircserver."
@@ -10218,8 +10218,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgIRC.cpp:205:0:m_bIRCUseChannelFilter",
-        "PPgIRC.cpp:245:0:m_bIRCUseChannelFilter"
+        "PPgIRC.cpp:210:0:m_bIRCUseChannelFilter",
+        "PPgIRC.cpp:250:0:m_bIRCUseChannelFilter"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ircusechannelfilter."
@@ -11624,8 +11624,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgProxy.cpp:117:0:SetProxySettings",
-        "PPgProxy.cpp:46:0:GetProxySettings"
+        "PPgProxy.cpp:122:0:SetProxySettings",
+        "PPgProxy.cpp:51:0:GetProxySettings"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: proxysettings."
@@ -11763,8 +11763,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgScheduler.cpp:455:0:scheduler",
-        "PPgScheduler.cpp:456:0:scheduler"
+        "PPgScheduler.cpp:477:0:scheduler",
+        "PPgScheduler.cpp:478:0:scheduler"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: scheduler."
@@ -11787,7 +11787,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgScheduler.cpp:82:0:IsSchedulerEnabled"
+        "PPgScheduler.cpp:88:0:IsSchedulerEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: schedulerenabled."
@@ -12322,35 +12322,12 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
+        "PPgGeneral.cpp:101:0:GetUpdateDays",
         "PPgGeneral.cpp:154:0:GetUpdateDays",
         "PPgGeneral.cpp:249:0:SetUpdateDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: updatedays."
-    },
-    {
-      "id": "ui-runtime::updatenotify",
-      "inventoryId": null,
-      "storageFile": null,
-      "section": null,
-      "key": null,
-      "sourceExpression": "",
-      "valueType": "unknown",
-      "access": [
-        "read"
-      ],
-      "classification": "ui-runtime",
-      "ownerExpressions": [
-        "updatenotify"
-      ],
-      "defaultExpression": "",
-      "clampOrNormalizer": "",
-      "uiBindingIds": [
-        "PPgGeneral.cpp:248:0:updatenotify",
-        "PPgGeneral.cpp:92:0:updatenotify"
-      ],
-      "restBindings": [],
-      "notes": "Synthetic UI/runtime preference owner token: updatenotify."
     },
     {
       "id": "ui-runtime::upnpbackendmode",
@@ -12572,29 +12549,6 @@
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: usesystemfontformaincontrols."
-    },
-    {
-      "id": "ui-runtime::versioncheckdays",
-      "inventoryId": null,
-      "storageFile": null,
-      "section": null,
-      "key": null,
-      "sourceExpression": "",
-      "valueType": "unknown",
-      "access": [
-        "read"
-      ],
-      "classification": "ui-runtime",
-      "ownerExpressions": [
-        "versioncheckdays"
-      ],
-      "defaultExpression": "",
-      "clampOrNormalizer": "",
-      "uiBindingIds": [
-        "PPgGeneral.cpp:101:0:versioncheckdays"
-      ],
-      "restBindings": [],
-      "notes": "Synthetic UI/runtime preference owner token: versioncheckdays."
     },
     {
       "id": "ui-runtime::watchclipboard",
@@ -12959,22 +12913,28 @@
       "notes": ""
     },
     {
-      "id": "UpdateNotifyTestClient",
-      "inventoryId": "UpdateNotifyTestClient",
+      "id": "UpdateNotify",
+      "inventoryId": "UpdateNotify",
       "storageFile": "statistics.ini or preferences.ini statistics section",
       "section": "<default>",
-      "key": "UpdateNotifyTestClient",
-      "sourceExpression": "_T(\"UpdateNotifyTestClient\")",
+      "key": "UpdateNotify",
+      "sourceExpression": "_T(\"UpdateNotify\")",
       "valueType": "bool",
       "access": [
         "read",
         "write"
       ],
-      "classification": "persisted-runtime",
-      "ownerExpressions": [],
+      "classification": "editable-ui",
+      "ownerExpressions": [
+        "SetUpdateNotify",
+        "UpdateNotify"
+      ],
       "defaultExpression": "",
       "clampOrNormalizer": "",
-      "uiBindingIds": [],
+      "uiBindingIds": [
+        "PPgGeneral.cpp:248:0:SetUpdateNotify",
+        "PPgGeneral.cpp:92:0:UpdateNotify"
+      ],
       "restBindings": [],
       "notes": ""
     },
@@ -17366,17 +17326,17 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:101:0:versioncheckdays",
+      "id": "PPgGeneral.cpp:101:0:GetUpdateDays",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
       "line": 101,
       "function": "LoadSettings",
       "access": "read",
-      "ownerExpression": "versioncheckdays",
+      "ownerExpression": "GetUpdateDays",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
-        "ui-runtime::versioncheckdays"
+        "ui-runtime::updatedays"
       ]
     },
     {
@@ -17610,13 +17570,13 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:248:0:updatenotify",
+      "id": "PPgGeneral.cpp:248:0:SetUpdateNotify",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
       "line": 248,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "updatenotify",
+      "ownerExpression": "SetUpdateNotify",
       "controlIds": [
         "IDC_CHECK4UPDATE"
       ],
@@ -17624,7 +17584,7 @@
         "IDC_CHECK4UPDATE"
       ],
       "schemaIds": [
-        "ui-runtime::updatenotify"
+        "UpdateNotify"
       ]
     },
     {
@@ -17898,13 +17858,13 @@
       ]
     },
     {
-      "id": "PPgGeneral.cpp:92:0:updatenotify",
+      "id": "PPgGeneral.cpp:92:0:UpdateNotify",
       "page": "PPgGeneral.cpp",
       "dialogId": "IDD_PPG_GENERAL",
       "line": 92,
       "function": "LoadSettings",
       "access": "read",
-      "ownerExpression": "updatenotify",
+      "ownerExpression": "UpdateNotify",
       "controlIds": [
         "IDC_CHECK4UPDATE"
       ],
@@ -17912,7 +17872,7 @@
         "IDC_CHECK4UPDATE"
       ],
       "schemaIds": [
-        "ui-runtime::updatenotify"
+        "UpdateNotify"
       ]
     },
     {
@@ -18006,10 +17966,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:104:0:m_bIRCIgnorePingPongMessages",
+      "id": "PPgIRC.cpp:109:0:m_bIRCIgnorePingPongMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 104,
+      "line": 109,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "m_bIRCIgnorePingPongMessages",
@@ -18020,10 +17980,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:146:0:GetIRCAddTimeStamp",
+      "id": "PPgIRC.cpp:151:0:GetIRCAddTimeStamp",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 146,
+      "line": 151,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCAddTimeStamp",
@@ -18034,10 +17994,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:147:0:GetIRCPlaySoundEvents",
+      "id": "PPgIRC.cpp:152:0:GetIRCPlaySoundEvents",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 147,
+      "line": 152,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCPlaySoundEvents",
@@ -18048,10 +18008,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:148:0:GetIRCIgnoreMiscMessages",
+      "id": "PPgIRC.cpp:153:0:GetIRCIgnoreMiscMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 148,
+      "line": 153,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCIgnoreMiscMessages",
@@ -18062,10 +18022,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:149:0:GetIRCIgnoreJoinMessages",
+      "id": "PPgIRC.cpp:154:0:GetIRCIgnoreJoinMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 149,
+      "line": 154,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCIgnoreJoinMessages",
@@ -18076,10 +18036,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:150:0:GetIRCIgnorePartMessages",
+      "id": "PPgIRC.cpp:155:0:GetIRCIgnorePartMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 150,
+      "line": 155,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCIgnorePartMessages",
@@ -18090,10 +18050,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:151:0:GetIRCIgnoreQuitMessages",
+      "id": "PPgIRC.cpp:156:0:GetIRCIgnoreQuitMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 151,
+      "line": 156,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCIgnoreQuitMessages",
@@ -18104,10 +18064,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:152:0:GetIRCIgnorePingPongMessages",
+      "id": "PPgIRC.cpp:157:0:GetIRCIgnorePingPongMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 152,
+      "line": 157,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCIgnorePingPongMessages",
@@ -18118,10 +18078,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:153:0:GetIRCIgnoreEmuleAddFriendMsgs",
+      "id": "PPgIRC.cpp:158:0:GetIRCIgnoreEmuleAddFriendMsgs",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 153,
+      "line": 158,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCIgnoreEmuleAddFriendMsgs",
@@ -18132,10 +18092,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:154:0:GetIRCAllowEmuleAddFriend",
+      "id": "PPgIRC.cpp:159:0:GetIRCAllowEmuleAddFriend",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 154,
+      "line": 159,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCAllowEmuleAddFriend",
@@ -18146,10 +18106,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:155:0:GetIRCIgnoreEmuleSendLinkMsgs",
+      "id": "PPgIRC.cpp:160:0:GetIRCIgnoreEmuleSendLinkMsgs",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 155,
+      "line": 160,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCIgnoreEmuleSendLinkMsgs",
@@ -18160,10 +18120,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:156:0:GetIRCAcceptLinks",
+      "id": "PPgIRC.cpp:161:0:GetIRCAcceptLinks",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 156,
+      "line": 161,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCAcceptLinks",
@@ -18174,10 +18134,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:157:0:GetIRCAcceptLinksFriendsOnly",
+      "id": "PPgIRC.cpp:162:0:GetIRCAcceptLinksFriendsOnly",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 157,
+      "line": 162,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCAcceptLinksFriendsOnly",
@@ -18188,10 +18148,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:158:0:GetIRCJoinHelpChannel",
+      "id": "PPgIRC.cpp:163:0:GetIRCJoinHelpChannel",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 158,
+      "line": 163,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCJoinHelpChannel",
@@ -18202,10 +18162,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:159:0:GetIRCGetChannelsOnConnect",
+      "id": "PPgIRC.cpp:164:0:GetIRCGetChannelsOnConnect",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 159,
+      "line": 164,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCGetChannelsOnConnect",
@@ -18216,10 +18176,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:160:0:GetIRCEnableSmileys",
+      "id": "PPgIRC.cpp:165:0:GetIRCEnableSmileys",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 160,
+      "line": 165,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCEnableSmileys",
@@ -18230,10 +18190,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:161:0:GetIRCEnableUTF8",
+      "id": "PPgIRC.cpp:166:0:GetIRCEnableUTF8",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 161,
+      "line": 166,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetIRCEnableUTF8",
@@ -18244,10 +18204,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:205:0:m_bIRCUseChannelFilter",
+      "id": "PPgIRC.cpp:210:0:m_bIRCUseChannelFilter",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 205,
+      "line": 210,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_bIRCUseChannelFilter",
@@ -18262,10 +18222,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:206:0:m_bIRCUsePerform",
+      "id": "PPgIRC.cpp:211:0:m_bIRCUsePerform",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 206,
+      "line": 211,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_bIRCUsePerform",
@@ -18280,10 +18240,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:208:0:m_strIRCServer",
+      "id": "PPgIRC.cpp:213:0:m_strIRCServer",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 208,
+      "line": 213,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_strIRCServer",
@@ -18298,10 +18258,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:209:0:m_strIRCNick",
+      "id": "PPgIRC.cpp:214:0:m_strIRCNick",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 209,
+      "line": 214,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_strIRCNick",
@@ -18316,10 +18276,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:210:0:m_strIRCChannelFilter",
+      "id": "PPgIRC.cpp:215:0:m_strIRCChannelFilter",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 210,
+      "line": 215,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_strIRCChannelFilter",
@@ -18334,10 +18294,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:211:0:m_strIRCPerformString",
+      "id": "PPgIRC.cpp:216:0:m_strIRCPerformString",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 211,
+      "line": 216,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_strIRCPerformString",
@@ -18352,10 +18312,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:212:0:m_uIRCChannelUserFilter",
+      "id": "PPgIRC.cpp:217:0:m_uIRCChannelUserFilter",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 212,
+      "line": 217,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_uIRCChannelUserFilter",
@@ -18370,10 +18330,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:224:0:m_bIRCAddTimeStamp",
+      "id": "PPgIRC.cpp:229:0:m_bIRCAddTimeStamp",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 224,
+      "line": 229,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCAddTimeStamp",
@@ -18384,10 +18344,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:225:0:m_bIRCPlaySoundEvents",
+      "id": "PPgIRC.cpp:230:0:m_bIRCPlaySoundEvents",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 225,
+      "line": 230,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCPlaySoundEvents",
@@ -18398,10 +18358,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:226:0:m_bIRCIgnoreMiscMessages",
+      "id": "PPgIRC.cpp:231:0:m_bIRCIgnoreMiscMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 226,
+      "line": 231,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCIgnoreMiscMessages",
@@ -18412,10 +18372,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:227:0:m_bIRCIgnoreJoinMessages",
+      "id": "PPgIRC.cpp:232:0:m_bIRCIgnoreJoinMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 227,
+      "line": 232,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCIgnoreJoinMessages",
@@ -18426,10 +18386,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:228:0:m_bIRCIgnorePartMessages",
+      "id": "PPgIRC.cpp:233:0:m_bIRCIgnorePartMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 228,
+      "line": 233,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCIgnorePartMessages",
@@ -18440,10 +18400,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:229:0:m_bIRCIgnoreQuitMessages",
+      "id": "PPgIRC.cpp:234:0:m_bIRCIgnoreQuitMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 229,
+      "line": 234,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCIgnoreQuitMessages",
@@ -18454,10 +18414,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:230:0:m_bIRCIgnorePingPongMessages",
+      "id": "PPgIRC.cpp:235:0:m_bIRCIgnorePingPongMessages",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 230,
+      "line": 235,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCIgnorePingPongMessages",
@@ -18468,10 +18428,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:231:0:m_bIRCIgnoreEmuleAddFriendMsgs",
+      "id": "PPgIRC.cpp:236:0:m_bIRCIgnoreEmuleAddFriendMsgs",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 231,
+      "line": 236,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCIgnoreEmuleAddFriendMsgs",
@@ -18482,10 +18442,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:232:0:m_bIRCAllowEmuleAddFriend",
+      "id": "PPgIRC.cpp:237:0:m_bIRCAllowEmuleAddFriend",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 232,
+      "line": 237,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCAllowEmuleAddFriend",
@@ -18496,10 +18456,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:233:0:m_bIRCIgnoreEmuleSendLinkMsgs",
+      "id": "PPgIRC.cpp:238:0:m_bIRCIgnoreEmuleSendLinkMsgs",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 233,
+      "line": 238,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCIgnoreEmuleSendLinkMsgs",
@@ -18510,10 +18470,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:234:0:m_bIRCAcceptLinks",
+      "id": "PPgIRC.cpp:239:0:m_bIRCAcceptLinks",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 234,
+      "line": 239,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCAcceptLinks",
@@ -18524,10 +18484,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:235:0:m_bIRCAcceptLinksFriendsOnly",
+      "id": "PPgIRC.cpp:240:0:m_bIRCAcceptLinksFriendsOnly",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 235,
+      "line": 240,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCAcceptLinksFriendsOnly",
@@ -18538,10 +18498,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:236:0:m_bIRCJoinHelpChannel",
+      "id": "PPgIRC.cpp:241:0:m_bIRCJoinHelpChannel",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 236,
+      "line": 241,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCJoinHelpChannel",
@@ -18552,10 +18512,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:237:0:m_bIRCGetChannelsOnConnect",
+      "id": "PPgIRC.cpp:242:0:m_bIRCGetChannelsOnConnect",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 237,
+      "line": 242,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCGetChannelsOnConnect",
@@ -18563,62 +18523,6 @@
       "directControlIds": [],
       "schemaIds": [
         "ui-runtime::ircgetchannelsonconnect"
-      ]
-    },
-    {
-      "id": "PPgIRC.cpp:238:0:GetIRCEnableSmileys",
-      "page": "PPgIRC.cpp",
-      "dialogId": "IDD_PPG_IRC",
-      "line": 238,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetIRCEnableSmileys",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IRCEnableSmileys"
-      ]
-    },
-    {
-      "id": "PPgIRC.cpp:239:0:m_bIRCEnableSmileys",
-      "page": "PPgIRC.cpp",
-      "dialogId": "IDD_PPG_IRC",
-      "line": 239,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bIRCEnableSmileys",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IRCEnableSmileys"
-      ]
-    },
-    {
-      "id": "PPgIRC.cpp:240:0:m_bIRCEnableUTF8",
-      "page": "PPgIRC.cpp",
-      "dialogId": "IDD_PPG_IRC",
-      "line": 240,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bIRCEnableUTF8",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IRCEnableUTF8"
-      ]
-    },
-    {
-      "id": "PPgIRC.cpp:242:0:GetIRCEnableSmileys",
-      "page": "PPgIRC.cpp",
-      "dialogId": "IDD_PPG_IRC",
-      "line": 242,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "GetIRCEnableSmileys",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "IRCEnableSmileys"
       ]
     },
     {
@@ -18636,10 +18540,66 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:245:0:m_bIRCUseChannelFilter",
+      "id": "PPgIRC.cpp:244:0:m_bIRCEnableSmileys",
+      "page": "PPgIRC.cpp",
+      "dialogId": "IDD_PPG_IRC",
+      "line": 244,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bIRCEnableSmileys",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IRCEnableSmileys"
+      ]
+    },
+    {
+      "id": "PPgIRC.cpp:245:0:m_bIRCEnableUTF8",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
       "line": 245,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bIRCEnableUTF8",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IRCEnableUTF8"
+      ]
+    },
+    {
+      "id": "PPgIRC.cpp:247:0:GetIRCEnableSmileys",
+      "page": "PPgIRC.cpp",
+      "dialogId": "IDD_PPG_IRC",
+      "line": 247,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetIRCEnableSmileys",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IRCEnableSmileys"
+      ]
+    },
+    {
+      "id": "PPgIRC.cpp:248:0:GetIRCEnableSmileys",
+      "page": "PPgIRC.cpp",
+      "dialogId": "IDD_PPG_IRC",
+      "line": 248,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetIRCEnableSmileys",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "IRCEnableSmileys"
+      ]
+    },
+    {
+      "id": "PPgIRC.cpp:250:0:m_bIRCUseChannelFilter",
+      "page": "PPgIRC.cpp",
+      "dialogId": "IDD_PPG_IRC",
+      "line": 250,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCUseChannelFilter",
@@ -18654,10 +18614,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:247:0:m_bIRCUsePerform",
+      "id": "PPgIRC.cpp:252:0:m_bIRCUsePerform",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 247,
+      "line": 252,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIRCUsePerform",
@@ -18672,10 +18632,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:251:0:m_strIRCNick",
+      "id": "PPgIRC.cpp:256:0:m_strIRCNick",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 251,
+      "line": 256,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strIRCNick",
@@ -18686,10 +18646,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:255:0:m_strIRCNick",
+      "id": "PPgIRC.cpp:260:0:m_strIRCNick",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 255,
+      "line": 260,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strIRCNick",
@@ -18700,10 +18660,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:257:0:m_strIRCNick",
+      "id": "PPgIRC.cpp:262:0:m_strIRCNick",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 257,
+      "line": 262,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strIRCNick",
@@ -18714,10 +18674,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:263:0:m_strIRCServer",
+      "id": "PPgIRC.cpp:268:0:m_strIRCServer",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 263,
+      "line": 268,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strIRCServer",
@@ -18732,10 +18692,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:264:0:m_strIRCChannelFilter",
+      "id": "PPgIRC.cpp:269:0:m_strIRCChannelFilter",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 264,
+      "line": 269,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strIRCChannelFilter",
@@ -18750,10 +18710,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:265:0:m_strIRCPerformString",
+      "id": "PPgIRC.cpp:270:0:m_strIRCPerformString",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 265,
+      "line": 270,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strIRCPerformString",
@@ -18768,10 +18728,10 @@
       ]
     },
     {
-      "id": "PPgIRC.cpp:267:0:m_uIRCChannelUserFilter",
+      "id": "PPgIRC.cpp:272:0:m_uIRCChannelUserFilter",
       "page": "PPgIRC.cpp",
       "dialogId": "IDD_PPG_IRC",
-      "line": 267,
+      "line": 272,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_uIRCChannelUserFilter",
@@ -19704,10 +19664,10 @@
       ]
     },
     {
-      "id": "PPgProxy.cpp:117:0:SetProxySettings",
+      "id": "PPgProxy.cpp:122:0:SetProxySettings",
       "page": "PPgProxy.cpp",
       "dialogId": "IDD_PPG_PROXY",
-      "line": 117,
+      "line": 122,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetProxySettings",
@@ -19718,10 +19678,10 @@
       ]
     },
     {
-      "id": "PPgProxy.cpp:46:0:GetProxySettings",
+      "id": "PPgProxy.cpp:51:0:GetProxySettings",
       "page": "PPgProxy.cpp",
       "dialogId": "IDD_PPG_PROXY",
-      "line": 46,
+      "line": 51,
       "function": "CPPgProxy",
       "access": "read",
       "ownerExpression": "GetProxySettings",
@@ -19732,10 +19692,10 @@
       ]
     },
     {
-      "id": "PPgScheduler.cpp:386:0:GetCatCount",
+      "id": "PPgScheduler.cpp:401:0:GetCatCount",
       "page": "PPgScheduler.cpp",
       "dialogId": "IDD_PPG_SCHEDULER",
-      "line": 386,
+      "line": 401,
       "function": "OnNmRClickActionlist",
       "access": "read",
       "ownerExpression": "GetCatCount",
@@ -19746,10 +19706,10 @@
       ]
     },
     {
-      "id": "PPgScheduler.cpp:389:0:GetCatCount",
+      "id": "PPgScheduler.cpp:404:0:GetCatCount",
       "page": "PPgScheduler.cpp",
       "dialogId": "IDD_PPG_SCHEDULER",
-      "line": 389,
+      "line": 404,
       "function": "OnNmRClickActionlist",
       "access": "read",
       "ownerExpression": "GetCatCount",
@@ -19760,10 +19720,10 @@
       ]
     },
     {
-      "id": "PPgScheduler.cpp:390:0:GetCategory",
+      "id": "PPgScheduler.cpp:405:0:GetCategory",
       "page": "PPgScheduler.cpp",
       "dialogId": "IDD_PPG_SCHEDULER",
-      "line": 390,
+      "line": 405,
       "function": "OnNmRClickActionlist",
       "access": "read",
       "ownerExpression": "GetCategory",
@@ -19774,10 +19734,10 @@
       ]
     },
     {
-      "id": "PPgScheduler.cpp:455:0:scheduler",
+      "id": "PPgScheduler.cpp:477:0:scheduler",
       "page": "PPgScheduler.cpp",
       "dialogId": "IDD_PPG_SCHEDULER",
-      "line": 455,
+      "line": 477,
       "function": "OnEnableChange",
       "access": "read",
       "ownerExpression": "scheduler",
@@ -19792,10 +19752,10 @@
       ]
     },
     {
-      "id": "PPgScheduler.cpp:456:0:scheduler",
+      "id": "PPgScheduler.cpp:478:0:scheduler",
       "page": "PPgScheduler.cpp",
       "dialogId": "IDD_PPG_SCHEDULER",
-      "line": 456,
+      "line": 478,
       "function": "OnEnableChange",
       "access": "read",
       "ownerExpression": "scheduler",
@@ -19806,10 +19766,10 @@
       ]
     },
     {
-      "id": "PPgScheduler.cpp:82:0:IsSchedulerEnabled",
+      "id": "PPgScheduler.cpp:88:0:IsSchedulerEnabled",
       "page": "PPgScheduler.cpp",
       "dialogId": "IDD_PPG_SCHEDULER",
-      "line": 82,
+      "line": 88,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsSchedulerEnabled",
