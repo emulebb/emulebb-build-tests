@@ -40,4 +40,46 @@ TEST_CASE("Tray notification seam shows minimized windows only when minimize-to-
 	CHECK_FALSE(TrayNotificationSeams::ShouldTrayIconBeVisible(state));
 }
 
+TEST_CASE("Tray notification seam routes hidden single mouse activation to MiniMule when enabled")
+{
+	TrayNotificationSeams::CTrayPrimaryActivationState state;
+	state.bMiniMuleEnabled = true;
+	state.bMainWindowVisible = false;
+	state.eActivation = TrayNotificationSeams::ETrayPrimaryActivation::MouseSingleClick;
+
+	CHECK(TrayNotificationSeams::ResolveTrayPrimaryActivation(state)
+		== TrayNotificationSeams::ETrayPrimaryActivationAction::ShowMiniMule);
+}
+
+TEST_CASE("Tray notification seam restores when MiniMule is disabled or activation is explicit restore")
+{
+	TrayNotificationSeams::CTrayPrimaryActivationState state;
+	state.bMiniMuleEnabled = false;
+	state.bMainWindowVisible = false;
+	state.eActivation = TrayNotificationSeams::ETrayPrimaryActivation::MouseSingleClick;
+
+	CHECK(TrayNotificationSeams::ResolveTrayPrimaryActivation(state)
+		== TrayNotificationSeams::ETrayPrimaryActivationAction::RestoreMainWindow);
+
+	state.bMiniMuleEnabled = true;
+	state.eActivation = TrayNotificationSeams::ETrayPrimaryActivation::MouseDoubleClick;
+	CHECK(TrayNotificationSeams::ResolveTrayPrimaryActivation(state)
+		== TrayNotificationSeams::ETrayPrimaryActivationAction::RestoreMainWindow);
+
+	state.eActivation = TrayNotificationSeams::ETrayPrimaryActivation::KeyboardSelect;
+	CHECK(TrayNotificationSeams::ResolveTrayPrimaryActivation(state)
+		== TrayNotificationSeams::ETrayPrimaryActivationAction::RestoreMainWindow);
+}
+
+TEST_CASE("Tray notification seam ignores visible single mouse activation while MiniMule is enabled")
+{
+	TrayNotificationSeams::CTrayPrimaryActivationState state;
+	state.bMiniMuleEnabled = true;
+	state.bMainWindowVisible = true;
+	state.eActivation = TrayNotificationSeams::ETrayPrimaryActivation::MouseSingleClick;
+
+	CHECK(TrayNotificationSeams::ResolveTrayPrimaryActivation(state)
+		== TrayNotificationSeams::ETrayPrimaryActivationAction::None);
+}
+
 TEST_SUITE_END();
