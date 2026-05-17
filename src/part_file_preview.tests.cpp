@@ -148,6 +148,21 @@ TEST_CASE("Part-file preview seam moves thumbnail capture deeper as progress inc
 	CHECK(PartFilePreviewSeams::GetVideoThumbnailCaptureStartSecond(fileSize, 950ull) == 180u);
 }
 
+TEST_CASE("Part-file preview seam defines wire-compatible FFmpeg peer preview frames")
+{
+	CHECK(PartFilePreviewSeams::kPeerPreviewFrameCount == 4);
+	CHECK(PartFilePreviewSeams::kPeerPreviewFirstFrameSecond == 15u);
+	CHECK(PartFilePreviewSeams::kPeerPreviewFrameStepSeconds == 50u);
+	CHECK(PartFilePreviewSeams::kPeerPreviewFrameMaxWidth == 450);
+	CHECK(PartFilePreviewSeams::GetPeerPreviewFrameSecond(0) == 15u);
+	CHECK(PartFilePreviewSeams::GetPeerPreviewFrameSecond(1) == 65u);
+	CHECK(PartFilePreviewSeams::GetPeerPreviewFrameSecond(3) == 165u);
+	CHECK(PartFilePreviewSeams::ShouldAllowPeerPreview(true, true, true));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldAllowPeerPreview(false, true, true));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldAllowPeerPreview(true, false, true));
+	CHECK_FALSE(PartFilePreviewSeams::ShouldAllowPeerPreview(true, true, false));
+}
+
 TEST_CASE("Part-file preview seam builds quoted FFmpeg thumbnail command lines")
 {
 	const CString command = PartFilePreviewSeams::BuildFfmpegThumbnailCommandLine(
@@ -168,6 +183,28 @@ TEST_CASE("Part-file preview seam builds quoted FFmpeg thumbnail command lines")
 	CHECK(command.Find(_T("-an -frames:v 1")) >= 0);
 	CHECK(command.Find(_T("\"scale=480:-2:force_original_aspect_ratio=decrease\"")) >= 0);
 	CHECK(command.Find(_T("\"C:\\Temp Files\\thumb_sample.png\"")) >= 0);
+}
+
+TEST_CASE("Part-file preview seam builds quoted FFmpeg peer preview frame command lines")
+{
+	const CString command = PartFilePreviewSeams::BuildFfmpegPeerPreviewFrameCommandLine(
+		CString(_T("C:\\Program Files\\FFmpeg\\bin\\ffmpeg.exe")),
+		CString(_T("C:\\Shared Files\\sample preview.mkv")),
+		CString(_T("C:\\Temp Files\\peer_000.png")),
+		PartFilePreviewSeams::GetPeerPreviewFrameSecond(2));
+
+	CHECK(command.Find(_T("\"C:\\Program Files\\FFmpeg\\bin\\ffmpeg.exe\"")) >= 0);
+	CHECK(command.Find(_T("-hide_banner")) >= 0);
+	CHECK(command.Find(_T("-loglevel error")) >= 0);
+	CHECK(command.Find(_T("-y")) >= 0);
+	CHECK(command.Find(_T("-ss 115")) >= 0);
+	CHECK(command.Find(_T("-fflags +genpts+discardcorrupt")) >= 0);
+	CHECK(command.Find(_T("-err_detect ignore_err")) >= 0);
+	CHECK(command.Find(_T("-analyzeduration 5M -probesize 5M")) >= 0);
+	CHECK(command.Find(_T("\"C:\\Shared Files\\sample preview.mkv\"")) >= 0);
+	CHECK(command.Find(_T("-an -frames:v 1")) >= 0);
+	CHECK(command.Find(_T("\"scale=450:-2:force_original_aspect_ratio=decrease\"")) >= 0);
+	CHECK(command.Find(_T("\"C:\\Temp Files\\peer_000.png\"")) >= 0);
 }
 
 TEST_SUITE_END;

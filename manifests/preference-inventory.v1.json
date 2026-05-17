@@ -9073,28 +9073,6 @@
       "notes": ""
     },
     {
-      "id": "VideoPreviewBackupped",
-      "storageFile": "preferences.ini",
-      "sections": [
-        "<default>"
-      ],
-      "key": "VideoPreviewBackupped",
-      "sourceExpression": "_T(\"VideoPreviewBackupped\")",
-      "kind": "literal",
-      "access": [
-        "read",
-        "write"
-      ],
-      "valueKinds": [
-        "Bool"
-      ],
-      "ownerField": "",
-      "uiApiSurface": "",
-      "clampOrNormalizer": "",
-      "classification": "active-roundtrip",
-      "notes": ""
-    },
-    {
       "id": "VideoPreviewThumbnails",
       "storageFile": "preferences.ini",
       "sections": [
@@ -9158,6 +9136,28 @@
       "clampOrNormalizer": "",
       "classification": "active-roundtrip",
       "notes": ""
+    },
+    {
+      "id": "AllowPeerPreview",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "AllowPeerPreview",
+      "sourceExpression": "prefini::VideoThumbnailKeys::AllowPeerPreview",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": "Explicit opt-in for advertising and serving peer preview frames from shared video files."
     },
     {
       "id": "WatchClipboard4ED2kFilelinks",

@@ -181,7 +181,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:158:0:addnewfilespaused",
-        "PPgFiles.cpp:224:0:addnewfilespaused"
+        "PPgFiles.cpp:225:0:addnewfilespaused"
       ],
       "restBindings": [],
       "notes": ""
@@ -339,6 +339,35 @@
       "uiBindingIds": [],
       "restBindings": [],
       "notes": ""
+    },
+    {
+      "id": "AllowPeerPreview",
+      "inventoryId": "AllowPeerPreview",
+      "storageFile": "preferences.ini",
+      "section": "<default>",
+      "key": "AllowPeerPreview",
+      "sourceExpression": "prefini::VideoThumbnailKeys::AllowPeerPreview",
+      "valueType": "bool",
+      "access": [
+        "read",
+        "write"
+      ],
+      "classification": "editable-ui",
+      "ownerExpressions": [
+        "m_bAllowPeerPreview"
+      ],
+      "defaultExpression": "",
+      "clampOrNormalizer": "",
+      "uiBindingIds": [
+        "PPgFiles.cpp:180:0:m_bAllowPeerPreview",
+        "PPgFiles.cpp:198:0:m_bAllowPeerPreview",
+        "PPgFiles.cpp:238:0:m_bAllowPeerPreview",
+        "PPgFiles.cpp:251:0:m_bAllowPeerPreview",
+        "PPgFiles.cpp:255:0:m_bAllowPeerPreview",
+        "PPgFiles.cpp:258:0:m_bAllowPeerPreview"
+      ],
+      "restBindings": [],
+      "notes": "Explicit opt-in for advertising and serving peer preview frames from shared video files."
     },
     {
       "id": "AlwaysShowTrayIcon",
@@ -598,7 +627,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:185:0:AutoFilenameCleanup",
-        "PPgFiles.cpp:225:0:autofilenamecleanup"
+        "PPgFiles.cpp:226:0:autofilenamecleanup"
       ],
       "restBindings": [],
       "notes": ""
@@ -2911,9 +2940,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgFiles.cpp:182:0:GetFileCompletionArguments",
-        "PPgFiles.cpp:240:0:m_strFileCompletionArguments",
-        "PPgFiles.cpp:241:0:m_strFileCompletionArguments"
+        "PPgFiles.cpp:183:0:GetFileCompletionArguments",
+        "PPgFiles.cpp:242:0:m_strFileCompletionArguments",
+        "PPgFiles.cpp:243:0:m_strFileCompletionArguments"
       ],
       "restBindings": [],
       "notes": ""
@@ -2938,10 +2967,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgFiles.cpp:181:0:GetFileCompletionProgram",
-        "PPgFiles.cpp:238:0:m_strFileCompletionProgram",
-        "PPgFiles.cpp:239:0:m_strFileCompletionProgram",
-        "PPgFiles.cpp:242:1:m_strFileCompletionProgram"
+        "PPgFiles.cpp:182:0:GetFileCompletionProgram",
+        "PPgFiles.cpp:240:0:m_strFileCompletionProgram",
+        "PPgFiles.cpp:241:0:m_strFileCompletionProgram",
+        "PPgFiles.cpp:244:1:m_strFileCompletionProgram"
       ],
       "restBindings": [],
       "notes": ""
@@ -2966,8 +2995,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgFiles.cpp:299:0:GetFilenameCleanups",
-        "PPgFiles.cpp:302:0:SetFilenameCleanups"
+        "PPgFiles.cpp:308:0:GetFilenameCleanups",
+        "PPgFiles.cpp:311:0:SetFilenameCleanups"
       ],
       "restBindings": [],
       "notes": ""
@@ -6203,9 +6232,9 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:160:0:m_bpreviewprio",
-        "PPgFiles.cpp:198:0:m_bpreviewprio",
         "PPgFiles.cpp:199:0:m_bpreviewprio",
-        "PPgFiles.cpp:200:0:m_bpreviewprio"
+        "PPgFiles.cpp:200:0:m_bpreviewprio",
+        "PPgFiles.cpp:201:0:m_bpreviewprio"
       ],
       "restBindings": [],
       "notes": ""
@@ -6541,7 +6570,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgFiles.cpp:222:0:SetRememberCancelledFiles"
+        "PPgFiles.cpp:223:0:SetRememberCancelledFiles"
       ],
       "restBindings": [],
       "notes": ""
@@ -6565,7 +6594,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgFiles.cpp:220:0:SetRememberDownloadedFiles"
+        "PPgFiles.cpp:221:0:SetRememberDownloadedFiles"
       ],
       "restBindings": [],
       "notes": ""
@@ -6688,9 +6717,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgFiles.cpp:180:0:GetRunCommandOnFileCompletion",
-        "PPgFiles.cpp:237:0:m_bRunCommandOnFileCompletion",
-        "PPgFiles.cpp:242:0:m_bRunCommandOnFileCompletion"
+        "PPgFiles.cpp:181:0:GetRunCommandOnFileCompletion",
+        "PPgFiles.cpp:239:0:m_bRunCommandOnFileCompletion",
+        "PPgFiles.cpp:244:0:m_bRunCommandOnFileCompletion"
       ],
       "restBindings": [],
       "notes": ""
@@ -7857,10 +7886,10 @@
         "PPgFiles.cpp:167:0:m_istartnextfile",
         "PPgFiles.cpp:169:0:m_istartnextfile",
         "PPgFiles.cpp:171:0:m_istartnextfile",
-        "PPgFiles.cpp:208:0:m_istartnextfile",
-        "PPgFiles.cpp:210:0:m_istartnextfile",
-        "PPgFiles.cpp:212:0:m_istartnextfile",
-        "PPgFiles.cpp:214:0:m_istartnextfile"
+        "PPgFiles.cpp:209:0:m_istartnextfile",
+        "PPgFiles.cpp:211:0:m_istartnextfile",
+        "PPgFiles.cpp:213:0:m_istartnextfile",
+        "PPgFiles.cpp:215:0:m_istartnextfile"
       ],
       "restBindings": [],
       "notes": ""
@@ -9142,7 +9171,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:161:0:m_bDAP",
-        "PPgFiles.cpp:203:0:m_bDAP"
+        "PPgFiles.cpp:204:0:m_bDAP"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: dap."
@@ -10858,30 +10887,6 @@
       "notes": "Synthetic UI/runtime preference owner token: maxusernicklength."
     },
     {
-      "id": "ui-runtime::moviepreviewbackup",
-      "inventoryId": null,
-      "storageFile": null,
-      "section": null,
-      "key": null,
-      "sourceExpression": "",
-      "valueType": "unknown",
-      "access": [
-        "read"
-      ],
-      "classification": "ui-runtime",
-      "ownerExpressions": [
-        "m_bMoviePreviewBackup"
-      ],
-      "defaultExpression": "",
-      "clampOrNormalizer": "",
-      "uiBindingIds": [
-        "PPgFiles.cpp:184:0:m_bMoviePreviewBackup",
-        "PPgFiles.cpp:252:0:m_bMoviePreviewBackup"
-      ],
-      "restBindings": [],
-      "notes": "Synthetic UI/runtime preference owner token: moviepreviewbackup."
-    },
-    {
       "id": "ui-runtime::nfilebuffersizebytes",
       "inventoryId": null,
       "storageFile": null,
@@ -12227,7 +12232,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:163:0:m_btransferfullchunks",
-        "PPgFiles.cpp:216:0:m_btransferfullchunks"
+        "PPgFiles.cpp:217:0:m_btransferfullchunks"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: transferfullchunks."
@@ -12275,7 +12280,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:162:0:m_bUAP",
-        "PPgFiles.cpp:205:0:m_bUAP"
+        "PPgFiles.cpp:206:0:m_bUAP"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: uap."
@@ -12423,7 +12428,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:159:0:m_bUseOldTimeRemaining",
-        "PPgFiles.cpp:226:0:m_bUseOldTimeRemaining"
+        "PPgFiles.cpp:227:0:m_bUseOldTimeRemaining"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: useoldtimeremaining."
@@ -12569,7 +12574,7 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:186:0:watchclipboard",
-        "PPgFiles.cpp:218:0:watchclipboard"
+        "PPgFiles.cpp:219:0:watchclipboard"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: watchclipboard."
@@ -13489,8 +13494,8 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:176:0:m_strVideoPlayer",
-        "PPgFiles.cpp:228:0:m_strVideoPlayer",
-        "PPgFiles.cpp:229:0:m_strVideoPlayer"
+        "PPgFiles.cpp:229:0:m_strVideoPlayer",
+        "PPgFiles.cpp:230:0:m_strVideoPlayer"
       ],
       "restBindings": [],
       "notes": ""
@@ -13515,29 +13520,9 @@
       "clampOrNormalizer": "",
       "uiBindingIds": [
         "PPgFiles.cpp:177:0:m_strVideoPlayerArgs",
-        "PPgFiles.cpp:230:0:m_strVideoPlayerArgs",
-        "PPgFiles.cpp:231:0:m_strVideoPlayerArgs"
+        "PPgFiles.cpp:231:0:m_strVideoPlayerArgs",
+        "PPgFiles.cpp:232:0:m_strVideoPlayerArgs"
       ],
-      "restBindings": [],
-      "notes": ""
-    },
-    {
-      "id": "VideoPreviewBackupped",
-      "inventoryId": "VideoPreviewBackupped",
-      "storageFile": "preferences.ini",
-      "section": "<default>",
-      "key": "VideoPreviewBackupped",
-      "sourceExpression": "_T(\"VideoPreviewBackupped\")",
-      "valueType": "bool",
-      "access": [
-        "read",
-        "write"
-      ],
-      "classification": "persisted-runtime",
-      "ownerExpressions": [],
-      "defaultExpression": "",
-      "clampOrNormalizer": "",
-      "uiBindingIds": [],
       "restBindings": [],
       "notes": ""
     },
@@ -13559,7 +13544,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgFiles.cpp:253:0:m_bVideoPreviewThumbnails"
+        "PPgFiles.cpp:262:0:m_bVideoPreviewThumbnails"
       ],
       "restBindings": [],
       "notes": "Written as false for compatibility while runtime loading forces thumbnails disabled."
@@ -13585,10 +13570,12 @@
       "uiBindingIds": [
         "PPgFiles.cpp:178:0:m_strVideoThumbnailFfmpegPath",
         "PPgFiles.cpp:196:0:m_strVideoThumbnailFfmpegPath",
-        "PPgFiles.cpp:232:0:m_strVideoThumbnailFfmpegPath",
         "PPgFiles.cpp:233:0:m_strVideoThumbnailFfmpegPath",
-        "PPgFiles.cpp:246:1:m_strVideoThumbnailFfmpegPath",
-        "PPgFiles.cpp:247:0:m_strVideoThumbnailFfmpegPath"
+        "PPgFiles.cpp:234:0:m_strVideoThumbnailFfmpegPath",
+        "PPgFiles.cpp:248:1:m_strVideoThumbnailFfmpegPath",
+        "PPgFiles.cpp:249:0:m_strVideoThumbnailFfmpegPath",
+        "PPgFiles.cpp:255:1:m_strVideoThumbnailFfmpegPath",
+        "PPgFiles.cpp:256:0:m_strVideoThumbnailFfmpegPath"
       ],
       "restBindings": [],
       "notes": ""
@@ -13614,9 +13601,10 @@
       "uiBindingIds": [
         "PPgFiles.cpp:179:0:m_uVideoThumbnailIntervalSeconds",
         "PPgFiles.cpp:197:0:m_uVideoThumbnailIntervalSeconds",
-        "PPgFiles.cpp:236:0:m_uVideoThumbnailIntervalSeconds",
-        "PPgFiles.cpp:246:0:m_uVideoThumbnailIntervalSeconds",
-        "PPgFiles.cpp:248:0:m_uVideoThumbnailIntervalSeconds"
+        "PPgFiles.cpp:237:0:m_uVideoThumbnailIntervalSeconds",
+        "PPgFiles.cpp:248:0:m_uVideoThumbnailIntervalSeconds",
+        "PPgFiles.cpp:250:0:m_uVideoThumbnailIntervalSeconds",
+        "PPgFiles.cpp:257:0:m_uVideoThumbnailIntervalSeconds"
       ],
       "restBindings": [],
       "notes": ""
@@ -16554,10 +16542,28 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:180:0:GetRunCommandOnFileCompletion",
+      "id": "PPgFiles.cpp:180:0:m_bAllowPeerPreview",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
       "line": 180,
+      "function": "LoadSettings",
+      "access": "read",
+      "ownerExpression": "m_bAllowPeerPreview",
+      "controlIds": [
+        "IDC_ALLOW_PEER_PREVIEW"
+      ],
+      "directControlIds": [
+        "IDC_ALLOW_PEER_PREVIEW"
+      ],
+      "schemaIds": [
+        "AllowPeerPreview"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:181:0:GetRunCommandOnFileCompletion",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 181,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetRunCommandOnFileCompletion",
@@ -16572,10 +16578,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:181:0:GetFileCompletionProgram",
+      "id": "PPgFiles.cpp:182:0:GetFileCompletionProgram",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 181,
+      "line": 182,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetFileCompletionProgram",
@@ -16590,10 +16596,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:182:0:GetFileCompletionArguments",
+      "id": "PPgFiles.cpp:183:0:GetFileCompletionArguments",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 182,
+      "line": 183,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetFileCompletionArguments",
@@ -16605,24 +16611,6 @@
       ],
       "schemaIds": [
         "FileCompletionArguments"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:184:0:m_bMoviePreviewBackup",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 184,
-      "function": "LoadSettings",
-      "access": "read",
-      "ownerExpression": "m_bMoviePreviewBackup",
-      "controlIds": [
-        "IDC_VIDEOBACKUP"
-      ],
-      "directControlIds": [
-        "IDC_VIDEOBACKUP"
-      ],
-      "schemaIds": [
-        "ui-runtime::moviepreviewbackup"
       ]
     },
     {
@@ -16726,10 +16714,24 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:198:0:m_bpreviewprio",
+      "id": "PPgFiles.cpp:198:0:m_bAllowPeerPreview",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
       "line": 198,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bAllowPeerPreview",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "AllowPeerPreview"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:199:0:m_bpreviewprio",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 199,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bpreviewprio",
@@ -16740,10 +16742,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:199:0:m_bpreviewprio",
+      "id": "PPgFiles.cpp:200:0:m_bpreviewprio",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 199,
+      "line": 200,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bpreviewprio",
@@ -16758,10 +16760,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:200:0:m_bpreviewprio",
+      "id": "PPgFiles.cpp:201:0:m_bpreviewprio",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 200,
+      "line": 201,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bpreviewprio",
@@ -16772,10 +16774,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:203:0:m_bDAP",
+      "id": "PPgFiles.cpp:204:0:m_bDAP",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 203,
+      "line": 204,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bDAP",
@@ -16790,10 +16792,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:205:0:m_bUAP",
+      "id": "PPgFiles.cpp:206:0:m_bUAP",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 205,
+      "line": 206,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bUAP",
@@ -16808,10 +16810,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:208:0:m_istartnextfile",
+      "id": "PPgFiles.cpp:209:0:m_istartnextfile",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 208,
+      "line": 209,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_istartnextfile",
@@ -16822,10 +16824,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:210:0:m_istartnextfile",
+      "id": "PPgFiles.cpp:211:0:m_istartnextfile",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 210,
+      "line": 211,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_istartnextfile",
@@ -16836,10 +16838,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:212:0:m_istartnextfile",
+      "id": "PPgFiles.cpp:213:0:m_istartnextfile",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 212,
+      "line": 213,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_istartnextfile",
@@ -16850,10 +16852,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:214:0:m_istartnextfile",
+      "id": "PPgFiles.cpp:215:0:m_istartnextfile",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 214,
+      "line": 215,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_istartnextfile",
@@ -16864,10 +16866,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:216:0:m_btransferfullchunks",
+      "id": "PPgFiles.cpp:217:0:m_btransferfullchunks",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 216,
+      "line": 217,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_btransferfullchunks",
@@ -16882,10 +16884,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:218:0:watchclipboard",
+      "id": "PPgFiles.cpp:219:0:watchclipboard",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 218,
+      "line": 219,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "watchclipboard",
@@ -16900,10 +16902,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:220:0:SetRememberDownloadedFiles",
+      "id": "PPgFiles.cpp:221:0:SetRememberDownloadedFiles",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 220,
+      "line": 221,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetRememberDownloadedFiles",
@@ -16918,10 +16920,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:222:0:SetRememberCancelledFiles",
+      "id": "PPgFiles.cpp:223:0:SetRememberCancelledFiles",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 222,
+      "line": 223,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetRememberCancelledFiles",
@@ -16936,10 +16938,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:224:0:addnewfilespaused",
+      "id": "PPgFiles.cpp:225:0:addnewfilespaused",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 224,
+      "line": 225,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "addnewfilespaused",
@@ -16954,10 +16956,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:225:0:autofilenamecleanup",
+      "id": "PPgFiles.cpp:226:0:autofilenamecleanup",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 225,
+      "line": 226,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "autofilenamecleanup",
@@ -16972,10 +16974,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:226:0:m_bUseOldTimeRemaining",
+      "id": "PPgFiles.cpp:227:0:m_bUseOldTimeRemaining",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 226,
+      "line": 227,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bUseOldTimeRemaining",
@@ -16990,24 +16992,6 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:228:0:m_strVideoPlayer",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 228,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_strVideoPlayer",
-      "controlIds": [
-        "IDC_VIDEOPLAYER"
-      ],
-      "directControlIds": [
-        "IDC_VIDEOPLAYER"
-      ],
-      "schemaIds": [
-        "VideoPlayer"
-      ]
-    },
-    {
       "id": "PPgFiles.cpp:229:0:m_strVideoPlayer",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
@@ -17015,28 +16999,28 @@
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strVideoPlayer",
-      "controlIds": [],
-      "directControlIds": [],
+      "controlIds": [
+        "IDC_VIDEOPLAYER"
+      ],
+      "directControlIds": [
+        "IDC_VIDEOPLAYER"
+      ],
       "schemaIds": [
         "VideoPlayer"
       ]
     },
     {
-      "id": "PPgFiles.cpp:230:0:m_strVideoPlayerArgs",
+      "id": "PPgFiles.cpp:230:0:m_strVideoPlayer",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
       "line": 230,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "m_strVideoPlayerArgs",
-      "controlIds": [
-        "IDC_VIDEOPLAYER_ARGS"
-      ],
-      "directControlIds": [
-        "IDC_VIDEOPLAYER_ARGS"
-      ],
+      "ownerExpression": "m_strVideoPlayer",
+      "controlIds": [],
+      "directControlIds": [],
       "schemaIds": [
-        "VideoPlayerArgs"
+        "VideoPlayer"
       ]
     },
     {
@@ -17047,28 +17031,28 @@
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strVideoPlayerArgs",
-      "controlIds": [],
-      "directControlIds": [],
+      "controlIds": [
+        "IDC_VIDEOPLAYER_ARGS"
+      ],
+      "directControlIds": [
+        "IDC_VIDEOPLAYER_ARGS"
+      ],
       "schemaIds": [
         "VideoPlayerArgs"
       ]
     },
     {
-      "id": "PPgFiles.cpp:232:0:m_strVideoThumbnailFfmpegPath",
+      "id": "PPgFiles.cpp:232:0:m_strVideoPlayerArgs",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
       "line": 232,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
-      "controlIds": [
-        "IDC_THUMBNAIL_FFMPEG"
-      ],
-      "directControlIds": [
-        "IDC_THUMBNAIL_FFMPEG"
-      ],
+      "ownerExpression": "m_strVideoPlayerArgs",
+      "controlIds": [],
+      "directControlIds": [],
       "schemaIds": [
-        "VideoThumbnailFfmpegPath"
+        "VideoPlayerArgs"
       ]
     },
     {
@@ -17079,6 +17063,24 @@
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strVideoThumbnailFfmpegPath",
+      "controlIds": [
+        "IDC_THUMBNAIL_FFMPEG"
+      ],
+      "directControlIds": [
+        "IDC_THUMBNAIL_FFMPEG"
+      ],
+      "schemaIds": [
+        "VideoThumbnailFfmpegPath"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:234:0:m_strVideoThumbnailFfmpegPath",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 234,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
@@ -17086,136 +17088,12 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:236:0:m_uVideoThumbnailIntervalSeconds",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 236,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_uVideoThumbnailIntervalSeconds",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "VideoThumbnailIntervalSeconds"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:237:0:m_bRunCommandOnFileCompletion",
+      "id": "PPgFiles.cpp:237:0:m_uVideoThumbnailIntervalSeconds",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
       "line": 237,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "m_bRunCommandOnFileCompletion",
-      "controlIds": [
-        "IDC_RUNONFILECOMPLETE"
-      ],
-      "directControlIds": [
-        "IDC_RUNONFILECOMPLETE"
-      ],
-      "schemaIds": [
-        "RunCommandOnFileCompletion"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:238:0:m_strFileCompletionProgram",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 238,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_strFileCompletionProgram",
-      "controlIds": [
-        "IDC_FILECOMPLETEPROGRAM"
-      ],
-      "directControlIds": [
-        "IDC_FILECOMPLETEPROGRAM"
-      ],
-      "schemaIds": [
-        "FileCompletionProgram"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:239:0:m_strFileCompletionProgram",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 239,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_strFileCompletionProgram",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "FileCompletionProgram"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:240:0:m_strFileCompletionArguments",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 240,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_strFileCompletionArguments",
-      "controlIds": [
-        "IDC_FILECOMPLETEARGS"
-      ],
-      "directControlIds": [
-        "IDC_FILECOMPLETEARGS"
-      ],
-      "schemaIds": [
-        "FileCompletionArguments"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:241:0:m_strFileCompletionArguments",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 241,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_strFileCompletionArguments",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "FileCompletionArguments"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:242:0:m_bRunCommandOnFileCompletion",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 242,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bRunCommandOnFileCompletion",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "RunCommandOnFileCompletion"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:242:1:m_strFileCompletionProgram",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 242,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_strFileCompletionProgram",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "FileCompletionProgram"
-      ]
-    },
-    {
-      "id": "PPgFiles.cpp:246:0:m_uVideoThumbnailIntervalSeconds",
-      "page": "PPgFiles.cpp",
-      "dialogId": "IDD_PPG_FILES",
-      "line": 246,
-      "function": "OnApply",
-      "access": "write",
       "ownerExpression": "m_uVideoThumbnailIntervalSeconds",
       "controlIds": [],
       "directControlIds": [],
@@ -17224,31 +17102,131 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:246:1:m_strVideoThumbnailFfmpegPath",
+      "id": "PPgFiles.cpp:238:0:m_bAllowPeerPreview",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 246,
+      "line": 238,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
-      "controlIds": [],
-      "directControlIds": [],
+      "ownerExpression": "m_bAllowPeerPreview",
+      "controlIds": [
+        "IDC_ALLOW_PEER_PREVIEW"
+      ],
+      "directControlIds": [
+        "IDC_ALLOW_PEER_PREVIEW"
+      ],
       "schemaIds": [
-        "VideoThumbnailFfmpegPath"
+        "AllowPeerPreview"
       ]
     },
     {
-      "id": "PPgFiles.cpp:247:0:m_strVideoThumbnailFfmpegPath",
+      "id": "PPgFiles.cpp:239:0:m_bRunCommandOnFileCompletion",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 247,
+      "line": 239,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
+      "ownerExpression": "m_bRunCommandOnFileCompletion",
+      "controlIds": [
+        "IDC_RUNONFILECOMPLETE"
+      ],
+      "directControlIds": [
+        "IDC_RUNONFILECOMPLETE"
+      ],
+      "schemaIds": [
+        "RunCommandOnFileCompletion"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:240:0:m_strFileCompletionProgram",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 240,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strFileCompletionProgram",
+      "controlIds": [
+        "IDC_FILECOMPLETEPROGRAM"
+      ],
+      "directControlIds": [
+        "IDC_FILECOMPLETEPROGRAM"
+      ],
+      "schemaIds": [
+        "FileCompletionProgram"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:241:0:m_strFileCompletionProgram",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 241,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strFileCompletionProgram",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
-        "VideoThumbnailFfmpegPath"
+        "FileCompletionProgram"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:242:0:m_strFileCompletionArguments",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 242,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strFileCompletionArguments",
+      "controlIds": [
+        "IDC_FILECOMPLETEARGS"
+      ],
+      "directControlIds": [
+        "IDC_FILECOMPLETEARGS"
+      ],
+      "schemaIds": [
+        "FileCompletionArguments"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:243:0:m_strFileCompletionArguments",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 243,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strFileCompletionArguments",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "FileCompletionArguments"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:244:0:m_bRunCommandOnFileCompletion",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 244,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bRunCommandOnFileCompletion",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "RunCommandOnFileCompletion"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:244:1:m_strFileCompletionProgram",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 244,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strFileCompletionProgram",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "FileCompletionProgram"
       ]
     },
     {
@@ -17266,28 +17244,136 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:252:0:m_bMoviePreviewBackup",
+      "id": "PPgFiles.cpp:248:1:m_strVideoThumbnailFfmpegPath",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 252,
+      "line": 248,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "m_bMoviePreviewBackup",
-      "controlIds": [
-        "IDC_VIDEOBACKUP"
-      ],
-      "directControlIds": [
-        "IDC_VIDEOBACKUP"
-      ],
+      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
+      "controlIds": [],
+      "directControlIds": [],
       "schemaIds": [
-        "ui-runtime::moviepreviewbackup"
+        "VideoThumbnailFfmpegPath"
       ]
     },
     {
-      "id": "PPgFiles.cpp:253:0:m_bVideoPreviewThumbnails",
+      "id": "PPgFiles.cpp:249:0:m_strVideoThumbnailFfmpegPath",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 253,
+      "line": 249,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "VideoThumbnailFfmpegPath"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:250:0:m_uVideoThumbnailIntervalSeconds",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 250,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_uVideoThumbnailIntervalSeconds",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "VideoThumbnailIntervalSeconds"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:251:0:m_bAllowPeerPreview",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 251,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bAllowPeerPreview",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "AllowPeerPreview"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:255:0:m_bAllowPeerPreview",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 255,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bAllowPeerPreview",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "AllowPeerPreview"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:255:1:m_strVideoThumbnailFfmpegPath",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 255,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "VideoThumbnailFfmpegPath"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:256:0:m_strVideoThumbnailFfmpegPath",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 256,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_strVideoThumbnailFfmpegPath",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "VideoThumbnailFfmpegPath"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:257:0:m_uVideoThumbnailIntervalSeconds",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 257,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_uVideoThumbnailIntervalSeconds",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "VideoThumbnailIntervalSeconds"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:258:0:m_bAllowPeerPreview",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 258,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bAllowPeerPreview",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "AllowPeerPreview"
+      ]
+    },
+    {
+      "id": "PPgFiles.cpp:262:0:m_bVideoPreviewThumbnails",
+      "page": "PPgFiles.cpp",
+      "dialogId": "IDD_PPG_FILES",
+      "line": 262,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bVideoPreviewThumbnails",
@@ -17298,10 +17384,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:299:0:GetFilenameCleanups",
+      "id": "PPgFiles.cpp:308:0:GetFilenameCleanups",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 299,
+      "line": 308,
       "function": "OnSetCleanupFilter",
       "access": "read",
       "ownerExpression": "GetFilenameCleanups",
@@ -17312,10 +17398,10 @@
       ]
     },
     {
-      "id": "PPgFiles.cpp:302:0:SetFilenameCleanups",
+      "id": "PPgFiles.cpp:311:0:SetFilenameCleanups",
       "page": "PPgFiles.cpp",
       "dialogId": "IDD_PPG_FILES",
-      "line": 302,
+      "line": 311,
       "function": "OnSetCleanupFilter",
       "access": "read",
       "ownerExpression": "SetFilenameCleanups",

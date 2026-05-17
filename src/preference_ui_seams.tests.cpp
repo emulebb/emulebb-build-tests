@@ -118,6 +118,7 @@ TEST_CASE("Preference INI map uses dedicated upload-policy sections without lega
 
 	CHECK(CString(PreferenceIniMap::VideoThumbnailKeys::FfmpegPath) == CString(_T("VideoThumbnailFfmpegPath")));
 	CHECK(CString(PreferenceIniMap::VideoThumbnailKeys::IntervalSeconds) == CString(_T("VideoThumbnailIntervalSeconds")));
+	CHECK(CString(PreferenceIniMap::VideoThumbnailKeys::AllowPeerPreview) == CString(_T("AllowPeerPreview")));
 
 	CHECK(CString(PreferenceIniMap::GeoLocationKeys::LookupEnabled) == CString(_T("GeoLocationLookupEnabled")));
 	CHECK(CString(PreferenceIniMap::GeoLocationKeys::UpdatePeriodDays) == CString(_T("GeoLocationUpdatePeriodDays")));
@@ -142,6 +143,7 @@ TEST_CASE("Preference INI map uses dedicated upload-policy sections without lega
 	CHECK_FALSE(CString(PreferenceIniMap::UploadPolicyKeys::MaxUploadClientsAllowed).Left(2) == CString(_T("BB")));
 	CHECK_FALSE(CString(PreferenceIniMap::UploadPolicyKeys::SessionTransferLimitMode).Left(2) == CString(_T("BB")));
 	CHECK_FALSE(CString(PreferenceIniMap::VideoThumbnailKeys::FfmpegPath).Left(2) == CString(_T("BB")));
+	CHECK_FALSE(CString(PreferenceIniMap::VideoThumbnailKeys::AllowPeerPreview).Left(2) == CString(_T("BB")));
 }
 #endif
 
