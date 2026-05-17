@@ -5,30 +5,41 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   python-harness:
-    runs-on: windows-latest
+    name: python-harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2022
+          - windows-2025-vs2026
 
     steps:
       - name: Checkout test harness
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: repos/eMule-build-tests
 
       - name: Checkout app source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: eMulebb/eMule
           path: workspaces/v0.72a/app/eMule-main
 
       - name: Checkout tooling docs
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: eMulebb/eMule-tooling
           path: repos/eMule-tooling
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
