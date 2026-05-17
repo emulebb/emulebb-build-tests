@@ -60,6 +60,22 @@
               "description": "Covered directly and through certification; pytest output is recorded by the operator when run standalone."
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.release-coverage.ownership.v1",
+          "title": "Release coverage ownership manifest",
+          "phase": "preflight",
+          "flowCategory": "coverage-ownership",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test python --quiet",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Python harness validates the release coverage ownership manifest against campaign scenarios."
+            }
+          ]
         }
       ]
     },
@@ -126,6 +142,61 @@
               "kind": "manual",
               "required": true,
               "description": "Native parity, coverage, and live-diff command result is recorded by the operator."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.protocol.tag-file-format.goldens.v1",
+          "title": "Protocol tag and file-format golden coverage",
+          "phase": "protocol-parity",
+          "flowCategory": "file-format",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test all",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/native-coverage-latest/coverage-summary.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Native parity suite owns Kad/eD2K tag serialization and release file-format golden tests."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.protocol.links-collections.boundaries.v1",
+          "title": "eD2K links and collection boundary coverage",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test all",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Native collection, direct download, and protocol parity tests own link and collection parser boundaries."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.protocol.server-ipfilter.native.v1",
+          "title": "Server and IP filter native boundary coverage",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test all",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Native server socket, server.met persistence, and IP filter seams cover current nonblocking release ownership."
             }
           ]
         }
@@ -420,6 +491,22 @@
               "statusPointer": "/status"
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.ui.classic-dialog-inputs.native.v1",
+          "title": "Classic dialog input native seam ownership",
+          "phase": "ui-resource-depth",
+          "flowCategory": "ui",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test all",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Native category, direct-download, scheduler, and future dialog seams own nonblocking classic dialog input coverage."
+            }
+          ]
         }
       ]
     },
@@ -575,6 +662,36 @@
     }
   ],
   "releaseGates": [
+    {
+      "id": "release-coverage-ownership",
+      "coveredBy": [
+        "emulebb.flow.release-coverage.ownership.v1"
+      ]
+    },
+    {
+      "id": "protocol-tag-file-format-goldens",
+      "coveredBy": [
+        "emulebb.flow.protocol.tag-file-format.goldens.v1"
+      ]
+    },
+    {
+      "id": "links-collections-boundaries",
+      "coveredBy": [
+        "emulebb.flow.protocol.links-collections.boundaries.v1"
+      ]
+    },
+    {
+      "id": "classic-dialog-inputs-native",
+      "coveredBy": [
+        "emulebb.flow.ui.classic-dialog-inputs.native.v1"
+      ]
+    },
+    {
+      "id": "server-ipfilter-native",
+      "coveredBy": [
+        "emulebb.flow.protocol.server-ipfilter.native.v1"
+      ]
+    },
     {
       "id": "validate",
       "coveredBy": [

@@ -61,6 +61,18 @@ Current critical comparison slices:
 - R1 REST/WebServer contract and boundary seams: `src\web_api.tests.cpp`
 - core socket IO guards: `src\socket_io.tests.cpp`, `src\emsocket_send.tests.cpp`, `src\async_socket_ex.tests.cpp`
 
+Release coverage ownership:
+
+- `manifests\release-coverage\ownership.v1.json` is the release-owned weak-area
+  map for the shared harness
+- each blocking release-owned area must map to a campaign scenario in
+  `manifests\release-campaigns\emule-bb-0.7.3.v1.json`
+- planned and deferred areas stay visible in that manifest instead of living in
+  loose notes
+- deterministic file-format goldens live in
+  `src\release_file_format_goldens.tests.cpp` and run through the existing
+  native `parity` suite when native tests are executed
+
 Script inventory:
 
 - Python 3 is the canonical runtime for live/UI harnesses in this repo

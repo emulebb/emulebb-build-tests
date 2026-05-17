@@ -1,0 +1,238 @@
+{
+  "schemaVersion": "emule-build-tests.release-coverage.v1",
+  "title": "eMule BB release coverage ownership",
+  "description": "Release-owned weak areas and the single test lane responsible for each area.",
+  "areas": [
+    {
+      "id": "protocol-tags-kad-ed2k",
+      "title": "Kad and eD2K tag serialization",
+      "releasePhase": "protocol-parity",
+      "ownerLane": "native",
+      "status": "covered",
+      "blocking": true,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Protocol*",
+        "srchybrid/Packets*",
+        "srchybrid/kademlia/io/**",
+        "srchybrid/kademlia/kademlia/Tag.h"
+      ],
+      "coverage": [
+        "src/protocol.tests.cpp",
+        "src/protocol_parity.tests.cpp",
+        "src/release_file_format_goldens.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.protocol.tag-file-format.goldens.v1"
+      ]
+    },
+    {
+      "id": "kad-ed2k-persistence-files",
+      "title": "Kad/eD2K persistence file formats",
+      "releasePhase": "protocol-parity",
+      "ownerLane": "native",
+      "status": "covered",
+      "blocking": true,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/ServerList*",
+        "srchybrid/ServerMetPersistenceSeams.h",
+        "srchybrid/kademlia/utils/NodesDatSupport*",
+        "srchybrid/kademlia/utils/KadPersistenceSeams.h"
+      ],
+      "coverage": [
+        "src/server_met_persistence.tests.cpp",
+        "src/kad_guards.tests.cpp",
+        "src/release_file_format_goldens.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.protocol.tag-file-format.goldens.v1"
+      ]
+    },
+    {
+      "id": "profile-preferences-formats",
+      "title": "Profile preferences and startup config formats",
+      "releasePhase": "preflight",
+      "ownerLane": "python-harness",
+      "status": "covered",
+      "blocking": true,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Preferences*",
+        "srchybrid/StartupConfigOverride.h",
+        "srchybrid/Config*"
+      ],
+      "coverage": [
+        "manifests/preference-inventory.v1.json",
+        "tests/python/test_preference_inventory.py",
+        "tests/python/test_startup_profile.py",
+        "src/release_file_format_goldens.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.release-coverage.ownership.v1",
+        "emulebb.flow.certification.fast.matrix.v1"
+      ]
+    },
+    {
+      "id": "ed2k-links-collections",
+      "title": "eD2K links and collection import boundaries",
+      "releasePhase": "protocol-parity",
+      "ownerLane": "native",
+      "status": "covered",
+      "blocking": true,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/ED2KLink*",
+        "srchybrid/Collection*"
+      ],
+      "coverage": [
+        "src/collection.tests.cpp",
+        "src/direct_download.tests.cpp",
+        "src/protocol_parity.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.protocol.links-collections.boundaries.v1"
+      ]
+    },
+    {
+      "id": "classic-dialog-inputs",
+      "title": "Classic dialog and input validation surfaces",
+      "releasePhase": "ui-resource-depth",
+      "ownerLane": "native",
+      "status": "planned",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/AddFriend*",
+        "srchybrid/AddSourceDlg*",
+        "srchybrid/DirectDownloadDlg*",
+        "srchybrid/CatDialog*",
+        "srchybrid/Scheduler*"
+      ],
+      "coverage": [
+        "src/category_dialog.tests.cpp",
+        "src/direct_download.tests.cpp",
+        "src/scheduler_removal.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.ui.classic-dialog-inputs.native.v1"
+      ]
+    },
+    {
+      "id": "controller-rest-arr-amutorrent",
+      "title": "REST, Arr, and aMuTorrent controller surface",
+      "releasePhase": "controller-surface",
+      "ownerLane": "live-e2e",
+      "status": "covered",
+      "blocking": true,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/WebServer*",
+        "srchybrid/WebServerJson*",
+        "srchybrid/WebServices*"
+      ],
+      "coverage": [
+        "src/web_api.tests.cpp",
+        "scripts/rest-api-smoke.py",
+        "scripts/prowlarr-emulebb-live.py",
+        "scripts/radarr-emulebb-live.py",
+        "scripts/sonarr-emulebb-live.py",
+        "scripts/amutorrent-browser-smoke.py"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.rest.contract.controller.v1",
+        "emulebb.flow.arr.prowlarr.search-to-client.live.v1",
+        "emulebb.flow.arr.radarr.import.live.v1",
+        "emulebb.flow.arr.sonarr.import.live.v1",
+        "emulebb.flow.amutorrent.browser.controller.v1"
+      ]
+    },
+    {
+      "id": "live-profile-policy",
+      "title": "Live profile policy and minimized non-UI launch rules",
+      "releasePhase": "preflight",
+      "ownerLane": "python-harness",
+      "status": "covered",
+      "blocking": true,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Preferences*",
+        "srchybrid/Emule*",
+        "srchybrid/WebServer*"
+      ],
+      "coverage": [
+        "tests/python/test_live_profiles.py",
+        "tests/python/test_live_profile_seed.py",
+        "tests/python/test_live_e2e_suite.py"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.release-coverage.ownership.v1",
+        "emulebb.flow.certification.fast.matrix.v1"
+      ]
+    },
+    {
+      "id": "server-ipfilter-update-flows",
+      "title": "Server, IP filter, and remote update flows",
+      "releasePhase": "protocol-parity",
+      "ownerLane": "native",
+      "status": "planned",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Server*",
+        "srchybrid/IPFilter*",
+        "srchybrid/HttpDownloadDlg*",
+        "srchybrid/URLClient*"
+      ],
+      "coverage": [
+        "src/server_socket.tests.cpp",
+        "src/server_met_persistence.tests.cpp",
+        "src/ip_filter.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.protocol.server-ipfilter.native.v1"
+      ]
+    },
+    {
+      "id": "irc-chat-friends",
+      "title": "IRC, chat, friends, and buddy UI-adjacent flows",
+      "releasePhase": "ui-resource-depth",
+      "ownerLane": "deferred",
+      "status": "deferred",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Irc*",
+        "srchybrid/Chat*",
+        "srchybrid/Friend*",
+        "srchybrid/BaseClient*"
+      ],
+      "coverage": [
+        "src/base_client_friend_buddy.tests.cpp"
+      ],
+      "deferredReason": "Release candidate does not currently expose IRC/chat as a primary release gate; future pass should add dialog/input seams before promoting to blocking."
+    },
+    {
+      "id": "packaging-provenance",
+      "title": "Release package manifests, hashes, and architecture proof",
+      "releasePhase": "packaging-provenance",
+      "ownerLane": "packaging",
+      "status": "covered",
+      "blocking": true,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/res/emulex64.manifest",
+        "srchybrid/res/emuleARM64.manifest"
+      ],
+      "coverage": [
+        "manifests/release-campaigns/emule-bb-0.7.3.v1.json"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.package.core.x64.v1",
+        "emulebb.flow.package.core.arm64.v1",
+        "emulebb.flow.package.amutorrent.x64.v1",
+        "emulebb.flow.provenance.clean-worktree.release.v1"
+      ]
+    }
+  ]
+}

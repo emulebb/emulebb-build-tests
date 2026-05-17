@@ -215,6 +215,7 @@
     <ClCompile Include="src\protocol_parity.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProtocolParsers.h') and Exists('$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h') and Exists('$(AppRoot)\srchybrid\ServerSocketSeams.h')" />
     <ClCompile Include="src\protocol_receive_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h')" />
     <ClCompile Include="src\protocol.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ProtocolGuards.h')" />
+    <ClCompile Include="src\release_file_format_goldens.tests.cpp" />
     <ClCompile Include="src\resource_ownership.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ResourceOwnershipSeams.h')" />
     <ClCompile Include="src\release_update_check.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ReleaseUpdateCheckSeams.h')" />
     <ClCompile Include="src\rar_file.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\RARFileSeams.h')" />
