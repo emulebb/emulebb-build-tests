@@ -18,11 +18,11 @@ manifests/live-profile-seed/config/preferences.ini binary -eol
 
 # Resource files are stored as normal UTF-8 text in this repo.
 # Keep Git newline normalization, but do not add any encoding transcoding rule.
-*.rc text eol=crlf
-*.rc2 text eol=crlf
+*.rc text eol=lf
+*.rc2 text eol=lf
 
-*.bat text eol=crlf
-*.cmd text eol=crlf
+*.bat text eol=lf
+*.cmd text eol=lf
 
 *.md text eol=lf
 *.yml text eol=lf
