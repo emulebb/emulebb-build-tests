@@ -95,23 +95,64 @@
       ]
     },
     {
-      "id": "classic-dialog-inputs",
-      "title": "Classic dialog and input validation surfaces",
+      "id": "friend-source-dialog-inputs",
+      "title": "Friend and source dialog input validation",
+      "releasePhase": "ui-resource-depth",
+      "ownerLane": "native",
+      "status": "covered",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/AddFriend*",
+        "srchybrid/AddSourceDlg*",
+        "srchybrid/AddFriendInputSeams.h",
+        "srchybrid/AddSourceInputSeams.h",
+        "srchybrid/DialogInputParsingSeams.h"
+      ],
+      "coverage": [
+        "src/add_friend_input.tests.cpp",
+        "src/add_source_input.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.ui.classic-dialog-inputs.native.v1"
+      ]
+    },
+    {
+      "id": "direct-download-dialog-inputs",
+      "title": "Direct download dialog link and category inputs",
+      "releasePhase": "ui-resource-depth",
+      "ownerLane": "native",
+      "status": "covered",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/DirectDownloadDlg*",
+        "srchybrid/DirectDownloadSeams.h",
+        "srchybrid/ED2KLink*"
+      ],
+      "coverage": [
+        "src/direct_download.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.ui.classic-dialog-inputs.native.v1",
+        "emulebb.flow.protocol.links-collections.boundaries.v1"
+      ]
+    },
+    {
+      "id": "category-scheduler-dialog-inputs",
+      "title": "Category and scheduler dialog validation",
       "releasePhase": "ui-resource-depth",
       "ownerLane": "native",
       "status": "planned",
       "blocking": false,
       "releaseOwned": true,
       "appPathGlobs": [
-        "srchybrid/AddFriend*",
-        "srchybrid/AddSourceDlg*",
-        "srchybrid/DirectDownloadDlg*",
         "srchybrid/CatDialog*",
+        "srchybrid/CategoryDialogSeams.h",
         "srchybrid/Scheduler*"
       ],
       "coverage": [
         "src/category_dialog.tests.cpp",
-        "src/direct_download.tests.cpp",
         "src/scheduler_removal.tests.cpp"
       ],
       "campaignScenarioIds": [
@@ -175,7 +216,7 @@
       "title": "Server, IP filter, and remote update flows",
       "releasePhase": "protocol-parity",
       "ownerLane": "native",
-      "status": "planned",
+      "status": "covered",
       "blocking": false,
       "releaseOwned": true,
       "appPathGlobs": [
@@ -185,6 +226,7 @@
         "srchybrid/URLClient*"
       ],
       "coverage": [
+        "src/server_input.tests.cpp",
         "src/server_socket.tests.cpp",
         "src/server_met_persistence.tests.cpp",
         "src/ip_filter.tests.cpp"
@@ -211,6 +253,28 @@
         "src/base_client_friend_buddy.tests.cpp"
       ],
       "deferredReason": "Release candidate does not currently expose IRC/chat as a primary release gate; future pass should add dialog/input seams before promoting to blocking."
+    },
+    {
+      "id": "archive-preview-comment-diagnostics",
+      "title": "Archive preview, comments, credits, and offline diagnostics",
+      "releasePhase": "ui-resource-depth",
+      "ownerLane": "native",
+      "status": "planned",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Archive*",
+        "srchybrid/Preview*",
+        "srchybrid/Comment*",
+        "srchybrid/Credits*",
+        "srchybrid/Statistics*"
+      ],
+      "coverage": [
+        "src/release_file_format_goldens.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.ui.classic-dialog-inputs.native.v1"
+      ]
     },
     {
       "id": "packaging-provenance",

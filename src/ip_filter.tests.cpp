@@ -88,6 +88,16 @@ TEST_CASE("IP-filter update seam rejects markup download payloads")
 	CHECK_FALSE(IPFilterUpdateSeams::LooksLikeMarkupPayload("", 0u));
 }
 
+TEST_CASE("IP-filter update seam owns accepted archive member names")
+{
+	CHECK(IPFilterUpdateSeams::IsSupportedArchiveMemberName(CString(_T("ipfilter.dat"))));
+	CHECK(IPFilterUpdateSeams::IsSupportedArchiveMemberName(CString(_T("guarding.p2p"))));
+	CHECK(IPFilterUpdateSeams::IsSupportedArchiveMemberName(CString(_T("guardian.p2p"))));
+	CHECK(IPFilterUpdateSeams::IsSupportedArchiveMemberName(CString(_T(" IPFILTER.DAT "))));
+	CHECK_FALSE(IPFilterUpdateSeams::IsSupportedArchiveMemberName(CString(_T("ranges.txt"))));
+	CHECK_FALSE(IPFilterUpdateSeams::IsSupportedArchiveMemberName(CString(_T("ipfilter.dat.exe"))));
+}
+
 TEST_CASE("IP-filter seam bypasses runtime filtering when disabled")
 {
 	CHECK(IPFilterSeams::ShouldEvaluateFilter(true, 1u, 0x01020304u));

@@ -134,6 +134,8 @@
     <ClCompile Include="$(AppRoot)\srchybrid\kademlia\utils\SafeKad.cpp" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\SafeKad.cpp')" />
     <ClCompile Include="src\async_datagram_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketSeams.h')" />
     <ClCompile Include="src\async_datagram_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
+    <ClCompile Include="src\add_friend_input.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AddFriendInputSeams.h')" />
+    <ClCompile Include="src\add_source_input.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AddSourceInputSeams.h')" />
     <ClCompile Include="src\aich_maintenance.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AICHMaintenanceSeams.h')" />
     <ClCompile Include="src\aich_sync_thread.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AICHSyncThreadSeams.h')" />
     <ClCompile Include="src\app_command_line.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppCommandLineSeams.h')" />
@@ -227,6 +229,7 @@
     <ClCompile Include="src\shared_file_list.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SharedFileListSeams.h')" />
     <ClCompile Include="src\search_list_view.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SearchListViewSeams.h')" />
     <ClCompile Include="src\server_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ServerSocketSeams.h')" />
+    <ClCompile Include="src\server_input.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ServerInputSeams.h')" />
     <ClCompile Include="src\server_met_persistence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ServerMetPersistenceSeams.h')" />
     <ClCompile Include="src\socket_io.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SocketIoSeams.h')" />
     <ClCompile Include="src\socket_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SocketPolicySeams.h')" />
@@ -271,6 +274,8 @@
     <ClInclude Include="include\LongPathTestSupport.h" />
     <ClInclude Include="include\TestSupport.h" />
     <ClInclude Include="$(AppRoot)\srchybrid\AICHSyncThreadSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AICHSyncThreadSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\AddFriendInputSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AddFriendInputSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\AddSourceInputSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AddSourceInputSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\AppCommandLineSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AppCommandLineSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BackgroundRefreshSeams.h" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
@@ -283,6 +288,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DirectDownloadSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\DialogInputParsingSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DialogInputParsingSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueDiskSpaceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadQueueAutoCatSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueAutoCatSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h')" />
@@ -321,6 +327,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\SearchTrustHintSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SearchTrustHintSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ServerSocketSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ServerSocketSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\ServerInputSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ServerInputSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ServerMetPersistenceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ServerMetPersistenceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SocketIoSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SocketIoSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SocketPolicySeams.h" Condition="Exists('$(AppRoot)\srchybrid\SocketPolicySeams.h')" />

@@ -36,11 +36,14 @@ def test_release_coverage_manifest_keeps_required_weak_areas_owned() -> None:
         "kad-ed2k-persistence-files",
         "profile-preferences-formats",
         "ed2k-links-collections",
-        "classic-dialog-inputs",
+        "friend-source-dialog-inputs",
+        "direct-download-dialog-inputs",
+        "category-scheduler-dialog-inputs",
         "controller-rest-arr-amutorrent",
         "live-profile-policy",
         "server-ipfilter-update-flows",
         "irc-chat-friends",
+        "archive-preview-comment-diagnostics",
         "packaging-provenance",
     }
 
@@ -56,7 +59,10 @@ def test_release_coverage_manifest_rejects_blocking_area_without_campaign_owner(
 
 def test_release_coverage_manifest_rejects_deferred_blocking_area() -> None:
     manifest = release_coverage.clone_manifest(release_coverage.load_release_coverage_manifest(repo_root()))
-    manifest["areas"][-2]["blocking"] = True
+    for area in manifest["areas"]:
+        if area["id"] == "irc-chat-friends":
+            area["blocking"] = True
+            break
 
     validation = release_coverage.validate_release_coverage_manifest(manifest)
 

@@ -72,6 +72,9 @@ Release coverage ownership:
 - deterministic file-format goldens live in
   `src\release_file_format_goldens.tests.cpp` and run through the existing
   native `parity` suite when native tests are executed
+- deterministic dialog/update seams now own friend/source input parsing,
+  direct-download link tokenization, server update URL validation, and IP-filter
+  archive member policy without requiring live UI automation
 
 Script inventory:
 
