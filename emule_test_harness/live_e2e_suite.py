@@ -144,6 +144,12 @@ SUITE_SPECS = (
         is_resource_ui_smoke=True,
         default_enabled=False,
     ),
+    SuiteSpec(
+        name="command-line-smoke",
+        script_name="command-line-smoke.py",
+        category="startup",
+        default_enabled=False,
+    ),
     SuiteSpec(name="preference-ui", script_name="preference-ui-e2e.py", category="ui"),
     SuiteSpec(
         name="shared-files-ui",
@@ -263,6 +269,7 @@ PROFILE_SUITE_NAMES = {
         "amutorrent-browser-smoke",
     ),
     "beta-release": (
+        "command-line-smoke",
         "shared-directories-rest",
         "rest-api",
         "prowlarr-emulebb",
@@ -271,6 +278,7 @@ PROFILE_SUITE_NAMES = {
         "rest-cold-start-dump-stress",
     ),
     "release-expanded": (
+        "command-line-smoke",
         "preference-ui",
         "shared-files-ui",
         "shared-hash-ui",

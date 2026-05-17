@@ -136,6 +136,7 @@
     <ClCompile Include="src\async_datagram_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
     <ClCompile Include="src\aich_maintenance.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AICHMaintenanceSeams.h')" />
     <ClCompile Include="src\aich_sync_thread.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AICHSyncThreadSeams.h')" />
+    <ClCompile Include="src\app_command_line.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppCommandLineSeams.h')" />
     <ClCompile Include="src\app_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppKeyboardShortcutsSeams.h')" />
     <ClCompile Include="src\async_socket_ex.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncSocketExSeams.h')" />
     <ClCompile Include="src\atomic_state.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppStateSeams.h')" />
@@ -269,6 +270,7 @@
     <ClInclude Include="include\LongPathTestSupport.h" />
     <ClInclude Include="include\TestSupport.h" />
     <ClInclude Include="$(AppRoot)\srchybrid\AICHSyncThreadSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AICHSyncThreadSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\AppCommandLineSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AppCommandLineSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BackgroundRefreshSeams.h" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h" Condition="Exists('$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h')" />

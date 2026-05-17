@@ -388,6 +388,7 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
         live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE
     )
     assert [script_name(command) for command in commands] == [
+        "command-line-smoke.py",
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "rest-cold-start-dump-stress.py",
@@ -399,7 +400,7 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
     assert "auto-browse-live.py" not in [script_name(command) for command in commands]
     assert "shared-files-ui-e2e.py" not in [script_name(command) for command in commands]
 
-    cold_start_command = commands[2]
+    cold_start_command = commands[3]
     assert option_values(cold_start_command, "--waves") == [str(live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES)]
     assert option_values(cold_start_command, "--searches-per-wave") == [
         str(live_e2e_suite.BETA_RELEASE_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE)
@@ -521,6 +522,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["profile"] == "release-expanded"
     assert summary["profile_suite_selection_applied"] is True
     assert [script_name(command) for command in commands] == [
+        "command-line-smoke.py",
         "preference-ui-e2e.py",
         "shared-files-ui-e2e.py",
         "search-ui-live.py",
@@ -552,14 +554,14 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["weak_path_matrix"]["adversity"]["local_dumps_crash_smoke"] is True
     assert summary["weak_path_matrix"]["integrations"]["amutorrent_browser_smoke"] is True
 
-    preference_command = commands[0]
+    preference_command = commands[1]
     assert "--directories-tree-stress" in preference_command
 
-    search_ui_command = commands[2]
+    search_ui_command = commands[3]
     assert option_values(search_ui_command, "--ui-search-rounds") == ["2"]
     assert option_values(search_ui_command, "--ui-download-lifecycle-count") == ["2"]
 
-    rest_command = commands[5]
+    rest_command = commands[6]
     assert option_values(rest_command, "--server-search-count") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
     ]
@@ -587,7 +589,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    cold_start_command = commands[6]
+    cold_start_command = commands[7]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
