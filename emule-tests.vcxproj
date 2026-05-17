@@ -194,6 +194,7 @@
     <ClCompile Include="src\long_path.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\LongPathSeams.h')" />
     <ClCompile Include="src\mapped_file_reader.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
     <ClCompile Include="src\media_info_dll.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MediaInfoDllSeams.h')" />
+    <ClCompile Include="src\media_metadata_fallback.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MediaMetadataFallbackSeams.h')" />
     <ClCompile Include="src\modern_limits.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\FileBufferSlider.h')" />
     <ClCompile Include="src\mule_list_ctrl.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MuleListCtrlViewPresets.h')" />
     <ClCompile Include="src\null_guard.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
@@ -314,6 +315,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\FileTypeClassifierSeams.h" Condition="Exists('$(AppRoot)\srchybrid\FileTypeClassifierSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\HelperThreadLaunchSeams.h" Condition="Exists('$(AppRoot)\srchybrid\HelperThreadLaunchSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\MappedFileReader.h" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\MediaMetadataFallbackSeams.h" Condition="Exists('$(AppRoot)\srchybrid\MediaMetadataFallbackSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\NullGuardSeams.h" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\OtherFunctionsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\OtherFunctionsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFileEndgameSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileEndgameSeams.h')" />

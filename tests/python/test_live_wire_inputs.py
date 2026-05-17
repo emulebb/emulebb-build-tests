@@ -31,6 +31,9 @@ def payload() -> dict[str, object]:
                 }
             ],
         },
+        "media_corpus": {
+            "video_roots": ["C:\\media\\movies", "D:\\samples"],
+        },
     }
 
 
@@ -41,6 +44,7 @@ def test_parse_live_wire_inputs_normalizes_runtime_values() -> None:
     assert inputs.document_terms == ("debian",)
     assert inputs.radarr_movie_terms == ("public domain movie",)
     assert inputs.sonarr_series_terms == ("public domain series",)
+    assert tuple(str(path) for path in inputs.video_roots) == (str(Path("C:\\media\\movies").resolve()), str(Path("D:\\samples").resolve()))
     assert inputs.bootstrap_transfer_hashes == ("28EAB1A0AB1B9416AAF534E27A234941",)
     assert inputs.direct_bootstrap_transfers[0]["name"] == "ubuntu.iso"
     assert live_wire_inputs.summarize_terms(inputs.generic_open_terms) == {"count": 2}
@@ -49,6 +53,7 @@ def test_parse_live_wire_inputs_normalizes_runtime_values() -> None:
         "methods": ["direct_ed2k"],
         "sizes": [42],
     }
+    assert live_wire_inputs.summarize_paths(inputs.video_roots) == {"count": 2}
 
 
 def test_parse_live_wire_inputs_rejects_missing_or_invalid_fields() -> None:
@@ -76,6 +81,15 @@ def test_parse_live_wire_inputs_keeps_sonarr_terms_backward_compatible() -> None
     inputs = live_wire_inputs.parse_live_wire_inputs(old_payload)
 
     assert inputs.sonarr_series_terms == inputs.radarr_movie_terms
+
+
+def test_parse_live_wire_inputs_keeps_media_corpus_optional() -> None:
+    old_payload = payload()
+    del old_payload["media_corpus"]
+
+    inputs = live_wire_inputs.parse_live_wire_inputs(old_payload)
+
+    assert inputs.video_roots == ()
 
 
 def test_select_daily_and_redaction_are_deterministic() -> None:

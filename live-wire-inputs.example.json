@@ -34,5 +34,10 @@
         "method": "direct_ed2k"
       }
     ]
+  },
+  "media_corpus": {
+    "video_roots": [
+      "C:\\example\\public-video-corpus"
+    ]
   }
 }

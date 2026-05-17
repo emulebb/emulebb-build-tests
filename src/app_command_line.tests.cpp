@@ -32,6 +32,7 @@ TEST_CASE("App command line accepts help aliases without starting the app")
 	CHECK(helpShort.eMode == AppCommandLineSeams::EMode::Help);
 	CHECK(helpWindows.eMode == AppCommandLineSeams::EMode::Help);
 	CHECK(helpLong.strUsage.Find(_T("--generate-webserver-cert")) >= 0);
+	CHECK(helpLong.strUsage.Find(_T("--diagnose-media-metadata")) >= 0);
 }
 
 TEST_CASE("App command line rejects unknown switches")
@@ -132,4 +133,43 @@ TEST_CASE("App command line rejects partial certificate generation inputs")
 	CHECK(certWithoutMode.strError == CString(_T("The --cert, --key, and --host options require --generate-webserver-cert.")));
 	CHECK(missingCertValue.eMode == AppCommandLineSeams::EMode::Invalid);
 	CHECK(missingCertValue.strError == CString(_T("The --cert option requires a value.")));
+}
+
+TEST_CASE("App command line parses media metadata diagnostics")
+{
+	const auto result = Parse({
+		_T("emule.exe"),
+		_T("--diagnose-media-metadata"),
+		_T("--input"),
+		_T("C:\\media\\sample.mkv"),
+		_T("--output=report.json")
+	});
+
+	CHECK(result.eMode == AppCommandLineSeams::EMode::DiagnoseMediaMetadata);
+	CHECK(result.strMetadataInputFile == CString(_T("C:\\media\\sample.mkv")));
+	CHECK(result.strMetadataOutputFile == CString(_T("report.json")));
+}
+
+TEST_CASE("App command line rejects incomplete media metadata diagnostics")
+{
+	const auto missingInput = Parse({_T("emule.exe"), _T("--diagnose-media-metadata")});
+	const auto inputWithoutMode = Parse({_T("emule.exe"), _T("--input"), _T("C:\\media\\sample.mkv")});
+	const auto twoHeadlessModes = Parse({
+		_T("emule.exe"),
+		_T("--generate-webserver-cert"),
+		_T("--cert"),
+		_T("cert.pem"),
+		_T("--key"),
+		_T("key.pem"),
+		_T("--diagnose-media-metadata"),
+		_T("--input"),
+		_T("C:\\media\\sample.mkv")
+	});
+
+	CHECK(missingInput.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(missingInput.strError == CString(_T("The --diagnose-media-metadata command requires --input.")));
+	CHECK(inputWithoutMode.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(inputWithoutMode.strError == CString(_T("The --input and --output options require --diagnose-media-metadata.")));
+	CHECK(twoHeadlessModes.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(twoHeadlessModes.strError == CString(_T("Only one headless command may be specified.")));
 }

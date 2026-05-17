@@ -24,6 +24,7 @@ class LiveWireInputs:
     document_terms: tuple[str, ...]
     radarr_movie_terms: tuple[str, ...]
     sonarr_series_terms: tuple[str, ...]
+    video_roots: tuple[Path, ...]
     bootstrap_transfer_hashes: tuple[str, ...]
     direct_bootstrap_transfers: tuple[dict[str, object], ...]
 
@@ -80,12 +81,14 @@ def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None)
         raise RuntimeError(f"Live-wire inputs schema must be {SCHEMA!r}.")
     search_terms = require_object(payload, "search_terms")
     auto_browse = require_object(payload, "auto_browse")
+    media_corpus = read_optional_object(payload, "media_corpus")
     return LiveWireInputs(
         path=(path or Path(DEFAULT_INPUTS_FILE_NAME)).resolve(),
         generic_open_terms=read_terms(search_terms, "generic_open"),
         document_terms=read_terms(search_terms, "documents"),
         radarr_movie_terms=read_terms(search_terms, "radarr_movies"),
         sonarr_series_terms=read_optional_terms(search_terms, "sonarr_series", fallback_key="radarr_movies"),
+        video_roots=read_optional_paths(media_corpus, "video_roots"),
         bootstrap_transfer_hashes=read_hashes(auto_browse, "bootstrap_transfer_hashes"),
         direct_bootstrap_transfers=read_direct_transfers(auto_browse, "direct_bootstrap_transfers"),
     )
@@ -95,6 +98,15 @@ def require_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
     """Returns one nested object or raises with a precise input-contract error."""
 
     value = payload.get(key)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Live-wire inputs field {key!r} must be an object.")
+    return value
+
+
+def read_optional_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    """Returns an optional nested object or raises with a precise input-contract error."""
+
+    value = payload.get(key, {})
     if not isinstance(value, dict):
         raise RuntimeError(f"Live-wire inputs field {key!r} must be an object.")
     return value
@@ -120,6 +132,20 @@ def read_optional_terms(payload: dict[str, Any], key: str, *, fallback_key: str)
     if key not in payload:
         return read_terms(payload, fallback_key)
     return read_terms(payload, key)
+
+
+def read_optional_paths(payload: dict[str, Any], key: str) -> tuple[Path, ...]:
+    """Reads an optional string-list path field without exposing the values in reports."""
+
+    value = payload.get(key, [])
+    if not isinstance(value, list):
+        raise RuntimeError(f"Live-wire inputs field {key!r} must be an array.")
+    paths: list[Path] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise RuntimeError(f"Live-wire inputs field {key!r}[{index}] must be a non-empty string.")
+        paths.append(Path(item.strip()).expanduser().resolve())
+    return tuple(paths)
 
 
 def read_hashes(payload: dict[str, Any], key: str) -> tuple[str, ...]:
@@ -254,6 +280,12 @@ def summarize_direct_transfers(items: tuple[dict[str, object], ...]) -> dict[str
         "methods": sorted({str(item.get("method") or "") for item in items}),
         "sizes": [int(item["size"]) for item in items],
     }
+
+
+def summarize_paths(items: tuple[Path, ...]) -> dict[str, object]:
+    """Returns a redacted summary for operator-owned local path lists."""
+
+    return {"count": len(items)}
 
 
 def redact_term_selection(index: int, items: tuple[str, ...], *, source: str) -> dict[str, object]:
