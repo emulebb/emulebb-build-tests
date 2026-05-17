@@ -903,7 +903,7 @@ def test_suite_continues_after_failures_by_default(tmp_path: Path, monkeypatch) 
     assert calls == len([spec for spec in live_e2e_suite.SUITE_SPECS if spec.default_enabled])
 
 
-def test_inconclusive_live_wire_suite_does_not_fail_aggregate(tmp_path: Path, monkeypatch) -> None:
+def test_inconclusive_live_wire_suite_fails_aggregate(tmp_path: Path, monkeypatch) -> None:
     def return_inconclusive_for_auto_browse(command: list[str]) -> int:
         return live_e2e_suite.SUITE_INCONCLUSIVE_RETURN_CODE if script_name(command) == "auto-browse-live.py" else 0
 
@@ -914,13 +914,13 @@ def test_inconclusive_live_wire_suite_does_not_fail_aggregate(tmp_path: Path, mo
         FakeHarnessCliCommon(tmp_path),
     )
 
-    assert summary["status"] == "passed"
-    assert summary["has_inconclusive_suites"] is True
-    assert summary["inconclusive_suite_names"] == ["auto-browse-live"]
-    assert summary["inconclusive_classification"]["accepted_external"][0]["name"] == "auto-browse-live"
-    assert summary["inconclusive_classification"]["blocking"] == []
+    assert summary["status"] == "failed"
+    assert summary["strict_success_required"] is True
+    assert "has_inconclusive_suites" not in summary
+    assert "inconclusive_suite_names" not in summary
+    assert "inconclusive_classification" not in summary
     assert summary["suites"][-1]["name"] == "auto-browse-live"
-    assert summary["suites"][-1]["status"] == "inconclusive"
+    assert summary["suites"][-1]["status"] == "failed"
 
 
 def test_fail_fast_stops_after_first_failed_suite(tmp_path: Path, monkeypatch) -> None:
@@ -1115,9 +1115,9 @@ def test_cold_start_dump_stress_flags_are_passed_to_child(tmp_path: Path, monkey
     assert summary["rest_cold_start_dump_stress"]["allow_required_zero_result_searches"] is True
     assert summary["rest_cold_start_dump_stress"]["skip_transfer_cleanup"] is True
     assert summary["rest_cold_start_dump_stress"]["skip_umdh_diffs"] is True
-    assert summary["status"] == "passed"
-    assert summary["has_inconclusive_suites"] is True
-    assert summary["suites"][0]["status"] == "inconclusive"
+    assert summary["status"] == "failed"
+    assert summary["strict_success_required"] is True
+    assert summary["suites"][0]["status"] == "failed"
 
 
 def test_local_dumps_crash_smoke_forwards_live_bind_policy(tmp_path: Path, monkeypatch) -> None:

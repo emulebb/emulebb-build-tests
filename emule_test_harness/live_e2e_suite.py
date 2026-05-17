@@ -800,7 +800,7 @@ def run_suite_command_with_optional_cpu_profile(
         profile_paths.summary_path.write_text(json.dumps(combined_summary, indent=2, sort_keys=True), encoding="utf-8")
         profile_result["export"] = export
         profile_result["summary"] = combined_summary
-        profile_result["status"] = "passed" if detail_summary.get("available") else "inconclusive"
+        profile_result["status"] = "passed" if detail_summary.get("available") else "failed"
     else:
         profile_result["status"] = "failed"
 
@@ -821,27 +821,7 @@ def get_suite_status_from_return_code(return_code: int) -> str:
 
     if return_code == 0:
         return "passed"
-    if return_code == SUITE_INCONCLUSIVE_RETURN_CODE:
-        return "inconclusive"
     return "failed"
-
-
-def classify_inconclusive_suite(spec: SuiteSpec) -> dict[str, object]:
-    """Classifies inconclusive child suites for release report triage."""
-
-    if spec.uses_live_seed_refresh or spec.category == "live-wire":
-        return {
-            "name": spec.name,
-            "category": spec.category,
-            "classification": "accepted_external_live_network_supply",
-            "blocking": False,
-        }
-    return {
-        "name": spec.name,
-        "category": spec.category,
-        "classification": "blocking_harness_or_app_state",
-        "blocking": True,
-    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1268,12 +1248,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             if spec.is_prowlarr_emulebb or spec.is_arr_emulebb
         ],
         "fail_fast": bool(args.fail_fast),
-        "has_inconclusive_suites": False,
-        "inconclusive_suite_names": [],
-        "inconclusive_classification": {
-            "accepted_external": [],
-            "blocking": [],
-        },
+        "strict_success_required": True,
         "suites": [],
     }
 
@@ -1447,12 +1422,6 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 }
             )
         summary["suites"].append(result)  # type: ignore[index]
-        if suite_status == "inconclusive":
-            summary["has_inconclusive_suites"] = True
-            summary["inconclusive_suite_names"].append(spec.name)  # type: ignore[index, union-attr]
-            classification = classify_inconclusive_suite(spec)
-            bucket = "blocking" if classification["blocking"] else "accepted_external"
-            summary["inconclusive_classification"][bucket].append(classification)  # type: ignore[index, union-attr]
         if suite_status == "failed":
             summary["status"] = "failed"
             if args.fail_fast:
