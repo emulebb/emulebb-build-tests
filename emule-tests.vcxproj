@@ -150,6 +150,7 @@
     <ClCompile Include="src\background_refresh.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
     <ClCompile Include="src\community_core_divergence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueSeams.h')" />
     <ClCompile Include="src\compression_buffer.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
+    <ClCompile Include="src\comment_dialog.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CommentDialogSeams.h')" />
     <ClCompile Include="src\client_credits.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
     <ClCompile Include="src\client_socket_lifetime.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
     <ClCompile Include="src\client_udp_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientUDPSocketSeams.h')" />
@@ -223,6 +224,7 @@
     <ClCompile Include="src\rar_file.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\RARFileSeams.h')" />
     <ClCompile Include="src\ring.tests.cpp" />
     <ClCompile Include="src\scheduler_removal.tests.cpp" />
+    <ClCompile Include="src\scheduler_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SchedulerPolicySeams.h')" />
     <ClCompile Include="src\search_params.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SearchParams.h') and Exists('$(AppRoot)\srchybrid\SearchParamsPolicy.h')" />
     <ClCompile Include="src\search_trust_hint.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SearchTrustHintSeams.h')" />
     <ClCompile Include="src\shared_directory_monitor.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h')" />
@@ -298,6 +300,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\ListenSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ListenSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\LongPathSeams.h" Condition="Exists('$(AppRoot)\srchybrid\LongPathSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\CommentDialogSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CommentDialogSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\EMSocketSendSeams.h" Condition="Exists('$(AppRoot)\srchybrid\EMSocketSendSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DownloadPriorityShortcutsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DownloadPriorityShortcutsSeams.h')" />
@@ -324,6 +327,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\RegexMatchSeams.h" Condition="Exists('$(AppRoot)\srchybrid\RegexMatchSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ResourceOwnershipSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ResourceOwnershipSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SearchListViewSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SearchListViewSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\SchedulerPolicySeams.h" Condition="Exists('$(AppRoot)\srchybrid\SchedulerPolicySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SearchTrustHintSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SearchTrustHintSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ServerSocketSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ServerSocketSeams.h')" />

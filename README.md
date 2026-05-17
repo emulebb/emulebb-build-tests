@@ -75,6 +75,8 @@ Release coverage ownership:
 - deterministic dialog/update seams now own friend/source input parsing,
   direct-download link tokenization, server update URL validation, and IP-filter
   archive member policy without requiring live UI automation
+- scheduler policy and comment/Kad-note seams own deterministic coverage for
+  scheduler activation, action values, comment filters, and note-search gating
 
 Script inventory:
 

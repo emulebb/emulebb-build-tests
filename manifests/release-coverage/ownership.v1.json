@@ -143,16 +143,19 @@
       "title": "Category and scheduler dialog validation",
       "releasePhase": "ui-resource-depth",
       "ownerLane": "native",
-      "status": "planned",
+      "status": "covered",
       "blocking": false,
       "releaseOwned": true,
       "appPathGlobs": [
         "srchybrid/CatDialog*",
         "srchybrid/CategoryDialogSeams.h",
-        "srchybrid/Scheduler*"
+        "srchybrid/Scheduler*",
+        "srchybrid/PPgScheduler*",
+        "srchybrid/SchedulerPolicySeams.h"
       ],
       "coverage": [
         "src/category_dialog.tests.cpp",
+        "src/scheduler_policy.tests.cpp",
         "src/scheduler_removal.tests.cpp"
       ],
       "campaignScenarioIds": [
@@ -255,8 +258,29 @@
       "deferredReason": "Release candidate does not currently expose IRC/chat as a primary release gate; future pass should add dialog/input seams before promoting to blocking."
     },
     {
+      "id": "comment-kad-note-dialogs",
+      "title": "Comment dialog and Kad note search policy",
+      "releasePhase": "ui-resource-depth",
+      "ownerLane": "native",
+      "status": "covered",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Comment*",
+        "srchybrid/CommentDialogSeams.h",
+        "srchybrid/kademlia/kademlia/Search*"
+      ],
+      "coverage": [
+        "src/comment_dialog.tests.cpp",
+        "src/search_trust_hint.tests.cpp"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.ui.classic-dialog-inputs.native.v1"
+      ]
+    },
+    {
       "id": "archive-preview-comment-diagnostics",
-      "title": "Archive preview, comments, credits, and offline diagnostics",
+      "title": "Archive preview, credits, and offline diagnostics",
       "releasePhase": "ui-resource-depth",
       "ownerLane": "native",
       "status": "planned",
@@ -265,7 +289,6 @@
       "appPathGlobs": [
         "srchybrid/Archive*",
         "srchybrid/Preview*",
-        "srchybrid/Comment*",
         "srchybrid/Credits*",
         "srchybrid/Statistics*"
       ],
