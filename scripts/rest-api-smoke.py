@@ -201,6 +201,8 @@ REST_STRESS_RETRYABLE_ERROR_FRAGMENTS = (
     "forcibly closed",
     "connection was aborted",
 )
+DEFAULT_HTTPS_CA_FILE = object()
+HTTPS_TRUST_CA_FILE: str | None = None
 REST_LEAK_CHURN_RESOURCE_THRESHOLDS = {
     "handles": {"after_drain_max": 64, "peak_max": 128},
     "thread_count": {"after_drain_max": 4, "peak_max": 32},
@@ -989,56 +991,122 @@ def choose_listen_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def create_https_certificate_pair(artifacts_dir: Path) -> dict[str, str]:
-    """Creates a temporary self-signed certificate/key pair for localhost HTTPS tests."""
+def create_https_certificate_pair(app_exe: Path, artifacts_dir: Path) -> dict[str, str]:
+    """Creates a localhost HTTPS certificate/key pair through the eMule certificate CLI."""
 
     cert_dir = artifacts_dir / "https-cert"
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / "webserver-cert.pem"
     key_path = cert_dir / "webserver-key.pem"
-    config_path = cert_dir / "openssl.cnf"
-    config_path.write_text(
-        "\n".join(
-            [
-                "[req]",
-                "distinguished_name = req_distinguished_name",
-                "prompt = no",
-                "[req_distinguished_name]",
-                "CN = 127.0.0.1",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
     command = [
-        "openssl",
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        str(key_path),
-        "-out",
+        str(app_exe),
+        "--generate-webserver-cert",
+        "--cert",
         str(cert_path),
-        "-days",
-        "1",
-        "-config",
-        str(config_path),
+        "--key",
+        str(key_path),
+        "--host",
+        "127.0.0.1",
+        "--host",
+        "localhost",
     ]
-    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30.0)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"eMule HTTPS certificate generation failed with exit code {result.returncode}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    if not cert_path.is_file() or cert_path.stat().st_size <= 0:
+        raise RuntimeError(f"eMule HTTPS certificate generation did not create a certificate at '{cert_path}'.")
+    if not key_path.is_file() or key_path.stat().st_size <= 0:
+        raise RuntimeError(f"eMule HTTPS certificate generation did not create a key at '{key_path}'.")
     return {
         "certificate": str(cert_path),
         "key": str(key_path),
+        "generator": "emule-cli",
     }
 
 
-def build_urlopen_context(base_url: str):
-    """Returns an urllib TLS context for localhost HTTPS smoke requests."""
+def configure_https_trust(certificate_path: str | None) -> None:
+    """Sets the trust anchor used by subsequent HTTPS smoke requests."""
 
-    if urllib.parse.urlparse(base_url).scheme == "https":
-        return ssl._create_unverified_context()
-    return None
+    global HTTPS_TRUST_CA_FILE
+    HTTPS_TRUST_CA_FILE = certificate_path or None
+
+
+def build_urlopen_context(base_url: str, *, cafile: str | None | object = DEFAULT_HTTPS_CA_FILE):
+    """Returns an urllib TLS context for HTTPS smoke requests with certificate validation enabled."""
+
+    if urllib.parse.urlparse(base_url).scheme != "https":
+        return None
+    trust_file = HTTPS_TRUST_CA_FILE if cafile is DEFAULT_HTTPS_CA_FILE else cafile
+    if trust_file:
+        return ssl.create_default_context(cafile=str(trust_file))
+    return ssl.create_default_context()
+
+
+def exercise_https_certificate_validation(
+    base_url: str,
+    api_key: str,
+    certificate_path: str,
+    *,
+    request_timeout_seconds: float,
+) -> dict[str, object]:
+    """Requires HTTPS REST to pass with the generated cert and fail under the wrong trust/host."""
+
+    endpoint = parse_base_url_endpoint(base_url)
+    if endpoint["scheme"] != "https":
+        return {"enabled": False, "ok": True}
+
+    trusted = http_request(
+        base_url,
+        "/api/v1/app",
+        api_key=api_key,
+        request_timeout_seconds=request_timeout_seconds,
+        tls_ca_file=certificate_path,
+    )
+    if int(trusted["status"]) != 200:
+        raise AssertionError(f"HTTPS trusted certificate validation request failed: {compact_http_result(trusted)}")
+
+    untrusted_rejected = False
+    untrusted_error = ""
+    try:
+        http_request(
+            base_url,
+            "/api/v1/app",
+            api_key=api_key,
+            request_timeout_seconds=request_timeout_seconds,
+            tls_ca_file=None,
+        )
+    except (ssl.SSLError, urllib.error.URLError, OSError) as exc:
+        untrusted_rejected = True
+        untrusted_error = str(exc)
+    if not untrusted_rejected:
+        raise AssertionError("HTTPS request unexpectedly succeeded without the generated certificate trust anchor.")
+
+    wrong_host_rejected = False
+    wrong_host_error = ""
+    context = ssl.create_default_context(cafile=certificate_path)
+    try:
+        with socket.create_connection((str(endpoint["host"]), int(endpoint["port"])), timeout=request_timeout_seconds) as sock:
+            with context.wrap_socket(sock, server_hostname="wrong-host.emulebb.invalid"):
+                pass
+    except (ssl.SSLError, OSError) as exc:
+        wrong_host_rejected = True
+        wrong_host_error = str(exc)
+    if not wrong_host_rejected:
+        raise AssertionError("HTTPS certificate hostname validation unexpectedly accepted the wrong host.")
+
+    return {
+        "enabled": True,
+        "ok": True,
+        "trusted_status": int(trusted["status"]),
+        "untrusted_rejected": untrusted_rejected,
+        "untrusted_error": untrusted_error,
+        "wrong_host_rejected": wrong_host_rejected,
+        "wrong_host_error": wrong_host_error,
+        "certificate": certificate_path,
+    }
 
 
 def configure_webserver_profile(
@@ -1105,6 +1173,7 @@ def http_request(
     content_type: str | None = None,
     extra_headers: dict[str, str] | None = None,
     request_timeout_seconds: float = 5.0,
+    tls_ca_file: str | None | object = DEFAULT_HTTPS_CA_FILE,
 ) -> dict[str, object]:
     """Performs one HTTP request and returns a compact structured result."""
 
@@ -1126,7 +1195,7 @@ def http_request(
 
     request = urllib.request.Request(base_url + path, data=data, method=method, headers=headers)
     urlopen_kwargs = {"timeout": request_timeout_seconds}
-    context = build_urlopen_context(base_url)
+    context = build_urlopen_context(base_url, cafile=tls_ca_file)
     if context is not None:
         urlopen_kwargs["context"] = context
     try:
@@ -2738,6 +2807,8 @@ def exercise_rest_stress(
     concurrency: int,
     max_failures: int,
     request_timeout_seconds: float,
+    process_id: int | None = None,
+    resource_gate_enabled: bool = False,
 ) -> dict[str, object]:
     """Runs a bounded read-heavy REST stress pass against the isolated app."""
 
@@ -2755,6 +2826,7 @@ def exercise_rest_stress(
             "ok": True,
             "requests_started": 0,
             "requests_completed": 0,
+            "resource_gate_enabled": resource_gate_enabled,
         }
 
     deadline = time.monotonic() + duration_seconds
@@ -2768,6 +2840,13 @@ def exercise_rest_stress(
         qbit_session_cookie = create_qbit_session_cookie(base_url, api_key)
     rows: list[dict[str, object]] = []
     next_index = 0
+    resource_snapshots: dict[str, dict[str, int | None]] = {}
+    peak_snapshot: dict[str, int | None] | None = None
+    if resource_gate_enabled:
+        if process_id is None:
+            raise AssertionError("REST stress resource gate requires a process id.")
+        resource_snapshots["before"] = get_process_resource_snapshot(process_id)
+        peak_snapshot = dict(resource_snapshots["before"])
 
     def run_one(index: int) -> dict[str, object]:
         operation = operations[index % len(operations)]
@@ -2859,6 +2938,8 @@ def exercise_rest_stress(
             for future in as_completed(list(futures)):
                 futures.pop(future)
                 rows.append(future.result())
+                if resource_gate_enabled and len(rows) % max(1, concurrency) == 0:
+                    peak_snapshot = max_resource_snapshot(peak_snapshot, get_process_resource_snapshot(process_id))
                 if time.monotonic() < deadline:
                     futures[executor.submit(run_one, next_index)] = next_index
                     next_index += 1
@@ -2874,6 +2955,34 @@ def exercise_rest_stress(
     )
     if not summary["ok"]:
         raise AssertionError(f"REST stress failures exceeded budget: {summary}")
+    summary["resource_gate_enabled"] = resource_gate_enabled
+    if resource_gate_enabled:
+        time.sleep(0.5)
+        after_snapshot = get_process_resource_snapshot(process_id)
+        peak_snapshot = max_resource_snapshot(peak_snapshot, after_snapshot)
+        resource_snapshots["peak"] = peak_snapshot
+        resource_snapshots["after_drain"] = after_snapshot
+        before_to_after_drain = diff_process_resource_snapshots(resource_snapshots["before"], after_snapshot)
+        before_to_peak = diff_process_resource_snapshots(resource_snapshots["before"], peak_snapshot)
+        resource_observability = evaluate_rest_leak_churn_resource_observability(
+            (
+                resource_snapshots["before"],
+                resource_snapshots["peak"],
+                resource_snapshots["after_drain"],
+            )
+        )
+        if not resource_observability["ok"]:
+            raise AssertionError(f"REST stress resource snapshots incomplete: {resource_observability!r}")
+        resource_thresholds = evaluate_rest_leak_churn_resources(before_to_after_drain, before_to_peak)
+        if not resource_thresholds["ok"]:
+            raise AssertionError(f"REST stress resource thresholds exceeded: {resource_thresholds!r}")
+        summary["resource_snapshots"] = resource_snapshots
+        summary["resource_deltas"] = {
+            "before_to_after_drain": before_to_after_drain,
+            "before_to_peak": before_to_peak,
+        }
+        summary["resource_observability"] = resource_observability
+        summary["resource_thresholds"] = resource_thresholds
     return summary
 
 
@@ -5877,10 +5986,11 @@ def main() -> int:
     base_url = f"{args.webserver_scheme}://127.0.0.1:{port}"
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="rest-api-smoke")
     https_material = (
-        create_https_certificate_pair(artifacts_dir)
+        create_https_certificate_pair(app_exe, artifacts_dir)
         if args.webserver_scheme == "https"
-        else {"certificate": "", "key": ""}
+        else {"certificate": "", "key": "", "generator": ""}
     )
+    configure_https_trust(https_material["certificate"])
     seed_refresh = None
     if not args.skip_live_seed_refresh:
         seed_refresh = refresh_seed_files(
@@ -5921,6 +6031,7 @@ def main() -> int:
             "bind_addr": args.bind_addr,
             "webserver_scheme": args.webserver_scheme,
             "https_certificate": https_material["certificate"],
+            "https_certificate_generator": https_material["generator"],
             "enable_upnp": True,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "keep_running": bool(args.keep_running),
@@ -5970,6 +6081,15 @@ def main() -> int:
         current_phase = set_phase(report, "rest_ready")
         ready = wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
         report["checks"]["ready"] = compact_http_result(ready)
+
+        if args.webserver_scheme == "https":
+            current_phase = set_phase(report, "https_certificate_validation")
+            report["checks"]["https_certificate_validation"] = exercise_https_certificate_validation(
+                base_url,
+                args.api_key,
+                https_material["certificate"],
+                request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+            )
 
         current_phase = set_phase(report, "nat_backend_order")
         report["checks"]["nat_backend_order"] = wait_for_upnp_backend_order(
@@ -6061,6 +6181,8 @@ def main() -> int:
                 concurrency=args.rest_stress_concurrency,
                 max_failures=args.rest_stress_max_failures,
                 request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+                process_id=launched_process_id,
+                resource_gate_enabled=(args.webserver_scheme == "https"),
             )
 
         if args.rest_leak_churn_budget != "off":

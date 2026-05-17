@@ -621,9 +621,13 @@ def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: 
 
     assert summary["status"] == "passed"
     assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
+    assert summary["rest_stress_budget"] == "soak"
+    assert summary["rest_leak_churn_budget"] == "smoke"
 
     rest_command = commands[2]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
+    assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
 
 
 def test_cpu_heavy_profile_runs_shared_files_50k_under_cpu_profile(tmp_path: Path, monkeypatch) -> None:

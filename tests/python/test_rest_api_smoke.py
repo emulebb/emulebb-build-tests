@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import re
+import ssl
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -142,6 +144,101 @@ def test_https_urlopen_context_is_only_used_for_https() -> None:
 
     assert module.build_urlopen_context("http://127.0.0.1:4711") is None
     assert module.build_urlopen_context("https://127.0.0.1:4711") is not None
+
+
+def test_https_urlopen_context_uses_generated_certificate_trust(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    calls: list[str | None] = []
+
+    def fake_create_default_context(*, cafile=None):
+        calls.append(cafile)
+        return SimpleNamespace(cafile=cafile)
+
+    monkeypatch.setattr(module.ssl, "create_default_context", fake_create_default_context)
+    cert_path = tmp_path / "webserver-cert.pem"
+    module.configure_https_trust(str(cert_path))
+
+    context = module.build_urlopen_context("https://127.0.0.1:4711")
+
+    assert context.cafile == str(cert_path)
+    assert calls == [str(cert_path)]
+    module.configure_https_trust(None)
+
+
+def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    observed_commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        observed_commands.append(list(command))
+        cert_path = Path(command[command.index("--cert") + 1])
+        key_path = Path(command[command.index("--key") + 1])
+        cert_path.write_text("certificate", encoding="utf-8")
+        key_path.write_text("key", encoding="utf-8")
+        assert kwargs["check"] is False
+        assert kwargs["timeout"] == 30.0
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    material = module.create_https_certificate_pair(Path("emule.exe"), tmp_path)
+
+    assert material["generator"] == "emule-cli"
+    assert Path(material["certificate"]).read_text(encoding="utf-8") == "certificate"
+    assert Path(material["key"]).read_text(encoding="utf-8") == "key"
+    assert observed_commands == [
+        [
+            "emule.exe",
+            "--generate-webserver-cert",
+            "--cert",
+            str(tmp_path / "https-cert" / "webserver-cert.pem"),
+            "--key",
+            str(tmp_path / "https-cert" / "webserver-key.pem"),
+            "--host",
+            "127.0.0.1",
+            "--host",
+            "localhost",
+        ]
+    ]
+
+
+def test_https_certificate_validation_requires_trust_anchor_and_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    request_ca_files: list[object] = []
+
+    def fake_http_request(_base_url, _path, **kwargs):
+        request_ca_files.append(kwargs.get("tls_ca_file"))
+        if kwargs.get("tls_ca_file") is None:
+            raise module.urllib.error.URLError(ssl.SSLError("self-signed certificate"))
+        return {"status": 200, "content_type": "application/json", "body_text": "{}", "json": {}, "raw_json": {}}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeContext:
+        def wrap_socket(self, _sock, *, server_hostname):
+            assert server_hostname == "wrong-host.emulebb.invalid"
+            raise ssl.SSLError("hostname mismatch")
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+    monkeypatch.setattr(module.socket, "create_connection", lambda *_args, **_kwargs: FakeSocket())
+    monkeypatch.setattr(module.ssl, "create_default_context", lambda *, cafile=None: FakeContext())
+
+    summary = module.exercise_https_certificate_validation(
+        "https://127.0.0.1:4711",
+        "api-key",
+        "webserver-cert.pem",
+        request_timeout_seconds=1.0,
+    )
+
+    assert summary["ok"] is True
+    assert summary["untrusted_rejected"] is True
+    assert summary["wrong_host_rejected"] is True
+    assert request_ca_files == ["webserver-cert.pem", None]
 
 
 def test_rest_socket_probe_outcome_rejects_timeouts() -> None:
@@ -2956,6 +3053,123 @@ def test_rest_stress_summary_reports_retry_recovery() -> None:
     assert summary["retry_attempt_count"] == 3
     assert summary["retried_success_count"] == 1
     assert summary["retried_failure_count"] == 1
+
+
+def test_rest_stress_https_resource_gate_reports_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        module,
+        "build_rest_stress_operations",
+        lambda _budget: [
+            {
+                "method": "GET",
+                "path": "/api/v1/app",
+                "family": "native-rest",
+                "scenario": "read",
+                "expected_statuses": (200,),
+                "response_kind": "text",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {"status": 200, "content_type": "text/plain", "body_text": "ok", "json": None, "raw_json": None},
+    )
+    monkeypatch.setattr(
+        module,
+        "get_process_resource_snapshot",
+        lambda _pid: {
+            "handles": 10,
+            "thread_count": 4,
+            "gdi_objects": 1,
+            "user_objects": 1,
+            "private_bytes": 4096,
+            "working_set_bytes": 8192,
+        },
+    )
+
+    summary = module.exercise_rest_stress(
+        "https://127.0.0.1:4711",
+        "api-key",
+        budget="smoke",
+        duration_seconds=0.02,
+        concurrency=1,
+        max_failures=0,
+        request_timeout_seconds=1.0,
+        process_id=123,
+        resource_gate_enabled=True,
+    )
+
+    assert summary["ok"] is True
+    assert summary["resource_gate_enabled"] is True
+    assert summary["resource_observability"]["ok"] is True
+    assert summary["resource_thresholds"]["ok"] is True
+    assert set(summary["resource_snapshots"]) == {"before", "peak", "after_drain"}
+
+
+def test_rest_stress_resource_gate_fails_threshold_violations(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        module,
+        "build_rest_stress_operations",
+        lambda _budget: [
+            {
+                "method": "GET",
+                "path": "/api/v1/app",
+                "family": "native-rest",
+                "scenario": "read",
+                "expected_statuses": (200,),
+                "response_kind": "text",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {"status": 200, "content_type": "text/plain", "body_text": "ok", "json": None, "raw_json": None},
+    )
+    snapshot_calls = 0
+
+    def fake_snapshot(_pid):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        if snapshot_calls == 1:
+            return {
+                "handles": 10,
+                "thread_count": 4,
+                "gdi_objects": 1,
+                "user_objects": 1,
+                "private_bytes": 4096,
+                "working_set_bytes": 8192,
+            }
+        return {
+            "handles": 10,
+            "thread_count": 4,
+            "gdi_objects": 1,
+            "user_objects": 1,
+            "private_bytes": 512 * 1024 * 1024,
+            "working_set_bytes": 512 * 1024 * 1024,
+        }
+
+    monkeypatch.setattr(module, "get_process_resource_snapshot", fake_snapshot)
+
+    with pytest.raises(AssertionError, match="REST stress resource thresholds exceeded"):
+        module.exercise_rest_stress(
+            "https://127.0.0.1:4711",
+            "api-key",
+            budget="smoke",
+            duration_seconds=0.01,
+            concurrency=1,
+            max_failures=0,
+            request_timeout_seconds=1.0,
+            process_id=123,
+            resource_gate_enabled=True,
+        )
 
 
 def test_server_connect_transport_loss_is_runtime_failure_signal() -> None:
