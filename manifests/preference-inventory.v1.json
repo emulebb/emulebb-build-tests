@@ -338,6 +338,28 @@
       "notes": ""
     },
     {
+      "id": "AllowPeerPreview",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "AllowPeerPreview",
+      "sourceExpression": "prefini::VideoThumbnailKeys::AllowPeerPreview",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": "Explicit opt-in for advertising and serving peer preview frames from shared video files."
+    },
+    {
       "id": "AlwaysShowTrayIcon",
       "storageFile": "preferences.ini",
       "sections": [
@@ -646,14 +668,14 @@
       "notes": ""
     },
     {
-      "id": "BBPreferenceSchema",
+      "id": "BackendMode",
       "storageFile": "preferences.ini",
       "sections": [
-        "<default>"
+        "UPnP"
       ],
-      "key": "BBPreferenceSchema",
-      "sourceExpression": "prefini::MigrationKeys::PreferenceSchema",
-      "kind": "constant",
+      "key": "BackendMode",
+      "sourceExpression": "_T(\"BackendMode\")",
+      "kind": "literal",
       "access": [
         "read",
         "write"
@@ -668,14 +690,14 @@
       "notes": ""
     },
     {
-      "id": "BackendMode",
+      "id": "BBPreferenceSchema",
       "storageFile": "preferences.ini",
       "sections": [
-        "UPnP"
+        "<default>"
       ],
-      "key": "BackendMode",
-      "sourceExpression": "_T(\"BackendMode\")",
-      "kind": "literal",
+      "key": "BBPreferenceSchema",
+      "sourceExpression": "prefini::MigrationKeys::PreferenceSchema",
+      "kind": "constant",
       "access": [
         "read",
         "write"
@@ -3508,28 +3530,6 @@
       "notes": ""
     },
     {
-      "id": "IPFilterLastUpdateTime",
-      "storageFile": "preferences.ini",
-      "sections": [
-        "<default>"
-      ],
-      "key": "IPFilterLastUpdateTime",
-      "sourceExpression": "prefini::IPFilterUpdateKeys::LastUpdateTime",
-      "kind": "constant",
-      "access": [
-        "read",
-        "write"
-      ],
-      "valueKinds": [
-        "String"
-      ],
-      "ownerField": "",
-      "uiApiSurface": "",
-      "clampOrNormalizer": "",
-      "classification": "active-roundtrip",
-      "notes": ""
-    },
-    {
       "id": "IPFilterEnabled",
       "storageFile": "preferences.ini",
       "sections": [
@@ -3544,6 +3544,28 @@
       ],
       "valueKinds": [
         "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
+      "id": "IPFilterLastUpdateTime",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "IPFilterLastUpdateTime",
+      "sourceExpression": "prefini::IPFilterUpdateKeys::LastUpdateTime",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "String"
       ],
       "ownerField": "",
       "uiApiSurface": "",
@@ -4955,6 +4977,28 @@
       "clampOrNormalizer": "",
       "classification": "active-roundtrip",
       "notes": ""
+    },
+    {
+      "id": "MediaInfo_MediaInfoDllPath",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "MediaInfo_MediaInfoDllPath",
+      "sourceExpression": "_T(\"MediaInfo_MediaInfoDllPath\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "String"
+      ],
+      "ownerField": "m_strMediaInfoDllPath",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": "Optional MediaInfo.dll lookup path. The <noload> token intentionally disables the optional DLL while keeping built-in metadata fallbacks."
     },
     {
       "id": "MessageEnableSmileys",
@@ -9136,28 +9180,6 @@
       "clampOrNormalizer": "",
       "classification": "active-roundtrip",
       "notes": ""
-    },
-    {
-      "id": "AllowPeerPreview",
-      "storageFile": "preferences.ini",
-      "sections": [
-        "<default>"
-      ],
-      "key": "AllowPeerPreview",
-      "sourceExpression": "prefini::VideoThumbnailKeys::AllowPeerPreview",
-      "kind": "constant",
-      "access": [
-        "read",
-        "write"
-      ],
-      "valueKinds": [
-        "Bool"
-      ],
-      "ownerField": "",
-      "uiApiSurface": "",
-      "clampOrNormalizer": "",
-      "classification": "active-roundtrip",
-      "notes": "Explicit opt-in for advertising and serving peer preview frames from shared video files."
     },
     {
       "id": "WatchClipboard4ED2kFilelinks",
