@@ -140,7 +140,7 @@
     },
     {
       "id": "category-scheduler-dialog-inputs",
-      "title": "Category and scheduler dialog validation",
+      "title": "Category dialog validation; scheduler frozen",
       "releasePhase": "ui-resource-depth",
       "ownerLane": "native",
       "status": "covered",
@@ -148,15 +148,10 @@
       "releaseOwned": true,
       "appPathGlobs": [
         "srchybrid/CatDialog*",
-        "srchybrid/CategoryDialogSeams.h",
-        "srchybrid/Scheduler*",
-        "srchybrid/PPgScheduler*",
-        "srchybrid/SchedulerPolicySeams.h"
+        "srchybrid/CategoryDialogSeams.h"
       ],
       "coverage": [
-        "src/category_dialog.tests.cpp",
-        "src/scheduler_policy.tests.cpp",
-        "src/scheduler_removal.tests.cpp"
+        "src/category_dialog.tests.cpp"
       ],
       "campaignScenarioIds": [
         "emulebb.flow.ui.classic-dialog-inputs.native.v1"
@@ -240,7 +235,7 @@
     },
     {
       "id": "irc-chat-friends",
-      "title": "IRC, chat, friends, and buddy UI-adjacent flows",
+      "title": "Frozen IRC and IRC-adjacent chat UI",
       "releasePhase": "ui-resource-depth",
       "ownerLane": "deferred",
       "status": "deferred",
@@ -252,10 +247,8 @@
         "srchybrid/Friend*",
         "srchybrid/BaseClient*"
       ],
-      "coverage": [
-        "src/base_client_friend_buddy.tests.cpp"
-      ],
-      "deferredReason": "Release candidate does not currently expose IRC/chat as a primary release gate; future pass should add dialog/input seams before promoting to blocking."
+      "coverage": [],
+      "deferredReason": "IRC and IRC-adjacent chat UI are frozen surfaces: no support, no new test coverage, no release gate, and possible removal. Friend/source dialog coverage is owned separately by friend-source-dialog-inputs."
     },
     {
       "id": "comment-kad-note-dialogs",
@@ -280,24 +273,19 @@
     },
     {
       "id": "archive-preview-comment-diagnostics",
-      "title": "Archive preview, credits, and offline diagnostics",
+      "title": "Frozen archive preview and archive recovery",
       "releasePhase": "ui-resource-depth",
-      "ownerLane": "native",
-      "status": "planned",
+      "ownerLane": "deferred",
+      "status": "deferred",
       "blocking": false,
       "releaseOwned": true,
       "appPathGlobs": [
         "srchybrid/Archive*",
-        "srchybrid/Preview*",
-        "srchybrid/Credits*",
-        "srchybrid/Statistics*"
+        "srchybrid/Preview*"
       ],
-      "coverage": [
-        "src/release_file_format_goldens.tests.cpp"
-      ],
-      "campaignScenarioIds": [
-        "emulebb.flow.ui.classic-dialog-inputs.native.v1"
-      ]
+      "coverage": [],
+      "campaignScenarioIds": [],
+      "deferredReason": "Archive preview and archive recovery are frozen surfaces: no support, no new test coverage, no release gate, and possible removal."
     },
     {
       "id": "packaging-provenance",

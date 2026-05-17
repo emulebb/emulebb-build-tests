@@ -504,7 +504,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Native friend/source, direct-download, category, scheduler, comment/Kad-note, and future dialog seams own nonblocking dialog input coverage."
+              "description": "Native friend/source, direct-download, category, and comment/Kad-note seams own nonblocking dialog input coverage. Scheduler, IRC, archive preview, legacy HTML templates, and proxy support are frozen and excluded from release evidence."
             }
           ]
         }
@@ -694,7 +694,7 @@
       ]
     },
     {
-      "id": "category-scheduler-dialog-inputs-native",
+      "id": "category-dialog-inputs-native",
       "coveredBy": [
         "emulebb.flow.ui.classic-dialog-inputs.native.v1"
       ]
