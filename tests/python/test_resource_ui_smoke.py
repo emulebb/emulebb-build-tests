@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -119,6 +120,7 @@ def test_resource_report_fails_before_launching_when_release_dlls_are_missing(tm
         language_scope="release",
         max_languages=None,
         skip_screenshots=True,
+        language_timeout_seconds=30.0,
     )
     monkeypatch.setattr(smoke.harness_cli_common, "resolve_profile_seed_dir", lambda _paths, _value: tmp_path / "seed")
 
@@ -128,3 +130,102 @@ def test_resource_report_fails_before_launching_when_release_dlls_are_missing(tm
     assert report["selected_language_count"] == 1
     assert report["missing_language_dlls"][0]["dll_stem"] == "it_IT"
     assert report["languages"] == []
+
+
+def test_language_child_command_carries_isolated_language_contract(tmp_path: Path) -> None:
+    smoke = load_resource_ui_smoke()
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    app_exe = app_root / "emule.exe"
+    app_exe.write_text("", encoding="utf-8")
+    paths = SimpleNamespace(
+        workspace_root=tmp_path / "workspaces" / "workspace",
+        app_root=app_root,
+        app_exe=app_exe,
+        source_artifacts_dir=tmp_path / "artifacts",
+        configuration="Release",
+    )
+    args = SimpleNamespace(
+        profile_seed_dir=tmp_path / "seed",
+        language_scope="release",
+        skip_screenshots=True,
+    )
+    result_path = tmp_path / "artifacts" / "languages" / "de_DE" / "language-result.json"
+
+    command = smoke.build_language_child_command(
+        paths=paths,
+        args=args,
+        manifest_path=tmp_path / "rc-release-languages.json",
+        language={"dll_stem": "de_DE"},
+        result_path=result_path,
+    )
+
+    assert command[0] == sys.executable
+    assert "--single-language-dll-stem" in command
+    assert command[command.index("--single-language-dll-stem") + 1] == "de_DE"
+    assert command[command.index("--single-language-output-json") + 1] == str(result_path)
+    assert "--profile-seed-dir" in command
+    assert "--skip-screenshots" in command
+
+
+def test_language_subprocess_timeout_records_failure_and_kills_process_tree(tmp_path: Path, monkeypatch) -> None:
+    smoke = load_resource_ui_smoke()
+    language = {
+        "code": "ar_AE",
+        "name": "Arabic",
+        "rc": "ar_AE.rc",
+        "dll_stem": "ar_AE",
+        "language_id": 0x3801,
+        "dll_path": str(tmp_path / "ar_AE.dll"),
+    }
+    paths = SimpleNamespace(
+        workspace_root=tmp_path,
+        app_root=tmp_path / "app",
+        app_exe=tmp_path / "app" / "emule.exe",
+        source_artifacts_dir=tmp_path / "artifacts",
+        configuration="Release",
+    )
+    args = SimpleNamespace(
+        profile_seed_dir=None,
+        language_scope="release",
+        skip_screenshots=True,
+        language_timeout_seconds=1.0,
+    )
+    kill_commands: list[list[str]] = []
+
+    class FakeProcess:
+        pid = 1234
+        returncode: int | None = None
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def communicate(self, timeout: float | None = None):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired(cmd=["resource-ui-smoke.py"], timeout=timeout or 0.0, output="before", stderr="blocked")
+            self.returncode = -9
+            return "after", "terminated"
+
+    def fake_run(command, **_kwargs):
+        kill_commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="killed", stderr="")
+
+    monkeypatch.setattr(smoke.sys, "platform", "win32")
+    monkeypatch.setattr(smoke.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(smoke.subprocess, "run", fake_run)
+
+    result = smoke.run_language_subprocess(
+        language=language,
+        paths=paths,
+        args=args,
+        manifest_path=tmp_path / "rc-release-languages.json",
+        output_root=tmp_path / "artifacts" / "languages",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "LanguageSmokeTimeout"
+    assert result["child_process"]["returncode"] == -9
+    assert kill_commands == [["taskkill", "/PID", "1234", "/T", "/F"]]
+    result_file = tmp_path / "artifacts" / "languages" / "ar_AE" / "language-result.json"
+    assert json.loads(result_file.read_text(encoding="utf-8"))["error"]["type"] == "LanguageSmokeTimeout"

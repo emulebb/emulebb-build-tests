@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -48,6 +49,8 @@ IDCANCEL = 2
 PAGE_TREE_ID = 0x7EEE
 
 MIN_PREFERENCE_TREE_ITEMS = 8
+DEFAULT_LANGUAGE_TIMEOUT_SECONDS = 240.0
+PROCESS_OUTPUT_TAIL_CHARS = 4000
 VIEW_COMMANDS = (
     ("transfer", MP_HM_TRANSFER),
     ("search", MP_HM_SEARCH),
@@ -106,6 +109,18 @@ LANGUAGE_ID_BY_DLL_STEM = {
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def tail_process_output(value: str | bytes | None) -> str:
+    """Returns a bounded text tail for child process diagnostic fields."""
+
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if len(value) <= PROCESS_OUTPUT_TAIL_CHARS:
+        return value
+    return value[-PROCESS_OUTPUT_TAIL_CHARS:]
 
 
 def canonical_workspace_root(workspace_root: Path) -> Path:
@@ -331,6 +346,232 @@ def smoke_one_language(
     return result
 
 
+def build_language_failure_result(
+    language: dict[str, object],
+    *,
+    error_type: str,
+    message: str,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Builds one failed language row without requiring an in-process app launch."""
+
+    result: dict[str, object] = {
+        "code": language.get("code"),
+        "name": language.get("name"),
+        "rc": language.get("rc"),
+        "dll_stem": language.get("dll_stem"),
+        "language_id": language.get("language_id"),
+        "dll_path": language.get("dll_path"),
+        "status": "failed",
+        "error": {
+            "type": error_type,
+            "message": message,
+        },
+    }
+    if extra:
+        result.update(extra)
+    return result
+
+
+def build_language_child_command(
+    *,
+    paths,
+    args: argparse.Namespace,
+    manifest_path: Path,
+    language: dict[str, object],
+    result_path: Path,
+) -> list[str]:
+    """Builds the isolated subprocess command for one resource language row."""
+
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--workspace-root",
+        str(paths.workspace_root),
+        "--app-root",
+        str(paths.app_root),
+        "--app-exe",
+        str(paths.app_exe),
+        "--artifacts-dir",
+        str(paths.source_artifacts_dir),
+        "--configuration",
+        str(paths.configuration),
+        "--release-languages-json",
+        str(manifest_path),
+        "--language-scope",
+        str(args.language_scope),
+        "--single-language-dll-stem",
+        str(language["dll_stem"]),
+        "--single-language-output-json",
+        str(result_path),
+    ]
+    if args.profile_seed_dir:
+        command.extend(["--profile-seed-dir", str(args.profile_seed_dir)])
+    if args.skip_screenshots:
+        command.append("--skip-screenshots")
+    return command
+
+
+def kill_process_tree(process_id: int) -> dict[str, object]:
+    """Terminates one child process tree after a language timeout."""
+
+    if sys.platform == "win32":
+        completed = subprocess.run(
+            ["taskkill", "/PID", str(process_id), "/T", "/F"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        return {
+            "command": "taskkill",
+            "returncode": completed.returncode,
+            "stdout_tail": tail_process_output(completed.stdout),
+            "stderr_tail": tail_process_output(completed.stderr),
+        }
+    return {"command": "unsupported", "message": "Process-tree cleanup is only implemented for Windows live UI runs."}
+
+
+def run_language_subprocess(
+    *,
+    language: dict[str, object],
+    paths,
+    args: argparse.Namespace,
+    manifest_path: Path,
+    output_root: Path,
+) -> dict[str, object]:
+    """Runs one language smoke row in an isolated child process with a hard timeout."""
+
+    dll_stem = str(language["dll_stem"])
+    result_path = output_root / dll_stem / "language-result.json"
+    command = build_language_child_command(
+        paths=paths,
+        args=args,
+        manifest_path=manifest_path,
+        language=language,
+        result_path=result_path,
+    )
+    timeout_seconds = float(args.language_timeout_seconds)
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        timed_out = False
+        kill_result: dict[str, object] | None = None
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        kill_result = kill_process_tree(int(process.pid))
+        try:
+            stdout, stderr = process.communicate(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+
+    child_process = {
+        "returncode": process.returncode,
+        "timeout_seconds": timeout_seconds,
+        "stdout_tail": tail_process_output(stdout),
+        "stderr_tail": tail_process_output(stderr),
+    }
+    if timed_out:
+        child_process["termination"] = kill_result
+        result = build_language_failure_result(
+            language,
+            error_type="LanguageSmokeTimeout",
+            message=f"{dll_stem} resource UI smoke exceeded {timeout_seconds:.1f} seconds.",
+            extra={"child_process": child_process},
+        )
+        write_json(result_path, result)
+        return result
+
+    if result_path.is_file():
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["child_process"] = child_process
+        write_json(result_path, result)
+        return result
+
+    result = build_language_failure_result(
+        language,
+        error_type="LanguageSmokeChildProcessFailure",
+        message=f"{dll_stem} child process exited without writing a language result.",
+        extra={"child_process": child_process},
+    )
+    write_json(result_path, result)
+    return result
+
+
+def make_child_run_paths(args: argparse.Namespace):
+    """Resolves the minimal run-path contract for one single-language child."""
+
+    repo_root = harness_cli_common.get_repo_root(__file__)
+    workspace_root, app_root, app_exe = harness_cli_common.resolve_app_executable(
+        repo_root=repo_root,
+        configuration=args.configuration,
+        workspace_root=Path(args.workspace_root).resolve() if args.workspace_root else None,
+        app_root=args.app_root,
+        app_exe=args.app_exe,
+    )
+    seed_config_dir = (repo_root / "manifests" / "live-profile-seed" / "config").resolve()
+    if not seed_config_dir.is_dir():
+        raise RuntimeError(f"Seed config directory was not found at '{seed_config_dir}'.")
+    if not args.artifacts_dir:
+        raise RuntimeError("--artifacts-dir is required for isolated resource UI language children.")
+    source_artifacts_dir = Path(args.artifacts_dir).resolve()
+    return harness_cli_common.HarnessRunPaths(
+        repo_root=repo_root,
+        workspace_root=workspace_root,
+        app_root=app_root,
+        app_exe=app_exe,
+        seed_config_dir=seed_config_dir,
+        configuration=args.configuration,
+        suite_name="resource-ui-smoke",
+        source_artifacts_dir=source_artifacts_dir,
+        run_report_dir=source_artifacts_dir,
+        latest_report_dir=source_artifacts_dir,
+        keep_source_artifacts=True,
+        local_dumps={},
+    )
+
+
+def run_single_language_child(args: argparse.Namespace) -> int:
+    """Runs and writes the result for one isolated resource language child."""
+
+    if not args.single_language_output_json:
+        raise RuntimeError("--single-language-output-json is required with --single-language-dll-stem.")
+    paths = make_child_run_paths(args)
+    manifest_path = (
+        Path(args.release_languages_json).resolve()
+        if args.release_languages_json
+        else default_release_languages_path(paths.workspace_root, paths.repo_root)
+    )
+    languages = attach_language_dlls(load_release_languages(manifest_path), paths.app_exe)
+    matches = [row for row in languages if row.get("dll_stem") == args.single_language_dll_stem]
+    if not matches:
+        raise RuntimeError(f"Release language DLL stem was not found in manifest: {args.single_language_dll_stem!r}")
+    language = matches[0]
+    if not language.get("dll_present"):
+        result = build_language_failure_result(
+            language,
+            error_type="MissingLanguageDll",
+            message=f"{args.single_language_dll_stem} DLL is missing next to the app executable.",
+        )
+    else:
+        seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
+        result = smoke_one_language(
+            language=language,
+            paths=paths,
+            seed_config_dir=seed_config_dir,
+            output_root=paths.source_artifacts_dir / "languages",
+            capture_screenshots=not args.skip_screenshots,
+        )
+    write_json(Path(args.single_language_output_json).resolve(), result)
+    return 0 if result.get("status") == "passed" else 1
+
+
 def build_report_status(
     *,
     language_scope: str,
@@ -380,7 +621,9 @@ def run_resource_ui_smoke(paths, args: argparse.Namespace) -> dict[str, object]:
             "release_manifest_loaded": True,
             "language_id_mapping_complete": True,
             "ui_resource_failures_are_hard_failures": True,
+            "language_rows_are_process_isolated": True,
         },
+        "language_timeout_seconds": float(args.language_timeout_seconds),
         "languages": [],
     }
     if args.language_scope == "release" and missing_dlls:
@@ -393,12 +636,12 @@ def run_resource_ui_smoke(paths, args: argparse.Namespace) -> dict[str, object]:
 
     output_root = paths.source_artifacts_dir / "languages"
     for language in selected_languages:
-        language_result = smoke_one_language(
+        language_result = run_language_subprocess(
             language=language,
             paths=paths,
-            seed_config_dir=seed_config_dir,
+            args=args,
+            manifest_path=manifest_path,
             output_root=output_root,
-            capture_screenshots=not args.skip_screenshots,
         )
         report["languages"].append(language_result)  # type: ignore[index]
 
@@ -416,7 +659,7 @@ def run_resource_ui_smoke(paths, args: argparse.Namespace) -> dict[str, object]:
     return report
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
@@ -429,7 +672,13 @@ def main() -> None:
     parser.add_argument("--language-scope", choices=["release", "available"], default="release")
     parser.add_argument("--max-languages", type=int)
     parser.add_argument("--skip-screenshots", action="store_true")
+    parser.add_argument("--language-timeout-seconds", type=float, default=DEFAULT_LANGUAGE_TIMEOUT_SECONDS)
+    parser.add_argument("--single-language-dll-stem", help=argparse.SUPPRESS)
+    parser.add_argument("--single-language-output-json", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.single_language_dll_stem:
+        return run_single_language_child(args)
 
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -460,7 +709,8 @@ def main() -> None:
         harness_cli_common.publish_latest_report(paths)
         if not paths.keep_source_artifacts:
             shutil.rmtree(paths.source_artifacts_dir, ignore_errors=True)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
