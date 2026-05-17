@@ -76,6 +76,8 @@ DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_SEARCH_UI_SEARCH_ROUNDS = 1
 DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
 DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS = 120.0
+DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS = 2.0 * 60.0 * 60.0
+SUITE_TIMEOUT_RETURN_CODE = 124
 RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK = 50
 RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT = 100
 RELEASE_EXPANDED_REST_STRESS_DURATION_SECONDS = 45.0
@@ -684,10 +686,42 @@ def build_suite_command(
 
 
 def run_suite_command(command: list[str]) -> int:
-    """Runs one child suite command and returns its process exit code."""
+    """Runs one child suite command with a hard wall-clock timeout."""
 
-    completed = subprocess.run(command, check=False)
-    return completed.returncode
+    process = subprocess.Popen(command)
+    try:
+        return process.wait(timeout=DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        terminate_process_tree(process.pid)
+        try:
+            process.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            pass
+        return SUITE_TIMEOUT_RETURN_CODE
+
+
+def terminate_process_tree(process_id: int) -> dict[str, object]:
+    """Terminates one child process tree after a suite-level timeout."""
+
+    if os.name == "nt":
+        completed = subprocess.run(
+            ["taskkill", "/PID", str(process_id), "/T", "/F"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        return {
+            "command": "taskkill",
+            "return_code": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+        }
+    try:
+        os.kill(process_id, 9)
+        return {"command": "kill", "return_code": 0}
+    except OSError as exc:
+        return {"command": "kill", "return_code": 1, "error": str(exc)}
 
 
 def should_profile_shared_files_ui_suite(spec: SuiteSpec, args: argparse.Namespace) -> bool:
@@ -1187,6 +1221,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         },
         "arr_direct_search_stress_count": args.arr_direct_search_stress_count,
         "arr_prowlarr_search_stress_count": args.arr_prowlarr_search_stress_count,
+        "child_suite_timeout_seconds": DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS,
         "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
         "arr_search_timeout_seconds": args.arr_search_timeout_seconds,
         "document_download_timeout_seconds": args.document_download_timeout_seconds,
@@ -1334,6 +1369,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "category": spec.category,
             "status": suite_status,
             "return_code": return_code,
+            "timed_out": return_code == SUITE_TIMEOUT_RETURN_CODE,
+            "timeout_seconds": DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS,
             "duration_seconds": round(time.monotonic() - started, 3),
             "artifacts_dir": str(child_artifacts_dir.resolve()),
             "command": command,

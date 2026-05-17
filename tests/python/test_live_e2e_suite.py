@@ -940,6 +940,26 @@ def test_fail_fast_stops_after_first_failed_suite(tmp_path: Path, monkeypatch) -
     assert [script_name(command) for command in commands] == ["preference-ui-e2e.py"]
 
 
+def test_run_suite_command_times_out_and_terminates_process_tree(monkeypatch) -> None:
+    killed: list[int] = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def wait(self, timeout=None):
+            self.calls += 1
+            raise subprocess.TimeoutExpired(cmd=["child-suite"], timeout=timeout or 0.0)
+
+    monkeypatch.setattr(live_e2e_suite.subprocess, "Popen", lambda _command: FakeProcess())
+    monkeypatch.setattr(live_e2e_suite, "terminate_process_tree", lambda process_id: killed.append(process_id) or {"return_code": 0})
+
+    assert live_e2e_suite.run_suite_command(["child-suite"]) == live_e2e_suite.SUITE_TIMEOUT_RETURN_CODE
+    assert killed == [4321]
+
+
 def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(
