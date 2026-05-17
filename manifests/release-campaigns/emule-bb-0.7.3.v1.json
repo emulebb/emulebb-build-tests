@@ -1,0 +1,639 @@
+{
+  "schemaVersion": "emule-build-tests.release-campaign.v1",
+  "kind": "instance",
+  "templateId": "emulebb.release.template.default.v1",
+  "campaignId": "emule-bb-0.7.3",
+  "releaseVersion": "0.7.3",
+  "title": "eMule BB 0.7.3 release campaign",
+  "description": "First concrete release instance for the eMule BB-owned campaign model.",
+  "phases": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.workspace.validate.static.v1",
+          "title": "Workspace validation and policy audits",
+          "phase": "preflight",
+          "flowCategory": "workspace-policy",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace validate",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Operator records the validate command result in the release checklist."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.certification.fast.matrix.v1",
+          "title": "Fast certification matrix",
+          "phase": "preflight",
+          "flowCategory": "build",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test certification --profile fast",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "certification/*-fast/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.python.harness.unit.v1",
+          "title": "Python harness unit coverage",
+          "phase": "preflight",
+          "flowCategory": "python-harness",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test python --quiet",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Covered directly and through certification; pytest output is recorded by the operator when run standalone."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "protocol-parity",
+      "title": "Protocol parity",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.protocol.kad-ed2k.parity.v1",
+          "title": "Kad/eD2K protocol parity",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test protocol-parity",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Protocol surface diff, protocol goldens, and protocol live-diff are command-level evidence."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.community-core.coverage.parity.v1",
+          "title": "Community-core coverage and comparison",
+          "phase": "protocol-parity",
+          "flowCategory": "community-comparison",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test community-core-coverage",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/community-core-coverage/latest/summary.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Community-core coverage command result remains authoritative when no summary path exists."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.native.release.all.v1",
+          "title": "Native release test sweep",
+          "phase": "protocol-parity",
+          "flowCategory": "native",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test all",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/native-coverage-latest/coverage-summary.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Native parity, coverage, and live-diff command result is recorded by the operator."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "controller-surface",
+      "title": "Controller surface",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rest.contract.controller.v1",
+          "title": "REST contract and qBittorrent-compatible surface",
+          "phase": "controller-surface",
+          "flowCategory": "rest-api",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
+          "liveE2eProfile": "controller-surface",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/live-e2e-suite-latest/result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "controller-surface"
+              }
+            },
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/rest-api-smoke-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.arr.prowlarr.search-to-client.live.v1",
+          "title": "Prowlarr search and download-client handoff",
+          "phase": "controller-surface",
+          "flowCategory": "arr",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
+          "liveE2eProfile": "controller-surface",
+          "liveE2eSuite": "prowlarr-emulebb",
+          "localInputs": [
+            "live-wire-inputs.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/prowlarr-emulebb-live-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.arr.radarr.import.live.v1",
+          "title": "Radarr eMule BB acquisition flow",
+          "phase": "controller-surface",
+          "flowCategory": "arr",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
+          "liveE2eProfile": "controller-surface",
+          "liveE2eSuite": "radarr-emulebb",
+          "localInputs": [
+            "live-wire-inputs.local.json",
+            "radarr movie root"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/radarr-emulebb-live-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.arr.sonarr.import.live.v1",
+          "title": "Sonarr eMule BB acquisition flow",
+          "phase": "controller-surface",
+          "flowCategory": "arr",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
+          "liveE2eProfile": "controller-surface",
+          "liveE2eSuite": "sonarr-emulebb",
+          "localInputs": [
+            "live-wire-inputs.local.json",
+            "sonarr series root"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/sonarr-emulebb-live-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.amutorrent.browser.controller.v1",
+          "title": "aMuTorrent browser controller smoke",
+          "phase": "controller-surface",
+          "flowCategory": "amutorrent",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
+          "liveE2eProfile": "controller-surface",
+          "liveE2eSuite": "amutorrent-browser-smoke",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/amutorrent-browser-smoke-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-wire-release",
+      "title": "Live-wire release",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.livewire.release-expanded.weak-path.v1",
+          "title": "Expanded live weak-path release proof",
+          "phase": "live-wire-release",
+          "flowCategory": "live-wire",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded --fail-fast --live-wire-inputs-file repos\\eMule-build-tests\\live-wire-inputs.local.json",
+          "liveE2eProfile": "release-expanded",
+          "localInputs": [
+            "live-wire-inputs.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/live-e2e-suite-latest/result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "release-expanded"
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.livewire.search-ui.download.lifecycle.v1",
+          "title": "Search UI live search and download lifecycle",
+          "phase": "live-wire-release",
+          "flowCategory": "ui",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded",
+          "liveE2eProfile": "release-expanded",
+          "liveE2eSuite": "search-ui-live",
+          "localInputs": [
+            "live-wire-inputs.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/search-ui-live-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.livewire.rest.download-trigger.v1",
+          "title": "REST live search and paused download trigger proof",
+          "phase": "live-wire-release",
+          "flowCategory": "rest-api",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded",
+          "liveE2eProfile": "release-expanded",
+          "liveE2eSuite": "rest-api",
+          "localInputs": [
+            "live-wire-inputs.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/rest-api-smoke-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.ui.preferences.shared-files.hash.release.v1",
+          "title": "Preferences, shared files, and shared hash UI release flow",
+          "phase": "live-wire-release",
+          "flowCategory": "ui",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded",
+          "liveE2eProfile": "release-expanded",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/preference-ui-e2e-latest/result.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/shared-files-ui-e2e-latest/result.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/shared-hash-ui-e2e-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ui-resource-depth",
+      "title": "UI resource depth",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.ui.resources.release-languages.v1",
+          "title": "Full stock language resource smoke",
+          "phase": "ui-resource-depth",
+          "flowCategory": "resource",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile ui-resource-depth --fail-fast",
+          "liveE2eProfile": "ui-resource-depth",
+          "liveE2eSuite": "resource-ui-smoke",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/live-e2e-suite-latest/result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "ui-resource-depth"
+              }
+            },
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/resource-ui-smoke-latest/ui-summary.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.ui.preferences.resource-depth.v1",
+          "title": "Preferences UI resource-depth companion",
+          "phase": "ui-resource-depth",
+          "flowCategory": "ui",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile ui-resource-depth --fail-fast",
+          "liveE2eProfile": "ui-resource-depth",
+          "liveE2eSuite": "preference-ui",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "tests-repo",
+              "path": "reports/preference-ui-e2e-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stabilization-stress",
+      "title": "Stabilization stress",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.stress.rest.crash-leak-dump.v1",
+          "title": "REST stress, crash dump, leak, and CPU profile add-on",
+          "phase": "stabilization-stress",
+          "flowCategory": "stress",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test live-e2e --profile stabilization-stress --fail-fast",
+          "liveE2eProfile": "stabilization-stress",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/live-e2e-suite-latest/result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "stabilization-stress"
+              }
+            },
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/rest-cold-start-dump-stress-latest/result.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/local-dumps-crash-smoke-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.amutorrent.live.resilience.v1",
+          "title": "aMuTorrent clean startup, UI, and resilience live add-ons",
+          "phase": "stabilization-stress",
+          "flowCategory": "amutorrent",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test certification --profile overnight",
+          "localInputs": [
+            "live-wire-inputs.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/amutorrent-clean-startup-latest/result.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/amutorrent-emulebb-ui-live-latest/result.json",
+              "statusPointer": "/status"
+            },
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "tests-repo",
+              "path": "reports/amutorrent-resilience-live-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "packaging-provenance",
+      "title": "Packaging provenance",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.package.core.x64.v1",
+          "title": "x64 release package and manifest",
+          "phase": "packaging-provenance",
+          "flowCategory": "packaging",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace package-release --config Release --platform x64",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "release/emule-bb-v0.7.3/eMule-broadband-0.7.3-x64.manifest.json"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.package.core.arm64.v1",
+          "title": "ARM64 release package and manifest",
+          "phase": "packaging-provenance",
+          "flowCategory": "packaging",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace package-release --config Release --platform ARM64",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "release/emule-bb-v0.7.3/eMule-broadband-0.7.3-arm64.manifest.json"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.package.amutorrent.x64.v1",
+          "title": "aMuTorrent x64 controller package and manifest",
+          "phase": "packaging-provenance",
+          "flowCategory": "packaging",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace package-amutorrent --config Release --platform x64",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "release/emule-bb-v0.7.3/eMule-broadband-0.7.3-amutorrent-x64.manifest.json"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.provenance.clean-worktree.release.v1",
+          "title": "Clean worktree and hash recording",
+          "phase": "packaging-provenance",
+          "flowCategory": "provenance",
+          "required": true,
+          "blocking": true,
+          "command": "python repos\\eMule-tooling\\ci\\check-clean-worktree.py",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Operator records clean-worktree output and package SHA-256 hashes in the release checklist."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "releaseGates": [
+    {
+      "id": "validate",
+      "coveredBy": [
+        "emulebb.flow.workspace.validate.static.v1"
+      ]
+    },
+    {
+      "id": "certification-fast",
+      "coveredBy": [
+        "emulebb.flow.certification.fast.matrix.v1"
+      ]
+    },
+    {
+      "id": "certification-overnight",
+      "coveredBy": [
+        "emulebb.flow.rest.contract.controller.v1",
+        "emulebb.flow.stress.rest.crash-leak-dump.v1",
+        "emulebb.flow.amutorrent.live.resilience.v1"
+      ]
+    },
+    {
+      "id": "live-e2e-release-expanded",
+      "coveredBy": [
+        "emulebb.flow.livewire.release-expanded.weak-path.v1",
+        "emulebb.flow.livewire.search-ui.download.lifecycle.v1",
+        "emulebb.flow.livewire.rest.download-trigger.v1",
+        "emulebb.flow.ui.preferences.shared-files.hash.release.v1"
+      ]
+    },
+    {
+      "id": "ui-resource-depth",
+      "coveredBy": [
+        "emulebb.flow.ui.resources.release-languages.v1",
+        "emulebb.flow.ui.preferences.resource-depth.v1"
+      ]
+    },
+    {
+      "id": "package-x64",
+      "coveredBy": [
+        "emulebb.flow.package.core.x64.v1"
+      ]
+    },
+    {
+      "id": "package-arm64",
+      "coveredBy": [
+        "emulebb.flow.package.core.arm64.v1"
+      ]
+    },
+    {
+      "id": "package-amutorrent-x64",
+      "coveredBy": [
+        "emulebb.flow.package.amutorrent.x64.v1"
+      ]
+    },
+    {
+      "id": "clean-worktree",
+      "coveredBy": [
+        "emulebb.flow.provenance.clean-worktree.release.v1"
+      ]
+    }
+  ]
+}

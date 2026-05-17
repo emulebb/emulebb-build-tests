@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "emule-build-tests.release-campaign.v1",
+  "title": "eMule BB release campaign manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "emule-build-tests.release-campaign.v1"
+    },
+    "kind": {
+      "enum": [
+        "template",
+        "instance"
+      ]
+    },
+    "templateId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaignId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "releaseVersion": {
+      "type": "string"
+    },
+    "taxonomy": {
+      "type": "object"
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/phase"
+      }
+    },
+    "releaseGates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/releaseGate"
+      }
+    }
+  },
+  "$defs": {
+    "phase": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "scenarios"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scenario"
+          }
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "phase",
+        "flowCategory",
+        "command"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^emulebb\\.flow\\.[a-z0-9.-]+\\.v[0-9]+$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "flowCategory": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "command": {
+          "type": "string"
+        },
+        "liveE2eProfile": {
+          "type": "string"
+        },
+        "liveE2eSuite": {
+          "type": "string"
+        },
+        "localInputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "kind",
+        "required"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "base": {
+          "enum": [
+            "tests-repo",
+            "emule-workspace-root",
+            "workspace-state"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "glob": {
+          "type": "string"
+        },
+        "statusPointer": {
+          "type": "string"
+        },
+        "matches": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "releaseGate": {
+      "type": "object",
+      "required": [
+        "id",
+        "coveredBy"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "coveredBy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

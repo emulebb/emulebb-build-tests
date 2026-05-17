@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "emule-build-tests.release-campaign.v1",
+  "kind": "template",
+  "templateId": "emulebb.release.template.default.v1",
+  "title": "eMule BB release campaign template",
+  "description": "Strict release-test taxonomy owned by eMule BB for current and future releases.",
+  "taxonomy": {
+    "phases": [
+      {
+        "id": "preflight",
+        "title": "Preflight",
+        "intent": "Fast local confidence, workspace policy, buildability, and unit-level harness checks."
+      },
+      {
+        "id": "protocol-parity",
+        "title": "Protocol parity",
+        "intent": "Kad/eD2K compatibility, native protocol coverage, community comparison, and live-diff signal."
+      },
+      {
+        "id": "controller-surface",
+        "title": "Controller surface",
+        "intent": "REST, Web/API compatibility, aMuTorrent, and Arr controller integration coverage."
+      },
+      {
+        "id": "live-wire-release",
+        "title": "Live-wire release",
+        "intent": "Operator-owned real-network search, transfer, UI, weak-path, and external integration proof."
+      },
+      {
+        "id": "ui-resource-depth",
+        "title": "UI resource depth",
+        "intent": "Release language/resource coverage and deep UI smoke for release-facing controls."
+      },
+      {
+        "id": "stabilization-stress",
+        "title": "Stabilization stress",
+        "intent": "Optional extended resource, crash, leak, concurrency, and dump evidence."
+      },
+      {
+        "id": "packaging-provenance",
+        "title": "Packaging provenance",
+        "intent": "Release packages, architecture coverage, hashes, manifests, and clean source provenance."
+      }
+    ],
+    "flowCategories": [
+      "workspace-policy",
+      "build",
+      "python-harness",
+      "native",
+      "protocol",
+      "community-comparison",
+      "rest-api",
+      "controller",
+      "amutorrent",
+      "arr",
+      "live-wire",
+      "ui",
+      "resource",
+      "stress",
+      "packaging",
+      "provenance"
+    ],
+    "statusPolicy": "warn-only",
+    "scenarioIdPattern": "emulebb.flow.<area>.<specific-flow>.<scope>.vN"
+  }
+}
