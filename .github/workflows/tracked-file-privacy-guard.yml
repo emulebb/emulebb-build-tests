@@ -6,8 +6,8 @@ on:
 
 jobs:
   baseline:
-    uses: eMulebb/eMule-tooling/.github/workflows/reusable-baseline.yml@ci/v7
+    uses: eMulebb/eMule-tooling/.github/workflows/reusable-baseline.yml@ci/v8
     with:
       policy_path: manifests/privacy-guard/policy.v1.json
       repo_kind: tests
-      tooling_ref: ci/v7
+      tooling_ref: ci/v8
