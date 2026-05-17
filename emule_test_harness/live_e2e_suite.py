@@ -75,6 +75,7 @@ DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFIL
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_SEARCH_UI_SEARCH_ROUNDS = 1
 DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
+DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS = 120.0
 RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK = 50
 RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT = 100
 RELEASE_EXPANDED_REST_STRESS_DURATION_SECONDS = 45.0
@@ -523,6 +524,8 @@ def build_suite_command(
     rest_cold_start_dump_stress_cpu_profile_stack_min_hits: int = DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS,
     rest_cold_start_dump_stress_cpu_profile_symbols_required: bool = True,
     rest_cold_start_dump_stress_skip_dumps: bool = False,
+    resource_ui_language_timeout_seconds: float = DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS,
+    fail_fast: bool = False,
 ) -> list[str]:
     """Builds one child suite command line."""
 
@@ -556,6 +559,9 @@ def build_suite_command(
         release_languages_json = workspace_root.parent.parent / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json"
         command.extend(["--release-languages-json", str(release_languages_json.resolve())])
         command.extend(["--language-scope", "release"])
+        command.extend(["--language-timeout-seconds", str(resource_ui_language_timeout_seconds)])
+        if fail_fast:
+            command.append("--fail-fast-languages")
     if spec.name == "shared-files-ui" and shared_files_tree_stress_churn_cycles is not None:
         command.extend(["--tree-stress-churn-cycles", str(shared_files_tree_stress_churn_cycles)])
     scenario_names = shared_files_ui_scenarios if spec.name == "shared-files-ui" and shared_files_ui_scenarios else spec.scenarios
@@ -840,6 +846,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--profile", choices=LIVE_E2E_PROFILES, default="default")
     parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--resource-ui-language-timeout-seconds", type=float, default=DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--rest-server-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-kad-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
@@ -1310,6 +1317,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_cpu_profile_stack_min_hits=args.rest_cold_start_dump_stress_cpu_profile_stack_min_hits,
             rest_cold_start_dump_stress_cpu_profile_symbols_required=args.rest_cold_start_dump_stress_cpu_profile_symbols_required,
             rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
+            resource_ui_language_timeout_seconds=args.resource_ui_language_timeout_seconds,
+            fail_fast=args.fail_fast,
         )
         started = time.monotonic()
         return_code, suite_cpu_profile = run_suite_command_with_optional_cpu_profile(

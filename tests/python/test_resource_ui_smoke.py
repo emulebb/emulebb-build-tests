@@ -121,6 +121,7 @@ def test_resource_report_fails_before_launching_when_release_dlls_are_missing(tm
         max_languages=None,
         skip_screenshots=True,
         language_timeout_seconds=30.0,
+        fail_fast_languages=False,
     )
     monkeypatch.setattr(smoke.harness_cli_common, "resolve_profile_seed_dir", lambda _paths, _value: tmp_path / "seed")
 
@@ -229,3 +230,58 @@ def test_language_subprocess_timeout_records_failure_and_kills_process_tree(tmp_
     assert kill_commands == [["taskkill", "/PID", "1234", "/T", "/F"]]
     result_file = tmp_path / "artifacts" / "languages" / "ar_AE" / "language-result.json"
     assert json.loads(result_file.read_text(encoding="utf-8"))["error"]["type"] == "LanguageSmokeTimeout"
+
+
+def test_resource_report_language_fail_fast_stops_after_first_failure(tmp_path: Path, monkeypatch) -> None:
+    smoke = load_resource_ui_smoke()
+    manifest = write_manifest(
+        tmp_path / "rc-release-languages.json",
+        [
+            {"code": "ar_AE", "name": "Arabic", "rc": "ar_AE.rc"},
+            {"code": "de_DE", "name": "German", "rc": "de_DE.rc"},
+        ],
+    )
+    app_exe = tmp_path / "bin" / "emule.exe"
+    lang_dir = app_exe.parent / "lang"
+    lang_dir.mkdir(parents=True)
+    app_exe.write_text("", encoding="utf-8")
+    (lang_dir / "ar_AE.dll").write_text("", encoding="utf-8")
+    (lang_dir / "de_DE.dll").write_text("", encoding="utf-8")
+    paths = SimpleNamespace(
+        configuration="Release",
+        app_exe=app_exe,
+        app_root=tmp_path / "app",
+        workspace_root=tmp_path,
+        repo_root=tmp_path / "repo",
+        source_artifacts_dir=tmp_path / "artifacts",
+    )
+    args = SimpleNamespace(
+        profile_seed_dir=None,
+        release_languages_json=str(manifest),
+        language_scope="release",
+        max_languages=None,
+        skip_screenshots=True,
+        language_timeout_seconds=10.0,
+        fail_fast_languages=True,
+    )
+    calls: list[str] = []
+
+    def fake_run_language_subprocess(*, language, **_kwargs):
+        calls.append(language["dll_stem"])
+        return {
+            "code": language["code"],
+            "name": language["name"],
+            "rc": language["rc"],
+            "dll_stem": language["dll_stem"],
+            "status": "failed",
+            "error": {"type": "SyntheticFailure", "message": "blocked"},
+        }
+
+    monkeypatch.setattr(smoke.harness_cli_common, "resolve_profile_seed_dir", lambda _paths, _value: tmp_path / "seed")
+    monkeypatch.setattr(smoke, "run_language_subprocess", fake_run_language_subprocess)
+
+    report = smoke.run_resource_ui_smoke(paths, args)
+
+    assert report["status"] == "failed"
+    assert calls == ["ar_AE"]
+    assert [row["dll_stem"] for row in report["languages"]] == ["ar_AE"]

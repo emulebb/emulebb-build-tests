@@ -684,7 +684,36 @@ def test_ui_resource_depth_profile_runs_resource_smoke_and_preferences(tmp_path:
     assert option_values(resource_command, "--release-languages-json") == [
         str((tmp_path / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json").resolve())
     ]
+    assert option_values(resource_command, "--language-timeout-seconds") == [str(live_e2e_suite.DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS)]
+    assert "--fail-fast-languages" not in resource_command
     assert summary["suites"][0]["language_scope"] == "release"
+
+
+def test_ui_resource_depth_fail_fast_propagates_to_language_rows(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "ui-resource-depth",
+            "--fail-fast",
+            "--resource-ui-language-timeout-seconds",
+            "30",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    resource_command = commands[0]
+    assert option_values(resource_command, "--language-timeout-seconds") == ["30.0"]
+    assert "--fail-fast-languages" in resource_command
 
 
 def test_profile_does_not_override_explicit_suite_selection(tmp_path: Path, monkeypatch) -> None:

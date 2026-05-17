@@ -49,7 +49,7 @@ IDCANCEL = 2
 PAGE_TREE_ID = 0x7EEE
 
 MIN_PREFERENCE_TREE_ITEMS = 8
-DEFAULT_LANGUAGE_TIMEOUT_SECONDS = 240.0
+DEFAULT_LANGUAGE_TIMEOUT_SECONDS = 120.0
 PROCESS_OUTPUT_TAIL_CHARS = 4000
 VIEW_COMMANDS = (
     ("transfer", MP_HM_TRANSFER),
@@ -644,6 +644,8 @@ def run_resource_ui_smoke(paths, args: argparse.Namespace) -> dict[str, object]:
             output_root=output_root,
         )
         report["languages"].append(language_result)  # type: ignore[index]
+        if args.fail_fast_languages and language_result.get("status") != "passed":
+            break
 
     report["status"] = build_report_status(
         language_scope=args.language_scope,
@@ -673,6 +675,7 @@ def main() -> int:
     parser.add_argument("--max-languages", type=int)
     parser.add_argument("--skip-screenshots", action="store_true")
     parser.add_argument("--language-timeout-seconds", type=float, default=DEFAULT_LANGUAGE_TIMEOUT_SECONDS)
+    parser.add_argument("--fail-fast-languages", action="store_true")
     parser.add_argument("--single-language-dll-stem", help=argparse.SUPPRESS)
     parser.add_argument("--single-language-output-json", help=argparse.SUPPRESS)
     args = parser.parse_args()
