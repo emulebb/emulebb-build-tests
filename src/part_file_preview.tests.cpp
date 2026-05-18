@@ -70,6 +70,38 @@ TEST_CASE("Part-file preview seam validates external FFmpeg thumbnail helpers")
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(scriptPath));
 }
 
+TEST_CASE("Part-file preview seam validates configured external preview applications")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0x505256u));
+
+	const std::wstring exePath = fixture.MakeDirectoryChildPath(L"preview.exe");
+	const std::wstring comPath = fixture.MakeDirectoryChildPath(L"preview.com");
+	const std::wstring scriptPath = fixture.MakeDirectoryChildPath(L"preview.cmd");
+	const std::wstring missingPath = fixture.MakeDirectoryChildPath(L"missing-preview.exe");
+	const std::vector<BYTE> payload = LongPathTestSupport::BuildDeterministicPayload(768u, 0x505256u);
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(exePath, payload));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(comPath, payload));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::WriteBytes(scriptPath, payload));
+
+	CString quotedExePath(exePath.c_str());
+	quotedExePath.Insert(0, _T('"'));
+	quotedExePath.Append(_T("\""));
+
+	CHECK(PartFilePreviewSeams::IsValidConfiguredPreviewApplicationPath(CString(exePath.c_str())));
+	CHECK(PartFilePreviewSeams::IsValidConfiguredPreviewApplicationPath(CString(comPath.c_str())));
+	CHECK(PartFilePreviewSeams::IsValidConfiguredPreviewApplicationPath(quotedExePath));
+	CHECK_FALSE(PartFilePreviewSeams::IsValidConfiguredPreviewApplicationPath(CString(_T("preview.exe"))));
+	CHECK_FALSE(PartFilePreviewSeams::IsValidConfiguredPreviewApplicationPath(CString(missingPath.c_str())));
+	CHECK_FALSE(PartFilePreviewSeams::IsValidConfiguredPreviewApplicationPath(CString(scriptPath.c_str())));
+	CHECK_FALSE(PartFilePreviewSeams::IsValidConfiguredPreviewApplicationPath(CString()));
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(exePath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(comPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(scriptPath));
+}
+
 TEST_CASE("Part-file preview seam unlocks partial videos after a capped percentage threshold")
 {
 	const std::uint64_t oneMegabyte = 1024ull * 1024ull;
