@@ -103,6 +103,16 @@ TEST_CASE("Async socket seam only yields callback-drain polling while callbacks 
 	CHECK_FALSE(ShouldYieldForAsyncSocketCallbackDrain(-1));
 }
 
+#if defined(EMULE_TEST_HAVE_ASYNC_SOCKET_HOSTNAME_RESOLVE_SEAMS)
+TEST_CASE("Async socket hostname seam ignores stale worker results")
+{
+	CHECK(ClassifyAsyncSocketHostnameCompletion(false, true, 0) == AsyncSocketExHostnameCompletion::UnknownSocket);
+	CHECK(ClassifyAsyncSocketHostnameCompletion(true, false, 0) == AsyncSocketExHostnameCompletion::StaleRequest);
+	CHECK(ClassifyAsyncSocketHostnameCompletion(true, true, WSAHOST_NOT_FOUND) == AsyncSocketExHostnameCompletion::Failed);
+	CHECK(ClassifyAsyncSocketHostnameCompletion(true, true, 0) == AsyncSocketExHostnameCompletion::Resolved);
+}
+#endif
+
 #if defined(EMULE_TEST_HAVE_ASYNC_SOCKET_RUNTIME_SEAMS)
 TEST_CASE("Async socket seam makes helper initialization failures release-visible")
 {
