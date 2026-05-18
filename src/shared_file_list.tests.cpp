@@ -105,6 +105,33 @@ TEST_CASE("Startup-cache save shutdown wait stays bounded by the configured budg
 	CHECK_FALSE(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 7500ui64, 5000ui64 }));
 }
 
+TEST_CASE("Shared-file shutdown polling uses one bounded sleep policy")
+{
+	CHECK_EQ(SharedFileListSeams::kSharedHashShutdownWaitMs, 5000u);
+	CHECK_EQ(SharedFileListSeams::kStartupCacheSaveShutdownWaitMs, 5000u);
+	CHECK_EQ(SharedFileListSeams::kSharedShutdownPollIntervalMs, 15u);
+
+	CHECK(SharedFileListSeams::ShouldKeepWaitingForSharedShutdownPoll({ 0ui64, 5000ui64, 15u }));
+	CHECK(SharedFileListSeams::ShouldKeepWaitingForSharedShutdownPoll({ 4999ui64, 5000ui64, 15u }));
+	CHECK_FALSE(SharedFileListSeams::ShouldKeepWaitingForSharedShutdownPoll({ 5000ui64, 5000ui64, 15u }));
+
+	CHECK_EQ(SharedFileListSeams::GetSharedShutdownPollSleepMs({ 0ui64, 5000ui64, 15u }), 15u);
+	CHECK_EQ(SharedFileListSeams::GetSharedShutdownPollSleepMs({ 4990ui64, 5000ui64, 15u }), 10u);
+	CHECK_EQ(SharedFileListSeams::GetSharedShutdownPollSleepMs({ 5000ui64, 5000ui64, 15u }), 0u);
+	CHECK_EQ(SharedFileListSeams::GetSharedShutdownPollSleepMs({ 100ui64, 5000ui64, 0u }), 0u);
+}
+
+TEST_CASE("Shared hash UI drain post retries do not sleep after the final attempt")
+{
+	CHECK_EQ(SharedFileListSeams::kSharedHashCompletionPostRetries, 20u);
+	CHECK_EQ(SharedFileListSeams::kSharedHashCompletionPostRetryDelayMs, 25u);
+
+	CHECK(SharedFileListSeams::ShouldRetrySharedHashDrainPost(0u, SharedFileListSeams::kSharedHashCompletionPostRetries));
+	CHECK(SharedFileListSeams::ShouldRetrySharedHashDrainPost(18u, SharedFileListSeams::kSharedHashCompletionPostRetries));
+	CHECK_FALSE(SharedFileListSeams::ShouldRetrySharedHashDrainPost(19u, SharedFileListSeams::kSharedHashCompletionPostRetries));
+	CHECK_FALSE(SharedFileListSeams::ShouldRetrySharedHashDrainPost(0u, 1u));
+}
+
 TEST_CASE("Shutdown skips shared startup-cache persistence after interrupted hashing")
 {
 	CHECK(SharedFileListSeams::ShouldPersistStartupCacheOnShutdown(false));
