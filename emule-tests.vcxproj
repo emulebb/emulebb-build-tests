@@ -183,6 +183,7 @@
     <ClCompile Include="src\full_hash_probe.cpp" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
     <ClCompile Include="src\hash_probe.cpp" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
     <ClCompile Include="src\timer_resolution_probe.cpp" />
+    <ClCompile Include="src\win32_callback_timer.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\Win32CallbackTimerSeams.h')" />
     <ClCompile Include="src\download_progress_bar.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadProgressBarSeams.h')" />
     <ClCompile Include="src\i18n.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\I18nSeams.h')" />
     <ClCompile Include="src\ini2.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\Ini2Helpers.h')" />
