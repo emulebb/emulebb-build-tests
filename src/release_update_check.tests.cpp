@@ -1,8 +1,10 @@
 #include "../third_party/doctest/doctest.h"
 
+#include "PartFileHashLaunchSeams.h"
 #include "ReleaseUpdateCheckSeams.h"
 #include "VersionCheckLaunchSeams.h"
 
+using PartFileHashLaunchSeams::IsHashWorkerBusyStatus;
 using ReleaseUpdateCheckSeams::BuildRequiredAssetName;
 using ReleaseUpdateCheckSeams::CompareReleaseVersions;
 using ReleaseUpdateCheckSeams::EReleaseEvaluationStatus;
@@ -84,6 +86,25 @@ TEST_CASE("eMule BB release evaluation ignores malformed and prerelease payloads
 
 	const auto parseFailed = EvaluateLatestReleaseJson("{not-json", local, "x64");
 	CHECK_EQ(parseFailed.eStatus, EReleaseEvaluationStatus::ParseFailed);
+}
+
+TEST_SUITE_END;
+
+TEST_SUITE_BEGIN("part_file_hash_launch");
+
+TEST_CASE("part file hash launch guard blocks active hash and completion statuses")
+{
+	constexpr int kReady = 0;
+	constexpr int kWaitingForHash = 2;
+	constexpr int kHashing = 3;
+	constexpr int kCompleting = 8;
+	constexpr int kComplete = 9;
+
+	CHECK_FALSE(IsHashWorkerBusyStatus(kReady, kWaitingForHash, kHashing, kCompleting));
+	CHECK(IsHashWorkerBusyStatus(kWaitingForHash, kWaitingForHash, kHashing, kCompleting));
+	CHECK(IsHashWorkerBusyStatus(kHashing, kWaitingForHash, kHashing, kCompleting));
+	CHECK(IsHashWorkerBusyStatus(kCompleting, kWaitingForHash, kHashing, kCompleting));
+	CHECK_FALSE(IsHashWorkerBusyStatus(kComplete, kWaitingForHash, kHashing, kCompleting));
 }
 
 TEST_SUITE_END;
