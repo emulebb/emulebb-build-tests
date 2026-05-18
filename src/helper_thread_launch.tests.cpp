@@ -32,6 +32,39 @@ struct DeletableSuspendedThread
 			*pbDeleted = true;
 	}
 };
+
+struct FakeWaitEvent
+{
+	HANDLE hEvent = NULL;
+	int nLockCount = 0;
+
+	explicit FakeWaitEvent(bool bSignaled)
+		: hEvent(::CreateEvent(NULL, TRUE, bSignaled ? TRUE : FALSE, NULL))
+	{
+	}
+
+	explicit FakeWaitEvent(HANDLE hInvalidEvent)
+		: hEvent(hInvalidEvent)
+	{
+	}
+
+	~FakeWaitEvent()
+	{
+		if (hEvent != NULL && hEvent != INVALID_HANDLE_VALUE)
+			::CloseHandle(hEvent);
+	}
+
+	operator HANDLE() const
+	{
+		return hEvent;
+	}
+
+	BOOL Lock()
+	{
+		++nLockCount;
+		return TRUE;
+	}
+};
 }
 
 TEST_SUITE_BEGIN("parity");
@@ -174,6 +207,73 @@ TEST_CASE("Helper thread shutdown wait seam classifies bounded wait results")
 	CHECK(HelperThreadLaunchSeams::ClassifyShutdownWait(WAIT_TIMEOUT) == HelperThreadLaunchSeams::ShutdownWaitAction::TimedOut);
 	CHECK(HelperThreadLaunchSeams::ClassifyShutdownWait(WAIT_FAILED) == HelperThreadLaunchSeams::ShutdownWaitAction::Failed);
 	CHECK(HelperThreadLaunchSeams::ClassifyShutdownWait(WAIT_ABANDONED) == HelperThreadLaunchSeams::ShutdownWaitAction::Failed);
+}
+
+TEST_CASE("Helper thread shutdown wait seam centralizes event-ended worker policy")
+{
+	int nTimedOut = 0;
+	int nFailed = 0;
+	DWORD dwFailedError = ERROR_SUCCESS;
+
+	{
+		FakeWaitEvent event(static_cast<HANDLE>(NULL));
+		CHECK(HelperThreadLaunchSeams::WaitForEventThreadShutdown(
+			event,
+			false,
+			0,
+			[&]() { ++nTimedOut; },
+			[&](DWORD dwLastError) {
+				++nFailed;
+				dwFailedError = dwLastError;
+			}) == HelperThreadLaunchSeams::ShutdownWaitAction::Finished);
+		CHECK(event.nLockCount == 0);
+	}
+
+	{
+		FakeWaitEvent event(true);
+		CHECK(HelperThreadLaunchSeams::WaitForEventThreadShutdown(
+			event,
+			true,
+			0,
+			[&]() { ++nTimedOut; },
+			[&](DWORD dwLastError) {
+				++nFailed;
+				dwFailedError = dwLastError;
+			}) == HelperThreadLaunchSeams::ShutdownWaitAction::Finished);
+		CHECK(event.nLockCount == 0);
+	}
+
+	{
+		FakeWaitEvent event(false);
+		CHECK(HelperThreadLaunchSeams::WaitForEventThreadShutdown(
+			event,
+			true,
+			0,
+			[&]() { ++nTimedOut; },
+			[&](DWORD dwLastError) {
+				++nFailed;
+				dwFailedError = dwLastError;
+			}) == HelperThreadLaunchSeams::ShutdownWaitAction::TimedOut);
+		CHECK(event.nLockCount == 1);
+	}
+
+	{
+		FakeWaitEvent event(static_cast<HANDLE>(NULL));
+		CHECK(HelperThreadLaunchSeams::WaitForEventThreadShutdown(
+			event,
+			true,
+			0,
+			[&]() { ++nTimedOut; },
+			[&](DWORD dwLastError) {
+				++nFailed;
+				dwFailedError = dwLastError;
+			}) == HelperThreadLaunchSeams::ShutdownWaitAction::Failed);
+		CHECK(event.nLockCount == 1);
+	}
+
+	CHECK(nTimedOut == 1);
+	CHECK(nFailed == 1);
+	CHECK(dwFailedError == ERROR_INVALID_HANDLE);
 }
 
 TEST_CASE("Helper thread flags and states use interlocked accessors")
