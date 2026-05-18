@@ -37,17 +37,4 @@ TEST_CASE("Add source input seam rejects endpoint truncation risks")
 	CHECK_FALSE(AddSourceInputSeams::ParseSourceClientInput(CString(_T("5.6.7.8")), CString(_T("abc"))).Valid);
 }
 
-TEST_CASE("Add source input seam extracts supported URL sources")
-{
-	const AddSourceInputSeams::UrlSourceInput input = AddSourceInputSeams::ParseUrlSourceInput(CString(_T(" https://user:pass@example.net/files/test.bin ")));
-	CHECK(input.Valid);
-	CHECK(input.Url == CString(_T("https://user:pass@example.net/files/test.bin")));
-	CHECK(input.Scheme == CString(_T("https")));
-	CHECK(input.HostName == CString(_T("example.net")));
-
-	CHECK(AddSourceInputSeams::ParseUrlSourceInput(CString(_T("ftp://mirror.example.net/pub/file.dat"))).Valid);
-	CHECK_FALSE(AddSourceInputSeams::ParseUrlSourceInput(CString(_T("file://C:/temp/file.dat"))).Valid);
-	CHECK_FALSE(AddSourceInputSeams::ParseUrlSourceInput(CString(_T("https:///missing-host"))).Valid);
-}
-
 TEST_SUITE_END();

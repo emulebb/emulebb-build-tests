@@ -2210,28 +2210,6 @@
       "notes": ""
     },
     {
-      "id": "DownData_URL",
-      "storageFile": "statistics.ini or preferences.ini statistics section",
-      "sections": [
-        "<default>"
-      ],
-      "key": "DownData_URL",
-      "sourceExpression": "_T(\"DownData_URL\")",
-      "kind": "literal",
-      "access": [
-        "read",
-        "write"
-      ],
-      "valueKinds": [
-        "UInt64"
-      ],
-      "ownerField": "",
-      "uiApiSurface": "",
-      "clampOrNormalizer": "",
-      "classification": "active-roundtrip",
-      "notes": ""
-    },
-    {
       "id": "DownDataPort_4662",
       "storageFile": "statistics.ini or preferences.ini statistics section",
       "sections": [

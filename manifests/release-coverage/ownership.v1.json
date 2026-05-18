@@ -219,8 +219,7 @@
       "releaseOwned": true,
       "appPathGlobs": [
         "srchybrid/Server*",
-        "srchybrid/IPFilter*",
-        "srchybrid/URLClient*"
+        "srchybrid/IPFilter*"
       ],
       "coverage": [
         "src/server_input.tests.cpp",
