@@ -19,4 +19,17 @@ TEST_CASE("Process launch seam keeps external process waits bounded")
 	CHECK(ProcessLaunchSeams::kTimedOutProcessTerminateWaitMs <= 5u * 1000u);
 }
 
+TEST_CASE("Process launch seam result objects default to non-started success-neutral state")
+{
+	const ProcessLaunchSeams::DetachedLaunchResult detached;
+	CHECK_FALSE(detached.Started);
+	CHECK(detached.LastError == ERROR_SUCCESS);
+
+	const ProcessLaunchSeams::BoundedProcessResult bounded;
+	CHECK_FALSE(bounded.Started);
+	CHECK(bounded.WaitResult == ProcessLaunchSeams::EProcessWaitResult::Other);
+	CHECK(bounded.LastError == ERROR_SUCCESS);
+	CHECK(bounded.ExitCode == ERROR_SUCCESS);
+}
+
 TEST_SUITE_END();
