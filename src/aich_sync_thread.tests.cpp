@@ -31,4 +31,12 @@ TEST_CASE("AICH sync seam validates only non-negative UI progress counts")
 	CHECK_FALSE(HasValidAICHSyncProgressCount(-1));
 }
 
+TEST_CASE("AICH sync seam classifies UI progress delivery outcomes")
+{
+	CHECK(GetAICHSyncProgressDeliveryAction(-1, EWorkerUiMessageDelivery::Delivered) == EAICHSyncProgressDeliveryAction::IgnoreInvalidCount);
+	CHECK(GetAICHSyncProgressDeliveryAction(0, EWorkerUiMessageDelivery::Delivered) == EAICHSyncProgressDeliveryAction::Delivered);
+	CHECK(GetAICHSyncProgressDeliveryAction(3, EWorkerUiMessageDelivery::InvalidWindow) == EAICHSyncProgressDeliveryAction::DropUnavailableTarget);
+	CHECK(GetAICHSyncProgressDeliveryAction(3, EWorkerUiMessageDelivery::Failed) == EAICHSyncProgressDeliveryAction::Failed);
+}
+
 TEST_SUITE_END;
