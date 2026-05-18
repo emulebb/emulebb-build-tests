@@ -27,7 +27,7 @@ std::vector<std::uint8_t> Box(std::uint32_t type, const std::vector<std::uint8_t
 std::vector<std::uint8_t> BuildMp4Fixture()
 {
 	std::vector<std::uint8_t> bytes = Box(0x66747970u, {'i', 's', 'o', 'm', 0, 0, 0, 0});
-	std::vector<std::uint8_t> mvhd(20, 0);
+	std::vector<std::uint8_t> mvhd(12, 0);
 	AppendBe32(mvhd, 1000);
 	AppendBe32(mvhd, 125000);
 	std::vector<std::uint8_t> tkhd(84, 0);
@@ -48,7 +48,7 @@ std::vector<std::uint8_t> BuildEbmlFixture()
 {
 	std::vector<std::uint8_t> bytes = {0x1A, 0x45, 0xDF, 0xA3, 0x80};
 	bytes.insert(bytes.end(), {0x2A, 0xD7, 0xB1, 0x83, 0x0F, 0x42, 0x40});
-	double duration = 120.0;
+	double duration = 120000.0;
 	std::uint64_t raw = 0;
 	memcpy(&raw, &duration, sizeof raw);
 	bytes.insert(bytes.end(), {0x44, 0x89, 0x88});
