@@ -161,6 +161,7 @@
     <ClCompile Include="src\config_default_files.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ConfigDefaultFilesSeams.h')" />
     <ClCompile Include="src\config_startup_backup.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h')" />
     <ClCompile Include="src\collection.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
+    <ClCompile Include="src\com_initialization.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ComInitializationSeams.h')" />
     <ClCompile Include="src\custom_auto_complete.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h')" />
     <ClCompile Include="src\direct_download.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
     <ClCompile Include="src\diagnostic_snapshot.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h')" />
@@ -298,6 +299,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\CompressionBufferSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CollectionSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\ComInitializationSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ComInitializationSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CustomAutoCompleteSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DirectDownloadSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DirectDownloadSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h" Condition="Exists('$(AppRoot)\srchybrid\DiagnosticSnapshotSeams.h')" />
