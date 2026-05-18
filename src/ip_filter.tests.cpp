@@ -120,6 +120,40 @@ TEST_CASE("IP-filter automatic refresh requires filtering and auto update")
 	CHECK_FALSE(IPFilterSeams::ShouldQueueAutomaticRefresh(false, false));
 }
 
+TEST_CASE("IP-filter seam parses filter.dat ranges with bounded IPv4 octets")
+{
+	IPFilterSeams::IPRange range;
+	CHECK(IPFilterSeams::TryParseFilterDatLine("1.2.3.4 - 5.6.7.8 , 42 , sample range", range));
+	CHECK(range.Start == 0x01020304u);
+	CHECK(range.End == 0x05060708u);
+	CHECK(range.Level == 42u);
+	CHECK(range.Description == "sample range");
+
+	CHECK(IPFilterSeams::TryParseFilterDatLine("10.0.0.1-10.0.0.255", range));
+	CHECK(range.Start == 0x0a000001u);
+	CHECK(range.End == 0x0a0000ffu);
+	CHECK(range.Level == IPFilterSeams::kDefaultFilterLevel);
+	CHECK(range.Description.IsEmpty());
+
+	CHECK_FALSE(IPFilterSeams::TryParseFilterDatLine("1.2.3.256 - 5.6.7.8 , 42 , wraps without seam", range));
+	CHECK_FALSE(IPFilterSeams::TryParseFilterDatLine("1.2.3.4 - 5.6.7.8 trailing", range));
+	CHECK_FALSE(IPFilterSeams::TryParseFilterDatLine("1.2.3.4 - 5.6.7.8 , nope , bad level", range));
+}
+
+TEST_CASE("IP-filter seam parses PeerGuardian ranges with strict address tails")
+{
+	IPFilterSeams::IPRange range;
+	CHECK(IPFilterSeams::TryParsePeerGuardianLine("PGIPDB sample network: 203.0.113.1 - 203.0.113.99", range));
+	CHECK(range.Start == 0xcb007101u);
+	CHECK(range.End == 0xcb007163u);
+	CHECK(range.Level == IPFilterSeams::kDefaultFilterLevel);
+	CHECK(range.Description == "sample network");
+
+	CHECK_FALSE(IPFilterSeams::TryParsePeerGuardianLine("sample: 203.0.113.1 - 203.0.113.300", range));
+	CHECK_FALSE(IPFilterSeams::TryParsePeerGuardianLine("sample: 203.0.113.1 - 203.0.113.99 trailing", range));
+	CHECK_FALSE(IPFilterSeams::TryParsePeerGuardianLine("203.0.113.1 - 203.0.113.99", range));
+}
+
 TEST_CASE("IP-filter normalization lets a lower-level narrow overlap win only inside the overlap")
 {
 	const std::vector<IPFilterSeams::IPRange> normalized = IPFilterSeams::NormalizeIPRanges({
