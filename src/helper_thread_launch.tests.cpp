@@ -24,6 +24,21 @@ TEST_CASE("IOCP helper shutdown waits without posting before the port is ready")
 	CHECK(HelperThreadLaunchSeams::ClassifyIocpShutdown(true, true) == HelperThreadLaunchSeams::IocpShutdownAction::SignalAndWait);
 }
 
+TEST_CASE("IOCP helper shutdown request sets stop state only for started workers")
+{
+	volatile LONG nStopRequested = 0;
+	volatile LONG nRunState = 1;
+
+	CHECK(HelperThreadLaunchSeams::RequestIocpShutdown(nStopRequested, nRunState, 0, false, NULL) == HelperThreadLaunchSeams::IocpShutdownAction::NoOp);
+	CHECK(HelperThreadLaunchSeams::IsFlagSet(nStopRequested));
+	CHECK(HelperThreadLaunchSeams::GetState(nRunState) == 1);
+
+	HelperThreadLaunchSeams::ClearFlag(nStopRequested);
+	CHECK(HelperThreadLaunchSeams::RequestIocpShutdown(nStopRequested, nRunState, 0, true, NULL) == HelperThreadLaunchSeams::IocpShutdownAction::WaitOnly);
+	CHECK(HelperThreadLaunchSeams::IsFlagSet(nStopRequested));
+	CHECK(HelperThreadLaunchSeams::GetState(nRunState) == 0);
+}
+
 TEST_CASE("IOCP helper wakeups require a started live worker with a ready port")
 {
 	CHECK(HelperThreadLaunchSeams::CanPostIocpWork(true, false, true, true));
@@ -31,6 +46,37 @@ TEST_CASE("IOCP helper wakeups require a started live worker with a ready port")
 	CHECK_FALSE(HelperThreadLaunchSeams::CanPostIocpWork(true, true, true, true));
 	CHECK_FALSE(HelperThreadLaunchSeams::CanPostIocpWork(true, false, false, true));
 	CHECK_FALSE(HelperThreadLaunchSeams::CanPostIocpWork(true, false, true, false));
+}
+
+TEST_CASE("IOCP helper loop and deferred wake decisions preserve stop key semantics")
+{
+	CHECK(HelperThreadLaunchSeams::ShouldWaitForIocpWorkerCompletion(false, 1, 0));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldWaitForIocpWorkerCompletion(true, 1, 0));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldWaitForIocpWorkerCompletion(false, 0, 0));
+
+	CHECK(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(TRUE, 1));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(FALSE, 1));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(TRUE, 0));
+
+	CHECK(HelperThreadLaunchSeams::ShouldPostIocpWakeAfterNewData(1, true));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldPostIocpWakeAfterNewData(0, true));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldPostIocpWakeAfterNewData(1, false));
+}
+
+TEST_CASE("IOCP helper owns completion port handles")
+{
+	HANDLE hPort = NULL;
+	DWORD dwLastError = ERROR_SUCCESS;
+
+	REQUIRE(HelperThreadLaunchSeams::TryCreateIocpPort(hPort, dwLastError));
+	CHECK(hPort != NULL);
+	CHECK(dwLastError == ERROR_SUCCESS);
+
+	HelperThreadLaunchSeams::CloseIocpPort(hPort);
+	CHECK(hPort == NULL);
+
+	HelperThreadLaunchSeams::CloseIocpPort(hPort);
+	CHECK(hPort == NULL);
 }
 
 TEST_CASE("Event helper shutdown only waits when thread launch succeeded")
