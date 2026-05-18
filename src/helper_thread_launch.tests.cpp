@@ -39,4 +39,29 @@ TEST_CASE("Event helper shutdown only waits when thread launch succeeded")
 	CHECK_FALSE(HelperThreadLaunchSeams::ShouldWaitForEventThreadShutdown(false));
 }
 
+TEST_CASE("Helper thread shutdown wait seam classifies bounded wait results")
+{
+	CHECK(HelperThreadLaunchSeams::ClassifyShutdownWait(WAIT_OBJECT_0) == HelperThreadLaunchSeams::ShutdownWaitAction::Finished);
+	CHECK(HelperThreadLaunchSeams::ClassifyShutdownWait(WAIT_TIMEOUT) == HelperThreadLaunchSeams::ShutdownWaitAction::TimedOut);
+	CHECK(HelperThreadLaunchSeams::ClassifyShutdownWait(WAIT_FAILED) == HelperThreadLaunchSeams::ShutdownWaitAction::Failed);
+	CHECK(HelperThreadLaunchSeams::ClassifyShutdownWait(WAIT_ABANDONED) == HelperThreadLaunchSeams::ShutdownWaitAction::Failed);
+}
+
+TEST_CASE("Helper thread flags and states use interlocked accessors")
+{
+	volatile LONG nFlag = 0;
+	volatile LONG nState = 0;
+
+	CHECK_FALSE(HelperThreadLaunchSeams::IsFlagSet(nFlag));
+	HelperThreadLaunchSeams::SetFlag(nFlag);
+	CHECK(HelperThreadLaunchSeams::IsFlagSet(nFlag));
+	HelperThreadLaunchSeams::ClearFlag(nFlag);
+	CHECK_FALSE(HelperThreadLaunchSeams::IsFlagSet(nFlag));
+
+	HelperThreadLaunchSeams::SetState(nState, 2);
+	CHECK(HelperThreadLaunchSeams::GetState(nState) == 2);
+	CHECK(HelperThreadLaunchSeams::ExchangeState(nState, 3) == 2);
+	CHECK(HelperThreadLaunchSeams::GetState(nState) == 3);
+}
+
 TEST_SUITE_END;
