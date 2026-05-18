@@ -37,4 +37,13 @@ TEST_CASE("Add source input seam rejects endpoint truncation risks")
 	CHECK_FALSE(AddSourceInputSeams::ParseSourceClientInput(CString(_T("5.6.7.8")), CString(_T("abc"))).Valid);
 }
 
+TEST_CASE("Add source input seam rejects removed HTTP and link-style source inputs")
+{
+	CHECK_FALSE(AddSourceInputSeams::ParseSourceClientInput(CString(_T("http://example.invalid/file.part")), CString(_T("4662"))).Valid);
+	CHECK_FALSE(AddSourceInputSeams::ParseSourceClientInput(CString(_T("https://example.invalid/file.part")), CString(_T("4662"))).Valid);
+	CHECK_FALSE(AddSourceInputSeams::ParseSourceClientInput(CString(_T("ed2k://|file|name.bin|1|0123456789ABCDEF0123456789ABCDEF|/")), CString(_T("4662"))).Valid);
+	CHECK_FALSE(AddSourceInputSeams::ParseSourceClientInput(CString(_T("5.6.7.8/path")), CString(_T("4662"))).Valid);
+	CHECK_FALSE(AddSourceInputSeams::ParseSourceClientInput(CString(_T("5.6.7.8:4662/path")), CString(_T("4662"))).Valid);
+}
+
 TEST_SUITE_END();

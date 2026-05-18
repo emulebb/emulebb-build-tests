@@ -292,6 +292,7 @@ PROFILE_SUITE_NAMES = {
     "stabilization-stress": (
         "shared-files-ui",
         "search-ui-live",
+        "shared-directories-rest",
         "rest-api",
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
@@ -1197,6 +1198,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 "shared_files_ui": any(spec.name == "shared-files-ui" for spec in selected_specs),
                 "shared_hash_ui": any(spec.name == "shared-hash-ui" for spec in selected_specs),
                 "search_ui_live": any(spec.name == "search-ui-live" for spec in selected_specs),
+                "shared_directories_rest": any(spec.name == "shared-directories-rest" for spec in selected_specs),
             },
             "integrations": {
                 "amutorrent_browser_smoke": any(spec.name == "amutorrent-browser-smoke" for spec in selected_specs),
