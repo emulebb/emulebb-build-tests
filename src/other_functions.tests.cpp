@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <objbase.h>
+#include <shellapi.h>
 #include <windows.h>
 
 TEST_SUITE_BEGIN("parity");
@@ -207,6 +208,17 @@ TEST_CASE("Other-functions seam keeps debug builds from writing autorun registry
 #else
 	CHECK(OtherFunctionsSeams::ShouldWriteAutoStartRegistry());
 #endif
+}
+
+TEST_CASE("Other-functions seam classifies ShellExecute legacy result codes")
+{
+	CHECK_FALSE(OtherFunctionsSeams::DidShellExecuteLaunch(reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(0))));
+	CHECK_FALSE(OtherFunctionsSeams::DidShellExecuteLaunch(reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_FNF))));
+	CHECK_FALSE(OtherFunctionsSeams::DidShellExecuteLaunch(reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(32))));
+	CHECK(OtherFunctionsSeams::DidShellExecuteLaunch(reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(33))));
+
+	CHECK(OtherFunctionsSeams::GetShellExecuteErrorCode(reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_NOASSOC))) == SE_ERR_NOASSOC);
+	CHECK(OtherFunctionsSeams::GetShellExecuteErrorCode(reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(33))) == ERROR_SUCCESS);
 }
 
 TEST_CASE("App registry identity seam keeps eMule BB registry ownership separate")
