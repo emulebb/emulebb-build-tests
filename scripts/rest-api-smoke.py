@@ -133,6 +133,7 @@ psapi.GetProcessMemoryInfo.argtypes = [
 psapi.GetProcessMemoryInfo.restype = ctypes.c_int
 
 DEFAULT_LIVE_DOWNLOAD_TRIGGER_COUNT = 1
+DEFAULT_TORZNAB_LIVE_SEARCH_TIMEOUT_SECONDS = 60.0
 MAX_SAFE_LIVE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 MIN_SAFE_LIVE_DOWNLOAD_SOURCES = 2
 UNSAFE_LIVE_DOWNLOAD_SUFFIXES = (
@@ -4433,7 +4434,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
         base_url=base_url,
         path="/indexer/emulebb/api?t=search&q=linux",
         api_key=api_key,
-        request_timeout_seconds=10.0,
+        request_timeout_seconds=DEFAULT_TORZNAB_LIVE_SEARCH_TIMEOUT_SECONDS,
     )
     assert int(torznab_search["status"]) == 200, compact_http_result(torznab_search)
     assert "<rss" in str(torznab_search.get("body_text") or ""), compact_http_result(torznab_search)
