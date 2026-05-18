@@ -45,4 +45,29 @@ TEST_CASE("async DNS posted result ownership is released only after delivery")
 	CHECK_FALSE(static_cast<bool>(pResult));
 }
 
+TEST_CASE("async DNS launch helper owns work until a resolver thread starts")
+{
+	std::unique_ptr<AsyncDnsResolveSeams::SHostnameResolveWork> pWork = AsyncDnsResolveSeams::MakeHostnameResolveWork(
+		reinterpret_cast<HWND>(static_cast<INT_PTR>(17)),
+		WM_APP + 12,
+		34,
+		56,
+		CStringA("example.test"),
+		SOCK_DGRAM,
+		4662);
+
+	REQUIRE(static_cast<bool>(pWork));
+	CHECK(pWork->hTargetWnd == reinterpret_cast<HWND>(static_cast<INT_PTR>(17)));
+	CHECK(pWork->uCompletionMessage == WM_APP + 12);
+	CHECK(pWork->wParam == 34);
+	CHECK(pWork->uRequestId == 56);
+	CHECK(pWork->strHostAddress == CStringA("example.test"));
+	CHECK(pWork->nSocketType == SOCK_DGRAM);
+	CHECK(pWork->nHostPort == 4662);
+
+	std::unique_ptr<AsyncDnsResolveSeams::SHostnameResolveWork> pEmptyWork;
+	CHECK_FALSE(AsyncDnsResolveSeams::StartHostnameResolveThread(pEmptyWork));
+	CHECK_FALSE(static_cast<bool>(pEmptyWork));
+}
+
 TEST_SUITE_END;
