@@ -142,6 +142,7 @@
     <ClCompile Include="src\app_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppKeyboardShortcutsSeams.h')" />
     <ClCompile Include="src\async_dns_resolve.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncDnsResolveSeams.h')" />
     <ClCompile Include="src\async_socket_ex.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AsyncSocketExSeams.h')" />
+    <ClCompile Include="src\atomic_file_save.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AtomicFileSaveSeams.h')" />
     <ClCompile Include="src\atomic_state.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\AppStateSeams.h')" />
     <ClCompile Include="src\base_client_friend_buddy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h')" />
     <ClCompile Include="src\kad_base.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h')" />
@@ -286,6 +287,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\AddFriendInputSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AddFriendInputSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\AddSourceInputSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AddSourceInputSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\AppCommandLineSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AppCommandLineSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\AtomicFileSaveSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AtomicFileSaveSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\AsyncDatagramSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BackgroundRefreshSeams.h" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h" Condition="Exists('$(AppRoot)\srchybrid\BaseClientFriendBuddySeams.h')" />
