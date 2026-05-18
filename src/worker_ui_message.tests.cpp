@@ -70,6 +70,22 @@ TEST_CASE("Worker/UI seam posts only while the target window is still alive and 
 	CHECK_FALSE(TryPostWorkerUiMessage(NULL, WM_APP + 43));
 }
 
+TEST_CASE("Worker/UI seam classifies direct UI message delivery")
+{
+	CHECK(ClassifyWorkerUiMessageDelivery(true, true) == EWorkerUiMessageDelivery::Delivered);
+	CHECK(ClassifyWorkerUiMessageDelivery(true, false) == EWorkerUiMessageDelivery::Failed);
+	CHECK(ClassifyWorkerUiMessageDelivery(false, true) == EWorkerUiMessageDelivery::InvalidWindow);
+	CHECK(ClassifyWorkerUiMessageDelivery(false, false) == EWorkerUiMessageDelivery::InvalidWindow);
+
+	const SWorkerUiMessageDelivery posted = PostWorkerUiMessage(NULL, WM_APP + 46);
+	CHECK(posted.eDelivery == EWorkerUiMessageDelivery::InvalidWindow);
+	CHECK(posted.dwLastError == ERROR_INVALID_WINDOW_HANDLE);
+
+	const SWorkerUiMessageDelivery sent = SendWorkerUiMessage(NULL, WM_APP + 47);
+	CHECK(sent.eDelivery == EWorkerUiMessageDelivery::InvalidWindow);
+	CHECK(sent.dwLastError == ERROR_INVALID_WINDOW_HANDLE);
+}
+
 TEST_CASE("Worker/UI seam transfers queued payload ownership to the UI thread")
 {
 	CScopedMessageOnlyWindow window;
