@@ -2,6 +2,38 @@
 
 #include "HelperThreadLaunchSeams.h"
 
+namespace
+{
+struct FakeSuspendedThread
+{
+	BOOL m_bAutoDelete = TRUE;
+	DWORD dwResumeResult = 0;
+
+	DWORD ResumeThread()
+	{
+		return dwResumeResult;
+	}
+};
+
+struct DeletableSuspendedThread
+{
+	BOOL m_bAutoDelete = TRUE;
+	DWORD dwResumeResult = 0;
+	bool *pbDeleted = nullptr;
+
+	DWORD ResumeThread()
+	{
+		return dwResumeResult;
+	}
+
+	~DeletableSuspendedThread()
+	{
+		if (pbDeleted != nullptr)
+			*pbDeleted = true;
+	}
+};
+}
+
 TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("Helper thread launch seam classifies AfxBeginThread results")
@@ -10,6 +42,57 @@ TEST_CASE("Helper thread launch seam classifies AfxBeginThread results")
 
 	CHECK(HelperThreadLaunchSeams::DidStartThread(&fakeThread));
 	CHECK_FALSE(HelperThreadLaunchSeams::DidStartThread(nullptr));
+}
+
+TEST_CASE("Helper thread launch seam classifies suspended resume results")
+{
+	int fakeThread = 0;
+
+	CHECK(HelperThreadLaunchSeams::DidResumeThread(0));
+	CHECK(HelperThreadLaunchSeams::DidResumeThread(2));
+	CHECK_FALSE(HelperThreadLaunchSeams::DidResumeThread(static_cast<DWORD>(-1)));
+
+	CHECK(HelperThreadLaunchSeams::ClassifySuspendedThreadResume(nullptr, 0) == HelperThreadLaunchSeams::SuspendedThreadResumeAction::LaunchFailed);
+	CHECK(HelperThreadLaunchSeams::ClassifySuspendedThreadResume(&fakeThread, 0) == HelperThreadLaunchSeams::SuspendedThreadResumeAction::Resumed);
+	CHECK(HelperThreadLaunchSeams::ClassifySuspendedThreadResume(&fakeThread, static_cast<DWORD>(-1)) == HelperThreadLaunchSeams::SuspendedThreadResumeAction::ResumeFailed);
+}
+
+TEST_CASE("Helper thread launch seam resumes auto-delete workers without taking ownership")
+{
+	FakeSuspendedThread thread;
+	DWORD dwLastError = ERROR_SUCCESS;
+
+	CHECK(HelperThreadLaunchSeams::ResumeAutoDeleteSuspendedThread(&thread, dwLastError));
+	CHECK(dwLastError == ERROR_SUCCESS);
+	CHECK(thread.m_bAutoDelete == TRUE);
+
+	thread.dwResumeResult = static_cast<DWORD>(-1);
+	CHECK_FALSE(HelperThreadLaunchSeams::ResumeAutoDeleteSuspendedThread(&thread, dwLastError));
+	CHECK(thread.m_bAutoDelete == TRUE);
+}
+
+TEST_CASE("Helper thread launch seam owns suspended workers and releases resume failures")
+{
+	bool bDeleted = false;
+	DeletableSuspendedThread *pThread = new DeletableSuspendedThread;
+	pThread->pbDeleted = &bDeleted;
+	DeletableSuspendedThread *pOwnedThread = nullptr;
+	DWORD dwLastError = ERROR_SUCCESS;
+
+	CHECK(HelperThreadLaunchSeams::OwnAndResumeSuspendedThread(pOwnedThread, pThread, dwLastError));
+	REQUIRE(pOwnedThread == pThread);
+	CHECK(pOwnedThread->m_bAutoDelete == FALSE);
+	CHECK_FALSE(bDeleted);
+	delete pOwnedThread;
+
+	bDeleted = false;
+	pThread = new DeletableSuspendedThread;
+	pThread->pbDeleted = &bDeleted;
+	pThread->dwResumeResult = static_cast<DWORD>(-1);
+	pOwnedThread = nullptr;
+	CHECK_FALSE(HelperThreadLaunchSeams::OwnAndResumeSuspendedThread(pOwnedThread, pThread, dwLastError));
+	CHECK(pOwnedThread == nullptr);
+	CHECK(bDeleted);
 }
 
 TEST_CASE("IOCP helper shutdown skips waits when launch failed")
