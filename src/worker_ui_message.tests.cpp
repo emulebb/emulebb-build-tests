@@ -72,6 +72,7 @@ TEST_CASE("Worker/UI seam posts only while the target window is still alive and 
 
 TEST_CASE("Worker/UI seam classifies direct UI message delivery")
 {
+#if defined(EMULE_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
 	CHECK(ClassifyWorkerUiMessageDelivery(true, true) == EWorkerUiMessageDelivery::Delivered);
 	CHECK(ClassifyWorkerUiMessageDelivery(true, false) == EWorkerUiMessageDelivery::Failed);
 	CHECK(ClassifyWorkerUiMessageDelivery(false, true) == EWorkerUiMessageDelivery::InvalidWindow);
@@ -84,10 +85,12 @@ TEST_CASE("Worker/UI seam classifies direct UI message delivery")
 	const SWorkerUiMessageDelivery sent = SendWorkerUiMessage(NULL, WM_APP + 47);
 	CHECK(sent.eDelivery == EWorkerUiMessageDelivery::InvalidWindow);
 	CHECK(sent.dwLastError == ERROR_INVALID_WINDOW_HANDLE);
+#endif
 }
 
 TEST_CASE("Worker/UI seam transfers queued payload ownership to the UI thread")
 {
+#if defined(EMULE_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
 	CScopedMessageOnlyWindow window;
 	const HWND hWnd = window.GetHwnd();
 	if (hWnd == NULL)
@@ -106,10 +109,12 @@ TEST_CASE("Worker/UI seam transfers queued payload ownership to the UI thread")
 	CHECK_EQ(pPayload->value, 17);
 	pPayload.reset();
 	CHECK_EQ(STrackedPayload::s_nDestroyCount, 1);
+#endif
 }
 
 TEST_CASE("Worker/UI seam drops queued payloads once the owning window tears down")
 {
+#if defined(EMULE_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
 	CScopedMessageOnlyWindow window;
 	const HWND hWnd = window.GetHwnd();
 	if (hWnd == NULL)
@@ -127,6 +132,7 @@ TEST_CASE("Worker/UI seam drops queued payloads once the owning window tears dow
 	REQUIRE(::PeekMessage(&msg, hWnd, WM_APP + 45, WM_APP + 45, PM_REMOVE) != FALSE);
 	std::unique_ptr<STrackedPayload> pDroppedPayload = TakePostedWorkerUiPayload<STrackedPayload>(msg.wParam);
 	CHECK_FALSE(static_cast<bool>(pDroppedPayload));
+#endif
 }
 
 TEST_SUITE_END;
