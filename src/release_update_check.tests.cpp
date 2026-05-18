@@ -1,6 +1,7 @@
 #include "../third_party/doctest/doctest.h"
 
 #include "ReleaseUpdateCheckSeams.h"
+#include "VersionCheckLaunchSeams.h"
 
 using ReleaseUpdateCheckSeams::BuildRequiredAssetName;
 using ReleaseUpdateCheckSeams::CompareReleaseVersions;
@@ -8,6 +9,10 @@ using ReleaseUpdateCheckSeams::EReleaseEvaluationStatus;
 using ReleaseUpdateCheckSeams::EvaluateLatestReleaseJson;
 using ReleaseUpdateCheckSeams::SModReleaseVersion;
 using ReleaseUpdateCheckSeams::TryParseReleaseTag;
+using VersionCheckLaunchSeams::ClearQueued;
+using VersionCheckLaunchSeams::IsQueued;
+using VersionCheckLaunchSeams::PostCompletion;
+using VersionCheckLaunchSeams::TryMarkQueued;
 
 namespace
 {
@@ -79,6 +84,35 @@ TEST_CASE("eMule BB release evaluation ignores malformed and prerelease payloads
 
 	const auto parseFailed = EvaluateLatestReleaseJson("{not-json", local, "x64");
 	CHECK_EQ(parseFailed.eStatus, EReleaseEvaluationStatus::ParseFailed);
+}
+
+TEST_SUITE_END;
+
+TEST_SUITE_BEGIN("version_check_launch");
+
+TEST_CASE("version check launch gate allows only one in-flight worker")
+{
+	volatile LONG lQueued = 0;
+
+	CHECK_FALSE(IsQueued(lQueued));
+	CHECK(TryMarkQueued(lQueued));
+	CHECK(IsQueued(lQueued));
+	CHECK_FALSE(TryMarkQueued(lQueued));
+
+	ClearQueued(lQueued);
+	CHECK_FALSE(IsQueued(lQueued));
+	CHECK(TryMarkQueued(lQueued));
+}
+
+TEST_CASE("version check completion post failure releases launch gate")
+{
+	volatile LONG lQueued = 0;
+	REQUIRE(TryMarkQueued(lQueued));
+
+	const auto result = PostCompletion(NULL, WM_APP + 1, 0, &lQueued);
+
+	CHECK_FALSE(result.bDelivered);
+	CHECK_FALSE(IsQueued(lQueued));
 }
 
 TEST_SUITE_END;
