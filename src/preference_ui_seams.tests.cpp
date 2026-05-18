@@ -1,5 +1,6 @@
 #include "../third_party/doctest/doctest.h"
 
+#include "IPv4AddressSeams.h"
 #include "PreferenceUiSeams.h"
 
 #if __has_include("PreferenceIniMap.h")
@@ -13,6 +14,26 @@
 #include <vector>
 
 TEST_SUITE_BEGIN("parity");
+
+TEST_CASE("IPv4 address seam centralizes dotted address and optional port parsing")
+{
+	uint32_t address = 0;
+	uint16_t port = 0;
+	bool hasPort = false;
+
+	CHECK(IPv4AddressSeams::TryParseIPv4Address(CString(_T(" 203.0.113.7 ")), address));
+	CHECK(address == 0x077100cbu);
+	CHECK(IPv4AddressSeams::FormatIPv4Address(address) == CString(_T("203.0.113.7")));
+
+	CHECK(IPv4AddressSeams::TryParseIPv4AddressAndOptionalPort(CString(_T("10.54.218.144:65535")), address, port, hasPort));
+	CHECK(address == 0x90da360au);
+	CHECK(hasPort);
+	CHECK(port == 65535);
+
+	CHECK_FALSE(IPv4AddressSeams::TryParseIPv4Address(CString(_T("192.168.1.999")), address));
+	CHECK_FALSE(IPv4AddressSeams::TryParseIPv4AddressAndOptionalPort(CString(_T("10.0.0.5:0")), address, port, hasPort));
+	CHECK_FALSE(IPv4AddressSeams::TryParseIPv4AddressAndOptionalPort(CString(_T("10.0.0.5:65536")), address, port, hasPort));
+}
 
 TEST_CASE("Preference UI seam validates WebServer allowed-IP lists")
 {
