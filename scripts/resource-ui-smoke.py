@@ -232,7 +232,7 @@ def read_top_menu_labels(main_hwnd: int) -> list[str]:
 
 
 def send_view_command(main_hwnd: int, command_id: int) -> None:
-    win32gui.SendMessage(main_hwnd, WM_COMMAND, command_id, 0)
+    win32gui.PostMessage(main_hwnd, WM_COMMAND, command_id, 0)
     time.sleep(0.25)
 
 
@@ -250,6 +250,7 @@ def smoke_one_language(
 ) -> dict[str, object]:
     dll_stem = str(language["dll_stem"])
     language_dir = output_root / dll_stem
+    language_dir.mkdir(parents=True, exist_ok=True)
     profile = live_common.prepare_scenario_profile(
         seed_config_dir=seed_config_dir,
         artifacts_dir=output_root.parent,
@@ -305,11 +306,14 @@ def smoke_one_language(
         if len(tree_texts) < MIN_PREFERENCE_TREE_ITEMS:
             raise AssertionError(f"Expected at least {MIN_PREFERENCE_TREE_ITEMS} Preferences tree entries, got {tree_texts!r}.")
         if capture_screenshots:
-            result["preferences_screenshot"] = preference_ui.capture_dialog_screenshot(
-                app,
-                dialog_hwnd,
-                language_dir / "screenshots" / "preferences.png",
-            )
+            try:
+                result["preferences_screenshot"] = preference_ui.capture_dialog_screenshot(
+                    app,
+                    dialog_hwnd,
+                    language_dir / "screenshots" / "preferences.png",
+                )
+            except Exception as capture_exc:
+                result["preferences_screenshot_error"] = repr(capture_exc)
         preference_ui.click_button(preference_ui.find_control(dialog_hwnd, IDCANCEL, "Button"))
         live_common.wait_for(
             lambda: not win32gui.IsWindow(dialog_hwnd),

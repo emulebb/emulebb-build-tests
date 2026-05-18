@@ -42,6 +42,7 @@ from emule_test_harness.live_profiles import (
     apply_webserver_profile,
     build_profile_base,
     prepare_profile_base,
+    prepare_scenario_profile,
     win_path,
     write_preferences_dat,
     write_shared_directories_file,
