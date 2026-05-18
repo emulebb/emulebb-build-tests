@@ -220,7 +220,6 @@
       "appPathGlobs": [
         "srchybrid/Server*",
         "srchybrid/IPFilter*",
-        "srchybrid/HttpDownloadDlg*",
         "srchybrid/URLClient*"
       ],
       "coverage": [
