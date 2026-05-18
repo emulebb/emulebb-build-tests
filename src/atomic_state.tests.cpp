@@ -3,6 +3,7 @@
 #include "../include/TestSupport.h"
 
 #include <atomic>
+#include <memory>
 #include <string>
 
 #include "AppStateSeams.h"
@@ -40,6 +41,17 @@ TEST_CASE("Display refresh helper respects force and the randomized throttle win
 	CHECK_FALSE(ShouldRunDisplayRefresh(false, 249u, 100u, 100u, 50u));
 	CHECK(ShouldRunDisplayRefresh(false, 250u, 100u, 100u, 50u));
 	CHECK(ShouldRunDisplayRefresh(true, 101u, 100u, 100u, 50u));
+}
+
+TEST_CASE("Display refresh post helper consumes payloads when delivery is unavailable")
+{
+	std::unique_ptr<CPartFileDisplayUpdateRequest> pRequest(new CPartFileDisplayUpdateRequest{});
+	CHECK_FALSE(PostOwnedDisplayRefreshRequest(NULL, WM_APP + 5, pRequest));
+	CHECK_FALSE(static_cast<bool>(pRequest));
+
+	std::unique_ptr<CPartFileDisplayUpdateRequest> pEmptyRequest;
+	CHECK_FALSE(PostOwnedDisplayRefreshRequest(reinterpret_cast<HWND>(static_cast<INT_PTR>(17)), WM_APP + 6, pEmptyRequest));
+	CHECK_FALSE(static_cast<bool>(pEmptyRequest));
 }
 
 TEST_CASE("Display refresh mask exchange drains the queued bits and clears the pending state")
