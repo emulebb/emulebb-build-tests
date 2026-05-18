@@ -10,6 +10,39 @@
 
 TEST_SUITE_BEGIN("parity");
 
+TEST_CASE("Part-file completion seam classifies worker launch results")
+{
+	int fakeThread = 0;
+
+	CHECK(PartFileCompletionSeams::DidStartCompletionThread(&fakeThread));
+	CHECK_FALSE(PartFileCompletionSeams::DidStartCompletionThread(nullptr));
+}
+
+TEST_CASE("Part-file completion seam classifies worker result delivery")
+{
+	CHECK(PartFileCompletionSeams::ClassifyWorkerCompletionPostResult(false, true)
+		== PartFileCompletionSeams::EWorkerCompletionDelivery::Delivered);
+	CHECK(PartFileCompletionSeams::ClassifyWorkerCompletionPostResult(false, false)
+		== PartFileCompletionSeams::EWorkerCompletionDelivery::Failed);
+	CHECK(PartFileCompletionSeams::ClassifyWorkerCompletionPostResult(true, false)
+		== PartFileCompletionSeams::EWorkerCompletionDelivery::SkippedAppClosing);
+	CHECK(PartFileCompletionSeams::ClassifyWorkerCompletionPostResult(true, true)
+		== PartFileCompletionSeams::EWorkerCompletionDelivery::SkippedAppClosing);
+}
+
+TEST_CASE("Part-file completion seam skips posting during shutdown and rejects missing target windows")
+{
+	const PartFileCompletionSeams::SWorkerCompletionPostResult closingResult =
+		PartFileCompletionSeams::PostWorkerCompletion(true, NULL, WM_APP, 0, 0);
+	CHECK(closingResult.eDelivery == PartFileCompletionSeams::EWorkerCompletionDelivery::SkippedAppClosing);
+	CHECK(closingResult.dwLastError == ERROR_SUCCESS);
+
+	const PartFileCompletionSeams::SWorkerCompletionPostResult missingTargetResult =
+		PartFileCompletionSeams::PostWorkerCompletion(false, NULL, WM_APP, 0, 0);
+	CHECK(missingTargetResult.eDelivery == PartFileCompletionSeams::EWorkerCompletionDelivery::Failed);
+	CHECK(missingTargetResult.dwLastError == ERROR_INVALID_WINDOW_HANDLE);
+}
+
 TEST_CASE("Part-file completion seam only warns about disabled long-path support for plausible move failures")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
