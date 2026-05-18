@@ -33,6 +33,10 @@ TEST_CASE("IPv4 address seam centralizes dotted address and optional port parsin
 	CHECK_FALSE(IPv4AddressSeams::TryParseIPv4Address(CString(_T("192.168.1.999")), address));
 	CHECK_FALSE(IPv4AddressSeams::TryParseIPv4AddressAndOptionalPort(CString(_T("10.0.0.5:0")), address, port, hasPort));
 	CHECK_FALSE(IPv4AddressSeams::TryParseIPv4AddressAndOptionalPort(CString(_T("10.0.0.5:65536")), address, port, hasPort));
+
+	CHECK(IPv4AddressSeams::IsDottedIPv4Literal(CString(_T("255.255.255.255"))));
+	CHECK_FALSE(IPv4AddressSeams::IsDottedIPv4Literal(CString(_T("server.example.test"))));
+	CHECK_FALSE(IPv4AddressSeams::IsDottedIPv4Literal(CString(_T("127.1"))));
 }
 
 TEST_CASE("Preference UI seam validates WebServer allowed-IP lists")
