@@ -1,18 +1,27 @@
 #include "../third_party/doctest/doctest.h"
 
 #include "DownloadQueueDiskSpaceSeams.h"
+#include "LongPathSeams.h"
 
 #include <iterator>
 #include <string>
+
+#include <atlstr.h>
 
 namespace
 {
 	using DownloadQueueDiskSpaceSeams::FileDiskSpaceState;
 	using DownloadQueueDiskSpaceSeams::FileDiskSpaceStatus;
 	using DownloadQueueDiskSpaceSeams::ProtectedVolumeSpaceState;
+	using DownloadQueueDiskSpaceSeams::ProtectedVolumeAvailability;
 	using DownloadQueueDiskSpaceSeams::RequiredFreeSpacePathCacheKey;
+	using DownloadQueueDiskSpaceSeams::TempDirPlacementDecision;
+	using DownloadQueueDiskSpaceSeams::TempDirVolumeCandidate;
+	using DownloadQueueDiskSpaceSeams::VolumeIdentity;
 	using DownloadQueueDiskSpaceSeams::VolumeKey;
 	using DownloadQueueDiskSpaceSeams::VolumeResumeBudget;
+
+	constexpr uint64_t kGiB = 1024ull * 1024ull * 1024ull;
 
 	VolumeKey MakeDriveVolumeKey(const int iDriveNumber)
 	{
@@ -41,6 +50,36 @@ namespace
 	RequiredFreeSpacePathCacheKey NormalizePathCacheKey(LPCTSTR pszPath)
 	{
 		return DownloadQueueDiskSpaceSeams::NormalizeRequiredFreeSpacePathCacheKey(RequiredFreeSpacePathCacheKey(pszPath));
+	}
+
+	ProtectedVolumeAvailability MakeVolumeAvailability(LPCTSTR pszVolumeId, const int64_t nAvailableBytes)
+	{
+		ProtectedVolumeAvailability availability = { VolumeIdentity(pszVolumeId), nAvailableBytes };
+		return availability;
+	}
+
+	TempDirVolumeCandidate MakeTempCandidate(LPCTSTR pszVolumeId, const bool bFatVolume = false)
+	{
+		TempDirVolumeCandidate candidate = { VolumeIdentity(pszVolumeId), bFatVolume };
+		return candidate;
+	}
+
+	TempDirPlacementDecision SelectTempDir(
+		const TempDirVolumeCandidate *pCandidates,
+		const std::size_t nCandidateCount,
+		const ProtectedVolumeAvailability *pVolumes,
+		const std::size_t nVolumeCount,
+		const VolumeIdentity &rIncomingVolumeId,
+		const uint64_t nFileSize)
+	{
+		return DownloadQueueDiskSpaceSeams::SelectTempDirForProtectedVolumeSnapshot(
+			pCandidates,
+			nCandidateCount,
+			pVolumes,
+			nVolumeCount,
+			rIncomingVolumeId,
+			nFileSize,
+			0x00000000FFC00000ull);
 	}
 }
 
@@ -128,6 +167,82 @@ TEST_CASE("Queue disk-space seam normalizes required-space cache keys")
 	CHECK(NormalizePathCacheKey(_T("D:\\")) == RequiredFreeSpacePathCacheKey(_T("d:\\")));
 }
 
+TEST_CASE("Queue disk-space production flow treats mounted temp and parent incoming as distinct volumes")
+{
+	const VolumeIdentity parentVolume(_T("\\\\?\\Volume{parent-drive}\\"));
+	const VolumeIdentity mountedVolume(_T("\\\\?\\Volume{mounted-temp}\\"));
+	const TempDirVolumeCandidate tempCandidates[] = {
+		MakeTempCandidate(mountedVolume.c_str())
+	};
+	ProtectedVolumeAvailability volumes[] = {
+		MakeVolumeAvailability(parentVolume.c_str(), static_cast<int64_t>(8u * kGiB)),
+		MakeVolumeAvailability(mountedVolume.c_str(), static_cast<int64_t>(10u * kGiB))
+	};
+
+	const TempDirPlacementDecision enoughIncoming = SelectTempDir(
+		tempCandidates,
+		std::size(tempCandidates),
+		volumes,
+		std::size(volumes),
+		parentVolume,
+		5u * kGiB);
+	CHECK(enoughIncoming.HasSelection);
+	CHECK_EQ(enoughIncoming.CandidateIndex, 0u);
+
+	volumes[0].AvailableBytes = static_cast<int64_t>(4u * kGiB);
+	const TempDirPlacementDecision lowIncoming = SelectTempDir(
+		tempCandidates,
+		std::size(tempCandidates),
+		volumes,
+		std::size(volumes),
+		parentVolume,
+		5u * kGiB);
+	CHECK_FALSE(lowIncoming.HasSelection);
+}
+
+TEST_CASE("Queue disk-space production flow accepts same mounted temp and incoming volume without double-reserving")
+{
+	const VolumeIdentity mountedVolume(_T("\\\\?\\Volume{mounted-shared}\\"));
+	const TempDirVolumeCandidate tempCandidates[] = {
+		MakeTempCandidate(mountedVolume.c_str())
+	};
+	const ProtectedVolumeAvailability volumes[] = {
+		MakeVolumeAvailability(mountedVolume.c_str(), static_cast<int64_t>(6u * kGiB))
+	};
+
+	const TempDirPlacementDecision decision = SelectTempDir(
+		tempCandidates,
+		std::size(tempCandidates),
+		volumes,
+		std::size(volumes),
+		mountedVolume,
+		5u * kGiB);
+	CHECK(decision.HasSelection);
+	CHECK_EQ(decision.CandidateIndex, 0u);
+}
+
+TEST_CASE("Queue disk-space production flow fails closed for unresolved mounted temp candidates")
+{
+	const VolumeIdentity parentVolume(_T("\\\\?\\Volume{parent-drive}\\"));
+	const VolumeIdentity unresolvedTemp(_T("#unresolved-volume:c:\\mounts\\missing-temp"));
+	const TempDirVolumeCandidate tempCandidates[] = {
+		MakeTempCandidate(unresolvedTemp.c_str())
+	};
+	const ProtectedVolumeAvailability volumes[] = {
+		MakeVolumeAvailability(parentVolume.c_str(), static_cast<int64_t>(8u * kGiB)),
+		MakeVolumeAvailability(unresolvedTemp.c_str(), 0)
+	};
+
+	const TempDirPlacementDecision decision = SelectTempDir(
+		tempCandidates,
+		std::size(tempCandidates),
+		volumes,
+		std::size(volumes),
+		parentVolume,
+		1u * kGiB);
+	CHECK_FALSE(decision.HasSelection);
+}
+
 TEST_CASE("Queue disk-space seam pauses active normal files only when they still need growth below the floor")
 {
 	const VolumeKey volumeKey = MakeDriveVolumeKey(2);
@@ -174,6 +289,50 @@ TEST_CASE("Queue disk-space seam never auto-resumes user-paused files and treats
 		pausedFile, budget, PartFilePersistenceSeams::kMinDownloadFreeBytes));
 	CHECK_FALSE(DownloadQueueDiskSpaceSeams::ShouldResumeForDiskSpace(
 		insufficientFile, budget, PartFilePersistenceSeams::kMinDownloadFreeBytes));
+}
+
+TEST_CASE("Queue disk-space production flow follows a real mounted-folder volume when present")
+{
+	const CString strMountedRoot(_T("C:\\M\\H20T00\\"));
+	if (::GetFileAttributes(strMountedRoot) == INVALID_FILE_ATTRIBUTES)
+		return;
+
+	LongPathSeams::ResolvedVolumeContext mountedContext = {};
+	LongPathSeams::ResolvedVolumeContext parentContext = {};
+	DWORD dwError = ERROR_SUCCESS;
+	REQUIRE(LongPathSeams::TryResolveContainingVolumeContext(strMountedRoot + _T("probe"), mountedContext, &dwError));
+	REQUIRE(LongPathSeams::TryResolveContainingVolumeContext(_T("C:\\"), parentContext, &dwError));
+	REQUIRE(mountedContext.strVolumeKey != parentContext.strVolumeKey);
+
+	const VolumeIdentity mountedVolume(mountedContext.strVolumeKey.c_str());
+	const VolumeIdentity parentVolume(parentContext.strVolumeKey.c_str());
+	const TempDirVolumeCandidate tempCandidates[] = {
+		MakeTempCandidate(mountedVolume.c_str())
+	};
+	ProtectedVolumeAvailability volumes[] = {
+		MakeVolumeAvailability(parentVolume.c_str(), static_cast<int64_t>(6u * kGiB)),
+		MakeVolumeAvailability(mountedVolume.c_str(), static_cast<int64_t>(10u * kGiB))
+	};
+
+	const TempDirPlacementDecision enoughParentIncoming = SelectTempDir(
+		tempCandidates,
+		std::size(tempCandidates),
+		volumes,
+		std::size(volumes),
+		parentVolume,
+		5u * kGiB);
+	CHECK(enoughParentIncoming.HasSelection);
+	CHECK_EQ(enoughParentIncoming.CandidateIndex, 0u);
+
+	volumes[0].AvailableBytes = static_cast<int64_t>(4u * kGiB);
+	const TempDirPlacementDecision lowParentIncoming = SelectTempDir(
+		tempCandidates,
+		std::size(tempCandidates),
+		volumes,
+		std::size(volumes),
+		parentVolume,
+		5u * kGiB);
+	CHECK_FALSE(lowParentIncoming.HasSelection);
 }
 
 TEST_SUITE_END;
