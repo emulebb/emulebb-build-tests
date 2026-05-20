@@ -133,6 +133,7 @@ class SuiteSpec:
     is_rest_cold_start_dump_stress: bool = False
     is_search_ui_live: bool = False
     is_resource_ui_smoke: bool = False
+    accepts_mounted_shared_root: bool = False
     default_enabled: bool = True
 
 
@@ -193,6 +194,7 @@ SUITE_SPECS = (
         name="shared-directories-rest",
         script_name="shared-directories-rest-e2e.py",
         category="rest",
+        accepts_mounted_shared_root=True,
     ),
     SuiteSpec(
         name="rest-api",
@@ -536,6 +538,7 @@ def build_suite_command(
     rest_cold_start_dump_stress_cpu_profile_symbols_required: bool = True,
     rest_cold_start_dump_stress_skip_dumps: bool = False,
     resource_ui_language_timeout_seconds: float = DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS,
+    mounted_shared_root: Path | None = None,
     fail_fast: bool = False,
 ) -> list[str]:
     """Builds one child suite command line."""
@@ -562,6 +565,8 @@ def build_suite_command(
         command.extend(["--startup-trace-mode", startup_trace_mode])
     if spec.accepts_shared_root and shared_root is not None:
         command.extend(["--shared-root", str(shared_root.resolve())])
+    if spec.accepts_mounted_shared_root and mounted_shared_root is not None:
+        command.extend(["--mounted-shared-root", str(mounted_shared_root.resolve())])
     if spec.name == "preference-ui" and preference_ui_directories_tree_stress:
         command.append("--directories-tree-stress")
         if shared_root is not None:
@@ -846,6 +851,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--startup-trace-mode", choices=["required", "optional"], default="required")
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
+    parser.add_argument(
+        "--mounted-shared-root",
+        help="Optional dedicated mounted-folder path passed to the shared-directories REST E2E suite.",
+    )
     parser.add_argument("--preference-ui-directories-tree-stress", action="store_true")
     parser.add_argument("--shared-files-ui-scenario", action="append", choices=SHARED_FILES_UI_SCENARIOS)
     parser.add_argument("--shared-files-tree-stress-churn-cycles", type=int)
@@ -1120,6 +1129,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     shared_root = Path(args.shared_root).resolve() if args.shared_root else None
     radarr_movie_root = args.radarr_movie_root.strip() if args.radarr_movie_root else None
     sonarr_series_root = args.sonarr_series_root.strip() if args.sonarr_series_root else None
+    mounted_shared_root = Path(args.mounted_shared_root) if args.mounted_shared_root else None
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     resolved_shared_files_ui_scenarios = list(
         shared_files_ui_scenarios
@@ -1221,6 +1231,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "radarr_movie_root_present": bool(args.radarr_movie_root),
         "sonarr_series_root_configured": bool(args.sonarr_series_root),
         "sonarr_series_root_present": bool(args.sonarr_series_root),
+        "mounted_shared_root_configured": mounted_shared_root is not None,
+        "mounted_shared_root": str(mounted_shared_root) if mounted_shared_root is not None else None,
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
             "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
@@ -1338,6 +1350,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_cpu_profile_symbols_required=args.rest_cold_start_dump_stress_cpu_profile_symbols_required,
             rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
             resource_ui_language_timeout_seconds=args.resource_ui_language_timeout_seconds,
+            mounted_shared_root=mounted_shared_root,
             fail_fast=args.fail_fast,
         )
         started = time.monotonic()

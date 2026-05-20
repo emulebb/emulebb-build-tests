@@ -45,6 +45,32 @@ def test_read_persisted_path_list_handles_utf16_and_missing(tmp_path: Path) -> N
     assert module.read_persisted_path_list(tmp_path / "missing.dat") == []
 
 
+def test_create_mounted_root_fixture_stays_below_operator_root(tmp_path: Path) -> None:
+    module = load_shared_directories_rest_module()
+
+    mounted_root = tmp_path / "mounted"
+    mounted_root.mkdir()
+    fixture = module.create_mounted_root_fixture(mounted_root)
+
+    assert fixture["parent"] == tmp_path
+    assert fixture["mounted_root"] == mounted_root
+    assert fixture["root"].parent == mounted_root
+    assert "mounted root fixture" in (fixture["root"] / "mounted_root_file.txt").read_text(encoding="utf-8")
+
+
+def test_remove_tree_long_path_removes_fixture_tree(tmp_path: Path) -> None:
+    module = load_shared_directories_rest_module()
+
+    root = tmp_path / "fixture"
+    child = root / "child"
+    child.mkdir(parents=True)
+    (child / "file.txt").write_text("content", encoding="utf-8")
+
+    module.remove_tree_long_path(root)
+
+    assert not root.exists()
+
+
 def test_assert_equivalent_path_sets_handles_case_slashes_and_trailing_separators() -> None:
     module = load_shared_directories_rest_module()
 

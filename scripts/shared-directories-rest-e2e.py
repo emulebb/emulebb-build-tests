@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shutil
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -170,6 +172,14 @@ def write_text_exact_long_path(path: Path, text: str) -> None:
 
     with open(to_windows_exact_long_path(path), "w", encoding="utf-8") as handle:
         handle.write(text)
+
+
+def remove_tree_long_path(path: Path) -> None:
+    """Removes a mounted-root fixture tree through extended-length path spelling."""
+
+    prepared = to_windows_long_path(path)
+    if os.path.isdir(prepared):
+        shutil.rmtree(prepared)
 
 
 def file_exists_long_path(path: Path) -> bool:
@@ -423,6 +433,20 @@ def create_fixture_tree(artifacts_dir: Path) -> dict[str, Path]:
     }
 
 
+def create_mounted_root_fixture(mounted_shared_root: Path) -> dict[str, Path]:
+    """Creates a short-lived fixture below an operator-provided mounted folder."""
+
+    root = mounted_shared_root / f"emulebb-mounted-shared-{uuid.uuid4().hex}"
+    mkdir_long_path(root)
+    write_text_long_path(root / "mounted_root_file.txt", "mounted root fixture\r\n")
+    return {
+        "parent": mounted_shared_root.parent,
+        "mounted_root": mounted_shared_root,
+        "root": root,
+        "child": root / "child",
+    }
+
+
 def set_phase(report: dict[str, object], phase: str) -> str:
     """Records the current execution phase in the live report."""
 
@@ -534,6 +558,15 @@ def main() -> int:
     parser.add_argument("--api-key", default="shared-directories-rest-test-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
+    parser.add_argument(
+        "--mounted-shared-root",
+        default=os.environ.get("EMULE_MOUNTED_SHARED_ROOT"),
+        help=(
+            "Optional existing dedicated Windows mounted-folder path. When set, "
+            "the suite recursively shares its parent and verifies monitor/persistence "
+            "behavior across the mounted-folder boundary."
+        ),
+    )
     args = parser.parse_args()
 
     paths = harness_cli_common.prepare_run_paths(
@@ -553,6 +586,12 @@ def main() -> int:
     port = choose_listen_port()
     base_url = f"http://127.0.0.1:{port}"
     fixtures = create_fixture_tree(artifacts_dir)
+    mounted_shared_root = Path(args.mounted_shared_root).resolve() if args.mounted_shared_root else None
+    mounted_fixture: dict[str, Path] | None = None
+    if mounted_shared_root is not None:
+        if not mounted_shared_root.is_dir():
+            raise AssertionError(f"Mounted shared root does not exist or is not a directory: {mounted_shared_root}")
+        mounted_fixture = create_mounted_root_fixture(mounted_shared_root)
     profile = prepare_profile_base(
         seed_config_dir,
         artifacts_dir,
@@ -604,6 +643,11 @@ def main() -> int:
             "path": exact_names_path,
             "directory_leaf": fixtures["exact_names"].name,
             "file_name": exact_file_name,
+        },
+        "mounted_shared_root": {
+            "enabled": mounted_fixture is not None,
+            "configured_path": str(mounted_shared_root) if mounted_shared_root is not None else None,
+            "fixtures": {key: str(value) for key, value in mounted_fixture.items()} if mounted_fixture is not None else {},
         },
         "checks": {},
         "cleanup": {},
@@ -867,6 +911,95 @@ def main() -> int:
             "replacement shared files after native REST delete",
         )
 
+        if mounted_fixture is None:
+            checks["mounted_shared_root"] = {
+                "status": "skipped",
+                "reason": "--mounted-shared-root/EMULE_MOUNTED_SHARED_ROOT not configured",
+            }
+        else:
+            mounted_parent_path = live_common.win_path(mounted_fixture["parent"], trailing_slash=True)
+            mounted_root_path = live_common.win_path(mounted_fixture["mounted_root"], trailing_slash=True)
+            mounted_fixture_root_path = live_common.win_path(mounted_fixture["root"], trailing_slash=True)
+            mounted_child_path = live_common.win_path(mounted_fixture["child"], trailing_slash=True)
+            mounted_roots = [mounted_parent_path, mounted_root_path]
+            mounted_items_before_child = [mounted_parent_path, mounted_root_path, mounted_fixture_root_path]
+            mounted_items_after_child = [*mounted_items_before_child, mounted_child_path]
+            mounted_monitor_owned_before_child = [mounted_fixture_root_path]
+            mounted_monitor_owned_after_child = [mounted_fixture_root_path, mounted_child_path]
+            mounted_files_before_child = ["mounted_root_file.txt"]
+            mounted_files_after_child = ["mounted_child_file.txt", "mounted_root_file.txt"]
+
+            current_phase = set_phase(report, "mounted_parent_recursive_patch")
+            mounted_payload = build_shared_directory_patch_payload([], [mounted_fixture["parent"]])
+            checks["patch_mounted_parent_recursive"] = {
+                "payload": mounted_payload,
+                "response": patch_shared_directories(base_url, args.api_key, mounted_payload),
+            }
+            checks["mounted_parent_directories"] = wait_for_shared_directory_paths(
+                base_url,
+                args.api_key,
+                expected_roots=mounted_roots,
+                expected_items=mounted_items_before_child,
+                expected_monitor_owned=mounted_monitor_owned_before_child,
+                description="mounted-folder recursive shared-directory model",
+            )
+            checks["mounted_parent_files"] = wait_for_shared_file_names(
+                base_url,
+                args.api_key,
+                mounted_files_before_child,
+                "mounted-folder recursive shared files",
+            )
+
+            current_phase = set_phase(report, "mounted_child_live_create")
+            mkdir_long_path(mounted_fixture["child"])
+            write_text_long_path(mounted_fixture["child"] / "mounted_child_file.txt", "mounted child fixture\r\n")
+            checks["mounted_child_live_directories"] = wait_for_shared_directory_paths(
+                base_url,
+                args.api_key,
+                expected_roots=mounted_roots,
+                expected_items=mounted_items_after_child,
+                expected_monitor_owned=mounted_monitor_owned_after_child,
+                description="mounted-folder recursive model after live child create",
+            )
+            checks["mounted_child_live_files"] = wait_for_shared_file_names(
+                base_url,
+                args.api_key,
+                mounted_files_after_child,
+                "mounted-folder shared files after live child create",
+            )
+
+            current_phase = set_phase(report, "shutdown_after_mounted_parent")
+            close_app_cleanly(app)
+            app = None
+            checks["persisted_after_mounted_shutdown"] = assert_persisted_lists(
+                config_dir,
+                expected_shared_dirs=mounted_items_after_child,
+                expected_monitored_roots=mounted_roots,
+                expected_monitor_owned=mounted_monitor_owned_after_child,
+            )
+
+            current_phase = set_phase(report, "relaunch_mounted_parent_state")
+            app, title, ready = launch_and_wait(app_exe, profile_base, base_url, args.api_key, args.rest_ready_timeout_seconds)
+            checks["mounted_relaunch"] = {
+                "process_id": get_app_process_id(app),
+                "main_window_title": title,
+                "ready": ready,
+            }
+            checks["mounted_relaunch_directories"] = wait_for_shared_directory_paths(
+                base_url,
+                args.api_key,
+                expected_roots=mounted_roots,
+                expected_items=mounted_items_after_child,
+                expected_monitor_owned=mounted_monitor_owned_after_child,
+                description="reloaded mounted-folder recursive shared-directory model",
+            )
+            checks["mounted_relaunch_files"] = wait_for_shared_file_names(
+                base_url,
+                args.api_key,
+                mounted_files_after_child,
+                "reloaded mounted-folder shared files",
+            )
+
         current_phase = set_phase(report, "completed")
         report["status"] = "passed"
     except Exception as exc:
@@ -889,6 +1022,21 @@ def main() -> int:
             except Exception as exc:  # pragma: no cover - best-effort live cleanup
                 cleanup["app_closed"] = False
                 cleanup["app_close_error"] = repr(exc)
+                if pending_error is None:
+                    pending_error = exc
+                    report["status"] = "failed"
+                    report["failed_phase"] = "cleanup"
+                    report["error"] = {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+        if mounted_fixture is not None and not args.keep_artifacts:
+            try:
+                remove_tree_long_path(mounted_fixture["root"])
+                cleanup["mounted_fixture_removed"] = True
+            except Exception as exc:  # pragma: no cover - best-effort external fixture cleanup
+                cleanup["mounted_fixture_removed"] = False
+                cleanup["mounted_fixture_remove_error"] = repr(exc)
                 if pending_error is None:
                     pending_error = exc
                     report["status"] = "failed"

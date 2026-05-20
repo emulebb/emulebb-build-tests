@@ -99,6 +99,33 @@ def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, mo
     assert option_values(command, "--workspace-root") == [str(workspace_root.resolve())]
 
 
+def test_child_suite_command_passes_mounted_shared_root_only_to_shared_directories_rest(tmp_path: Path) -> None:
+    mounted_root = tmp_path / "mount-parent" / "mounted"
+    mounted_root.mkdir(parents=True)
+
+    shared_directories_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("shared-directories-rest"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        mounted_shared_root=mounted_root,
+    )
+    preference_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("preference-ui"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        mounted_shared_root=mounted_root,
+    )
+
+    assert option_values(shared_directories_command, "--mounted-shared-root") == [str(mounted_root.resolve())]
+    assert "--mounted-shared-root" not in preference_command
+
+
 def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
     shared_root = tmp_path / "shared"
