@@ -10,6 +10,7 @@ namespace
 	using DownloadQueueDiskSpaceSeams::FileDiskSpaceState;
 	using DownloadQueueDiskSpaceSeams::FileDiskSpaceStatus;
 	using DownloadQueueDiskSpaceSeams::ProtectedVolumeSpaceState;
+	using DownloadQueueDiskSpaceSeams::RequiredFreeSpacePathCacheKey;
 	using DownloadQueueDiskSpaceSeams::VolumeKey;
 	using DownloadQueueDiskSpaceSeams::VolumeResumeBudget;
 
@@ -35,6 +36,11 @@ namespace
 	{
 		VolumeResumeBudget budget = { rVolumeKey, nFreeBytes, nResumeHeadroomBytes };
 		return budget;
+	}
+
+	RequiredFreeSpacePathCacheKey NormalizePathCacheKey(LPCTSTR pszPath)
+	{
+		return DownloadQueueDiskSpaceSeams::NormalizeRequiredFreeSpacePathCacheKey(RequiredFreeSpacePathCacheKey(pszPath));
 	}
 }
 
@@ -114,6 +120,12 @@ TEST_CASE("Queue disk-space seam fails closed when snapshot demand cannot be ful
 	CHECK(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(true, true, true, true));
 	CHECK_FALSE(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(true, false, false, false));
 	CHECK_FALSE(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(true, true, true, false));
+}
+
+TEST_CASE("Queue disk-space seam normalizes required-space cache keys")
+{
+	CHECK(NormalizePathCacheKey(_T("C:/Temp/eMule/Incoming/")) == NormalizePathCacheKey(_T("c:\\temp\\emule\\incoming")));
+	CHECK(NormalizePathCacheKey(_T("D:\\")) == RequiredFreeSpacePathCacheKey(_T("d:\\")));
 }
 
 TEST_CASE("Queue disk-space seam pauses active normal files only when they still need growth below the floor")
