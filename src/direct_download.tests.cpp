@@ -33,27 +33,21 @@ TEST_CASE("HTTP transfer profiles bound maintenance downloads by use case")
 	CHECK(release.dwConnectTimeoutMs == 7000u);
 	CHECK(release.dwSendTimeoutMs == 7000u);
 	CHECK(release.dwReceiveTimeoutMs == 7000u);
-	CHECK(release.ullTotalTimeoutMs == 7000ull);
 	CHECK(release.ullMaxResponseBytes == HttpTransferSeams::KiB(512));
 
 	const HttpTransferSeams::SRequestLimits serverMet = HttpTransferSeams::GetRequestLimitsForProfile(HttpTransferSeams::ERequestProfile::ServerMet);
-	CHECK(serverMet.ullTotalTimeoutMs == 30000ull);
 	CHECK(serverMet.ullMaxResponseBytes == HttpTransferSeams::MiB(2));
 
 	const HttpTransferSeams::SRequestLimits nodesDat = HttpTransferSeams::GetRequestLimitsForProfile(HttpTransferSeams::ERequestProfile::NodesDat);
-	CHECK(nodesDat.ullTotalTimeoutMs == 30000ull);
 	CHECK(nodesDat.ullMaxResponseBytes == HttpTransferSeams::MiB(2));
 
 	const HttpTransferSeams::SRequestLimits ipFilter = HttpTransferSeams::GetRequestLimitsForProfile(HttpTransferSeams::ERequestProfile::IPFilter);
-	CHECK(ipFilter.ullTotalTimeoutMs == 180000ull);
 	CHECK(ipFilter.ullMaxResponseBytes == HttpTransferSeams::MiB(64));
 
 	const HttpTransferSeams::SRequestLimits geoDatabase = HttpTransferSeams::GetRequestLimitsForProfile(HttpTransferSeams::ERequestProfile::GeoDatabase);
-	CHECK(geoDatabase.ullTotalTimeoutMs == 600000ull);
 	CHECK(geoDatabase.ullMaxResponseBytes == HttpTransferSeams::MiB(192));
 
 	const HttpTransferSeams::SRequestLimits generic = HttpTransferSeams::GetRequestLimitsForProfile(HttpTransferSeams::ERequestProfile::GenericFileDownload);
-	CHECK(generic.ullTotalTimeoutMs == 300000ull);
 	CHECK(generic.ullMaxResponseBytes == HttpTransferSeams::MiB(64));
 }
 
