@@ -429,6 +429,14 @@ TEST_CASE("Part-file persistence seam blocks metadata writes when the free-space
 	CHECK(PartFilePersistenceSeams::CanWritePartMetWithFreeSpace(PartFilePersistenceSeams::kMinPartMetWriteFreeBytes + 1u));
 }
 
+TEST_CASE("Part-file persistence seam fails unresolved protected volumes closed")
+{
+	CHECK_EQ(
+		PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(PartFilePersistenceSeams::kMinIncomingFreeBytes),
+		PartFilePersistenceSeams::kMinIncomingFreeBytes);
+	CHECK_EQ(PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(0u), 0u);
+}
+
 TEST_CASE("Part-file persistence seam invalidation forces a fresh low-space decision")
 {
 	PartFilePersistenceSeams::PartMetWriteGuardState state = { false, false };

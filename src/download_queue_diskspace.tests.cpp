@@ -67,6 +67,30 @@ TEST_CASE("Queue disk-space seam detects any protected-volume breach in a snapsh
 	CHECK(DownloadQueueDiskSpaceSeams::HasProtectedVolumeBreach(withBreach, std::size(withBreach)));
 }
 
+TEST_CASE("Queue disk-space seam keeps repeated breach enforcement but suppresses duplicate logs")
+{
+	const DownloadQueueDiskSpaceSeams::ProtectedDiskSpaceBreachAction clearAction =
+		DownloadQueueDiskSpaceSeams::ResolveProtectedDiskSpaceBreachAction(false, true, true);
+	CHECK(clearAction.ShouldClearBlock);
+	CHECK_FALSE(clearAction.ShouldLogBreach);
+	CHECK_FALSE(clearAction.ShouldStopDownloads);
+	CHECK_FALSE(clearAction.ShouldRememberBlock);
+
+	const DownloadQueueDiskSpaceSeams::ProtectedDiskSpaceBreachAction firstBreachAction =
+		DownloadQueueDiskSpaceSeams::ResolveProtectedDiskSpaceBreachAction(true, false, false);
+	CHECK_FALSE(firstBreachAction.ShouldClearBlock);
+	CHECK(firstBreachAction.ShouldLogBreach);
+	CHECK(firstBreachAction.ShouldStopDownloads);
+	CHECK(firstBreachAction.ShouldRememberBlock);
+
+	const DownloadQueueDiskSpaceSeams::ProtectedDiskSpaceBreachAction repeatedBreachAction =
+		DownloadQueueDiskSpaceSeams::ResolveProtectedDiskSpaceBreachAction(true, true, true);
+	CHECK_FALSE(repeatedBreachAction.ShouldClearBlock);
+	CHECK_FALSE(repeatedBreachAction.ShouldLogBreach);
+	CHECK(repeatedBreachAction.ShouldStopDownloads);
+	CHECK(repeatedBreachAction.ShouldRememberBlock);
+}
+
 TEST_CASE("Queue disk-space seam pauses active normal files only when they still need growth below the floor")
 {
 	const VolumeKey volumeKey = MakeDriveVolumeKey(2);
