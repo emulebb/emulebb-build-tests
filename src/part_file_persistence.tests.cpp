@@ -462,6 +462,20 @@ TEST_CASE("Part-file persistence seam saturates disk-space byte addition")
 		static_cast<uint64_t>(-1));
 }
 
+TEST_CASE("Part-file persistence seam measures gap byte counts defensively")
+{
+	uint64_t gapBytes = 0;
+
+	CHECK(PartFilePersistenceSeams::TryMeasureGapBytes(10u, 19u, &gapBytes));
+	CHECK_EQ(gapBytes, 10u);
+
+	CHECK(PartFilePersistenceSeams::TryMeasureGapBytes(0u, static_cast<uint64_t>(-1), &gapBytes));
+	CHECK_EQ(gapBytes, static_cast<uint64_t>(-1));
+
+	CHECK_FALSE(PartFilePersistenceSeams::TryMeasureGapBytes(20u, 19u, &gapBytes));
+	CHECK_EQ(gapBytes, 0u);
+}
+
 TEST_CASE("Part-file persistence seam invalidation forces a fresh low-space decision")
 {
 	PartFilePersistenceSeams::PartMetWriteGuardState state = { false, false };
