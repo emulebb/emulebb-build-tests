@@ -7,12 +7,6 @@
 
 TEST_SUITE_BEGIN("parity");
 
-TEST_CASE("DirectDownload seam rejects handle registration after owner cancellation")
-{
-	CHECK(DirectDownloadSeams::ShouldRegisterInternetHandleForCancellationState(false));
-	CHECK_FALSE(DirectDownloadSeams::ShouldRegisterInternetHandleForCancellationState(true));
-}
-
 TEST_CASE("DirectDownload seam normalizes multiline link input")
 {
 	CHECK(DirectDownloadSeams::NormalizeDirectDownloadEditText(CString(_T("one\ntwo\r\nthree"))) == CString(_T("one\r\ntwo\r\nthree")));

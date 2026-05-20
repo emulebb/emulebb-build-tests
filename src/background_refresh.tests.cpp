@@ -42,13 +42,6 @@ struct TestRefreshContext
 {
 	int nId = 0;
 };
-
-std::shared_ptr<DirectDownload::CDownloadCancellation> MakeSentinelCancellation(INT_PTR nValue)
-{
-	return std::shared_ptr<DirectDownload::CDownloadCancellation>(
-		reinterpret_cast<DirectDownload::CDownloadCancellation*>(nValue),
-		[](DirectDownload::CDownloadCancellation*) {});
-}
 }
 
 TEST_CASE("Background refresh queued worker helper transfers context ownership on start")
@@ -56,14 +49,12 @@ TEST_CASE("Background refresh queued worker helper transfers context ownership o
 	BackgroundRefreshSeams::SRefreshState state;
 	std::unique_ptr<TestRefreshContext> context(new TestRefreshContext);
 	context->nId = 42;
-	std::shared_ptr<DirectDownload::CDownloadCancellation> cancellation(MakeSentinelCancellation(0x1001));
 
 	TestRefreshContext *pStartedContext = NULL;
 	int nCleanupCalls = 0;
 	const bool bStarted = BackgroundRefreshSeams::StartQueuedRefreshWorker(
 		state,
 		context,
-		cancellation,
 		[&](TestRefreshContext *pContext) {
 			pStartedContext = pContext;
 			return true;
@@ -80,8 +71,6 @@ TEST_CASE("Background refresh queued worker helper transfers context ownership o
 	CHECK(pStartedContext->nId == 42);
 	CHECK(nCleanupCalls == 0);
 	CHECK(BackgroundRefreshSeams::IsRefreshQueued(state));
-	const bool bStoredCancellation = state.pCancellation.get() == cancellation.get();
-	CHECK(bStoredCancellation);
 
 	delete pStartedContext;
 }
@@ -91,14 +80,12 @@ TEST_CASE("Background refresh queued worker helper cleans up failed starts")
 	BackgroundRefreshSeams::SRefreshState state;
 	std::unique_ptr<TestRefreshContext> context(new TestRefreshContext);
 	context->nId = 7;
-	std::shared_ptr<DirectDownload::CDownloadCancellation> cancellation(MakeSentinelCancellation(0x1002));
 
 	int nCleanupCalls = 0;
 	int nCleanedId = 0;
 	const bool bStarted = BackgroundRefreshSeams::StartQueuedRefreshWorker(
 		state,
 		context,
-		cancellation,
 		[](TestRefreshContext*) {
 			return false;
 		},
@@ -113,26 +100,20 @@ TEST_CASE("Background refresh queued worker helper cleans up failed starts")
 	CHECK(nCleanupCalls == 1);
 	CHECK(nCleanedId == 7);
 	CHECK_FALSE(BackgroundRefreshSeams::IsRefreshQueued(state));
-	const bool bCancellationCleared = state.pCancellation.get() == NULL;
-	CHECK(bCancellationCleared);
 }
 
 TEST_CASE("Background refresh queued worker helper cleans up duplicate requests")
 {
 	BackgroundRefreshSeams::SRefreshState state;
 	REQUIRE(BackgroundRefreshSeams::TryMarkRefreshQueued(state));
-	std::shared_ptr<DirectDownload::CDownloadCancellation> originalCancellation(MakeSentinelCancellation(0x1003));
-	state.pCancellation = originalCancellation;
 	std::unique_ptr<TestRefreshContext> context(new TestRefreshContext);
 	context->nId = 9;
-	std::shared_ptr<DirectDownload::CDownloadCancellation> duplicateCancellation(MakeSentinelCancellation(0x1004));
 
 	int nCleanupCalls = 0;
 	bool bStartCalled = false;
 	const bool bStarted = BackgroundRefreshSeams::StartQueuedRefreshWorker(
 		state,
 		context,
-		duplicateCancellation,
 		[&](TestRefreshContext*) {
 			bStartCalled = true;
 			return true;
@@ -148,8 +129,6 @@ TEST_CASE("Background refresh queued worker helper cleans up duplicate requests"
 	CHECK_FALSE(bStartCalled);
 	CHECK(nCleanupCalls == 1);
 	CHECK(BackgroundRefreshSeams::IsRefreshQueued(state));
-	const bool bOriginalCancellationPreserved = state.pCancellation.get() == originalCancellation.get();
-	CHECK(bOriginalCancellationPreserved);
 }
 
 TEST_SUITE_END();
