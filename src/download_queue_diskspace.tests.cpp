@@ -45,10 +45,15 @@ TEST_CASE("Queue disk-space seam detects protected-volume threshold breaches")
 	const ProtectedVolumeSpaceState exactFit = { 1024u, 1024u };
 	const ProtectedVolumeSpaceState aboveFloor = { 1025u, 1024u };
 	const ProtectedVolumeSpaceState belowFloor = { 1023u, 1024u };
+	const ProtectedVolumeSpaceState unresolvedWithFloor = {
+		DownloadQueueDiskSpaceSeams::GetUnresolvedProtectedVolumeFreeBytes(),
+		1024u
+	};
 
 	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsProtectedVolumeBreached(exactFit));
 	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsProtectedVolumeBreached(aboveFloor));
 	CHECK(DownloadQueueDiskSpaceSeams::IsProtectedVolumeBreached(belowFloor));
+	CHECK(DownloadQueueDiskSpaceSeams::IsProtectedVolumeBreached(unresolvedWithFloor));
 }
 
 TEST_CASE("Queue disk-space seam detects any protected-volume breach in a snapshot")
