@@ -447,6 +447,29 @@ def create_mounted_root_fixture(mounted_shared_root: Path) -> dict[str, Path]:
     }
 
 
+def build_mounted_root_expectations(mounted_fixture: dict[str, Path]) -> dict[str, list[str]]:
+    """Builds REST and persistence expectations for the mounted-folder scenario."""
+
+    mounted_parent_path = live_common.win_path(mounted_fixture["parent"], trailing_slash=True)
+    mounted_root_path = live_common.win_path(mounted_fixture["mounted_root"], trailing_slash=True)
+    mounted_fixture_root_path = live_common.win_path(mounted_fixture["root"], trailing_slash=True)
+    mounted_child_path = live_common.win_path(mounted_fixture["child"], trailing_slash=True)
+    items_before_child = [mounted_parent_path, mounted_root_path, mounted_fixture_root_path]
+    items_after_child = [*items_before_child, mounted_child_path]
+    monitor_owned_before_child = [mounted_root_path, mounted_fixture_root_path]
+    monitor_owned_after_child = [*monitor_owned_before_child, mounted_child_path]
+    return {
+        "visible_roots": [mounted_parent_path],
+        "monitored_roots": [mounted_parent_path, mounted_root_path],
+        "items_before_child": items_before_child,
+        "items_after_child": items_after_child,
+        "monitor_owned_before_child": monitor_owned_before_child,
+        "monitor_owned_after_child": monitor_owned_after_child,
+        "files_before_child": ["mounted_root_file.txt"],
+        "files_after_child": ["mounted_child_file.txt", "mounted_root_file.txt"],
+    }
+
+
 def set_phase(report: dict[str, object], phase: str) -> str:
     """Records the current execution phase in the live report."""
 
@@ -917,17 +940,7 @@ def main() -> int:
                 "reason": "--mounted-shared-root/EMULE_MOUNTED_SHARED_ROOT not configured",
             }
         else:
-            mounted_parent_path = live_common.win_path(mounted_fixture["parent"], trailing_slash=True)
-            mounted_root_path = live_common.win_path(mounted_fixture["mounted_root"], trailing_slash=True)
-            mounted_fixture_root_path = live_common.win_path(mounted_fixture["root"], trailing_slash=True)
-            mounted_child_path = live_common.win_path(mounted_fixture["child"], trailing_slash=True)
-            mounted_roots = [mounted_parent_path, mounted_root_path]
-            mounted_items_before_child = [mounted_parent_path, mounted_root_path, mounted_fixture_root_path]
-            mounted_items_after_child = [*mounted_items_before_child, mounted_child_path]
-            mounted_monitor_owned_before_child = [mounted_fixture_root_path]
-            mounted_monitor_owned_after_child = [mounted_fixture_root_path, mounted_child_path]
-            mounted_files_before_child = ["mounted_root_file.txt"]
-            mounted_files_after_child = ["mounted_child_file.txt", "mounted_root_file.txt"]
+            mounted_expectations = build_mounted_root_expectations(mounted_fixture)
 
             current_phase = set_phase(report, "mounted_parent_recursive_patch")
             mounted_payload = build_shared_directory_patch_payload([], [mounted_fixture["parent"]])
@@ -938,15 +951,15 @@ def main() -> int:
             checks["mounted_parent_directories"] = wait_for_shared_directory_paths(
                 base_url,
                 args.api_key,
-                expected_roots=mounted_roots,
-                expected_items=mounted_items_before_child,
-                expected_monitor_owned=mounted_monitor_owned_before_child,
+                expected_roots=mounted_expectations["visible_roots"],
+                expected_items=mounted_expectations["items_before_child"],
+                expected_monitor_owned=mounted_expectations["monitor_owned_before_child"],
                 description="mounted-folder recursive shared-directory model",
             )
             checks["mounted_parent_files"] = wait_for_shared_file_names(
                 base_url,
                 args.api_key,
-                mounted_files_before_child,
+                mounted_expectations["files_before_child"],
                 "mounted-folder recursive shared files",
             )
 
@@ -956,15 +969,15 @@ def main() -> int:
             checks["mounted_child_live_directories"] = wait_for_shared_directory_paths(
                 base_url,
                 args.api_key,
-                expected_roots=mounted_roots,
-                expected_items=mounted_items_after_child,
-                expected_monitor_owned=mounted_monitor_owned_after_child,
+                expected_roots=mounted_expectations["visible_roots"],
+                expected_items=mounted_expectations["items_after_child"],
+                expected_monitor_owned=mounted_expectations["monitor_owned_after_child"],
                 description="mounted-folder recursive model after live child create",
             )
             checks["mounted_child_live_files"] = wait_for_shared_file_names(
                 base_url,
                 args.api_key,
-                mounted_files_after_child,
+                mounted_expectations["files_after_child"],
                 "mounted-folder shared files after live child create",
             )
 
@@ -973,9 +986,9 @@ def main() -> int:
             app = None
             checks["persisted_after_mounted_shutdown"] = assert_persisted_lists(
                 config_dir,
-                expected_shared_dirs=mounted_items_after_child,
-                expected_monitored_roots=mounted_roots,
-                expected_monitor_owned=mounted_monitor_owned_after_child,
+                expected_shared_dirs=mounted_expectations["items_after_child"],
+                expected_monitored_roots=mounted_expectations["monitored_roots"],
+                expected_monitor_owned=mounted_expectations["monitor_owned_after_child"],
             )
 
             current_phase = set_phase(report, "relaunch_mounted_parent_state")
@@ -988,15 +1001,15 @@ def main() -> int:
             checks["mounted_relaunch_directories"] = wait_for_shared_directory_paths(
                 base_url,
                 args.api_key,
-                expected_roots=mounted_roots,
-                expected_items=mounted_items_after_child,
-                expected_monitor_owned=mounted_monitor_owned_after_child,
+                expected_roots=mounted_expectations["visible_roots"],
+                expected_items=mounted_expectations["items_after_child"],
+                expected_monitor_owned=mounted_expectations["monitor_owned_after_child"],
                 description="reloaded mounted-folder recursive shared-directory model",
             )
             checks["mounted_relaunch_files"] = wait_for_shared_file_names(
                 base_url,
                 args.api_key,
-                mounted_files_after_child,
+                mounted_expectations["files_after_child"],
                 "reloaded mounted-folder shared files",
             )
 

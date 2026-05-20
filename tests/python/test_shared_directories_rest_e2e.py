@@ -58,6 +58,22 @@ def test_create_mounted_root_fixture_stays_below_operator_root(tmp_path: Path) -
     assert "mounted root fixture" in (fixture["root"] / "mounted_root_file.txt").read_text(encoding="utf-8")
 
 
+def test_build_mounted_root_expectations_keeps_promoted_root_internal(tmp_path: Path) -> None:
+    module = load_shared_directories_rest_module()
+
+    mounted_root = tmp_path / "mounted"
+    mounted_root.mkdir()
+    fixture = module.create_mounted_root_fixture(mounted_root)
+    expectations = module.build_mounted_root_expectations(fixture)
+    mounted_root_path = module.live_common.win_path(mounted_root, trailing_slash=True)
+
+    assert expectations["visible_roots"] == [module.live_common.win_path(tmp_path, trailing_slash=True)]
+    assert mounted_root_path in expectations["monitored_roots"]
+    assert mounted_root_path in expectations["items_before_child"]
+    assert mounted_root_path in expectations["monitor_owned_before_child"]
+    assert mounted_root_path not in expectations["visible_roots"]
+
+
 def test_remove_tree_long_path_removes_fixture_tree(tmp_path: Path) -> None:
     module = load_shared_directories_rest_module()
 
