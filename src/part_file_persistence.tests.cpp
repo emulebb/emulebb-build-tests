@@ -432,9 +432,16 @@ TEST_CASE("Part-file persistence seam blocks metadata writes when the free-space
 TEST_CASE("Part-file persistence seam fails unresolved protected volumes closed")
 {
 	CHECK_EQ(
-		PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(PartFilePersistenceSeams::kMinIncomingFreeBytes),
+		PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(PartFilePersistenceSeams::kMinIncomingFreeBytes, 0u),
 		PartFilePersistenceSeams::kMinIncomingFreeBytes);
-	CHECK_EQ(PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(0u), 0u);
+	CHECK_EQ(
+		PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(0u, PartFilePersistenceSeams::kMinTempFreeBytes),
+		PartFilePersistenceSeams::kMinTempFreeBytes);
+	CHECK_EQ(
+		PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(
+			PartFilePersistenceSeams::kMinIncomingFreeBytes,
+			PartFilePersistenceSeams::kMinTempFreeBytes),
+		PartFilePersistenceSeams::kMinIncomingFreeBytes);
 }
 
 TEST_CASE("Part-file persistence seam saturates disk-space byte addition")
