@@ -349,6 +349,85 @@ TEST_CASE("Shared directory recursion stops junction loops by filesystem identit
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(childPath));
 }
 
+TEST_CASE("Monitored shared roots promote mounted-folder volume boundaries to independent roots")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0xA10005u));
+
+	const std::wstring rootPath = fixture.DirectoryPath();
+	const std::wstring plainChildPath = fixture.MakeDirectoryChildPath(L"plain-child");
+	const std::wstring mountedChildPath = fixture.MakeDirectoryChildPath(L"mounted-child");
+	const std::wstring mountedGrandchildPath = mountedChildPath + L"\\grandchild";
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(plainChildPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(mountedChildPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(mountedGrandchildPath));
+
+	const CString strMountedChildKey(SharedDirectoryOps::MakeSharedDirectoryLookupKey(CString(mountedChildPath.c_str())));
+	const auto resolveVolumeKey = [strMountedChildKey](const CString &rstrDirectory, CString &rstrVolumeKey) -> bool {
+		const CString strDirectoryKey(SharedDirectoryOps::MakeSharedDirectoryLookupKey(rstrDirectory));
+		rstrVolumeKey = strDirectoryKey.Left(strMountedChildKey.GetLength()).CompareNoCase(strMountedChildKey) == 0
+			? CString(_T("\\\\?\\Volume{mounted-child}\\"))
+			: CString(_T("\\\\?\\Volume{parent}\\"));
+		return true;
+	};
+
+	CStringList monitoredRoots;
+	CStringList monitorOwnedDirs;
+	SharedDirectoryOps::AddMonitoredSharedRoot(
+		monitoredRoots,
+		monitorOwnedDirs,
+		CString(rootPath.c_str()),
+		[](const CString &) { return true; },
+		resolveVolumeKey);
+
+	CHECK_EQ(CountEquivalentPaths(monitoredRoots, CString(rootPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(monitoredRoots, CString(mountedChildPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(monitoredRoots, CString(plainChildPath.c_str())), 0);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, CString(plainChildPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, CString(mountedChildPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, CString(mountedGrandchildPath.c_str())), 1);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(mountedGrandchildPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(mountedChildPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(plainChildPath));
+}
+
+TEST_CASE("Monitored shared roots keep same-volume recursive trees under one root")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0xA10006u));
+
+	const std::wstring rootPath = fixture.DirectoryPath();
+	const std::wstring childPath = fixture.MakeDirectoryChildPath(L"same-volume-child");
+	const std::wstring grandchildPath = childPath + L"\\grandchild";
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(childPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(grandchildPath));
+
+	const auto resolveVolumeKey = [](const CString &, CString &rstrVolumeKey) -> bool {
+		rstrVolumeKey = _T("\\\\?\\Volume{same}\\");
+		return true;
+	};
+
+	CStringList monitoredRoots;
+	CStringList monitorOwnedDirs;
+	SharedDirectoryOps::AddMonitoredSharedRoot(
+		monitoredRoots,
+		monitorOwnedDirs,
+		CString(rootPath.c_str()),
+		[](const CString &) { return true; },
+		resolveVolumeKey);
+
+	CHECK_EQ(CountPaths(monitoredRoots), 1);
+	CHECK_EQ(CountEquivalentPaths(monitoredRoots, CString(rootPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, CString(childPath.c_str())), 1);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, CString(grandchildPath.c_str())), 1);
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(grandchildPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(childPath));
+}
+
 #if defined(EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS) && defined(EMULE_TESTS_HAS_SHARED_FILE_INTAKE_POLICY)
 TEST_CASE("Shared directory recursion skips built-in and configured ignored directory names")
 {
