@@ -328,6 +328,26 @@ TEST_CASE("Shared directory recursion dedupes non-recursive junction aliases by 
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(targetPath));
 }
 
+TEST_CASE("Shared directory object lookup recognizes junction aliases already in a canonical list")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(true, 0u, 0xA10007u));
+
+	const std::wstring targetPath = fixture.MakeDirectoryChildPath(L"real-target");
+	const std::wstring aliasPath = fixture.MakeDirectoryChildPath(L"alias-target");
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::CreateDirectoryPath(targetPath));
+	if (!LongPathTestSupport::CreateDirectoryJunction(aliasPath, targetPath))
+		return;
+
+	CStringList sharedDirectories;
+	sharedDirectories.AddTail(CString(targetPath.c_str()));
+	CHECK(SharedDirectoryOps::ListContainsEquivalentDirectoryObject(sharedDirectories, CString(aliasPath.c_str())));
+
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(aliasPath));
+	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(targetPath));
+}
+
 TEST_CASE("Shared directory recursion keeps only one child path when a junction aliases the same target")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
