@@ -107,6 +107,15 @@ TEST_CASE("Queue disk-space seam invalidates cached path requirements only after
 	CHECK(DownloadQueueDiskSpaceSeams::ShouldInvalidateRequiredFreeSpacePathCacheAfterReservation(true));
 }
 
+TEST_CASE("Queue disk-space seam fails closed when snapshot demand cannot be fully reserved")
+{
+	CHECK(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(false, false, false, false));
+	CHECK(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(true, true, false, false));
+	CHECK(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(true, true, true, true));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(true, false, false, false));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(true, true, true, false));
+}
+
 TEST_CASE("Queue disk-space seam pauses active normal files only when they still need growth below the floor")
 {
 	const VolumeKey volumeKey = MakeDriveVolumeKey(2);
