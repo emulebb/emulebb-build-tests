@@ -69,6 +69,30 @@ TEST_CASE("Client software display appends a non-empty mod identity")
 }
 #endif
 
+TEST_CASE("Client software display formats legacy name and minor-version labels")
+{
+	CHECK(BuildClientSoftwareNameDisplay(_T("cDonkey")) == CString(_T("cDonkey")));
+	CHECK(BuildClientSoftwareMinorVersionDisplay(_T("cDonkey"), 36u) == CString(_T("cDonkey v0.36")));
+	CHECK(BuildClientSoftwareMinorVersionDisplay(_T("MLdonkey"), 54u) == CString(_T("MLdonkey v0.54")));
+	CHECK(BuildClientSoftwareMinorVersionDisplay(_T("Old eMule"), 30u) == CString(_T("Old eMule v0.30")));
+	CHECK(BuildClientSoftwareMinorVersionDisplay(_T("eDonkey"), 61u) == CString(_T("eDonkey v0.61")));
+}
+
+TEST_CASE("Client software display preserves structured eMule protocol version labels")
+{
+	CHECK(BuildClientSoftwareStructuredVersionDisplay(SO_EMULE, _T("eMule"), 0u, 72u, 0u) == CString(_T("eMule v0.72a")));
+	CHECK(BuildClientSoftwareStructuredVersionDisplay(SO_AMULE, _T("aMule"), 2u, 3u, 0u) == CString(_T("aMule v2.3.0")));
+	CHECK(BuildClientSoftwareStructuredVersionDisplay(SO_XMULE, _T("xMule"), 1u, 2u, 0u) == CString(_T("xMule v1.2")));
+	CHECK(BuildClientSoftwareStructuredVersionDisplay(SO_LPHANT, _T("lphant"), 2u, 5u, 0u) == CString(_T("lphant v1.05")));
+	CHECK(BuildClientSoftwareStructuredVersionDisplay(SO_SHAREAZA, _T("Shareaza"), 2u, 7u, 1u) == CString(_T("Shareaza v2.7.1")));
+}
+
+TEST_CASE("Client software display preserves decoded eDonkeyHybrid version labels")
+{
+	CHECK(BuildDonkeyHybridClientSoftwareVersionDisplay(0u, 50u, 0u) == CString(_T("eDonkeyHybrid v0.50")));
+	CHECK(BuildDonkeyHybridClientSoftwareVersionDisplay(1u, 3u, 1u) == CString(_T("eDonkeyHybrid v1.3.1")));
+}
+
 TEST_CASE("Friend transition never unlinks IP-only friends solely because the endpoint changed")
 {
 	const FriendLinkSnapshot ipOnlyConnecting = {true, false, true, false, false};
