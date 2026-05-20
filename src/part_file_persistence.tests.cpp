@@ -437,6 +437,17 @@ TEST_CASE("Part-file persistence seam fails unresolved protected volumes closed"
 	CHECK_EQ(PartFilePersistenceSeams::GetRequiredFreeBytesForUnresolvedVolume(0u), 0u);
 }
 
+TEST_CASE("Part-file persistence seam saturates disk-space byte addition")
+{
+	CHECK_EQ(PartFilePersistenceSeams::SaturatingAddBytes(1024u, 2048u), 3072u);
+	CHECK_EQ(
+		PartFilePersistenceSeams::SaturatingAddBytes(static_cast<uint64_t>(-1) - 1u, 1u),
+		static_cast<uint64_t>(-1));
+	CHECK_EQ(
+		PartFilePersistenceSeams::SaturatingAddBytes(static_cast<uint64_t>(-1) - 1u, 2u),
+		static_cast<uint64_t>(-1));
+}
+
 TEST_CASE("Part-file persistence seam invalidation forces a fresh low-space decision")
 {
 	PartFilePersistenceSeams::PartMetWriteGuardState state = { false, false };
