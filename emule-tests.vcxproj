@@ -170,6 +170,7 @@
     <ClCompile Include="src\download_queue_hostname_resolver.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueHostnameResolverSeams.h')" />
     <ClCompile Include="src\download_list_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadListKeyboardShortcutsSeams.h')" />
     <ClCompile Include="src\download_queue_overview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DownloadQueueOverviewSeams.h')" />
+    <ClCompile Include="src\drop_target.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\DropTargetSeams.h')" />
     <ClCompile Include="src\emsocket_send.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EMSocketSendSeams.h')" />
     <ClCompile Include="src\udp_obfuscation_framing.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramFramingSeams.h')" />
     <ClCompile Include="src\encrypted_datagram_sequence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSequenceSeams.h')" />
