@@ -2,12 +2,14 @@
 
 #include "DownloadQueueDiskSpaceSeams.h"
 
+#include <iterator>
 #include <string>
 
 namespace
 {
 	using DownloadQueueDiskSpaceSeams::FileDiskSpaceState;
 	using DownloadQueueDiskSpaceSeams::FileDiskSpaceStatus;
+	using DownloadQueueDiskSpaceSeams::ProtectedVolumeSpaceState;
 	using DownloadQueueDiskSpaceSeams::VolumeKey;
 	using DownloadQueueDiskSpaceSeams::VolumeResumeBudget;
 
@@ -37,6 +39,33 @@ namespace
 }
 
 TEST_SUITE_BEGIN("parity");
+
+TEST_CASE("Queue disk-space seam detects protected-volume threshold breaches")
+{
+	const ProtectedVolumeSpaceState exactFit = { 1024u, 1024u };
+	const ProtectedVolumeSpaceState aboveFloor = { 1025u, 1024u };
+	const ProtectedVolumeSpaceState belowFloor = { 1023u, 1024u };
+
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsProtectedVolumeBreached(exactFit));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsProtectedVolumeBreached(aboveFloor));
+	CHECK(DownloadQueueDiskSpaceSeams::IsProtectedVolumeBreached(belowFloor));
+}
+
+TEST_CASE("Queue disk-space seam detects any protected-volume breach in a snapshot")
+{
+	const ProtectedVolumeSpaceState allClear[] = {
+		{ 2u * 1024u, 1024u },
+		{ 4096u, 4096u }
+	};
+	const ProtectedVolumeSpaceState withBreach[] = {
+		{ 2u * 1024u, 1024u },
+		{ 4095u, 4096u }
+	};
+
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::HasProtectedVolumeBreach(NULL, 2u));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::HasProtectedVolumeBreach(allClear, std::size(allClear)));
+	CHECK(DownloadQueueDiskSpaceSeams::HasProtectedVolumeBreach(withBreach, std::size(withBreach)));
+}
 
 TEST_CASE("Queue disk-space seam pauses active normal files only when they still need growth below the floor")
 {
