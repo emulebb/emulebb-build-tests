@@ -54,4 +54,20 @@ TEST_CASE("Transfer window seam logs invalid state only")
 	CHECK(TransferWndSeams::ShouldLogInvalidState(false));
 }
 
+TEST_CASE("Transfer window seam commits category drag only after full image drag startup")
+{
+	CHECK_FALSE(TransferWndSeams::ShouldCommitCategoryDragStart(false, false, false));
+	CHECK_FALSE(TransferWndSeams::ShouldCommitCategoryDragStart(true, false, false));
+	CHECK_FALSE(TransferWndSeams::ShouldCommitCategoryDragStart(true, true, false));
+	CHECK(TransferWndSeams::ShouldCommitCategoryDragStart(true, true, true));
+}
+
+TEST_CASE("Transfer window seam cancels category drag when the left button is gone")
+{
+	CHECK_FALSE(TransferWndSeams::ShouldCancelCategoryDragOnMouseMove(false, false));
+	CHECK_FALSE(TransferWndSeams::ShouldCancelCategoryDragOnMouseMove(false, true));
+	CHECK_FALSE(TransferWndSeams::ShouldCancelCategoryDragOnMouseMove(true, true));
+	CHECK(TransferWndSeams::ShouldCancelCategoryDragOnMouseMove(true, false));
+}
+
 TEST_SUITE_END();
