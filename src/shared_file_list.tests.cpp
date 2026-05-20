@@ -474,6 +474,44 @@ TEST_CASE("Monitored shared roots keep same-volume recursive trees under one roo
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::RemoveDirectoryPath(childPath));
 }
 
+TEST_CASE("Monitor-owned cleanup preserves retained promoted roots when an ancestor downgrades")
+{
+	CStringList monitorOwnedDirs;
+	monitorOwnedDirs.AddTail(_T("C:\\shared\\mounted\\"));
+	monitorOwnedDirs.AddTail(_T("C:\\shared\\mounted\\child\\"));
+	monitorOwnedDirs.AddTail(_T("C:\\shared\\plain\\"));
+
+	CStringList downgradedRoots;
+	downgradedRoots.AddTail(_T("C:\\shared\\"));
+
+	CStringList retainedMonitoredRoots;
+	retainedMonitoredRoots.AddTail(_T("C:\\shared\\mounted\\"));
+
+	CHECK(SharedDirectoryOps::RemoveMonitorOwnedDirectoriesForDowngradedRoots(monitorOwnedDirs, downgradedRoots, retainedMonitoredRoots));
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, _T("C:\\shared\\mounted\\")), 1);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, _T("C:\\shared\\mounted\\child\\")), 1);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, _T("C:\\shared\\plain\\")), 0);
+}
+
+TEST_CASE("Monitor-owned cleanup removes promoted-root subtree when that root downgrades")
+{
+	CStringList monitorOwnedDirs;
+	monitorOwnedDirs.AddTail(_T("C:\\shared\\mounted\\"));
+	monitorOwnedDirs.AddTail(_T("C:\\shared\\mounted\\child\\"));
+	monitorOwnedDirs.AddTail(_T("C:\\shared\\plain\\"));
+
+	CStringList downgradedRoots;
+	downgradedRoots.AddTail(_T("C:\\shared\\mounted\\"));
+
+	CStringList retainedMonitoredRoots;
+	retainedMonitoredRoots.AddTail(_T("C:\\shared\\"));
+
+	CHECK(SharedDirectoryOps::RemoveMonitorOwnedDirectoriesForDowngradedRoots(monitorOwnedDirs, downgradedRoots, retainedMonitoredRoots));
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, _T("C:\\shared\\mounted\\")), 0);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, _T("C:\\shared\\mounted\\child\\")), 0);
+	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, _T("C:\\shared\\plain\\")), 1);
+}
+
 #if defined(EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS) && defined(EMULE_TESTS_HAS_SHARED_FILE_INTAKE_POLICY)
 TEST_CASE("Shared directory recursion skips built-in and configured ignored directory names")
 {
