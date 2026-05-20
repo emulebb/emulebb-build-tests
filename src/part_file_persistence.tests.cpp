@@ -446,6 +446,13 @@ TEST_CASE("Part-file persistence seam saturates disk-space byte addition")
 	CHECK_EQ(
 		PartFilePersistenceSeams::SaturatingAddBytes(static_cast<uint64_t>(-1) - 1u, 2u),
 		static_cast<uint64_t>(-1));
+	CHECK_EQ(
+		PartFilePersistenceSeams::SaturatingAddBytes(
+			PartFilePersistenceSeams::SaturatingAddBytes(static_cast<uint64_t>(-1) - 4u, 3u), 2u),
+		static_cast<uint64_t>(-1));
+	CHECK_EQ(
+		PartFilePersistenceSeams::SaturatingAddBytes(static_cast<uint64_t>(-1), 16u * 1024u),
+		static_cast<uint64_t>(-1));
 }
 
 TEST_CASE("Part-file persistence seam invalidation forces a fresh low-space decision")
