@@ -236,6 +236,7 @@
     <ClCompile Include="src\scheduler_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SchedulerPolicySeams.h')" />
     <ClCompile Include="src\search_params.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SearchParams.h') and Exists('$(AppRoot)\srchybrid\SearchParamsPolicy.h')" />
     <ClCompile Include="src\search_trust_hint.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SearchTrustHintSeams.h')" />
+    <ClCompile Include="src\shared_dirs_tree_ctrl.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SharedDirsTreeCtrlSeams.h')" />
     <ClCompile Include="src\shared_directory_monitor.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SharedDirectoryMonitorSeams.h')" />
     <ClCompile Include="src\shared_file_list.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SharedFileListSeams.h')" />
     <ClCompile Include="src\search_list_view.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SearchListViewSeams.h')" />
