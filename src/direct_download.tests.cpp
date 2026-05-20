@@ -27,6 +27,14 @@ TEST_CASE("DirectDownload seam preserves parser slash and category defaults")
 	CHECK(DirectDownloadSeams::NormalizeDirectDownloadCategorySelection(2, 0) == 0);
 }
 
+TEST_CASE("DirectDownload seam commits only after all input links parse")
+{
+	CHECK(DirectDownloadSeams::ShouldCommitParsedDirectDownloadLinks(0u, 0u));
+	CHECK(DirectDownloadSeams::ShouldCommitParsedDirectDownloadLinks(2u, 2u));
+	CHECK_FALSE(DirectDownloadSeams::ShouldCommitParsedDirectDownloadLinks(1u, 2u));
+	CHECK_FALSE(DirectDownloadSeams::ShouldCommitParsedDirectDownloadLinks(2u, 1u));
+}
+
 TEST_CASE("HTTP transfer profiles bound maintenance downloads by use case")
 {
 	const HttpTransferSeams::SRequestLimits release = HttpTransferSeams::GetRequestLimitsForProfile(HttpTransferSeams::ERequestProfile::ReleaseUpdateJson);
