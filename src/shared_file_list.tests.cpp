@@ -21,6 +21,12 @@
 #include "SharedFilesWndSeams.h"
 #define EMULE_TESTS_HAS_SHARED_FILES_WND_SEAMS 1
 #endif
+#if __has_include("SharedDirectoryMonitorSeams.h")
+#include "SharedDirectoryMonitorSeams.h"
+#ifndef EMULE_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS
+#define EMULE_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS 1
+#endif
+#endif
 #endif
 #include "SharedFileListSeams.h"
 
@@ -276,6 +282,26 @@ TEST_CASE("Shared files deferred reload coalesces shared-only work and lets full
 	state = SharedFilesWndSeams::AddDeferredReloadRequest(state, false);
 	CHECK(state.bFullTreeReload);
 	CHECK_FALSE(state.bSharedFilesReload);
+}
+#endif
+
+#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS
+TEST_CASE("Shared-directory monitor falls back to full reconciliation without a trusted journal")
+{
+	using SharedDirectoryMonitorSeams::EMonitoredRootCatchupMode;
+
+	CHECK(SharedDirectoryMonitorSeams::GetStartupCatchupMode(false, false, false) == EMonitoredRootCatchupMode::None);
+	CHECK(SharedDirectoryMonitorSeams::GetStartupCatchupMode(true, false, false) == EMonitoredRootCatchupMode::FullReconcile);
+	CHECK(SharedDirectoryMonitorSeams::GetStartupCatchupMode(true, true, false) == EMonitoredRootCatchupMode::FullReconcile);
+	CHECK(SharedDirectoryMonitorSeams::GetStartupCatchupMode(true, true, true) == EMonitoredRootCatchupMode::JournalDelta);
+}
+
+TEST_CASE("Shared-directory monitor persists only trusted NTFS journal checkpoints")
+{
+	CHECK(SharedDirectoryMonitorSeams::ShouldPersistJournalState(true, 10u, 20));
+	CHECK_FALSE(SharedDirectoryMonitorSeams::ShouldPersistJournalState(false, 10u, 20));
+	CHECK_FALSE(SharedDirectoryMonitorSeams::ShouldPersistJournalState(true, 0u, 20));
+	CHECK_FALSE(SharedDirectoryMonitorSeams::ShouldPersistJournalState(true, 10u, 0));
 }
 #endif
 
