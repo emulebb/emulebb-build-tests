@@ -131,7 +131,7 @@ TEST_CASE("Part-file persistence seam only resumes insufficient files after the 
 		nMinimumFreeBytes + nResumeHeadroomBytes, nMinimumFreeBytes, nResumeHeadroomBytes));
 }
 
-TEST_CASE("Part-file persistence seam keeps cache bookkeeping explicit")
+TEST_CASE("Part-file persistence seam does not reuse stale metadata write decisions")
 {
 	PartFilePersistenceSeams::PartMetWriteGuardState state = { false, false };
 
@@ -141,7 +141,7 @@ TEST_CASE("Part-file persistence seam keeps cache bookkeeping explicit")
 	PartFilePersistenceSeams::StorePartMetWriteGuardState(&state, true);
 	CHECK(state.HasCachedResult);
 	CHECK(state.CanWrite);
-	CHECK(PartFilePersistenceSeams::ShouldReusePartMetWriteCache(state.HasCachedResult, false));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldReusePartMetWriteCache(state.HasCachedResult, false));
 	CHECK_FALSE(PartFilePersistenceSeams::ShouldReusePartMetWriteCache(state.HasCachedResult, true));
 
 	PartFilePersistenceSeams::InvalidatePartMetWriteGuardState(&state);
@@ -150,6 +150,17 @@ TEST_CASE("Part-file persistence seam keeps cache bookkeeping explicit")
 
 	PartFilePersistenceSeams::StorePartMetWriteGuardState(NULL, true);
 	PartFilePersistenceSeams::InvalidatePartMetWriteGuardState(NULL);
+
+	state = { true, true };
+	const PartFilePersistenceSeams::PartMetWriteGuardDecision decision =
+		PartFilePersistenceSeams::ResolvePartMetWriteGuard(
+			state.HasCachedResult,
+			state.CanWrite,
+			false,
+			PartFilePersistenceSeams::kMinPartMetWriteFreeBytes - 1u);
+
+	CHECK_FALSE(decision.UseCachedResult);
+	CHECK_FALSE(decision.CanWrite);
 }
 
 TEST_CASE("Part-file persistence seam exposes path existence without treating blank paths as files")
@@ -428,8 +439,8 @@ TEST_CASE("Part-file persistence seam invalidation forces a fresh low-space deci
 
 	PartFilePersistenceSeams::StorePartMetWriteGuardState(&state, initialDecision.CanWrite);
 	const PartFilePersistenceSeams::PartMetWriteGuardDecision cachedDecision = PartFilePersistenceSeams::ResolvePartMetWriteGuard(state.HasCachedResult, state.CanWrite, false, 0u);
-	CHECK(cachedDecision.UseCachedResult);
-	CHECK(cachedDecision.CanWrite);
+	CHECK_FALSE(cachedDecision.UseCachedResult);
+	CHECK_FALSE(cachedDecision.CanWrite);
 
 	PartFilePersistenceSeams::InvalidatePartMetWriteGuardState(&state);
 	const PartFilePersistenceSeams::PartMetWriteGuardDecision refreshedDecision = PartFilePersistenceSeams::ResolvePartMetWriteGuard(state.HasCachedResult, state.CanWrite, false, 0u);
