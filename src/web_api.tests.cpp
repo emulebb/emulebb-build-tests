@@ -504,13 +504,13 @@ TEST_CASE("Web API shares strict bounded unsigned parsing across native REST and
 	CHECK_FALSE(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=tvsearch&q=Show&season=+1&ep=2", torznabRequest, error));
 	CHECK_EQ(error, "season must be an unsigned decimal value in the range 0..9999");
 
-	std::string ed2k;
+	std::string addUrl;
 	error.clear();
-	CHECK_FALSE(WebServerQBitCompatSeams::TryBuildEd2kLinkFromMagnet(
+	CHECK_FALSE(WebServerQBitCompatSeams::TryValidateAddRequestUrl(
 		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=x&xl=+42",
-		ed2k,
+		addUrl,
 		error));
-	CHECK_EQ(error, "magnet size must be an unsigned decimal value");
+	CHECK_EQ(error, "magnet URLs are not supported");
 }
 
 TEST_CASE("Web API only allows shared-file removal for files that are shared and not mandatory")
@@ -1162,17 +1162,14 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK(rssQueries.empty());
 }
 
-TEST_CASE("Web API exposes deterministic Torznab magnets and safe XML text")
+TEST_CASE("Web API exposes deterministic Torznab eD2K links and safe XML text")
 {
 	CHECK_EQ(
-		WebServerArrCompatSeams::BuildFakeBtihHash("0123456789ABCDEF0123456789ABCDEF"),
-		"0123456789abcdef0123456789abcdef00000000");
-	CHECK_EQ(
-		WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "A&B.mkv", 42),
-		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=A%26B.mkv&xl=42");
-	CHECK(WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "", 42).empty());
-	CHECK(WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "bad\x01name.mkv", 42).empty());
-	CHECK(WebServerArrCompatSeams::BuildMagnetFromEd2k("0123456789abcdef0123456789abcdef", "A&B.mkv", 0).empty());
+		WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789ABCDEF0123456789ABCDEF", "A&B.mkv", 42),
+		"ed2k://|file|A%26B.mkv|42|0123456789abcdef0123456789abcdef|/");
+	CHECK(WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789abcdef0123456789abcdef", "", 42).empty());
+	CHECK(WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789abcdef0123456789abcdef", "bad\x01name.mkv", 42).empty());
+	CHECK(WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789abcdef0123456789abcdef", "A&B.mkv", 0).empty());
 	CHECK_EQ(WebServerArrCompatSeams::XmlEscape("<tag attr=\"x\">A&B</tag>"), "&lt;tag attr=&quot;x&quot;&gt;A&amp;B&lt;/tag&gt;");
 	CHECK_EQ(WebServerJsonSeams::UrlEncodeUtf8("A B+100%"), "A%20B%2B100%25");
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "release.mkv", 10));
@@ -1403,11 +1400,11 @@ TEST_CASE("Web API shares URL encoding across native and Arr compatibility seams
 	CHECK_FALSE(WebServerJsonSeams::TryUrlDecodeUtf8("bad%2xescape", decoded, error));
 	CHECK_EQ(error, "malformed percent escape");
 
-	const std::string magnet(WebServerArrCompatSeams::BuildMagnetFromEd2k(
+	const std::string link(WebServerArrCompatSeams::BuildEd2kDownloadLink(
 		"0123456789abcdef0123456789abcdef",
 		"operator-movie-title + [test].mkv",
 		42));
-	CHECK(magnet.find("&dn=" + encoded + "&xl=42") != std::string::npos);
+	CHECK(link.find("|" + encoded + "|42|") != std::string::npos);
 }
 
 TEST_CASE("Web API shares strict percent decoding across native and Arr adapters")
@@ -1434,35 +1431,32 @@ TEST_CASE("Web API shares strict percent decoding across native and Arr adapters
 	CHECK(fields.empty());
 
 	error.clear();
-	std::string ed2k;
-	CHECK_FALSE(WebServerQBitCompatSeams::TryBuildEd2kLinkFromMagnet(
-		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=%2x&xl=42",
-		ed2k,
-		error));
-	CHECK_EQ(error, "malformed percent escape");
-	CHECK(ed2k.empty());
+	std::string addUrl;
+	CHECK_FALSE(WebServerQBitCompatSeams::TryValidateAddRequestUrl("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=%2x&xl=42", addUrl, error));
+	CHECK_EQ(error, "magnet URLs are not supported");
+	CHECK(addUrl.empty());
 }
 
-TEST_CASE("Web API decodes qBittorrent add forms into native eD2K links")
+TEST_CASE("Web API accepts qBittorrent add forms only for native eD2K links")
 {
 	std::map<std::string, std::string> form;
 	std::string error;
-	CHECK(WebServerQBitCompatSeams::TryParseFormBody("category=RADARR_ENG&stopped=true&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3DLa%2BDolce%2BVita.mkv%26xl%3D42", form, error));
+	CHECK(WebServerQBitCompatSeams::TryParseFormBody("category=RADARR_ENG&stopped=true&urls=ed2k%3A%2F%2F%7Cfile%7CLa%2520Dolce%2520Vita.mkv%7C42%7C0123456789abcdef0123456789abcdef%7C%2F", form, error));
 	CHECK_EQ(form["category"], "RADARR_ENG");
-	CHECK_EQ(form["urls"], "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=La+Dolce+Vita.mkv&xl=42");
+	CHECK_EQ(form["urls"], "ed2k://|file|La%20Dolce%20Vita.mkv|42|0123456789abcdef0123456789abcdef|/");
 
 	WebServerQBitCompatSeams::SQBitTorrentAddRequest request;
-	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=RADARR_ENG&stopped=true&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3DLa%2BDolce%2BVita.mkv%26xl%3D42", request, error));
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=RADARR_ENG&stopped=true&urls=ed2k%3A%2F%2F%7Cfile%7CLa%2520Dolce%2520Vita.mkv%7C42%7C0123456789abcdef0123456789abcdef%7C%2F", request, error));
 	CHECK_EQ(request.strCategory, "RADARR_ENG");
 	CHECK(request.bPaused);
 	CHECK_EQ(request.strUrl, "ed2k://|file|La%20Dolce%20Vita.mkv|42|0123456789abcdef0123456789abcdef|/");
 
 	error.clear();
-	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=++RADARR_ENG++&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=++RADARR_ENG++&urls=ed2k%3A%2F%2F%7Cfile%7Cx%7C42%7C0123456789abcdef0123456789abcdef%7C%2F", request, error));
 	CHECK_EQ(request.strCategory, "RADARR_ENG");
 
 	error.clear();
-	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("paused=false&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("paused=false&urls=ed2k%3A%2F%2F%7Cfile%7Cx%7C42%7C0123456789abcdef0123456789abcdef%7C%2F", request, error));
 	CHECK_FALSE(request.bPaused);
 }
 
@@ -1472,22 +1466,10 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	std::map<std::string, std::string> form;
 	std::string error;
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=http%3A%2F%2Fexample.invalid%2Ffile.torrent", request, error));
-	CHECK_EQ(error, "only magnet URLs are supported");
+	CHECK_EQ(error, "only eD2K URLs are supported");
 
-	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef11111111%26dn%3Dx%26xl%3D42", request, error));
-	CHECK_EQ(error, "magnet btih does not carry an eD2K hash");
-
-	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D0", request, error));
-	CHECK_EQ(error, "magnet size must be positive");
-
-	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D999999999999999999999", request, error));
-	CHECK_EQ(error, "magnet size must be an unsigned decimal value");
-
-	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3D%26xl%3D42", request, error));
-	CHECK_EQ(error, "magnet display name must not be empty");
-
-	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dbad%2501name%26xl%3D42", request, error));
-	CHECK_EQ(error, "magnet display name must be valid UTF-8 without control characters");
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_EQ(error, "magnet URLs are not supported");
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=a&category=b", form, error));
 	CHECK_EQ(error, "duplicate form field: category");
@@ -1506,11 +1488,11 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	CHECK_EQ(error, "category form field is required");
 
 	error.clear();
-	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=bad%01name&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=bad%01name&urls=ed2k%3A%2F%2F%7Cfile%7Cx%7C42%7C0123456789abcdef0123456789abcdef%7C%2F", request, error));
 	CHECK_EQ(error, "category must be valid UTF-8 without control characters");
 
 	error.clear();
-	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("paused=maybe&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("paused=maybe&urls=ed2k%3A%2F%2F%7Cfile%7Cx%7C42%7C0123456789abcdef0123456789abcdef%7C%2F", request, error));
 	CHECK_EQ(error, "paused must be a boolean form value");
 }
 
@@ -1613,13 +1595,6 @@ TEST_CASE("Web API keeps native hashes strict while qBittorrent adapters normali
 	CHECK(WebServerQBitCompatSeams::TryParseHashesOnlyRequest("hashes=0123456789ABCDEF0123456789ABCDEF", mutation, error));
 	REQUIRE_EQ(mutation.hashes.size(), 1u);
 	CHECK_EQ(mutation.hashes[0], "0123456789abcdef0123456789abcdef");
-
-	std::string ed2k;
-	CHECK(WebServerQBitCompatSeams::TryBuildEd2kLinkFromMagnet(
-		"magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF00000000&dn=UpperHash.bin&xl=42",
-		ed2k,
-		error));
-	CHECK_EQ(ed2k, "ed2k://|file|UpperHash.bin|42|0123456789abcdef0123456789abcdef|/");
 }
 
 TEST_CASE("Web API builds representative REST routes and normalizes query parameters")
