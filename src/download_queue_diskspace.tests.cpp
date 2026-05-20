@@ -96,6 +96,17 @@ TEST_CASE("Queue disk-space seam keeps repeated breach enforcement but suppresse
 	CHECK(repeatedBreachAction.ShouldRememberBlock);
 }
 
+TEST_CASE("Queue disk-space seam invalidates cached path requirements only after reserved snapshot demand")
+{
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::ShouldReserveProtectedVolumeSnapshotDemand(false, false, 1024u));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::ShouldReserveProtectedVolumeSnapshotDemand(true, true, 1024u));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::ShouldReserveProtectedVolumeSnapshotDemand(true, false, 0u));
+	CHECK(DownloadQueueDiskSpaceSeams::ShouldReserveProtectedVolumeSnapshotDemand(true, false, 1024u));
+
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::ShouldInvalidateRequiredFreeSpacePathCacheAfterReservation(false));
+	CHECK(DownloadQueueDiskSpaceSeams::ShouldInvalidateRequiredFreeSpacePathCacheAfterReservation(true));
+}
+
 TEST_CASE("Queue disk-space seam pauses active normal files only when they still need growth below the floor")
 {
 	const VolumeKey volumeKey = MakeDriveVolumeKey(2);
