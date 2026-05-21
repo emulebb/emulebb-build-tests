@@ -530,10 +530,19 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert summary["status"] == "passed"
     assert summary["profile"] == "multi-client-p2p"
     assert summary["profile_suite_selection_applied"] is True
-    assert [script_name(command) for command in commands] == ["multi-client-p2p-matrix.py", "local-ed2k-search-soak.py"]
-    assert [suite["name"] for suite in summary["suites"]] == ["multi-client-p2p-matrix", "local-ed2k-search-soak"]
+    assert [script_name(command) for command in commands] == [
+        "multi-client-p2p-matrix.py",
+        "local-ed2k-search-soak.py",
+        "local-ed2k-chaos-mode.py",
+    ]
+    assert [suite["name"] for suite in summary["suites"]] == [
+        "multi-client-p2p-matrix",
+        "local-ed2k-search-soak",
+        "local-ed2k-chaos-mode",
+    ]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
     assert option_values(commands[1], "--p2p-bind-interface-name") == []
+    assert option_values(commands[2], "--p2p-bind-interface-name") == []
 
 
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:
