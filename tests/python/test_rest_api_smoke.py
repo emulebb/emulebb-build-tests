@@ -2217,6 +2217,21 @@ def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None
     assert "only eD2K URLs are supported" in seams
 
 
+def test_native_transfer_add_reports_queue_rejection_as_failure() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source = source_path.read_text(encoding="utf-8")
+    transfer_add_block = source[source.index('if (strCommand == "transfers/add")') : source.index("auto handleTransferBulkMutation")]
+
+    assert "theApp.downloadqueue->AddFileLinkToDownload(*pFileLink" in transfer_add_block
+    assert "theApp.downloadqueue->GetFileByID(pFileLink->GetHashKey()) == NULL" in transfer_add_block
+    assert 'rLinkErrorCode = "INVALID_STATE";' in transfer_add_block
+    assert "no temp/incoming volume placement satisfies the protected disk-space thresholds" in transfer_add_block
+    assert 'added["ok"] = false;' in transfer_add_block
+    assert 'added["code"] = static_cast<LPCSTR>(strLinkErrorCode);' in transfer_add_block
+    assert "rError.strCode = !strLinkErrorCode.IsEmpty() ? strLinkErrorCode" in transfer_add_block
+
+
 def test_qbit_compat_documents_hash_mutation_cap() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     seams = (
