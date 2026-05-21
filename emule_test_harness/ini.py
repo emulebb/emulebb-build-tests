@@ -55,7 +55,7 @@ def patch_ini_value(text: str, key: str, value: str) -> str:
     pattern = re.compile(rf"(?im)^(?P<key>{re.escape(key)})=.*$")
     replacement = f"{key}={value}"
     if pattern.search(text):
-        return pattern.sub(replacement, text)
+        return pattern.sub(lambda _match: replacement, text)
     suffix = "" if text.endswith("\n") else "\r\n"
     return f"{text}{suffix}{replacement}\r\n"
 

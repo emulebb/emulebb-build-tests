@@ -36,6 +36,13 @@ def test_patch_ini_value_replaces_existing_key_case_insensitively() -> None:
     assert "Port=1" in patched
 
 
+def test_patch_ini_value_replaces_existing_key_with_windows_backslashes() -> None:
+    patched = patch_ini_value("TempDir=C:\\old\\temp\\\r\nPort=1\r\n", "TempDir", "C:\\prj\\profile\\temp\\")
+
+    assert "TempDir=C:\\prj\\profile\\temp\\" in patched
+    assert "Port=1" in patched
+
+
 def test_patch_ini_value_appends_missing_key_with_crlf() -> None:
     assert patch_ini_value("Nick=eMule", "Port", "4662") == "Nick=eMule\r\nPort=4662\r\n"
 
