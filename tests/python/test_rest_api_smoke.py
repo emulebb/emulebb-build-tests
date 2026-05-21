@@ -2169,6 +2169,27 @@ def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None
     assert "only eD2K URLs are supported" in seams
 
 
+def test_qbit_compat_documents_hash_mutation_cap() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    seams = (
+        workspace_root
+        / "workspaces"
+        / "workspace"
+        / "app"
+        / "eMule-main"
+        / "srchybrid"
+        / "WebServerQBitCompatSeams.h"
+    ).read_text(encoding="utf-8")
+    adapter_docs = (
+        workspace_root / "repos" / "eMule-tooling" / "docs" / "rest" / "REST-API-ADAPTERS.md"
+    ).read_text(encoding="utf-8")
+
+    assert "kMaxHashMutationCount = 100" in seams
+    assert "one to 100 pipe-delimited 32-character eD2K hashes" in adapter_docs
+    assert "The `hashes=all` value is intentionally" in adapter_docs
+    assert "not supported by the Arr adapter" in adapter_docs
+
+
 def test_rest_contract_registry_covers_release_families() -> None:
     module = load_rest_api_smoke_module()
 
