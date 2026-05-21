@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.multi_client import resolve_windows_client_inventory  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_windows_client_inventory  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
@@ -88,7 +88,7 @@ def compact_child_report(path: Path) -> dict[str, object] | None:
 def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the mandatory eMule BB download from tracing-harness seed scenario."""
 
-    scenario_id = "client01-emulebb-downloads-from-client02-harness"
+    scenario_id = "cl-emulebb-001-downloads-from-cl-harness-002"
     scenario_artifacts = paths.source_artifacts_dir / scenario_id
     command = build_python_command()
     command.extend(
@@ -141,7 +141,7 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
     return {
         "id": scenario_id,
         "status": "passed" if completed.returncode == 0 else "failed",
-        "clients": ["client01-emulebb", "client02-harness"],
+        "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["harness"].profile_id],
         "command": command,
         "return_code": completed.returncode,
         "duration_seconds": round(time.monotonic() - started, 3),
@@ -156,9 +156,9 @@ def build_optional_scenario_rows(inventory: dict[str, object], *, require_option
 
     rows: list[dict[str, object]] = []
     definitions = (
-        ("client01-emulebb-downloads-from-client03-emuleai", "emuleai"),
-        ("client01-emulebb-downloads-from-client04-amule", "amule"),
-        ("client03-emuleai-and-client04-amule-discovery", "emuleai", "amule"),
+        ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
+        ("cl-emulebb-001-downloads-from-cl-amule-004", "amule"),
+        ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
     )
     for definition in definitions:
         scenario_id = definition[0]
@@ -172,7 +172,20 @@ def build_optional_scenario_rows(inventory: dict[str, object], *, require_option
                     "status": "failed" if require_optional_clients else "skipped",
                     "reason": "optional client artifact missing",
                     "missing_clients": [row.identity.profile_id for row in missing],
-                    "clients": ["client01-emulebb", *[row.identity.profile_id for row in availability]],
+                    "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
+                }
+            )
+            continue
+        adapter_blocked = [row for row in availability if not row.deterministic_transfer_adapter]
+        if adapter_blocked:
+            rows.append(
+                {
+                    "id": scenario_id,
+                    "status": "failed" if require_optional_clients else "skipped",
+                    "reason": "deterministic transfer adapter is not enabled for optional client",
+                    "adapter_blocked_clients": [row.identity.profile_id for row in adapter_blocked],
+                    "launch_adapters": {row.identity.profile_id: row.launch_adapter for row in availability},
+                    "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
                 }
             )
             continue
@@ -180,8 +193,8 @@ def build_optional_scenario_rows(inventory: dict[str, object], *, require_option
             {
                 "id": scenario_id,
                 "status": "failed" if require_optional_clients else "skipped",
-                "reason": "optional client executable found, but deterministic launch/control adapter is not enabled yet",
-                "clients": ["client01-emulebb", *[row.identity.profile_id for row in availability]],
+                "reason": "optional deterministic scenario runner is not implemented yet",
+                "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
             }
         )
     return rows

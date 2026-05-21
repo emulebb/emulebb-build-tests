@@ -43,8 +43,8 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
     rows = module.build_optional_scenario_rows(inventory, require_optional_clients=False)
 
     assert {row["status"] for row in rows} == {"skipped"}
-    assert rows[0]["missing_clients"] == ["client03-emuleai"]
-    assert rows[1]["missing_clients"] == ["client04-amule"]
+    assert rows[0]["missing_clients"] == ["cl-emuleai-003"]
+    assert rows[1]["missing_clients"] == ["cl-amule-004"]
 
 
 def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path: Path) -> None:
@@ -74,6 +74,8 @@ def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path:
 
     assert {row["status"] for row in rows} == {"failed"}
     assert all("adapter" in str(row["reason"]) for row in rows)
+    assert rows[0]["adapter_blocked_clients"] == ["cl-emuleai-003"]
+    assert rows[1]["adapter_blocked_clients"] == ["cl-amule-004"]
 
 
 def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: Path) -> None:
@@ -104,7 +106,8 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
     result = module.run_deterministic_transfer_scenario(paths, args)
 
     assert result["status"] == "passed"
-    assert result["clients"] == ["client01-emulebb", "client02-harness"]
+    assert result["id"] == "cl-emulebb-001-downloads-from-cl-harness-002"
+    assert result["clients"] == ["cl-emulebb-001", "cl-harness-002"]
     command = captured["command"]
     assert "--p2p-bind-interface-name" in command
     assert "--client2-app-exe" in command

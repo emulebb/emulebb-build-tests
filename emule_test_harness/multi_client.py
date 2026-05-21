@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 
-CLIENT01_EMULEBB = "client01-emulebb"
-CLIENT02_HARNESS = "client02-harness"
-CLIENT03_EMULEAI = "client03-emuleai"
-CLIENT04_AMULE = "client04-amule"
+CLIENT01_EMULEBB = "cl-emulebb-001"
+CLIENT02_HARNESS = "cl-harness-002"
+CLIENT03_EMULEAI = "cl-emuleai-003"
+CLIENT04_AMULE = "cl-amule-004"
 
 NICK_CLIENT01_EMULEBB = "cl-emulebb-001"
 NICK_CLIENT02_HARNESS = "cl-harness-002"
@@ -20,7 +21,7 @@ NICK_CLIENT04_AMULE = "cl-amule-004"
 
 @dataclass(frozen=True)
 class ClientIdentity:
-    """Stable identity used for profile names, reports, and P2P-visible nicknames."""
+    """Stable identity used for profile directories, reports, and P2P-visible nicknames."""
 
     key: str
     profile_id: str
@@ -37,6 +38,8 @@ class ClientAvailability:
     available: bool
     executable: Path | None
     reason: str
+    launch_adapter: str = ""
+    deterministic_transfer_adapter: bool = False
     control_executable: Path | None = None
 
     def as_report(self) -> dict[str, object]:
@@ -51,6 +54,8 @@ class ClientAvailability:
             "available": self.available,
             "reason": self.reason,
             "executable": str(self.executable) if self.executable is not None else None,
+            "launch_adapter": self.launch_adapter,
+            "deterministic_transfer_adapter": self.deterministic_transfer_adapter,
         }
         if self.control_executable is not None:
             row["control_executable"] = str(self.control_executable)
@@ -101,10 +106,40 @@ def workspace_parent_root(workspace_root: Path) -> Path:
     return resolved
 
 
-def analysis_root(workspace_root: Path, name: str) -> Path:
-    """Returns the materialized analysis checkout path for one optional client."""
+def workspace_manifest_path(workspace_root: Path) -> Path:
+    """Returns the generated workspace manifest path."""
 
-    return workspace_parent_root(workspace_root) / "analysis" / name
+    return workspace_root.resolve() / "deps.json"
+
+
+def resolve_manifest_repo(workspace_root: Path, repo_key: str) -> Path:
+    """Resolves one repo path from the generated workspace manifest."""
+
+    manifest_path = workspace_manifest_path(workspace_root)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    repos = payload.get("workspace", {}).get("repos", {})
+    value = repos.get(repo_key)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Workspace manifest does not define workspace.repos.{repo_key}.")
+    return (manifest_path.parent / value).resolve()
+
+
+def unavailable_manifest_client(
+    identity: ClientIdentity,
+    repo_key: str,
+    adapter: str,
+    exc: Exception,
+) -> ClientAvailability:
+    """Builds an unavailable optional-client row when the workspace manifest cannot resolve it."""
+
+    return ClientAvailability(
+        identity=identity,
+        available=False,
+        executable=None,
+        reason=f"workspace manifest repo '{repo_key}' is unavailable: {exc}",
+        launch_adapter=adapter,
+        deterministic_transfer_adapter=False,
+    )
 
 
 def first_existing_file(candidates: list[Path]) -> Path | None:
@@ -127,6 +162,8 @@ def resolve_emulebb_client(app_exe: Path) -> ClientAvailability:
         available=resolved.is_file(),
         executable=resolved if resolved.is_file() else None,
         reason="available" if resolved.is_file() else f"missing executable: {resolved}",
+        launch_adapter="emule-gui-profile",
+        deterministic_transfer_adapter=True,
     )
 
 
@@ -151,6 +188,8 @@ def resolve_harness_client(workspace_root: Path, configuration: str, override: s
         available=candidate.is_file(),
         executable=candidate if candidate.is_file() else None,
         reason="available" if candidate.is_file() else f"missing executable: {candidate}",
+        launch_adapter="tracing-harness-gui-profile",
+        deterministic_transfer_adapter=True,
     )
 
 
@@ -158,8 +197,12 @@ def resolve_emuleai_client(workspace_root: Path, configuration: str, override: s
     """Resolves an optional Windows eMuleAI executable if it has already been built."""
 
     identity = CLIENT_IDENTITIES["emuleai"]
-    root = analysis_root(workspace_root, "emuleai")
+    try:
+        root = resolve_manifest_repo(workspace_root, "emuleai")
+    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+        return unavailable_manifest_client(identity, "emuleai", "emuleai-gui-profile", exc)
     candidates = [Path(override)] if override else [
+        root / "_Build" / "eMuleAI" / configuration / "x64" / "eMuleAI.exe",
         root / "x64" / configuration / "eMuleAI.exe",
         root / "srchybrid" / "x64" / configuration / "eMuleAI.exe",
         root / "srchybrid" / "x64" / configuration / "emule.exe",
@@ -171,6 +214,8 @@ def resolve_emuleai_client(workspace_root: Path, configuration: str, override: s
         available=executable is not None,
         executable=executable,
         reason="available" if executable is not None else f"no built eMuleAI executable found under {root}",
+        launch_adapter="emuleai-gui-profile",
+        deterministic_transfer_adapter=False,
     )
 
 
@@ -182,15 +227,18 @@ def resolve_amule_client(
     """Resolves optional Windows aMule daemon and command binaries when present."""
 
     identity = CLIENT_IDENTITIES["amule"]
-    root = analysis_root(workspace_root, "amule")
+    try:
+        root = resolve_manifest_repo(workspace_root, "amule")
+    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+        return unavailable_manifest_client(identity, "amule", "amuled-amulecmd", exc)
     daemon_candidates = [Path(override_daemon)] if override_daemon else [
-        workspace_parent_root(workspace_root) / "state" / "tools" / "amule" / "bin" / "amuled.exe",
+        workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amuled.exe",
         root / "packaging" / "windows" / "dist" / "bin" / "amuled.exe",
         root / "build" / "bin" / "amuled.exe",
         root / "bin" / "amuled.exe",
     ]
     control_candidates = [Path(override_control)] if override_control else [
-        workspace_parent_root(workspace_root) / "state" / "tools" / "amule" / "bin" / "amulecmd.exe",
+        workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amulecmd.exe",
         root / "packaging" / "windows" / "dist" / "bin" / "amulecmd.exe",
         root / "build" / "bin" / "amulecmd.exe",
         root / "bin" / "amulecmd.exe",
@@ -212,6 +260,8 @@ def resolve_amule_client(
         executable=daemon,
         control_executable=control,
         reason=reason,
+        launch_adapter="amuled-amulecmd",
+        deterministic_transfer_adapter=False,
     )
 
 
