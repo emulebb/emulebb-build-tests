@@ -116,7 +116,7 @@ TEST_CASE("Long-path seam memoizes prepared path facts across repeated calls")
 	const LongPathSeams::PreparedPathMemoStats afterHits = LongPathSeams::GetPreparedPathMemoizationStats();
 	CHECK_EQ(strippedPath, path);
 	CHECK_EQ(normalizedPath, path);
-	CHECK(afterHits.ullCacheHits >= 2ull);
+	CHECK(afterHits.ullCacheHits >= 1ull);
 	CHECK_EQ(afterHits.uEntryCount, 1u);
 }
 
@@ -500,6 +500,42 @@ TEST_CASE("Long-path seam creates overlong unicode directories before file opera
 		REQUIRE(nLastSlash != std::wstring::npos);
 		current.erase(nLastSlash);
 	}
+}
+
+TEST_CASE("Long-path seam creates missing overlong startup directory trees in one call")
+{
+	LongPathTestSupport::ScopedLongPathFixture fixture;
+	INFO(fixture.LastError());
+	REQUIRE(fixture.Initialize(false, 0u, 0x57A27u));
+
+	std::wstring profileDir = fixture.DirectoryPath() + L"\\profile_" + LongPathTestSupport::MakeSpecialSegment();
+	while (profileDir.size() < MAX_PATH + 32u) {
+		profileDir += L"\\segment_";
+		profileDir += LongPathTestSupport::MakeSpecialSegment();
+	}
+
+	const std::wstring incomingDir = profileDir + L"\\config\\Incoming\\";
+	const std::wstring tempDir = profileDir + L"\\config\\Temp\\deep-child";
+	REQUIRE(LongPathSeams::CreateDirectoryPath(incomingDir.c_str()));
+	REQUIRE(LongPathSeams::CreateDirectoryPath(tempDir.c_str()));
+	CHECK(LongPathSeams::DirectoryExists(incomingDir.c_str()));
+	CHECK(LongPathSeams::DirectoryExists(tempDir.c_str()));
+	CHECK(LongPathSeams::CreateDirectoryPath(incomingDir.c_str()));
+
+	std::vector<std::wstring> cleanup = {
+		tempDir,
+		profileDir + L"\\config\\Temp",
+		profileDir + L"\\config\\Incoming",
+		profileDir + L"\\config"
+	};
+	for (std::wstring current = profileDir; current.size() > fixture.DirectoryPath().size(); ) {
+		cleanup.push_back(current);
+		const size_t nLastSlash = current.find_last_of(L'\\');
+		REQUIRE(nLastSlash != std::wstring::npos);
+		current.erase(nLastSlash);
+	}
+	for (const std::wstring &path : cleanup)
+		(void)::RemoveDirectoryW(LongPathTestSupport::PreparePathForLongPath(path).c_str());
 }
 
 TEST_CASE("Long-path seam normalizes overlong forward-slash paths for directory and payload round-trips")

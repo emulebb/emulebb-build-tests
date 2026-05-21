@@ -23,7 +23,7 @@ def test_transient_path_detection_catches_workspace_artifacts() -> None:
 
     assert module.is_transient_harness_path(r"C:\repo\workspaces\workspace\state\test-artifacts\suite\crash-dumps")
     assert module.is_transient_harness_path(r"C:\repo\repos\eMule-build-tests\reports\old\crash-dumps")
-    assert not module.is_transient_harness_path(r"C:\Users\operator\Documents\eMuleDumps")
+    assert not module.is_transient_harness_path(r"C:\operator-data\Documents\eMuleDumps")
 
 
 def test_fixture_cleanup_audit_flags_leftover_paths(monkeypatch, tmp_path: Path) -> None:

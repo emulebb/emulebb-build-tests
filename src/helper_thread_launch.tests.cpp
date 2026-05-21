@@ -170,9 +170,10 @@ TEST_CASE("IOCP helper loop and deferred wake decisions preserve stop key semant
 	CHECK_FALSE(HelperThreadLaunchSeams::ShouldWaitForIocpWorkerCompletion(true, 1, 0));
 	CHECK_FALSE(HelperThreadLaunchSeams::ShouldWaitForIocpWorkerCompletion(false, 0, 0));
 
-	CHECK(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(TRUE, 1));
-	CHECK_FALSE(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(FALSE, 1));
-	CHECK_FALSE(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(TRUE, 0));
+	CHECK(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(TRUE, 1, NULL));
+	CHECK(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(FALSE, 1, reinterpret_cast<void *>(1)));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(TRUE, 0, NULL));
+	CHECK_FALSE(HelperThreadLaunchSeams::ShouldProcessIocpWorkerCompletion(FALSE, 0, NULL));
 
 	CHECK(HelperThreadLaunchSeams::ShouldPostIocpWakeAfterNewData(1, true));
 	CHECK_FALSE(HelperThreadLaunchSeams::ShouldPostIocpWakeAfterNewData(0, true));
