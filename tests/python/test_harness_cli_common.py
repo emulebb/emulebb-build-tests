@@ -126,6 +126,73 @@ def test_resolve_profile_seed_dir_uses_default_or_override(tmp_path: Path) -> No
     assert module.resolve_profile_seed_dir(paths, tmp_path / "override") == (tmp_path / "override").resolve()
 
 
+def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    repo_root = tmp_path / "repos" / "eMule-build-tests"
+    script_file = repo_root / "scripts" / "suite.py"
+    seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
+    app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
+    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emule.exe"
+    seed_dir.mkdir(parents=True)
+    app_exe.parent.mkdir(parents=True)
+    app_exe.write_text("exe", encoding="utf-8")
+
+    monkeypatch.setattr(module.time, "strftime", lambda _format: "20260521-120000")
+    monkeypatch.setattr(module.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(module, "configure_local_dumps", lambda **_kwargs: {"enabled": False})
+    monkeypatch.setenv("TEMP", r"C:\not-the-workspace-temp")
+    monkeypatch.setenv("TMP", r"C:\not-the-workspace-temp")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\not-the-workspace-localappdata")
+
+    paths = module.prepare_run_paths(
+        script_file=script_file,
+        suite_name="rest-api-live-e2e",
+        configuration="Release",
+        workspace_root=tmp_path / "workspaces" / "workspace",
+        app_root=app_root,
+    )
+
+    label = "20260521-120000-eMule-main-release-4242"
+    assert paths.source_artifacts_dir == (
+        tmp_path / "workspaces" / "workspace" / "state" / "test-artifacts" / "rest-api-live-e2e" / label
+    ).resolve()
+    assert paths.run_report_dir == (
+        tmp_path / "workspaces" / "workspace" / "state" / "test-reports" / "rest-api-live-e2e" / label
+    ).resolve()
+    assert paths.latest_report_dir == (
+        tmp_path / "workspaces" / "workspace" / "state" / "test-reports" / "rest-api-live-e2e-latest"
+    ).resolve()
+    assert paths.keep_source_artifacts is False
+
+
+def test_prepare_run_paths_rejects_explicit_windows_temp_artifacts(monkeypatch, tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    repo_root = tmp_path / "repos" / "eMule-build-tests"
+    script_file = repo_root / "scripts" / "suite.py"
+    seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
+    app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
+    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emule.exe"
+    local_temp = tmp_path / "Users" / "tester" / "AppData" / "Local" / "Temp"
+    seed_dir.mkdir(parents=True)
+    app_exe.parent.mkdir(parents=True)
+    app_exe.write_text("exe", encoding="utf-8")
+    local_temp.mkdir(parents=True)
+
+    monkeypatch.setenv("LOCALAPPDATA", str(local_temp.parent))
+    monkeypatch.setenv("TEMP", str(local_temp))
+    monkeypatch.setattr(module, "configure_local_dumps", lambda **_kwargs: {"enabled": False})
+
+    with pytest.raises(RuntimeError, match="not Windows temp"):
+        module.prepare_run_paths(
+            script_file=script_file,
+            suite_name="rest-api-live-e2e",
+            configuration="Release",
+            workspace_root=tmp_path / "workspaces" / "workspace",
+            app_root=app_root,
+            artifacts_dir=local_temp / "bad-run",
+        )
+
+
 def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatch, tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     registry: dict[str, dict[str, tuple[object, int]]] = {}

@@ -93,7 +93,7 @@ def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
     manifest_root.mkdir(parents=True)
     for path in (repo_root() / "manifests" / "release-campaigns").glob("*.json"):
         (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    latest = tests_root / "reports" / "live-e2e-suite-latest"
+    latest = state_root / "test-reports" / "live-e2e-suite-latest"
     latest.mkdir(parents=True)
     (latest / "result.json").write_text(json.dumps({"status": "passed", "profile": "release-expanded"}), encoding="utf-8")
     fast = state_root / "certification" / "20260517-010203-fast"

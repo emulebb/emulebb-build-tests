@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.live_profile_seed import validate_seed_config_dir
+from emule_test_harness.paths import get_test_artifacts_root, get_test_reports_root, reject_windows_temp_path
 from emule_test_harness.workspace_layout import get_default_workspace_root, resolve_workspace_app_root
 
 
@@ -87,14 +88,16 @@ def main(argv: list[str] | None = None) -> int:
         preferred_variant_names=("main", "community", "tracing-harness"),
     )
     emule_exe = (args.emule_exe or (app_root / "srchybrid" / "x64" / "Debug" / "emule.exe")).resolve()
-    report_root = (args.report_root or (test_repo_root / "reports" / "diag-hash")).resolve()
+    report_root = (args.report_root or (get_test_reports_root(workspace_root) / "diag-hash")).resolve()
+    reject_windows_temp_path(report_root, "report root")
     latest_report_dir = report_root.parent / "diag-hash-latest"
     seed_config_dir = (args.profile_seed_dir or (test_repo_root / "manifests" / "live-profile-seed" / "config")).resolve()
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     run_dir = report_root / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
-    profile_root = (args.profile_root or (run_dir / "profile-base")).resolve()
+    profile_root = (args.profile_root or (get_test_artifacts_root(workspace_root) / "diag-hash" / timestamp / "profile-base")).resolve()
+    reject_windows_temp_path(profile_root, "profile root")
 
     print(f"[diag] Report directory: {run_dir}")
     print(f"[diag] App root: {app_root}")

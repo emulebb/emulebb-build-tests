@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
+
+WORKSPACE_NAME = "workspace"
+TEST_ARTIFACTS_DIR_NAME = "test-artifacts"
+TEST_REPORTS_DIR_NAME = "test-reports"
 
 
 def make_file_token(value: str) -> str:
@@ -28,6 +33,80 @@ def get_build_tag(workspace_root: Path, app_root: Path | None = None) -> str:
     if app_root is not None:
         segments.append(app_root.resolve().name)
     return re.sub(r"[^A-Za-z0-9._-]", "_", "-".join(segments))
+
+
+def get_emule_workspace_root(test_repo_root: Path) -> Path:
+    """Returns the canonical root that owns `repos/` and `workspaces/`."""
+
+    if os.environ.get("EMULE_WORKSPACE_ROOT"):
+        return Path(os.environ["EMULE_WORKSPACE_ROOT"]).resolve()
+    return test_repo_root.resolve().parent.parent
+
+
+def get_default_workspace_root(test_repo_root: Path, workspace_name: str = WORKSPACE_NAME) -> Path:
+    """Returns the default managed workspace root for one test checkout."""
+
+    return get_emule_workspace_root(test_repo_root) / "workspaces" / workspace_name
+
+
+def get_workspace_state_root(workspace_root: Path) -> Path:
+    """Returns the canonical generated test state root for one workspace."""
+
+    return workspace_root.resolve() / "state"
+
+
+def get_test_artifacts_root(workspace_root: Path) -> Path:
+    """Returns the canonical scratch artifact root for test harness runs."""
+
+    return get_workspace_state_root(workspace_root) / TEST_ARTIFACTS_DIR_NAME
+
+
+def get_test_reports_root(workspace_root: Path) -> Path:
+    """Returns the canonical published report root for test harness runs."""
+
+    return get_workspace_state_root(workspace_root) / TEST_REPORTS_DIR_NAME
+
+
+def _normalized_path_text(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
+
+
+def path_is_relative_to(path: Path, root: Path) -> bool:
+    """Returns whether `path` is equal to or below `root` after resolution."""
+
+    path_text = _normalized_path_text(path)
+    root_text = _normalized_path_text(root).rstrip("\\/")
+    return path_text == root_text or path_text.startswith(root_text + os.sep)
+
+
+def windows_temp_roots() -> tuple[Path, ...]:
+    """Returns known Windows temp roots that must not hold harness outcomes."""
+
+    roots: list[Path] = []
+    for variable_name in ("TEMP", "TMP"):
+        value = os.environ.get(variable_name)
+        if value:
+            roots.append(Path(value))
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        roots.append(Path(local_app_data) / "Temp")
+
+    unique_roots: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = _normalized_path_text(root)
+        if key not in seen:
+            seen.add(key)
+            unique_roots.append(root)
+    return tuple(unique_roots)
+
+
+def reject_windows_temp_path(path: Path, purpose: str) -> None:
+    """Rejects harness output roots below Windows temp directories."""
+
+    for temp_root in windows_temp_roots():
+        if path_is_relative_to(path, temp_root):
+            raise RuntimeError(f"{purpose} must be under workspace state, not Windows temp: {path.resolve()}")
 
 
 def get_test_binary_path(

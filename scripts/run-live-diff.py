@@ -17,6 +17,7 @@ from emule_test_harness.live_diff import (
     get_default_workspace_root,
     run_live_diff,
 )
+from emule_test_harness.paths import get_test_reports_root, reject_windows_temp_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,11 +42,14 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     test_repo_root = args.test_repo_root.resolve()
-    report_root = (args.report_root or (test_repo_root / "reports")).resolve()
+    test_run_workspace_root = (args.test_run_workspace_root or get_default_workspace_root(test_repo_root)).resolve()
+    baseline_workspace_root = (args.baseline_workspace_root or get_default_workspace_root(test_repo_root)).resolve()
+    report_root = (args.report_root or get_test_reports_root(test_run_workspace_root)).resolve()
+    reject_windows_temp_path(report_root, "report root")
     config = LiveDiffConfig(
         test_repo_root=test_repo_root,
-        test_run_workspace_root=(args.test_run_workspace_root or get_default_workspace_root(test_repo_root)).resolve(),
-        baseline_workspace_root=(args.baseline_workspace_root or get_default_workspace_root(test_repo_root)).resolve(),
+        test_run_workspace_root=test_run_workspace_root,
+        baseline_workspace_root=baseline_workspace_root,
         test_run_app_root=args.test_run_app_root.resolve() if args.test_run_app_root else None,
         baseline_app_root=args.baseline_app_root.resolve() if args.baseline_app_root else None,
         configuration=args.configuration,

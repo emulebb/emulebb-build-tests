@@ -6,11 +6,15 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from emule_test_harness.paths import (
+    get_test_artifacts_root,
+    get_test_reports_root,
+    reject_windows_temp_path,
+)
 
 try:
     import winreg
@@ -484,15 +488,17 @@ def prepare_run_paths(
     if not seed_config_dir.is_dir():
         raise RuntimeError(f"Seed config directory was not found at '{seed_config_dir}'.")
 
-    report_root = repo_root / "reports"
+    report_root = get_test_reports_root(resolved_workspace_root)
+    reject_windows_temp_path(report_root, "report root")
     suite_report_root = report_root / suite_name
     report_stamp = time.strftime("%Y%m%d-%H%M%S")
-    report_label = f"{report_stamp}-{sanitize_report_token(get_app_variant_label(resolved_app_exe))}-{configuration.lower()}"
+    report_label = f"{report_stamp}-{sanitize_report_token(get_app_variant_label(resolved_app_exe))}-{configuration.lower()}-{os.getpid()}"
     source_artifacts_dir = (
         Path(artifacts_dir).resolve()
         if artifacts_dir
-        else Path(tempfile.gettempdir(), f"emule-{suite_name}-{uuid.uuid4().hex}").resolve()
+        else (get_test_artifacts_root(resolved_workspace_root) / suite_name / report_label).resolve()
     )
+    reject_windows_temp_path(source_artifacts_dir, "artifacts directory")
     source_artifacts_dir.mkdir(parents=True, exist_ok=True)
     local_dumps = configure_local_dumps(
         artifact_dir=source_artifacts_dir,

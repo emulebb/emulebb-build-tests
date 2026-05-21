@@ -17,7 +17,7 @@ def default_workspace_root() -> Path:
 
 
 def default_dump_path(workspace_root: Path) -> Path:
-    return workspace_root / "repos" / "eMule-build-tests" / "reports" / "diag-hash-latest" / "emule-cpu.dmp"
+    return workspace_root / "workspaces" / "workspace" / "state" / "test-reports" / "diag-hash-latest" / "emule-cpu.dmp"
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
         "dump_path",
         nargs="?",
         default=str(default_dump_path(workspace_root)),
-        help="Minidump path to inspect. Defaults to reports/diag-hash-latest/emule-cpu.dmp.",
+        help="Minidump path to inspect. Defaults to workspaces/workspace/state/test-reports/diag-hash-latest/emule-cpu.dmp.",
     )
     return parser.parse_args()
 

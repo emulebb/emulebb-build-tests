@@ -13,8 +13,9 @@ from emule_test_harness.community_core_coverage import (
 
 
 def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path) -> None:
-    older = tmp_path / "reports" / "native-coverage" / "older" / "coverage-summary.json"
-    newer = tmp_path / "reports" / "native-coverage" / "newer" / "coverage-summary.json"
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    older = workspace_root / "state" / "test-reports" / "native-coverage" / "older" / "coverage-summary.json"
+    newer = workspace_root / "state" / "test-reports" / "native-coverage" / "newer" / "coverage-summary.json"
     older.parent.mkdir(parents=True)
     newer.parent.mkdir(parents=True)
     older.write_text(json.dumps({"name": "older"}), encoding="utf-8")
@@ -27,7 +28,7 @@ def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path)
     os.utime(older, (old_time, old_time))
     os.utime(newer, (new_time, new_time))
 
-    assert get_latest_coverage_summary_path(tmp_path) == newer
+    assert get_latest_coverage_summary_path(workspace_root) == newer
 
 
 def test_build_config_resolves_default_app_roots(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .live_diff import LiveDiffConfig, run_live_diff
 from .native_coverage import NativeCoverageConfig, run_native_coverage
+from .paths import get_test_artifacts_root, get_test_reports_root
 from .workspace_layout import get_default_workspace_root
 
 
@@ -32,10 +33,10 @@ class CommunityCoreCoverageConfig:
     rest_app_scope: str = "main-only"
 
 
-def get_latest_coverage_summary_path(test_repo_root: Path) -> Path:
+def get_latest_coverage_summary_path(workspace_root: Path) -> Path:
     """Returns the most recently written native coverage summary."""
 
-    coverage_root = test_repo_root.resolve() / "reports" / "native-coverage"
+    coverage_root = get_test_reports_root(workspace_root) / "native-coverage"
     summaries = sorted(
         coverage_root.glob("**/coverage-summary.json"),
         key=lambda path: path.stat().st_mtime,
@@ -49,7 +50,8 @@ def get_latest_coverage_summary_path(test_repo_root: Path) -> Path:
 def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
     """Runs the canonical main-vs-community coverage and live-diff comparison."""
 
-    run_report_dir = config.test_repo_root / "reports" / "community-core-coverage" / time.strftime("%Y%m%d-%H%M%S")
+    report_root = get_test_reports_root(config.workspace_root)
+    run_report_dir = report_root / "community-core-coverage" / time.strftime("%Y%m%d-%H%M%S")
     run_report_dir.mkdir(parents=True, exist_ok=True)
 
     run_native_coverage(
@@ -63,7 +65,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
             preferred_coverage_root=config.preferred_coverage_root,
         )
     )
-    main_coverage_summary_path = get_latest_coverage_summary_path(config.test_repo_root)
+    main_coverage_summary_path = get_latest_coverage_summary_path(config.workspace_root)
 
     run_native_coverage(
         NativeCoverageConfig(
@@ -76,7 +78,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
             preferred_coverage_root=config.preferred_coverage_root,
         )
     )
-    community_coverage_summary_path = get_latest_coverage_summary_path(config.test_repo_root)
+    community_coverage_summary_path = get_latest_coverage_summary_path(config.workspace_root)
 
     live_diff_result = run_live_diff(
         LiveDiffConfig(
@@ -88,13 +90,13 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
             configuration=config.configuration,
             platform=config.platform,
             suite_names=("parity", "protocol-parity", "community-core-divergence"),
-            report_root=config.test_repo_root / "reports",
+            report_root=report_root,
         )
     )
     if live_diff_result != 0:
         return live_diff_result
 
-    live_diff_summary_path = config.test_repo_root / "reports" / "live-diff-summary.json"
+    live_diff_summary_path = report_root / "live-diff-summary.json"
     live_rest_e2e = None
     if config.include_live_rest_e2e:
         live_rest_e2e = run_live_rest_e2e_for_community_summary(config, run_report_dir)
@@ -181,7 +183,7 @@ def run_live_rest_e2e_for_community_summary(
 
     if config.rest_app_scope != "main-only":
         raise ValueError("Community REST E2E currently supports only main-only app scope.")
-    artifacts_dir = run_report_dir / "live-rest-e2e"
+    artifacts_dir = get_test_artifacts_root(config.workspace_root) / "community-core-coverage" / run_report_dir.name / "live-rest-e2e"
     command = [
         sys.executable,
         str(config.test_repo_root / "scripts" / "rest-api-smoke.py"),

@@ -20,7 +20,7 @@ It owns:
 - shared doctest sources and support headers
 - parity and divergence suites for live workspace-to-workspace comparison
 - workspace-level build and live-diff scripts
-- fixture, manifest, and report directories for future protocol coverage
+- fixture, manifest, and workspace-state report helpers for future protocol coverage
 - the deterministic live-profile seed used by the live REST E2E lane and live UI regressions
 
 The project is built against the canonical app checkout resolved from the invoking workspace manifest. It is intentionally not a runtime dependency like the `eMule-*` third-party dependencies, and it is no longer embedded as a `tests/` submodule inside each workspace.
@@ -50,7 +50,8 @@ Community core comparison workflow:
 - it runs the focused `community-core-divergence` suite for main-only queue-scoring and persistence behavior
 - it runs native coverage for `app\eMule-community-baseline` with `parity`
 - it runs `scripts\run-live-diff.py` against those two app roots and keeps the suite-level pass/fail split explicit
-- the wrapper writes a combined summary under `reports\community-core-coverage`
+- the wrapper writes a combined summary under
+  `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-reports\community-core-coverage`
 
 Current critical comparison slices:
 
@@ -98,7 +99,7 @@ Script inventory:
 | `scripts\validate-protocol-goldens.py` | protocol parity guard | maintained | validates compact Kad/eD2K oracle goldens and redaction rules |
 | `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes tracing-harness UDP/eD2K JSONL dumps into candidate goldens |
 | `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
-| `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under reports |
+| `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report/profile-seed resolution for Python-first live/UI harnesses |
@@ -122,6 +123,20 @@ Workspace quick reference:
 - canonical target app paths are `app\eMule-main`, `app\eMule-community-baseline`, and `app\eMule-community-tracing-harness`
 - for live-diff runs, point `-TestRunWorkspaceRoot` and `-BaselineWorkspaceRoot` at the two workspace roots you want to compare
 - for cleanroom validation, pass both `-WorkspaceRoot` and `-AppRoot` explicitly so reports and build tags stay tied to the selected workspace root
+
+Harness output roots:
+
+- published reports and `*-latest` pointers live under
+  `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-reports`
+- scratch artifacts, live profiles, VHD images, admin mount working folders,
+  CPU/heap traces, browser data directories, dumps, and child-suite scratch live
+  under `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-artifacts`
+- explicit artifact, profile, mount, or report paths below `%TEMP%`, `%TMP%`,
+  or `%LOCALAPPDATA%\Temp` are rejected; test outcomes must be predictable and
+  workspace-owned
+- older repo-local `repos\eMule-build-tests\reports` and
+  `workspaces\workspace\state\live-e2e-artifacts` paths are legacy evidence
+  locations only and are not used for new runs
 
 The default seam-enabled baseline for 0.72a comparisons is materialized as
 `app\eMule-community-baseline`. It is test-only and should stay
@@ -203,9 +218,11 @@ Cold-start REST dump stress lane:
   Windows SDK `cdb` when available; `--enable-umdh` additionally enables
   `gflags` UST before launch, captures UMDH snapshots, and restores the image
   flag before exit
-- reports are written under `reports\rest-cold-start-dump-stress\...` and
-  include `result.json`, resource snapshots, dump files, CDB transcripts,
-  handle snapshots, module inventory, and optional UMDH diffs
+- reports are written under
+  `state\test-reports\rest-cold-start-dump-stress\...`; scratch profiles,
+  dump files, CDB transcripts, handle snapshots, module inventory, CPU traces,
+  and optional UMDH diffs are kept under the matching
+  `state\test-artifacts` run tree before publication
 - live download triggers actively start safe real downloads and allow archive,
   audio, and video candidates while still blocking executable/script payloads;
   if the live network does not expose enough safe candidates, the lane returns
@@ -223,8 +240,8 @@ Fake/Kad trust soak lane:
 - the report focuses on fake-file risk invariants, canonical name divergence,
   ignored release-noise tokens, Kad publish-info buckets, result volume,
   failed/zero-result cycles, and process resource/CPU samples
-- reports are written under `reports\fake-kad-trust-soak\...` and mirrored to
-  `reports\fake-kad-trust-soak-latest`
+- reports are written under `state\test-reports\fake-kad-trust-soak\...` and
+  mirrored to `state\test-reports\fake-kad-trust-soak-latest`
 
 Aggregate live E2E lane:
 
@@ -256,7 +273,9 @@ Aggregate live E2E lane:
   budget flags to reduce or expand that budget for a specific run
 - REST and auto-browse child runs refresh `server.met` and `nodes.dat` from `https://emule-security.org/` / `https://upd.emule-security.org/` unless `--skip-live-seed-refresh` is supplied
 - the aggregate runner continues after child-suite failures by default to expose multiple breaking points in one pass; use `--fail-fast` only when a short diagnostic run is needed
-- each child suite keeps its normal report directory, while the aggregate run also writes `reports\live-e2e-suite\...\result.json` and refreshes `reports\live-e2e-suite-latest`
+- each child suite keeps its normal report directory, while the aggregate run
+  also writes `state\test-reports\live-e2e-suite\...\result.json` and refreshes
+  `state\test-reports\live-e2e-suite-latest`
 
 Canonical live auto-browse lane:
 
@@ -274,7 +293,8 @@ Canonical live auto-browse lane:
   - acquisition of one live transfer with sources
   - at least one successful automatic remote-share browse that logs success and persists `.browsecache` output
 - `--keep-running` leaves the launched isolated eMule instance alive after a passing run and forces artifact retention so the profile can be inspected afterward
-- artifacts are published under `reports\auto-browse-live\...` with the same latest-report mirroring as the other Python-first live harnesses
+- artifacts are published under `state\test-reports\auto-browse-live\...` with
+  the same latest-report mirroring as the other Python-first live harnesses
 
 Shared Files live UI regression:
 
@@ -284,8 +304,11 @@ Shared Files live UI regression:
 - the default UI run now covers two scenarios: the original three-file deterministic smoke case plus a generated recursive robustness tree under the configured long-path shared root
 - the regression asserts that the main window starts maximized and exercises exact default-name ordering, size ascending and descending sorts, name ascending and descending sorts after reload, selection-detail updates, reload preservation of the active descending size sort, and large-tree row-count/set/prefix checks driven by the generated manifest
 - `--scenario` can be repeated on the Python entrypoint to run only `fixture-three-files` or only `generated-robustness-recursive`
-- each run publishes artifacts and `ui-summary.json` under `reports\shared-files-ui-e2e\...` and refreshes `reports\shared-files-ui-e2e-latest`
-- the shared `reports\harness-summary.json` now includes a `live_ui` section when that regression is run
+- each run publishes artifacts and `ui-summary.json` under
+  `state\test-reports\shared-files-ui-e2e\...` and refreshes
+  `state\test-reports\shared-files-ui-e2e-latest`
+- the shared `state\test-reports\harness-summary.json` now includes a
+  `live_ui` section when that regression is run
 
 Config-stability live UI regression:
 
@@ -294,14 +317,18 @@ Config-stability live UI regression:
 - the default run covers `long-config-settings-roundtrip` and `long-config-shared-stress`
 - the roundtrip scenario edits the real Preferences dialog, saves `OnlineSignature`, verifies `preferences.ini`, relaunches the same long-path profile, and confirms persisted UI state
 - the stress scenario repeats launch, Preferences save, Shared Files activation, and clean shutdown across multiple cycles while recursively sharing the generated robustness tree under the configured long-path shared root
-- each run publishes artifacts and `ui-summary.json` under `reports\config-stability-ui-e2e\...` and refreshes `reports\config-stability-ui-e2e-latest`
+- each run publishes artifacts and `ui-summary.json` under
+  `state\test-reports\config-stability-ui-e2e\...` and refreshes
+  `state\test-reports\config-stability-ui-e2e-latest`
 
 Preferences live UI regression:
 
 - `scripts\preference-ui-e2e.py` is the operator-facing entrypoint for the real Preferences dialog regression
 - it launches an isolated profile, opens Preferences, drives the WebServer page fields for max upload size and allowed IPs, then drives the Tweaks advanced tree through real tree selection, checkbox/radio activation, and in-place edit controls
 - the scenario saves through the dialog and asserts `preferences.ini` persistence for crash dumps, log size/buffer/format, performance logging, text editor command, preview small-block policy, chat/session limits, WebServer max upload, and WebServer allowed IPs
-- each run publishes `ui-summary.json` under `reports\preference-ui-e2e\...` and refreshes `reports\preference-ui-e2e-latest`
+- each run publishes `ui-summary.json` under
+  `state\test-reports\preference-ui-e2e\...` and refreshes
+  `state\test-reports\preference-ui-e2e-latest`
 
 Startup-profile scenarios:
 
@@ -313,8 +340,12 @@ Startup-profile scenarios:
 - the long-path scenarios target the configured long-path shared root by default, regenerate the repo-owned fixture tree as needed, and expand `shareddir.dat` deterministically in the recursive cases
 - each scenario summary now also records shareddir payload metrics plus tree-shape metrics such as depth, longest paths, and counts beyond the Windows path thresholds
 - each scenario summary includes highlighted timings, normalized derived timings, and the top slowest startup phases, and the combined summary adds direct delta comparisons between the main long-path, generated output, and Shared Files robustness root-only vs recursive variants
-- each run publishes scenario artifacts plus `startup-profiles-summary.json` and `startup-profiles-wrapper-summary.json` under `reports\startup-profile-scenarios\...` and refreshes `reports\startup-profile-scenarios-latest`
-- the shared `reports\harness-summary.json` now includes a `startup_profiles` section when that runner is used
+- each run publishes scenario artifacts plus `startup-profiles-summary.json`
+  and `startup-profiles-wrapper-summary.json` under
+  `state\test-reports\startup-profile-scenarios\...` and refreshes
+  `state\test-reports\startup-profile-scenarios-latest`
+- the shared `state\test-reports\harness-summary.json` now includes a
+  `startup_profiles` section when that runner is used
 
 Tracked-file privacy guard:
 
@@ -325,8 +356,8 @@ Tracked-file privacy guard:
 
 Native seam coverage and shared reports:
 
-- `scripts\run-native-coverage.py` builds `emule-tests.exe`, runs the requested doctest suites under OpenCppCoverage, and writes Cobertura plus summary outputs under `reports\native-coverage`
-- `scripts\run-community-core-coverage.py` chains the canonical `main` and `community` native-coverage runs with the workspace live-diff pass and writes a combined summary under `reports\community-core-coverage`
+- `scripts\run-native-coverage.py` builds `emule-tests.exe`, runs the requested doctest suites under OpenCppCoverage, and writes Cobertura plus summary outputs under `state\test-reports\native-coverage`
+- `scripts\run-community-core-coverage.py` chains the canonical `main` and `community` native-coverage runs with the workspace live-diff pass and writes a combined summary under `state\test-reports\community-core-coverage`
 - Python OpenCppCoverage resolution uses an explicit install root when provided, otherwise discovers `OpenCppCoverage.exe` from `PATH`, and finally falls back to a repo-managed pinned install under `tools\OpenCppCoverage`
-- `scripts\run-live-diff.py` writes both text and JSON parity/divergence summaries under `reports`
-- `scripts\publish-harness-summary.py` combines native coverage, parity, optional live-harness manifest data, optional live UI status, and optional startup-profile scenario status into one shared summary under `reports`
+- `scripts\run-live-diff.py` writes both text and JSON parity/divergence summaries under `state\test-reports`
+- `scripts\publish-harness-summary.py` combines native coverage, parity, optional live-harness manifest data, optional live UI status, and optional startup-profile scenario status into one shared summary under `state\test-reports`

@@ -20,6 +20,7 @@ from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     VolumeIdentity,
     create_admin_volume_fixture,
 )
+from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -70,6 +71,7 @@ def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFi
     """Builds the VHD-backed fixture configuration for this suite."""
 
     mount_parent = Path(args.mount_root).resolve() if args.mount_root else paths.source_artifacts_dir / "admin-mounts"
+    reject_windows_temp_path(mount_parent, "admin fixture mount root")
     return AdminVolumeFixtureConfig(
         vhd_path=paths.source_artifacts_dir / "admin-volumes" / "shared-cache-volume-identity.vhdx",
         mount_root=mount_parent / "shared-cache-volume-identity",

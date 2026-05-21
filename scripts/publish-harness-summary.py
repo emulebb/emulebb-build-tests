@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.paths import get_default_workspace_root, get_test_reports_root
 
 
 def read_json_file(path: Path | None):
@@ -24,7 +31,7 @@ def build_combined_summary(
     live_ui_summary,
     startup_profile_summary,
 ) -> dict[str, object]:
-    """Builds the stable combined summary payload under `reports/`."""
+    """Builds the stable combined summary payload under the workspace test report root."""
 
     live_ui_result = live_ui_summary.get("result") if isinstance(live_ui_summary, dict) else None
     startup_profile_result = startup_profile_summary.get("result") if isinstance(startup_profile_summary, dict) else None
@@ -121,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--test-repo-root", default=str(Path(__file__).resolve().parent.parent))
+    parser.add_argument("--workspace-root", default="")
     parser.add_argument("--coverage-summary-path", default="")
     parser.add_argument("--live-diff-summary-path", default="")
     parser.add_argument("--live-session-manifest-path", default="")
@@ -129,7 +137,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     test_repo_root = Path(args.test_repo_root).resolve()
-    report_root = test_repo_root / "reports"
+    workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else get_default_workspace_root(test_repo_root)
+    report_root = get_test_reports_root(workspace_root)
     coverage_summary_path = Path(args.coverage_summary_path).resolve() if args.coverage_summary_path else report_root / "native-coverage-latest" / "coverage-summary.json"
     live_diff_summary_path = Path(args.live_diff_summary_path).resolve() if args.live_diff_summary_path else report_root / "live-diff-summary.json"
     live_ui_summary_path = Path(args.live_ui_summary_path).resolve() if args.live_ui_summary_path else report_root / "shared-files-ui-e2e-latest" / "ui-summary.json"

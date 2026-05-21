@@ -128,7 +128,7 @@ def run_live_diff(config: LiveDiffConfig) -> int:
         failed=failed,
         text_summary_path=summary_path,
     )
-    publish_harness_summary(config.test_repo_root, summary_json_path)
+    publish_harness_summary(config.test_repo_root, config.test_run_workspace_root, summary_json_path)
 
     for line in summary_lines:
         print(line)
@@ -165,7 +165,7 @@ def write_live_diff_summary(
     summary_json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def publish_harness_summary(test_repo_root: Path, summary_json_path: Path) -> None:
+def publish_harness_summary(test_repo_root: Path, workspace_root: Path, summary_json_path: Path) -> None:
     """Refreshes the combined harness summary after a live-diff run."""
 
     run_captured(
@@ -174,6 +174,8 @@ def publish_harness_summary(test_repo_root: Path, summary_json_path: Path) -> No
             str((test_repo_root / "scripts" / "publish-harness-summary.py").resolve()),
             "--test-repo-root",
             str(test_repo_root.resolve()),
+            "--workspace-root",
+            str(workspace_root.resolve()),
             "--live-diff-summary-path",
             str(summary_json_path.resolve()),
         ),

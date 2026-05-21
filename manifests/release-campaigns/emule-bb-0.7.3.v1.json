@@ -111,8 +111,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/community-core-coverage/latest/summary.json",
+              "base": "workspace-state",
+              "path": "test-reports/community-core-coverage/latest/summary.json",
               "statusPointer": "/status"
             },
             {
@@ -134,8 +134,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/native-coverage-latest/coverage-summary.json",
+              "base": "workspace-state",
+              "path": "test-reports/native-coverage-latest/coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -157,8 +157,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/native-coverage-latest/coverage-summary.json",
+              "base": "workspace-state",
+              "path": "test-reports/native-coverage-latest/coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -219,8 +219,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/live-e2e-suite-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/live-e2e-suite-latest/result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "controller-surface"
@@ -229,8 +229,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/rest-api-smoke-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/rest-api-smoke-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -252,8 +252,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/prowlarr-emulebb-live-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/prowlarr-emulebb-live-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -276,8 +276,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/radarr-emulebb-live-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/radarr-emulebb-live-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -300,8 +300,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/sonarr-emulebb-live-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/sonarr-emulebb-live-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -320,8 +320,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/amutorrent-browser-smoke-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/amutorrent-browser-smoke-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -348,8 +348,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/live-e2e-suite-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/live-e2e-suite-latest/result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "release-expanded"
@@ -374,8 +374,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/search-ui-live-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/search-ui-live-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -397,8 +397,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/rest-api-smoke-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/rest-api-smoke-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -416,22 +416,22 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/preference-ui-e2e-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/preference-ui-e2e-latest/result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/shared-files-ui-e2e-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/shared-files-ui-e2e-latest/result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/shared-hash-ui-e2e-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/shared-hash-ui-e2e-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -456,8 +456,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/live-e2e-suite-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/live-e2e-suite-latest/result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "ui-resource-depth"
@@ -466,8 +466,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/resource-ui-smoke-latest/ui-summary.json",
+              "base": "workspace-state",
+              "path": "test-reports/resource-ui-smoke-latest/ui-summary.json",
               "statusPointer": "/status"
             }
           ]
@@ -486,8 +486,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "tests-repo",
-              "path": "reports/preference-ui-e2e-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/preference-ui-e2e-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -527,8 +527,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/live-e2e-suite-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/live-e2e-suite-latest/result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "stabilization-stress"
@@ -537,15 +537,15 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/rest-cold-start-dump-stress-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/rest-cold-start-dump-stress-latest/result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/local-dumps-crash-smoke-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/local-dumps-crash-smoke-latest/result.json",
               "statusPointer": "/status"
             }
           ]
@@ -565,22 +565,22 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/amutorrent-clean-startup-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/amutorrent-clean-startup-latest/result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/amutorrent-emulebb-ui-live-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/amutorrent-emulebb-ui-live-latest/result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": false,
-              "base": "tests-repo",
-              "path": "reports/amutorrent-resilience-live-latest/result.json",
+              "base": "workspace-state",
+              "path": "test-reports/amutorrent-resilience-live-latest/result.json",
               "statusPointer": "/status"
             }
           ]

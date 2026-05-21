@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .live_diff import build_emule_tests_command, get_default_workspace_root
-from .paths import get_build_tag, get_test_binary_path
+from .paths import get_build_tag, get_test_binary_path, get_test_reports_root
 from .processes import run_captured
 
 DEFAULT_COVERAGE_VERSION = "0.9.9.0"
@@ -184,7 +184,7 @@ def run_native_coverage(config: NativeCoverageConfig) -> int:
     """Runs native coverage and returns a process exit code."""
 
     build_tag = get_build_tag(config.workspace_root, config.app_root)
-    report_root = config.test_repo_root / "reports"
+    report_root = get_test_reports_root(config.workspace_root)
     coverage_report_root = report_root / "native-coverage"
     report_stamp = time.strftime("%Y%m%d-%H%M%S")
     run_report_dir = coverage_report_root / f"{report_stamp}-{build_tag}-{config.platform}-{config.configuration}"
@@ -304,7 +304,7 @@ def run_native_coverage(config: NativeCoverageConfig) -> int:
         encoding="utf-8",
     )
     publish_directory_snapshot(run_report_dir, latest_report_dir)
-    publish_harness_summary(config.test_repo_root, coverage_summary_path)
+    publish_harness_summary(config.test_repo_root, config.workspace_root, coverage_summary_path)
     print(f"Native coverage report directory: {run_report_dir}")
     return 0
 
@@ -339,7 +339,7 @@ def publish_directory_snapshot(source_directory: Path, destination_directory: Pa
             shutil.copy2(entry, destination)
 
 
-def publish_harness_summary(test_repo_root: Path, coverage_summary_path: Path) -> None:
+def publish_harness_summary(test_repo_root: Path, workspace_root: Path, coverage_summary_path: Path) -> None:
     """Refreshes the shared harness summary after a native coverage run."""
 
     run_captured(
@@ -348,6 +348,8 @@ def publish_harness_summary(test_repo_root: Path, coverage_summary_path: Path) -
             str((test_repo_root / "scripts" / "publish-harness-summary.py").resolve()),
             "--test-repo-root",
             str(test_repo_root.resolve()),
+            "--workspace-root",
+            str(workspace_root.resolve()),
             "--coverage-summary-path",
             str(coverage_summary_path.resolve()),
         ),

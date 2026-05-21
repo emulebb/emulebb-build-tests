@@ -17,6 +17,7 @@ from emule_test_harness.protocol_surface import (
     render_report_lines,
     write_report,
 )
+from emule_test_harness.paths import get_test_reports_root, reject_windows_temp_path
 from emule_test_harness.workspace_layout import get_default_workspace_root
 
 
@@ -42,7 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     test_run_app_root = (args.test_run_app_root or (workspace_root / "app" / "eMule-main")).resolve()
     baseline_app_root = (args.baseline_app_root or (workspace_root / "app" / "eMule-community-baseline")).resolve()
     manifest_path = (args.manifest_path or (test_repo_root / "protocol-parity-surface.json")).resolve()
-    report_path = (args.report_path or (test_repo_root / "reports" / "protocol-surface-diff.json")).resolve()
+    report_path = (args.report_path or (get_test_reports_root(workspace_root) / "protocol-surface-diff.json")).resolve()
+    reject_windows_temp_path(report_path, "report path")
 
     report = check_protocol_surface(
         manifest=load_manifest(manifest_path),

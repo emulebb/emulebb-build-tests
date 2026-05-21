@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import tempfile
+import time
 
 
 class AdminVolumeFixtureError(RuntimeError):
@@ -141,12 +141,12 @@ def build_cleanup_vhd_diskpart_script(*, vhd_path: Path, drive_letter: str, moun
     return "\n".join(lines)
 
 
-def run_diskpart_script(script_text: str) -> CommandResult:
-    """Runs one generated diskpart script through a temporary file."""
+def run_diskpart_script(script_text: str, script_dir: Path) -> CommandResult:
+    """Runs one generated diskpart script from a workspace-owned artifact directory."""
 
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as handle:
-        handle.write(script_text)
-        script_path = Path(handle.name)
+    script_dir.mkdir(parents=True, exist_ok=True)
+    script_path = script_dir / f"diskpart-{os.getpid()}-{time.time_ns()}.txt"
+    script_path.write_text(script_text, encoding="utf-8")
     try:
         command = ["diskpart.exe", "/s", str(script_path)]
         completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
@@ -227,7 +227,8 @@ def create_admin_volume_fixture(config: AdminVolumeFixtureConfig):
         drive_letter=drive_letter,
         mount_root=config.mount_root,
     )
-    create_result = run_diskpart_script(create_script)
+    script_dir = config.vhd_path.parent / "diskpart-scripts"
+    create_result = run_diskpart_script(create_script, script_dir)
     if create_result.return_code != 0:
         raise AdminVolumeFixtureError(f"diskpart failed while creating the test VHD: {create_result.stderr or create_result.stdout}")
 
@@ -251,7 +252,7 @@ def create_admin_volume_fixture(config: AdminVolumeFixtureConfig):
             mount_root=config.mount_root,
             delete_vdisk=not config.keep,
         )
-        run_diskpart_script(cleanup_script)
+        run_diskpart_script(cleanup_script, script_dir)
         if not config.keep:
             try:
                 config.vhd_path.unlink(missing_ok=True)

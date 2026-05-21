@@ -59,7 +59,7 @@ def test_fixture_removes_owned_mount_directory_after_cleanup(tmp_path: Path, mon
     monkeypatch.setattr(
         admin_volume_fixtures,
         "run_diskpart_script",
-        lambda _script: calls.append("diskpart") or admin_volume_fixtures.CommandResult([], 0, "", ""),
+        lambda _script, _script_dir: calls.append(str(_script_dir)) or admin_volume_fixtures.CommandResult([], 0, "", ""),
     )
     monkeypatch.setattr(
         admin_volume_fixtures,
@@ -85,6 +85,24 @@ def test_fixture_removes_owned_mount_directory_after_cleanup(tmp_path: Path, mon
         vhd_path.write_bytes(b"vhd")
         assert mount_root.is_dir()
 
-    assert calls == ["diskpart", "diskpart"]
+    assert calls == [str(vhd_path.parent / "diskpart-scripts"), str(vhd_path.parent / "diskpart-scripts")]
     assert not vhd_path.exists()
     assert not mount_root.exists()
+
+
+def test_diskpart_script_is_written_under_requested_artifact_dir(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command, *, stdout, stderr, text, check):
+        captured["command"] = command
+        return type("Completed", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+    monkeypatch.setattr(admin_volume_fixtures.subprocess, "run", fake_run)
+    monkeypatch.setattr(admin_volume_fixtures.time, "time_ns", lambda: 123)
+    monkeypatch.setattr(admin_volume_fixtures.os, "getpid", lambda: 456)
+
+    result = admin_volume_fixtures.run_diskpart_script("list volume\n", tmp_path / "scripts")
+
+    assert result.return_code == 0
+    assert captured["command"] == ["diskpart.exe", "/s", str(tmp_path / "scripts" / "diskpart-456-123.txt")]
+    assert not (tmp_path / "scripts" / "diskpart-456-123.txt").exists()

@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import live_wire_inputs  # noqa: E402
+from emule_test_harness.paths import get_test_reports_root, reject_windows_temp_path  # noqa: E402
 
 VIDEO_EXTENSIONS = {
     ".avi",
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live-wire-inputs-file", default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)))
     parser.add_argument("--emule-exe", type=Path)
-    parser.add_argument("--report-root", type=Path, default=REPO_ROOT / "reports" / "media-metadata-corpus")
+    parser.add_argument("--report-root", type=Path, default=get_test_reports_root(WORKSPACE_ROOT / "workspaces" / "workspace") / "media-metadata-corpus")
     parser.add_argument("--timeout-seconds", type=int, default=60)
     parser.add_argument("--fail-fast", action="store_true")
     return parser
@@ -151,10 +152,12 @@ def run(args: argparse.Namespace) -> int:
     if not emule_exe.is_file():
         raise RuntimeError(f"eMule executable is missing: {emule_exe}")
 
-    run_dir = args.report_root.resolve() / datetime.now().strftime("%Y%m%d-%H%M%S")
+    report_root = args.report_root.resolve()
+    reject_windows_temp_path(report_root, "report root")
+    run_dir = report_root / datetime.now().strftime("%Y%m%d-%H%M%S")
     detail_dir = run_dir / "files"
     detail_dir.mkdir(parents=True, exist_ok=True)
-    latest_dir = args.report_root.resolve().parent / "media-metadata-corpus-latest"
+    latest_dir = report_root.parent / "media-metadata-corpus-latest"
     files = discover_video_files(inputs.video_roots)
     if not files:
         raise RuntimeError("No video files were discovered in media_corpus.video_roots")
