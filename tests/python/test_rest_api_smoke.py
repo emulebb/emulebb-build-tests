@@ -2076,6 +2076,54 @@ def test_openapi_error_code_enum_covers_native_rest_codes() -> None:
     assert native_codes <= documented_codes
 
 
+def test_openapi_response_dtos_require_core_implementation_fields() -> None:
+    module = load_rest_api_smoke_module()
+    document = module.yaml.safe_load(module.OPENAPI_CONTRACT_PATH.read_text(encoding="utf-8"))
+    schemas = document["components"]["schemas"]
+
+    snapshot_data = schemas["SnapshotEnvelope"]["allOf"][1]["properties"]["data"]
+    transfer_details_data = schemas["TransferDetailsEnvelope"]["allOf"][1]["properties"]["data"]
+    search_result = schemas["SearchResult"]
+
+    assert set(snapshot_data["required"]) == {
+        "app",
+        "status",
+        "transfers",
+        "sharedFiles",
+        "uploads",
+        "uploadQueue",
+        "servers",
+        "kad",
+        "logs",
+    }
+    assert set(transfer_details_data["required"]) == {"transfer", "parts", "sources"}
+    assert {
+        "searchId",
+        "method",
+        "type",
+        "hash",
+        "name",
+        "sizeBytes",
+        "sources",
+        "completeSources",
+        "fileType",
+        "complete",
+        "knownType",
+        "directory",
+        "clientIp",
+        "clientPort",
+        "serverIp",
+        "serverPort",
+        "clientCount",
+        "serverCount",
+        "kadPublishInfo",
+        "rating",
+        "hasComment",
+        "spam",
+        "evidence",
+    } <= set(search_result["required"])
+
+
 def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerQBitCompat.cpp"
