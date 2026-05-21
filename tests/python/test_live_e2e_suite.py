@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from emule_test_harness import live_e2e_suite
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
 
@@ -146,6 +148,41 @@ def test_child_suite_command_passes_mounted_shared_root_only_to_shared_directori
 
     assert option_values(shared_directories_command, "--mounted-shared-root") == [str(mounted_root.resolve())]
     assert "--mounted-shared-root" not in preference_command
+
+
+def test_admin_volume_fixture_options_reach_only_admin_storage_suites(tmp_path: Path) -> None:
+    mount_root = tmp_path / "mount-parent"
+    admin_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("shared-cache-volume-identity"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    regular_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("rest-api"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+
+    assert "--admin-volume-fixtures" in admin_command
+    assert option_values(admin_command, "--vhd-size-mb") == ["384"]
+    assert option_values(admin_command, "--mount-root") == [str(mount_root.resolve())]
+    assert "--keep-admin-fixtures" in admin_command
+    assert "--admin-volume-fixtures" not in regular_command
+    assert "--vhd-size-mb" not in regular_command
 
 
 def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
@@ -596,7 +633,9 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "search-ui-live.py",
         "shared-hash-ui-e2e.py",
         "shared-directories-rest-e2e.py",
+        "shared-cache-volume-identity.py",
         "rest-api-smoke.py",
+        "disk-space-guard-live.py",
         "rest-cold-start-dump-stress.py",
         "local-dumps-crash-smoke.py",
         "amutorrent-browser-smoke.py",
@@ -615,6 +654,11 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["profiling"]["cpu"]["enabled"] is True
     assert summary["profiling"]["cpu"]["stack"] is True
     assert summary["profiling"]["memory"]["enabled"] is True
+    assert summary["admin_volume_fixtures"]["enabled"] is True
+    assert summary["admin_volume_fixtures"]["suite_names"] == [
+        "shared-cache-volume-identity",
+        "disk-space-guard-live",
+    ]
     assert summary["search_ui"] == {"search_rounds": 2, "download_lifecycle_count": 2}
     assert summary["weak_path_matrix"]["live_download_triggers"] == {
         "server_search_count": live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK,
@@ -623,6 +667,11 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "success_policy": "accepted_and_materialized_in_transfer_queue",
     }
     assert summary["weak_path_matrix"]["adversity"]["local_dumps_crash_smoke"] is True
+    assert summary["weak_path_matrix"]["storage"] == {
+        "shared_cache_volume_identity": True,
+        "disk_space_guard_live": True,
+        "admin_volume_fixtures": True,
+    }
     assert summary["weak_path_matrix"]["integrations"]["amutorrent_browser_smoke"] is True
 
     preference_command = commands[1]
@@ -632,7 +681,11 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(search_ui_command, "--ui-search-rounds") == ["2"]
     assert option_values(search_ui_command, "--ui-download-lifecycle-count") == ["2"]
 
-    rest_command = commands[6]
+    cache_volume_command = commands[6]
+    assert option_values(cache_volume_command, "--vhd-size-mb") == ["256"]
+    assert "--admin-volume-fixtures" in cache_volume_command
+
+    rest_command = commands[7]
     assert option_values(rest_command, "--server-search-count") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
     ]
@@ -660,7 +713,11 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    cold_start_command = commands[7]
+    disk_space_command = commands[8]
+    assert option_values(disk_space_command, "--vhd-size-mb") == ["256"]
+    assert "--admin-volume-fixtures" in disk_space_command
+
+    cold_start_command = commands[9]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
@@ -670,6 +727,19 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(cold_start_command, "--downloads-per-wave") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE)
     ]
+
+
+def test_admin_storage_suite_requires_explicit_fixture_gate(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="require --admin-volume-fixtures"):
+        live_e2e_suite.run_live_e2e_suite(
+            parse_args(
+                "--workspace-root",
+                str(tmp_path / "workspaces" / "workspace"),
+                "--suite",
+                "disk-space-guard-live",
+            ),
+            FakeHarnessCliCommon(tmp_path),
+        )
 
 
 def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: Path, monkeypatch) -> None:
@@ -1284,6 +1354,10 @@ def test_operator_script_help_loads_hyphenated_helpers() -> None:
     assert "--profile-cpu-stack" in completed.stdout
     assert "--profile-memory" in completed.stdout
     assert "--profile-resource-interval-seconds" in completed.stdout
+    assert "--admin-volume-fixtures" in completed.stdout
+    assert "--vhd-size-mb" in completed.stdout
+    assert "--mount-root" in completed.stdout
+    assert "--keep-admin-fixtures" in completed.stdout
     assert "--skip-live-seed-refresh" in completed.stdout
     assert "--profile-seed-dir" in completed.stdout
     assert "--seed" + "-config-dir" not in completed.stdout

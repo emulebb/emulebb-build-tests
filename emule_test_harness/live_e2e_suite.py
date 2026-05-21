@@ -137,6 +137,7 @@ class SuiteSpec:
     is_search_ui_live: bool = False
     is_resource_ui_smoke: bool = False
     accepts_mounted_shared_root: bool = False
+    requires_admin_volume_fixtures: bool = False
     default_enabled: bool = True
 
 
@@ -200,11 +201,25 @@ SUITE_SPECS = (
         accepts_mounted_shared_root=True,
     ),
     SuiteSpec(
+        name="shared-cache-volume-identity",
+        script_name="shared-cache-volume-identity.py",
+        category="storage",
+        requires_admin_volume_fixtures=True,
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="rest-api",
         script_name="rest-api-smoke.py",
         category="rest",
         uses_live_seed_refresh=True,
         is_rest_api=True,
+    ),
+    SuiteSpec(
+        name="disk-space-guard-live",
+        script_name="disk-space-guard-live.py",
+        category="storage",
+        requires_admin_volume_fixtures=True,
+        default_enabled=False,
     ),
     SuiteSpec(
         name="rest-cold-start-dump-stress",
@@ -289,7 +304,9 @@ PROFILE_SUITE_NAMES = {
         "shared-hash-ui",
         "search-ui-live",
         "shared-directories-rest",
+        "shared-cache-volume-identity",
         "rest-api",
+        "disk-space-guard-live",
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
         "amutorrent-browser-smoke",
@@ -365,6 +382,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         args.arr_download_proof_mode = CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
 
     if args.profile == "release-expanded":
+        args.admin_volume_fixtures = True
         if not args.preference_ui_directories_tree_stress:
             args.preference_ui_directories_tree_stress = True
         if args.rest_server_search_count == DEFAULT_REST_SEARCH_COUNT:
@@ -566,6 +584,10 @@ def build_suite_command(
     rest_cold_start_dump_stress_skip_dumps: bool = False,
     resource_ui_language_timeout_seconds: float = DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS,
     mounted_shared_root: Path | None = None,
+    admin_volume_fixtures: bool = False,
+    vhd_size_mb: int = 256,
+    mount_root: Path | None = None,
+    keep_admin_fixtures: bool = False,
     fail_fast: bool = False,
 ) -> list[str]:
     """Builds one child suite command line."""
@@ -594,6 +616,14 @@ def build_suite_command(
         command.extend(["--shared-root", str(shared_root.resolve())])
     if spec.accepts_mounted_shared_root and mounted_shared_root is not None:
         command.extend(["--mounted-shared-root", str(mounted_shared_root.resolve())])
+    if spec.requires_admin_volume_fixtures:
+        if admin_volume_fixtures:
+            command.append("--admin-volume-fixtures")
+        command.extend(["--vhd-size-mb", str(vhd_size_mb)])
+        if mount_root is not None:
+            command.extend(["--mount-root", str(mount_root.resolve())])
+        if keep_admin_fixtures:
+            command.append("--keep-admin-fixtures")
     if spec.name == "preference-ui" and preference_ui_directories_tree_stress:
         command.append("--directories-tree-stress")
         if shared_root is not None:
@@ -967,6 +997,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--mounted-shared-root",
         help="Optional dedicated mounted-folder path passed to the shared-directories REST E2E suite.",
     )
+    parser.add_argument("--admin-volume-fixtures", action="store_true")
+    parser.add_argument("--vhd-size-mb", type=int, default=256)
+    parser.add_argument("--mount-root")
+    parser.add_argument("--keep-admin-fixtures", action="store_true")
     parser.add_argument("--preference-ui-directories-tree-stress", action="store_true")
     parser.add_argument("--shared-files-ui-scenario", action="append", choices=SHARED_FILES_UI_SCENARIOS)
     parser.add_argument("--shared-files-tree-stress-churn-cycles", type=int)
@@ -1229,6 +1263,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("CPU profile stack min hits must be greater than zero.")
     if args.profile_resource_interval_seconds <= 0:
         raise ValueError("Profile resource monitor interval must be greater than zero.")
+    if args.vhd_size_mb <= 0:
+        raise ValueError("Admin volume fixture VHD size must be greater than zero.")
     if args.search_ui_search_rounds <= 0:
         raise ValueError("Search UI rounds must be greater than zero.")
     if args.search_ui_download_lifecycle_count <= 0:
@@ -1258,6 +1294,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         keep_artifacts=args.keep_artifacts,
     )
     selected_specs = resolve_suite_specs(args.suite)
+    if any(spec.requires_admin_volume_fixtures for spec in selected_specs) and not args.admin_volume_fixtures:
+        raise ValueError("Selected admin storage live suites require --admin-volume-fixtures.")
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
     python_executable = harness_cli_common.find_python_executable()
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
@@ -1265,6 +1303,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     radarr_movie_root = args.radarr_movie_root.strip() if args.radarr_movie_root else None
     sonarr_series_root = args.sonarr_series_root.strip() if args.sonarr_series_root else None
     mounted_shared_root = Path(args.mounted_shared_root) if args.mounted_shared_root else None
+    mount_root = Path(args.mount_root) if args.mount_root else None
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     resolved_shared_files_ui_scenarios = list(
         shared_files_ui_scenarios
@@ -1360,6 +1399,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 "search_ui_live": any(spec.name == "search-ui-live" for spec in selected_specs),
                 "shared_directories_rest": any(spec.name == "shared-directories-rest" for spec in selected_specs),
             },
+            "storage": {
+                "shared_cache_volume_identity": any(spec.name == "shared-cache-volume-identity" for spec in selected_specs),
+                "disk_space_guard_live": any(spec.name == "disk-space-guard-live" for spec in selected_specs),
+                "admin_volume_fixtures": bool(args.admin_volume_fixtures),
+            },
             "integrations": {
                 "amutorrent_browser_smoke": any(spec.name == "amutorrent-browser-smoke" for spec in selected_specs),
                 "arr_live_wire_suites": [
@@ -1383,6 +1427,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "sonarr_series_root_present": bool(args.sonarr_series_root),
         "mounted_shared_root_configured": mounted_shared_root is not None,
         "mounted_shared_root": str(mounted_shared_root) if mounted_shared_root is not None else None,
+        "admin_volume_fixtures": {
+            "enabled": bool(args.admin_volume_fixtures),
+            "vhd_size_mb": args.vhd_size_mb,
+            "mount_root": str(mount_root) if mount_root is not None else None,
+            "keep": bool(args.keep_admin_fixtures),
+            "suite_names": [spec.name for spec in selected_specs if spec.requires_admin_volume_fixtures],
+        },
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
             "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
@@ -1501,6 +1552,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
             resource_ui_language_timeout_seconds=args.resource_ui_language_timeout_seconds,
             mounted_shared_root=mounted_shared_root,
+            admin_volume_fixtures=args.admin_volume_fixtures,
+            vhd_size_mb=args.vhd_size_mb,
+            mount_root=mount_root,
+            keep_admin_fixtures=args.keep_admin_fixtures,
             fail_fast=args.fail_fast,
         )
         started = time.monotonic()
@@ -1607,6 +1662,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                     "rest_cold_start_dump_stress": dict(summary["rest_cold_start_dump_stress"]),  # type: ignore[arg-type]
                 }
             )
+        if spec.requires_admin_volume_fixtures:
+            result["admin_volume_fixture"] = dict(summary["admin_volume_fixtures"])  # type: ignore[arg-type]
         summary["suites"].append(result)  # type: ignore[index]
         if suite_status == "failed":
             summary["status"] = "failed"
