@@ -41,6 +41,7 @@ rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
 
 DISK_SPACE_TOKENS = ("space", "disk", "volume", "storage", "free")
 DEFAULT_GUARD_FILE_HASH = "1234567890ABCDEF1234567890ABCDEF"
+DEFAULT_GUARD_FILE_HASH_LOWER = DEFAULT_GUARD_FILE_HASH.lower()
 
 
 def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
@@ -229,7 +230,7 @@ def run_disk_space_guard(args: argparse.Namespace) -> dict[str, object]:
             )
             transfer_lookup = rest_smoke.http_request(
                 base_url,
-                f"/api/v1/transfers/{DEFAULT_GUARD_FILE_HASH}",
+                f"/api/v1/transfers/{DEFAULT_GUARD_FILE_HASH_LOWER}",
                 api_key=args.api_key,
                 request_timeout_seconds=5.0,
             )

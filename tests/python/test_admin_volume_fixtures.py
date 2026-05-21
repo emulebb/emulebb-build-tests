@@ -46,3 +46,45 @@ def test_normalize_drive_letter_rejects_invalid_values() -> None:
         admin_volume_fixtures.normalize_drive_letter("share")
     with pytest.raises(ValueError):
         admin_volume_fixtures.normalize_drive_letter("1")
+
+
+def test_fixture_removes_owned_mount_directory_after_cleanup(tmp_path: Path, monkeypatch) -> None:
+    vhd_path = tmp_path / "fixture.vhdx"
+    mount_root = tmp_path / "mount"
+    local_control_root = tmp_path / "control"
+    calls: list[str] = []
+
+    monkeypatch.setattr(admin_volume_fixtures, "require_windows_admin", lambda: None)
+    monkeypatch.setattr(admin_volume_fixtures, "find_available_drive_letter", lambda _preferred=None: "Z")
+    monkeypatch.setattr(
+        admin_volume_fixtures,
+        "run_diskpart_script",
+        lambda _script: calls.append("diskpart") or admin_volume_fixtures.CommandResult([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        admin_volume_fixtures,
+        "get_volume_identity",
+        lambda root: admin_volume_fixtures.VolumeIdentity(
+            root=str(root),
+            volume_name=None,
+            serial_hex=None,
+            file_system=None,
+            label=None,
+            total_bytes=1,
+            free_bytes=1,
+        ),
+    )
+
+    config = admin_volume_fixtures.AdminVolumeFixtureConfig(
+        vhd_path=vhd_path,
+        mount_root=mount_root,
+        local_control_root=local_control_root,
+        size_mb=64,
+    )
+    with admin_volume_fixtures.create_admin_volume_fixture(config):
+        vhd_path.write_bytes(b"vhd")
+        assert mount_root.is_dir()
+
+    assert calls == ["diskpart", "diskpart"]
+    assert not vhd_path.exists()
+    assert not mount_root.exists()

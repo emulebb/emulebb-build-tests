@@ -215,6 +215,7 @@ def create_admin_volume_fixture(config: AdminVolumeFixtureConfig):
 
     require_windows_admin()
     drive_letter = find_available_drive_letter(config.drive_letter)
+    mount_root_preexisting = config.mount_root.exists()
     config.vhd_path.parent.mkdir(parents=True, exist_ok=True)
     config.mount_root.mkdir(parents=True, exist_ok=True)
     config.local_control_root.mkdir(parents=True, exist_ok=True)
@@ -256,3 +257,8 @@ def create_admin_volume_fixture(config: AdminVolumeFixtureConfig):
                 config.vhd_path.unlink(missing_ok=True)
             except OSError:
                 pass
+            if not mount_root_preexisting:
+                try:
+                    config.mount_root.rmdir()
+                except OSError:
+                    pass
