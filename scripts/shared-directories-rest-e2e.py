@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import sys
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Any
@@ -66,6 +69,10 @@ PATH_LIST_FILES = {
     "monitored": "shareddir.monitored.dat",
     "monitor_owned": "shareddir.monitor-owned.dat",
 }
+MOUNTED_ROOT_FILE_NAME = "mounted_root_file.txt"
+MOUNTED_CHILD_FILE_NAME = "mounted_child_file.txt"
+MOUNTED_ROOT_FILE_BYTES = b"mounted root fixture\r\n"
+MOUNTED_CHILD_FILE_BYTES = b"mounted child fixture\r\n"
 
 
 def configure_rest_only_profile(
@@ -185,6 +192,13 @@ def write_text_exact_long_path(path: Path, text: str) -> None:
         handle.write(text)
 
 
+def write_bytes_long_path(path: Path, content: bytes) -> None:
+    """Writes one binary fixture without relying on legacy MAX_PATH limits."""
+
+    with open(to_windows_long_path(path), "wb") as handle:
+        handle.write(content)
+
+
 def remove_tree_long_path(path: Path) -> None:
     """Removes a mounted-root fixture tree through extended-length path spelling."""
 
@@ -280,6 +294,98 @@ def delete_shared_file_by_hash(base_url: str, api_key: str, file_hash: str, *, d
     compact = compact_http_result(result)
     compact["response"] = body
     return compact
+
+
+def assert_shared_file_ed2k_link(
+    base_url: str,
+    api_key: str,
+    row: dict[str, object],
+    *,
+    expected_name: str,
+    expected_size: int,
+) -> dict[str, object]:
+    """Asserts one shared-file REST row has a downloadable eD2K link."""
+
+    file_hash = require_shared_file_hash(row, expected_name)
+    result = http_request(base_url, f"{SHARED_FILES_ROUTE}/{file_hash}/ed2k-link", api_key=api_key)
+    body = require_json_object(result, 200)
+    link = body.get("link")
+    if not isinstance(link, str) or not link.startswith("ed2k://|file|"):
+        raise AssertionError(f"Shared-file eD2K link is missing or malformed: {body!r}")
+    if file_hash.casefold() not in link.casefold():
+        raise AssertionError(f"Shared-file eD2K link does not contain hash {file_hash!r}: {link!r}")
+    if f"|{expected_size}|" not in link:
+        raise AssertionError(f"Shared-file eD2K link does not contain size {expected_size}: {link!r}")
+    if expected_name not in urllib.parse.unquote(link):
+        raise AssertionError(f"Shared-file eD2K link does not contain file name {expected_name!r}: {link!r}")
+    compact = compact_http_result(result)
+    compact["hash"] = file_hash
+    compact["link"] = link
+    return compact
+
+
+def require_shared_file_hash(row: dict[str, object], expected_name: str) -> str:
+    """Extracts and validates the public hash from one shared-file REST row."""
+
+    if row.get("name") != expected_name:
+        raise AssertionError(f"Expected shared-file row for {expected_name!r}, got {row!r}")
+    file_hash = row.get("hash")
+    if not isinstance(file_hash, str) or not re.fullmatch(r"[0-9a-f]{32}", file_hash):
+        raise AssertionError(f"Shared-file row has no lowercase MD4 hash: {row!r}")
+    return file_hash
+
+
+def assert_shared_file_row_content(
+    row: dict[str, object],
+    *,
+    expected_name: str,
+    expected_content: bytes,
+) -> dict[str, object]:
+    """Asserts one shared-file REST row still points at exact readable bytes."""
+
+    file_hash = require_shared_file_hash(row, expected_name)
+    path_text = row.get("path")
+    if not isinstance(path_text, str) or not path_text:
+        raise AssertionError(f"Shared-file row has no path for byte-read proof: {row!r}")
+    path = Path(path_text)
+    actual = path.read_bytes()
+    if actual != expected_content:
+        raise AssertionError(f"Shared-file path bytes mismatch for {expected_name!r}: {actual!r}")
+    return {
+        "hash": file_hash,
+        "path": path_text,
+        "bytes": len(actual),
+        "sha256": hashlib.sha256(expected_content).hexdigest(),
+    }
+
+
+def assert_mounted_shared_file_serving(
+    base_url: str,
+    api_key: str,
+    *,
+    expected_files: dict[str, bytes],
+) -> dict[str, object]:
+    """Asserts VHD-mounted shared files expose REST metadata and exact readable bytes."""
+
+    checks: dict[str, object] = {}
+    for file_name, content in sorted(expected_files.items()):
+        row = get_shared_file_row_by_name(base_url, api_key, file_name)
+        checks[file_name] = {
+            "row": row,
+            "ed2k_link": assert_shared_file_ed2k_link(
+                base_url,
+                api_key,
+                row,
+                expected_name=file_name,
+                expected_size=len(content),
+            ),
+            "filesystem_read": assert_shared_file_row_content(
+                row,
+                expected_name=file_name,
+                expected_content=content,
+            ),
+        }
+    return checks
 
 
 def assert_replaced_shared_files_preserved(fixtures: dict[str, Path], unicode_file_name: str, exact_file_name: str) -> dict[str, bool]:
@@ -449,7 +555,7 @@ def create_mounted_root_fixture(mounted_shared_root: Path) -> dict[str, Path]:
 
     root = mounted_shared_root / f"emulebb-mounted-shared-{uuid.uuid4().hex}"
     mkdir_long_path(root)
-    write_text_long_path(root / "mounted_root_file.txt", "mounted root fixture\r\n")
+    write_bytes_long_path(root / MOUNTED_ROOT_FILE_NAME, MOUNTED_ROOT_FILE_BYTES)
     return {
         "parent": mounted_shared_root.parent,
         "mounted_root": mounted_shared_root,
@@ -485,13 +591,13 @@ def build_mounted_root_expectations(mounted_fixture: dict[str, Path]) -> dict[st
     monitor_owned_after_child = [*monitor_owned_before_child, mounted_child_path]
     return {
         "visible_roots": [mounted_parent_path],
-        "monitored_roots": [mounted_parent_path, mounted_root_path],
+        "monitored_roots": [mounted_parent_path],
         "items_before_child": items_before_child,
         "items_after_child": items_after_child,
         "monitor_owned_before_child": monitor_owned_before_child,
         "monitor_owned_after_child": monitor_owned_after_child,
-        "files_before_child": ["mounted_root_file.txt"],
-        "files_after_child": ["mounted_child_file.txt", "mounted_root_file.txt"],
+        "files_before_child": [MOUNTED_ROOT_FILE_NAME],
+        "files_after_child": [MOUNTED_CHILD_FILE_NAME, MOUNTED_ROOT_FILE_NAME],
     }
 
 
@@ -664,7 +770,13 @@ def main() -> int:
     )
     config_dir = Path(profile["config_dir"])
     profile_base = Path(profile["profile_base"])
-    configure_rest_only_profile(config_dir, app_exe, args.api_key, port, args.bind_addr)
+    configure_rest_only_profile(
+        config_dir,
+        app_exe,
+        args.api_key,
+        port,
+        args.bind_addr,
+    )
 
     flat_path = live_common.win_path(fixtures["flat"], trailing_slash=True)
     recursive_path = live_common.win_path(fixtures["recursive"], trailing_slash=True)
@@ -1009,10 +1121,15 @@ def main() -> int:
                 mounted_expectations["files_before_child"],
                 "mounted-folder recursive shared files",
             )
+            checks["mounted_parent_serving"] = assert_mounted_shared_file_serving(
+                base_url,
+                args.api_key,
+                expected_files={MOUNTED_ROOT_FILE_NAME: MOUNTED_ROOT_FILE_BYTES},
+            )
 
             current_phase = set_phase(report, "mounted_child_live_create")
             mkdir_long_path(mounted_fixture["child"])
-            write_text_long_path(mounted_fixture["child"] / "mounted_child_file.txt", "mounted child fixture\r\n")
+            write_bytes_long_path(mounted_fixture["child"] / MOUNTED_CHILD_FILE_NAME, MOUNTED_CHILD_FILE_BYTES)
             checks["mounted_child_live_directories"] = wait_for_shared_directory_paths(
                 base_url,
                 args.api_key,
@@ -1026,6 +1143,14 @@ def main() -> int:
                 args.api_key,
                 mounted_expectations["files_after_child"],
                 "mounted-folder shared files after live child create",
+            )
+            checks["mounted_child_live_serving"] = assert_mounted_shared_file_serving(
+                base_url,
+                args.api_key,
+                expected_files={
+                    MOUNTED_ROOT_FILE_NAME: MOUNTED_ROOT_FILE_BYTES,
+                    MOUNTED_CHILD_FILE_NAME: MOUNTED_CHILD_FILE_BYTES,
+                },
             )
 
             current_phase = set_phase(report, "shutdown_after_mounted_parent")
@@ -1058,6 +1183,14 @@ def main() -> int:
                 args.api_key,
                 mounted_expectations["files_after_child"],
                 "reloaded mounted-folder shared files",
+            )
+            checks["mounted_relaunch_serving"] = assert_mounted_shared_file_serving(
+                base_url,
+                args.api_key,
+                expected_files={
+                    MOUNTED_ROOT_FILE_NAME: MOUNTED_ROOT_FILE_BYTES,
+                    MOUNTED_CHILD_FILE_NAME: MOUNTED_CHILD_FILE_BYTES,
+                },
             )
 
         current_phase = set_phase(report, "completed")

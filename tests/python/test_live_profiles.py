@@ -139,7 +139,10 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
     )
 
     text = live_profiles.read_ini_text(preferences_path)
-    assert "WebTemplateFile=" in text
+    expected_template = str(app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl")
+    emule_section = text.split("[WebServer]", 1)[0]
+    assert emule_section.count("WebTemplateFile=") == 1
+    assert f"WebTemplateFile={expected_template}" in emule_section
     assert "ApiKey=api-key" in text
     assert "BindAddr=127.0.0.1" in text
     assert "Port=4711" in text

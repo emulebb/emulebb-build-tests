@@ -146,7 +146,7 @@ def apply_webserver_profile(config_dir: Path, spec: WebServerProfileSpec) -> Non
     template_path = spec.app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"
     preferences_path = config_dir / "preferences.ini"
     text = read_ini_text(preferences_path)
-    text = patch_ini_value(text, "WebTemplateFile", str(template_path))
+    text = upsert_ini_section_value(text, "eMule", "WebTemplateFile", str(template_path))
 
     values = [
         ("Password", ""),
