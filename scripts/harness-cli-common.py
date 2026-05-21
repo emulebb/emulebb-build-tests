@@ -91,6 +91,21 @@ def _read_registry_values(subkey: str) -> dict[str, object] | None:
         return None
 
 
+def _sanitize_previous_registry_values(values: dict[str, object] | None) -> dict[str, object] | None:
+    """Returns prior registry state without persisting stale filesystem roots."""
+
+    if values is None:
+        return None
+    sanitized = dict(values)
+    dump_folder = sanitized.get("DumpFolder")
+    if isinstance(dump_folder, dict):
+        sanitized["DumpFolder"] = {
+            "present": True,
+            "type": dump_folder.get("type"),
+        }
+    return sanitized
+
+
 def _registry_root_name(root) -> str:
     """Returns a stable display name for a Windows registry root handle."""
 
@@ -243,7 +258,7 @@ def configure_local_dumps(
             {
                 "image_name": image_name,
                 "registry_subkey": "HKCU\\" + image_subkey,
-                "before": before,
+                "before": _sanitize_previous_registry_values(before),
                 "after": _read_registry_values(image_subkey),
             }
         )
@@ -569,12 +584,43 @@ def publish_run_artifacts(paths: HarnessRunPaths) -> None:
 
     exact_makedirs(paths.run_report_dir.parent)
     publish_directory_snapshot(paths.source_artifacts_dir, paths.run_report_dir)
+    rewrite_published_json_paths(paths)
 
 
 def publish_latest_report(paths: HarnessRunPaths) -> None:
     """Refreshes the suite-level `-latest` snapshot from one run report."""
 
     publish_directory_snapshot(paths.run_report_dir, paths.latest_report_dir)
+
+
+def rewrite_published_json_paths(paths: HarnessRunPaths) -> None:
+    """Rewrites copied JSON reports to point at their published report tree."""
+
+    replacements = (
+        (str(paths.source_artifacts_dir), str(paths.run_report_dir)),
+        (paths.source_artifacts_dir.as_posix(), paths.run_report_dir.as_posix()),
+    )
+    for json_path in paths.run_report_dir.rglob("*.json"):
+        try:
+            payload = read_json_file(json_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        rewritten = _rewrite_json_strings(payload, replacements)
+        if rewritten != payload:
+            write_json_file(json_path, rewritten)
+
+
+def _rewrite_json_strings(value, replacements: tuple[tuple[str, str], ...]):
+    if isinstance(value, str):
+        rewritten = value
+        for source, target in replacements:
+            rewritten = rewritten.replace(source, target)
+        return rewritten
+    if isinstance(value, list):
+        return [_rewrite_json_strings(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {key: _rewrite_json_strings(item, replacements) for key, item in value.items()}
+    return value
 
 
 def build_live_ui_summary(

@@ -243,6 +243,13 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
             registry.setdefault(key.subkey, {})[name] = (value, value_type)
 
     monkeypatch.setattr(module, "winreg", FakeWinReg)
+    stale_dump_root = tmp_path / "state" / "live-e2e-artifacts" / "old-run" / "crash-dumps"
+    for image_name in ("emule.exe", "umdh.exe", "procdump64.exe"):
+        subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\" + image_name)
+        registry[subkey] = {
+            "DumpFolder": (str(stale_dump_root), FakeWinReg.REG_EXPAND_SZ),
+            "DumpType": (1, FakeWinReg.REG_DWORD),
+        }
 
     result = module.configure_local_dumps(
         artifact_dir=tmp_path / "artifacts",
@@ -262,8 +269,61 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
         assert registry[subkey]["DumpFolder"][1] == FakeWinReg.REG_EXPAND_SZ
         assert registry[subkey]["DumpType"] == (2, FakeWinReg.REG_DWORD)
         assert registry[subkey]["DumpCount"] == (64, FakeWinReg.REG_DWORD)
+    for entry in result["entries"]:
+        assert entry["before"]["DumpFolder"] == {"present": True, "type": FakeWinReg.REG_EXPAND_SZ}
+        assert str(stale_dump_root) not in json.dumps(entry["before"])
     wer_subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.WER_BASE_SUBKEY)
     assert registry[wer_subkey]["Disabled"] == (0, FakeWinReg.REG_DWORD)
+
+
+def test_publish_run_artifacts_rewrites_json_paths_to_report_dir(tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    source_dir = tmp_path / "state" / "test-artifacts" / "suite" / "run"
+    report_dir = tmp_path / "state" / "test-reports" / "suite" / "run"
+    source_dir.mkdir(parents=True)
+    (source_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "artifact_dir": str(report_dir),
+                "source_artifact_dir": str(source_dir),
+                "local_dumps": {
+                    "dump_folder": str(source_dir / "crash-dumps"),
+                    "entries": [
+                        {
+                            "after": {
+                                "DumpFolder": {
+                                    "value": str(source_dir / "crash-dumps"),
+                                }
+                            }
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths = module.HarnessRunPaths(
+        repo_root=tmp_path,
+        workspace_root=tmp_path / "workspaces" / "workspace",
+        app_root=tmp_path / "app",
+        app_exe=tmp_path / "app" / "emule.exe",
+        seed_config_dir=tmp_path / "seed",
+        configuration="Release",
+        suite_name="suite",
+        source_artifacts_dir=source_dir,
+        run_report_dir=report_dir,
+        latest_report_dir=tmp_path / "state" / "test-reports" / "suite-latest",
+        keep_source_artifacts=False,
+        local_dumps={},
+    )
+
+    module.publish_run_artifacts(paths)
+
+    published = json.loads((report_dir / "result.json").read_text(encoding="utf-8"))
+    assert published["source_artifact_dir"] == str(report_dir)
+    assert published["local_dumps"]["dump_folder"] == str(report_dir / "crash-dumps")
+    assert published["local_dumps"]["entries"][0]["after"]["DumpFolder"]["value"] == str(report_dir / "crash-dumps")
+    assert str(source_dir) not in json.dumps(published)
 
 
 def test_collect_local_dump_files_filters_configured_images(tmp_path: Path) -> None:
