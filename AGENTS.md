@@ -1,6 +1,6 @@
 # Rules
 
-- Read `EMULE_WORKSPACE_ROOT\repos\eMule-tooling\docs\WORKSPACE_POLICY.md`
+- Read `EMULE_WORKSPACE_ROOT\repos\eMule-tooling\docs\WORKSPACE-POLICY.md`
   before test-harness work; it is authoritative for workspace-wide rules.
 - This file contains test-repo local deltas only. Do not duplicate branch,
   worktree, setup, dependency, or app-source policy here.

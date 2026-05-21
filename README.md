@@ -32,7 +32,7 @@ Supported branch:
 - `main`
 
 Workspace branch roles are owned by
-`EMULE_WORKSPACE_ROOT\repos\eMule-tooling\docs\WORKSPACE_POLICY.md`. Do not
+`EMULE_WORKSPACE_ROOT\repos\eMule-tooling\docs\WORKSPACE-POLICY.md`. Do not
 infer release status from branch names. Baseline workspaces may be edited only
 when the change is strictly to enable tests, seams, logging, tracing, or
 debugging; they are not feature-development branches.
