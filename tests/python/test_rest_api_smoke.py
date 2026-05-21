@@ -2056,6 +2056,26 @@ def test_openapi_custom_success_responses_reject_generic_ok_fallbacks() -> None:
             module.validate_openapi_response_payload(response_name, {"data": {"ok": True}, "meta": {}})
 
 
+def test_openapi_error_code_enum_covers_native_rest_codes() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    openapi_text = (workspace_root / "repos" / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml").read_text(
+        encoding="utf-8"
+    )
+    native_text = (app_source / "WebServerJson.cpp").read_text(encoding="utf-8")
+    native_text += (app_source / "WebServerJsonSeams.h").read_text(encoding="utf-8")
+
+    enum_match = re.search(
+        r"code:\n\s+type: string\n(?:.|\n)*?enum:\n(?P<values>(?:\s+- [A-Z_]+\n)+)",
+        openapi_text,
+    )
+    assert enum_match is not None
+    documented_codes = set(re.findall(r"- ([A-Z_]+)", enum_match.group("values")))
+    native_codes = set(re.findall(r'(?:strCode\s*=\s*|strErrorCode\s*=\s*|rCode == )"([A-Z_]+)"', native_text))
+
+    assert native_codes <= documented_codes
+
+
 def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerQBitCompat.cpp"
