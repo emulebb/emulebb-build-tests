@@ -83,6 +83,7 @@ DEFAULT_SEARCH_UI_SEARCH_ROUNDS = 1
 DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
 DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS = 120.0
 DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS = 2.0 * 60.0 * 60.0
+DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB = 6144
 SUITE_TIMEOUT_RETURN_CODE = 124
 RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK = 50
 RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT = 100
@@ -302,6 +303,7 @@ SUITE_SPECS = (
         script_name="amutorrent-browser-smoke.py",
         category="rest",
         is_amutorrent_browser=True,
+        accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
         name="prowlarr-emulebb",
@@ -689,7 +691,12 @@ def build_suite_command(
     if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures:
         if admin_volume_fixtures:
             command.append("--admin-volume-fixtures")
-        command.extend(["--vhd-size-mb", str(vhd_size_mb)])
+        suite_vhd_size_mb = (
+            max(vhd_size_mb, DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)
+            if spec.is_amutorrent_browser
+            else vhd_size_mb
+        )
+        command.extend(["--vhd-size-mb", str(suite_vhd_size_mb)])
         if mount_root is not None:
             command.extend(["--mount-root", str(mount_root.resolve())])
         if keep_admin_fixtures:

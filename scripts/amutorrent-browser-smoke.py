@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import importlib.util
 import os
 import subprocess
@@ -11,13 +12,27 @@ import time
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
+    AdminVolumeFixture,
+    AdminVolumeFixtureConfig,
+    build_storage_topology,
+    create_admin_volume_fixture,
+)
+from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
+
 AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
 SUPPORTED_NODE_MIN_MAJOR = 20
-SUPPORTED_NODE_MAX_MAJOR = 24
+SUPPORTED_NODE_MAX_MAJOR = 25
 DEFAULT_WINDOWS_NODE24 = Path(r"C:\bin\nodejs-v24\node.exe")
 DEFAULT_WINDOWS_NODE22 = Path(r"C:\bin\nodejs-v22-old\node.exe")
 DEFAULT_SEARCH_ROUNDS = 2
+DEFAULT_CONTROLLER_VHD_SIZE_MB = 6144
 AMUTORRENT_BROWSER_SMOKE_HASH = "0123456789abcdef0123456789abcdef"
+SUITE_NAME = "amutorrent-browser-smoke"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -36,6 +51,7 @@ def load_local_module(module_name: str, filename: str):
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 rest_api_smoke = load_local_module("rest_api_smoke_helpers", "rest-api-smoke.py")
+cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
 
 choose_listen_port = rest_api_smoke.choose_listen_port
 close_app_cleanly = live_common.close_app_cleanly
@@ -101,41 +117,46 @@ def resolve_amutorrent_node() -> dict[str, Any]:
     """Selects the Node.js runtime used for the aMuTorrent browser smoke."""
 
     configured = os.environ.get(AMUTORRENT_NODE_ENV)
-    if configured:
-        node_exe = Path(configured)
-    elif DEFAULT_WINDOWS_NODE24.exists():
-        node_exe = DEFAULT_WINDOWS_NODE24
-    elif DEFAULT_WINDOWS_NODE22.exists():
-        node_exe = DEFAULT_WINDOWS_NODE22
-    else:
-        node_exe = Path("node")
+    candidates = [Path(configured)] if configured else []
+    if DEFAULT_WINDOWS_NODE24.exists():
+        candidates.append(DEFAULT_WINDOWS_NODE24)
+    candidates.append(Path("node"))
+    if DEFAULT_WINDOWS_NODE22.exists():
+        candidates.append(DEFAULT_WINDOWS_NODE22)
 
-    try:
-        completed = subprocess.run(
-            [str(node_exe), "-v"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError(
-            f"Unable to run Node.js executable '{node_exe}'. "
-            f"Set {AMUTORRENT_NODE_ENV} to a Node {SUPPORTED_NODE_MIN_MAJOR}-{SUPPORTED_NODE_MAX_MAJOR} runtime."
-        ) from exc
-
-    version = completed.stdout.strip()
-    major = parse_node_major(version)
-    if major < SUPPORTED_NODE_MIN_MAJOR or major > SUPPORTED_NODE_MAX_MAJOR:
+    rejected: list[dict[str, str]] = []
+    selected: tuple[Path, str, int] | None = None
+    for node_exe in candidates:
+        try:
+            completed = subprocess.run(
+                [str(node_exe), "-v"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            rejected.append({"path": str(node_exe), "reason": repr(exc)})
+            continue
+        version = completed.stdout.strip()
+        major = parse_node_major(version)
+        if major < SUPPORTED_NODE_MIN_MAJOR or major > SUPPORTED_NODE_MAX_MAJOR:
+            rejected.append({"path": str(node_exe), "version": version, "reason": "unsupported_major"})
+            continue
+        selected = (node_exe, version, major)
+        break
+    if selected is None:
         raise RuntimeError(
             f"aMuTorrent browser smoke requires Node.js {SUPPORTED_NODE_MIN_MAJOR}-{SUPPORTED_NODE_MAX_MAJOR} "
-            "because its locked server dependencies include native addons; "
-            f"'{node_exe}' reports {version}. Set {AMUTORRENT_NODE_ENV} to a Node 24 executable."
+            "because its locked server dependencies include native addons. "
+            f"Set {AMUTORRENT_NODE_ENV} to a compatible Node executable. Rejected candidates: {rejected!r}"
         )
+    node_exe, version, major = selected
 
     return {
         "path": str(node_exe),
         "version": version,
         "major": major,
+        "rejected_candidates": rejected,
         "install_command": describe_install_command(node_exe),
     }
 
@@ -155,6 +176,24 @@ def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dic
             f"Missing: {missing_display}. "
             f"Run from {amutorrent_root}: {node_info['install_command']}"
         )
+
+
+def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
+    """Builds the VHD fixture configuration for aMuTorrent controller storage."""
+
+    mount_parent = (
+        Path(args.mount_root).resolve()
+        if args.mount_root
+        else paths.workspace_root / "state" / "admin-mounts"
+    )
+    reject_windows_temp_path(mount_parent, "admin fixture mount root")
+    return AdminVolumeFixtureConfig(
+        vhd_path=paths.source_artifacts_dir / "admin-volumes" / f"{SUITE_NAME}.vhdx",
+        mount_root=mount_parent / SUITE_NAME,
+        local_control_root=paths.source_artifacts_dir / "local-control-volume",
+        size_mb=args.vhd_size_mb,
+        keep=args.keep_admin_fixtures,
+    )
 
 
 def build_search_mode_specs(search_rounds: int) -> list[dict[str, str]]:
@@ -739,6 +778,10 @@ def main() -> int:
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--search-rounds", type=int, default=DEFAULT_SEARCH_ROUNDS)
+    parser.add_argument("--admin-volume-fixtures", action="store_true")
+    parser.add_argument("--vhd-size-mb", type=int, default=DEFAULT_CONTROLLER_VHD_SIZE_MB)
+    parser.add_argument("--mount-root")
+    parser.add_argument("--keep-admin-fixtures", action="store_true")
     args = parser.parse_args()
     if args.search_rounds <= 0:
         raise ValueError("--search-rounds must be greater than zero.")
@@ -753,12 +796,51 @@ def main() -> int:
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
     )
+    fixture_context = None
+    fixture_cleanup_inputs: dict[str, Path] | None = None
+    admin_storage: dict[str, object] = {"enabled": False}
+    incoming_dir: Path | None = None
+    temp_dir: Path | None = None
+    amutorrent_data_dir: Path | None = None
+    if args.admin_volume_fixtures:
+        config = build_admin_fixture_config(paths, args)
+        fixture_context = create_admin_volume_fixture(config)
+        fixture = fixture_context.__enter__()
+        assert isinstance(fixture, AdminVolumeFixture)
+        fixture_cleanup_inputs = {
+            "vhd_path": fixture.vhd_path,
+            "drive_root": fixture.drive_root,
+            "mount_root": fixture.mount_root,
+        }
+        topology = build_storage_topology(fixture, SUITE_NAME)
+        controller_root = topology.vhd_mount_root / "controller-storage"
+        incoming_dir = controller_root / "incoming"
+        temp_dir = controller_root / "temp"
+        amutorrent_data_dir = controller_root / "amutorrent-data"
+        admin_storage = {
+            "enabled": True,
+            "vhd_path": str(config.vhd_path),
+            "mount_root": str(config.mount_root),
+            "local_control_root": str(config.local_control_root),
+            "size_mb": config.size_mb,
+            "keep": config.keep,
+            "controller_root": str(controller_root),
+            "incoming_dir": str(incoming_dir),
+            "temp_dir": str(temp_dir),
+            "amutorrent_data_dir": str(amutorrent_data_dir),
+            "volume_identities": {
+                "drive_letter": asdict(fixture.drive_identity),
+                "folder_mount": asdict(fixture.mount_identity),
+                "local_control": asdict(fixture.local_control_identity),
+            },
+        }
     workspace_repo_root = find_workspace_repo_root(paths.workspace_root)
     amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
     artifacts_dir = paths.source_artifacts_dir
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = resolve_amutorrent_node()
-    amutorrent_data_dir = artifacts_dir / "amutorrent-data"
+    if amutorrent_data_dir is None:
+        amutorrent_data_dir = artifacts_dir / "amutorrent-data"
 
     emule_port = choose_listen_port()
     amutorrent_port = choose_listen_port()
@@ -768,12 +850,19 @@ def main() -> int:
     amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
 
-    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-browser-smoke")
+    profile = prepare_profile_base(
+        seed_config_dir,
+        artifacts_dir,
+        shared_dirs=[],
+        scenario_id="amutorrent-browser-smoke",
+        incoming_dir=incoming_dir,
+        temp_dir=temp_dir,
+    )
     configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, args.bind_addr)
     rest_api_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
 
     report: dict[str, Any] = {
-        "suite": "amutorrent-browser-smoke",
+        "suite": SUITE_NAME,
         "status": "failed",
         "emule_base_url": emule_base_url,
         "amutorrent_base_url": amutorrent_base_url,
@@ -795,6 +884,7 @@ def main() -> int:
         },
         "network_ready_timeout_seconds": args.network_ready_timeout_seconds,
         "search_rounds": args.search_rounds,
+        "admin_volume_fixture": admin_storage,
         "checks": {},
         "cleanup": {},
     }
@@ -883,13 +973,31 @@ def main() -> int:
                 report["cleanup"]["emule_closed"] = False
                 report["cleanup"]["emule_killed"] = True
                 report["cleanup"]["emule_close_error"] = repr(exc)
+        if fixture_context is not None:
+            try:
+                fixture_context.__exit__(None, None, None)
+                report["cleanup"]["admin_fixture_context_closed"] = True
+            except Exception as exc:
+                report["cleanup"]["admin_fixture_context_closed"] = False
+                report["cleanup"]["admin_fixture_close_error"] = repr(exc)
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+            if fixture_cleanup_inputs is not None:
+                report["fixture_cleanup"] = cleanup_audit.audit_fixture_cleanup(
+                    vhd_path=fixture_cleanup_inputs["vhd_path"],
+                    drive_root=fixture_cleanup_inputs["drive_root"],
+                    mount_root=fixture_cleanup_inputs["mount_root"],
+                    keep_vhd=args.keep_admin_fixtures,
+                )
+                if report["fixture_cleanup"].get("status") != "passed":
+                    report["status"] = "failed"
         write_json(artifacts_dir / "result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)
     if pending_error is not None:
         raise pending_error
-    return 0
+    return 0 if report.get("status") == "passed" else 1
 
 
 if __name__ == "__main__":

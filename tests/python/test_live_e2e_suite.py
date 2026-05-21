@@ -280,6 +280,21 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     )
     assert "--admin-volume-fixtures" in partfile_recovery_command
     assert option_values(partfile_recovery_command, "--mount-root") == [str(mount_root.resolve())]
+    amutorrent_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("amutorrent-browser-smoke"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    assert "--admin-volume-fixtures" in amutorrent_command
+    assert option_values(amutorrent_command, "--mount-root") == [str(mount_root.resolve())]
+    assert option_values(amutorrent_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)]
     long_path_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("vhd-long-path-special-names"),
         scripts_dir=tmp_path / "scripts",
@@ -789,6 +804,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "category-incoming-path-matrix",
         "vhd-partfile-recovery",
         "admin-volume-cleanup-audit",
+        "amutorrent-browser-smoke",
     ]
     assert summary["search_ui"] == {"search_rounds": 2, "download_lifecycle_count": 2}
     assert summary["weak_path_matrix"]["live_download_triggers"] == {
@@ -898,6 +914,11 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(cold_start_command, "--downloads-per-wave") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE)
     ]
+
+    amutorrent_command = commands[-1]
+    assert script_name(amutorrent_command) == "amutorrent-browser-smoke.py"
+    assert "--admin-volume-fixtures" in amutorrent_command
+    assert option_values(amutorrent_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)]
 
 
 def test_admin_storage_suite_requires_explicit_fixture_gate(tmp_path: Path) -> None:
