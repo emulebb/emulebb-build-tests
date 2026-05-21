@@ -221,6 +221,13 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="unc-mapped-drive-identity",
+        script_name="unc-mapped-drive-identity.py",
+        category="storage",
+        requires_admin_volume_fixtures=True,
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="rest-api",
         script_name="rest-api-smoke.py",
         category="rest",
@@ -354,6 +361,7 @@ PROFILE_SUITE_NAMES = {
         "shared-directories-rest",
         "shared-cache-volume-identity",
         "shared-cache-invalidation",
+        "unc-mapped-drive-identity",
         "rest-api",
         "disk-space-guard-live",
         "vhd-profile-isolation",
@@ -1464,6 +1472,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "storage": {
                 "shared_cache_volume_identity": any(spec.name == "shared-cache-volume-identity" for spec in selected_specs),
                 "shared_cache_invalidation": any(spec.name == "shared-cache-invalidation" for spec in selected_specs),
+                "unc_mapped_drive_identity": any(spec.name == "unc-mapped-drive-identity" for spec in selected_specs),
                 "disk_space_guard_live": any(spec.name == "disk-space-guard-live" for spec in selected_specs),
                 "vhd_profile_isolation": any(spec.name == "vhd-profile-isolation" for spec in selected_specs),
                 "vhd_profile_durability": any(spec.name == "vhd-profile-durability" for spec in selected_specs),
