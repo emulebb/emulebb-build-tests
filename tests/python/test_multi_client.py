@@ -76,6 +76,7 @@ def test_resolve_optional_clients_accepts_workspace_state_artifacts(tmp_path: Pa
     assert amule.available is True
     assert amule.executable == amule_daemon.resolve()
     assert amule.control_executable == amule_control.resolve()
+    assert amule.deterministic_transfer_adapter is True
 
 
 def test_optional_clients_report_unavailable_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:

@@ -18,6 +18,8 @@ from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_windows_c
 
 SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
+HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
+AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -85,19 +87,13 @@ def compact_child_report(path: Path) -> dict[str, object] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the mandatory eMule BB download from tracing-harness seed scenario."""
+def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
+    """Appends the shared live-suite arguments forwarded to child scenarios."""
 
-    scenario_id = "cl-emulebb-001-downloads-from-cl-harness-002"
-    scenario_artifacts = paths.source_artifacts_dir / scenario_id
-    command = build_python_command()
     command.extend(
         [
-            str((Path(__file__).resolve().with_name("deterministic-two-client-transfer.py"))),
             "--configuration",
             args.configuration,
-            "--artifacts-dir",
-            str(scenario_artifacts),
             "--api-key",
             args.api_key,
             "--bind-addr",
@@ -124,8 +120,6 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
         command.extend(["--app-root", str(Path(args.app_root).resolve())])
     if args.app_exe:
         command.extend(["--app-exe", str(Path(args.app_exe).resolve())])
-    if args.client2_app_exe:
-        command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
     if args.profile_seed_dir:
         command.extend(["--profile-seed-dir", str(Path(args.profile_seed_dir).resolve())])
     if args.p2p_bind_interface_address:
@@ -134,6 +128,24 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
         command.extend(["--ed2k-server-repo", str(Path(args.ed2k_server_repo).resolve())])
     if args.ed2k_server_exe:
         command.extend(["--ed2k-server-exe", str(Path(args.ed2k_server_exe).resolve())])
+
+
+def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the mandatory eMule BB download from tracing-harness seed scenario."""
+
+    scenario_id = HARNESS_TRANSFER_SCENARIO_ID
+    scenario_artifacts = paths.source_artifacts_dir / "h2"
+    command = build_python_command()
+    command.extend(
+        [
+            str((Path(__file__).resolve().with_name("deterministic-two-client-transfer.py"))),
+            "--artifacts-dir",
+            str(scenario_artifacts),
+        ]
+    )
+    add_common_child_args(command, args)
+    if args.client2_app_exe:
+        command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
 
     started = time.monotonic()
     completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
@@ -151,17 +163,59 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
     }
 
 
-def build_optional_scenario_rows(inventory: dict[str, object], *, require_optional_clients: bool) -> list[dict[str, object]]:
+def run_amule_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the eMule BB download from a headless aMule seed scenario."""
+
+    scenario_artifacts = paths.source_artifacts_dir / "a4"
+    command = build_python_command()
+    command.extend(
+        [
+            str((Path(__file__).resolve().with_name("deterministic-amule-transfer.py"))),
+            "--artifacts-dir",
+            str(scenario_artifacts),
+        ]
+    )
+    add_common_child_args(command, args)
+    if args.amule_daemon_exe:
+        command.extend(["--amule-daemon-exe", str(Path(args.amule_daemon_exe).resolve())])
+    if args.amule_control_exe:
+        command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
+
+    started = time.monotonic()
+    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
+    child_report = compact_child_report(scenario_artifacts / "deterministic-amule-transfer.json")
+    return {
+        "id": AMULE_TRANSFER_SCENARIO_ID,
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
+        "command": command,
+        "return_code": completed.returncode,
+        "duration_seconds": round(time.monotonic() - started, 3),
+        "stdout_tail": completed.stdout[-4000:],
+        "stderr_tail": completed.stderr[-4000:],
+        "report": child_report,
+    }
+
+
+def build_optional_scenario_rows(
+    inventory: dict[str, object],
+    *,
+    require_optional_clients: bool,
+    completed_scenario_ids: set[str] | None = None,
+) -> list[dict[str, object]]:
     """Builds explicit rows for optional Windows clients that are not silently ignored."""
 
+    completed_scenario_ids = completed_scenario_ids or set()
     rows: list[dict[str, object]] = []
     definitions = (
         ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
-        ("cl-emulebb-001-downloads-from-cl-amule-004", "amule"),
+        (AMULE_TRANSFER_SCENARIO_ID, "amule"),
         ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
     )
     for definition in definitions:
         scenario_id = definition[0]
+        if scenario_id in completed_scenario_ids:
+            continue
         client_keys = definition[1:]
         availability = [inventory[key] for key in client_keys]
         missing = [row for row in availability if not row.available]
@@ -254,7 +308,18 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         scenarios = [run_deterministic_transfer_scenario(paths, args)]
-        scenarios.extend(build_optional_scenario_rows(inventory, require_optional_clients=args.require_optional_clients))
+        completed_optional_ids: set[str] = set()
+        amule = inventory["amule"]
+        if amule.available and amule.deterministic_transfer_adapter:
+            scenarios.append(run_amule_transfer_scenario(paths, args))
+            completed_optional_ids.add(AMULE_TRANSFER_SCENARIO_ID)
+        scenarios.extend(
+            build_optional_scenario_rows(
+                inventory,
+                require_optional_clients=args.require_optional_clients,
+                completed_scenario_ids=completed_optional_ids,
+            )
+        )
         report["scenarios"] = scenarios
         failed = [row for row in scenarios if row.get("status") == "failed"]
         report["status"] = "failed" if failed else "passed"

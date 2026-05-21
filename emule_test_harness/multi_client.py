@@ -261,7 +261,7 @@ def resolve_amule_client(
         control_executable=control,
         reason=reason,
         launch_adapter="amuled-amulecmd",
-        deterministic_transfer_adapter=False,
+        deterministic_transfer_adapter=available,
     )
 
 
