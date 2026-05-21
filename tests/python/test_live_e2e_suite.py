@@ -733,6 +733,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared-hash-ui-e2e.py",
         "shared-directories-rest-e2e.py",
         "shared-cache-volume-identity.py",
+        "shared-cache-invalidation.py",
         "rest-api-smoke.py",
         "disk-space-guard-live.py",
         "vhd-profile-isolation.py",
@@ -763,6 +764,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared-files-ui",
         "shared-directories-rest",
         "shared-cache-volume-identity",
+        "shared-cache-invalidation",
         "disk-space-guard-live",
         "vhd-profile-isolation",
         "vhd-profile-durability",
@@ -780,6 +782,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["weak_path_matrix"]["adversity"]["local_dumps_crash_smoke"] is True
     assert summary["weak_path_matrix"]["storage"] == {
         "shared_cache_volume_identity": True,
+        "shared_cache_invalidation": True,
         "disk_space_guard_live": True,
         "vhd_profile_isolation": True,
         "vhd_profile_durability": True,
@@ -801,7 +804,11 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(cache_volume_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cache_volume_command
 
-    rest_command = commands[7]
+    cache_invalidation_command = commands[7]
+    assert option_values(cache_invalidation_command, "--vhd-size-mb") == ["256"]
+    assert "--admin-volume-fixtures" in cache_invalidation_command
+
+    rest_command = commands[8]
     assert option_values(rest_command, "--server-search-count") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
     ]
@@ -829,31 +836,31 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    disk_space_command = commands[8]
+    disk_space_command = commands[9]
     assert option_values(disk_space_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in disk_space_command
 
-    profile_isolation_command = commands[9]
+    profile_isolation_command = commands[10]
     assert option_values(profile_isolation_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_isolation_command
 
-    profile_durability_command = commands[10]
+    profile_durability_command = commands[11]
     assert option_values(profile_durability_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_durability_command
 
-    category_matrix_command = commands[11]
+    category_matrix_command = commands[12]
     assert option_values(category_matrix_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in category_matrix_command
 
-    partfile_recovery_command = commands[12]
+    partfile_recovery_command = commands[13]
     assert option_values(partfile_recovery_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in partfile_recovery_command
 
-    cleanup_audit_command = commands[13]
+    cleanup_audit_command = commands[14]
     assert option_values(cleanup_audit_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cleanup_audit_command
 
-    cold_start_command = commands[14]
+    cold_start_command = commands[15]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
