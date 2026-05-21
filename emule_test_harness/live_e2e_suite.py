@@ -73,6 +73,9 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAUL
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
+DEFAULT_PROFILE_CPU_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
+DEFAULT_PROFILE_CPU_STACK_MIN_HITS = 10
+DEFAULT_PROFILE_RESOURCE_MONITOR_INTERVAL_SECONDS = 2.0
 DEFAULT_SEARCH_UI_SEARCH_ROUNDS = 1
 DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
 DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS = 120.0
@@ -308,6 +311,16 @@ PROFILE_SUITE_NAMES = {
     ),
 }
 LIVE_E2E_PROFILES = ("default", *PROFILE_SUITE_NAMES.keys())
+BROAD_DIAGNOSTIC_PROFILE_NAMES = {"release-expanded", "stabilization-stress", "cpu-heavy"}
+CPU_PROFILED_SUITE_NAMES = {
+    "preference-ui",
+    "shared-files-ui",
+    "shared-hash-ui",
+    "search-ui-live",
+    "resource-ui-smoke",
+    "rest-api",
+    "rest-cold-start-dump-stress",
+}
 
 
 def resolve_suite_specs(selected_names: list[str] | None) -> tuple[SuiteSpec, ...]:
@@ -328,6 +341,20 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
 
     if not args.suite:
         args.suite = list(PROFILE_SUITE_NAMES[args.profile])
+
+    if args.profile in BROAD_DIAGNOSTIC_PROFILE_NAMES:
+        args.profile_cpu = True
+        args.profile_cpu_stack = True
+        args.profile_memory = True
+        if (
+            args.rest_cold_start_dump_stress_resource_monitor_interval_seconds
+            == DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS
+        ):
+            args.rest_cold_start_dump_stress_resource_monitor_interval_seconds = DEFAULT_PROFILE_RESOURCE_MONITOR_INTERVAL_SECONDS
+        if not args.rest_cold_start_dump_stress_cpu_profile:
+            args.rest_cold_start_dump_stress_cpu_profile = True
+        if not args.rest_cold_start_dump_stress_cpu_profile_stack:
+            args.rest_cold_start_dump_stress_cpu_profile_stack = True
 
     if args.arr_direct_search_stress_count == DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT:
         args.arr_direct_search_stress_count = BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT
@@ -738,10 +765,53 @@ def terminate_process_tree(process_id: int) -> dict[str, object]:
         return {"command": "kill", "return_code": 1, "error": str(exc)}
 
 
+@dataclass(frozen=True)
+class SuiteCpuProfileOptions:
+    """Resolved CPU profiling settings for one aggregate child suite."""
+
+    enabled: bool
+    source: str
+    max_file_mb: int
+    stack: bool
+    stack_min_hits: int
+    symbols_required: bool
+
+
+def resolve_suite_cpu_profile_options(spec: SuiteSpec, args: argparse.Namespace) -> SuiteCpuProfileOptions:
+    """Returns the effective CPU profiling settings for one child suite."""
+
+    if bool(args.profile_cpu) and spec.name in CPU_PROFILED_SUITE_NAMES:
+        return SuiteCpuProfileOptions(
+            enabled=True,
+            source="profile-cpu",
+            max_file_mb=args.profile_cpu_max_file_mb,
+            stack=bool(args.profile_cpu_stack),
+            stack_min_hits=args.profile_cpu_stack_min_hits,
+            symbols_required=bool(args.profile_symbols_required),
+        )
+    if spec.name == "shared-files-ui" and bool(args.shared_files_ui_cpu_profile):
+        return SuiteCpuProfileOptions(
+            enabled=True,
+            source="shared-files-ui-cpu-profile",
+            max_file_mb=args.shared_files_ui_cpu_profile_max_file_mb,
+            stack=bool(args.shared_files_ui_cpu_profile_stack),
+            stack_min_hits=args.shared_files_ui_cpu_profile_stack_min_hits,
+            symbols_required=bool(args.shared_files_ui_cpu_profile_symbols_required),
+        )
+    return SuiteCpuProfileOptions(
+        enabled=False,
+        source="disabled",
+        max_file_mb=args.profile_cpu_max_file_mb,
+        stack=False,
+        stack_min_hits=args.profile_cpu_stack_min_hits,
+        symbols_required=True,
+    )
+
+
 def should_profile_shared_files_ui_suite(spec: SuiteSpec, args: argparse.Namespace) -> bool:
     """Returns whether the shared-files UI child suite should run under ETW CPU profiling."""
 
-    return spec.name == "shared-files-ui" and bool(args.shared_files_ui_cpu_profile)
+    return spec.name == "shared-files-ui" and resolve_suite_cpu_profile_options(spec, args).enabled
 
 
 def run_suite_command_with_optional_cpu_profile(
@@ -754,22 +824,24 @@ def run_suite_command_with_optional_cpu_profile(
 ) -> tuple[int, dict[str, object] | None]:
     """Runs one child suite, optionally wrapped in a bounded xperf CPU profile."""
 
-    if not should_profile_shared_files_ui_suite(spec, args):
+    profile_options = resolve_suite_cpu_profile_options(spec, args)
+    if not profile_options.enabled:
         return run_suite_command(command), None
 
     profile_paths = cpu_profile.build_cpu_profile_paths(child_artifacts_dir)
     profile_result: dict[str, object] = {
         "enabled": True,
         "tool": "xperf",
+        "source": profile_options.source,
         "profile_paths": {
             "etl": str(profile_paths.etl_path),
             "detail": str(profile_paths.detail_path),
             "summary": str(profile_paths.summary_path),
             "stack": str(profile_paths.stack_path),
         },
-        "max_file_mb": args.shared_files_ui_cpu_profile_max_file_mb,
-        "stack": bool(args.shared_files_ui_cpu_profile_stack),
-        "stack_min_hits": args.shared_files_ui_cpu_profile_stack_min_hits,
+        "max_file_mb": profile_options.max_file_mb,
+        "stack": profile_options.stack,
+        "stack_min_hits": profile_options.stack_min_hits,
     }
     tools = cpu_profile.discover_cpu_profile_tools()
     if not tools.xperf:
@@ -778,7 +850,7 @@ def run_suite_command_with_optional_cpu_profile(
         return run_suite_command(command), profile_result
 
     pdb_path = cpu_profile.resolve_app_pdb_path(app_exe)
-    if args.shared_files_ui_cpu_profile_symbols_required and not pdb_path.is_file():
+    if profile_options.symbols_required and not pdb_path.is_file():
         profile_result["status"] = "failed"
         profile_result["error"] = f"Required app symbols were not found: {pdb_path}"
         return run_suite_command(command), profile_result
@@ -786,7 +858,7 @@ def run_suite_command_with_optional_cpu_profile(
     start = cpu_profile.start_cpu_profile(
         tools=tools,
         paths=profile_paths,
-        max_file_mb=args.shared_files_ui_cpu_profile_max_file_mb,
+        max_file_mb=profile_options.max_file_mb,
         timeout_seconds=30.0,
     )
     profile_result["start"] = start
@@ -800,13 +872,13 @@ def run_suite_command_with_optional_cpu_profile(
             paths=profile_paths,
             app_exe=app_exe,
             timeout_seconds=90.0,
-            include_stack=bool(args.shared_files_ui_cpu_profile_stack),
-            stack_min_hits=args.shared_files_ui_cpu_profile_stack_min_hits,
+            include_stack=profile_options.stack,
+            stack_min_hits=profile_options.stack_min_hits,
         )
         detail_summary = cpu_profile.parse_xperf_profile_detail_file(profile_paths.detail_path)
         stack_summary = (
             cpu_profile.parse_xperf_stack_report_file(profile_paths.stack_path)
-            if args.shared_files_ui_cpu_profile_stack
+            if profile_options.stack
             else {"available": False, "reason": "stack export disabled"}
         )
         combined_summary = {"detail": detail_summary, "stack": stack_summary}
@@ -836,6 +908,46 @@ def get_suite_status_from_return_code(return_code: int) -> str:
     if return_code == 0:
         return "passed"
     return "failed"
+
+
+def read_child_suite_result(child_artifacts_dir: Path) -> dict[str, object] | None:
+    """Reads a child suite result file when the child runner published one."""
+
+    result_path = child_artifacts_dir / "result.json"
+    if not result_path.is_file():
+        return None
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def extract_child_resource_diagnostics(child_result: dict[str, object] | None) -> dict[str, object] | None:
+    """Extracts bounded memory/resource diagnostics from a child suite report."""
+
+    if not child_result:
+        return None
+    diagnostics = child_result.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    extracted: dict[str, object] = {}
+    resource_monitor = diagnostics.get("resource_monitor")
+    if isinstance(resource_monitor, dict):
+        extracted["resource_monitor"] = {
+            key: value
+            for key, value in resource_monitor.items()
+            if key in {"enabled", "interval_seconds", "summary", "thread_alive_after_stop", "sample_file"}
+        }
+    for key in ("resource_deltas", "findings"):
+        value = diagnostics.get(key)
+        if isinstance(value, dict):
+            extracted[key] = value
+    if "resource_deltas" not in extracted:
+        resource_deltas = child_result.get("resource_deltas")
+        if isinstance(resource_deltas, dict):
+            extracted["resource_deltas"] = resource_deltas
+    return extracted or None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -874,6 +986,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--shared-files-ui-cpu-profile-symbols-required",
         action=argparse.BooleanOptionalAction,
         default=True,
+    )
+    parser.add_argument("--profile-cpu", action="store_true")
+    parser.add_argument("--profile-cpu-max-file-mb", type=int, default=DEFAULT_PROFILE_CPU_MAX_FILE_MB)
+    parser.add_argument("--profile-cpu-stack", action="store_true")
+    parser.add_argument("--profile-cpu-stack-min-hits", type=int, default=DEFAULT_PROFILE_CPU_STACK_MIN_HITS)
+    parser.add_argument("--profile-symbols-required", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--profile-memory", action="store_true")
+    parser.add_argument(
+        "--profile-resource-interval-seconds",
+        type=float,
+        default=DEFAULT_PROFILE_RESOURCE_MONITOR_INTERVAL_SECONDS,
     )
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--profile", choices=LIVE_E2E_PROFILES, default="default")
@@ -1100,6 +1223,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Shared Files UI CPU profile max file MB must be greater than zero.")
     if args.shared_files_ui_cpu_profile_stack_min_hits <= 0:
         raise ValueError("Shared Files UI CPU profile stack min hits must be greater than zero.")
+    if args.profile_cpu_max_file_mb <= 0:
+        raise ValueError("CPU profile max file MB must be greater than zero.")
+    if args.profile_cpu_stack_min_hits <= 0:
+        raise ValueError("CPU profile stack min hits must be greater than zero.")
+    if args.profile_resource_interval_seconds <= 0:
+        raise ValueError("Profile resource monitor interval must be greater than zero.")
     if args.search_ui_search_rounds <= 0:
         raise ValueError("Search UI rounds must be greater than zero.")
     if args.search_ui_download_lifecycle_count <= 0:
@@ -1111,6 +1240,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
 
     explicit_suite_names = tuple(args.suite or ())
     apply_profile_defaults(args)
+    if (
+        args.profile_memory
+        and args.rest_cold_start_dump_stress_resource_monitor_interval_seconds
+        == DEFAULT_REST_COLD_START_DUMP_STRESS_RESOURCE_MONITOR_INTERVAL_SECONDS
+    ):
+        args.rest_cold_start_dump_stress_resource_monitor_interval_seconds = args.profile_resource_interval_seconds
     validate_args(args)
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
@@ -1172,6 +1307,21 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "stack": bool(args.shared_files_ui_cpu_profile_stack),
             "stack_min_hits": args.shared_files_ui_cpu_profile_stack_min_hits,
             "symbols_required": bool(args.shared_files_ui_cpu_profile_symbols_required),
+        },
+        "profiling": {
+            "cpu": {
+                "enabled": bool(args.profile_cpu),
+                "suite_names": [spec.name for spec in selected_specs if spec.name in CPU_PROFILED_SUITE_NAMES],
+                "max_file_mb": args.profile_cpu_max_file_mb,
+                "stack": bool(args.profile_cpu_stack),
+                "stack_min_hits": args.profile_cpu_stack_min_hits,
+                "symbols_required": bool(args.profile_symbols_required),
+            },
+            "memory": {
+                "enabled": bool(args.profile_memory),
+                "resource_interval_seconds": args.profile_resource_interval_seconds,
+                "rest_cold_start_resource_interval_seconds": args.rest_cold_start_dump_stress_resource_monitor_interval_seconds,
+            },
         },
         "preference_ui_directories_tree_stress": bool(args.preference_ui_directories_tree_stress),
         "rest_coverage_budget": args.rest_coverage_budget,
@@ -1361,6 +1511,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             child_artifacts_dir=child_artifacts_dir,
             app_exe=paths.app_exe,
         )
+        child_result = read_child_suite_result(child_artifacts_dir)
         suite_status = get_suite_status_from_return_code(return_code)
         result = {
             "name": spec.name,
@@ -1381,9 +1532,21 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         }
         if suite_cpu_profile is not None:
             result["cpu_profile"] = suite_cpu_profile
+            result.setdefault("diagnostics", {})["cpu_profile"] = suite_cpu_profile  # type: ignore[index]
             if suite_cpu_profile.get("status") == "failed" and suite_status == "passed":
                 suite_status = "failed"
                 result["status"] = suite_status
+        if args.profile_memory:
+            resource_diagnostics = extract_child_resource_diagnostics(child_result)
+            result.setdefault("diagnostics", {})["resources"] = (  # type: ignore[index]
+                resource_diagnostics
+                or {
+                    "resource_monitor": {
+                        "enabled": False,
+                        "reason": "child result did not publish resource diagnostics",
+                    }
+                }
+            )
         if spec.name == "preference-ui":
             result["directories_tree_stress"] = bool(args.preference_ui_directories_tree_stress)
         if spec.is_resource_ui_smoke:

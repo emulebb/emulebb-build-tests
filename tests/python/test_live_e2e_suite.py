@@ -63,6 +63,28 @@ def option_values(command: list[str], option: str) -> list[str]:
     return [command[index + 1] for index, value in enumerate(command[:-1]) if value == option]
 
 
+def install_profiled_command_capture(monkeypatch, commands: list[list[str]]) -> None:
+    """Captures aggregate child commands without requiring local xperf tools."""
+
+    def fake_run_profiled(command, *, spec, args, child_artifacts_dir, app_exe):
+        commands.append(command)
+        profile_options = live_e2e_suite.resolve_suite_cpu_profile_options(spec, args)
+        if not profile_options.enabled:
+            return 0, None
+        return (
+            0,
+            {
+                "enabled": True,
+                "source": profile_options.source,
+                "status": "passed",
+                "stack": profile_options.stack,
+                "summary": {"detail": {"available": True}},
+            },
+        )
+
+    monkeypatch.setattr(live_e2e_suite, "run_suite_command_with_optional_cpu_profile", fake_run_profiled)
+
+
 def suite_spec(name: str) -> live_e2e_suite.SuiteSpec:
     return next(spec for spec in live_e2e_suite.SUITE_SPECS if spec.name == name)
 
@@ -439,11 +461,7 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
 
 def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
-    monkeypatch.setattr(
-        live_e2e_suite,
-        "run_suite_command",
-        lambda command: commands.append(command) or 0,
-    )
+    install_profiled_command_capture(monkeypatch, commands)
 
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "stabilization-stress"),
@@ -481,6 +499,20 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["rest_leak_churn_budget"] == "smoke"
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
+    assert summary["profiling"]["cpu"]["enabled"] is True
+    assert summary["profiling"]["cpu"]["stack"] is True
+    assert summary["profiling"]["memory"]["enabled"] is True
+    assert summary["rest_cold_start_dump_stress"]["cpu_profile"] is True
+    assert summary["rest_cold_start_dump_stress"]["cpu_profile_stack"] is True
+    assert summary["rest_cold_start_dump_stress"]["resource_monitor_interval_seconds"] == (
+        live_e2e_suite.DEFAULT_PROFILE_RESOURCE_MONITOR_INTERVAL_SECONDS
+    )
+    assert [suite["name"] for suite in summary["suites"] if "cpu_profile" in suite] == [
+        "shared-files-ui",
+        "search-ui-live",
+        "rest-api",
+        "rest-cold-start-dump-stress",
+    ]
     assert summary["search_ui"] == {"search_rounds": 3, "download_lifecycle_count": 2}
     assert summary["suites"][1]["search_ui_search_rounds"] == 3
     assert summary["suites"][1]["search_ui_download_lifecycle_count"] == 2
@@ -547,11 +579,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
 
 def test_release_expanded_profile_requires_100_live_download_triggers_and_adversity(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
-    monkeypatch.setattr(
-        live_e2e_suite,
-        "run_suite_command",
-        lambda command: commands.append(command) or 0,
-    )
+    install_profiled_command_capture(monkeypatch, commands)
 
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "release-expanded"),
@@ -584,6 +612,9 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.RELEASE_EXPANDED_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
     assert summary["rest_download_trigger_count"] == live_e2e_suite.RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT
+    assert summary["profiling"]["cpu"]["enabled"] is True
+    assert summary["profiling"]["cpu"]["stack"] is True
+    assert summary["profiling"]["memory"]["enabled"] is True
     assert summary["search_ui"] == {"search_rounds": 2, "download_lifecycle_count": 2}
     assert summary["weak_path_matrix"]["live_download_triggers"] == {
         "server_search_count": live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK,
@@ -643,11 +674,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
 
 def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
-    monkeypatch.setattr(
-        live_e2e_suite,
-        "run_suite_command",
-        lambda command: commands.append(command) or 0,
-    )
+    install_profiled_command_capture(monkeypatch, commands)
 
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
@@ -705,6 +732,35 @@ def test_cpu_heavy_profile_runs_shared_files_50k_under_cpu_profile(tmp_path: Pat
     assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
     assert option_values(shared_files_command, "--tree-stress-churn-cycles") == ["80"]
     assert summary["suites"][0]["cpu_profile"]["status"] == "passed"
+
+
+def test_child_resource_diagnostics_are_bounded_for_aggregate_memory_profiles() -> None:
+    child_result = {
+        "diagnostics": {
+            "resource_monitor": {
+                "enabled": True,
+                "interval_seconds": 2.0,
+                "summary": {"sample_count": 3, "peak_working_set_bytes": 4096},
+                "samples": [{"working_set_bytes": 1024}],
+                "thread_alive_after_stop": False,
+            },
+            "resource_deltas": {"baseline_to_peak": {"working_set_delta_bytes": 2048}},
+            "findings": {"resources": [{"severity": "warning", "text": "growth"}]},
+        }
+    }
+
+    extracted = live_e2e_suite.extract_child_resource_diagnostics(child_result)
+
+    assert extracted == {
+        "resource_monitor": {
+            "enabled": True,
+            "interval_seconds": 2.0,
+            "summary": {"sample_count": 3, "peak_working_set_bytes": 4096},
+            "thread_alive_after_stop": False,
+        },
+        "resource_deltas": {"baseline_to_peak": {"working_set_delta_bytes": 2048}},
+        "findings": {"resources": [{"severity": "warning", "text": "growth"}]},
+    }
 
 
 def test_ui_resource_depth_profile_runs_resource_smoke_and_preferences(tmp_path: Path, monkeypatch) -> None:
@@ -904,11 +960,7 @@ def test_search_ui_live_suite_is_selectable_with_live_network_policy(tmp_path: P
 
 def test_stabilization_stress_profile_includes_expanded_search_ui_live(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
-    monkeypatch.setattr(
-        live_e2e_suite,
-        "run_suite_command",
-        lambda command: commands.append(command) or 0,
-    )
+    install_profiled_command_capture(monkeypatch, commands)
 
     summary = live_e2e_suite.run_live_e2e_suite(
         parse_args(
@@ -1228,6 +1280,10 @@ def test_operator_script_help_loads_hyphenated_helpers() -> None:
     )
 
     assert completed.returncode == 0
+    assert "--profile-cpu" in completed.stdout
+    assert "--profile-cpu-stack" in completed.stdout
+    assert "--profile-memory" in completed.stdout
+    assert "--profile-resource-interval-seconds" in completed.stdout
     assert "--skip-live-seed-refresh" in completed.stdout
     assert "--profile-seed-dir" in completed.stdout
     assert "--seed" + "-config-dir" not in completed.stdout
