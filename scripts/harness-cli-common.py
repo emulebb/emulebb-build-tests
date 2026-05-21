@@ -702,8 +702,6 @@ def publish_directory_snapshot(source_directory: Path, destination_directory: Pa
 def cleanup_source_artifacts(paths: HarnessRunPaths) -> None:
     """Removes transient source artifacts when the invocation does not retain them."""
 
-    if paths.keep_source_artifacts:
-        return
     local_dumps_restore = restore_local_dumps(paths.local_dumps)
     failed_restore_entries = [
         entry
@@ -712,6 +710,8 @@ def cleanup_source_artifacts(paths: HarnessRunPaths) -> None:
     ]
     if failed_restore_entries:
         print(f"Warning: LocalDumps registry cleanup had errors: {failed_restore_entries}")
+    if paths.keep_source_artifacts:
+        return
     if exact_path_exists(paths.source_artifacts_dir):
         deadline = time.monotonic() + 10.0
         last_error: OSError | None = None

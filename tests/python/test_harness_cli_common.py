@@ -397,6 +397,33 @@ def test_cleanup_source_artifacts_restores_or_clears_local_dumps_registry(monkey
     assert tool_subkey not in registry
 
 
+def test_cleanup_source_artifacts_restores_local_dumps_when_artifacts_are_kept(monkeypatch, tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    calls: list[dict[str, object]] = []
+    artifact_dir = tmp_path / "state" / "test-artifacts" / "suite" / "run"
+    artifact_dir.mkdir(parents=True)
+    paths = module.HarnessRunPaths(
+        repo_root=tmp_path,
+        workspace_root=tmp_path,
+        app_root=tmp_path,
+        app_exe=tmp_path / "emule.exe",
+        seed_config_dir=tmp_path,
+        configuration="Release",
+        suite_name="suite",
+        source_artifacts_dir=artifact_dir,
+        run_report_dir=tmp_path / "reports" / "suite" / "run",
+        latest_report_dir=tmp_path / "reports" / "suite-latest",
+        keep_source_artifacts=True,
+        local_dumps={"dump_folder": str(artifact_dir / "crash-dumps")},
+    )
+    monkeypatch.setattr(module, "restore_local_dumps", lambda local_dumps: calls.append(local_dumps) or {"entries": []})
+
+    module.cleanup_source_artifacts(paths)
+
+    assert calls == [paths.local_dumps]
+    assert artifact_dir.exists()
+
+
 def test_publish_run_artifacts_rewrites_json_paths_to_report_dir(tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     source_dir = tmp_path / "state" / "test-artifacts" / "suite" / "run"
