@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.ini import read_ini_text  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 
@@ -46,6 +47,8 @@ rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
 SUITE_NAME = "deterministic-two-client-transfer"
 API_KEY = "deterministic-two-client-transfer-key"
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+CLIENT01 = CLIENT_IDENTITIES["emulebb"]
+CLIENT02 = CLIENT_IDENTITIES["harness"]
 
 SERVER_MET_HEADER = 0xE0
 TAGTYPE_STRING = 0x02
@@ -820,19 +823,19 @@ def main(argv: list[str] | None = None) -> int:
             profile_seed_dir,
             paths.source_artifacts_dir,
             [],
-            "client1-emule-bb",
+            CLIENT01.profile_id,
         )
         client2 = live_common.prepare_scenario_profile(
             profile_seed_dir,
             paths.source_artifacts_dir,
             [],
-            "client2-testing-harness",
+            CLIENT02.profile_id,
         )
         client2_app_exe = resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
         configure_client_profile(
             config_dir=Path(client1["config_dir"]),
             app_exe=paths.app_exe,
-            nick="eMuleBB-Client1",
+            nick=CLIENT01.nick,
             tcp_port=ports["client1_tcp"],
             udp_port=ports["client1_udp"],
             ed2k_enabled=True,
@@ -844,7 +847,7 @@ def main(argv: list[str] | None = None) -> int:
         configure_client_profile(
             config_dir=Path(client2["config_dir"]),
             app_exe=client2_app_exe,
-            nick="eMuleHarness-Client2",
+            nick=CLIENT02.nick,
             tcp_port=ports["client2_tcp"],
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
@@ -859,14 +862,18 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         report["profiles"] = {
-            "client1": {
+            CLIENT01.profile_id: {
+                "client_key": CLIENT01.key,
+                "nick": CLIENT01.nick,
                 "profile_base": str(client1["profile_base"]),
                 "config_dir": str(client1["config_dir"]),
                 "incoming_dir": str(client1["incoming_dir"]),
                 "temp_dir": str(client1["temp_dir"]),
                 "preferences": read_preferences_snapshot(Path(client1["config_dir"])),
             },
-            "client2": {
+            CLIENT02.profile_id: {
+                "client_key": CLIENT02.key,
+                "nick": CLIENT02.nick,
                 "profile_base": str(client2["profile_base"]),
                 "config_dir": str(client2["config_dir"]),
                 "incoming_dir": str(client2["incoming_dir"]),
@@ -899,7 +906,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["client2_server_client"] = wait_for_server_client(
             admin_base_url,
             args.api_key,
-            "eMuleHarness-Client2",
+            CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
         report["checks"]["client2_server_file"] = wait_for_server_file(
@@ -926,7 +933,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["client1_server_client"] = wait_for_server_client(
             admin_base_url,
             args.api_key,
-            "eMuleBB-Client1",
+            CLIENT01.nick,
             args.server_connect_timeout_seconds,
         )
 
@@ -961,7 +968,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         close_results: dict[str, object] = {}
-        for name, app in (("client1", client1_app), ("client2", client2_app)):
+        for name, app in ((CLIENT01.profile_id, client1_app), (CLIENT02.profile_id, client2_app)):
             if app is None:
                 continue
             try:

@@ -134,7 +134,7 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     module.configure_client_profile(
         config_dir=config_dir,
         app_exe=tmp_path / "app" / "emule.exe",
-        nick="client1",
+        nick=module.CLIENT01.nick,
         tcp_port=4662,
         udp_port=4672,
         ed2k_enabled=True,
@@ -150,7 +150,7 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     assert "FileBufferTimeLimit=1" in emule_section
     assert "AllocateFullFile=0" in emule_section
     assert "SparsePartFiles=0" in emule_section
-    assert "Nick=client1" in emule_section
+    assert f"Nick={module.CLIENT01.nick}" in emule_section
 
 
 def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:

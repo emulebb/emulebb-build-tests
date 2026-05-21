@@ -194,6 +194,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="multi-client-p2p-matrix",
+        script_name="multi-client-p2p-matrix.py",
+        category="protocol",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="shared-hash-ui",
         script_name="shared-hash-ui-e2e.py",
         category="ui",
@@ -349,6 +355,9 @@ PROFILE_SUITE_NAMES = {
     "protocol-parity": (
         "deterministic-two-client-transfer",
         "rest-api",
+    ),
+    "multi-client-p2p": (
+        "multi-client-p2p-matrix",
     ),
     "beta-green": (
         "shared-directories-rest",
@@ -773,7 +782,7 @@ def build_suite_command(
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
         command.extend(["--ui-search-rounds", str(search_ui_search_rounds)])
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
-    if spec.name == "deterministic-two-client-transfer" and p2p_bind_interface_name:
+    if spec.name in {"deterministic-two-client-transfer", "multi-client-p2p-matrix"} and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
