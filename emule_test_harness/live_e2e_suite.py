@@ -213,6 +213,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="local-ed2k-protocol-combinations",
+        script_name="local-ed2k-protocol-combinations.py",
+        category="protocol",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="shared-hash-ui",
         script_name="shared-hash-ui-e2e.py",
         category="ui",
@@ -373,6 +379,7 @@ PROFILE_SUITE_NAMES = {
         "multi-client-p2p-matrix",
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
+        "local-ed2k-protocol-combinations",
     ),
     "beta-green": (
         "shared-directories-rest",
@@ -798,7 +805,14 @@ def build_suite_command(
         command.extend(["--ui-search-rounds", str(search_ui_search_rounds)])
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
     if (
-        spec.name in {"deterministic-two-client-transfer", "multi-client-p2p-matrix", "local-ed2k-search-soak", "local-ed2k-chaos-mode"}
+        spec.name
+        in {
+            "deterministic-two-client-transfer",
+            "multi-client-p2p-matrix",
+            "local-ed2k-search-soak",
+            "local-ed2k-chaos-mode",
+            "local-ed2k-protocol-combinations",
+        }
         and p2p_bind_interface_name
         and p2p_bind_interface_name != "hide.me"
     ):

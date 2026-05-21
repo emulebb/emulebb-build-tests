@@ -268,7 +268,16 @@ def write_empty_catalog(path: Path) -> None:
     path.write_text(json.dumps({"files": []}, indent=2), encoding="utf-8")
 
 
-def build_server_config(path: Path, *, ed2k_port: int, admin_port: int, catalog_path: Path, token: str) -> dict[str, object]:
+def build_server_config(
+    path: Path,
+    *,
+    ed2k_port: int,
+    admin_port: int,
+    catalog_path: Path,
+    token: str,
+    protocol_obfuscation: bool = True,
+    server_udp: bool = True,
+) -> dict[str, object]:
     """Writes and returns the local ED2K server JSON configuration."""
 
     config = {
@@ -281,8 +290,8 @@ def build_server_config(path: Path, *, ed2k_port: int, admin_port: int, catalog_
         "storage_backend": "json",
         "catalog_path": str(catalog_path),
         "search_batch_size": 200,
-        "protocol_obfuscation": True,
-        "server_udp": True,
+        "protocol_obfuscation": protocol_obfuscation,
+        "server_udp": server_udp,
         "udp_port_offset": 4,
         "soft_files_limit": 5000,
         "hard_files_limit": 200000,
@@ -772,6 +781,10 @@ def read_preferences_snapshot(config_dir: Path) -> dict[str, object]:
         "MaxUpload",
         "MaxDownload",
         "MaxUploadClientsAllowed",
+        "CryptLayerSupported",
+        "CryptLayerRequested",
+        "CryptLayerRequired",
+        "CryptTCPPaddingLength",
     )
     snapshot: dict[str, object] = {}
     for key in keys:

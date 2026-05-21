@@ -80,6 +80,28 @@ def test_build_server_config_uses_workspace_artifact_paths(tmp_path: Path) -> No
     assert payload["listen_address"] == "0.0.0.0:4661"
     assert payload["admin_listen_address"] == "127.0.0.1:8080"
     assert payload["catalog_path"] == str(catalog_path)
+    assert payload["protocol_obfuscation"] is True
+    assert payload["server_udp"] is True
+
+
+def test_build_server_config_allows_protocol_overrides(tmp_path: Path) -> None:
+    module = load_suite_module()
+    config_path = tmp_path / "server" / "config.json"
+    catalog_path = tmp_path / "server" / "catalog.json"
+
+    config = module.build_server_config(
+        config_path,
+        ed2k_port=4661,
+        admin_port=8080,
+        catalog_path=catalog_path,
+        token="secret",
+        protocol_obfuscation=False,
+        server_udp=False,
+    )
+
+    assert config["protocol_obfuscation"] is False
+    assert config["server_udp"] is False
+    assert json.loads(config_path.read_text(encoding="utf-8"))["protocol_obfuscation"] is False
 
 
 def test_parse_exported_ed2k_file_link() -> None:
@@ -151,6 +173,7 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     assert f"MaxUpload={module.DETERMINISTIC_BANDWIDTH_LIMIT_KIB}" in emule_section
     assert f"MaxDownload={module.DETERMINISTIC_BANDWIDTH_LIMIT_KIB}" in emule_section
     assert "MaxUploadClientsAllowed=32" in text
+    assert module.read_preferences_snapshot(config_dir)["CryptLayerSupported"] is None
     assert "CommitFiles=2" in emule_section
     assert "FileBufferSize=16384" in emule_section
     assert "FileBufferTimeLimit=1" in emule_section
