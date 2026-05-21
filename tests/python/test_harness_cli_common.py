@@ -219,7 +219,7 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
             return f"{id(root)}\\{subkey}"
 
         @staticmethod
-        def OpenKey(root, subkey: str):
+        def OpenKey(root, subkey: str, *_args):
             subkey = FakeWinReg.key_name(root, subkey)
             if subkey not in registry:
                 raise FileNotFoundError(subkey)
@@ -241,6 +241,20 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
         @staticmethod
         def SetValueEx(key: FakeKey, name: str, _reserved: int, value_type: int, value) -> None:
             registry.setdefault(key.subkey, {})[name] = (value, value_type)
+
+        @staticmethod
+        def DeleteValue(key: FakeKey, name: str) -> None:
+            try:
+                del registry[key.subkey][name]
+            except KeyError as exc:
+                raise FileNotFoundError(name) from exc
+
+        @staticmethod
+        def DeleteKey(root, subkey: str) -> None:
+            subkey = FakeWinReg.key_name(root, subkey)
+            if registry.get(subkey):
+                raise OSError("key is not empty")
+            registry.pop(subkey, None)
 
     monkeypatch.setattr(module, "winreg", FakeWinReg)
     stale_dump_root = tmp_path / "state" / "live-e2e-artifacts" / "old-run" / "crash-dumps"
@@ -274,6 +288,113 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
         assert str(stale_dump_root) not in json.dumps(entry["before"])
     wer_subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.WER_BASE_SUBKEY)
     assert registry[wer_subkey]["Disabled"] == (0, FakeWinReg.REG_DWORD)
+
+
+def test_cleanup_source_artifacts_restores_or_clears_local_dumps_registry(monkeypatch, tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    registry: dict[str, dict[str, tuple[object, int]]] = {}
+
+    class FakeKey:
+        def __init__(self, subkey: str) -> None:
+            self.subkey = subkey
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb) -> None:
+            return None
+
+    class FakeWinReg:
+        HKEY_CURRENT_USER = object()
+        HKEY_LOCAL_MACHINE = object()
+        KEY_SET_VALUE = 0x0002
+        REG_EXPAND_SZ = 2
+        REG_DWORD = 4
+
+        @staticmethod
+        def key_name(root, subkey: str) -> str:
+            return f"{id(root)}\\{subkey}"
+
+        @staticmethod
+        def OpenKey(root, subkey: str, *_args):
+            subkey = FakeWinReg.key_name(root, subkey)
+            if subkey not in registry:
+                raise FileNotFoundError(subkey)
+            return FakeKey(subkey)
+
+        @staticmethod
+        def CreateKeyEx(root, subkey: str, _reserved: int, _access: int):
+            subkey = FakeWinReg.key_name(root, subkey)
+            registry.setdefault(subkey, {})
+            return FakeKey(subkey)
+
+        @staticmethod
+        def QueryValueEx(key: FakeKey, name: str):
+            try:
+                return registry[key.subkey][name]
+            except KeyError as exc:
+                raise FileNotFoundError(name) from exc
+
+        @staticmethod
+        def SetValueEx(key: FakeKey, name: str, _reserved: int, value_type: int, value) -> None:
+            registry.setdefault(key.subkey, {})[name] = (value, value_type)
+
+        @staticmethod
+        def DeleteValue(key: FakeKey, name: str) -> None:
+            try:
+                del registry[key.subkey][name]
+            except KeyError as exc:
+                raise FileNotFoundError(name) from exc
+
+        @staticmethod
+        def DeleteKey(root, subkey: str) -> None:
+            subkey = FakeWinReg.key_name(root, subkey)
+            if registry.get(subkey):
+                raise OSError("key is not empty")
+            registry.pop(subkey, None)
+
+    monkeypatch.setattr(module, "winreg", FakeWinReg)
+    artifact_dir = tmp_path / "state" / "test-artifacts" / "suite" / "run"
+    artifact_dir.mkdir(parents=True)
+    previous_external_dump = tmp_path / "operator-dumps"
+    previous_harness_dump = tmp_path / "state" / "live-e2e-artifacts" / "old-run" / "crash-dumps"
+    emule_subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\emule.exe")
+    tool_subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\umdh.exe")
+    registry[emule_subkey] = {
+        "DumpFolder": (str(previous_external_dump), FakeWinReg.REG_EXPAND_SZ),
+        "DumpType": (1, FakeWinReg.REG_DWORD),
+    }
+    registry[tool_subkey] = {
+        "DumpFolder": (str(previous_harness_dump), FakeWinReg.REG_EXPAND_SZ),
+        "DumpType": (1, FakeWinReg.REG_DWORD),
+    }
+
+    local_dumps = module.configure_local_dumps(
+        artifact_dir=artifact_dir,
+        app_exe=tmp_path / "emule.exe",
+        tool_image_names=("umdh.exe",),
+    )
+    paths = module.HarnessRunPaths(
+        repo_root=tmp_path,
+        workspace_root=tmp_path,
+        app_root=tmp_path,
+        app_exe=tmp_path / "emule.exe",
+        seed_config_dir=tmp_path,
+        configuration="Release",
+        suite_name="suite",
+        source_artifacts_dir=artifact_dir,
+        run_report_dir=tmp_path / "reports" / "suite" / "run",
+        latest_report_dir=tmp_path / "reports" / "suite-latest",
+        keep_source_artifacts=False,
+        local_dumps=local_dumps,
+    )
+
+    module.cleanup_source_artifacts(paths)
+
+    assert not artifact_dir.exists()
+    assert registry[emule_subkey]["DumpFolder"] == (str(previous_external_dump), FakeWinReg.REG_EXPAND_SZ)
+    assert registry[emule_subkey]["DumpType"] == (1, FakeWinReg.REG_DWORD)
+    assert tool_subkey not in registry
 
 
 def test_publish_run_artifacts_rewrites_json_paths_to_report_dir(tmp_path: Path) -> None:

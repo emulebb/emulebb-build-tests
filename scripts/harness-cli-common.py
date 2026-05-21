@@ -33,7 +33,9 @@ LOCAL_DUMPS_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting\L
 LOCAL_DUMPS_DUMP_TYPE_FULL = 2
 LOCAL_DUMPS_DUMP_COUNT = 64
 LOCAL_DUMPS_TOOL_IMAGE_NAMES = ("umdh.exe", "procdump.exe", "procdump64.exe")
+LOCAL_DUMPS_VALUE_NAMES = ("DumpFolder", "DumpType", "DumpCount")
 ACCESS_VIOLATION_EXIT_CODE = 0xC0000005
+_LOCAL_DUMPS_RESTORE_STATES: dict[tuple[str, str], dict[str, object] | None] = {}
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,87 @@ def _sanitize_previous_registry_values(values: dict[str, object] | None) -> dict
             "type": dump_folder.get("type"),
         }
     return sanitized
+
+
+def _path_has_parts(path_text: str, expected_parts: tuple[str, ...]) -> bool:
+    """Returns true when a path contains one contiguous case-insensitive part sequence."""
+
+    parts = tuple(part.lower() for part in Path(os.path.expandvars(path_text)).parts)
+    expected = tuple(part.lower() for part in expected_parts)
+    return any(parts[index:index + len(expected)] == expected for index in range(0, len(parts) - len(expected) + 1))
+
+
+def _is_harness_owned_dump_folder(value: object) -> bool:
+    """Returns true for transient harness dump roots that must not be restored later."""
+
+    if not isinstance(value, str) or not value.strip():
+        return False
+    return (
+        _path_has_parts(value, ("state", "test-artifacts"))
+        or _path_has_parts(value, ("state", "live-e2e-artifacts"))
+        or _path_has_parts(value, ("repos", "eMule-build-tests", "reports"))
+    )
+
+
+def _registry_restore_values(values: dict[str, object] | None) -> dict[str, object] | None:
+    """Returns raw registry values to restore, or none for harness-owned stale roots."""
+
+    if values is None:
+        return None
+    dump_folder = values.get("DumpFolder")
+    if isinstance(dump_folder, dict) and _is_harness_owned_dump_folder(dump_folder.get("value")):
+        return None
+    return values
+
+
+def _registry_dump_folder_matches(values: dict[str, object] | None, expected_dump_folder: str) -> bool:
+    """Returns true when a LocalDumps key still points at the configured run folder."""
+
+    if not isinstance(values, dict):
+        return False
+    dump_folder = values.get("DumpFolder")
+    if not isinstance(dump_folder, dict):
+        return False
+    value = dump_folder.get("value")
+    if not isinstance(value, str):
+        return False
+    return str(Path(os.path.expandvars(value)).resolve()).lower() == expected_dump_folder.lower()
+
+
+def _delete_registry_value_if_present(key, name: str) -> None:
+    """Deletes one registry value, ignoring absent values."""
+
+    try:
+        winreg.DeleteValue(key, name)
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def _restore_registry_values(subkey: str, restore_values: dict[str, object] | None) -> None:
+    """Restores or clears one LocalDumps image key."""
+
+    if restore_values is None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey, 0, winreg.KEY_SET_VALUE) as key:
+                for name in LOCAL_DUMPS_VALUE_NAMES:
+                    _delete_registry_value_if_present(key, name)
+        except FileNotFoundError:
+            return
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
+        except OSError:
+            return
+        return
+
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, subkey, 0, winreg.KEY_SET_VALUE) as key:
+        for name in LOCAL_DUMPS_VALUE_NAMES:
+            value = restore_values.get(name)
+            if isinstance(value, dict) and "value" in value and "type" in value:
+                winreg.SetValueEx(key, name, 0, int(value["type"]), value["value"])
+            else:
+                _delete_registry_value_if_present(key, name)
 
 
 def _registry_root_name(root) -> str:
@@ -250,20 +333,75 @@ def configure_local_dumps(
     for image_name in image_names:
         image_subkey = LOCAL_DUMPS_BASE_SUBKEY + "\\" + image_name
         before = _read_registry_values(image_subkey)
+        restore_values = _registry_restore_values(before)
+        _LOCAL_DUMPS_RESTORE_STATES[(image_subkey, str(dump_dir).lower())] = restore_values
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, image_subkey, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "DumpFolder", 0, winreg.REG_EXPAND_SZ, str(dump_dir))
             winreg.SetValueEx(key, "DumpType", 0, winreg.REG_DWORD, LOCAL_DUMPS_DUMP_TYPE_FULL)
             winreg.SetValueEx(key, "DumpCount", 0, winreg.REG_DWORD, dump_count)
+        before_summary = _sanitize_previous_registry_values(before)
+        if before_summary is not None and restore_values is None:
+            before_summary["restore_policy"] = "clear_harness_owned_previous"
         entries.append(
             {
                 "image_name": image_name,
                 "registry_subkey": "HKCU\\" + image_subkey,
-                "before": _sanitize_previous_registry_values(before),
+                "before": before_summary,
                 "after": _read_registry_values(image_subkey),
             }
         )
     result["enabled"] = True
     result["entries"] = entries
+    return result
+
+
+def restore_local_dumps(local_dumps: dict[str, object]) -> dict[str, object]:
+    """Restores LocalDumps keys touched by one run before transient artifacts are removed."""
+
+    result: dict[str, object] = {
+        "attempted": False,
+        "entries": [],
+    }
+    if winreg is None or not isinstance(local_dumps, dict):
+        return result
+    dump_folder = local_dumps.get("dump_folder")
+    entries = local_dumps.get("entries")
+    if not isinstance(dump_folder, str) or not isinstance(entries, list):
+        return result
+
+    expected_dump_folder = str(Path(os.path.expandvars(dump_folder)).resolve())
+    result["attempted"] = True
+    restore_entries: list[dict[str, object]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        image_name = entry.get("image_name")
+        if not isinstance(image_name, str) or not image_name:
+            continue
+        image_subkey = LOCAL_DUMPS_BASE_SUBKEY + "\\" + image_name
+        restore_entry: dict[str, object] = {
+            "image_name": image_name,
+            "registry_subkey": "HKCU\\" + image_subkey,
+        }
+        current = _read_registry_values(image_subkey)
+        if not _registry_dump_folder_matches(current, expected_dump_folder):
+            restore_entry["restored"] = False
+            restore_entry["reason"] = "current_dump_folder_changed_or_absent"
+            restore_entries.append(restore_entry)
+            continue
+        restore_values = _LOCAL_DUMPS_RESTORE_STATES.pop((image_subkey, expected_dump_folder.lower()), None)
+        try:
+            _restore_registry_values(image_subkey, restore_values)
+            restore_entry["restored"] = True
+            restore_entry["cleared"] = restore_values is None
+        except OSError as exc:
+            restore_entry["restored"] = False
+            restore_entry["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+        restore_entries.append(restore_entry)
+    result["entries"] = restore_entries
     return result
 
 
@@ -566,6 +704,14 @@ def cleanup_source_artifacts(paths: HarnessRunPaths) -> None:
 
     if paths.keep_source_artifacts:
         return
+    local_dumps_restore = restore_local_dumps(paths.local_dumps)
+    failed_restore_entries = [
+        entry
+        for entry in local_dumps_restore.get("entries", [])
+        if isinstance(entry, dict) and entry.get("error")
+    ]
+    if failed_restore_entries:
+        print(f"Warning: LocalDumps registry cleanup had errors: {failed_restore_entries}")
     if exact_path_exists(paths.source_artifacts_dir):
         deadline = time.monotonic() + 10.0
         last_error: OSError | None = None
