@@ -228,6 +228,13 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="vhd-profile-isolation",
+        script_name="vhd-profile-isolation.py",
+        category="storage",
+        requires_admin_volume_fixtures=True,
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="admin-volume-cleanup-audit",
         script_name="admin-volume-cleanup-audit.py",
         category="storage",
@@ -320,6 +327,7 @@ PROFILE_SUITE_NAMES = {
         "shared-cache-volume-identity",
         "rest-api",
         "disk-space-guard-live",
+        "vhd-profile-isolation",
         "admin-volume-cleanup-audit",
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
@@ -1424,6 +1432,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "storage": {
                 "shared_cache_volume_identity": any(spec.name == "shared-cache-volume-identity" for spec in selected_specs),
                 "disk_space_guard_live": any(spec.name == "disk-space-guard-live" for spec in selected_specs),
+                "vhd_profile_isolation": any(spec.name == "vhd-profile-isolation" for spec in selected_specs),
                 "admin_volume_cleanup_audit": any(spec.name == "admin-volume-cleanup-audit" for spec in selected_specs),
                 "admin_volume_fixtures": bool(args.admin_volume_fixtures),
             },
