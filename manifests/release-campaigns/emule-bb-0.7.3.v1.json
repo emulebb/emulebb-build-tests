@@ -519,9 +519,9 @@
           "title": "REST stress, crash dump, leak, and CPU profile add-on",
           "phase": "stabilization-stress",
           "flowCategory": "stress",
-          "required": false,
-          "blocking": false,
-          "command": "python -m emule_workspace test live-e2e --profile stabilization-stress --fail-fast",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile stabilization-stress --fail-fast --live-wire-inputs-file repos\\eMule-build-tests\\live-wire-inputs.local.json",
           "liveE2eProfile": "stabilization-stress",
           "evidence": [
             {
@@ -555,9 +555,9 @@
           "title": "aMuTorrent clean startup, UI, and resilience live add-ons",
           "phase": "stabilization-stress",
           "flowCategory": "amutorrent",
-          "required": false,
-          "blocking": false,
-          "command": "python -m emule_workspace test certification --profile overnight",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test certification --profile overnight --live-wire-inputs-file repos\\eMule-build-tests\\live-wire-inputs.local.json",
           "localInputs": [
             "live-wire-inputs.local.json"
           ],
