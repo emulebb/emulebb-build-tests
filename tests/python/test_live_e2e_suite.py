@@ -495,10 +495,19 @@ def test_protocol_parity_profile_runs_live_rest_protocol_smoke(tmp_path: Path, m
     assert summary["status"] == "passed"
     assert summary["profile"] == "protocol-parity"
     assert summary["profile_suite_selection_applied"] is True
-    assert [script_name(command) for command in commands] == ["rest-api-smoke.py"]
-    assert [suite["name"] for suite in summary["suites"]] == ["rest-api"]
+    assert [script_name(command) for command in commands] == [
+        "deterministic-two-client-transfer.py",
+        "rest-api-smoke.py",
+    ]
+    assert [suite["name"] for suite in summary["suites"]] == [
+        "deterministic-two-client-transfer",
+        "rest-api",
+    ]
 
-    rest_command = commands[0]
+    deterministic_command = commands[0]
+    assert option_values(deterministic_command, "--p2p-bind-interface-name") == ["hide.me"]
+
+    rest_command = commands[1]
     assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--p2p-bind-interface-name") == ["hide.me"]
@@ -669,6 +678,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert [script_name(command) for command in commands] == [
         "shared-files-ui-e2e.py",
         "search-ui-live.py",
+        "deterministic-two-client-transfer.py",
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "rest-cold-start-dump-stress.py",
@@ -677,6 +687,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert [suite["name"] for suite in summary["suites"]] == [
         "shared-files-ui",
         "search-ui-live",
+        "deterministic-two-client-transfer",
         "shared-directories-rest",
         "rest-api",
         "rest-cold-start-dump-stress",
@@ -712,8 +723,8 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["suites"][1]["search_ui_search_rounds"] == 3
     assert summary["suites"][1]["search_ui_download_lifecycle_count"] == 2
     assert summary["weak_path_matrix"]["ui"]["shared_directories_rest"] is True
-    assert summary["suites"][3]["rest_leak_churn_budget"] == "smoke"
-    assert summary["suites"][3]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
+    assert summary["suites"][4]["rest_leak_churn_budget"] == "smoke"
+    assert summary["suites"][4]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
 
     shared_files_command = commands[0]
     assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
@@ -722,10 +733,14 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert option_values(search_ui_command, "--ui-search-rounds") == ["3"]
     assert option_values(search_ui_command, "--ui-download-lifecycle-count") == ["2"]
 
-    shared_directories_command = commands[2]
+    deterministic_command = commands[2]
+    assert script_name(deterministic_command) == "deterministic-two-client-transfer.py"
+    assert option_values(deterministic_command, "--p2p-bind-interface-name") == ["hide.me"]
+
+    shared_directories_command = commands[3]
     assert script_name(shared_directories_command) == "shared-directories-rest-e2e.py"
 
-    rest_command = commands[3]
+    rest_command = commands[4]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-stress-duration-seconds") == [
@@ -745,7 +760,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    cold_start_command = commands[4]
+    cold_start_command = commands[5]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
@@ -789,6 +804,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "preference-ui-e2e.py",
         "shared-files-ui-e2e.py",
         "search-ui-live.py",
+        "deterministic-two-client-transfer.py",
         "shared-hash-ui-e2e.py",
         "shared-directories-rest-e2e.py",
         "shared-cache-volume-identity.py",
@@ -866,23 +882,26 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(search_ui_command, "--ui-search-rounds") == ["2"]
     assert option_values(search_ui_command, "--ui-download-lifecycle-count") == ["2"]
 
-    cache_volume_command = commands[6]
+    deterministic_command = commands[4]
+    assert option_values(deterministic_command, "--p2p-bind-interface-name") == ["hide.me"]
+
+    cache_volume_command = commands[7]
     assert option_values(cache_volume_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cache_volume_command
 
-    cache_invalidation_command = commands[7]
+    cache_invalidation_command = commands[8]
     assert option_values(cache_invalidation_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cache_invalidation_command
 
-    unc_mapped_command = commands[8]
+    unc_mapped_command = commands[9]
     assert option_values(unc_mapped_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in unc_mapped_command
 
-    long_path_command = commands[9]
+    long_path_command = commands[10]
     assert option_values(long_path_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in long_path_command
 
-    rest_command = commands[10]
+    rest_command = commands[11]
     assert option_values(rest_command, "--server-search-count") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
     ]
@@ -910,31 +929,31 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    disk_space_command = commands[11]
+    disk_space_command = commands[12]
     assert option_values(disk_space_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in disk_space_command
 
-    profile_isolation_command = commands[12]
+    profile_isolation_command = commands[13]
     assert option_values(profile_isolation_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_isolation_command
 
-    profile_durability_command = commands[13]
+    profile_durability_command = commands[14]
     assert option_values(profile_durability_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_durability_command
 
-    category_matrix_command = commands[14]
+    category_matrix_command = commands[15]
     assert option_values(category_matrix_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in category_matrix_command
 
-    partfile_recovery_command = commands[15]
+    partfile_recovery_command = commands[16]
     assert option_values(partfile_recovery_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in partfile_recovery_command
 
-    cleanup_audit_command = commands[16]
+    cleanup_audit_command = commands[17]
     assert option_values(cleanup_audit_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cleanup_audit_command
 
-    cold_start_command = commands[17]
+    cold_start_command = commands[18]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
@@ -985,7 +1004,7 @@ def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: 
     assert summary["rest_stress_budget"] == "soak"
     assert summary["rest_leak_churn_budget"] == "smoke"
 
-    rest_command = commands[3]
+    rest_command = commands[4]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]

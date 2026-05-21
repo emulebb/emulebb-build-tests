@@ -188,6 +188,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="deterministic-two-client-transfer",
+        script_name="deterministic-two-client-transfer.py",
+        category="protocol",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="shared-hash-ui",
         script_name="shared-hash-ui-e2e.py",
         category="ui",
@@ -341,6 +347,7 @@ SUITE_NAMES = tuple(spec.name for spec in SUITE_SPECS)
 SUITE_INCONCLUSIVE_RETURN_CODE = 2
 PROFILE_SUITE_NAMES = {
     "protocol-parity": (
+        "deterministic-two-client-transfer",
         "rest-api",
     ),
     "beta-green": (
@@ -370,6 +377,7 @@ PROFILE_SUITE_NAMES = {
         "shared-files-ui",
         "shared-hash-ui",
         "search-ui-live",
+        "deterministic-two-client-transfer",
         "shared-directories-rest",
         "shared-cache-volume-identity",
         "shared-cache-invalidation",
@@ -389,6 +397,7 @@ PROFILE_SUITE_NAMES = {
     "stabilization-stress": (
         "shared-files-ui",
         "search-ui-live",
+        "deterministic-two-client-transfer",
         "shared-directories-rest",
         "rest-api",
         "rest-cold-start-dump-stress",
@@ -764,6 +773,8 @@ def build_suite_command(
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
         command.extend(["--ui-search-rounds", str(search_ui_search_rounds)])
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
+    if spec.name == "deterministic-two-client-transfer" and p2p_bind_interface_name:
+        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])

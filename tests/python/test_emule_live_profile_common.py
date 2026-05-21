@@ -62,3 +62,30 @@ def test_launch_app_rejects_interactive_minimized_conflict(tmp_path: Path) -> No
         assert "Interactive UI" in str(exc)
     else:
         raise AssertionError("Expected interactive minimized-to-tray launch conflict to fail.")
+
+
+def test_launch_app_appends_extra_arguments(monkeypatch, tmp_path: Path) -> None:
+    module = load_live_common_module()
+    commands: list[str] = []
+
+    class FakeApplication:
+        def __init__(self, backend: str) -> None:
+            assert backend == "win32"
+
+        def start(self, command_line: str, wait_for_idle: bool):
+            assert wait_for_idle is False
+            commands.append(command_line)
+            return self
+
+    monkeypatch.setattr(module, "require_pywinauto", lambda: None)
+    monkeypatch.setattr(module, "Application", FakeApplication)
+
+    module.launch_app(
+        tmp_path / "emule.exe",
+        tmp_path / "profile-base",
+        minimized_to_tray=False,
+        extra_args=["--sharefile", str(tmp_path / "shared.bin")],
+    )
+
+    assert "--sharefile" in commands[0]
+    assert str(tmp_path / "shared.bin") in commands[0]

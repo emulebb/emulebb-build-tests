@@ -118,6 +118,33 @@ def test_apply_minimized_to_tray_startup_sets_tray_preferences(tmp_path: Path) -
     assert "AlwaysShowTrayIcon=1" in text
 
 
+def test_apply_emule_preferences_updates_only_emule_section_duplicates(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    write_utf16_ini_text(
+        preferences_path,
+        (
+            "[eMule]\n"
+            "FilterBadIPs=1\n"
+            "Nick=old\n"
+            "FilterBadIPs=1\n"
+            "[WebServer]\n"
+            "Nick=web\n"
+        ),
+    )
+
+    live_profiles.apply_emule_preferences(config_dir, (("FilterBadIPs", "0"), ("Nick", "client1")))
+
+    text = live_profiles.read_ini_text(preferences_path)
+    emule_section = text.split("[WebServer]", 1)[0]
+    webserver_section = text.split("[WebServer]", 1)[1]
+    assert emule_section.count("FilterBadIPs=0") == 2
+    assert "Nick=client1" in emule_section
+    assert "FilterBadIPs=1" not in emule_section
+    assert "Nick=web" in webserver_section
+
+
 def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

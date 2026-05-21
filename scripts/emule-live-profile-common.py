@@ -234,6 +234,7 @@ def launch_app(
     *,
     minimized_to_tray: bool = True,
     requires_interactive_ui: bool = False,
+    extra_args: list[str] | tuple[str, ...] = (),
 ) -> Application:
     """Starts the real app with the isolated `-c` override and startup profiling enabled."""
 
@@ -244,7 +245,7 @@ def launch_app(
         apply_minimized_to_tray_startup(profile_base / "config")
     os.environ["EMULE_STARTUP_PROFILE"] = "1"
     command_line = subprocess.list2cmdline(
-        [str(app_exe), "-ignoreinstances", "-c", str(profile_base)]
+        [str(app_exe), "-ignoreinstances", "-c", str(profile_base), *extra_args]
     )
     return Application(backend="win32").start(command_line, wait_for_idle=False)
 

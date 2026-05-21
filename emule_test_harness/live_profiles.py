@@ -80,7 +80,7 @@ def apply_emule_preferences(config_dir: Path, values: tuple[tuple[str, str], ...
     preferences_path = config_dir / "preferences.ini"
     text = read_ini_text(preferences_path)
     for key, value in values:
-        text = patch_ini_value(text, key, value)
+        text = upsert_ini_section_value(text, "eMule", key, value)
     write_utf16_ini_text(preferences_path, text)
 
 
