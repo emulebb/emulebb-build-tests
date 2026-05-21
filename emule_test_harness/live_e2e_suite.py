@@ -84,6 +84,7 @@ DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
 DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS = 120.0
 DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS = 2.0 * 60.0 * 60.0
 DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB = 6144
+DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB = 32768
 SUITE_TIMEOUT_RETURN_CODE = 124
 RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK = 50
 RELEASE_EXPANDED_REST_DOWNLOAD_TRIGGER_COUNT = 100
@@ -318,6 +319,7 @@ SUITE_SPECS = (
         category="live-wire",
         uses_live_seed_refresh=True,
         is_arr_emulebb=True,
+        accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
         name="sonarr-emulebb",
@@ -325,6 +327,7 @@ SUITE_SPECS = (
         category="live-wire",
         uses_live_seed_refresh=True,
         is_arr_emulebb=True,
+        accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
         name="auto-browse-live",
@@ -691,11 +694,12 @@ def build_suite_command(
     if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures:
         if admin_volume_fixtures:
             command.append("--admin-volume-fixtures")
-        suite_vhd_size_mb = (
-            max(vhd_size_mb, DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)
-            if spec.is_amutorrent_browser
-            else vhd_size_mb
-        )
+        if spec.is_arr_emulebb:
+            suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB)
+        elif spec.is_amutorrent_browser:
+            suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)
+        else:
+            suite_vhd_size_mb = vhd_size_mb
         command.extend(["--vhd-size-mb", str(suite_vhd_size_mb)])
         if mount_root is not None:
             command.extend(["--mount-root", str(mount_root.resolve())])

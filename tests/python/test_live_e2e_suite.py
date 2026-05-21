@@ -295,6 +295,36 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     assert "--admin-volume-fixtures" in amutorrent_command
     assert option_values(amutorrent_command, "--mount-root") == [str(mount_root.resolve())]
     assert option_values(amutorrent_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)]
+    radarr_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("radarr-emulebb"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    assert "--admin-volume-fixtures" in radarr_command
+    assert option_values(radarr_command, "--mount-root") == [str(mount_root.resolve())]
+    assert option_values(radarr_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB)]
+    sonarr_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("sonarr-emulebb"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    assert "--admin-volume-fixtures" in sonarr_command
+    assert option_values(sonarr_command, "--mount-root") == [str(mount_root.resolve())]
+    assert option_values(sonarr_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB)]
     long_path_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("vhd-long-path-special-names"),
         scripts_dir=tmp_path / "scripts",

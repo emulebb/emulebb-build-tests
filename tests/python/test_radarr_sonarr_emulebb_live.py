@@ -785,7 +785,7 @@ def test_prowlarr_fallback_adds_selected_magnet_through_qbit_category(monkeypatc
 def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[tuple[str, object]] = []
-    magnet = "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000&dn=Operator.Series.S01E01.mkv&xl=42"
+    ed2k_link = "ed2k://|file|Operator.Series.S01E01.mkv|1400000000|fedcba9876543210fedcba9876543210|/"
 
     monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: {"oldhash"})
     monkeypatch.setattr(
@@ -805,14 +805,13 @@ def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatc
 
     def fake_http_request(_base_url, path, **_kwargs):
         assert path.startswith("/indexer/emulebb/api?t=search&cat=5000&q=")
-        escaped_magnet = magnet.replace("&", "&amp;")
         body = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
   <channel>
     <item>
       <title>Operator Series S01E01 1080p</title>
-      <link>{escaped_magnet}</link>
-      <enclosure url="{escaped_magnet}" length="1400000000" />
+      <link>{ed2k_link}</link>
+      <enclosure url="{ed2k_link}" length="1400000000" type="application/x-ed2k-link" />
       <torznab:attr name="size" value="1400000000" />
       <torznab:attr name="peers" value="20" />
     </item>
@@ -854,9 +853,58 @@ def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatc
     assert result["source"] == "prowlarr_eMule_indexer_qbit_add"
     assert result["hash_present"] is True
     assert calls == [
-        ("qbit_add", (magnet, module.SONARR_IMPORT_CATEGORY)),
+        ("qbit_add", (ed2k_link, module.SONARR_IMPORT_CATEGORY)),
         ("new_transfer", module.SONARR_IMPORT_CATEGORY),
     ]
+
+
+def test_direct_torznab_parser_preserves_namespaced_magnet_attr() -> None:
+    module = load_radarr_sonarr_module()
+    magnet = "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000&dn=Operator.Movie.mkv&xl=42"
+    escaped_magnet = magnet.replace("&", "&amp;")
+    body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Operator Movie 1080p</title>
+      <guid>ed2k:opaque</guid>
+      <enclosure length="1400000000" />
+      <torznab:attr name="size" value="1400000000" />
+      <torznab:attr name="sourceCount" value="14" />
+      <torznab:attr name="magneturl" value="{escaped_magnet}" />
+    </item>
+  </channel>
+</rss>"""
+
+    rows = module.parse_direct_torznab_release_rows(body)
+
+    assert rows[0]["magnetUrl"] == magnet
+    assert rows[0]["sourceCount"] == 14
+    assert module.get_release_download_link(rows[0]) == magnet
+
+
+def test_direct_torznab_parser_preserves_native_ed2k_download_link() -> None:
+    module = load_radarr_sonarr_module()
+    ed2k_link = "ed2k://|file|Operator.Movie.mkv|1400000000|fedcba9876543210fedcba9876543210|/"
+    body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Operator Movie 1080p</title>
+      <guid isPermaLink="false">ed2k:fedcba9876543210fedcba9876543210</guid>
+      <link>{ed2k_link}</link>
+      <enclosure url="{ed2k_link}" length="1400000000" type="application/x-ed2k-link" />
+      <torznab:attr name="size" value="1400000000" />
+      <torznab:attr name="peers" value="14" />
+    </item>
+  </channel>
+</rss>"""
+
+    rows = module.parse_direct_torznab_release_rows(body)
+
+    assert rows[0]["downloadUrl"] == ed2k_link
+    assert module.get_release_download_link(rows[0]) == ed2k_link
+    assert module.hash_from_download_link(ed2k_link) == "fedcba9876543210fedcba9876543210"
 
 
 def test_arr_release_grab_discovers_new_category_transfer_when_release_hash_missing(
@@ -2246,6 +2294,29 @@ def test_qbit_direct_add_sends_arr_share_limit_fields(monkeypatch: pytest.Monkey
     assert observed_form["ratioLimit"] == "-1"
     assert observed_form["seedingTimeLimit"] == "-1"
     assert observed_form["inactiveSeedingTimeLimit"] == "-1"
+
+
+def test_qbit_direct_add_accepts_native_ed2k_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    observed_form: dict[str, object] = {}
+    ed2k_link = "ed2k://|file|Operator.Movie.mkv|1400000000|fedcba9876543210fedcba9876543210|/"
+
+    def fake_qbit_request(_base_url, _path, **kwargs):
+        observed_form.update(kwargs["form"])
+        return {"status": 200, "body_text": "Ok."}
+
+    monkeypatch.setattr(module, "qbit_request", fake_qbit_request)
+    monkeypatch.setattr(module, "qbit_login", lambda _base_url, _api_key: ("opener", {"status": 200, "body_text": "Ok."}))
+
+    result = module.qbit_direct_add(
+        "http://127.0.0.1:4711",
+        "secret",
+        ed2k_link,
+        module.RADARR_IMPORT_CATEGORY,
+    )
+
+    assert result["hash"] == "fedcba9876543210fedcba9876543210"
+    assert observed_form["urls"] == ed2k_link
 
 
 def test_qbit_live_wire_roundtrip_cleans_up_added_transfer_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:

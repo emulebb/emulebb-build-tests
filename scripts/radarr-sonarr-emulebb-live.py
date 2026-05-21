@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import importlib.util
 import json
 import re
@@ -21,6 +22,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import live_env
+from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
+    AdminVolumeFixture,
+    AdminVolumeFixtureConfig,
+    build_storage_topology,
+    create_admin_volume_fixture,
+)
+from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 SYNTHETIC_TRIGGER_MAGNET = (
     "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000"
@@ -42,6 +50,7 @@ DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES = 30.0
 DEFAULT_SHARED_HASH_IDLE_TIMEOUT_SECONDS = 60.0
 ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 DEFAULT_MEDIA_QUALITY_PROFILE_NAME = "AnyAnyLang"
+DEFAULT_CONTROLLER_VHD_SIZE_MB = 32768
 MIN_ARR_RELEASE_SOURCES = 10
 MIN_ARR_RELEASE_TITLE_MATCH_SCORE = 150
 SONARR_EPISODE_TITLE_PATTERNS = (
@@ -73,6 +82,7 @@ harness_cli_common = prowlarr_live.harness_cli_common
 rest_smoke = prowlarr_live.rest_smoke
 live_common = prowlarr_live.live_common
 live_wire_inputs = prowlarr_live.live_wire_inputs
+cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
 
 QBIT_ROUTE_COMPLETENESS_SCENARIOS: tuple[dict[str, object], ...] = (
     {"name": "public_webapi_version", "method": "GET", "path": "/api/v2/app/webapiVersion", "auth": False, "expected_statuses": (200,)},
@@ -1034,14 +1044,17 @@ def parse_direct_torznab_release_rows(body_text: str) -> list[dict[str, Any]]:
         for child in list(item):
             if not child.tag.endswith("attr"):
                 continue
-            name = child.attrib.get("name")
+            name = (child.attrib.get("name") or "").strip()
             if not name:
                 continue
+            normalized_name = name.lower()
             value = child.attrib.get("value")
-            if name in {"size", "seeders", "peers", "grabs", "sources", "sourceCount"}:
-                row[name] = parse_torznab_int(value)
-            elif name in {"magneturl", "infohash"}:
-                row[name] = value or ""
+            if normalized_name in {"size", "seeders", "peers", "grabs", "sources", "sourcecount"}:
+                row["sourceCount" if normalized_name == "sourcecount" else normalized_name] = parse_torznab_int(value)
+            elif normalized_name == "magneturl":
+                row["magnetUrl"] = value or ""
+            elif normalized_name == "infohash":
+                row["infohash"] = value or ""
         row["sources"] = max(
             parse_torznab_int(row.get("sources")),
             parse_torznab_int(row.get("sourceCount")),
@@ -2041,14 +2054,20 @@ def wait_for_new_transfer_category(
     raise RuntimeError(f"Arr grab did not create a new transfer in category {category!r}. Last: {last!r}")
 
 
-def get_release_magnet_url(release: dict[str, Any]) -> str:
-    """Returns the eMule magnet URL carried by one Arr/Prowlarr release row."""
+def is_supported_emule_download_link(value: str) -> bool:
+    """Returns true for links accepted by the live eMule/qBit add path."""
 
-    for key in ("downloadUrl", "magnetUrl", "guid"):
+    return value.startswith("ed2k://") or value.startswith("magnet:?")
+
+
+def get_release_download_link(release: dict[str, Any]) -> str:
+    """Returns the eMule download link carried by one Arr/Prowlarr release row."""
+
+    for key in ("downloadUrl", "magnetUrl", "magneturl", "guid"):
         value = str(release.get(key) or "").strip()
-        if value.startswith("magnet:?"):
+        if is_supported_emule_download_link(value):
             return value
-    raise RuntimeError("Prowlarr release did not expose a magnet URL.")
+    raise RuntimeError("Prowlarr release did not expose an eMule download link.")
 
 
 def grab_first_arr_release_via_prowlarr(
@@ -2155,7 +2174,7 @@ def grab_first_arr_release_via_prowlarr(
             else:
                 selected = prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
             try:
-                magnet = get_release_magnet_url(selected)
+                download_link = get_release_download_link(selected)
             except RuntimeError:
                 direct_rows, direct_summary = direct_torznab_source_rows(
                     emule_base_url,
@@ -2180,12 +2199,12 @@ def grab_first_arr_release_via_prowlarr(
                         prefer_sources=prefer_sources,
                     )
                 selected = ranked_direct_rows[0]
-                magnet = get_release_magnet_url(selected)
-                attempts[-1]["direct_torznab_magnet_fallback"] = direct_summary
+                download_link = get_release_download_link(selected)
+                attempts[-1]["direct_torznab_download_link_fallback"] = direct_summary
             added = qbit_direct_add(
                 emule_base_url,
                 emule_api_key,
-                magnet,
+                download_link,
                 download_category,
             )
             new_transfer = wait_for_new_transfer_category(
@@ -2207,7 +2226,7 @@ def grab_first_arr_release_via_prowlarr(
                 "hash": transfer_hash,
                 "hash_present": bool(transfer_hash),
                 "grab_status": int(added.get("add_status") or 0),
-                "magnet_hash_present": bool(added.get("hash")),
+                "download_link_hash_present": bool(added.get("hash")),
                 "category_transfer": {key: value for key, value in new_transfer.items() if key != "hash"},
             }
         remaining = deadline - time.monotonic()
@@ -2420,7 +2439,7 @@ def qbit_route_completeness_checks(base_url: str, emule_api_key: str, cookie: st
 def qbit_direct_add(
     base_url: str,
     emule_api_key: str,
-    magnet: str,
+    download_link: str,
     category: str,
     *,
     cookie: str | None = None,
@@ -2437,7 +2456,7 @@ def qbit_direct_add(
         "/api/v2/torrents/add",
         cookie=cookie,
         form={
-            "urls": magnet,
+            "urls": download_link,
             "category": category,
             "stopped": "true",
             "ratioLimit": "-1",
@@ -2448,7 +2467,7 @@ def qbit_direct_add(
         timeout_seconds=45.0,
     )
     require_qbit_ok(add, "qBit add")
-    result: dict[str, object] = {"add_status": int(add.get("status") or 0), "hash": ed2k_hash_from_magnet(magnet)}
+    result: dict[str, object] = {"add_status": int(add.get("status") or 0), "hash": hash_from_download_link(download_link)}
     if login_status is not None:
         result["login_status"] = login_status
     return result
@@ -2656,6 +2675,28 @@ def ed2k_hash_from_magnet(magnet: str) -> str:
     if not xt.startswith(prefix) or len(xt) < len(prefix) + 40:
         raise RuntimeError("Magnet does not contain an eMule BB fake BTIH hash.")
     return xt[len(prefix) : len(prefix) + 32]
+
+
+def ed2k_hash_from_link(link: str) -> str:
+    """Extracts the native MD4 hash from an eD2K file link."""
+
+    parts = link.split("|")
+    if len(parts) < 5 or parts[0].lower() != "ed2k://" or parts[1].lower() != "file":
+        raise RuntimeError("eD2K link is not a file link.")
+    transfer_hash = parts[4].lower()
+    if not re.fullmatch(r"[0-9a-f]{32}", transfer_hash):
+        raise RuntimeError("eD2K file link does not contain a native MD4 hash.")
+    return transfer_hash
+
+
+def hash_from_download_link(download_link: str) -> str:
+    """Extracts the native transfer hash from a supported live download link."""
+
+    if download_link.startswith("magnet:?"):
+        return ed2k_hash_from_magnet(download_link)
+    if download_link.startswith("ed2k://"):
+        return ed2k_hash_from_link(download_link)
+    raise RuntimeError("Unsupported eMule download link.")
 
 
 def wait_for_transfer(base_url: str, emule_api_key: str, transfer_hash: str, timeout_seconds: float) -> dict[str, object]:
@@ -3279,6 +3320,24 @@ def wait_for_arr_release_results(
     raise RuntimeError(f"Arr release searches returned no eMule BB rows before timeout. Attempts: {attempts!r}")
 
 
+def build_admin_fixture_config(paths, args: argparse.Namespace, suite_name: str) -> AdminVolumeFixtureConfig:
+    """Builds the VHD fixture configuration for Arr controller storage."""
+
+    mount_parent = (
+        Path(args.mount_root).resolve()
+        if args.mount_root
+        else paths.workspace_root / "state" / "admin-mounts"
+    )
+    reject_windows_temp_path(mount_parent, "admin fixture mount root")
+    return AdminVolumeFixtureConfig(
+        vhd_path=paths.source_artifacts_dir / "admin-volumes" / f"{suite_name}.vhdx",
+        mount_root=mount_parent / suite_name,
+        local_control_root=paths.source_artifacts_dir / "local-control-volume",
+        size_mb=args.vhd_size_mb,
+        keep=args.keep_admin_fixtures,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the Radarr/Sonarr eMule BB live test argument parser."""
 
@@ -3305,6 +3364,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arr-kind", choices=["radarr", "sonarr"], default="radarr")
     parser.add_argument("--download-proof-mode", choices=["complete", "handoff"], default="complete")
     parser.add_argument("--acquisition-timeout-minutes", type=float)
+    parser.add_argument("--admin-volume-fixtures", action="store_true")
+    parser.add_argument("--vhd-size-mb", type=int, default=DEFAULT_CONTROLLER_VHD_SIZE_MB)
+    parser.add_argument("--mount-root")
+    parser.add_argument("--keep-admin-fixtures", action="store_true")
     parser.add_argument(
         "--radarr-movie-root",
         help="Optional Radarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
@@ -3801,6 +3864,47 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
     result_path = artifacts_dir / "result.json"
+    fixture_context = None
+    fixture_cleanup_inputs: dict[str, Path] | None = None
+    admin_storage: dict[str, object] = {"enabled": False}
+    profile_incoming_dir: Path | None = None
+    profile_temp_dir: Path | None = None
+    arr_category_path = artifacts_dir / arr_category
+    if args.admin_volume_fixtures:
+        config = build_admin_fixture_config(paths, args, suite_name)
+        fixture_context = create_admin_volume_fixture(config)
+        fixture = fixture_context.__enter__()
+        assert isinstance(fixture, AdminVolumeFixture)
+        fixture_cleanup_inputs = {
+            "vhd_path": fixture.vhd_path,
+            "drive_root": fixture.drive_root,
+            "mount_root": fixture.mount_root,
+        }
+        topology = build_storage_topology(fixture, suite_name)
+        controller_root = topology.vhd_mount_root / "controller-storage" / kind
+        profile_incoming_dir = controller_root / "incoming"
+        profile_temp_dir = controller_root / "temp"
+        arr_category_path = controller_root / arr_category
+        if media_root is None:
+            media_root = controller_root / "media-root"
+        admin_storage = {
+            "enabled": True,
+            "vhd_path": str(config.vhd_path),
+            "mount_root": str(config.mount_root),
+            "local_control_root": str(config.local_control_root),
+            "size_mb": config.size_mb,
+            "keep": config.keep,
+            "controller_root": str(controller_root),
+            "profile_incoming_dir": str(profile_incoming_dir),
+            "profile_temp_dir": str(profile_temp_dir),
+            "arr_category_path": str(arr_category_path),
+            "media_root": str(media_root),
+            "volume_identities": {
+                "drive_letter": asdict(fixture.drive_identity),
+                "folder_mount": asdict(fixture.mount_identity),
+                "local_control": asdict(fixture.local_control_identity),
+            },
+        }
     if media_root is None:
         media_root = artifacts_dir / arr_category
     media_root_creates_local_path = not bool(root_arg)
@@ -3815,25 +3919,37 @@ def main() -> int:
         if args.acquisition_timeout_minutes is not None
         else parse_timeout_minutes(env_values.get("ACQUISITION_ATTEMPT_TIMEOUT_MINUTES"), DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES)
     )
-    profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="arr-emulebb-live")
-    seed_refresh = None
-    if not args.skip_live_seed_refresh:
-        seed_refresh = rest_smoke.refresh_seed_files(
-            Path(profile["config_dir"]),
-            timeout_seconds=args.seed_download_timeout_seconds,
+    try:
+        profile = live_common.prepare_profile_base(
+            seed_config_dir,
+            artifacts_dir,
+            shared_dirs=[],
+            scenario_id="arr-emulebb-live",
+            incoming_dir=profile_incoming_dir,
+            temp_dir=profile_temp_dir,
         )
-    rest_smoke.configure_webserver_profile(
-        Path(profile["config_dir"]),
-        paths.app_exe,
-        args.emule_api_key,
-        port,
-        bind_addr,
-    )
-    if args.p2p_bind_interface_name:
-        rest_smoke.apply_p2p_bind_interface_override(
+        seed_refresh = None
+        if not args.skip_live_seed_refresh:
+            seed_refresh = rest_smoke.refresh_seed_files(
+                Path(profile["config_dir"]),
+                timeout_seconds=args.seed_download_timeout_seconds,
+            )
+        rest_smoke.configure_webserver_profile(
             Path(profile["config_dir"]),
-            args.p2p_bind_interface_name,
+            paths.app_exe,
+            args.emule_api_key,
+            port,
+            bind_addr,
         )
+        if args.p2p_bind_interface_name:
+            rest_smoke.apply_p2p_bind_interface_override(
+                Path(profile["config_dir"]),
+                args.p2p_bind_interface_name,
+            )
+    except Exception:
+        if fixture_context is not None:
+            fixture_context.__exit__(None, None, None)
+        raise
 
     app = None
     main_window = None
@@ -3862,6 +3978,7 @@ def main() -> int:
             "log_dir": str(profile["log_dir"]),
         },
         "live_logs": summarize_live_logs(profile),
+        "admin_volume_fixture": admin_storage,
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_search_terms": {
             arr_term_key: live_wire_inputs.summarize_terms(media_terms),
@@ -3905,7 +4022,6 @@ def main() -> int:
         report["checks"]["search_tabs_before_clear"] = list_emule_searches(emule_base_url, args.emule_api_key)
         report["checks"]["clear_existing_search_tabs"] = delete_all_emule_searches(emule_base_url, args.emule_api_key)
         report["checks"]["search_tabs_after_clear"] = list_emule_searches(emule_base_url, args.emule_api_key)
-        arr_category_path = artifacts_dir / arr_category
         arr_category_summary = ensure_emule_category(
             emule_base_url,
             args.emule_api_key,
@@ -4140,6 +4256,24 @@ def main() -> int:
             except Exception as exc:
                 report["cleanup"] = {"closed_app": False, "error": str(exc)}
                 if report.get("status") == "passed":
+                    report["status"] = "failed"
+        if fixture_context is not None:
+            try:
+                fixture_context.__exit__(None, None, None)
+                report.setdefault("cleanup", {})["admin_fixture_context_closed"] = True  # type: ignore[index]
+            except Exception as exc:
+                report.setdefault("cleanup", {})["admin_fixture_context_closed"] = False  # type: ignore[index]
+                report.setdefault("cleanup", {})["admin_fixture_close_error"] = repr(exc)  # type: ignore[index]
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+            if fixture_cleanup_inputs is not None:
+                report["fixture_cleanup"] = cleanup_audit.audit_fixture_cleanup(
+                    vhd_path=fixture_cleanup_inputs["vhd_path"],
+                    drive_root=fixture_cleanup_inputs["drive_root"],
+                    mount_root=fixture_cleanup_inputs["mount_root"],
+                    keep_vhd=args.keep_admin_fixtures,
+                )
+                if report["fixture_cleanup"].get("status") != "passed":
                     report["status"] = "failed"
         report["live_logs"] = summarize_live_logs(profile)
         live_common.write_json(result_path, report)
