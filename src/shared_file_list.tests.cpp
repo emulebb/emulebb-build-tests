@@ -736,6 +736,34 @@ TEST_CASE("Shared startup cache verification also requires matching file date an
 	CHECK_FALSE(SharedStartupCachePolicy::MatchesVerifiedFileState(record, true, 56, 66u));
 	CHECK_FALSE(SharedStartupCachePolicy::MatchesVerifiedFileState(record, true, 55, 67u));
 }
+
+TEST_CASE("Shared startup cache generic inventory validation requires an exact file set")
+{
+	std::vector<SharedStartupCachePolicy::FileRecord> cached = {
+		{ CString(L"beta.bin"), 22, 200u },
+		{ CString(L"alpha.bin"), 11, 100u }
+	};
+	std::vector<SharedStartupCachePolicy::FileRecord> current = {
+		{ CString(L"alpha.bin"), 11, 100u },
+		{ CString(L"beta.bin"), 22, 200u }
+	};
+	CHECK(SharedStartupCachePolicy::FileRecordSetsMatchForInventoryValidation(cached, current));
+
+	current.push_back({ CString(L"gamma.bin"), 33, 300u });
+	CHECK_FALSE(SharedStartupCachePolicy::FileRecordSetsMatchForInventoryValidation(cached, current));
+
+	current = cached;
+	current.pop_back();
+	CHECK_FALSE(SharedStartupCachePolicy::FileRecordSetsMatchForInventoryValidation(cached, current));
+
+	current = cached;
+	current[0].ullFileSize += 1u;
+	CHECK_FALSE(SharedStartupCachePolicy::FileRecordSetsMatchForInventoryValidation(cached, current));
+
+	current = cached;
+	current[0].strLeafName = CString(L"BETA.bin");
+	CHECK_FALSE(SharedStartupCachePolicy::FileRecordSetsMatchForInventoryValidation(cached, current));
+}
 #endif
 
 #if defined(EMULE_TESTS_HAS_LONG_PATH_SEAMS) && defined(EMULE_LONG_PATH_SEAMS_HAS_NTFS_JOURNAL_HELPERS)
@@ -824,12 +852,22 @@ TEST_CASE("Long path seams resolve mounted-folder volumes to the mounted root in
 	if (::GetFileAttributesW(strMountedRoot) == INVALID_FILE_ATTRIBUTES)
 		return;
 
-	LongPathSeams::ResolvedVolumeContext context = {};
+	LongPathSeams::ResolvedVolumeContext rootContext = {};
 	DWORD dwError = ERROR_SUCCESS;
-	REQUIRE(LongPathSeams::TryResolveContainingVolumeContext(strMountedRoot + L"probe", context, &dwError));
-	CHECK(CString(context.strMountRoot.c_str()).CompareNoCase(strMountedRoot) == 0);
-	CHECK(CString(context.strVolumeGuidPath.c_str()).Find(L"\\\\?\\Volume{") == 0);
-	CHECK(CString(context.strMountRoot.c_str()).CompareNoCase(L"C:\\") != 0);
+	REQUIRE(LongPathSeams::TryResolveContainingVolumeContext(strMountedRoot, rootContext, &dwError));
+	CHECK(CString(rootContext.strMountRoot.c_str()).CompareNoCase(strMountedRoot) == 0);
+	CHECK(CString(rootContext.strVolumeGuidPath.c_str()).Find(L"\\\\?\\Volume{") == 0);
+	CHECK(CString(rootContext.strMountRoot.c_str()).CompareNoCase(L"C:\\") != 0);
+
+	LongPathSeams::ResolvedVolumeContext trimmedRootContext = {};
+	REQUIRE(LongPathSeams::TryResolveContainingVolumeContext(PathHelpers::TrimTrailingSeparator(strMountedRoot), trimmedRootContext, &dwError));
+	CHECK(CString(trimmedRootContext.strMountRoot.c_str()).CompareNoCase(strMountedRoot) == 0);
+	CHECK(trimmedRootContext.strVolumeKey == rootContext.strVolumeKey);
+
+	LongPathSeams::ResolvedVolumeContext childContext = {};
+	REQUIRE(LongPathSeams::TryResolveContainingVolumeContext(strMountedRoot + L"probe", childContext, &dwError));
+	CHECK(CString(childContext.strMountRoot.c_str()).CompareNoCase(strMountedRoot) == 0);
+	CHECK(childContext.strVolumeKey == rootContext.strVolumeKey);
 }
 
 TEST_CASE("Long path seams mark cached NTFS directories dirty through one journal delta scan")
