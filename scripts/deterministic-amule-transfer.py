@@ -55,7 +55,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
-    parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
@@ -280,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_api_key=args.api_key,
             rest_port=ports["client1_rest"],
             rest_bind_addr=args.bind_addr,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         dtt.write_server_met(
             Path(client1["config_dir"]) / "server.met",

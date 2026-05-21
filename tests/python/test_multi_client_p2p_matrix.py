@@ -23,6 +23,13 @@ def load_suite_module():
     return module
 
 
+def option_value(command: list[str], option: str) -> str | None:
+    if option not in command:
+        return None
+    index = command.index(option)
+    return command[index + 1] if index + 1 < len(command) else None
+
+
 def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
     module = load_suite_module()
     inventory = {
@@ -52,7 +59,8 @@ def test_matrix_defaults_to_132_mib_fixture() -> None:
     args = module.parse_args([])
 
     assert args.fixture_size_bytes == 132 * 1024 * 1024
-    assert args.transfer_completion_timeout_seconds == 900.0
+    assert args.transfer_completion_timeout_seconds == 1800.0
+    assert args.p2p_bind_interface_name == ""
 
 
 def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path: Path) -> None:
@@ -118,6 +126,7 @@ def test_optional_rows_omit_completed_amule_scenario(tmp_path: Path) -> None:
     assert module.AMULE_TRANSFER_SCENARIO_ID not in {row["id"] for row in rows}
     assert {row["id"] for row in rows} == {
         "cl-emulebb-001-downloads-from-cl-emuleai-003",
+        module.THREE_CLIENT_SWARM_SCENARIO_ID,
         "cl-emuleai-003-and-cl-amule-004-discovery",
     }
 
@@ -154,8 +163,18 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
     assert result["clients"] == ["cl-emulebb-001", "cl-harness-002"]
     command = captured["command"]
     assert command[command.index("--artifacts-dir") + 1].endswith("\\h2") or command[command.index("--artifacts-dir") + 1].endswith("/h2")
-    assert "--p2p-bind-interface-name" in command
+    assert "--p2p-bind-interface-name" not in command
     assert "--client2-app-exe" in command
+
+
+def test_common_child_args_forward_explicit_p2p_interface(tmp_path: Path) -> None:
+    module = load_suite_module()
+    command: list[str] = []
+    args = module.parse_args(["--p2p-bind-interface-name", "Ethernet"])
+
+    module.add_common_child_args(command, args)
+
+    assert option_value(command, "--p2p-bind-interface-name") == "Ethernet"
 
 
 def test_amule_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: Path) -> None:
@@ -193,5 +212,47 @@ def test_amule_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: P
     command = captured["command"]
     assert "deterministic-amule-transfer.py" in str(command[1])
     assert command[command.index("--artifacts-dir") + 1].endswith("\\a4") or command[command.index("--artifacts-dir") + 1].endswith("/a4")
+    assert "--amule-daemon-exe" in command
+    assert "--amule-control-exe" in command
+
+
+def test_three_client_swarm_scenario_forwards_harness_and_amule(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
+    args = module.parse_args(
+        [
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--app-exe",
+            str(tmp_path / "emule.exe"),
+            "--client2-app-exe",
+            str(tmp_path / "harness.exe"),
+            "--profile-seed-dir",
+            str(tmp_path / "seed"),
+            "--p2p-bind-interface-address",
+            "10.1.2.3",
+            "--amule-daemon-exe",
+            str(tmp_path / "amuled.exe"),
+            "--amule-control-exe",
+            str(tmp_path / "amulecmd.exe"),
+        ]
+    )
+
+    result = module.run_three_client_swarm_scenario(paths, args)
+
+    assert result["status"] == "passed"
+    assert result["id"] == module.THREE_CLIENT_SWARM_SCENARIO_ID
+    assert result["clients"] == ["cl-emulebb-001", "cl-harness-002", "cl-amule-004"]
+    command = captured["command"]
+    assert "three-client-swarm-transfer.py" in str(command[1])
+    assert command[command.index("--artifacts-dir") + 1].endswith("\\sw3") or command[command.index("--artifacts-dir") + 1].endswith("/sw3")
+    assert "--client2-app-exe" in command
     assert "--amule-daemon-exe" in command
     assert "--amule-control-exe" in command

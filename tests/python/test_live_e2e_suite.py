@@ -505,7 +505,7 @@ def test_protocol_parity_profile_runs_live_rest_protocol_smoke(tmp_path: Path, m
     ]
 
     deterministic_command = commands[0]
-    assert option_values(deterministic_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
 
     rest_command = commands[1]
     assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
@@ -532,7 +532,7 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert summary["profile_suite_selection_applied"] is True
     assert [script_name(command) for command in commands] == ["multi-client-p2p-matrix.py"]
     assert [suite["name"] for suite in summary["suites"]] == ["multi-client-p2p-matrix"]
-    assert option_values(commands[0], "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == []
 
 
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:
@@ -756,7 +756,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
 
     deterministic_command = commands[2]
     assert script_name(deterministic_command) == "deterministic-two-client-transfer.py"
-    assert option_values(deterministic_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
 
     shared_directories_command = commands[3]
     assert script_name(shared_directories_command) == "shared-directories-rest-e2e.py"
@@ -904,7 +904,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(search_ui_command, "--ui-download-lifecycle-count") == ["2"]
 
     deterministic_command = commands[4]
-    assert option_values(deterministic_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
 
     cache_volume_command = commands[7]
     assert option_values(cache_volume_command, "--vhd-size-mb") == ["256"]

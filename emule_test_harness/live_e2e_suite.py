@@ -782,7 +782,11 @@ def build_suite_command(
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
         command.extend(["--ui-search-rounds", str(search_ui_search_rounds)])
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
-    if spec.name in {"deterministic-two-client-transfer", "multi-client-p2p-matrix"} and p2p_bind_interface_name:
+    if (
+        spec.name in {"deterministic-two-client-transfer", "multi-client-p2p-matrix"}
+        and p2p_bind_interface_name
+        and p2p_bind_interface_name != "hide.me"
+    ):
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:

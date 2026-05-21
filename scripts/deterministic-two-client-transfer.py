@@ -83,7 +83,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
-    parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
@@ -555,16 +555,23 @@ def wait_for_completed_file(
 
 
 def discover_interface_ipv4(interface_name: str) -> str:
-    """Finds an IPv4 address for the required Windows network interface."""
+    """Finds an IPv4 address for a named interface or the first usable LAN interface."""
 
+    interface_filter = ""
+    if interface_name.strip():
+        interface_filter = f"-InterfaceAlias {json.dumps(interface_name.strip())} "
     command = [
         "powershell",
         "-NoProfile",
         "-Command",
         (
-            "Get-NetIPAddress -AddressFamily IPv4 "
-            f"-InterfaceAlias {json.dumps(interface_name)} "
-            "| Where-Object { $_.IPAddress -and $_.IPAddress -ne '127.0.0.1' } "
+            f"Get-NetIPAddress -AddressFamily IPv4 {interface_filter}"
+            "| Where-Object { "
+            "$_.IPAddress -and $_.IPAddress -ne '127.0.0.1' "
+            "-and $_.IPAddress -notlike '169.254.*' "
+            "-and $_.PrefixOrigin -ne 'WellKnown' "
+            "} "
+            "| Sort-Object @{Expression={if ($_.InterfaceAlias -like '*Loopback*') { 1 } else { 0 }}}, InterfaceMetric "
             "| Select-Object -First 1 -ExpandProperty IPAddress"
         ),
     ]
@@ -573,9 +580,10 @@ def discover_interface_ipv4(interface_name: str) -> str:
     try:
         ipaddress.IPv4Address(candidate)
     except ipaddress.AddressValueError as exc:
+        target = f"interface {interface_name!r}" if interface_name.strip() else "a usable non-loopback LAN interface"
         raise RuntimeError(
-            f"Could not discover IPv4 address for interface {interface_name!r}. "
-            "Pass --p2p-bind-interface-address to the suite if the interface alias is unusual."
+            f"Could not discover IPv4 address for {target}. "
+            "Pass --p2p-bind-interface-address to the suite if automatic discovery is unsuitable."
         ) from exc
     return candidate
 
@@ -592,6 +600,7 @@ def configure_client_profile(
     rest_api_key: str | None = None,
     rest_port: int | None = None,
     rest_bind_addr: str = "127.0.0.1",
+    p2p_bind_interface_name: str = "",
 ) -> None:
     """Applies deterministic network and optional REST settings to one profile."""
 
@@ -624,6 +633,9 @@ def configure_client_profile(
             ("AllocateFullFile", "0"),
             ("SparsePartFiles", "0"),
             ("CloseUPnPOnExit", "0"),
+            ("BindInterface", p2p_bind_interface_name.strip()),
+            ("BindAddr", ""),
+            ("BlockNetworkWhenBindUnavailableAtStartup", "1" if p2p_bind_interface_name.strip() else "0"),
         ),
     )
     live_common.apply_section_preferences(
@@ -872,6 +884,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_api_key=args.api_key,
             rest_port=ports["client1_rest"],
             rest_bind_addr=args.bind_addr,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         configure_client_profile(
             config_dir=Path(client2["config_dir"]),
@@ -881,6 +894,7 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["client2_udp"],
             ed2k_enabled=True,
             autoconnect=True,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         for profile in (client1, client2):
             write_server_met(

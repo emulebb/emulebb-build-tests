@@ -20,6 +20,7 @@ SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
 HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
 AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
+THREE_CLIENT_SWARM_SCENARIO_ID = "cl-emulebb-001-cl-harness-002-cl-amule-004-concurrent-swarm"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -53,13 +54,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
-    parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
-    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
+    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=1800.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
@@ -99,8 +100,6 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
             args.api_key,
             "--bind-addr",
             args.bind_addr,
-            "--p2p-bind-interface-name",
-            args.p2p_bind_interface_name,
             "--rest-ready-timeout-seconds",
             str(args.rest_ready_timeout_seconds),
             "--server-connect-timeout-seconds",
@@ -123,6 +122,8 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
         command.extend(["--app-exe", str(Path(args.app_exe).resolve())])
     if args.profile_seed_dir:
         command.extend(["--profile-seed-dir", str(Path(args.profile_seed_dir).resolve())])
+    if args.p2p_bind_interface_name:
+        command.extend(["--p2p-bind-interface-name", args.p2p_bind_interface_name])
     if args.p2p_bind_interface_address:
         command.extend(["--p2p-bind-interface-address", args.p2p_bind_interface_address])
     if args.ed2k_server_repo:
@@ -198,6 +199,46 @@ def run_amule_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, ob
     }
 
 
+def run_three_client_swarm_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the full eMule BB, tracing-harness, and aMule concurrent swarm."""
+
+    scenario_artifacts = paths.source_artifacts_dir / "sw3"
+    command = build_python_command()
+    command.extend(
+        [
+            str((Path(__file__).resolve().with_name("three-client-swarm-transfer.py"))),
+            "--artifacts-dir",
+            str(scenario_artifacts),
+        ]
+    )
+    add_common_child_args(command, args)
+    if args.client2_app_exe:
+        command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
+    if args.amule_daemon_exe:
+        command.extend(["--amule-daemon-exe", str(Path(args.amule_daemon_exe).resolve())])
+    if args.amule_control_exe:
+        command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
+
+    started = time.monotonic()
+    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
+    child_report = compact_child_report(scenario_artifacts / "three-client-swarm-transfer.json")
+    return {
+        "id": THREE_CLIENT_SWARM_SCENARIO_ID,
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "clients": [
+            CLIENT_IDENTITIES["emulebb"].profile_id,
+            CLIENT_IDENTITIES["harness"].profile_id,
+            CLIENT_IDENTITIES["amule"].profile_id,
+        ],
+        "command": command,
+        "return_code": completed.returncode,
+        "duration_seconds": round(time.monotonic() - started, 3),
+        "stdout_tail": completed.stdout[-4000:],
+        "stderr_tail": completed.stderr[-4000:],
+        "report": child_report,
+    }
+
+
 def build_optional_scenario_rows(
     inventory: dict[str, object],
     *,
@@ -211,6 +252,7 @@ def build_optional_scenario_rows(
     definitions = (
         ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
         (AMULE_TRANSFER_SCENARIO_ID, "amule"),
+        (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
         ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
     )
     for definition in definitions:
@@ -314,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
         if amule.available and amule.deterministic_transfer_adapter:
             scenarios.append(run_amule_transfer_scenario(paths, args))
             completed_optional_ids.add(AMULE_TRANSFER_SCENARIO_ID)
+            scenarios.append(run_three_client_swarm_scenario(paths, args))
+            completed_optional_ids.add(THREE_CLIENT_SWARM_SCENARIO_ID)
         scenarios.extend(
             build_optional_scenario_rows(
                 inventory,
