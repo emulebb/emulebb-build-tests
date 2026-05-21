@@ -46,6 +46,10 @@ rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
 
 SUITE_NAME = "deterministic-two-client-transfer"
 API_KEY = "deterministic-two-client-transfer-key"
+DEFAULT_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
+DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
+DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
+DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
@@ -85,8 +89,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
-    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--fixture-size-bytes", type=int, default=10 * 1024 * 1024)
+    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
+    parser.add_argument("--fixture-size-bytes", type=int, default=DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     return parser.parse_args(argv)
@@ -609,6 +613,11 @@ def configure_client_profile(
             ("AllowLocalHostIP", "1"),
             ("GeoLocationLookupEnabled", "0"),
             ("IPFilterEnabled", "0"),
+            ("DownloadCapacity", str(DETERMINISTIC_BANDWIDTH_CAPACITY_KIB)),
+            ("UploadCapacity", str(DETERMINISTIC_BANDWIDTH_CAPACITY_KIB)),
+            ("UploadCapacityNew", str(DETERMINISTIC_BANDWIDTH_CAPACITY_KIB)),
+            ("MaxUpload", str(DETERMINISTIC_BANDWIDTH_LIMIT_KIB)),
+            ("MaxDownload", str(DETERMINISTIC_BANDWIDTH_LIMIT_KIB)),
             ("CommitFiles", "2"),
             ("FileBufferSize", "16384"),
             ("FileBufferTimeLimit", "1"),
@@ -616,6 +625,11 @@ def configure_client_profile(
             ("SparsePartFiles", "0"),
             ("CloseUPnPOnExit", "0"),
         ),
+    )
+    live_common.apply_section_preferences(
+        config_dir,
+        "UploadPolicy",
+        (("MaxUploadClientsAllowed", str(DETERMINISTIC_MAX_UPLOAD_CLIENTS)),),
     )
     if rest_api_key is not None and rest_port is not None:
         live_common.apply_webserver_profile(
@@ -731,7 +745,22 @@ def read_preferences_snapshot(config_dir: Path) -> dict[str, object]:
     """Returns the bind and port preferences that matter for this suite."""
 
     text = read_ini_text(config_dir / "preferences.ini")
-    keys = ("Nick", "Port", "UDPPort", "BindInterface", "BindAddr", "Autoconnect", "NetworkED2K", "NetworkKademlia")
+    keys = (
+        "Nick",
+        "Port",
+        "UDPPort",
+        "BindInterface",
+        "BindAddr",
+        "Autoconnect",
+        "NetworkED2K",
+        "NetworkKademlia",
+        "DownloadCapacity",
+        "UploadCapacity",
+        "UploadCapacityNew",
+        "MaxUpload",
+        "MaxDownload",
+        "MaxUploadClientsAllowed",
+    )
     snapshot: dict[str, object] = {}
     for key in keys:
         match = re.search(rf"(?im)^{re.escape(key)}=(.*)$", text)

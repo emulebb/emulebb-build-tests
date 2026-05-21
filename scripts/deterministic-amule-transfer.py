@@ -61,8 +61,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
-    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--fixture-size-bytes", type=int, default=10 * 1024 * 1024)
+    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
+    parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--amule-daemon-exe")
@@ -233,11 +233,19 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["amule_shared_file"] = {"link": exported_link, "parsed": link_info, **shared}
 
         current_phase = "amule_server_connect"
+        report["checks"]["amule_add_server"] = amule_command_summary(
+            amule_harness.run_amulecmd(
+                amule_control_exe,
+                amule_profile,
+                f"Add {amule_harness.build_server_link(p2p_address, ports['ed2k_tcp'])}",
+                timeout_seconds=30.0,
+            )
+        )
         report["checks"]["amule_connect_server"] = amule_command_summary(
             amule_harness.run_amulecmd(
                 amule_control_exe,
                 amule_profile,
-                f"Connect {p2p_address}:{ports['ed2k_tcp']}",
+                "Connect ed2k",
                 timeout_seconds=30.0,
             )
         )

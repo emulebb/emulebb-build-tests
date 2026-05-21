@@ -145,12 +145,27 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     emule_section = text.split("[WebServer]", 1)[0]
     assert "FilterBadIPs=0" in emule_section
     assert "IPFilterEnabled=0" in emule_section
+    assert f"DownloadCapacity={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}" in emule_section
+    assert f"UploadCapacity={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}" in emule_section
+    assert f"UploadCapacityNew={module.DETERMINISTIC_BANDWIDTH_CAPACITY_KIB}" in emule_section
+    assert f"MaxUpload={module.DETERMINISTIC_BANDWIDTH_LIMIT_KIB}" in emule_section
+    assert f"MaxDownload={module.DETERMINISTIC_BANDWIDTH_LIMIT_KIB}" in emule_section
+    assert "MaxUploadClientsAllowed=32" in text
     assert "CommitFiles=2" in emule_section
     assert "FileBufferSize=16384" in emule_section
     assert "FileBufferTimeLimit=1" in emule_section
     assert "AllocateFullFile=0" in emule_section
     assert "SparsePartFiles=0" in emule_section
     assert f"Nick={module.CLIENT01.nick}" in emule_section
+
+
+def test_default_fixture_size_is_132_mib() -> None:
+    module = load_suite_module()
+    args = module.parse_args([])
+
+    assert module.DEFAULT_FIXTURE_SIZE_BYTES == 132 * 1024 * 1024
+    assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
+    assert args.transfer_completion_timeout_seconds == 900.0
 
 
 def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:

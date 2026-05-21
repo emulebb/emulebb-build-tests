@@ -12,7 +12,8 @@ from pathlib import Path
 from emule_test_harness.paths import reject_windows_temp_path
 
 
-SHARED_FILE_PATTERN = re.compile(r"(?im)^([0-9a-f]{32})\s+(.+)$")
+SHARED_FILE_PATTERN = re.compile(r"(?im)^\s*(?:>\s*)?([0-9a-f]{32})\s+(.+)$")
+UNLIMITED_THROTTLE = "0"
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,7 @@ def md5_hex(value: str) -> str:
 def win_path_text(path: Path) -> str:
     """Returns a resolved Windows path string for aMule config files."""
 
-    return str(path.resolve())
+    return str(path.resolve()).replace("\\", "\\\\")
 
 
 def build_amule_conf(profile: AmuleRuntimeProfile) -> str:
@@ -82,6 +83,11 @@ def build_amule_conf(profile: AmuleRuntimeProfile) -> str:
             "AddServerListFromClient=0",
             "SafeServerConnect=0",
             "AutoConnectStaticOnly=0",
+            f"MaxUpload={UNLIMITED_THROTTLE}",
+            f"MaxDownload={UNLIMITED_THROTTLE}",
+            "SlotAllocation=16",
+            "MaxConnections=1000",
+            "MaxConnectionsPerFiveSeconds=100",
             "UPnPEnabled=0",
             "ConnectToKad=0",
             "ConnectToED2K=1",
@@ -282,3 +288,14 @@ def build_file_link(file_name: str, size: int, file_hash: str) -> str:
     """Builds the deterministic ED2K file link consumed by eMule BB."""
 
     return f"ed2k://|file|{file_name}|{size}|{file_hash.lower()}|/"
+
+
+def build_server_link(address: str, port: int) -> str:
+    """Builds an ED2K server link accepted by `amulecmd Add`."""
+
+    normalized_address = address.strip()
+    if not normalized_address:
+        raise ValueError("ED2K server address must not be empty.")
+    if port < 1 or port > 65535:
+        raise ValueError(f"ED2K server port is out of range: {port}")
+    return f"ed2k://|server|{normalized_address}|{port}|/"

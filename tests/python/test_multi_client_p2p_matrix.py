@@ -47,6 +47,14 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
     assert rows[1]["missing_clients"] == ["cl-amule-004"]
 
 
+def test_matrix_defaults_to_132_mib_fixture() -> None:
+    module = load_suite_module()
+    args = module.parse_args([])
+
+    assert args.fixture_size_bytes == 132 * 1024 * 1024
+    assert args.transfer_completion_timeout_seconds == 900.0
+
+
 def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path: Path) -> None:
     module = load_suite_module()
     emuleai_exe = tmp_path / "eMuleAI.exe"

@@ -36,6 +36,7 @@ def load_local_module(module_name: str, filename: str):
 
 
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
+dtt = load_local_module("deterministic_two_client_transfer_matrix", "deterministic-two-client-transfer.py")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -58,8 +59,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
-    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--fixture-size-bytes", type=int, default=10 * 1024 * 1024)
+    parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
+    parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--emuleai-exe")

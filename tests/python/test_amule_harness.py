@@ -42,12 +42,17 @@ def test_prepare_amule_profile_writes_isolated_config(request: pytest.FixtureReq
     assert "Nick=cl-amule-004" in config_text
     assert "ConnectToED2K=1" in config_text
     assert "ConnectToKad=0" in config_text
+    assert "MaxUpload=0" in config_text
+    assert "MaxDownload=0" in config_text
+    assert "SlotAllocation=16" in config_text
+    assert "MaxConnections=1000" in config_text
+    assert "MaxConnectionsPerFiveSeconds=100" in config_text
     assert "AcceptExternalConnections=1" in config_text
     assert "ECAddress=127.0.0.1" in config_text
     assert "ECPort=41002" in config_text
     assert f"ECPassword={hashlib.md5(b'cl-amule-004-ec-password').hexdigest()}" in config_text
-    assert f"TempDir={profile.temp_dir}" in config_text
-    assert f"IncomingDir={profile.incoming_dir}" in config_text
+    assert f"TempDir={amule.win_path_text(profile.temp_dir)}" in config_text
+    assert f"IncomingDir={amule.win_path_text(profile.incoming_dir)}" in config_text
 
 
 def test_amule_commands_pin_config_dir_and_ec_endpoint(tmp_path: Path, request: pytest.FixtureRequest) -> None:
@@ -96,7 +101,13 @@ def test_wait_for_shared_file_hash_parses_amulecmd_output(
 
     class Completed:
         returncode = 0
-        stdout = "0123456789ABCDEF0123456789ABCDEF C:\\share\\deterministic-amule-transfer.bin\n"
+        stdout = (
+            "This is amulecmd GIT\n\n"
+            "Creating client...\n"
+            "Succeeded! Connection established to aMule GIT\n"
+            " > 0123456789ABCDEF0123456789ABCDEF C:\\share\\deterministic-amule-transfer.bin\n"
+            " > \tAuto [Hi] - 0(0) / 0(0) - 0 bytes (0 bytes) - 0.00\n"
+        )
         stderr = ""
 
     monkeypatch.setattr(amule, "run_amulecmd", lambda *_args, **_kwargs: Completed())
@@ -112,3 +123,12 @@ def test_wait_for_shared_file_hash_parses_amulecmd_output(
     assert amule.build_file_link("fixture.bin", 123, str(row["hash"])) == (
         "ed2k://|file|fixture.bin|123|0123456789abcdef0123456789abcdef|/"
     )
+
+
+def test_build_server_link_validates_ed2k_endpoint() -> None:
+    assert amule.build_server_link(" 10.55.0.1 ", 4661) == "ed2k://|server|10.55.0.1|4661|/"
+
+    with pytest.raises(ValueError, match="address"):
+        amule.build_server_link(" ", 4661)
+    with pytest.raises(ValueError, match="port"):
+        amule.build_server_link("10.55.0.1", 0)
