@@ -150,6 +150,22 @@ def build_cleanup_vhd_diskpart_script(*, vhd_path: Path, drive_letter: str, moun
     return "\n".join(lines)
 
 
+def build_attach_existing_vhd_diskpart_script(*, vhd_path: Path, drive_letter: str, mount_root: Path) -> str:
+    """Builds the diskpart script that reattaches one existing test VHD."""
+
+    letter = normalize_drive_letter(drive_letter)
+    return "\n".join(
+        [
+            f"select vdisk file={quote_diskpart_path(vhd_path)}",
+            "attach vdisk",
+            "select partition 1",
+            f"assign letter={letter}",
+            f"assign mount={quote_diskpart_path(mount_root)}",
+            "",
+        ]
+    )
+
+
 def run_diskpart_script(script_text: str, script_dir: Path) -> CommandResult:
     """Runs one generated diskpart script from a workspace-owned artifact directory."""
 
@@ -279,8 +295,62 @@ def create_admin_volume_fixture(config: AdminVolumeFixtureConfig):
                 config.vhd_path.unlink(missing_ok=True)
             except OSError:
                 pass
-            if not mount_root_preexisting:
-                try:
-                    config.mount_root.rmdir()
-                except OSError:
-                    pass
+        if not mount_root_preexisting:
+            try:
+                config.mount_root.rmdir()
+            except OSError:
+                pass
+
+
+@contextmanager
+def attach_admin_volume_fixture(config: AdminVolumeFixtureConfig):
+    """Attaches an existing VHD fixture and cleans up its mount points on exit."""
+
+    require_windows_admin()
+    if not config.vhd_path.exists():
+        raise AdminVolumeFixtureError(f"Existing VHD was not found: {config.vhd_path}")
+    drive_letter = find_available_drive_letter(config.drive_letter)
+    mount_root_preexisting = config.mount_root.exists()
+    config.mount_root.mkdir(parents=True, exist_ok=True)
+    config.local_control_root.mkdir(parents=True, exist_ok=True)
+    attach_script = build_attach_existing_vhd_diskpart_script(
+        vhd_path=config.vhd_path,
+        drive_letter=drive_letter,
+        mount_root=config.mount_root,
+    )
+    script_dir = config.vhd_path.parent / "diskpart-scripts"
+    attach_result = run_diskpart_script(attach_script, script_dir)
+    if attach_result.return_code != 0:
+        raise AdminVolumeFixtureError(f"diskpart failed while attaching the test VHD: {attach_result.stderr or attach_result.stdout}")
+
+    drive_root = Path(f"{drive_letter}:\\")
+    try:
+        fixture = AdminVolumeFixture(
+            vhd_path=config.vhd_path,
+            drive_root=drive_root,
+            mount_root=config.mount_root,
+            local_control_root=config.local_control_root,
+            drive_identity=get_volume_identity(drive_root),
+            mount_identity=get_volume_identity(config.mount_root),
+            local_control_identity=get_volume_identity(config.local_control_root),
+            create_result=attach_result,
+        )
+        yield fixture
+    finally:
+        cleanup_script = build_cleanup_vhd_diskpart_script(
+            vhd_path=config.vhd_path,
+            drive_letter=drive_letter,
+            mount_root=config.mount_root,
+            delete_vdisk=not config.keep,
+        )
+        run_diskpart_script(cleanup_script, script_dir)
+        if not config.keep:
+            try:
+                config.vhd_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if not mount_root_preexisting:
+            try:
+                config.mount_root.rmdir()
+            except OSError:
+                pass

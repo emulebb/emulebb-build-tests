@@ -238,6 +238,20 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     )
     assert "--admin-volume-fixtures" in profile_isolation_command
     assert option_values(profile_isolation_command, "--mount-root") == [str(mount_root.resolve())]
+    profile_durability_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("vhd-profile-durability"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    assert "--admin-volume-fixtures" in profile_durability_command
+    assert option_values(profile_durability_command, "--mount-root") == [str(mount_root.resolve())]
     assert "--admin-volume-fixtures" not in regular_command
     assert "--vhd-size-mb" not in regular_command
 
@@ -694,6 +708,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "rest-api-smoke.py",
         "disk-space-guard-live.py",
         "vhd-profile-isolation.py",
+        "vhd-profile-durability.py",
         "admin-volume-cleanup-audit.py",
         "rest-cold-start-dump-stress.py",
         "local-dumps-crash-smoke.py",
@@ -720,6 +735,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared-cache-volume-identity",
         "disk-space-guard-live",
         "vhd-profile-isolation",
+        "vhd-profile-durability",
         "admin-volume-cleanup-audit",
     ]
     assert summary["search_ui"] == {"search_rounds": 2, "download_lifecycle_count": 2}
@@ -734,6 +750,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared_cache_volume_identity": True,
         "disk_space_guard_live": True,
         "vhd_profile_isolation": True,
+        "vhd_profile_durability": True,
         "admin_volume_cleanup_audit": True,
         "admin_volume_fixtures": True,
     }
@@ -786,11 +803,15 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(profile_isolation_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_isolation_command
 
-    cleanup_audit_command = commands[10]
+    profile_durability_command = commands[10]
+    assert option_values(profile_durability_command, "--vhd-size-mb") == ["256"]
+    assert "--admin-volume-fixtures" in profile_durability_command
+
+    cleanup_audit_command = commands[11]
     assert option_values(cleanup_audit_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cleanup_audit_command
 
-    cold_start_command = commands[11]
+    cold_start_command = commands[12]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
