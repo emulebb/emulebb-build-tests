@@ -106,3 +106,22 @@ def test_diskpart_script_is_written_under_requested_artifact_dir(tmp_path: Path,
     assert result.return_code == 0
     assert captured["command"] == ["diskpart.exe", "/s", str(tmp_path / "scripts" / "diskpart-456-123.txt")]
     assert not (tmp_path / "scripts" / "diskpart-456-123.txt").exists()
+
+
+def test_build_storage_topology_names_local_drive_and_mount_roots(tmp_path: Path) -> None:
+    fixture = admin_volume_fixtures.AdminVolumeFixture(
+        vhd_path=tmp_path / "fixture.vhdx",
+        drive_root=Path("Z:\\"),
+        mount_root=tmp_path / "mounted",
+        local_control_root=tmp_path / "control",
+        drive_identity=admin_volume_fixtures.VolumeIdentity("Z:\\", None, "1", "NTFS", "VHD", 1, 1),
+        mount_identity=admin_volume_fixtures.VolumeIdentity(str(tmp_path / "mounted"), None, "1", "NTFS", "VHD", 1, 1),
+        local_control_identity=admin_volume_fixtures.VolumeIdentity(str(tmp_path / "control"), None, "2", "NTFS", "LOCAL", 1, 1),
+        create_result=admin_volume_fixtures.CommandResult([], 0, "", ""),
+    )
+
+    topology = admin_volume_fixtures.build_storage_topology(fixture, "suite")
+
+    assert topology.local_control_root == tmp_path / "control" / "suite"
+    assert topology.vhd_drive_root == Path("Z:\\") / "suite"
+    assert topology.vhd_mount_root == tmp_path / "mounted" / "suite"

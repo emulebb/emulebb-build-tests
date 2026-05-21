@@ -21,6 +21,17 @@ import win32con
 import win32gui
 import win32process
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.admin_volume_fixtures import (
+    AdminVolumeFixtureConfig,
+    build_storage_topology,
+    create_admin_volume_fixture,
+)
+from emule_test_harness.paths import reject_windows_temp_path
+
 try:
     from pywinauto import Application
     _PYWINAUTO_IMPORT_ERROR = None
@@ -60,6 +71,7 @@ IDC_RELOADSHAREDFILES = 2049
 IDC_SFLIST = 2167
 IDC_SF_FNAME = 3038
 IDC_SHAREDDIRSTREE = 2926
+VHD_MONITORED_FOLDER_SCENARIO = "monitored-folder-events-vhd"
 
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
@@ -518,9 +530,25 @@ def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_di
 def prepare_monitored_folder_events_fixture(seed_config_dir: Path, artifacts_dir: Path, app_exe: Path) -> dict:
     """Creates an initially unshared tree used for monitored filesystem event coverage."""
 
+    return prepare_monitored_folder_events_fixture_at_root(
+        seed_config_dir=seed_config_dir,
+        artifacts_dir=artifacts_dir,
+        app_exe=app_exe,
+        monitor_root=artifacts_dir / "monitored-share-root",
+    )
+
+
+def prepare_monitored_folder_events_fixture_at_root(
+    *,
+    seed_config_dir: Path,
+    artifacts_dir: Path,
+    app_exe: Path,
+    monitor_root: Path,
+) -> dict:
+    """Creates an initially unshared monitored tree at an explicit root."""
+
     incoming_dir = artifacts_dir / "incoming"
     temp_dir = artifacts_dir / "temp"
-    monitor_root = artifacts_dir / "monitored-share-root"
     existing_child_dir = monitor_root / "existing-child"
 
     incoming_dir.mkdir(parents=True, exist_ok=True)
@@ -577,6 +605,20 @@ def prepare_monitored_folder_events_fixture(seed_config_dir: Path, artifacts_dir
         }
     )
     return fixture
+
+
+def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
+    """Builds the optional VHD-backed Shared Files UI fixture configuration."""
+
+    mount_parent = Path(args.mount_root).resolve() if args.mount_root else paths.source_artifacts_dir / "admin-mounts"
+    reject_windows_temp_path(mount_parent, "admin fixture mount root")
+    return AdminVolumeFixtureConfig(
+        vhd_path=paths.source_artifacts_dir / "admin-volumes" / "shared-files-ui.vhdx",
+        mount_root=mount_parent / "shared-files-ui",
+        local_control_root=paths.source_artifacts_dir / "local-control-volume",
+        size_mb=args.vhd_size_mb,
+        keep=args.keep_admin_fixtures,
+    )
 
 
 def read_duplicate_cache_header(path: Path) -> dict[str, int]:
@@ -2258,15 +2300,26 @@ def run_monitored_folder_events_e2e(
     artifacts_dir: Path,
     *,
     require_startup_profile: bool,
+    monitor_root_override: Path | None = None,
+    scenario_name: str = "monitored-folder-events",
 ) -> None:
     """Exercises live monitored-share file and directory events without manual reloads."""
 
-    fixture = prepare_monitored_folder_events_fixture(seed_config_dir, artifacts_dir, app_exe)
+    fixture = (
+        prepare_monitored_folder_events_fixture_at_root(
+            seed_config_dir=seed_config_dir,
+            artifacts_dir=artifacts_dir,
+            app_exe=app_exe,
+            monitor_root=monitor_root_override,
+        )
+        if monitor_root_override is not None
+        else prepare_monitored_folder_events_fixture(seed_config_dir, artifacts_dir, app_exe)
+    )
     monitor_root = Path(str(fixture["monitor_root"]))
     existing_child_dir = Path(str(fixture["existing_child_dir"]))
     new_child_dir = Path(str(fixture["new_child_dir"]))
     summary = {
-        "name": "monitored-folder-events",
+        "name": scenario_name,
         "status": "failed",
         "app_exe": str(app_exe),
         "profile_base": str(fixture["profile_base"]),
@@ -3088,6 +3141,7 @@ def run_shared_files_ui_suite(
     *,
     require_startup_profile: bool,
     tree_stress_churn_cycles: int,
+    vhd_monitor_root: Path | None = None,
 ) -> None:
     """Runs the requested Shared Files UI scenarios and writes one combined result."""
 
@@ -3095,6 +3149,7 @@ def run_shared_files_ui_suite(
         "status": "passed",
         "app_exe": str(app_exe),
         "shared_root": live_common.win_path(shared_root.resolve(), trailing_slash=True),
+        "vhd_monitor_root": live_common.win_path(vhd_monitor_root.resolve(), trailing_slash=True) if vhd_monitor_root else None,
         "scenario_names": scenario_names,
         "scenario_count": len(scenario_names),
         "generated_fixture_manifest_path": None,
@@ -3151,6 +3206,17 @@ def run_shared_files_ui_suite(
                     scenario_dir,
                     require_startup_profile=require_startup_profile,
                 )
+            elif scenario_name == VHD_MONITORED_FOLDER_SCENARIO:
+                if vhd_monitor_root is None:
+                    raise RuntimeError(f"{VHD_MONITORED_FOLDER_SCENARIO} requires --admin-volume-fixtures.")
+                run_monitored_folder_events_e2e(
+                    app_exe,
+                    seed_config_dir,
+                    scenario_dir,
+                    require_startup_profile=require_startup_profile,
+                    monitor_root_override=vhd_monitor_root / "monitored-share-root",
+                    scenario_name=VHD_MONITORED_FOLDER_SCENARIO,
+                )
             else:
                 raise RuntimeError(f"Unknown Shared Files UI scenario: {scenario_name}")
         except Exception:
@@ -3198,8 +3264,13 @@ def main(argv: list[str]) -> int:
             "duplicate-startup-reuse",
             "dynamic-folder-lifecycle",
             "monitored-folder-events",
+            VHD_MONITORED_FOLDER_SCENARIO,
         ],
     )
+    parser.add_argument("--admin-volume-fixtures", action="store_true")
+    parser.add_argument("--vhd-size-mb", type=int, default=256)
+    parser.add_argument("--mount-root")
+    parser.add_argument("--keep-admin-fixtures", action="store_true")
     args = parser.parse_args(argv)
 
     if _PYWINAUTO_IMPORT_ERROR is not None:
@@ -3218,6 +3289,18 @@ def main(argv: list[str]) -> int:
     artifacts_dir = paths.source_artifacts_dir
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     scenario_names = args.scenarios or ["fixture-three-files", "generated-robustness-recursive"]
+    admin_fixture_context = None
+    admin_fixture_config = None
+    vhd_monitor_root = None
+    if args.admin_volume_fixtures:
+        admin_fixture_config = build_admin_fixture_config(paths, args)
+        admin_fixture_context = create_admin_volume_fixture(admin_fixture_config)
+        admin_fixture = admin_fixture_context.__enter__()
+        topology = build_storage_topology(admin_fixture, "shared-files-ui")
+        vhd_monitor_root = topology.vhd_mount_root
+        vhd_monitor_root.mkdir(parents=True, exist_ok=True)
+        if VHD_MONITORED_FOLDER_SCENARIO not in scenario_names:
+            scenario_names = [*scenario_names, VHD_MONITORED_FOLDER_SCENARIO]
 
     try:
         run_shared_files_ui_suite(
@@ -3228,7 +3311,11 @@ def main(argv: list[str]) -> int:
             scenario_names=scenario_names,
             require_startup_profile=(args.startup_trace_mode == "required"),
             tree_stress_churn_cycles=args.tree_stress_churn_cycles,
+            vhd_monitor_root=vhd_monitor_root,
         )
+        if admin_fixture_context is not None:
+            admin_fixture_context.__exit__(None, None, None)
+            admin_fixture_context = None
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="passed", paths=paths)
         summary_path = paths.run_report_dir / "ui-summary.json"
@@ -3239,6 +3326,9 @@ def main(argv: list[str]) -> int:
         return 0
     except Exception as exc:
         (artifacts_dir / "error.txt").write_text(f"{exc}\n", encoding="utf-8")
+        if admin_fixture_context is not None:
+            admin_fixture_context.__exit__(None, None, None)
+            admin_fixture_context = None
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="failed", paths=paths, error_message=str(exc))
         summary_path = paths.run_report_dir / "ui-summary.json"

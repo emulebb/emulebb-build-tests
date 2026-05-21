@@ -23,7 +23,10 @@ SHARED_FILES_UI_CORE_SCENARIOS = (
 SHARED_FILES_UI_STRESS_SCENARIOS = (
     "tree-refresh-stress-50k",
 )
-SHARED_FILES_UI_SCENARIOS = SHARED_FILES_UI_CORE_SCENARIOS + SHARED_FILES_UI_STRESS_SCENARIOS
+SHARED_FILES_UI_ADMIN_SCENARIOS = (
+    "monitored-folder-events-vhd",
+)
+SHARED_FILES_UI_SCENARIOS = SHARED_FILES_UI_CORE_SCENARIOS + SHARED_FILES_UI_STRESS_SCENARIOS + SHARED_FILES_UI_ADMIN_SCENARIOS
 CONFIG_STABILITY_UI_SCENARIOS = (
     "long-config-settings-roundtrip",
     "long-config-shared-stress",
@@ -138,6 +141,7 @@ class SuiteSpec:
     is_resource_ui_smoke: bool = False
     accepts_mounted_shared_root: bool = False
     requires_admin_volume_fixtures: bool = False
+    accepts_admin_volume_fixtures: bool = False
     default_enabled: bool = True
 
 
@@ -163,6 +167,7 @@ SUITE_SPECS = (
         scenarios=SHARED_FILES_UI_CORE_SCENARIOS,
         accepts_startup_trace_mode=True,
         accepts_shared_root=True,
+        accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
         name="config-stability-ui",
@@ -199,6 +204,7 @@ SUITE_SPECS = (
         script_name="shared-directories-rest-e2e.py",
         category="rest",
         accepts_mounted_shared_root=True,
+        accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
         name="shared-cache-volume-identity",
@@ -616,7 +622,7 @@ def build_suite_command(
         command.extend(["--shared-root", str(shared_root.resolve())])
     if spec.accepts_mounted_shared_root and mounted_shared_root is not None:
         command.extend(["--mounted-shared-root", str(mounted_shared_root.resolve())])
-    if spec.requires_admin_volume_fixtures:
+    if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures:
         if admin_volume_fixtures:
             command.append("--admin-volume-fixtures")
         command.extend(["--vhd-size-mb", str(vhd_size_mb)])
@@ -638,6 +644,8 @@ def build_suite_command(
     if spec.name == "shared-files-ui" and shared_files_tree_stress_churn_cycles is not None:
         command.extend(["--tree-stress-churn-cycles", str(shared_files_tree_stress_churn_cycles)])
     scenario_names = shared_files_ui_scenarios if spec.name == "shared-files-ui" and shared_files_ui_scenarios else spec.scenarios
+    if spec.name == "shared-files-ui" and admin_volume_fixtures and not shared_files_ui_scenarios:
+        scenario_names = tuple(dict.fromkeys((*scenario_names, *SHARED_FILES_UI_ADMIN_SCENARIOS)))
     for scenario in scenario_names:
         command.extend(["--scenario", scenario])
     if spec.uses_live_seed_refresh and skip_live_seed_refresh:
@@ -1312,6 +1320,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             (),
         )
     )
+    if (
+        args.admin_volume_fixtures
+        and any(spec.name == "shared-files-ui" for spec in selected_specs)
+        and not shared_files_ui_scenarios
+    ):
+        resolved_shared_files_ui_scenarios = list(dict.fromkeys((*resolved_shared_files_ui_scenarios, *SHARED_FILES_UI_ADMIN_SCENARIOS)))
     live_wire_inputs_file = live_wire_inputs.resolve_inputs_path(
         Path(__file__).resolve().parent.parent,
         args.live_wire_inputs_file,
@@ -1432,7 +1446,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "vhd_size_mb": args.vhd_size_mb,
             "mount_root": str(mount_root) if mount_root is not None else None,
             "keep": bool(args.keep_admin_fixtures),
-            "suite_names": [spec.name for spec in selected_specs if spec.requires_admin_volume_fixtures],
+            "suite_names": [
+                spec.name
+                for spec in selected_specs
+                if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures
+            ],
         },
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
@@ -1662,7 +1680,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                     "rest_cold_start_dump_stress": dict(summary["rest_cold_start_dump_stress"]),  # type: ignore[arg-type]
                 }
             )
-        if spec.requires_admin_volume_fixtures:
+        if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures:
             result["admin_volume_fixture"] = dict(summary["admin_volume_fixtures"])  # type: ignore[arg-type]
         summary["suites"].append(result)  # type: ignore[index]
         if suite_status == "failed":

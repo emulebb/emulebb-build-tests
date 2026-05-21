@@ -8,7 +8,7 @@ import json
 import shutil
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -16,10 +16,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
+    AdminVolumeFixture,
     AdminVolumeFixtureConfig,
+    build_storage_topology,
     create_admin_volume_fixture,
     get_volume_identity,
 )
+from emule_test_harness.ini import patch_ini_value, read_ini_text, write_utf16_ini_text  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 
@@ -42,7 +45,20 @@ rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
 
 DISK_SPACE_TOKENS = ("space", "disk", "volume", "storage", "free")
 DEFAULT_GUARD_FILE_HASH = "1234567890ABCDEF1234567890ABCDEF"
-DEFAULT_GUARD_FILE_HASH_LOWER = DEFAULT_GUARD_FILE_HASH.lower()
+STORAGE_ROLE_LOCAL = "local-control"
+STORAGE_ROLE_VHD_DRIVE = "vhd-drive-letter"
+STORAGE_ROLE_VHD_MOUNT = "vhd-folder-mount"
+
+
+@dataclass(frozen=True)
+class DiskSpaceGuardCase:
+    """One storage topology case in the constrained-volume live matrix."""
+
+    name: str
+    temp_role: str
+    incoming_role: str
+    expected_rejected: bool
+    extra_temp_roles: tuple[str, ...] = ()
 
 
 def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
@@ -70,6 +86,104 @@ def build_guard_transfer_link(size_bytes: int, file_hash: str = DEFAULT_GUARD_FI
     return f"ed2k://|file|disk-space-guard-live.bin|{size_bytes}|{cleaned_hash}|/"
 
 
+def case_hash(case_index: int) -> str:
+    """Returns a deterministic unique eD2K hash for one matrix case."""
+
+    if case_index < 0:
+        raise ValueError("Case index must be zero or greater.")
+    return f"{case_index + 1:032X}"
+
+
+def build_disk_space_guard_cases() -> list[DiskSpaceGuardCase]:
+    """Builds the required low-space storage topology matrix."""
+
+    return [
+        DiskSpaceGuardCase(
+            name="drive-letter-temp-and-incoming",
+            temp_role=STORAGE_ROLE_VHD_DRIVE,
+            incoming_role=STORAGE_ROLE_VHD_DRIVE,
+            expected_rejected=True,
+        ),
+        DiskSpaceGuardCase(
+            name="mounted-folder-temp-and-incoming",
+            temp_role=STORAGE_ROLE_VHD_MOUNT,
+            incoming_role=STORAGE_ROLE_VHD_MOUNT,
+            expected_rejected=True,
+        ),
+        DiskSpaceGuardCase(
+            name="local-temp-vhd-incoming",
+            temp_role=STORAGE_ROLE_LOCAL,
+            incoming_role=STORAGE_ROLE_VHD_DRIVE,
+            expected_rejected=True,
+        ),
+        DiskSpaceGuardCase(
+            name="vhd-temp-local-incoming",
+            temp_role=STORAGE_ROLE_VHD_DRIVE,
+            incoming_role=STORAGE_ROLE_LOCAL,
+            expected_rejected=True,
+        ),
+        DiskSpaceGuardCase(
+            name="multi-temp-fallback-to-local",
+            temp_role=STORAGE_ROLE_VHD_DRIVE,
+            incoming_role=STORAGE_ROLE_LOCAL,
+            expected_rejected=False,
+            extra_temp_roles=(STORAGE_ROLE_LOCAL,),
+        ),
+    ]
+
+
+def storage_role_root(fixture: AdminVolumeFixture, role: str) -> Path:
+    """Returns the suite-scoped root for one storage topology role."""
+
+    topology = build_storage_topology(fixture, "disk-space-guard-live")
+    roots = {
+        STORAGE_ROLE_LOCAL: topology.local_control_root,
+        STORAGE_ROLE_VHD_DRIVE: topology.vhd_drive_root,
+        STORAGE_ROLE_VHD_MOUNT: topology.vhd_mount_root,
+    }
+    try:
+        return roots[role]
+    except KeyError as exc:
+        raise ValueError(f"Unknown storage role: {role}") from exc
+
+
+def configure_temp_dirs(config_dir: Path, primary_temp_dir: Path, extra_temp_dirs: list[Path]) -> None:
+    """Writes one primary temp dir and optional fallback temp dirs to preferences.ini."""
+
+    preferences_path = config_dir / "preferences.ini"
+    text = read_ini_text(preferences_path)
+    primary = live_common.win_path(primary_temp_dir, trailing_slash=True)
+    extras = "|".join(live_common.win_path(path, trailing_slash=True) for path in extra_temp_dirs)
+    text = patch_ini_value(text, "TempDir", primary)
+    text = patch_ini_value(text, "TempDirs", extras)
+    write_utf16_ini_text(preferences_path, text)
+
+
+def find_part_metadata_roots(*roots: Path) -> list[str]:
+    """Returns roots that contain created part metadata after an accepted add."""
+
+    matches: list[str] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        if any(root.rglob("*.part.met")):
+            matches.append(str(root))
+    return matches
+
+
+def wait_for_part_metadata_roots(*roots: Path, timeout_seconds: float = 10.0) -> list[str]:
+    """Waits briefly for accepted transfer part metadata to materialize."""
+
+    deadline = time.time() + timeout_seconds
+    matches: list[str] = []
+    while time.time() < deadline:
+        matches = find_part_metadata_roots(*roots)
+        if matches:
+            return matches
+        time.sleep(0.25)
+    return matches
+
+
 def compact_result(result: dict[str, object] | None) -> dict[str, object] | None:
     """Returns bounded HTTP result diagnostics for JSON reports."""
 
@@ -95,6 +209,7 @@ def summarize_guard_result(
     add_result: dict[str, object],
     transfer_lookup: dict[str, object] | None,
     logs_result: dict[str, object] | None,
+    expected_rejected: bool = True,
 ) -> dict[str, object]:
     """Classifies the constrained-volume transfer-add result."""
 
@@ -104,19 +219,156 @@ def summarize_guard_result(
     transfer_absent = transfer_status in {None, 404}
     explicit_reason = text_contains_disk_space_reason(add_result.get("json"), add_result.get("body_text"), logs_result)
     errors: list[str] = []
-    if not rejected:
-        errors.append(f"expected constrained-volume transfer add to be rejected, got HTTP {add_status}")
-    if not transfer_absent:
-        errors.append(f"expected rejected transfer to be absent, got transfer lookup HTTP {transfer_status}")
-    if not explicit_reason:
-        errors.append("expected response or logs to include an explicit disk/storage/free-space reason")
+    if expected_rejected:
+        if not rejected:
+            errors.append(f"expected constrained-volume transfer add to be rejected, got HTTP {add_status}")
+        if not transfer_absent:
+            errors.append(f"expected rejected transfer to be absent, got transfer lookup HTTP {transfer_status}")
+        if not explicit_reason:
+            errors.append("expected response or logs to include an explicit disk/storage/free-space reason")
+    else:
+        if rejected:
+            errors.append(f"expected valid fallback temp placement to be accepted, got HTTP {add_status}")
+        if transfer_absent:
+            errors.append(f"expected accepted transfer to be present, got transfer lookup HTTP {transfer_status}")
     return {
         "status": "passed" if not errors else "failed",
+        "expected_rejected": expected_rejected,
         "rejected": rejected,
         "transfer_absent": transfer_absent,
         "explicit_reason": explicit_reason,
         "errors": errors,
     }
+
+
+def run_disk_space_guard_case(
+    *,
+    case: DiskSpaceGuardCase,
+    case_index: int,
+    fixture: AdminVolumeFixture,
+    paths,
+    seed_config_dir: Path,
+    base_url: str,
+    port: int,
+    args: argparse.Namespace,
+    transfer_size_bytes: int,
+) -> dict[str, object]:
+    """Runs one isolated app/profile against a disk-space topology case."""
+
+    case_artifacts_dir = paths.source_artifacts_dir / "cases" / case.name
+    temp_root = storage_role_root(fixture, case.temp_role)
+    incoming_root = storage_role_root(fixture, case.incoming_role)
+    extra_temp_roots = [storage_role_root(fixture, role) for role in case.extra_temp_roles]
+    temp_dir = temp_root / case.name / "temp"
+    incoming_dir = incoming_root / case.name / "incoming"
+    extra_temp_dirs = [root / case.name / f"temp-extra-{index}" for index, root in enumerate(extra_temp_roots, start=1)]
+    for directory in (temp_dir, incoming_dir, *extra_temp_dirs):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    transfer_hash = case_hash(case_index)
+    transfer_link = build_guard_transfer_link(transfer_size_bytes, transfer_hash)
+    summary: dict[str, object] = {
+        "name": case.name,
+        "status": "failed",
+        "storage_roles": {
+            "temp": case.temp_role,
+            "incoming": case.incoming_role,
+            "extra_temps": list(case.extra_temp_roles),
+        },
+        "directories": {
+            "temp": str(temp_dir),
+            "incoming": str(incoming_dir),
+            "extra_temps": [str(path) for path in extra_temp_dirs],
+        },
+        "transfer": {
+            "hash": transfer_hash.lower(),
+            "size_bytes": transfer_size_bytes,
+            "link": transfer_link,
+        },
+        "disk_usage_before": {
+            "temp": dict(shutil.disk_usage(temp_dir)._asdict()),
+            "incoming": dict(shutil.disk_usage(incoming_dir)._asdict()),
+        },
+    }
+    app = None
+    try:
+        profile_fixture = live_common.prepare_profile_base(
+            seed_config_dir=seed_config_dir,
+            artifacts_dir=case_artifacts_dir / "profile",
+            shared_dirs=[],
+            incoming_dir=incoming_dir,
+            temp_dir=temp_dir,
+            scenario_id=case.name,
+        )
+        configure_temp_dirs(Path(str(profile_fixture["config_dir"])), temp_dir, extra_temp_dirs)
+        rest_smoke.configure_webserver_profile(
+            Path(str(profile_fixture["config_dir"])),
+            paths.app_exe,
+            args.api_key,
+            port,
+            args.bind_addr,
+        )
+        summary["profile_base"] = str(profile_fixture["profile_base"])
+        summary["config_dir"] = str(profile_fixture["config_dir"])
+        app = live_common.launch_app(paths.app_exe, Path(str(profile_fixture["profile_base"])), minimized_to_tray=True)
+        process_id = rest_smoke.get_app_process_id(app)
+        summary["process_id"] = process_id
+        summary["resource_snapshots"] = {"after_launch": rest_smoke.get_process_resource_snapshot(process_id)}
+        summary["rest_ready"] = compact_result(rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds))
+        add_result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/transfers",
+            method="POST",
+            api_key=args.api_key,
+            json_body={"link": transfer_link, "paused": True, "categoryId": 0},
+            request_timeout_seconds=10.0,
+        )
+        transfer_lookup = rest_smoke.http_request(
+            base_url,
+            f"/api/v1/transfers/{transfer_hash.lower()}",
+            api_key=args.api_key,
+            request_timeout_seconds=5.0,
+        )
+        logs_result = rest_smoke.http_request(
+            base_url,
+            "/api/v1/logs?limit=200",
+            api_key=args.api_key,
+            request_timeout_seconds=5.0,
+        )
+        summary["http"] = {
+            "add_transfer": compact_result(add_result),
+            "transfer_lookup": compact_result(transfer_lookup),
+            "logs": compact_result(logs_result),
+        }
+        assertion = summarize_guard_result(
+            add_result=add_result,
+            transfer_lookup=transfer_lookup,
+            logs_result=logs_result,
+            expected_rejected=case.expected_rejected,
+        )
+        if not case.expected_rejected:
+            selected_roots = wait_for_part_metadata_roots(temp_dir, *extra_temp_dirs)
+            summary["selected_temp_roots"] = selected_roots
+            if not selected_roots:
+                assertion["errors"].append("expected accepted transfer to create part metadata under one configured temp root")
+                assertion["status"] = "failed"
+        summary["guard_assertion"] = assertion
+        summary["resource_snapshots"]["after_guard"] = rest_smoke.get_process_resource_snapshot(process_id)  # type: ignore[index]
+        summary["disk_usage_after"] = {
+            "temp": dict(shutil.disk_usage(temp_dir)._asdict()),
+            "incoming": dict(shutil.disk_usage(incoming_dir)._asdict()),
+        }
+        summary["status"] = assertion["status"]
+    except Exception as exc:
+        summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
+    finally:
+        if app is not None:
+            try:
+                summary["shutdown"] = rest_smoke.close_app_cleanly_with_timing(app)
+            except Exception as exc:
+                summary["shutdown_error"] = {"type": type(exc).__name__, "message": str(exc)}
+        harness_cli_common.write_json_file(case_artifacts_dir / "result.json", summary)
+    return summary
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,6 +414,7 @@ def run_disk_space_guard(args: argparse.Namespace) -> dict[str, object]:
     base_url = f"http://{args.bind_addr}:{port}"
     guard_size_mb = args.guard_transfer_size_mb or max(args.vhd_size_mb * 2, args.vhd_size_mb + 128)
     guard_size_bytes = guard_size_mb * 1024 * 1024
+    cases = build_disk_space_guard_cases()
     summary: dict[str, object] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "status": "failed",
@@ -186,83 +439,40 @@ def run_disk_space_guard(args: argparse.Namespace) -> dict[str, object]:
             "size_bytes": guard_size_bytes,
             "link": build_guard_transfer_link(guard_size_bytes),
         },
+        "case_count": len(cases),
+        "cases": [],
         "strict_success_required": True,
     }
-    app = None
     try:
         with create_admin_volume_fixture(config) as fixture:
-            incoming_dir = fixture.drive_root / "incoming"
-            temp_dir = fixture.drive_root / "temp"
-            incoming_dir.mkdir(parents=True, exist_ok=True)
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            profile_fixture = live_common.prepare_profile_base(
-                seed_config_dir=seed_config_dir,
-                artifacts_dir=paths.source_artifacts_dir / "profile",
-                shared_dirs=[],
-                incoming_dir=incoming_dir,
-                temp_dir=temp_dir,
-                scenario_id="disk-space-guard-live",
-            )
-            rest_smoke.configure_webserver_profile(
-                Path(str(profile_fixture["config_dir"])),
-                paths.app_exe,
-                args.api_key,
-                port,
-                args.bind_addr,
-            )
-            summary["volume_identity"] = asdict(get_volume_identity(fixture.drive_root))
-            summary["directories"] = {
-                "incoming": str(incoming_dir),
-                "temp": str(temp_dir),
-                "profile_base": str(profile_fixture["profile_base"]),
+            assert isinstance(fixture, AdminVolumeFixture)
+            topology = build_storage_topology(fixture, "disk-space-guard-live")
+            for root in (topology.local_control_root, topology.vhd_drive_root, topology.vhd_mount_root):
+                root.mkdir(parents=True, exist_ok=True)
+            summary["volume_identities"] = {
+                "drive_letter": asdict(get_volume_identity(fixture.drive_root)),
+                "folder_mount": asdict(get_volume_identity(fixture.mount_root)),
+                "local_control": asdict(get_volume_identity(fixture.local_control_root)),
             }
-            summary["disk_usage_before"] = dict(shutil.disk_usage(fixture.drive_root)._asdict())
-            app = live_common.launch_app(paths.app_exe, Path(str(profile_fixture["profile_base"])), minimized_to_tray=True)
-            process_id = rest_smoke.get_app_process_id(app)
-            summary["process_id"] = process_id
-            summary["resource_snapshots"] = {"after_launch": rest_smoke.get_process_resource_snapshot(process_id)}
-            summary["rest_ready"] = compact_result(rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds))
-            add_result = rest_smoke.http_request(
-                base_url,
-                "/api/v1/transfers",
-                method="POST",
-                api_key=args.api_key,
-                json_body={"link": summary["guard_transfer"]["link"], "paused": True, "categoryId": 0},
-                request_timeout_seconds=10.0,
-            )
-            transfer_lookup = rest_smoke.http_request(
-                base_url,
-                f"/api/v1/transfers/{DEFAULT_GUARD_FILE_HASH_LOWER}",
-                api_key=args.api_key,
-                request_timeout_seconds=5.0,
-            )
-            logs_result = rest_smoke.http_request(
-                base_url,
-                "/api/v1/logs?limit=200",
-                api_key=args.api_key,
-                request_timeout_seconds=5.0,
-            )
-            summary["http"] = {
-                "add_transfer": compact_result(add_result),
-                "transfer_lookup": compact_result(transfer_lookup),
-                "logs": compact_result(logs_result),
-            }
-            summary["guard_assertion"] = summarize_guard_result(
-                add_result=add_result,
-                transfer_lookup=transfer_lookup,
-                logs_result=logs_result,
-            )
-            summary["resource_snapshots"]["after_guard"] = rest_smoke.get_process_resource_snapshot(process_id)  # type: ignore[index]
-            summary["disk_usage_after"] = dict(shutil.disk_usage(fixture.drive_root)._asdict())
-            summary["status"] = summary["guard_assertion"]["status"]  # type: ignore[index]
+            case_results = []
+            for index, case in enumerate(cases):
+                case_result = run_disk_space_guard_case(
+                    case=case,
+                    case_index=index,
+                    fixture=fixture,
+                    paths=paths,
+                    seed_config_dir=seed_config_dir,
+                    base_url=base_url,
+                    port=port,
+                    args=args,
+                    transfer_size_bytes=guard_size_bytes,
+                )
+                case_results.append(case_result)
+            summary["cases"] = case_results
+            summary["status"] = "passed" if all(case.get("status") == "passed" for case in case_results) else "failed"
     except Exception as exc:
         summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
     finally:
-        if app is not None:
-            try:
-                summary["shutdown"] = rest_smoke.close_app_cleanly_with_timing(app)
-            except Exception as exc:
-                summary["shutdown_error"] = {"type": type(exc).__name__, "message": str(exc)}
         summary["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
         harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", summary)
         harness_cli_common.publish_run_artifacts(paths)

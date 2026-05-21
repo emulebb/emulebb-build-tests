@@ -65,6 +65,15 @@ class AdminVolumeFixture:
     create_result: CommandResult
 
 
+@dataclass(frozen=True)
+class AdminVolumeStorageTopology:
+    """Named storage roots exposed by one admin fixture for live test matrices."""
+
+    local_control_root: Path
+    vhd_drive_root: Path
+    vhd_mount_root: Path
+
+
 def require_windows_admin() -> None:
     """Raises when the current process cannot create Windows volume fixtures."""
 
@@ -206,6 +215,18 @@ def get_volume_identity(root: Path) -> VolumeIdentity:
         label=label,
         total_bytes=usage.total,
         free_bytes=usage.free,
+    )
+
+
+def build_storage_topology(fixture: AdminVolumeFixture, suite_name: str) -> AdminVolumeStorageTopology:
+    """Returns suite-scoped local, drive-letter, and mounted-folder fixture roots."""
+
+    if not suite_name.strip():
+        raise ValueError("Suite name must not be empty.")
+    return AdminVolumeStorageTopology(
+        local_control_root=fixture.local_control_root / suite_name,
+        vhd_drive_root=fixture.drive_root / suite_name,
+        vhd_mount_root=fixture.mount_root / suite_name,
     )
 
 

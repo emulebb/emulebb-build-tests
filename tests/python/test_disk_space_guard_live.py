@@ -36,6 +36,32 @@ def test_build_guard_transfer_link_validates_hash_and_size() -> None:
         module.build_guard_transfer_link(1024, "not-a-hash")
 
 
+def test_disk_space_guard_cases_cover_required_storage_matrix() -> None:
+    module = load_script_module()
+
+    cases = module.build_disk_space_guard_cases()
+
+    assert [case.name for case in cases] == [
+        "drive-letter-temp-and-incoming",
+        "mounted-folder-temp-and-incoming",
+        "local-temp-vhd-incoming",
+        "vhd-temp-local-incoming",
+        "multi-temp-fallback-to-local",
+    ]
+    assert any(case.temp_role == module.STORAGE_ROLE_VHD_MOUNT for case in cases)
+    assert any(case.incoming_role == module.STORAGE_ROLE_VHD_MOUNT for case in cases)
+    assert any(case.extra_temp_roles == (module.STORAGE_ROLE_LOCAL,) and not case.expected_rejected for case in cases)
+
+
+def test_case_hash_is_deterministic_unique_hex() -> None:
+    module = load_script_module()
+
+    assert module.case_hash(0) == "00000000000000000000000000000001"
+    assert module.case_hash(15) == "00000000000000000000000000000010"
+    with pytest.raises(ValueError):
+        module.case_hash(-1)
+
+
 def test_guard_result_passes_for_explicit_rejection_and_absent_transfer() -> None:
     module = load_script_module()
 
@@ -64,3 +90,19 @@ def test_guard_result_fails_when_transfer_is_accepted() -> None:
     assert result["rejected"] is False
     assert result["transfer_absent"] is False
     assert result["errors"]
+
+
+def test_guard_result_passes_for_expected_fallback_acceptance() -> None:
+    module = load_script_module()
+
+    result = module.summarize_guard_result(
+        add_result={"status": 200, "json": {"ok": True}, "body_text": ""},
+        transfer_lookup={"status": 200, "json": {"hash": "accepted"}, "body_text": ""},
+        logs_result={"status": 200, "json": []},
+        expected_rejected=False,
+    )
+
+    assert result["status"] == "passed"
+    assert result["expected_rejected"] is False
+    assert result["rejected"] is False
+    assert result["transfer_absent"] is False

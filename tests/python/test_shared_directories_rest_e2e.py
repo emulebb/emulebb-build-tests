@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def load_shared_directories_rest_module():
@@ -72,6 +73,21 @@ def test_build_mounted_root_expectations_keeps_promoted_root_internal(tmp_path: 
     assert mounted_root_path in expectations["items_before_child"]
     assert mounted_root_path in expectations["monitor_owned_before_child"]
     assert mounted_root_path not in expectations["visible_roots"]
+
+
+def test_build_admin_fixture_config_stays_under_source_artifacts(tmp_path: Path, monkeypatch) -> None:
+    module = load_shared_directories_rest_module()
+    monkeypatch.setattr(module, "reject_windows_temp_path", lambda _path, _purpose: None)
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "artifacts")
+    args = SimpleNamespace(mount_root=None, vhd_size_mb=384, keep_admin_fixtures=True)
+
+    config = module.build_admin_fixture_config(paths, args)
+
+    assert config.vhd_path == tmp_path / "artifacts" / "admin-volumes" / "shared-directories-rest.vhdx"
+    assert config.mount_root == tmp_path / "artifacts" / "admin-mounts" / "shared-directories-rest"
+    assert config.local_control_root == tmp_path / "artifacts" / "local-control-volume"
+    assert config.size_mb == 384
+    assert config.keep is True
 
 
 def test_remove_tree_long_path_removes_fixture_tree(tmp_path: Path) -> None:

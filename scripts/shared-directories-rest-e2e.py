@@ -12,6 +12,17 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.admin_volume_fixtures import (
+    AdminVolumeFixtureConfig,
+    build_storage_topology,
+    create_admin_volume_fixture,
+)
+from emule_test_harness.paths import reject_windows_temp_path
+
 
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
@@ -447,6 +458,20 @@ def create_mounted_root_fixture(mounted_shared_root: Path) -> dict[str, Path]:
     }
 
 
+def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
+    """Builds the optional VHD-backed mounted-folder fixture configuration."""
+
+    mount_parent = Path(args.mount_root).resolve() if args.mount_root else paths.source_artifacts_dir / "admin-mounts"
+    reject_windows_temp_path(mount_parent, "admin fixture mount root")
+    return AdminVolumeFixtureConfig(
+        vhd_path=paths.source_artifacts_dir / "admin-volumes" / "shared-directories-rest.vhdx",
+        mount_root=mount_parent / "shared-directories-rest",
+        local_control_root=paths.source_artifacts_dir / "local-control-volume",
+        size_mb=args.vhd_size_mb,
+        keep=args.keep_admin_fixtures,
+    )
+
+
 def build_mounted_root_expectations(mounted_fixture: dict[str, Path]) -> dict[str, list[str]]:
     """Builds REST and persistence expectations for the mounted-folder scenario."""
 
@@ -590,6 +615,10 @@ def main() -> int:
             "behavior across the mounted-folder boundary."
         ),
     )
+    parser.add_argument("--admin-volume-fixtures", action="store_true")
+    parser.add_argument("--vhd-size-mb", type=int, default=256)
+    parser.add_argument("--mount-root")
+    parser.add_argument("--keep-admin-fixtures", action="store_true")
     args = parser.parse_args()
 
     paths = harness_cli_common.prepare_run_paths(
@@ -610,6 +639,16 @@ def main() -> int:
     base_url = f"http://127.0.0.1:{port}"
     fixtures = create_fixture_tree(artifacts_dir)
     mounted_shared_root = Path(args.mounted_shared_root).resolve() if args.mounted_shared_root else None
+    admin_fixture_context = None
+    admin_fixture = None
+    admin_fixture_config = None
+    if args.admin_volume_fixtures and mounted_shared_root is None:
+        admin_fixture_config = build_admin_fixture_config(paths, args)
+        admin_fixture_context = create_admin_volume_fixture(admin_fixture_config)
+        admin_fixture = admin_fixture_context.__enter__()
+        topology = build_storage_topology(admin_fixture, "shared-directories-rest")
+        mounted_shared_root = topology.vhd_mount_root
+        mounted_shared_root.mkdir(parents=True, exist_ok=True)
     mounted_fixture: dict[str, Path] | None = None
     if mounted_shared_root is not None:
         if not mounted_shared_root.is_dir():
@@ -671,6 +710,14 @@ def main() -> int:
             "enabled": mounted_fixture is not None,
             "configured_path": str(mounted_shared_root) if mounted_shared_root is not None else None,
             "fixtures": {key: str(value) for key, value in mounted_fixture.items()} if mounted_fixture is not None else {},
+            "admin_volume_fixture": {
+                "enabled": admin_fixture is not None,
+                "vhd_path": str(admin_fixture_config.vhd_path) if admin_fixture_config is not None else None,
+                "mount_root": str(admin_fixture_config.mount_root) if admin_fixture_config is not None else None,
+                "local_control_root": str(admin_fixture_config.local_control_root) if admin_fixture_config is not None else None,
+                "size_mb": admin_fixture_config.size_mb if admin_fixture_config is not None else None,
+                "keep": admin_fixture_config.keep if admin_fixture_config is not None else None,
+            },
         },
         "checks": {},
         "cleanup": {},
@@ -1050,6 +1097,21 @@ def main() -> int:
             except Exception as exc:  # pragma: no cover - best-effort external fixture cleanup
                 cleanup["mounted_fixture_removed"] = False
                 cleanup["mounted_fixture_remove_error"] = repr(exc)
+                if pending_error is None:
+                    pending_error = exc
+                    report["status"] = "failed"
+                    report["failed_phase"] = "cleanup"
+                    report["error"] = {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+        if admin_fixture_context is not None:
+            try:
+                admin_fixture_context.__exit__(None, None, None)
+                cleanup["admin_volume_fixture_closed"] = True
+            except Exception as exc:  # pragma: no cover - best-effort admin fixture cleanup
+                cleanup["admin_volume_fixture_closed"] = False
+                cleanup["admin_volume_fixture_close_error"] = repr(exc)
                 if pending_error is None:
                     pending_error = exc
                     report["status"] = "failed"

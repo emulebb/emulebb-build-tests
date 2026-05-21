@@ -150,10 +150,34 @@ def test_child_suite_command_passes_mounted_shared_root_only_to_shared_directori
     assert "--mounted-shared-root" not in preference_command
 
 
-def test_admin_volume_fixture_options_reach_only_admin_storage_suites(tmp_path: Path) -> None:
+def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -> None:
     mount_root = tmp_path / "mount-parent"
     admin_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("shared-cache-volume-identity"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    shared_directories_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("shared-directories-rest"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    shared_files_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("shared-files-ui"),
         scripts_dir=tmp_path / "scripts",
         python_executable="python",
         workspace_root=tmp_path / "workspace",
@@ -181,6 +205,10 @@ def test_admin_volume_fixture_options_reach_only_admin_storage_suites(tmp_path: 
     assert option_values(admin_command, "--vhd-size-mb") == ["384"]
     assert option_values(admin_command, "--mount-root") == [str(mount_root.resolve())]
     assert "--keep-admin-fixtures" in admin_command
+    assert "--admin-volume-fixtures" in shared_directories_command
+    assert option_values(shared_directories_command, "--vhd-size-mb") == ["384"]
+    assert "--admin-volume-fixtures" in shared_files_command
+    assert option_values(shared_files_command, "--scenario")[-1] == "monitored-folder-events-vhd"
     assert "--admin-volume-fixtures" not in regular_command
     assert "--vhd-size-mb" not in regular_command
 
@@ -656,6 +684,8 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["profiling"]["memory"]["enabled"] is True
     assert summary["admin_volume_fixtures"]["enabled"] is True
     assert summary["admin_volume_fixtures"]["suite_names"] == [
+        "shared-files-ui",
+        "shared-directories-rest",
         "shared-cache-volume-identity",
         "disk-space-guard-live",
     ]

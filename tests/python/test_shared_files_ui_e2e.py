@@ -47,6 +47,63 @@ def test_tree_label_matches_drive_rejects_other_drives() -> None:
     assert not module.tree_label_matches_drive("C-drive backup", "D:\\")
 
 
+def test_vhd_monitored_scenario_requires_admin_monitor_root(tmp_path: Path) -> None:
+    module = load_shared_files_module()
+
+    try:
+        module.run_shared_files_ui_suite(
+            app_exe=tmp_path / "emule.exe",
+            seed_config_dir=tmp_path / "seed",
+            artifacts_dir=tmp_path / "artifacts",
+            shared_root=tmp_path / "shared",
+            scenario_names=[module.VHD_MONITORED_FOLDER_SCENARIO],
+            require_startup_profile=False,
+            tree_stress_churn_cycles=1,
+            vhd_monitor_root=None,
+    )
+    except RuntimeError as exc:
+        assert "requires --admin-volume-fixtures" in str(exc) or "did not produce result.json" in str(exc)
+    else:
+        raise AssertionError("Expected VHD monitored scenario without admin root to fail.")
+
+
+def test_vhd_monitored_scenario_dispatches_with_explicit_root(tmp_path: Path, monkeypatch) -> None:
+    module = load_shared_files_module()
+    calls = []
+
+    def fake_run(app_exe, seed_config_dir, artifacts_dir, *, require_startup_profile, monitor_root_override=None, scenario_name=""):
+        calls.append(
+            {
+                "monitor_root_override": monitor_root_override,
+                "scenario_name": scenario_name,
+                "require_startup_profile": require_startup_profile,
+            }
+        )
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        module.write_json(artifacts_dir / "result.json", {"name": scenario_name, "status": "passed"})
+
+    monkeypatch.setattr(module, "run_monitored_folder_events_e2e", fake_run)
+
+    module.run_shared_files_ui_suite(
+        app_exe=tmp_path / "emule.exe",
+        seed_config_dir=tmp_path / "seed",
+        artifacts_dir=tmp_path / "artifacts",
+        shared_root=tmp_path / "shared",
+        scenario_names=[module.VHD_MONITORED_FOLDER_SCENARIO],
+        require_startup_profile=False,
+        tree_stress_churn_cycles=1,
+        vhd_monitor_root=tmp_path / "vhd-mounted",
+    )
+
+    assert calls == [
+        {
+            "monitor_root_override": tmp_path / "vhd-mounted" / "monitored-share-root",
+            "scenario_name": module.VHD_MONITORED_FOLDER_SCENARIO,
+            "require_startup_profile": False,
+        }
+    ]
+
+
 def test_tree_refresh_stress_fixture_estimate_exceeds_r1_node_floor() -> None:
     module = load_generated_fixture_module()
 
