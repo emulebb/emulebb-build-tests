@@ -120,7 +120,9 @@ def npm_command_for_node(node_path: Path) -> str:
     """Returns the npm executable paired with the selected Node runtime."""
 
     npm_path = node_path.with_name("npm.cmd" if os.name == "nt" else "npm")
-    return str(npm_path) if npm_path.exists() else "npm"
+    if npm_path.exists():
+        return str(npm_path)
+    return "npm.cmd" if os.name == "nt" else "npm"
 
 
 def build_and_verify_frontend_bundle(amutorrent_root: Path, node_path: Path) -> dict[str, Any]:

@@ -535,17 +535,20 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "local-ed2k-search-soak.py",
         "local-ed2k-chaos-mode.py",
         "local-ed2k-protocol-combinations.py",
+        "amutorrent-local-ed2k-ui-live.py",
     ]
     assert [suite["name"] for suite in summary["suites"]] == [
         "multi-client-p2p-matrix",
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
         "local-ed2k-protocol-combinations",
+        "amutorrent-local-ed2k-ui-live",
     ]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
     assert option_values(commands[1], "--p2p-bind-interface-name") == []
     assert option_values(commands[2], "--p2p-bind-interface-name") == []
     assert option_values(commands[3], "--p2p-bind-interface-name") == []
+    assert option_values(commands[4], "--p2p-bind-interface-name") == []
 
 
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:

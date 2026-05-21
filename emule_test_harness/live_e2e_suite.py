@@ -219,6 +219,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="amutorrent-local-ed2k-ui-live",
+        script_name="amutorrent-local-ed2k-ui-live.py",
+        category="ui",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="shared-hash-ui",
         script_name="shared-hash-ui-e2e.py",
         category="ui",
@@ -380,6 +386,7 @@ PROFILE_SUITE_NAMES = {
         "local-ed2k-search-soak",
         "local-ed2k-chaos-mode",
         "local-ed2k-protocol-combinations",
+        "amutorrent-local-ed2k-ui-live",
     ),
     "beta-green": (
         "shared-directories-rest",
@@ -812,6 +819,7 @@ def build_suite_command(
             "local-ed2k-search-soak",
             "local-ed2k-chaos-mode",
             "local-ed2k-protocol-combinations",
+            "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_name
         and p2p_bind_interface_name != "hide.me"
