@@ -24,12 +24,12 @@ def load_suite_module():
 def test_resolve_manifest_repo_uses_workspace_deps(tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
-    repo = tmp_path / "repos" / "emulebb-ed2k-server"
+    repo = tmp_path / "repos" / "goed2k-server"
     workspace.mkdir(parents=True)
     repo.mkdir(parents=True)
     (repo / "go.mod").write_text("module example\n", encoding="utf-8")
     (workspace / "deps.json").write_text(
-        json.dumps({"workspace": {"repos": {"ed2k_server": "..\\..\\repos\\emulebb-ed2k-server"}}}),
+        json.dumps({"workspace": {"repos": {"ed2k_server": "..\\..\\repos\\goed2k-server"}}}),
         encoding="utf-8",
     )
 
@@ -43,7 +43,7 @@ def test_resolve_ed2k_server_exe_defaults_to_workspace_state(tmp_path: Path) -> 
 
     resolved = module.resolve_ed2k_server_exe(workspace, None)
 
-    assert resolved == (workspace / "state" / "tools" / "emulebb-ed2k-server" / "overlord-ed2k-server.exe").resolve()
+    assert resolved == (workspace / "state" / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
 
 
 def test_write_server_met_creates_dynamic_ip_single_server(tmp_path: Path) -> None:

@@ -144,7 +144,7 @@ def resolve_ed2k_server_exe(workspace_root: Path, override: str | None) -> Path:
 
     if override:
         return Path(override).resolve()
-    return (workspace_root / "state" / "tools" / "emulebb-ed2k-server" / "overlord-ed2k-server.exe").resolve()
+    return (workspace_root / "state" / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
 
 
 def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, object]:
@@ -157,7 +157,7 @@ def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, o
         "build",
         "-o",
         str(server_exe),
-        "./cmd/overlord-ed2k-server",
+        "./cmd/goed2k-server",
     ]
     completed = subprocess.run(
         command,
