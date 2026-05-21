@@ -280,6 +280,20 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     )
     assert "--admin-volume-fixtures" in partfile_recovery_command
     assert option_values(partfile_recovery_command, "--mount-root") == [str(mount_root.resolve())]
+    long_path_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("vhd-long-path-special-names"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    assert "--admin-volume-fixtures" in long_path_command
+    assert option_values(long_path_command, "--mount-root") == [str(mount_root.resolve())]
     assert "--admin-volume-fixtures" not in regular_command
     assert "--vhd-size-mb" not in regular_command
 
@@ -735,6 +749,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared-cache-volume-identity.py",
         "shared-cache-invalidation.py",
         "unc-mapped-drive-identity.py",
+        "vhd-long-path-special-names.py",
         "rest-api-smoke.py",
         "disk-space-guard-live.py",
         "vhd-profile-isolation.py",
@@ -767,6 +782,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared-cache-volume-identity",
         "shared-cache-invalidation",
         "unc-mapped-drive-identity",
+        "vhd-long-path-special-names",
         "disk-space-guard-live",
         "vhd-profile-isolation",
         "vhd-profile-durability",
@@ -786,6 +802,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared_cache_volume_identity": True,
         "shared_cache_invalidation": True,
         "unc_mapped_drive_identity": True,
+        "vhd_long_path_special_names": True,
         "disk_space_guard_live": True,
         "vhd_profile_isolation": True,
         "vhd_profile_durability": True,
@@ -815,7 +832,11 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(unc_mapped_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in unc_mapped_command
 
-    rest_command = commands[9]
+    long_path_command = commands[9]
+    assert option_values(long_path_command, "--vhd-size-mb") == ["256"]
+    assert "--admin-volume-fixtures" in long_path_command
+
+    rest_command = commands[10]
     assert option_values(rest_command, "--server-search-count") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
     ]
@@ -843,31 +864,31 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    disk_space_command = commands[10]
+    disk_space_command = commands[11]
     assert option_values(disk_space_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in disk_space_command
 
-    profile_isolation_command = commands[11]
+    profile_isolation_command = commands[12]
     assert option_values(profile_isolation_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_isolation_command
 
-    profile_durability_command = commands[12]
+    profile_durability_command = commands[13]
     assert option_values(profile_durability_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_durability_command
 
-    category_matrix_command = commands[13]
+    category_matrix_command = commands[14]
     assert option_values(category_matrix_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in category_matrix_command
 
-    partfile_recovery_command = commands[14]
+    partfile_recovery_command = commands[15]
     assert option_values(partfile_recovery_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in partfile_recovery_command
 
-    cleanup_audit_command = commands[15]
+    cleanup_audit_command = commands[16]
     assert option_values(cleanup_audit_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cleanup_audit_command
 
-    cold_start_command = commands[16]
+    cold_start_command = commands[17]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
