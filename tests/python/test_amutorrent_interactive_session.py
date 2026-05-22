@@ -31,6 +31,8 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
         instance_id="emulebb-127.0.0.1-47110",
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
+        use_ssl=True,
+        extra_ca_cert=str(tmp_path / "webserver-cert.pem"),
     )
 
     assert env["PORT"] == "4001"
@@ -40,7 +42,9 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
     assert env["EMULEBB_ENABLED"] == "true"
     assert env["EMULEBB_PORT"] == "47110"
     assert env["EMULEBB_API_KEY"] == "test-key"
+    assert env["EMULEBB_USE_SSL"] == "true"
     assert env["EMULEBB_ID"] == "emulebb-127.0.0.1-47110"
+    assert env["NODE_EXTRA_CA_CERTS"] == str(tmp_path / "webserver-cert.pem")
     assert env["UNCHANGED"] == "1"
     assert env["PATH"].startswith(str(node_path.parent) + os.pathsep)
 

@@ -22,6 +22,9 @@ def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
 
     module_path = Path(__file__).resolve().with_name(filename)
+    existing = sys.modules.get(module_name)
+    if existing is not None and Path(getattr(existing, "__file__", "")).resolve() == module_path:
+        return existing
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
@@ -55,6 +58,7 @@ def build_clean_amutorrent_environment(
     amutorrent_port: int,
     node_path: Path,
     data_dir: Path,
+    extra_ca_cert: str = "",
 ) -> dict[str, str]:
     """Builds the environment for first-run aMuTorrent without pre-seeding eMule BB."""
 
@@ -71,9 +75,44 @@ def build_clean_amutorrent_environment(
     for key in tuple(env):
         if key.startswith("EMULEBB_"):
             env.pop(key, None)
+    if extra_ca_cert:
+        env["NODE_EXTRA_CA_CERTS"] = extra_ca_cert
     if node_path.is_absolute():
         env["PATH"] = str(node_path.parent) + os.pathsep + env.get("PATH", "")
     return env
+
+
+def normalize_rest_scheme(raw_scheme: str) -> str:
+    """Returns a supported REST WebServer scheme token."""
+
+    scheme = str(raw_scheme or "https").strip().lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"Unsupported REST WebServer scheme: {raw_scheme!r}")
+    return scheme
+
+
+def prepare_rest_transport(*, scheme: str, app_exe: Path, artifacts_dir: Path) -> dict[str, Any]:
+    """Prepares disposable REST transport material for one live run."""
+
+    rest_scheme = normalize_rest_scheme(scheme)
+    if rest_scheme != "https":
+        rest_api_smoke.configure_https_trust(None)
+        return {
+            "scheme": "http",
+            "use_https": False,
+            "https_material": None,
+            "node_extra_ca_cert": "",
+        }
+
+    https_material = rest_api_smoke.create_https_certificate_pair(app_exe, artifacts_dir)
+    certificate = str(https_material["certificate"])
+    rest_api_smoke.configure_https_trust(certificate)
+    return {
+        "scheme": "https",
+        "use_https": True,
+        "https_material": https_material,
+        "node_extra_ca_cert": certificate,
+    }
 
 
 def resolve_clean_live_wire_inputs_path(repo_root: Path, raw_path: str | None) -> Path:
@@ -209,6 +248,7 @@ def drive_first_run_wizard(
     emule_host: str,
     emule_port: int,
     api_key: str,
+    use_ssl: bool,
     artifacts_dir: Path,
     timeout_seconds: float,
 ) -> dict[str, Any]:
@@ -264,12 +304,14 @@ def drive_first_run_wizard(
             emulebb_card.get_by_placeholder("127.0.0.1").fill(emule_host)
             emulebb_card.get_by_placeholder("4711").fill(str(emule_port))
             emulebb_card.get_by_placeholder("Enter eMule BB API key").fill(api_key)
+            if use_ssl:
+                emulebb_card.get_by_text("Use SSL (HTTPS)", exact=True).click()
 
             connection = fetch_page_json(
                 page,
                 "/api/config/test",
                 "POST",
-                {"emulebb": {"enabled": True, "host": emule_host, "port": emule_port, "apiKey": api_key, "useSsl": False, "path": ""}},
+                {"emulebb": {"enabled": True, "host": emule_host, "port": emule_port, "apiKey": api_key, "useSsl": use_ssl, "path": ""}},
             )
             checks["emulebb_connection_test"] = connection
             connection_payload = require_browser_http_ok("emulebb-connection-test", connection)
@@ -404,6 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-clean-startup-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
@@ -439,12 +482,18 @@ def main() -> int:
     amutorrent_port = choose_listen_port()
     if emule_port == amutorrent_port:
         amutorrent_port = choose_listen_port()
-    emule_base_url = f"http://127.0.0.1:{emule_port}"
+    rest_scheme = normalize_rest_scheme(args.rest_webserver_scheme)
+    emule_base_url = f"{rest_scheme}://127.0.0.1:{emule_port}"
     amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-clean-data"
+    rest_transport = prepare_rest_transport(
+        scheme=rest_scheme,
+        app_exe=paths.app_exe,
+        artifacts_dir=artifacts_dir,
+    )
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-clean-startup")
     amutorrent_session.configure_session_profile(
@@ -455,6 +504,9 @@ def main() -> int:
         args.bind_addr,
         args.p2p_bind_interface_name,
         live_network=True,
+        use_https=bool(rest_transport["use_https"]),
+        https_certificate=str(rest_transport["https_material"]["certificate"]) if rest_transport["https_material"] else "",
+        https_key=str(rest_transport["https_material"]["key"]) if rest_transport["https_material"] else "",
     )
 
     report: dict[str, Any] = {
@@ -464,12 +516,14 @@ def main() -> int:
         "configuration": args.configuration,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
         "enable_upnp": True,
+        "rest_webserver_scheme": rest_transport["scheme"],
         "emule_base_url": emule_base_url,
         "amutorrent_base_url": amutorrent_base_url,
         "profile_base": str(profile["profile_base"]),
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
         "amutorrent_data_dir": str(amutorrent_data_dir),
+        "https_material": rest_transport["https_material"],
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_inputs": {
             "generic_open": live_wire_inputs.summarize_terms(inputs.generic_open_terms),
@@ -505,6 +559,7 @@ def main() -> int:
             amutorrent_port=amutorrent_port,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
+            extra_ca_cert=str(rest_transport["node_extra_ca_cert"]),
         )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
         amutorrent = subprocess.Popen(
@@ -521,6 +576,7 @@ def main() -> int:
             emule_host="127.0.0.1",
             emule_port=emule_port,
             api_key=args.api_key,
+            use_ssl=bool(rest_transport["use_https"]),
             artifacts_dir=artifacts_dir,
             timeout_seconds=args.ready_timeout_seconds,
         )

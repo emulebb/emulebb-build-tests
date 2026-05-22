@@ -25,6 +25,7 @@ def test_parser_defaults_to_resilience_live_options() -> None:
     assert args.configuration == "Debug"
     assert args.api_key == "amutorrent-resilience-key"
     assert args.p2p_bind_interface_name == "hide.me"
+    assert args.rest_webserver_scheme == "https"
     assert args.reconnect_timeout_seconds == 120.0
     assert args.live_wire_inputs_file.endswith("live-wire-inputs.local.json")
 
@@ -69,10 +70,12 @@ def test_build_saved_config_with_key_updates_only_expected_client() -> None:
         host="127.0.0.1",
         port=4777,
         api_key="new-key",
+        use_ssl=True,
     )
 
     assert updated["clients"][0]["apiKey"] == "new-key"
     assert updated["clients"][0]["port"] == 4777
+    assert updated["clients"][0]["useSsl"] is True
     assert updated["clients"][0]["type"] == "emulebb"
     assert updated["clients"][1] == current["clients"][1]
     assert current["clients"][0]["apiKey"] == "old"

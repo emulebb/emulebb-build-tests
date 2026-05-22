@@ -34,6 +34,7 @@ def test_clean_environment_keeps_wizard_enabled_and_removes_emulebb_env(tmp_path
         amutorrent_port=4002,
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
+        extra_ca_cert=str(tmp_path / "webserver-cert.pem"),
     )
 
     assert env["PORT"] == "4002"
@@ -41,6 +42,7 @@ def test_clean_environment_keeps_wizard_enabled_and_removes_emulebb_env(tmp_path
     assert env["WEB_AUTH_ENABLED"] == "false"
     assert "SKIP_SETUP_WIZARD" not in env
     assert "EMULEBB_HOST" not in env
+    assert env["NODE_EXTRA_CA_CERTS"] == str(tmp_path / "webserver-cert.pem")
     assert env["UNCHANGED"] == "1"
     assert env["PATH"].startswith(str(node_path.parent) + os.pathsep)
 
@@ -52,7 +54,16 @@ def test_parser_defaults_to_ignored_live_wire_file() -> None:
 
     assert args.configuration == "Debug"
     assert args.p2p_bind_interface_name == "hide.me"
+    assert args.rest_webserver_scheme == "https"
     assert args.live_wire_inputs_file.endswith("live-wire-inputs.local.json")
+
+
+def test_rest_scheme_defaults_to_https_and_accepts_http() -> None:
+    clean = load_clean_module()
+
+    assert clean.normalize_rest_scheme("") == "https"
+    assert clean.normalize_rest_scheme("HTTPS") == "https"
+    assert clean.normalize_rest_scheme("http") == "http"
 
 
 def test_live_wire_inputs_path_accepts_workspace_relative_explicit_path(tmp_path: Path, monkeypatch) -> None:

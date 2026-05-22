@@ -5878,16 +5878,33 @@ def execute_search_plan(
 def wait_for_rest_ready(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
     """Polls until the live REST listener answers the version route."""
 
+    last_error: dict[str, str] = {}
+
     def resolve():
+        nonlocal last_error
         try:
             result = http_request(base_url, "/api/v1/app", api_key=api_key)
-        except OSError:
+        except (OSError, urllib.error.URLError) as exc:
+            last_error = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
             return None
         if int(result["status"]) != 200:
+            last_error = {
+                "type": "HTTPStatus",
+                "message": str(compact_http_result(result)),
+            }
             return None
+        last_error = {}
         return result
 
-    return wait_for(resolve, timeout=timeout_seconds, interval=0.5, description="REST API readiness")
+    try:
+        return wait_for(resolve, timeout=timeout_seconds, interval=0.5, description="REST API readiness")
+    except RuntimeError as exc:
+        if last_error:
+            raise RuntimeError(f"{exc}. Last REST error: {last_error}") from exc
+        raise
 
 
 def set_phase(report: dict[str, object], phase: str) -> str:

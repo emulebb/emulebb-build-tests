@@ -17,6 +17,9 @@ def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
 
     module_path = Path(__file__).resolve().with_name(filename)
+    existing = sys.modules.get(module_name)
+    if existing is not None and Path(getattr(existing, "__file__", "")).resolve() == module_path:
+        return existing
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
@@ -50,6 +53,9 @@ def configure_session_profile(
     p2p_bind_interface_name: str,
     *,
     live_network: bool,
+    use_https: bool = False,
+    https_certificate: str = "",
+    https_key: str = "",
 ) -> None:
     """Enables REST and applies the requested live-network startup policy."""
 
@@ -72,6 +78,9 @@ def configure_session_profile(
             bind_addr=bind_addr,
             use_gzip=True,
             allow_admin_high_level_func=True,
+            use_https=use_https,
+            https_certificate=https_certificate,
+            https_key=https_key,
         ),
     )
     rest_api_smoke.apply_p2p_bind_interface_override(config_dir, p2p_bind_interface_name)
@@ -86,6 +95,8 @@ def build_amutorrent_environment(
     instance_id: str,
     node_path: Path,
     data_dir: Path,
+    use_ssl: bool = False,
+    extra_ca_cert: str = "",
 ) -> dict[str, str]:
     """Builds the environment used by the interactive aMuTorrent server."""
 
@@ -101,11 +112,13 @@ def build_amutorrent_environment(
             "EMULEBB_HOST": "127.0.0.1",
             "EMULEBB_PORT": str(emule_port),
             "EMULEBB_API_KEY": api_key,
-            "EMULEBB_USE_SSL": "false",
+            "EMULEBB_USE_SSL": "true" if use_ssl else "false",
             "EMULEBB_ID": instance_id,
             "EMULEBB_NAME": "eMule BB Interactive",
         }
     )
+    if extra_ca_cert:
+        env["NODE_EXTRA_CA_CERTS"] = extra_ca_cert
     if node_path.is_absolute():
         env["PATH"] = str(node_path.parent) + os.pathsep + env.get("PATH", "")
     return env

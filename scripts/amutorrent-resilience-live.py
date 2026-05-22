@@ -22,6 +22,9 @@ def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
 
     module_path = Path(__file__).resolve().with_name(filename)
+    existing = sys.modules.get(module_name)
+    if existing is not None and Path(getattr(existing, "__file__", "")).resolve() == module_path:
+        return existing
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
@@ -77,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-resilience-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
@@ -119,7 +123,7 @@ def is_config_test_failure(result: dict[str, Any]) -> bool:
     return payload.get("success") is False and emulebb.get("success") is False
 
 
-def build_emulebb_config_payload(*, host: str, port: int, api_key: str, enabled: bool = True) -> dict[str, Any]:
+def build_emulebb_config_payload(*, host: str, port: int, api_key: str, use_ssl: bool = False, enabled: bool = True) -> dict[str, Any]:
     """Builds the eMule BB section accepted by aMuTorrent config test/save endpoints."""
 
     return {
@@ -127,7 +131,7 @@ def build_emulebb_config_payload(*, host: str, port: int, api_key: str, enabled:
         "host": host,
         "port": port,
         "apiKey": api_key,
-        "useSsl": False,
+        "useSsl": use_ssl,
         "path": "",
     }
 
@@ -151,6 +155,7 @@ def build_saved_config_with_key(
     host: str,
     port: int,
     api_key: str,
+    use_ssl: bool = False,
 ) -> dict[str, Any]:
     """Returns a complete config object with one eMule BB client key replaced."""
 
@@ -165,7 +170,7 @@ def build_saved_config_with_key(
             continue
         next_client = dict(client)
         if next_client.get("id") == instance_id:
-            next_client.update(build_emulebb_config_payload(host=host, port=port, api_key=api_key))
+            next_client.update(build_emulebb_config_payload(host=host, port=port, api_key=api_key, use_ssl=use_ssl))
             next_client["id"] = instance_id
             next_client["type"] = "emulebb"
             replaced = True
@@ -201,6 +206,7 @@ def run_bad_credential_recovery(
     emule_host: str,
     emule_port: int,
     api_key: str,
+    use_ssl: bool,
     instance_id: str,
 ) -> dict[str, Any]:
     """Verifies a bad eMule BB key fails cleanly and a valid key recovers."""
@@ -214,7 +220,7 @@ def run_bad_credential_recovery(
         page,
         "/api/config/test",
         "POST",
-        {"emulebb": build_emulebb_config_payload(host=emule_host, port=emule_port, api_key=bad_key)},
+        {"emulebb": build_emulebb_config_payload(host=emule_host, port=emule_port, api_key=bad_key, use_ssl=use_ssl)},
     )
     if not is_config_test_failure(bad_test):
         raise RuntimeError(f"aMuTorrent bad-key connection test did not fail cleanly: {bad_test!r}")
@@ -225,6 +231,7 @@ def run_bad_credential_recovery(
         host=emule_host,
         port=emule_port,
         api_key=bad_key,
+        use_ssl=use_ssl,
     )
     bad_save = fetch_page_json(page, "/api/config/save", "POST", invalid_config)
     require_browser_http_ok("save-bad-key-config", bad_save)
@@ -236,6 +243,7 @@ def run_bad_credential_recovery(
         host=emule_host,
         port=emule_port,
         api_key=api_key,
+        use_ssl=use_ssl,
     )
     restore_save = fetch_page_json(page, "/api/config/save", "POST", restored_config)
     require_browser_http_ok("restore-valid-key-config", restore_save)
@@ -243,7 +251,7 @@ def run_bad_credential_recovery(
         page,
         "/api/config/test",
         "POST",
-        {"emulebb": build_emulebb_config_payload(host=emule_host, port=emule_port, api_key=api_key)},
+        {"emulebb": build_emulebb_config_payload(host=emule_host, port=emule_port, api_key=api_key, use_ssl=use_ssl)},
     )
     valid_payload = require_browser_http_ok("valid-key-connection-test", valid_test)
     if valid_payload.get("success") is not True:
@@ -368,6 +376,7 @@ def run_browser_resilience_workflows(
     emule_base_url: str,
     api_key: str,
     instance_id: str,
+    use_ssl: bool,
     inputs: live_wire_inputs.LiveWireInputs,
     artifacts_dir: Path,
     search_timeout_seconds: float,
@@ -399,6 +408,7 @@ def run_browser_resilience_workflows(
                 emule_host="127.0.0.1",
                 emule_port=int(emule_base_url.rsplit(":", 1)[1]),
                 api_key=api_key,
+                use_ssl=use_ssl,
                 instance_id=instance_id,
             )
             checks["concurrent_search_conflict"] = run_concurrent_search_conflict(
@@ -510,12 +520,19 @@ def main() -> int:
     amutorrent_port = choose_listen_port()
     if emule_port == amutorrent_port:
         amutorrent_port = choose_listen_port()
-    emule_base_url = f"http://127.0.0.1:{emule_port}"
+    rest_scheme = amutorrent_clean.normalize_rest_scheme(args.rest_webserver_scheme)
+    emule_base_url = f"{rest_scheme}://127.0.0.1:{emule_port}"
     amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-resilience-data"
+    rest_transport = amutorrent_clean.prepare_rest_transport(
+        scheme=rest_scheme,
+        app_exe=paths.app_exe,
+        artifacts_dir=artifacts_dir,
+    )
+    rest_api_smoke.configure_https_trust(str(rest_transport["node_extra_ca_cert"]) or None)
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-resilience-live")
     amutorrent_session.configure_session_profile(
@@ -526,6 +543,9 @@ def main() -> int:
         args.bind_addr,
         args.p2p_bind_interface_name,
         live_network=True,
+        use_https=bool(rest_transport["use_https"]),
+        https_certificate=str(rest_transport["https_material"]["certificate"]) if rest_transport["https_material"] else "",
+        https_key=str(rest_transport["https_material"]["key"]) if rest_transport["https_material"] else "",
     )
 
     report: dict[str, Any] = {
@@ -535,12 +555,14 @@ def main() -> int:
         "configuration": args.configuration,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
         "enable_upnp": True,
+        "rest_webserver_scheme": rest_transport["scheme"],
         "emule_base_url": emule_base_url,
         "amutorrent_base_url": amutorrent_base_url,
         "profile_base": str(profile["profile_base"]),
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
         "amutorrent_data_dir": str(amutorrent_data_dir),
+        "https_material": rest_transport["https_material"],
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_inputs": {
             "generic_open": live_wire_inputs.summarize_terms(inputs.generic_open_terms),
@@ -577,6 +599,7 @@ def main() -> int:
             amutorrent_port=amutorrent_port,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
+            extra_ca_cert=str(rest_transport["node_extra_ca_cert"]),
         )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
         amutorrent = subprocess.Popen(
@@ -593,6 +616,7 @@ def main() -> int:
             emule_host="127.0.0.1",
             emule_port=emule_port,
             api_key=args.api_key,
+            use_ssl=bool(rest_transport["use_https"]),
             artifacts_dir=artifacts_dir,
             timeout_seconds=args.ready_timeout_seconds,
         )
@@ -616,6 +640,7 @@ def main() -> int:
             emule_base_url=emule_base_url,
             api_key=args.api_key,
             instance_id=instance_id,
+            use_ssl=bool(rest_transport["use_https"]),
             inputs=inputs,
             artifacts_dir=artifacts_dir,
             search_timeout_seconds=args.search_observation_timeout_seconds,

@@ -48,6 +48,9 @@ def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
 
     module_path = Path(__file__).resolve().with_name(filename)
+    existing = sys.modules.get(module_name)
+    if existing is not None and Path(getattr(existing, "__file__", "")).resolve() == module_path:
+        return existing
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
@@ -89,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-emulebb-ui-key")
     parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
@@ -313,6 +317,46 @@ def wait_for_snapshot_category(page: Any, transfer_hash: str, category_name: str
     return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=f"aMuTorrent category {category_name!r}")
 
 
+def wait_for_emule_category(
+    *,
+    emule_base_url: str,
+    api_key: str,
+    category_name: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Waits until eMule BB REST reports a category created through aMuTorrent."""
+
+    expected = category_name.strip().lower()
+
+    def resolve() -> dict[str, Any] | None:
+        result = rest_api_smoke.http_request(emule_base_url, "/api/v1/categories", api_key=api_key)
+        payload = result.get("json")
+        if payload is None:
+            payload = result.get("payload")
+        data = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+        rows = data.get("items") if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            raise RuntimeError(f"eMule BB category response did not contain a category list: {result!r}")
+        matching = [
+            row
+            for row in rows
+            if isinstance(row, dict) and str(row.get("name") or row.get("title") or "").strip().lower() == expected
+        ]
+        if not matching:
+            return None
+        return {
+            "status": result.get("status"),
+            "category_count": len(rows),
+            "category": {
+                "id": matching[0].get("id"),
+                "name": matching[0].get("name") or matching[0].get("title"),
+                "path_present": bool(matching[0].get("path")),
+            },
+        }
+
+    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=f"eMule BB category {category_name!r}")
+
+
 def wait_for_enabled_test_id(page: Any, test_id: str, timeout_seconds: float = 15.0) -> None:
     """Waits for a visible, enabled element with a data-testid hook."""
 
@@ -404,6 +448,8 @@ def cleanup_category(page: Any, category_name: str) -> dict[str, Any]:
 def run_visible_transfer_actions(
     page: Any,
     *,
+    emule_base_url: str,
+    api_key: str,
     transfer_hash: str,
     instance_id: str,
     file_name: str,
@@ -437,6 +483,12 @@ def run_visible_transfer_actions(
     click_visible_test_id(page, "file-category-submit")
     page.locator('[data-testid="file-category-modal"]').wait_for(state="detached", timeout=15000)
     categorized = wait_for_snapshot_category(page, transfer_hash, category_name, timeout_seconds)
+    emule_category = wait_for_emule_category(
+        emule_base_url=emule_base_url,
+        api_key=api_key,
+        category_name=category_name,
+        timeout_seconds=timeout_seconds,
+    )
 
     exit_download_selection_mode_if_active(page)
     page.locator(f'[data-testid="item-file-name"][data-file-hash="{transfer_hash.lower()}"]:visible').first.click()
@@ -472,6 +524,7 @@ def run_visible_transfer_actions(
         "category": {
             "name": category_name,
             "snapshot_category": categorized.get("category"),
+            "emule_rest_category": emule_category,
             "cleanup": cleanup_category(page, category_name),
         },
         "file_info": {"variant": file_info_variant},
@@ -571,6 +624,8 @@ def run_visible_search_download(
     snapshot_item = wait_for_snapshot_item(page, transfer_hash, timeout_seconds)
     visible_actions = run_visible_transfer_actions(
         page,
+        emule_base_url=emule_base_url,
+        api_key=api_key,
         transfer_hash=transfer_hash,
         instance_id=instance_id,
         file_name=file_name,
@@ -752,12 +807,19 @@ def main() -> int:
     amutorrent_port = choose_listen_port()
     if emule_port == amutorrent_port:
         amutorrent_port = choose_listen_port()
-    emule_base_url = f"http://127.0.0.1:{emule_port}"
+    rest_scheme = amutorrent_clean.normalize_rest_scheme(args.rest_webserver_scheme)
+    emule_base_url = f"{rest_scheme}://127.0.0.1:{emule_port}"
     amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-emulebb-ui-data"
+    rest_transport = amutorrent_clean.prepare_rest_transport(
+        scheme=rest_scheme,
+        app_exe=paths.app_exe,
+        artifacts_dir=artifacts_dir,
+    )
+    rest_api_smoke.configure_https_trust(str(rest_transport["node_extra_ca_cert"]) or None)
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-emulebb-ui-live")
     amutorrent_session.configure_session_profile(
@@ -768,6 +830,9 @@ def main() -> int:
         args.bind_addr,
         args.p2p_bind_interface_name,
         live_network=True,
+        use_https=bool(rest_transport["use_https"]),
+        https_certificate=str(rest_transport["https_material"]["certificate"]) if rest_transport["https_material"] else "",
+        https_key=str(rest_transport["https_material"]["key"]) if rest_transport["https_material"] else "",
     )
 
     report: dict[str, Any] = {
@@ -777,12 +842,14 @@ def main() -> int:
         "configuration": args.configuration,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
         "enable_upnp": True,
+        "rest_webserver_scheme": rest_transport["scheme"],
         "emule_base_url": emule_base_url,
         "amutorrent_base_url": amutorrent_base_url,
         "profile_base": str(profile["profile_base"]),
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
         "amutorrent_data_dir": str(amutorrent_data_dir),
+        "https_material": rest_transport["https_material"],
         "live_wire_inputs_file": str(inputs.path),
         "live_wire_inputs": {
             "generic_open": live_wire_inputs.summarize_terms(inputs.generic_open_terms),
@@ -819,6 +886,7 @@ def main() -> int:
             amutorrent_port=amutorrent_port,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
+            extra_ca_cert=str(rest_transport["node_extra_ca_cert"]),
         )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
         amutorrent = subprocess.Popen(
@@ -835,6 +903,7 @@ def main() -> int:
             emule_host="127.0.0.1",
             emule_port=emule_port,
             api_key=args.api_key,
+            use_ssl=bool(rest_transport["use_https"]),
             artifacts_dir=artifacts_dir,
             timeout_seconds=args.ready_timeout_seconds,
         )
