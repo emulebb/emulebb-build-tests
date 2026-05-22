@@ -310,6 +310,23 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     assert "--admin-volume-fixtures" in radarr_command
     assert option_values(radarr_command, "--mount-root") == [str(mount_root.resolve())]
     assert option_values(radarr_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB)]
+    radarr_local_command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("radarr-emulebb-local"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        admin_volume_fixtures=True,
+        vhd_size_mb=384,
+        mount_root=mount_root,
+        keep_admin_fixtures=True,
+    )
+    assert radarr_local_command[1].endswith("radarr-emulebb-local.py")
+    assert "--admin-volume-fixtures" in radarr_local_command
+    assert option_values(radarr_local_command, "--mount-root") == [str(mount_root.resolve())]
+    assert option_values(radarr_local_command, "--p2p-bind-interface-name") == []
     sonarr_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("sonarr-emulebb"),
         scripts_dir=tmp_path / "scripts",

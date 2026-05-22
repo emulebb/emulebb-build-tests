@@ -367,6 +367,22 @@ SUITE_SPECS = (
         accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
+        name="radarr-emulebb-local",
+        script_name="radarr-emulebb-local.py",
+        category="live-wire",
+        default_enabled=False,
+        is_arr_emulebb=True,
+        accepts_admin_volume_fixtures=True,
+    ),
+    SuiteSpec(
+        name="sonarr-emulebb-local",
+        script_name="sonarr-emulebb-local.py",
+        category="live-wire",
+        default_enabled=False,
+        is_arr_emulebb=True,
+        accepts_admin_volume_fixtures=True,
+    ),
+    SuiteSpec(
         name="auto-browse-live",
         script_name="auto-browse-live.py",
         category="live-wire",
@@ -846,12 +862,12 @@ def build_suite_command(
         command.extend(["--radarr-release-timeout-seconds", str(arr_search_timeout_seconds)])
         command.extend(["--acquisition-timeout-minutes", str(media_acquisition_timeout_minutes)])
         command.extend(["--download-proof-mode", arr_download_proof_mode])
-        if spec.name == "radarr-emulebb" and radarr_movie_root is not None:
+        if spec.name in {"radarr-emulebb", "radarr-emulebb-local"} and radarr_movie_root is not None:
             command.extend(["--radarr-movie-root", str(radarr_movie_root)])
-        if spec.name == "sonarr-emulebb" and sonarr_series_root is not None:
+        if spec.name in {"sonarr-emulebb", "sonarr-emulebb-local"} and sonarr_series_root is not None:
             command.extend(["--sonarr-series-root", str(sonarr_series_root)])
         command.append("--enable-upnp")
-        if p2p_bind_interface_name:
+        if p2p_bind_interface_name and spec.name not in {"radarr-emulebb-local", "sonarr-emulebb-local"}:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_rest_cold_start_dump_stress:
         if live_wire_inputs_file is not None:

@@ -29,6 +29,56 @@ def test_radarr_sonarr_live_report_records_live_network_launch_inputs() -> None:
     assert 'BindAddr=hide.me' not in script_text
 
 
+def test_local_arr_release_names_are_deterministic_and_searchable() -> None:
+    module = load_radarr_sonarr_module()
+
+    assert module.arr_fake_release_name("radarr", "Example Movie: Test!") == (
+        "Example Movie Test 2026 1080p WEB-DL eMuleBB.mkv"
+    )
+    assert module.arr_fake_release_name("sonarr", "Example Series") == (
+        "Example Series S01E01 1080p WEB-DL eMuleBB.mkv"
+    )
+    assert "Example Movie" in module.arr_fake_release_name("radarr", "Example Movie: Test!")
+
+
+def test_local_ed2k_parser_defaults_keep_fixture_in_workspace_control() -> None:
+    module = load_radarr_sonarr_module()
+
+    args = module.build_parser().parse_args(["--deterministic-local-ed2k"])
+
+    assert args.deterministic_local_ed2k is True
+    assert args.local_ed2k_fixture_size_bytes == 132 * 1024 * 1024
+
+
+def test_local_arr_media_folder_is_created_under_owned_root(tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    movie_path = tmp_path / "Movie Title (2026)"
+
+    result = module.ensure_local_arr_media_folder(
+        {"movie": {"path": str(movie_path)}},
+        create_local_path=True,
+        media_key="movie",
+    )
+
+    assert result["created"] is True
+    assert result["exists"] is True
+    assert movie_path.is_dir()
+
+
+def test_local_arr_media_folder_skips_remote_or_unowned_roots(tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    movie_path = tmp_path / "Movie Title (2026)"
+
+    result = module.ensure_local_arr_media_folder(
+        {"movie": {"path": str(movie_path)}},
+        create_local_path=False,
+        media_key="movie",
+    )
+
+    assert result == {"created": False, "reason": "not_local_test_root"}
+    assert not movie_path.exists()
+
+
 def test_shared_hashing_snapshot_reads_status_stats(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
 
@@ -515,6 +565,78 @@ def test_radarr_movie_download_e2e_handoff_skips_completion_and_import(
         ("release_grab", ("operator movie", module.RADARR_IMPORT_CATEGORY)),
         ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
     ]
+
+
+def test_radarr_movie_download_e2e_local_synthetic_fixture_skips_arr_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+
+    monkeypatch.setattr(
+        module,
+        "ensure_radarr_movie",
+        lambda *_args, **_kwargs: {
+            "id": 77,
+            "created": False,
+            "updated": True,
+            "root_folder": {"path": str(tmp_path)},
+            "movie": {"path": str(tmp_path / "Movie Title (2026)")},
+        },
+    )
+    monkeypatch.setattr(module, "arr_health_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        module,
+        "grab_first_arr_release_or_fallback_to_prowlarr",
+        lambda **kwargs: {
+            "source": "arr_release_search",
+            "hash": "fedcba9876543210fedcba9876543210",
+            "hash_present": True,
+            "category_transfer": {"categoryName": kwargs["download_category"]},
+        },
+    )
+    monkeypatch.setattr(module, "resume_transfer_if_paused", lambda *_args, **_kwargs: {"resumed": False})
+    monkeypatch.setattr(
+        module,
+        "wait_for_transfer_completion",
+        lambda *_args, **_kwargs: {"completed": True, "name": "fixture.mkv"},
+    )
+    monkeypatch.setattr(
+        module,
+        "trigger_arr_downloaded_scan",
+        lambda *_args, **_kwargs: pytest.fail("downloaded scan should be skipped"),
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_radarr_import",
+        lambda *_args, **_kwargs: pytest.fail("Arr import should be skipped"),
+    )
+
+    report, cleanup_movie_id = module.run_radarr_movie_download_e2e(
+        radarr_url="http://radarr.test",
+        radarr_api_key="key",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        indexer_id=40,
+        indexer_name="eMule BB Local",
+        prowlarr_indexer_id=50,
+        movie_title="operator movie",
+        movie_root=tmp_path,
+        category_name=module.RADARR_IMPORT_CATEGORY,
+        category_save_path=tmp_path / module.RADARR_IMPORT_CATEGORY,
+        movie_root_creates_local_path=True,
+        quality_profile_name="AnyAnyLang",
+        release_search_timeout_seconds=10.0,
+        timeout_seconds=10.0,
+        skip_arr_import=True,
+    )
+
+    assert cleanup_movie_id == 77
+    assert report["completed_transfer"]["completed"] is True
+    assert report["downloaded_scan"] == {"skipped": True, "reason": "synthetic-local-ed2k-fixture"}
+    assert report["arr_import"] == {"skipped": True, "reason": "synthetic-local-ed2k-fixture"}
 
 
 def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_indexer(

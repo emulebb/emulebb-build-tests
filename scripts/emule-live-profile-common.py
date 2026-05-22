@@ -13,6 +13,7 @@ import win32con
 import win32api
 import win32event
 import win32gui
+import win32process
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -59,6 +60,7 @@ WINDOWS_DIRECTORY_PATH_LIMIT = 248
 WINDOWS_PATH_LIMIT = 260
 PATH_SAMPLE_LIMIT = 5
 MAIN_WINDOW_TITLE_PREFIXES = ("eMule v", "eMule BB")
+MAIN_WINDOW_TITLE_MARKERS = (" eMule v", " eMule BB")
 STARTUP_PROFILE_COMPLETE_PHASE_ID = "startup.complete"
 STARTUP_PROFILE_COMPLETE_PHASE_NAME = "StartupTimer complete"
 STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
@@ -254,7 +256,59 @@ def is_main_emule_window(hwnd: int) -> bool:
     """Reports whether one visible top-level window is the real main eMule dialog."""
 
     title = win32gui.GetWindowText(hwnd)
-    return win32gui.GetClassName(hwnd) == "#32770" and title.startswith(MAIN_WINDOW_TITLE_PREFIXES)
+    if win32gui.GetClassName(hwnd) != "#32770":
+        return False
+    return title.startswith(MAIN_WINDOW_TITLE_PREFIXES) or any(
+        marker in title for marker in MAIN_WINDOW_TITLE_MARKERS
+    )
+
+
+def find_process_main_window(app: Application, *, require_visible: bool = False):
+    """Finds the launched eMule main window by enumerating process top-level windows."""
+
+    try:
+        process_id = int(app.process())
+    except Exception:
+        return None
+
+    matches: list[int] = []
+
+    def collect(hwnd: int, _lparam: int) -> bool:
+        try:
+            _, hwnd_process_id = win32process.GetWindowThreadProcessId(hwnd)
+            if int(hwnd_process_id) != process_id:
+                return True
+            if require_visible and not win32gui.IsWindowVisible(hwnd):
+                return True
+            if is_main_emule_window(hwnd):
+                matches.append(hwnd)
+        except Exception:
+            return True
+        return True
+
+    win32gui.EnumWindows(collect, 0)
+    if not matches:
+        return None
+    return app.window(handle=matches[0]).wrapper_object()
+
+
+def find_app_main_window(app: Application, *, require_visible: bool = False):
+    """Finds the eMule main window from pywinauto's process window list."""
+
+    try:
+        windows = app.windows()
+    except Exception:
+        return None
+    for window in windows:
+        try:
+            hwnd = int(window.handle)
+            if require_visible and not window.is_visible():
+                continue
+            if is_main_emule_window(hwnd):
+                return window
+        except Exception:
+            continue
+    return None
 
 
 def describe_startup_dialog(hwnd: int) -> str:
@@ -286,20 +340,21 @@ def wait_for_main_window(app: Application, *, timeout: float = 90.0, require_vis
         try:
             window = app.top_window()
         except Exception:
-            return None
-        if not window.handle:
-            return None
-        if require_visible and not win32gui.IsWindowVisible(window.handle):
-            return None
-        if is_main_emule_window(window.handle):
-            return window
-        if win32gui.GetClassName(window.handle) == "#32770":
-            raise RuntimeError(
-                "Unexpected startup dialog "
-                f"{win32gui.GetWindowText(window.handle)!r}: "
-                f"{describe_startup_dialog(window.handle)!r}"
-            )
-        return window
+            window = None
+        if window is not None and window.handle:
+            if not (require_visible and not win32gui.IsWindowVisible(window.handle)):
+                if is_main_emule_window(window.handle):
+                    return window
+                if win32gui.GetClassName(window.handle) == "#32770":
+                    raise RuntimeError(
+                        "Unexpected startup dialog "
+                        f"{win32gui.GetWindowText(window.handle)!r}: "
+                        f"{describe_startup_dialog(window.handle)!r}"
+                    )
+        return find_app_main_window(app, require_visible=require_visible) or find_process_main_window(
+            app,
+            require_visible=require_visible,
+        )
 
     return wait_for(resolve, timeout=timeout, interval=0.5, description="eMule main window")
 

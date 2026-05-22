@@ -8,6 +8,7 @@ import importlib.util
 import json
 import re
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -51,6 +52,7 @@ DEFAULT_SHARED_HASH_IDLE_TIMEOUT_SECONDS = 60.0
 ARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
 DEFAULT_MEDIA_QUALITY_PROFILE_NAME = "AnyAnyLang"
 DEFAULT_CONTROLLER_VHD_SIZE_MB = 32768
+DEFAULT_LOCAL_ARR_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
 MIN_ARR_RELEASE_SOURCES = 10
 MIN_ARR_RELEASE_TITLE_MATCH_SCORE = 150
 SONARR_EPISODE_TITLE_PATTERNS = (
@@ -83,6 +85,7 @@ rest_smoke = prowlarr_live.rest_smoke
 live_common = prowlarr_live.live_common
 live_wire_inputs = prowlarr_live.live_wire_inputs
 cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
+dtt = load_local_module("deterministic_two_client_transfer_arr", "deterministic-two-client-transfer.py")
 
 QBIT_ROUTE_COMPLETENESS_SCENARIOS: tuple[dict[str, object], ...] = (
     {"name": "public_webapi_version", "method": "GET", "path": "/api/v2/app/webapiVersion", "auth": False, "expected_statuses": (200,)},
@@ -1578,6 +1581,24 @@ def ensure_radarr_movie(
     }
 
 
+def ensure_local_arr_media_folder(media: dict[str, object], *, create_local_path: bool, media_key: str) -> dict[str, object]:
+    """Creates the local Arr media folder when the test owns the root path."""
+
+    item = media.get(media_key)
+    if not create_local_path or not isinstance(item, dict):
+        return {"created": False, "reason": "not_local_test_root"}
+    path_text = str(item.get("path") or "").strip()
+    if not path_text:
+        return {"created": False, "reason": "missing_media_path"}
+    path = Path(path_text)
+    path.mkdir(parents=True, exist_ok=True)
+    return {
+        "created": True,
+        "path": str(path),
+        "exists": path.is_dir(),
+    }
+
+
 def delete_sonarr_series(arr_url: str, api_key: str, series_id: int) -> dict[str, object]:
     """Deletes one temporary Sonarr series without deleting local media files."""
 
@@ -1733,9 +1754,11 @@ def grab_first_arr_release(
     emule_base_url: str | None = None,
     emule_api_key: str | None = None,
     category_id: int | None = None,
+    min_sources: int | None = None,
 ) -> dict[str, object]:
     """Searches Arr releases and grabs the best eMule BB indexer match."""
 
+    required_sources = min_sources if min_sources is not None else (MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1)
     deadline = time.monotonic() + timeout_seconds
     attempts: list[dict[str, object]] = []
     while time.monotonic() < deadline:
@@ -1772,11 +1795,10 @@ def grab_first_arr_release(
                 }
             )
             if matches:
-                min_sources = MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1
                 require_episode_like = kind == "sonarr"
                 ranked_matches = matches
                 if (
-                    max((prowlarr_live.release_source_count(row) for row in matches), default=0) < min_sources
+                    max((prowlarr_live.release_source_count(row) for row in matches), default=0) < required_sources
                     and emule_base_url
                     and emule_api_key
                     and category_id is not None
@@ -1795,7 +1817,7 @@ def grab_first_arr_release(
                 ranked = rank_arr_releases(
                     ranked_matches,
                     title,
-                    min_sources=min_sources,
+                    min_sources=required_sources,
                     require_episode_like=require_episode_like,
                     prefer_sources=prefer_sources,
                 )
@@ -1803,7 +1825,7 @@ def grab_first_arr_release(
                     select_best_arr_release(
                         ranked_matches,
                         title,
-                        min_sources=min_sources,
+                        min_sources=required_sources,
                         require_episode_like=require_episode_like,
                         prefer_sources=prefer_sources,
                     )
@@ -1887,6 +1909,7 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
     download_category: str,
     timeout_seconds: float,
     health_rows: list[dict[str, Any]],
+    min_sources: int | None = None,
 ) -> dict[str, object]:
     """Grabs through Arr, using Prowlarr as search source when Arr quarantined the provider."""
 
@@ -1905,6 +1928,7 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
                 emule_base_url=emule_base_url,
                 emule_api_key=emule_api_key,
                 category_id=category_id,
+                min_sources=min_sources,
             )
             release_grab["source"] = "arr_release_search"
             release_grab["arr_indexer_unavailable_due_to_failures"] = False
@@ -1945,6 +1969,7 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
         category_id=category_id,
         download_category=download_category,
         timeout_seconds=timeout_seconds,
+        min_sources=min_sources,
     )
     release_grab["arr_direct_search_error"] = direct_error[:500]
     release_grab["arr_indexer_unavailable_due_to_failures"] = indexer_unavailable
@@ -2086,9 +2111,11 @@ def grab_first_arr_release_via_prowlarr(
     category_id: int,
     download_category: str,
     timeout_seconds: float,
+    min_sources: int | None = None,
 ) -> dict[str, object]:
     """Searches the eMule Prowlarr indexer, then triggers the grab from Arr."""
 
+    required_sources = min_sources if min_sources is not None else (MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1)
     before_hashes = transfer_hashes(emule_base_url, emule_api_key)
     deadline = time.monotonic() + timeout_seconds
     attempts: list[dict[str, object]] = []
@@ -2134,13 +2161,12 @@ def grab_first_arr_release_via_prowlarr(
             }
         )
         if status >= 200 and status < 300 and matches:
-            min_sources = MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1
             require_episode_like = kind == "sonarr"
             prefer_sources = kind == "sonarr"
             ranked_matches = rank_arr_releases(
                 matches,
                 title,
-                min_sources=min_sources,
+                min_sources=required_sources,
                 require_episode_like=require_episode_like,
                 prefer_sources=prefer_sources,
             )
@@ -2157,7 +2183,7 @@ def grab_first_arr_release_via_prowlarr(
                 ranked_direct_rows = rank_arr_releases(
                     direct_rows,
                     title,
-                    min_sources=min_sources,
+                    min_sources=required_sources,
                     require_episode_like=require_episode_like,
                     prefer_sources=prefer_sources,
                 )
@@ -2165,7 +2191,7 @@ def grab_first_arr_release_via_prowlarr(
                     select_best_arr_release(
                         direct_rows,
                         title,
-                        min_sources=min_sources,
+                        min_sources=required_sources,
                         require_episode_like=require_episode_like,
                         prefer_sources=prefer_sources,
                     )
@@ -2186,7 +2212,7 @@ def grab_first_arr_release_via_prowlarr(
                 ranked_direct_rows = rank_arr_releases(
                     direct_rows,
                     title,
-                    min_sources=min_sources,
+                    min_sources=required_sources,
                     require_episode_like=require_episode_like,
                     prefer_sources=prefer_sources,
                 )
@@ -2194,7 +2220,7 @@ def grab_first_arr_release_via_prowlarr(
                     select_best_arr_release(
                         direct_rows,
                         title,
-                        min_sources=min_sources,
+                        min_sources=required_sources,
                         require_episode_like=require_episode_like,
                         prefer_sources=prefer_sources,
                     )
@@ -3354,6 +3380,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bind-addr")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
@@ -3368,6 +3395,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vhd-size-mb", type=int, default=DEFAULT_CONTROLLER_VHD_SIZE_MB)
     parser.add_argument("--mount-root")
     parser.add_argument("--keep-admin-fixtures", action="store_true")
+    parser.add_argument("--deterministic-local-ed2k", action="store_true")
+    parser.add_argument("--local-ed2k-fixture-size-bytes", type=int, default=DEFAULT_LOCAL_ARR_FIXTURE_SIZE_BYTES)
+    parser.add_argument("--ed2k-server-repo")
+    parser.add_argument("--ed2k-server-exe")
+    parser.add_argument("--client2-app-exe")
     parser.add_argument(
         "--radarr-movie-root",
         help="Optional Radarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
@@ -3506,6 +3538,8 @@ def run_radarr_movie_download_e2e(
     release_search_timeout_seconds: float,
     timeout_seconds: float,
     download_proof_mode: str = "complete",
+    min_release_sources: int = MIN_ARR_RELEASE_SOURCES,
+    skip_arr_import: bool = False,
 ) -> tuple[dict[str, object], int | None]:
     """Runs the Radarr movie grab-to-eMule-category proof."""
 
@@ -3527,6 +3561,14 @@ def run_radarr_movie_download_e2e(
         "root_folder": movie.get("root_folder"),
         "quality_profile": movie.get("quality_profile"),
     }
+    report["local_media_folder"] = ensure_local_arr_media_folder(
+        movie,
+        create_local_path=movie_root_creates_local_path,
+        media_key="movie",
+    )
+    cleanup_movie = bool(movie.get("created")) or bool(
+        isinstance(report["local_media_folder"], dict) and report["local_media_folder"].get("created")
+    )
     health = arr_health_rows(radarr_url, radarr_api_key)
     report["indexer_health"] = {
         "unavailable_due_to_failures": arr_indexer_unavailable_due_to_failures(health, indexer_name),
@@ -3553,6 +3595,7 @@ def run_radarr_movie_download_e2e(
         download_category=category_name,
         timeout_seconds=min(release_search_timeout_seconds, ARR_LIVE_SEARCH_TIMEOUT_SECONDS),
         health_rows=health,
+        min_sources=min_release_sources,
     )
     report["release_grab"] = {key: value for key, value in release_grab.items() if key != "hash"}
     transfer_hash = str(release_grab.get("hash") or "")
@@ -3582,7 +3625,7 @@ def run_radarr_movie_download_e2e(
         }
         report["downloaded_scan"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
         report["arr_import"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
-        return report, movie_id if bool(movie.get("created")) else None
+        return report, movie_id if cleanup_movie else None
 
     report["completed_transfer"] = wait_for_transfer_completion(
         emule_base_url,
@@ -3590,6 +3633,10 @@ def run_radarr_movie_download_e2e(
         transfer_hash,
         timeout_seconds,
     )
+    if skip_arr_import:
+        report["downloaded_scan"] = {"skipped": True, "reason": "synthetic-local-ed2k-fixture"}
+        report["arr_import"] = {"skipped": True, "reason": "synthetic-local-ed2k-fixture"}
+        return report, movie_id if cleanup_movie else None
     import_path = completed_category_import_path(category_save_path, report["completed_transfer"], report["category_transfer"])
     report["downloaded_scan"] = trigger_arr_downloaded_scan(
         radarr_url,
@@ -3603,7 +3650,7 @@ def run_radarr_movie_download_e2e(
         report["downloaded_scan_import_error"] = str(exc)
         report["manual_import"] = manual_import_radarr_movie(radarr_url, radarr_api_key, movie_id, import_path)
         report["arr_import"] = wait_for_radarr_import(radarr_url, radarr_api_key, movie_id, min(timeout_seconds, 300.0))
-    return report, movie_id if bool(movie.get("created")) else None
+    return report, movie_id if cleanup_movie else None
 
 
 def run_sonarr_series_download_e2e(
@@ -3626,6 +3673,7 @@ def run_sonarr_series_download_e2e(
     release_search_timeout_seconds: float,
     timeout_seconds: float,
     download_proof_mode: str = "complete",
+    skip_arr_import: bool = False,
 ) -> tuple[dict[str, object], int | None]:
     """Runs the Sonarr series grab-to-import proof."""
 
@@ -3647,6 +3695,14 @@ def run_sonarr_series_download_e2e(
         "root_folder": series.get("root_folder"),
         "quality_profile": series.get("quality_profile"),
     }
+    report["local_media_folder"] = ensure_local_arr_media_folder(
+        series,
+        create_local_path=series_root_creates_local_path,
+        media_key="series",
+    )
+    cleanup_series = bool(series.get("created")) or bool(
+        isinstance(report["local_media_folder"], dict) and report["local_media_folder"].get("created")
+    )
     health = arr_health_rows(sonarr_url, sonarr_api_key)
     report["indexer_health"] = {
         "unavailable_due_to_failures": arr_indexer_unavailable_due_to_failures(health, indexer_name),
@@ -3702,7 +3758,7 @@ def run_sonarr_series_download_e2e(
         }
         report["downloaded_scan"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
         report["arr_import"] = {"skipped": True, "reason": "download-proof-mode=handoff"}
-        return report, series_id if bool(series.get("created")) else None
+        return report, series_id if cleanup_series else None
 
     report["completed_transfer"] = wait_for_transfer_completion(
         emule_base_url,
@@ -3710,6 +3766,10 @@ def run_sonarr_series_download_e2e(
         transfer_hash,
         timeout_seconds,
     )
+    if skip_arr_import:
+        report["downloaded_scan"] = {"skipped": True, "reason": "synthetic-local-ed2k-fixture"}
+        report["arr_import"] = {"skipped": True, "reason": "synthetic-local-ed2k-fixture"}
+        return report, series_id if cleanup_series else None
     import_path = completed_category_import_path(category_save_path, report["completed_transfer"], report["category_transfer"])
     report["downloaded_scan"] = trigger_arr_downloaded_scan(
         sonarr_url,
@@ -3718,7 +3778,7 @@ def run_sonarr_series_download_e2e(
         import_path,
     )
     report["arr_import"] = wait_for_sonarr_import(sonarr_url, sonarr_api_key, series_id, timeout_seconds)
-    return report, series_id if bool(series.get("created")) else None
+    return report, series_id if cleanup_series else None
 
 
 def require_arr_check_passed(kind: str, report: dict[str, object]) -> None:
@@ -3758,6 +3818,28 @@ def summarize_live_logs(profile: dict[str, object]) -> dict[str, object]:
     }
 
 
+def arr_fake_release_name(kind: str, title: str) -> str:
+    """Builds a deterministic fake media release filename from one live-wire title."""
+
+    cleaned = re.sub(r"[^A-Za-z0-9 ]+", " ", str(title).strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        cleaned = "Deterministic Local Media"
+    if kind == "sonarr":
+        return f"{cleaned} S01E01 1080p WEB-DL eMuleBB.mkv"
+    return f"{cleaned} 2026 1080p WEB-DL eMuleBB.mkv"
+
+
+def choose_local_ed2k_ports(avoid_ports: set[int]) -> dict[str, int]:
+    """Chooses deterministic local ED2K ports without colliding with existing listeners."""
+
+    for _ in range(25):
+        ports = dtt.choose_distinct_ports()
+        if not avoid_ports.intersection(ports.values()):
+            return ports
+    raise RuntimeError(f"Could not allocate local ED2K ports outside {sorted(avoid_ports)}.")
+
+
 def append_failure_log_tails(report: dict[str, object], profile: dict[str, object]) -> None:
     """Adds bounded eMule log tails to a failed live report."""
 
@@ -3794,6 +3876,8 @@ def main() -> int:
         raise ValueError("--result-timeout-seconds must be greater than zero.")
     if args.prowlarr_indexer_availability_timeout_seconds <= 0:
         raise ValueError("--prowlarr-indexer-availability-timeout-seconds must be greater than zero.")
+    if args.local_ed2k_fixture_size_bytes <= 0:
+        raise ValueError("--local-ed2k-fixture-size-bytes must be greater than zero.")
     env_values = live_env.load_env_values(
         (
             "PROWLARR_URL",
@@ -3929,7 +4013,7 @@ def main() -> int:
             temp_dir=profile_temp_dir,
         )
         seed_refresh = None
-        if not args.skip_live_seed_refresh:
+        if not args.skip_live_seed_refresh and not args.deterministic_local_ed2k:
             seed_refresh = rest_smoke.refresh_seed_files(
                 Path(profile["config_dir"]),
                 timeout_seconds=args.seed_download_timeout_seconds,
@@ -3953,6 +4037,8 @@ def main() -> int:
 
     app = None
     main_window = None
+    local_ed2k_server_process: subprocess.Popen | None = None
+    local_ed2k_seed_app = None
     cleanup_clients: list[tuple[str, str, int]] = []
     cleanup_radarr_movies: list[tuple[str, str, int]] = []
     cleanup_sonarr_series: list[tuple[str, str, int]] = []
@@ -3980,6 +4066,10 @@ def main() -> int:
         "live_logs": summarize_live_logs(profile),
         "admin_volume_fixture": admin_storage,
         "live_wire_inputs_file": str(inputs.path),
+        "deterministic_local_ed2k": {
+            "enabled": bool(args.deterministic_local_ed2k),
+            "fixture_size_bytes": args.local_ed2k_fixture_size_bytes,
+        },
         "live_wire_search_terms": {
             arr_term_key: live_wire_inputs.summarize_terms(media_terms),
         },
@@ -4008,6 +4098,128 @@ def main() -> int:
         live_common.write_json(result_path, report)
 
     try:
+        if args.deterministic_local_ed2k:
+            record_phase("local_ed2k_prepare")
+            p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+            local_ports = choose_local_ed2k_ports({port})
+            local_server_dir = artifacts_dir / "local-ed2k-server"
+            local_catalog_path = local_server_dir / "catalog.json"
+            local_config_path = local_server_dir / "config.json"
+            ed2k_repo = dtt.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
+            ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+            report["checks"]["local_ed2k_server_build"] = dtt.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+            dtt.write_empty_catalog(local_catalog_path)
+            report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
+                {
+                    "p2p_address": p2p_address,
+                    "ports": local_ports,
+                    "server_catalog_path": str(local_catalog_path),
+                }
+            )
+            report["checks"]["local_ed2k_server_config"] = dtt.build_server_config(
+                local_config_path,
+                ed2k_port=local_ports["ed2k_tcp"],
+                admin_port=local_ports["ed2k_admin"],
+                catalog_path=local_catalog_path,
+                token=args.emule_api_key,
+            )
+            local_ed2k_server_process = dtt.start_ed2k_server(
+                ed2k_exe,
+                local_config_path,
+                local_server_dir / "server.log",
+            )
+            local_admin_base_url = f"http://127.0.0.1:{local_ports['ed2k_admin']}"
+            report["checks"]["local_ed2k_server_health"] = dtt.wait_for_admin_health(local_admin_base_url, 30.0)
+
+            fake_release_name = arr_fake_release_name(kind, media_terms[0])
+            fixture_file = artifacts_dir / "local-arr-seed" / fake_release_name
+            fixture_sha256 = dtt.write_fixture_file(fixture_file, args.local_ed2k_fixture_size_bytes)
+            seed_profile = live_common.prepare_scenario_profile(
+                seed_config_dir,
+                artifacts_dir,
+                [],
+                dtt.CLIENT02.profile_id,
+            )
+            client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
+            dtt.configure_client_profile(
+                config_dir=Path(profile["config_dir"]),
+                app_exe=paths.app_exe,
+                nick=dtt.CLIENT01.nick,
+                tcp_port=local_ports["client1_tcp"],
+                udp_port=local_ports["client1_udp"],
+                ed2k_enabled=True,
+                autoconnect=False,
+                rest_api_key=args.emule_api_key,
+                rest_port=port,
+                rest_bind_addr=bind_addr,
+                p2p_bind_interface_name=args.p2p_bind_interface_name,
+            )
+            dtt.configure_client_profile(
+                config_dir=Path(seed_profile["config_dir"]),
+                app_exe=client2_app_exe,
+                nick=dtt.CLIENT02.nick,
+                tcp_port=local_ports["client2_tcp"],
+                udp_port=local_ports["client2_udp"],
+                ed2k_enabled=True,
+                autoconnect=True,
+                p2p_bind_interface_name=args.p2p_bind_interface_name,
+            )
+            for config_dir in (Path(profile["config_dir"]), Path(seed_profile["config_dir"])):
+                dtt.write_server_met(
+                    config_dir / "server.met",
+                    address=p2p_address,
+                    port=local_ports["ed2k_tcp"],
+                    name="emulebb-local-e2e",
+                )
+            export_dir = artifacts_dir / "local-arr-seed-export"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            ready_path = export_dir / "ready.txt"
+            export_link_path = export_dir / "fixture.ed2k.txt"
+            local_ed2k_seed_app = live_common.launch_app(
+                client2_app_exe,
+                Path(seed_profile["profile_base"]),
+                minimized_to_tray=True,
+                extra_args=dtt.build_client2_harness_args(
+                    ready_path=ready_path,
+                    fixture_file=fixture_file,
+                    export_link_path=export_link_path,
+                    source_ip=p2p_address,
+                ),
+            )
+            exported_link = dtt.wait_for_exported_link(export_link_path, args.result_timeout_seconds)
+            link_info = dtt.parse_ed2k_file_link(exported_link)
+            report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
+                {
+                    "fixture": {
+                        "path": str(fixture_file),
+                        "name": fixture_file.name,
+                        "size": args.local_ed2k_fixture_size_bytes,
+                        "sha256": fixture_sha256,
+                    },
+                    "exported_link": {
+                        "path": str(export_link_path),
+                        "parsed": link_info,
+                    },
+                    "seed_profile": {
+                        "profile_base": str(seed_profile["profile_base"]),
+                        "config_dir": str(seed_profile["config_dir"]),
+                    },
+                }
+            )
+            report["checks"]["local_ed2k_seed_ready"] = dtt.wait_for_file(ready_path, 30.0, "ARR local seed ready file")
+            report["checks"]["local_ed2k_seed_client"] = dtt.wait_for_server_client(
+                local_admin_base_url,
+                args.emule_api_key,
+                dtt.CLIENT02.nick,
+                args.emule_connection_timeout_seconds,
+            )
+            report["checks"]["local_ed2k_seed_file"] = dtt.wait_for_server_file(
+                local_admin_base_url,
+                args.emule_api_key,
+                str(link_info["hash"]),
+                args.result_timeout_seconds,
+            )
+
         record_phase("launch_emule")
         app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
         main_window = live_common.wait_for_main_window(app)
@@ -4034,31 +4246,42 @@ def main() -> int:
             emule_base_url,
             args.emule_api_key,
         )
-        servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
-        server_rows = rest_smoke.require_json_array(servers, 200)
-        report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(
-            emule_base_url,
-            args.emule_api_key,
-            server_rows,
-            args.emule_connection_timeout_seconds,
-        )
-        kad_connect = rest_smoke.http_request(
-            emule_base_url,
-            "/api/v1/kad/operations/start",
-            method="POST",
-            api_key=args.emule_api_key,
-            json_body={},
-            request_timeout_seconds=20.0,
-        )
-        if int(kad_connect["status"]) != 200:
-            raise RuntimeError(f"Kad start returned HTTP {kad_connect['status']}")
+        if args.deterministic_local_ed2k:
+            local_ed2k = report["deterministic_local_ed2k"]
+            local_ports = local_ed2k["ports"]  # type: ignore[index]
+            report["checks"]["servers_connect"] = dtt.add_and_connect_server(
+                emule_base_url,
+                args.emule_api_key,
+                address=str(local_ed2k["p2p_address"]),  # type: ignore[index]
+                port=int(local_ports["ed2k_tcp"]),  # type: ignore[index]
+                timeout_seconds=args.emule_connection_timeout_seconds,
+            )
+        else:
+            servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
+            server_rows = rest_smoke.require_json_array(servers, 200)
+            report["checks"]["servers_connect"] = rest_smoke.connect_to_live_server(
+                emule_base_url,
+                args.emule_api_key,
+                server_rows,
+                args.emule_connection_timeout_seconds,
+            )
+            kad_connect = rest_smoke.http_request(
+                emule_base_url,
+                "/api/v1/kad/operations/start",
+                method="POST",
+                api_key=args.emule_api_key,
+                json_body={},
+                request_timeout_seconds=20.0,
+            )
+            if int(kad_connect["status"]) != 200:
+                raise RuntimeError(f"Kad start returned HTTP {kad_connect['status']}")
         record_phase("network_ready")
         report["checks"]["network_ready"] = rest_smoke.wait_for_requested_networks(
             emule_base_url,
             args.emule_api_key,
             args.emule_connection_timeout_seconds,
-            require_server_connected=False,
-            require_kad_connected=True,
+            require_server_connected=bool(args.deterministic_local_ed2k),
+            require_kad_connected=not bool(args.deterministic_local_ed2k),
         )
         record_phase("prowlarr_indexer_upsert")
         prowlarr_indexer_sync_tags = resolve_prowlarr_indexer_sync_tags(
@@ -4149,6 +4372,8 @@ def main() -> int:
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
                 timeout_seconds=acquisition_timeout_seconds,
                 download_proof_mode=args.download_proof_mode,
+                min_release_sources=1 if args.deterministic_local_ed2k else MIN_ARR_RELEASE_SOURCES,
+                skip_arr_import=args.deterministic_local_ed2k,
             )
             if cleanup_media_id is not None:
                 cleanup_radarr_movies.append((arr_url, arr_api_key, cleanup_media_id))
@@ -4172,6 +4397,7 @@ def main() -> int:
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
                 timeout_seconds=acquisition_timeout_seconds,
                 download_proof_mode=args.download_proof_mode,
+                skip_arr_import=args.deterministic_local_ed2k,
             )
             if cleanup_media_id is not None:
                 cleanup_sonarr_series.append((arr_url, arr_api_key, cleanup_media_id))
@@ -4257,6 +4483,16 @@ def main() -> int:
                 report["cleanup"] = {"closed_app": False, "error": str(exc)}
                 if report.get("status") == "passed":
                     report["status"] = "failed"
+        if local_ed2k_seed_app is not None:
+            try:
+                live_common.close_app_cleanly(local_ed2k_seed_app)
+                report.setdefault("cleanup", {})["closed_local_ed2k_seed"] = True  # type: ignore[index]
+            except Exception as exc:
+                report.setdefault("cleanup", {})["closed_local_ed2k_seed"] = False  # type: ignore[index]
+                report.setdefault("cleanup", {})["local_ed2k_seed_close_error"] = str(exc)  # type: ignore[index]
+                if report.get("status") == "passed":
+                    report["status"] = "failed"
+        dtt.stop_process(local_ed2k_server_process)
         if fixture_context is not None:
             try:
                 fixture_context.__exit__(None, None, None)
