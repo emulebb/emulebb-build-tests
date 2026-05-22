@@ -3,6 +3,7 @@
 #include "../include/LongPathTestSupport.h"
 
 #include "AppRegistryIdentitySeams.h"
+#include "FilenameTextRepairSeams.h"
 #include "FilenameNormalizationPolicy.h"
 #include "LongPathSeams.h"
 #include "OtherFunctionsSeams.h"
@@ -362,6 +363,49 @@ TEST_CASE("Download filename majority candidates reject fallback-only names")
 TEST_CASE("Always-on download normalization does not strip prettify cleanup tokens")
 {
 	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("shared_file.txt"))) == CString(_T("shared file.txt")));
+}
+
+TEST_CASE("Incoming filename repair fixes conservative Western UTF-8 mojibake")
+{
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"citt\u00C3\u00A0.avi")) == CString(L"citt\u00E0.avi"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"Espa\u00C3\u00B1a.mp4")) == CString(L"Espa\u00F1a.mp4"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"canci\u00C3\u00B3n.flac")) == CString(L"canci\u00F3n.flac"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"\u00C2\u00BFQu\u00C3\u00A9?.txt")) == CString(L"\u00BFQu\u00E9?.txt"));
+}
+
+TEST_CASE("Incoming filename repair handles Windows-1252 punctuation mojibake")
+{
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"rock\u00E2\u20AC\u2122n\u00E2\u20AC\u2122roll.mp3")) == CString(L"rock\u2019n\u2019roll.mp3"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"said\u00E2\u20AC\u0153hi\u00E2\u20AC\u009D.txt")) == CString(L"said\u201Chi\u201D.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"part\u00E2\u20AC\u201Ctwo.txt")) == CString(L"part\u2013two.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"wait\u00E2\u20AC\u00A6.txt")) == CString(L"wait\u2026.txt"));
+}
+
+TEST_CASE("Incoming filename repair decodes bounded core and numeric HTML entities")
+{
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("Rock &amp; Roll.mp3"))) == CString(_T("Rock & Roll.mp3")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"Espa&#241;a.avi")) == CString(L"Espa\u00F1a.avi"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"canci&#xF3;n.flac")) == CString(L"canci\u00F3n.flac"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("A&nbsp;B.txt"))) == CString(L"A\u00A0B.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"Espa&amp;#241;a \u00C3\u00A9xito.mp3")) == CString(L"Espa\u00F1a \u00E9xito.mp3"));
+}
+
+TEST_CASE("Incoming filename repair leaves low-confidence text unchanged")
+{
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("plain ascii.txt"))) == CString(_T("plain ascii.txt")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"already caf\u00E9.txt")) == CString(L"already caf\u00E9.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("AT&T.txt"))) == CString(_T("AT&T.txt")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("unknown &notanentity;.txt"))) == CString(_T("unknown &notanentity;.txt")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("bad &#xD800;.txt"))) == CString(_T("bad &#xD800;.txt")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("bad &#1;.txt"))) == CString(_T("bad &#1;.txt")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"broken \u00C3.txt")) == CString(L"broken \u00C3.txt"));
+}
+
+TEST_CASE("Incoming filename repair wrappers match search and eD2K intake contracts")
+{
+	CHECK(FilenameTextRepairSeams::RepairIncomingSearchFilename(CString(L"The Longest Movie \u00C3\u00A9xito.avi")) == CString(L"The Longest Movie \u00E9xito.avi"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingEd2kLinkFilename(CString(L"Rock &amp; Roll \u00E2\u20AC\u2122live\u00E2\u20AC\u2122.mp3")) == CString(L"Rock & Roll \u2019live\u2019.mp3"));
+	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(FilenameTextRepairSeams::RepairIncomingEd2kLinkFilename(CString(_T("&quot;bad&lt;name&gt;&quot;.txt")))) == CString(_T("badname.txt")));
 }
 
 TEST_CASE("Path-helper seam treats descendant checks as equivalent across canonical path spellings")
