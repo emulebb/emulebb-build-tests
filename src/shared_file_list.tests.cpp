@@ -522,6 +522,8 @@ TEST_CASE("Shared directory lookup key vector supports repeated monitored-root c
 	SharedDirectoryOps::BuildSharedDirectoryLookupKeyVector(monitoredRoots, rootKeys);
 
 	CHECK_EQ(rootKeys.size(), static_cast<size_t>(2u));
+	CHECK(SharedDirectoryOps::ContainsSharedDirectoryLookupKey(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("C:\\shared\\"))));
+	CHECK_FALSE(SharedDirectoryOps::ContainsSharedDirectoryLookupKey(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("C:\\shared\\nested\\"))));
 	CHECK(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("C:\\shared\\"))));
 	CHECK(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("C:\\shared\\nested\\"))));
 	CHECK(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("D:\\media\\mounted\\child\\"))));
