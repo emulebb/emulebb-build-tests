@@ -43,6 +43,31 @@ TEST_CASE("Display refresh helper respects force and the randomized throttle win
 	CHECK(ShouldRunDisplayRefresh(true, 101u, 100u, 100u, 50u));
 }
 
+TEST_CASE("Desktop UI refresh intervals use the supported System Informer values")
+{
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(500u) == 500u);
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(1000u) == 1000u);
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(2000u) == 2000u);
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(5000u) == 5000u);
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(10000u) == 10000u);
+
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(0u) == 2000u);
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(750u) == 2000u);
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(60000u) == 2000u);
+}
+
+TEST_CASE("Desktop UI refresh intervals throttle non-forced list refreshes")
+{
+	CHECK_FALSE(ShouldRunDisplayRefresh(false, 599u, 100u, NormalizeDesktopUiRefreshIntervalMs(500u), 0u));
+	CHECK(ShouldRunDisplayRefresh(false, 600u, 100u, NormalizeDesktopUiRefreshIntervalMs(500u), 0u));
+	CHECK_FALSE(ShouldRunDisplayRefresh(false, 2099u, 100u, NormalizeDesktopUiRefreshIntervalMs(2000u), 0u));
+	CHECK(ShouldRunDisplayRefresh(false, 2100u, 100u, NormalizeDesktopUiRefreshIntervalMs(2000u), 0u));
+	CHECK_FALSE(ShouldRunDisplayRefresh(false, 10099u, 100u, NormalizeDesktopUiRefreshIntervalMs(10000u), 0u));
+	CHECK(ShouldRunDisplayRefresh(false, 10100u, 100u, NormalizeDesktopUiRefreshIntervalMs(10000u), 0u));
+
+	CHECK(ShouldRunDisplayRefresh(true, 101u, 100u, NormalizeDesktopUiRefreshIntervalMs(10000u), 800u));
+}
+
 #if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
 TEST_CASE("Display refresh post helper consumes payloads when delivery is unavailable")
 {
