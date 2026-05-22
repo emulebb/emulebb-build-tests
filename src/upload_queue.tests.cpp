@@ -27,4 +27,19 @@ TEST_CASE("Upload queue timer diagnostics count only loops slower than the inter
 	CHECK_FALSE(ShouldCountSlowUploadTimerLoop(1u, 0u));
 }
 
+TEST_CASE("Upload queue desktop UI refresh cadence follows normalized preference values")
+{
+	CHECK_FALSE(ShouldRunDesktopUiRefreshTick(1499u, 1000u, 500u));
+	CHECK(ShouldRunDesktopUiRefreshTick(1500u, 1000u, 500u));
+
+	CHECK_FALSE(ShouldRunDesktopUiRefreshTick(2999u, 1000u, 2000u));
+	CHECK(ShouldRunDesktopUiRefreshTick(3000u, 1000u, 2000u));
+
+	CHECK_FALSE(ShouldRunDesktopUiRefreshTick(10999u, 1000u, 10000u));
+	CHECK(ShouldRunDesktopUiRefreshTick(11000u, 1000u, 10000u));
+
+	CHECK_FALSE(ShouldRunDesktopUiRefreshTick(2999u, 1000u, 750u));
+	CHECK(ShouldRunDesktopUiRefreshTick(3000u, 1000u, 750u));
+}
+
 TEST_SUITE_END;
