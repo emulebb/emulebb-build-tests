@@ -1,6 +1,6 @@
 # eMule Shared Tests
 
-This repository is the shared test harness for the canonical 0.72a workspace rooted at `EMULE_WORKSPACE_ROOT`.
+This repository is the shared test harness for the canonical eMule BB workspace rooted at `EMULE_WORKSPACE_ROOT`.
 
 This repo assumes the canonical workspace created by
 `python -m emule_workspace materialize` from `repos\eMule-build`.

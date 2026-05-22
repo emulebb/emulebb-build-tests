@@ -57,7 +57,7 @@ def test_nat_backend_order_requires_attempts() -> None:
     module = load_rest_api_smoke_module()
 
     with pytest.raises(AssertionError, match="No NAT mapping backend attempts"):
-        module.assert_upnp_backend_order([{"message": "eMule Version 0.72a x64 ready"}])
+        module.assert_upnp_backend_order([{"message": "eMule BB 0.7.3 x64 ready"}])
 
 
 def test_p2p_bind_override_writes_interface_name(tmp_path: Path) -> None:
