@@ -4,12 +4,24 @@ import re
 from pathlib import Path
 
 
+def _rc_string_values(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for match in re.finditer(
+        r'^\s*(IDS_[A-Z0-9_]+)\s+"((?:[^"]|"")*)"',
+        path.read_text(encoding="utf-8-sig", errors="ignore"),
+        re.MULTILINE,
+    ):
+        values[match.group(1)] = match.group(2).replace('""', '"')
+    return values
+
+
 def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
 
     emule_cpp = (app_source / "Emule.cpp").read_text(encoding="utf-8", errors="ignore")
     preferences_cpp = (app_source / "Preferences.cpp").read_text(encoding="utf-8", errors="ignore")
+    emule_dlg_cpp = (app_source / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
     release_tests_cpp = (
         workspace_root
         / "repos"
@@ -18,14 +30,39 @@ def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
         / "release_update_check.tests.cpp"
     ).read_text(encoding="utf-8", errors="ignore")
 
-    assert "https://github.com/eMulebb/eMule-tooling/blob/main/docs/HELP.md" in emule_cpp
+    assert "https://emulebb.github.io/eMule-tooling/HELP/" in preferences_cpp
+    assert "GetOnlineHelpURL()" in emule_cpp
+    assert "GetOnlineHelpURL()" in emule_dlg_cpp
+    assert 'GetHomepageBaseURL() + _T("/faq/")' not in emule_dlg_cpp
     assert "https://github.com/eMulebb/eMule/releases" in preferences_cpp
     assert "https://api.github.com/repos/eMulebb/eMule/releases/latest" in preferences_cpp
     assert "https://github.com/eMulebb/eMule/releases/tag/" in release_tests_cpp
 
-    combined = "\n".join([emule_cpp, preferences_cpp, release_tests_cpp])
+    combined = "\n".join([emule_cpp, preferences_cpp, emule_dlg_cpp, release_tests_cpp])
+    assert "github.com/eMulebb/eMule-tooling/blob/main/docs/HELP.md" not in combined
     assert "github.com/itlezy" not in combined
     assert "api.github.com/repos/itlezy" not in combined
+
+
+def test_help_menu_and_update_strings_use_emulebb_copy() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    expected = {
+        "IDS_ERR_NOHELP": "Online help is available in the eMule BB documentation.\\n\\nDo you want to open the online help now?",
+        "IDS_CHECK4UPDATE": "Check for eMule BB updates",
+        "IDS_NEWVERSIONAVL": "A new version of eMule BB is available. Check GitHub Releases for more information.",
+        "IDS_NEWVERSIONAVLPOPUP": "A new version of eMule BB is available. Click here to read about the new version.",
+        "IDS_VERSIONCHECK": "&Check for eMule BB updates",
+        "IDS_VISITVERSIONCHECK": "\\n\\nDo you want to open GitHub Releases now?",
+        "IDS_HM_LINKHP": "eMule BB Homepage",
+        "IDS_HM_LINKFAQ": "eMule BB Help",
+        "IDS_HM_LINKVC": "eMule BB Releases",
+    }
+
+    rc_files = [app_source / "emule.rc", *sorted((app_source / "lang").glob("*.rc"))]
+    for rc_file in rc_files:
+        values = _rc_string_values(rc_file)
+        assert {key: values.get(key) for key in expected} == expected, rc_file
 
 
 def test_bootstrap_and_ip_filter_defaults_are_https_only() -> None:
