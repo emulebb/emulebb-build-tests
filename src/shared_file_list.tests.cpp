@@ -512,6 +512,23 @@ TEST_CASE("Monitor-owned cleanup removes promoted-root subtree when that root do
 	CHECK_EQ(CountEquivalentPaths(monitorOwnedDirs, _T("C:\\shared\\plain\\")), 1);
 }
 
+TEST_CASE("Shared directory lookup key vector supports repeated monitored-root containment checks")
+{
+	CStringList monitoredRoots;
+	monitoredRoots.AddTail(_T("C:\\shared\\"));
+	monitoredRoots.AddTail(_T("D:\\media\\mounted\\"));
+
+	std::vector<CString> rootKeys;
+	SharedDirectoryOps::BuildSharedDirectoryLookupKeyVector(monitoredRoots, rootKeys);
+
+	CHECK_EQ(rootKeys.size(), static_cast<size_t>(2u));
+	CHECK(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("C:\\shared\\"))));
+	CHECK(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("C:\\shared\\nested\\"))));
+	CHECK(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("D:\\media\\mounted\\child\\"))));
+	CHECK_FALSE(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("C:\\shared-sibling\\"))));
+	CHECK_FALSE(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("D:\\media\\"))));
+}
+
 #if defined(EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS) && defined(EMULE_TESTS_HAS_SHARED_FILE_INTAKE_POLICY)
 TEST_CASE("Shared directory recursion skips built-in and configured ignored directory names")
 {
