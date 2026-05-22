@@ -18,7 +18,8 @@ SCHEMA = "emule-live-process-monitor.v1"
 DEFAULT_DURATION_SECONDS = 30 * 60
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 2.0
 DEFAULT_CPU_SPIKE_THRESHOLD_ONE_CORE = 75.0
-DEFAULT_MAX_SPIKE_DUMPS = 8
+DEFAULT_MAX_SPIKE_DUMPS = 2
+DEFAULT_SPIKE_DUMP_DELAY_SECONDS = 300.0
 DEFAULT_PROCDUMP_PATH: str | None = None
 STILL_ACTIVE = 259
 WAIT_OBJECT_0 = 0
@@ -44,6 +45,7 @@ class LiveProcessMonitorConfig:
     procdump_path: Path | None = None
     cpu_spike_threshold_one_core: float = DEFAULT_CPU_SPIKE_THRESHOLD_ONE_CORE
     max_spike_dumps: int = DEFAULT_MAX_SPIKE_DUMPS
+    spike_dump_delay_seconds: float = DEFAULT_SPIKE_DUMP_DELAY_SECONDS
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,7 @@ def parse_config_payload(payload: dict[str, object], *, path: Path | None = None
         procdump_path=Path(str(procdump_raw)).expanduser() if procdump_raw else discover_procdump_path(),
         cpu_spike_threshold_one_core=float(payload.get("cpuSpikeThresholdOneCore", DEFAULT_CPU_SPIKE_THRESHOLD_ONE_CORE)),
         max_spike_dumps=int(payload.get("maxSpikeDumps", DEFAULT_MAX_SPIKE_DUMPS)),
+        spike_dump_delay_seconds=float(payload.get("spikeDumpDelaySeconds", DEFAULT_SPIKE_DUMP_DELAY_SECONDS)),
     )
 
 
@@ -166,8 +169,50 @@ def validate_config(config: LiveProcessMonitorConfig, *, app_exe: Path) -> None:
         raise RuntimeError("Live process monitor duration must be at least 1800 seconds.")
     if config.sample_interval_seconds <= 0:
         raise RuntimeError("Live process monitor sample interval must be greater than zero.")
+    if config.max_spike_dumps < 0:
+        raise RuntimeError("Live process monitor max spike dumps must not be negative.")
+    if config.spike_dump_delay_seconds < 0:
+        raise RuntimeError("Live process monitor spike dump delay must not be negative.")
     if not app_exe.is_file():
         raise RuntimeError(f"eMule executable does not exist: {app_exe}")
+
+
+def validate_capture_mode(
+    *,
+    cpu_profile_enabled: bool,
+    enable_umdh: bool,
+    capture_final_dump: bool,
+    spike_dumps_enabled: bool,
+    max_spike_dumps: int,
+) -> None:
+    """Rejects diagnostic mode combinations that distort CPU or heap evidence."""
+
+    if not enable_umdh:
+        return
+    if cpu_profile_enabled:
+        raise RuntimeError("UMDH memory runs must be separate from ETW CPU profiling; pass --no-cpu-profile.")
+    if capture_final_dump:
+        raise RuntimeError("UMDH memory runs must not also capture a final full ProcDump dump.")
+    if spike_dumps_enabled and max_spike_dumps > 0:
+        raise RuntimeError("UMDH memory runs must not also capture full spike dumps; pass --skip-spike-dumps.")
+
+
+def should_capture_spike_dump(
+    *,
+    elapsed_seconds: float,
+    process_pct_one_core: float,
+    captured_count: int,
+    max_spike_dumps: int,
+    cpu_spike_threshold_one_core: float,
+    spike_dump_delay_seconds: float,
+) -> bool:
+    """Returns whether one sampled CPU spike should trigger a full ProcDump dump."""
+
+    return (
+        captured_count < max_spike_dumps
+        and elapsed_seconds >= spike_dump_delay_seconds
+        and process_pct_one_core >= cpu_spike_threshold_one_core
+    )
 
 
 def build_launch_command(app_exe: Path, profile_dir: Path, extra_args: tuple[str, ...] = ()) -> list[str]:

@@ -238,16 +238,20 @@ Real-profile process monitor:
 
 - `scripts\live-process-monitor.py` launches the selected `emule.exe` with
   `-ignoreinstances -c <profileDir>` and samples CPU, private bytes, working
-  set, handles, optional REST `/api/v1/status` counters, spike dumps, and an
+  set, handles, REST `/api/v1/status` counters when `baseUrl` and `apiKey` are
+  configured, ETW/xperf CPU samples by default, delayed spike dumps, and an
   optional final full-memory dump
 - runs are intentionally long; `durationSeconds` and `--duration-seconds` must
   be at least 1800 seconds so memory trends are not confused with startup
   transients
+- CPU diagnosis should use the default ETW/xperf sampling run first; full spike
+  dumps now default to at most two captures after the initial startup delay
 - optional `--enable-umdh` wraps the run with `gflags /i emule.exe +ust`,
   captures baseline/final UMDH snapshots, diffs them, and disables UST during
-  cleanup
+  cleanup; UMDH is rejected when combined with ETW CPU profiling or full
+  ProcDump captures so heap runs stay separate from CPU runs
 - run it directly with `python scripts\live-process-monitor.py --configuration
-  Release --capture-final-dump`, or through the aggregate runner with
+  Release`, or through the aggregate runner with
   `--suite live-process-monitor`
 
 Fake/Kad trust soak lane:

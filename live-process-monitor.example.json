@@ -1,9 +1,12 @@
 {
   "schema": "emule-live-process-monitor.v1",
   "profileDir": "X:\\path\\to\\profile",
-  "baseUrl": null,
-  "apiKey": null,
+  "baseUrl": "https://<rest-bind-address>:4711",
+  "apiKey": "<rest-api-key>",
   "durationSeconds": 1800,
   "sampleIntervalSeconds": 2.0,
+  "cpuSpikeThresholdOneCore": 75.0,
+  "maxSpikeDumps": 2,
+  "spikeDumpDelaySeconds": 300.0,
   "procdumpPath": null
 }

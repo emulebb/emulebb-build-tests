@@ -19,6 +19,7 @@ def test_parse_config_payload_normalizes_local_inputs() -> None:
             "procdumpPath": r"X:\tools\procdump64.exe",
             "cpuSpikeThresholdOneCore": 120,
             "maxSpikeDumps": 3,
+            "spikeDumpDelaySeconds": 600,
         }
     )
 
@@ -29,6 +30,19 @@ def test_parse_config_payload_normalizes_local_inputs() -> None:
     assert config.sample_interval_seconds == 3.5
     assert config.cpu_spike_threshold_one_core == 120
     assert config.max_spike_dumps == 3
+    assert config.spike_dump_delay_seconds == 600
+
+
+def test_parse_config_payload_uses_less_intrusive_dump_defaults() -> None:
+    config = live_process_monitor.parse_config_payload(
+        {
+            "schema": live_process_monitor.SCHEMA,
+            "profileDir": r"X:\live\profile",
+        }
+    )
+
+    assert config.max_spike_dumps == 2
+    assert config.spike_dump_delay_seconds == 300.0
 
 
 def test_parse_config_payload_rejects_wrong_schema() -> None:
@@ -50,6 +64,74 @@ def test_build_launch_command_uses_real_profile_override() -> None:
         r"X:\M\profile",
         "-foo",
     ]
+
+
+def test_validate_capture_mode_separates_umdh_from_cpu_and_full_dumps() -> None:
+    with pytest.raises(RuntimeError, match="separate from ETW CPU profiling"):
+        live_process_monitor.validate_capture_mode(
+            cpu_profile_enabled=True,
+            enable_umdh=True,
+            capture_final_dump=False,
+            spike_dumps_enabled=False,
+            max_spike_dumps=0,
+        )
+    with pytest.raises(RuntimeError, match="final full ProcDump"):
+        live_process_monitor.validate_capture_mode(
+            cpu_profile_enabled=False,
+            enable_umdh=True,
+            capture_final_dump=True,
+            spike_dumps_enabled=False,
+            max_spike_dumps=0,
+        )
+    with pytest.raises(RuntimeError, match="full spike dumps"):
+        live_process_monitor.validate_capture_mode(
+            cpu_profile_enabled=False,
+            enable_umdh=True,
+            capture_final_dump=False,
+            spike_dumps_enabled=True,
+            max_spike_dumps=1,
+        )
+
+    live_process_monitor.validate_capture_mode(
+        cpu_profile_enabled=False,
+        enable_umdh=True,
+        capture_final_dump=False,
+        spike_dumps_enabled=False,
+        max_spike_dumps=1,
+    )
+
+
+def test_should_capture_spike_dump_honors_delay_threshold_and_limit() -> None:
+    common = {
+        "max_spike_dumps": 2,
+        "cpu_spike_threshold_one_core": 75.0,
+        "spike_dump_delay_seconds": 300.0,
+    }
+
+    assert not live_process_monitor.should_capture_spike_dump(
+        elapsed_seconds=299.0,
+        process_pct_one_core=150.0,
+        captured_count=0,
+        **common,
+    )
+    assert not live_process_monitor.should_capture_spike_dump(
+        elapsed_seconds=301.0,
+        process_pct_one_core=74.9,
+        captured_count=0,
+        **common,
+    )
+    assert not live_process_monitor.should_capture_spike_dump(
+        elapsed_seconds=301.0,
+        process_pct_one_core=150.0,
+        captured_count=2,
+        **common,
+    )
+    assert live_process_monitor.should_capture_spike_dump(
+        elapsed_seconds=301.0,
+        process_pct_one_core=150.0,
+        captured_count=1,
+        **common,
+    )
 
 
 def test_summarize_metric_rows_reports_deltas() -> None:
