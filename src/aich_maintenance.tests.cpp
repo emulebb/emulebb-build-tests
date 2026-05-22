@@ -26,6 +26,15 @@ TEST_CASE("AICH maintenance seam rejects raw hash payload sizes that overflow 32
 	CHECK_FALSE(AICHMaintenanceSeams::TryDeriveAICHHashPayloadSize(static_cast<size_t>((std::numeric_limits<uint32>::max)()), 2u, &nPayloadSize));
 }
 
+TEST_CASE("AICH maintenance seam estimates bounded known2 hash index buckets")
+{
+	CHECK_EQ(AICHMaintenanceSeams::EstimateAICHHashIndexBucketCount(0u, 20u), AICHMaintenanceSeams::kMinAICHHashIndexBucketCount);
+	CHECK_EQ(AICHMaintenanceSeams::EstimateAICHHashIndexBucketCount(1u, 20u), AICHMaintenanceSeams::kMinAICHHashIndexBucketCount);
+	CHECK_EQ(AICHMaintenanceSeams::EstimateAICHHashIndexBucketCount(1u + 24u * 1000u, 20u), static_cast<UINT>(2001u));
+	CHECK_EQ(AICHMaintenanceSeams::EstimateAICHHashIndexBucketCount((std::numeric_limits<ULONGLONG>::max)(), 20u), AICHMaintenanceSeams::kMaxAICHHashIndexBucketCount);
+	CHECK_EQ(AICHMaintenanceSeams::EstimateAICHHashIndexBucketCount(1024u, 0u), AICHMaintenanceSeams::kMinAICHHashIndexBucketCount);
+}
+
 TEST_CASE("AICH maintenance seam yields briefly for foreground hashing and exits immediately on shutdown")
 {
 	const AICHSyncForegroundWaitAction waitingAction = AICHMaintenanceSeams::GetForegroundHashWaitAction({false, 1, false});
