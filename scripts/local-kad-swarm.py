@@ -80,6 +80,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--client-count", type=int, default=DEFAULT_CLIENT_COUNT)
     parser.add_argument("--min-contacts-per-client", type=int, default=DEFAULT_MIN_CONTACTS_PER_CLIENT)
     parser.add_argument("--bootstrap-mode", choices=["rest", "preseed", "both"], default="rest")
+    parser.add_argument("--nodes-dat-fixture-mode", choices=["valid", "truncated", "stale"], default="valid")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--swarm-ready-timeout-seconds", type=float, default=240.0)
@@ -91,10 +92,14 @@ def validate_args(args: argparse.Namespace) -> None:
 
     if args.client_count < 2:
         raise ValueError("client count must be at least 2.")
-    if args.min_contacts_per_client < 1:
-        raise ValueError("minimum contacts per client must be at least 1.")
+    if args.min_contacts_per_client < 0:
+        raise ValueError("minimum contacts per client must be zero or greater.")
+    if args.min_contacts_per_client < 1 and args.nodes_dat_fixture_mode != "truncated":
+        raise ValueError("minimum contacts per client may be zero only for truncated nodes.dat chaos.")
     if args.min_contacts_per_client >= args.client_count:
         raise ValueError("minimum contacts per client must be lower than client count.")
+    if args.nodes_dat_fixture_mode != "valid" and args.bootstrap_mode not in {"preseed", "both"}:
+        raise ValueError("nodes.dat fixture chaos requires preseed or both bootstrap mode.")
 
 
 def choose_local_kad_ports(client_count: int) -> list[tuple[int, int, int]]:
@@ -191,6 +196,7 @@ def write_nodes_dat(path: Path, *, owner: KadClientSpec, peers: list[KadClientSp
             )
     return {
         "path": str(path),
+        "fixture_mode": "valid",
         "contact_count": len(contacts),
         "peer_address": peer_address,
         "peers": [
@@ -202,6 +208,61 @@ def write_nodes_dat(path: Path, *, owner: KadClientSpec, peers: list[KadClientSp
             for peer in contacts
         ],
     }
+
+
+def stale_peer_spec(peer: KadClientSpec) -> KadClientSpec:
+    """Returns one peer descriptor whose ports should not be accepting traffic."""
+
+    stale_tcp = peer.tcp_port + 1000 if peer.tcp_port <= 64535 else peer.tcp_port - 1000
+    stale_udp = peer.udp_port + 1000 if peer.udp_port <= 64535 else peer.udp_port - 1000
+    return KadClientSpec(
+        index=peer.index,
+        profile_id=peer.profile_id,
+        nick=peer.nick,
+        tcp_port=stale_tcp,
+        udp_port=stale_udp,
+        rest_port=peer.rest_port,
+    )
+
+
+def write_truncated_nodes_dat(path: Path) -> dict[str, object]:
+    """Writes a malformed `nodes.dat` fixture for startup-tolerance chaos."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(struct.pack("<II", 0, 2) + b"truncated")
+    return {
+        "path": str(path),
+        "fixture_mode": "truncated",
+        "contact_count": 0,
+        "expected": "Kad remains running without loading contacts from malformed nodes.dat.",
+    }
+
+
+def write_nodes_dat_fixture(
+    path: Path,
+    *,
+    owner: KadClientSpec,
+    peers: list[KadClientSpec],
+    peer_address: str,
+    fixture_mode: str,
+) -> dict[str, object]:
+    """Writes the requested local `nodes.dat` fixture mode."""
+
+    if fixture_mode == "valid":
+        return write_nodes_dat(path, owner=owner, peers=peers, peer_address=peer_address)
+    if fixture_mode == "stale":
+        summary = write_nodes_dat(
+            path,
+            owner=owner,
+            peers=[stale_peer_spec(peer) for peer in peers],
+            peer_address=peer_address,
+        )
+        summary["fixture_mode"] = "stale"
+        summary["expected"] = "Kad loads stale local contacts but should not become connected without live bootstrap."
+        return summary
+    if fixture_mode == "truncated":
+        return write_truncated_nodes_dat(path)
+    raise ValueError(f"Unsupported nodes.dat fixture mode: {fixture_mode!r}")
 
 
 def configure_kad_client_profile(
@@ -419,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
             "p2p_bind_interface_address": p2p_address,
             "rest_bind_addr": args.bind_addr,
             "bootstrap_mode": args.bootstrap_mode,
+            "nodes_dat_fixture_mode": args.nodes_dat_fixture_mode,
             "clients": [asdict(spec) for spec in specs],
         }
 
@@ -441,11 +503,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             preseed_summary = None
             if args.bootstrap_mode in {"preseed", "both"}:
-                preseed_summary = write_nodes_dat(
+                preseed_summary = write_nodes_dat_fixture(
                     Path(profile["config_dir"]) / "nodes.dat",
                     owner=spec,
                     peers=specs,
                     peer_address=p2p_address,
+                    fixture_mode=args.nodes_dat_fixture_mode,
                 )
             profile_reports[spec.profile_id] = {
                 "profile_base": str(profile["profile_base"]),
@@ -503,10 +566,11 @@ def main(argv: list[str] | None = None) -> int:
             }
 
         current_phase = "wait_for_swarm"
-        require_connected = args.bootstrap_mode != "preseed"
+        require_connected = args.bootstrap_mode != "preseed" and args.nodes_dat_fixture_mode == "valid"
         report["checks"]["swarm_readiness_policy"] = {
             "min_contacts_per_client": args.min_contacts_per_client,
             "require_connected": require_connected,
+            "nodes_dat_fixture_mode": args.nodes_dat_fixture_mode,
         }
         report["checks"]["swarm_ready"] = wait_for_local_swarm(
             specs=specs,

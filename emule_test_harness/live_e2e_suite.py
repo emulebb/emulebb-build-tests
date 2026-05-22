@@ -728,6 +728,7 @@ def build_suite_command(
     rest_cold_start_dump_stress_cpu_profile_symbols_required: bool = True,
     rest_cold_start_dump_stress_skip_dumps: bool = False,
     local_kad_bootstrap_mode: str = "rest",
+    local_kad_nodes_dat_fixture_mode: str = "valid",
     resource_ui_language_timeout_seconds: float = DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS,
     mounted_shared_root: Path | None = None,
     admin_volume_fixtures: bool = False,
@@ -852,6 +853,9 @@ def build_suite_command(
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.name == "local-kad-swarm":
         command.extend(["--bootstrap-mode", local_kad_bootstrap_mode])
+        command.extend(["--nodes-dat-fixture-mode", local_kad_nodes_dat_fixture_mode])
+        if local_kad_nodes_dat_fixture_mode == "truncated":
+            command.extend(["--min-contacts-per-client", "0"])
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
@@ -1214,6 +1218,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-search-method-override", choices=["automatic", "server", "global", "kad"])
     parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="http")
     parser.add_argument("--local-kad-bootstrap-mode", choices=["rest", "preseed", "both"], default="rest")
+    parser.add_argument("--local-kad-nodes-dat-fixture-mode", choices=["valid", "truncated", "stale"], default="valid")
     parser.add_argument("--rest-coverage-budget", choices=["smoke", "contract", "contract-stress"], default="contract")
     parser.add_argument("--rest-stress-budget", choices=["off", "smoke", "soak"], default="smoke")
     parser.add_argument("--rest-stress-duration-seconds", type=float, default=30.0)
@@ -1555,6 +1560,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "rest_search_method_override": args.rest_search_method_override,
         "local_kad_bootstrap_mode": args.local_kad_bootstrap_mode,
+        "local_kad_nodes_dat_fixture_mode": args.local_kad_nodes_dat_fixture_mode,
         "weak_path_matrix": {
             "adversity": {
                 "rest_socket_adversity_budget": args.rest_socket_adversity_budget,
@@ -1742,6 +1748,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_cold_start_dump_stress_cpu_profile_symbols_required=args.rest_cold_start_dump_stress_cpu_profile_symbols_required,
             rest_cold_start_dump_stress_skip_dumps=args.rest_cold_start_dump_stress_skip_dumps,
             local_kad_bootstrap_mode=args.local_kad_bootstrap_mode,
+            local_kad_nodes_dat_fixture_mode=args.local_kad_nodes_dat_fixture_mode,
             resource_ui_language_timeout_seconds=args.resource_ui_language_timeout_seconds,
             mounted_shared_root=mounted_shared_root,
             admin_volume_fixtures=args.admin_volume_fixtures,

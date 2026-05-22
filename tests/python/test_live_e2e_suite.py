@@ -581,10 +581,13 @@ def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> Non
         configuration="Release",
         artifacts_dir=tmp_path / "artifacts",
         local_kad_bootstrap_mode="preseed",
+        local_kad_nodes_dat_fixture_mode="truncated",
     )
 
     assert script_name(command) == "local-kad-swarm.py"
     assert option_values(command, "--bootstrap-mode") == ["preseed"]
+    assert option_values(command, "--nodes-dat-fixture-mode") == ["truncated"]
+    assert option_values(command, "--min-contacts-per-client") == ["0"]
 
 
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:

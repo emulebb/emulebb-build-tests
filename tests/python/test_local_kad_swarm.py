@@ -29,6 +29,7 @@ def test_local_kad_defaults_are_local_and_bounded() -> None:
     assert args.client_count == 3
     assert args.min_contacts_per_client == 1
     assert args.bootstrap_mode == "rest"
+    assert args.nodes_dat_fixture_mode == "valid"
     assert args.p2p_bind_interface_name == ""
     assert args.bind_addr == "127.0.0.1"
     assert args.swarm_ready_timeout_seconds == 240.0
@@ -39,10 +40,15 @@ def test_validate_args_requires_real_swarm() -> None:
 
     with pytest.raises(ValueError, match="at least 2"):
         module.validate_args(module.parse_args(["--client-count", "1"]))
-    with pytest.raises(ValueError, match="at least 1"):
+    with pytest.raises(ValueError, match="may be zero only"):
         module.validate_args(module.parse_args(["--min-contacts-per-client", "0"]))
     with pytest.raises(ValueError, match="lower than client count"):
         module.validate_args(module.parse_args(["--client-count", "3", "--min-contacts-per-client", "3"]))
+    with pytest.raises(ValueError, match="requires preseed or both"):
+        module.validate_args(module.parse_args(["--nodes-dat-fixture-mode", "stale"]))
+    module.validate_args(
+        module.parse_args(["--bootstrap-mode", "preseed", "--nodes-dat-fixture-mode", "truncated", "--min-contacts-per-client", "0"])
+    )
 
 
 def test_build_client_specs_uses_stable_emulebb_names() -> None:
@@ -122,6 +128,7 @@ def test_write_nodes_dat_preseeds_local_peer_contacts(tmp_path: Path) -> None:
     assert struct.unpack("<III", data[:12]) == (0, 2, 2)
     assert len(data) == 12 + 2 * 34
     assert summary["contact_count"] == 2
+    assert summary["fixture_mode"] == "valid"
     first_contact = data[12:46]
     assert first_contact[:16] == module.deterministic_kad_node_id(2)
     stored_ip, udp_port, tcp_port, version, udp_key, udp_key_ip, verified = struct.unpack("<IHHBIIB", first_contact[16:])
@@ -132,3 +139,34 @@ def test_write_nodes_dat_preseeds_local_peer_contacts(tmp_path: Path) -> None:
     assert udp_key == 0
     assert udp_key_ip == 0
     assert verified == 1
+
+
+def test_nodes_dat_fixture_modes_cover_stale_and_truncated(tmp_path: Path) -> None:
+    module = load_suite_module()
+    specs = module.build_client_specs(2, [(4701, 4801, 4901), (4702, 4802, 4902)])
+    stale_path = tmp_path / "stale" / "nodes.dat"
+    truncated_path = tmp_path / "truncated" / "nodes.dat"
+
+    stale = module.write_nodes_dat_fixture(
+        stale_path,
+        owner=specs[0],
+        peers=specs,
+        peer_address="10.1.2.3",
+        fixture_mode="stale",
+    )
+    truncated = module.write_nodes_dat_fixture(
+        truncated_path,
+        owner=specs[0],
+        peers=specs,
+        peer_address="10.1.2.3",
+        fixture_mode="truncated",
+    )
+
+    assert stale["fixture_mode"] == "stale"
+    first_contact = stale_path.read_bytes()[12:46]
+    _, udp_port, tcp_port, *_ = struct.unpack("<IHHBIIB", first_contact[16:])
+    assert udp_port == 5902
+    assert tcp_port == 5802
+    assert truncated["fixture_mode"] == "truncated"
+    assert truncated["contact_count"] == 0
+    assert len(truncated_path.read_bytes()) < 25
