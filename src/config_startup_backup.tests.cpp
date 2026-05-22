@@ -62,13 +62,22 @@ TEST_CASE("Config startup backup seams only accept exact backup directory names"
 	CHECK_FALSE(ConfigStartupBackupSeams::IsConfigBackupDirectoryName(_T("config_backup_20260514")));
 }
 
-TEST_CASE("Config startup backup seams skip only backup directories during copy")
+TEST_CASE("Config startup backup seams skip backup directories and generated artifacts during copy")
 {
 	CHECK(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("config_bak_20260514"), true));
 	CHECK(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("config_bak_20260514.tmp"), true));
+	CHECK(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("sharedcache.dat"), false));
+	CHECK(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("shareddups.dat"), false));
+	CHECK(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("dbip-city-lite.mmdb"), false));
+	CHECK(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("GeoIPCountryWhois.csv"), false));
 
 	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("config_bak_20260514"), false));
 	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("preferences.ini"), false));
+	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("known.met"), false));
+	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("known2.met"), false));
+	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("known2_64.met"), false));
+	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("clients.met"), false));
+	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("ipfilter.dat"), false));
 	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("incoming"), true));
 	CHECK_FALSE(ConfigStartupBackupSeams::ShouldSkipConfigBackupEntry(_T("config_bak_custom"), true));
 }
@@ -121,6 +130,8 @@ TEST_CASE("Config startup backup runtime copies config files and skips backup di
 	REQUIRE(LongPathSeams::CreateDirectory(strConfigDirectory) != FALSE);
 
 	const CString strPreferencesPath(PathHelpers::AppendPathComponent(strConfigDirectory, _T("preferences.ini")));
+	const CString strKnown2Path(PathHelpers::AppendPathComponent(strConfigDirectory, _T("known2_64.met")));
+	const CString strGeneratedCachePath(PathHelpers::AppendPathComponent(strConfigDirectory, _T("sharedcache.dat")));
 	const CString strNestedDirectory(PathHelpers::AppendPathComponent(strConfigDirectory, _T("nested")));
 	const CString strNestedFile(PathHelpers::AppendPathComponent(strNestedDirectory, _T("fileinfo.ini")));
 	const CString strExistingBackup(PathHelpers::AppendPathComponent(strConfigDirectory, _T("config_bak_20000101")));
@@ -128,6 +139,8 @@ TEST_CASE("Config startup backup runtime copies config files and skips backup di
 	const std::vector<BYTE> payload = { 'o', 'k' };
 
 	REQUIRE(LongPathSeams::WriteAllBytes(strPreferencesPath, payload));
+	REQUIRE(LongPathSeams::WriteAllBytes(strKnown2Path, payload));
+	REQUIRE(LongPathSeams::WriteAllBytes(strGeneratedCachePath, payload));
 	REQUIRE(LongPathSeams::CreateDirectory(strNestedDirectory) != FALSE);
 	REQUIRE(LongPathSeams::WriteAllBytes(strNestedFile, payload));
 	REQUIRE(LongPathSeams::CreateDirectory(strExistingBackup) != FALSE);
@@ -141,11 +154,15 @@ TEST_CASE("Config startup backup runtime copies config files and skips backup di
 	CHECK_FALSE(result.bCopyFailed);
 	CHECK(LongPathSeams::PathExists(PathHelpers::AppendPathComponent(strTodayBackup, _T("preferences.ini"))));
 	CHECK(LongPathSeams::PathExists(PathHelpers::AppendPathComponent(strTodayBackup, _T("nested\\fileinfo.ini"))));
+	CHECK(LongPathSeams::PathExists(PathHelpers::AppendPathComponent(strTodayBackup, _T("known2_64.met"))));
+	CHECK_FALSE(LongPathSeams::PathExists(PathHelpers::AppendPathComponent(strTodayBackup, _T("sharedcache.dat"))));
 	CHECK_FALSE(LongPathSeams::PathExists(PathHelpers::AppendPathComponent(strTodayBackup, _T("config_bak_20000101\\old.ini"))));
 
 	(void)DeleteDirectoryTree(strTodayBackup);
 	(void)DeleteDirectoryTree(strExistingBackup);
 	(void)DeleteDirectoryTree(strNestedDirectory);
+	(void)LongPathSeams::DeleteFileIfExists(strKnown2Path);
+	(void)LongPathSeams::DeleteFileIfExists(strGeneratedCachePath);
 	(void)LongPathSeams::DeleteFileIfExists(strPreferencesPath);
 	(void)DeleteDirectoryTree(strConfigDirectory);
 }
