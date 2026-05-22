@@ -48,6 +48,7 @@ def test_local_ed2k_parser_defaults_keep_fixture_in_workspace_control() -> None:
 
     assert args.deterministic_local_ed2k is True
     assert args.local_ed2k_fixture_size_bytes == 132 * 1024 * 1024
+    assert args.rest_webserver_scheme == "https"
 
 
 def test_local_arr_media_folder_is_created_under_owned_root(tmp_path: Path) -> None:
@@ -531,6 +532,11 @@ def test_radarr_movie_download_e2e_handoff_skips_completion_and_import(
         "resume_transfer_if_paused",
         lambda *_args, **_kwargs: calls.append(("resume_if_paused", _args[2])) or {"resumed": False},
     )
+    monkeypatch.setattr(
+        module,
+        "stop_and_cancel_handoff_transfer",
+        lambda *_args, **_kwargs: calls.append(("stop_cancel", _args[2])) or {"stop_status": 200, "cancel_status": 200},
+    )
     monkeypatch.setattr(module, "wait_for_transfer_completion", lambda *_args, **_kwargs: pytest.fail("completion wait should be skipped"))
     monkeypatch.setattr(module, "trigger_arr_downloaded_scan", lambda *_args, **_kwargs: pytest.fail("downloaded scan should be skipped"))
     monkeypatch.setattr(module, "wait_for_radarr_import", lambda *_args, **_kwargs: pytest.fail("Arr import should be skipped"))
@@ -564,6 +570,7 @@ def test_radarr_movie_download_e2e_handoff_skips_completion_and_import(
     assert calls == [
         ("release_grab", ("operator movie", module.RADARR_IMPORT_CATEGORY)),
         ("resume_if_paused", "fedcba9876543210fedcba9876543210"),
+        ("stop_cancel", "fedcba9876543210fedcba9876543210"),
     ]
 
 
@@ -1491,6 +1498,50 @@ def test_qbit_safety_checks_reject_unprotected_info(monkeypatch: pytest.MonkeyPa
         module.qbit_direct_safety_checks("http://127.0.0.1:4711", "secret")
 
 
+def test_handoff_stop_and_cancel_uses_qbit_stop_then_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        module,
+        "qbit_login",
+        lambda *_args, **_kwargs: ("SID=abc", {"status": 200}),
+    )
+
+    def fake_qbit_request(_base_url, path, **kwargs):
+        calls.append((path, kwargs.get("form")))
+        return {"status": 200, "body_text": "Ok."}
+
+    monkeypatch.setattr(module, "qbit_request", fake_qbit_request)
+    monkeypatch.setattr(
+        module,
+        "wait_for_transfer",
+        lambda *_args, **_kwargs: {"hash": _args[2], "state": "stopped"},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_transfer_absent",
+        lambda *_args, **_kwargs: {"hash": _args[2], "absent": True},
+    )
+    monkeypatch.setattr(module, "delete_transfer", lambda *_args, **_kwargs: pytest.fail("native cleanup should not run"))
+
+    report = module.stop_and_cancel_handoff_transfer(
+        "https://127.0.0.1:61921",
+        "emule-key",
+        "fedcba9876543210fedcba9876543210",
+        60.0,
+    )
+
+    assert report["login_status"] == 200
+    assert report["stop_status"] == 200
+    assert report["cancel_status"] == 200
+    assert report["deleted_transfer"] == {"hash": "fedcba9876543210fedcba9876543210", "absent": True}
+    assert calls == [
+        ("/api/v2/torrents/stop", {"hashes": "fedcba9876543210fedcba9876543210"}),
+        ("/api/v2/torrents/delete", {"hashes": "fedcba9876543210fedcba9876543210", "deleteFiles": "true"}),
+    ]
+
+
 def test_qbit_schema_summary_requires_arr_fields() -> None:
     module = load_radarr_sonarr_module()
     schema = {
@@ -1517,27 +1568,43 @@ def test_qbit_schema_summary_requires_arr_fields() -> None:
     assert module.summarize_qbit_schema(schema, category_field="tvCategory")["missing_required_fields"] == ["tvCategory"]
 
 
-def test_qbit_client_payload_starts_media_downloads() -> None:
-    module = load_radarr_sonarr_module()
-    schema = {
+def arr_qbit_schema(category_field: str = "movieCategory", *, certificate_validation: bool = False) -> dict[str, object]:
+    fields = [
+        {"name": "host"},
+        {"name": "port"},
+        {"name": "useSsl"},
+        {"name": "urlBase"},
+        {"name": "username"},
+        {"name": "password"},
+        {"name": "initialState"},
+        {"name": category_field},
+    ]
+    if certificate_validation:
+        fields.append({"name": "certificateValidation", "value": 0})
+    return {
         "implementation": "QBittorrent",
         "implementationName": "qBittorrent",
         "protocol": "torrent",
         "configContract": "QBittorrentSettings",
-        "fields": [
-            {"name": "host"},
-            {"name": "port"},
-            {"name": "useSsl"},
-            {"name": "urlBase"},
-            {"name": "username"},
-            {"name": "password"},
-            {"name": "initialState"},
-            {"name": "movieCategory"},
-        ],
+        "fields": fields,
     }
 
+
+def provider_field_value(provider: dict[str, object], field_name: str) -> object:
+    fields = provider.get("fields")
+    assert isinstance(fields, list)
+    for field in fields:
+        assert isinstance(field, dict)
+        if field.get("name") == field_name:
+            return field.get("value")
+    raise AssertionError(f"Missing field {field_name}")
+
+
+def test_qbit_client_payload_starts_media_downloads() -> None:
+    module = load_radarr_sonarr_module()
+
     payload = module.build_qbit_client_payload(
-        schema,
+        arr_qbit_schema(),
         name="eMule BB Live radarr 4711",
         host="127.0.0.1",
         port=4711,
@@ -1546,29 +1613,64 @@ def test_qbit_client_payload_starts_media_downloads() -> None:
         category="radarr_movies_cat",
     )
 
-    assert next(field["value"] for field in payload["fields"] if field["name"] == "initialState") == 0
-    assert next(field["value"] for field in payload["fields"] if field["name"] == "movieCategory") == "radarr_movies_cat"
+    assert provider_field_value(payload, "initialState") == 0
+    assert provider_field_value(payload, "movieCategory") == "radarr_movies_cat"
+    assert provider_field_value(payload, "useSsl") is False
+    assert payload["_emulebbCertificatePolicy"] == {"certificateValidation": False}
+
+
+def test_qbit_client_payload_covers_http_and_https_transport() -> None:
+    module = load_radarr_sonarr_module()
+
+    http_payload = module.build_qbit_client_payload(
+        arr_qbit_schema(certificate_validation=True),
+        name="eMule BB Live radarr HTTP",
+        host="127.0.0.1",
+        port=61920,
+        api_key="emule-key",
+        category_field="movieCategory",
+        category="radarr_movies_cat",
+        use_ssl=False,
+    )
+    https_payload = module.build_qbit_client_payload(
+        arr_qbit_schema(certificate_validation=True),
+        name="eMule BB Live radarr HTTPS",
+        host="127.0.0.1",
+        port=61921,
+        api_key="emule-key",
+        category_field="movieCategory",
+        category="radarr_movies_cat",
+        use_ssl=True,
+    )
+
+    assert provider_field_value(http_payload, "useSsl") is False
+    assert provider_field_value(http_payload, "certificateValidation") == 0
+    assert http_payload["_emulebbCertificatePolicy"] == {"certificateValidation": False}
+    assert provider_field_value(https_payload, "useSsl") is True
+    assert provider_field_value(https_payload, "certificateValidation") == 1
+    assert https_payload["_emulebbCertificatePolicy"] == {"certificateValidation": True}
+
+
+def test_qbit_client_payload_rejects_https_without_certificate_policy() -> None:
+    module = load_radarr_sonarr_module()
+
+    with pytest.raises(RuntimeError, match="does not expose disposable HTTPS certificate validation policy"):
+        module.build_qbit_client_payload(
+            arr_qbit_schema(),
+            name="eMule BB Live radarr HTTPS",
+            host="127.0.0.1",
+            port=61921,
+            api_key="emule-key",
+            category_field="movieCategory",
+            category="radarr_movies_cat",
+            use_ssl=True,
+        )
 
 
 def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[tuple[str, str]] = []
-    schema = {
-        "implementation": "QBittorrent",
-        "implementationName": "qBittorrent",
-        "protocol": "torrent",
-        "configContract": "QBittorrentSettings",
-        "fields": [
-            {"name": "host"},
-            {"name": "port"},
-            {"name": "useSsl"},
-            {"name": "urlBase"},
-            {"name": "username"},
-            {"name": "password"},
-            {"name": "initialState"},
-            {"name": "movieCategory"},
-        ],
-    }
+    schema = arr_qbit_schema()
 
     monkeypatch.setattr(module, "get_qbit_schema", lambda _arr_url, _api_key: schema)
 
@@ -1576,8 +1678,10 @@ def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.M
         method = str(kwargs.get("method") or "GET")
         calls.append((method, path))
         if path == "/api/v3/downloadclient?forceSave=true":
+            assert "_emulebbCertificatePolicy" not in kwargs["json_body"]
             return {"status": 201, "json": {"id": 77, "fields": []}, "body_text": "{}"}
         if path == "/api/v3/downloadclient/test":
+            assert "_emulebbCertificatePolicy" not in kwargs["json_body"]
             return {"status": 400, "json": None, "body_text": "cannot connect"}
         if path == "/api/v3/downloadclient/77":
             return {"status": 200, "json": None, "body_text": ""}
@@ -1640,6 +1744,7 @@ def test_arr_readiness_summaries_are_compact() -> None:
         "enableInteractiveSearch": None,
         "protocol": "torrent",
         "priority": 25,
+        "certificate_policy": None,
         "tag_count": None,
     }
     assert client["test_status"] == 200

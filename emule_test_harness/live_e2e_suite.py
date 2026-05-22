@@ -687,7 +687,7 @@ def build_suite_command(
     rest_kad_search_count: int = DEFAULT_REST_SEARCH_COUNT,
     rest_download_trigger_count: int = DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT,
     rest_search_method_override: str | None = None,
-    rest_webserver_scheme: str = "http",
+    rest_webserver_scheme: str = "https",
     rest_coverage_budget: str = "contract",
     rest_stress_budget: str = "smoke",
     rest_stress_duration_seconds: float = 30.0,
@@ -873,6 +873,7 @@ def build_suite_command(
     if spec.is_prowlarr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
+        command.extend(["--rest-webserver-scheme", rest_webserver_scheme])
         command.extend(["--rest-ready-timeout-seconds", str(emule_connection_timeout_seconds)])
         command.extend(["--emule-connection-timeout-seconds", str(emule_connection_timeout_seconds)])
         command.extend(["--result-timeout-seconds", str(arr_search_timeout_seconds)])
@@ -885,6 +886,7 @@ def build_suite_command(
     if spec.is_arr_emulebb:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
+        command.extend(["--rest-webserver-scheme", rest_webserver_scheme])
         command.extend(["--rest-ready-timeout-seconds", str(emule_connection_timeout_seconds)])
         command.extend(["--emule-connection-timeout-seconds", str(emule_connection_timeout_seconds)])
         command.extend(["--result-timeout-seconds", str(arr_search_timeout_seconds)])
@@ -1230,7 +1232,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-kad-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
     parser.add_argument("--rest-download-trigger-count", type=int, default=DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)
     parser.add_argument("--rest-search-method-override", choices=["automatic", "server", "global", "kad"])
-    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="http")
+    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--local-kad-bootstrap-mode", choices=["rest", "preseed", "both"], default="rest")
     parser.add_argument("--local-kad-nodes-dat-fixture-mode", choices=["valid", "truncated", "stale"], default="valid")
     parser.add_argument("--rest-coverage-budget", choices=["smoke", "contract", "contract-stress"], default="contract")

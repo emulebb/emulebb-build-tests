@@ -214,6 +214,33 @@ def set_field_value(provider: dict[str, Any], field_name: str, value: object) ->
     raise RuntimeError(f"Provider payload is missing field: {field_name}")
 
 
+def set_optional_field_value(provider: dict[str, Any], field_name: str, value: object) -> bool:
+    """Updates one provider field when the current Arr schema exposes it."""
+
+    fields = provider.get("fields")
+    if not isinstance(fields, list):
+        return False
+    for field in fields:
+        if isinstance(field, dict) and field.get("name") == field_name:
+            field["value"] = value
+            return True
+    return False
+
+
+def apply_disposable_local_certificate_policy(provider: dict[str, Any]) -> dict[str, object]:
+    """Disables provider TLS validation only for schemas that expose the local-only policy."""
+
+    return {
+        "certificateValidation": set_optional_field_value(provider, "certificateValidation", 1),
+    }
+
+
+def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:
+    """Returns a provider payload without harness-only report metadata."""
+
+    return {key: value for key, value in provider.items() if not str(key).startswith("_emulebb")}
+
+
 def get_tag_id(prowlarr_url: str, api_key: str, label: str) -> int | None:
     """Returns a Prowlarr tag id by label when the tag exists."""
 
@@ -429,6 +456,12 @@ def build_arr_emule_indexer_payload(
     set_field_value(payload, "apiPath", "/api")
     set_field_value(payload, "apiKey", prowlarr_api_key)
     set_field_value(payload, "categories", [int(category_id)])
+    uses_https = prowlarr_url.lower().startswith("https://")
+    payload["_emulebbCertificatePolicy"] = (
+        apply_disposable_local_certificate_policy(payload)
+        if uses_https
+        else {"certificateValidation": False}
+    )
     return payload
 
 
@@ -448,10 +481,18 @@ def save_arr_indexer_payload(
     else:
         path = "/api/v3/indexer?forceSave=true"
         method = "POST"
-    result = arr_request(arr_url, api_key, path, method=method, json_body=payload, timeout_seconds=60.0)
+    result = arr_request(
+        arr_url,
+        api_key,
+        path,
+        method=method,
+        json_body=public_provider_payload(payload),
+        timeout_seconds=60.0,
+    )
     saved = require_success(result, description)
     if not isinstance(saved, dict) or int(saved.get("id") or 0) <= 0:
         raise RuntimeError(f"{description} did not return a saved indexer id.")
+    saved["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
     return saved
 
 
@@ -494,7 +535,7 @@ def save_enabled_arr_emule_indexer_with_validation_retry(
         api_key,
         f"/api/v3/indexer/{existing_id}?forceSave=true" if existing_id else "/api/v3/indexer?forceSave=true",
         method="PUT" if existing_id else "POST",
-        json_body=payload,
+        json_body=public_provider_payload(payload),
         timeout_seconds=60.0,
     )
     status = int(result.get("status") or 0)
@@ -502,6 +543,7 @@ def save_enabled_arr_emule_indexer_with_validation_retry(
         saved = result.get("json")
         if not isinstance(saved, dict) or int(saved.get("id") or 0) <= 0:
             raise RuntimeError("Arr eMule BB indexer repair did not return a saved indexer id.")
+        saved["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
         return saved, {
             "mode": "updated" if existing_id else "created",
             "validation_retry": False,
@@ -653,7 +695,7 @@ def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, An
         api_key,
         f"/api/v3/indexer/{indexer_id}?forceSave=true",
         method="PUT",
-        json_body=payload,
+        json_body=public_provider_payload(payload),
         timeout_seconds=60.0,
     )
     saved = require_success(result, "Arr eMule BB synced indexer enable")
@@ -681,7 +723,7 @@ def ensure_arr_indexer_untagged(arr_url: str, api_key: str, indexer: dict[str, A
         api_key,
         f"/api/v3/indexer/{indexer_id}?forceSave=true",
         method="PUT",
-        json_body=payload,
+        json_body=public_provider_payload(payload),
         timeout_seconds=60.0,
     )
     saved = require_success(result, "Arr eMule BB synced indexer tag clear")
@@ -743,7 +785,7 @@ def set_arr_indexer_search_state(arr_url: str, api_key: str, indexer: dict[str, 
         api_key,
         f"/api/v3/indexer/{indexer_id}?forceSave=true",
         method="PUT",
-        json_body=payload,
+        json_body=public_provider_payload(payload),
         timeout_seconds=60.0,
     )
     require_success(result, "Arr indexer search-state update")
@@ -868,6 +910,7 @@ def build_qbit_client_payload(
     api_key: str,
     category_field: str,
     category: str,
+    use_ssl: bool = False,
 ) -> dict[str, Any]:
     """Builds a temporary qBittorrent client payload for eMule BB."""
 
@@ -887,12 +930,19 @@ def build_qbit_client_payload(
     payload["removeFailedDownloads"] = False
     set_field_value(payload, "host", host)
     set_field_value(payload, "port", port)
-    set_field_value(payload, "useSsl", False)
+    set_field_value(payload, "useSsl", bool(use_ssl))
     set_field_value(payload, "urlBase", "")
     set_field_value(payload, "username", "emule")
     set_field_value(payload, "password", api_key)
     set_field_value(payload, category_field, category)
     set_field_value(payload, "initialState", 0)
+    payload["_emulebbCertificatePolicy"] = (
+        apply_disposable_local_certificate_policy(payload)
+        if use_ssl
+        else {"certificateValidation": False}
+    )
+    if use_ssl and not any(payload["_emulebbCertificatePolicy"].values()):
+        raise RuntimeError("Arr qBittorrent schema does not expose disposable HTTPS certificate validation policy.")
     return payload
 
 
@@ -906,6 +956,7 @@ def create_temp_qbit_client(
     emule_api_key: str,
     category_field: str,
     category: str,
+    use_ssl: bool = False,
 ) -> dict[str, Any]:
     """Creates a temporary qBittorrent client and validates it."""
 
@@ -920,20 +971,28 @@ def create_temp_qbit_client(
         api_key=emule_api_key,
         category_field=category_field,
         category=category,
+        use_ssl=use_ssl,
     )
     try:
         created = require_success(
-            arr_request(arr_url, api_key, "/api/v3/downloadclient?forceSave=true", method="POST", json_body=payload),
+            arr_request(
+                arr_url,
+                api_key,
+                "/api/v3/downloadclient?forceSave=true",
+                method="POST",
+                json_body=public_provider_payload(payload),
+            ),
             "Arr eMule BB qBittorrent client create",
         )
         if not isinstance(created, dict) or not created.get("id"):
             raise RuntimeError("Arr did not return a created qBittorrent client id.")
         created_client_id = int(created["id"])
 
-        test_payload = json.loads(json.dumps(created))
+        test_payload = public_provider_payload(json.loads(json.dumps(created)))
         test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
         require_success(test_result, "Arr eMule BB qBittorrent client test")
         created["_emulebbSchemaSummary"] = schema_summary
+        created["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
         created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
         return created
     except Exception as exc:
@@ -960,6 +1019,7 @@ def summarize_arr_indexer(indexer: dict[str, Any]) -> dict[str, object]:
         "protocol": indexer.get("protocol"),
         "priority": indexer.get("priority"),
         "tag_count": len(indexer.get("tags") or []) if isinstance(indexer.get("tags"), list) else None,
+        "certificate_policy": indexer.get("_emulebbCertificatePolicy"),
     }
 
 
@@ -975,6 +1035,7 @@ def summarize_arr_download_client(client: dict[str, Any], *, category: str) -> d
         "category": category,
         "schema": client.get("_emulebbSchemaSummary"),
         "test_status": client.get("_emulebbTestStatus"),
+        "certificate_policy": client.get("_emulebbCertificatePolicy"),
     }
 
 
@@ -2379,8 +2440,12 @@ def qbit_request(
         if content_type is not None:
             headers["Content-Type"] = content_type
     request = urllib.request.Request(base_url.rstrip("/") + path, data=data, method=method, headers=headers)
+    urlopen_kwargs: dict[str, object] = {"timeout": timeout_seconds}
+    context = rest_smoke.build_urlopen_context(base_url)
+    if context is not None:
+        urlopen_kwargs["context"] = context
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with urllib.request.urlopen(request, **urlopen_kwargs) as response:
             body_text = response.read().decode("utf-8", errors="replace")
             return {"status": int(response.status), "body_text": body_text, "headers": dict(response.headers.items())}
     except urllib.error.HTTPError as exc:
@@ -2823,6 +2888,56 @@ def resume_transfer_if_paused(
         "operation_result": payload.get("result"),
         "affected": payload.get("affected"),
     }
+
+
+def stop_and_cancel_handoff_transfer(
+    base_url: str,
+    emule_api_key: str,
+    transfer_hash: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Stops and deletes the transfer created by an Arr release grab."""
+
+    report: dict[str, object] = {}
+    qbit_delete_completed = False
+    try:
+        cookie, login = qbit_login(base_url, emule_api_key)
+        report["login_status"] = int(login.get("status") or 0)
+
+        stop = qbit_request(
+            base_url,
+            "/api/v2/torrents/stop",
+            cookie=cookie,
+            form={"hashes": transfer_hash},
+            method="POST",
+            timeout_seconds=30.0,
+        )
+        require_qbit_ok(stop, "qBit stop")
+        report["stop_status"] = int(stop.get("status") or 0)
+        report["stopped_transfer"] = wait_for_transfer(base_url, emule_api_key, transfer_hash, min(timeout_seconds, 30.0))
+
+        delete = qbit_request(
+            base_url,
+            "/api/v2/torrents/delete",
+            cookie=cookie,
+            form={"hashes": transfer_hash, "deleteFiles": "true"},
+            method="POST",
+            timeout_seconds=30.0,
+        )
+        require_qbit_ok(delete, "qBit cancel/delete")
+        qbit_delete_completed = True
+        report["cancel_status"] = int(delete.get("status") or 0)
+        report["deleted_transfer"] = wait_for_transfer_absent(base_url, emule_api_key, transfer_hash, min(timeout_seconds, 60.0))
+    finally:
+        if not qbit_delete_completed:
+            try:
+                report["native_cleanup_delete"] = delete_transfer(base_url, emule_api_key, transfer_hash)
+            except Exception as cleanup_exc:
+                report["native_cleanup_delete"] = {
+                    "status": "cleanup_failed",
+                    "error": str(cleanup_exc),
+                }
+    return report
 
 
 def wait_for_radarr_import(arr_url: str, api_key: str, movie_id: int, timeout_seconds: float) -> dict[str, object]:
@@ -3378,6 +3493,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=str((REPO_ROOT / live_env.DEFAULT_ENV_FILE_NAME).resolve()))
     parser.add_argument("--emule-api-key", default="arr-emulebb-live-key")
     parser.add_argument("--bind-addr")
+    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--p2p-bind-interface-address")
@@ -3439,6 +3555,7 @@ def run_arr_checks(
     timeout_seconds: float,
     category_override: str | None = None,
     search_releases: bool = True,
+    use_ssl: bool = False,
 ) -> tuple[dict[str, object], int | None]:
     """Runs one Radarr or Sonarr live integration check."""
 
@@ -3478,6 +3595,7 @@ def run_arr_checks(
         emule_api_key=emule_api_key,
         category_field=category_field,
         category=category,
+        use_ssl=use_ssl,
     )
     report: dict[str, object] = {
         "status": {
@@ -3618,6 +3736,12 @@ def run_radarr_movie_download_e2e(
         report["category_transfer"],
     )
     if download_proof_mode == "handoff":
+        report["handoff_lifecycle"] = stop_and_cancel_handoff_transfer(
+            emule_base_url,
+            emule_api_key,
+            transfer_hash,
+            min(timeout_seconds, 120.0),
+        )
         report["completed_transfer"] = {
             "skipped": True,
             "reason": "download-proof-mode=handoff",
@@ -3751,6 +3875,12 @@ def run_sonarr_series_download_e2e(
         report["category_transfer"],
     )
     if download_proof_mode == "handoff":
+        report["handoff_lifecycle"] = stop_and_cancel_handoff_transfer(
+            emule_base_url,
+            emule_api_key,
+            transfer_hash,
+            min(timeout_seconds, 120.0),
+        )
         report["completed_transfer"] = {
             "skipped": True,
             "reason": "download-proof-mode=handoff",
@@ -3932,7 +4062,8 @@ def main() -> int:
     indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
     bind_addr = prowlarr_live.resolve_bind_addr(prowlarr_url, args.bind_addr)
     port = prowlarr_live.choose_listen_port(bind_addr)
-    emule_base_url = f"http://{bind_addr}:{port}"
+    use_https = args.rest_webserver_scheme == "https"
+    emule_base_url = f"{args.rest_webserver_scheme}://{bind_addr}:{port}"
     torznab_base_url = f"{emule_base_url}/indexer/emulebb"
 
     paths = harness_cli_common.prepare_run_paths(
@@ -4004,6 +4135,12 @@ def main() -> int:
         else parse_timeout_minutes(env_values.get("ACQUISITION_ATTEMPT_TIMEOUT_MINUTES"), DEFAULT_MEDIA_ACQUISITION_TIMEOUT_MINUTES)
     )
     try:
+        https_material = (
+            rest_smoke.create_https_certificate_pair(paths.app_exe, artifacts_dir, hosts=(bind_addr,))
+            if use_https
+            else {"certificate": "", "key": "", "generator": ""}
+        )
+        rest_smoke.configure_https_trust(https_material["certificate"])
         profile = live_common.prepare_profile_base(
             seed_config_dir,
             artifacts_dir,
@@ -4024,6 +4161,9 @@ def main() -> int:
             args.emule_api_key,
             port,
             bind_addr,
+            use_https=use_https,
+            https_certificate=https_material["certificate"],
+            https_key=https_material["key"],
         )
         if args.p2p_bind_interface_name:
             rest_smoke.apply_p2p_bind_interface_override(
@@ -4049,6 +4189,8 @@ def main() -> int:
         "status": "running",
         "emule_base_url": emule_base_url,
         "torznab_base_url": torznab_base_url,
+        "rest_webserver_scheme": args.rest_webserver_scheme,
+        "https_material": https_material if use_https else None,
         "indexer_name": indexer_name,
         "seed_refresh": seed_refresh,
         "enable_upnp": True,
@@ -4335,6 +4477,7 @@ def main() -> int:
             timeout_seconds=args.result_timeout_seconds,
             category_override=arr_category,
             search_releases=False,
+            use_ssl=use_https,
         )
         cleanup_clients.append((arr_url, arr_api_key, arr_client_id))
         report["checks"][kind] = arr_report

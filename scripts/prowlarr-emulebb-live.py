@@ -183,6 +183,33 @@ def set_field_value(indexer: dict[str, Any], field_name: str, value: object) -> 
     raise RuntimeError(f"Prowlarr indexer payload is missing field: {field_name}")
 
 
+def set_optional_field_value(provider: dict[str, Any], field_name: str, value: object) -> bool:
+    """Updates one provider field when the current Prowlarr schema exposes it."""
+
+    fields = provider.get("fields")
+    if not isinstance(fields, list):
+        return False
+    for field in fields:
+        if isinstance(field, dict) and field.get("name") == field_name:
+            field["value"] = value
+            return True
+    return False
+
+
+def apply_disposable_local_certificate_policy(provider: dict[str, Any]) -> dict[str, object]:
+    """Disables provider TLS validation only for schemas that expose the local-only policy."""
+
+    return {
+        "certificateValidation": set_optional_field_value(provider, "certificateValidation", 1),
+    }
+
+
+def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:
+    """Returns a provider payload without harness-only report metadata."""
+
+    return {key: value for key, value in provider.items() if not str(key).startswith("_emulebb")}
+
+
 def build_indexer_payload(
     base_payload: dict[str, Any],
     *,
@@ -208,6 +235,14 @@ def build_indexer_payload(
     set_field_value(payload, "apiPath", "/api")
     set_field_value(payload, "apiKey", emule_api_key)
     set_field_value(payload, "torrentBaseSettings.preferMagnetUrl", True)
+    uses_https = torznab_base_url.lower().startswith("https://")
+    payload["_emulebbCertificatePolicy"] = (
+        apply_disposable_local_certificate_policy(payload)
+        if uses_https
+        else {"certificateValidation": False}
+    )
+    if uses_https and not any(payload["_emulebbCertificatePolicy"].values()):
+        raise RuntimeError("Prowlarr Torznab schema does not expose disposable HTTPS certificate validation policy.")
     return payload
 
 
@@ -264,6 +299,7 @@ def build_qbit_download_client_payload(
     port: int,
     emule_api_key: str,
     category: str,
+    use_ssl: bool = False,
 ) -> dict[str, Any]:
     """Builds the managed Prowlarr qBittorrent client payload for eMule BB."""
 
@@ -281,12 +317,19 @@ def build_qbit_download_client_payload(
     payload["protocol"] = "torrent"
     set_field_value(payload, "host", host)
     set_field_value(payload, "port", int(port))
-    set_field_value(payload, "useSsl", False)
+    set_field_value(payload, "useSsl", bool(use_ssl))
     set_field_value(payload, "urlBase", "")
     set_field_value(payload, "username", "emule")
     set_field_value(payload, "password", emule_api_key)
     set_field_value(payload, "category", category)
     set_field_value(payload, "initialState", 2)
+    payload["_emulebbCertificatePolicy"] = (
+        apply_disposable_local_certificate_policy(payload)
+        if use_ssl
+        else {"certificateValidation": False}
+    )
+    if use_ssl and not any(payload["_emulebbCertificatePolicy"].values()):
+        raise RuntimeError("Prowlarr qBittorrent schema does not expose disposable HTTPS certificate validation policy.")
     return payload
 
 
@@ -300,7 +343,7 @@ def delete_download_client(prowlarr_url: str, api_key: str, client_id: int) -> d
 def test_qbit_download_client(prowlarr_url: str, api_key: str, client: dict[str, Any]) -> int:
     """Runs Prowlarr's download-client self-test and returns the HTTP status."""
 
-    test_payload = json.loads(json.dumps(client))
+    test_payload = public_provider_payload(json.loads(json.dumps(client)))
     test_result = prowlarr_request(
         prowlarr_url,
         api_key,
@@ -322,6 +365,7 @@ def create_temp_qbit_download_client(
     port: int,
     emule_api_key: str,
     category: str,
+    use_ssl: bool = False,
 ) -> dict[str, Any]:
     """Creates and validates a temporary Prowlarr qBittorrent client."""
 
@@ -335,10 +379,17 @@ def create_temp_qbit_download_client(
         port=port,
         emule_api_key=emule_api_key,
         category=category,
+        use_ssl=use_ssl,
     )
     try:
         saved = require_success(
-            prowlarr_request(prowlarr_url, api_key, "/api/v1/downloadclient?forceSave=true", method="POST", json_body=payload),
+            prowlarr_request(
+                prowlarr_url,
+                api_key,
+                "/api/v1/downloadclient?forceSave=true",
+                method="POST",
+                json_body=public_provider_payload(payload),
+            ),
             "Prowlarr eMule BB qBittorrent client create",
         )
         if not isinstance(saved, dict) or not saved.get("id"):
@@ -346,6 +397,7 @@ def create_temp_qbit_download_client(
         created_client_id = int(saved["id"])
 
         saved["_emulebbSchemaSummary"] = schema_summary
+        saved["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
         saved["_emulebbTemporary"] = True
         saved["_emulebbTestStatus"] = test_qbit_download_client(prowlarr_url, api_key, saved)
         return saved
@@ -372,6 +424,7 @@ def summarize_qbit_download_client(client: dict[str, Any], *, category: str) -> 
         "temporary": bool(client.get("_emulebbTemporary")),
         "schema": client.get("_emulebbSchemaSummary"),
         "test_status": client.get("_emulebbTestStatus"),
+        "certificate_policy": client.get("_emulebbCertificatePolicy"),
     }
 
 
@@ -502,10 +555,22 @@ def upsert_indexer(
     if existing is not None and existing.get("id"):
         path = f"/api/v1/indexer/{int(existing['id'])}"
         forced_save = True
-        result = prowlarr_request(prowlarr_url, api_key, path + "?forceSave=true", method="PUT", json_body=payload)
+        result = prowlarr_request(
+            prowlarr_url,
+            api_key,
+            path + "?forceSave=true",
+            method="PUT",
+            json_body=public_provider_payload(payload),
+        )
     else:
         forced_save = True
-        result = prowlarr_request(prowlarr_url, api_key, "/api/v1/indexer?forceSave=true", method="POST", json_body=payload)
+        result = prowlarr_request(
+            prowlarr_url,
+            api_key,
+            "/api/v1/indexer?forceSave=true",
+            method="POST",
+            json_body=public_provider_payload(payload),
+        )
         if should_force_save_indexer_validation(result):
             disabled_payload = json.loads(json.dumps(payload))
             disabled_payload["enable"] = False
@@ -514,7 +579,7 @@ def upsert_indexer(
                 api_key,
                 "/api/v1/indexer?forceSave=true",
                 method="POST",
-                json_body=disabled_payload,
+                json_body=public_provider_payload(disabled_payload),
             )
             created = require_success(create_result, "Prowlarr disabled eMule BB indexer create")
             if not isinstance(created, dict) or not created.get("id"):
@@ -525,7 +590,7 @@ def upsert_indexer(
                 api_key,
                 f"/api/v1/indexer/{int(created['id'])}?forceSave=true",
                 method="PUT",
-                json_body=payload,
+                json_body=public_provider_payload(payload),
             )
     saved = require_success(result, "Prowlarr eMule BB indexer upsert")
     if not isinstance(saved, dict) or not saved.get("id"):
@@ -533,6 +598,7 @@ def upsert_indexer(
             saved = get_indexer_by_id(prowlarr_url, api_key, int(payload["id"]))
         else:
             raise RuntimeError("Prowlarr did not return a saved indexer id.")
+    saved["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
     saved["_emulebbForcedSave"] = forced_save
     saved["_emulebbRecreatedAfterUnavailable"] = False
     saved["_emulebbUnavailableAtUpsert"] = unavailable_at_upsert
@@ -547,7 +613,7 @@ def test_indexer(prowlarr_url: str, api_key: str, indexer_payload: dict[str, Any
         api_key,
         "/api/v1/indexer/test",
         method="POST",
-        json_body=indexer_payload,
+        json_body=public_provider_payload(indexer_payload),
         timeout_seconds=90.0,
     )
     if is_no_results_validation_error(result):
@@ -1616,6 +1682,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=str((REPO_ROOT / live_env.DEFAULT_ENV_FILE_NAME).resolve()))
     parser.add_argument("--emule-api-key", default="prowlarr-emulebb-live-key")
     parser.add_argument("--bind-addr")
+    parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
@@ -1693,8 +1760,15 @@ def main() -> int:
     artifacts_dir = paths.source_artifacts_dir
     bind_addr = resolve_bind_addr(prowlarr_url, args.bind_addr)
     port = choose_listen_port(bind_addr)
-    emule_base_url = f"http://{bind_addr}:{port}"
+    use_https = args.rest_webserver_scheme == "https"
+    emule_base_url = f"{args.rest_webserver_scheme}://{bind_addr}:{port}"
     torznab_base_url = f"{emule_base_url}/indexer/emulebb"
+    https_material = (
+        rest_smoke.create_https_certificate_pair(paths.app_exe, artifacts_dir, hosts=(bind_addr,))
+        if use_https
+        else {"certificate": "", "key": "", "generator": ""}
+    )
+    rest_smoke.configure_https_trust(https_material["certificate"])
 
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="prowlarr-emulebb-live")
     seed_refresh = None
@@ -1709,6 +1783,9 @@ def main() -> int:
         args.emule_api_key,
         port,
         bind_addr,
+        use_https=use_https,
+        https_certificate=https_material["certificate"],
+        https_key=https_material["key"],
     )
     if args.p2p_bind_interface_name:
         rest_smoke.apply_p2p_bind_interface_override(
@@ -1725,6 +1802,8 @@ def main() -> int:
         "indexer_name": indexer_name,
         "emule_base_url": emule_base_url,
         "torznab_base_url": torznab_base_url,
+        "rest_webserver_scheme": args.rest_webserver_scheme,
+        "https_material": https_material if use_https else None,
         "api_key_length": len(args.emule_api_key),
         "prowlarr_api_key_length": len(prowlarr_api_key),
         "seed_refresh": seed_refresh,
@@ -1845,6 +1924,7 @@ def main() -> int:
             "enable": bool(saved_indexer.get("enable")),
             "forcedSave": bool(saved_indexer.get("_emulebbForcedSave")),
             "recreatedAfterUnavailable": bool(saved_indexer.get("_emulebbRecreatedAfterUnavailable")),
+            "certificate_policy": saved_indexer.get("_emulebbCertificatePolicy"),
         }
         indexer_statuses = get_indexer_statuses(prowlarr_url, prowlarr_api_key)
         report["checks"]["indexer_status"] = [
@@ -1876,6 +1956,7 @@ def main() -> int:
             port=port,
             emule_api_key=args.emule_api_key,
             category=PROWLARR_GRAB_CATEGORY,
+            use_ssl=use_https,
         )
         cleanup_download_clients.append((prowlarr_url, prowlarr_api_key, int(qbit_client["id"])))
         report["checks"][PROWLARR_DOWNLOAD_CLIENT_CHECK_KEYS[0]] = summarize_qbit_download_client(qbit_client, category=PROWLARR_GRAB_CATEGORY)

@@ -52,6 +52,14 @@ def test_prowlarr_live_report_contract_requires_download_client_grab_proof() -> 
     assert "prowlarr_series_video_results" not in script_text
 
 
+def test_parser_defaults_rest_webserver_to_https() -> None:
+    module = load_prowlarr_module()
+
+    args = module.build_parser().parse_args([])
+
+    assert args.rest_webserver_scheme == "https"
+
+
 def test_upsert_creates_indexer_with_force_save_to_avoid_live_validation(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []
@@ -212,6 +220,14 @@ def qbit_schema() -> dict[str, Any]:
     }
 
 
+def schema_with_certificate_validation(schema: dict[str, Any]) -> dict[str, Any]:
+    """Adds the Arr/Prowlarr local certificate policy field to a provider fixture."""
+
+    schema = {**schema, "fields": [dict(field) for field in schema["fields"]]}
+    schema["fields"].append({"name": "certificateValidation", "value": 0})
+    return schema
+
+
 def field_value(provider: dict[str, Any], name: str) -> object:
     """Returns one provider field value from a fixture payload."""
 
@@ -244,6 +260,86 @@ def test_qbit_download_client_payload_sets_emule_connection_and_category() -> No
     assert field_value(payload, "password") == "emule-key"
     assert field_value(payload, "category") == "prowlarr_grabs_cat"
     assert field_value(payload, "initialState") == 2
+    assert payload["_emulebbCertificatePolicy"] == {"certificateValidation": False}
+
+
+def test_indexer_payload_covers_http_and_https_certificate_policy() -> None:
+    module = load_prowlarr_module()
+    schema = {
+        "name": "Generic Torznab",
+        "implementation": "Torznab",
+        "fields": [
+            {"name": "baseUrl", "value": ""},
+            {"name": "apiPath", "value": ""},
+            {"name": "apiKey", "value": ""},
+            {"name": "torrentBaseSettings.preferMagnetUrl", "value": False},
+        ],
+    }
+
+    http_payload = module.build_indexer_payload(
+        schema_with_certificate_validation(schema),
+        name="eMule BB Local",
+        torznab_base_url="http://127.0.0.1:61920/indexer/emulebb",
+        emule_api_key="emule-key",
+    )
+    https_payload = module.build_indexer_payload(
+        schema_with_certificate_validation(schema),
+        name="eMule BB Local",
+        torznab_base_url="https://127.0.0.1:61920/indexer/emulebb",
+        emule_api_key="emule-key",
+    )
+
+    assert field_value(http_payload, "baseUrl") == "http://127.0.0.1:61920/indexer/emulebb"
+    assert field_value(http_payload, "certificateValidation") == 0
+    assert http_payload["_emulebbCertificatePolicy"] == {"certificateValidation": False}
+    assert field_value(https_payload, "baseUrl") == "https://127.0.0.1:61920/indexer/emulebb"
+    assert field_value(https_payload, "certificateValidation") == 1
+    assert https_payload["_emulebbCertificatePolicy"] == {"certificateValidation": True}
+
+
+def test_qbit_download_client_payload_covers_http_and_https_transport() -> None:
+    module = load_prowlarr_module()
+
+    http_payload = module.build_qbit_download_client_payload(
+        schema_with_certificate_validation(qbit_schema()),
+        name="eMule BB Live Prowlarr HTTP",
+        host="127.0.0.1",
+        port=61920,
+        emule_api_key="emule-key",
+        category="prowlarr_grabs_cat",
+        use_ssl=False,
+    )
+    https_payload = module.build_qbit_download_client_payload(
+        schema_with_certificate_validation(qbit_schema()),
+        name="eMule BB Live Prowlarr HTTPS",
+        host="127.0.0.1",
+        port=61921,
+        emule_api_key="emule-key",
+        category="prowlarr_grabs_cat",
+        use_ssl=True,
+    )
+
+    assert field_value(http_payload, "useSsl") is False
+    assert field_value(http_payload, "certificateValidation") == 0
+    assert http_payload["_emulebbCertificatePolicy"] == {"certificateValidation": False}
+    assert field_value(https_payload, "useSsl") is True
+    assert field_value(https_payload, "certificateValidation") == 1
+    assert https_payload["_emulebbCertificatePolicy"] == {"certificateValidation": True}
+
+
+def test_qbit_download_client_payload_rejects_https_without_certificate_policy() -> None:
+    module = load_prowlarr_module()
+
+    with pytest.raises(RuntimeError, match="does not expose disposable HTTPS certificate validation policy"):
+        module.build_qbit_download_client_payload(
+            qbit_schema(),
+            name="eMule BB Live Prowlarr HTTPS",
+            host="127.0.0.1",
+            port=61921,
+            emule_api_key="emule-key",
+            category="prowlarr_grabs_cat",
+            use_ssl=True,
+        )
 
 
 def test_first_live_wire_term_keeps_only_primary_operator_term() -> None:
@@ -271,8 +367,11 @@ def test_temp_qbit_download_client_creates_and_tests(monkeypatch) -> None:
         if path == "/api/v1/downloadclient?forceSave=true" and method == "POST":
             assert isinstance(json_body, dict)
             assert json_body["name"] == "eMule BB Live Prowlarr 8080"
+            assert "_emulebbCertificatePolicy" not in json_body
             return {"status": 201, "json": {"id": 41, "name": json_body["name"], "fields": json_body["fields"]}, "body_text": "{}"}
         if path == "/api/v1/downloadclient/test" and method == "POST":
+            assert isinstance(json_body, dict)
+            assert "_emulebbCertificatePolicy" not in json_body
             return {"status": 200, "json": None, "body_text": ""}
         raise AssertionError(f"Unexpected request: {method} {path}")
 

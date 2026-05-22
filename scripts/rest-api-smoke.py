@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import jsonschema
 import yaml
@@ -992,13 +992,14 @@ def choose_listen_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def create_https_certificate_pair(app_exe: Path, artifacts_dir: Path) -> dict[str, str]:
-    """Creates a localhost HTTPS certificate/key pair through the eMule certificate CLI."""
+def create_https_certificate_pair(app_exe: Path, artifacts_dir: Path, *, hosts: Iterable[str] = ()) -> dict[str, str]:
+    """Creates a HTTPS certificate/key pair through the eMule certificate CLI."""
 
     cert_dir = artifacts_dir / "https-cert"
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / "webserver-cert.pem"
     key_path = cert_dir / "webserver-key.pem"
+    certificate_hosts = tuple(dict.fromkeys(("127.0.0.1", "localhost", *(host for host in hosts if host))))
     command = [
         str(app_exe),
         "--generate-webserver-cert",
@@ -1006,11 +1007,9 @@ def create_https_certificate_pair(app_exe: Path, artifacts_dir: Path) -> dict[st
         str(cert_path),
         "--key",
         str(key_path),
-        "--host",
-        "127.0.0.1",
-        "--host",
-        "localhost",
     ]
+    for host in certificate_hosts:
+        command.extend(["--host", host])
     result = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30.0)
     if result.returncode != 0:
         raise RuntimeError(

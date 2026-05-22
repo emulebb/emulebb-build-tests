@@ -360,6 +360,41 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     assert "--vhd-size-mb" not in regular_command
 
 
+def test_arr_emulebb_suites_forward_http_and_https_rest_scheme(tmp_path: Path) -> None:
+    for scheme in ("http", "https"):
+        prowlarr_command = live_e2e_suite.build_suite_command(
+            spec=suite_spec("prowlarr-emulebb"),
+            scripts_dir=tmp_path / "scripts",
+            python_executable="python",
+            workspace_root=tmp_path / "workspace",
+            configuration="Release",
+            artifacts_dir=tmp_path / "artifacts",
+            rest_webserver_scheme=scheme,
+        )
+        radarr_command = live_e2e_suite.build_suite_command(
+            spec=suite_spec("radarr-emulebb"),
+            scripts_dir=tmp_path / "scripts",
+            python_executable="python",
+            workspace_root=tmp_path / "workspace",
+            configuration="Release",
+            artifacts_dir=tmp_path / "artifacts",
+            rest_webserver_scheme=scheme,
+        )
+        sonarr_command = live_e2e_suite.build_suite_command(
+            spec=suite_spec("sonarr-emulebb"),
+            scripts_dir=tmp_path / "scripts",
+            python_executable="python",
+            workspace_root=tmp_path / "workspace",
+            configuration="Release",
+            artifacts_dir=tmp_path / "artifacts",
+            rest_webserver_scheme=scheme,
+        )
+
+        assert option_values(prowlarr_command, "--rest-webserver-scheme") == [scheme]
+        assert option_values(radarr_command, "--rest-webserver-scheme") == [scheme]
+        assert option_values(sonarr_command, "--rest-webserver-scheme") == [scheme]
+
+
 def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
     shared_root = tmp_path / "shared"
@@ -434,7 +469,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--server-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--kad-search-count") == [str(live_e2e_suite.DEFAULT_REST_SEARCH_COUNT)]
     assert option_values(rest_command, "--live-download-trigger-count") == [str(live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)]
-    assert option_values(rest_command, "--webserver-scheme") == ["http"]
+    assert option_values(rest_command, "--webserver-scheme") == ["https"]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract"]
     assert option_values(rest_command, "--rest-stress-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-concurrency") == ["4"]
@@ -463,6 +498,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert "--enable-upnp" in prowlarr_command
     assert option_values(prowlarr_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(prowlarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
+    assert option_values(prowlarr_command, "--rest-webserver-scheme") == ["https"]
     assert option_values(prowlarr_command, "--direct-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)]
     assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)]
     assert "--skip-live-seed-refresh" not in prowlarr_command
@@ -474,6 +510,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert "--enable-upnp" in arr_command
     assert option_values(arr_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(arr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
+    assert option_values(arr_command, "--rest-webserver-scheme") == ["https"]
     assert "--qbit-live-wire-rounds" not in arr_command
     assert "--radarr-movie-root" not in arr_command
     assert "--skip-live-seed-refresh" not in arr_command
@@ -485,6 +522,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert "--enable-upnp" in sonarr_command
     assert option_values(sonarr_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(sonarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
+    assert option_values(sonarr_command, "--rest-webserver-scheme") == ["https"]
     assert "--sonarr-series-root" not in sonarr_command
     assert "--skip-live-seed-refresh" not in sonarr_command
     assert summary["suites"][10]["arr_integration"] is True
@@ -780,7 +818,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["rest_stress_concurrency"] == live_e2e_suite.STABILIZATION_REST_STRESS_CONCURRENCY
     assert summary["rest_stress_max_failures"] == live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES
     assert summary["rest_socket_adversity_budget"] == "smoke"
-    assert summary["rest_tls_handshake_adversity_budget"] == "off"
+    assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
     assert summary["rest_leak_churn_budget"] == "smoke"
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
@@ -832,7 +870,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
         str(live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES)
     ]
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
-    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
+    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-leak-churn-cycles") == [
         str(live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES)

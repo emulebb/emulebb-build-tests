@@ -181,7 +181,7 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    material = module.create_https_certificate_pair(Path("emule.exe"), tmp_path)
+    material = module.create_https_certificate_pair(Path("emule.exe"), tmp_path, hosts=("192.168.1.210", "127.0.0.1"))
 
     assert material["generator"] == "emule-cli"
     assert Path(material["certificate"]).read_text(encoding="utf-8") == "certificate"
@@ -198,6 +198,8 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
             "127.0.0.1",
             "--host",
             "localhost",
+            "--host",
+            "192.168.1.210",
         ]
     ]
 
