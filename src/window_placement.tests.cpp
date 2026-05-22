@@ -38,4 +38,36 @@ TEST_CASE("Default main window placement respects offset work areas")
 	CHECK(rcNormal.bottom == 770);
 }
 
+TEST_CASE("Tray restore preserves restore-to-maximized placement")
+{
+	WINDOWPLACEMENT placement = {};
+	placement.length = sizeof(WINDOWPLACEMENT);
+	placement.showCmd = SW_SHOWMINIMIZED;
+	placement.flags = WPF_RESTORETOMAXIMIZED;
+
+	CHECK(WindowPlacementSeams::ResolveRestoreShowCommand(placement) == SW_SHOWMAXIMIZED);
+}
+
+TEST_CASE("Tray restore preserves explicit maximized placement")
+{
+	WINDOWPLACEMENT placement = {};
+	placement.length = sizeof(WINDOWPLACEMENT);
+	placement.showCmd = SW_SHOWMAXIMIZED;
+
+	CHECK(WindowPlacementSeams::ResolveRestoreShowCommand(placement) == SW_SHOWMAXIMIZED);
+}
+
+TEST_CASE("Tray restore uses normal state for non-maximized placements")
+{
+	WINDOWPLACEMENT placement = {};
+	placement.length = sizeof(WINDOWPLACEMENT);
+	placement.showCmd = SW_SHOWMINIMIZED;
+
+	CHECK(WindowPlacementSeams::ResolveRestoreShowCommand(placement) == SW_SHOWNORMAL);
+
+	placement.showCmd = SW_SHOWNORMAL;
+	placement.flags = 0;
+	CHECK(WindowPlacementSeams::ResolveRestoreShowCommand(placement) == SW_SHOWNORMAL);
+}
+
 TEST_SUITE_END();
