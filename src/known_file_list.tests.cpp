@@ -77,6 +77,16 @@ TEST_CASE("Known-file collision seam keeps existing live entries even when incom
 }
 #endif
 
+#ifdef EMULE_TESTS_HAS_KNOWN_FILE_PUBLISH_SEAMS
+TEST_CASE("Known-file publish seam suppresses redundant shared-files UI updates")
+{
+	CHECK_FALSE(ShouldNotifyPublishedED2KChange(false, false));
+	CHECK_FALSE(ShouldNotifyPublishedED2KChange(true, true));
+	CHECK(ShouldNotifyPublishedED2KChange(false, true));
+	CHECK(ShouldNotifyPublishedED2KChange(true, false));
+}
+#endif
+
 TEST_CASE("Known-file progress seam posts only for matching known-file owners")
 {
 	CHECK(IsCompatibleKnownFileProgressOwner(true, 1024u, 1024u));
