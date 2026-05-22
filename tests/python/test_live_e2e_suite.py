@@ -568,7 +568,23 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[2], "--p2p-bind-interface-name") == []
     assert option_values(commands[3], "--p2p-bind-interface-name") == []
     assert option_values(commands[4], "--p2p-bind-interface-name") == []
+    assert option_values(commands[4], "--bootstrap-mode") == ["rest"]
     assert option_values(commands[5], "--p2p-bind-interface-name") == []
+
+
+def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> None:
+    command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("local-kad-swarm"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        local_kad_bootstrap_mode="preseed",
+    )
+
+    assert script_name(command) == "local-kad-swarm.py"
+    assert option_values(command, "--bootstrap-mode") == ["preseed"]
 
 
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:

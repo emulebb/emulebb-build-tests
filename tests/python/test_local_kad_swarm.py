@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import struct
 import sys
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def test_local_kad_defaults_are_local_and_bounded() -> None:
 
     assert args.client_count == 3
     assert args.min_contacts_per_client == 1
+    assert args.bootstrap_mode == "rest"
     assert args.p2p_bind_interface_name == ""
     assert args.bind_addr == "127.0.0.1"
     assert args.swarm_ready_timeout_seconds == 240.0
@@ -107,3 +109,26 @@ def test_configure_kad_client_profile_is_local_only(monkeypatch, tmp_path: Path)
     assert "EnableUPnP=0" in text
     assert sorted(result["removed_kad_state_files"]) == sorted(module.KAD_STATE_FILES)
     assert not any((config_dir / name).exists() for name in module.KAD_STATE_FILES)
+
+
+def test_write_nodes_dat_preseeds_local_peer_contacts(tmp_path: Path) -> None:
+    module = load_suite_module()
+    specs = module.build_client_specs(3, [(4701, 4801, 4901), (4702, 4802, 4902), (4703, 4803, 4903)])
+    path = tmp_path / "nodes.dat"
+
+    summary = module.write_nodes_dat(path, owner=specs[0], peers=specs, peer_address="10.1.2.3")
+
+    data = path.read_bytes()
+    assert struct.unpack("<III", data[:12]) == (0, 2, 2)
+    assert len(data) == 12 + 2 * 34
+    assert summary["contact_count"] == 2
+    first_contact = data[12:46]
+    assert first_contact[:16] == module.deterministic_kad_node_id(2)
+    stored_ip, udp_port, tcp_port, version, udp_key, udp_key_ip, verified = struct.unpack("<IHHBIIB", first_contact[16:])
+    assert stored_ip == module.stored_nodes_dat_ip("10.1.2.3")
+    assert udp_port == 4902
+    assert tcp_port == 4802
+    assert version == module.KADEMLIA_CONTACT_VERSION
+    assert udp_key == 0
+    assert udp_key_ip == 0
+    assert verified == 1

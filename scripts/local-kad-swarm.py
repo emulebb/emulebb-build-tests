@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, asdict
 import importlib.util
+import ipaddress
+import struct
 import sys
 import time
 from pathlib import Path
@@ -38,6 +40,7 @@ API_KEY = "local-kad-swarm-key"
 DEFAULT_CLIENT_COUNT = 3
 DEFAULT_MIN_CONTACTS_PER_CLIENT = 1
 KAD_BOOTSTRAP_THROTTLE_SECONDS = 11.0
+KADEMLIA_CONTACT_VERSION = 8
 KAD_STATE_FILES = (
     "nodes.dat",
     "nodes.dat.bak",
@@ -76,6 +79,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--client-count", type=int, default=DEFAULT_CLIENT_COUNT)
     parser.add_argument("--min-contacts-per-client", type=int, default=DEFAULT_MIN_CONTACTS_PER_CLIENT)
+    parser.add_argument("--bootstrap-mode", choices=["rest", "preseed", "both"], default="rest")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--swarm-ready-timeout-seconds", type=float, default=240.0)
@@ -145,6 +149,59 @@ def remove_kad_state_files(config_dir: Path) -> list[str]:
             path.unlink()
             removed.append(name)
     return removed
+
+
+def stored_nodes_dat_ip(address: str) -> int:
+    """Returns the little-endian IPv4 integer shape used by `nodes.dat`."""
+
+    return int.from_bytes(ipaddress.IPv4Address(address).packed, "little")
+
+
+def deterministic_kad_node_id(index: int) -> bytes:
+    """Builds a stable nonzero Kad node id for local `nodes.dat` fixtures."""
+
+    if index <= 0 or index > 255:
+        raise ValueError("Kad fixture node index must fit in one nonzero byte.")
+    return bytes([index]) + bytes((index * 37 + offset) % 256 for offset in range(1, 16))
+
+
+def write_nodes_dat(path: Path, *, owner: KadClientSpec, peers: list[KadClientSpec], peer_address: str) -> dict[str, object]:
+    """Writes a deterministic v2 `nodes.dat` containing local peer contacts."""
+
+    contacts = [peer for peer in peers if peer.profile_id != owner.profile_id]
+    if not contacts:
+        raise ValueError("nodes.dat fixture requires at least one peer contact.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stored_ip = stored_nodes_dat_ip(peer_address)
+    with path.open("wb") as handle:
+        handle.write(struct.pack("<III", 0, 2, len(contacts)))
+        for peer in contacts:
+            handle.write(deterministic_kad_node_id(peer.index))
+            handle.write(
+                struct.pack(
+                    "<IHHBIIB",
+                    stored_ip,
+                    peer.udp_port,
+                    peer.tcp_port,
+                    KADEMLIA_CONTACT_VERSION,
+                    0,
+                    0,
+                    1,
+                )
+            )
+    return {
+        "path": str(path),
+        "contact_count": len(contacts),
+        "peer_address": peer_address,
+        "peers": [
+            {
+                "profile_id": peer.profile_id,
+                "udp_port": peer.udp_port,
+                "tcp_port": peer.tcp_port,
+            }
+            for peer in contacts
+        ],
+    }
 
 
 def configure_kad_client_profile(
@@ -286,6 +343,7 @@ def wait_for_local_swarm(
     bind_addr: str,
     api_key: str,
     min_contacts_per_client: int,
+    require_connected: bool,
     timeout_seconds: float,
 ) -> dict[str, object]:
     """Waits until every local Kad client has the requested local contact count."""
@@ -306,6 +364,8 @@ def wait_for_local_swarm(
             snapshot_rows.append(row)
             if not bool(compact.get("running")):
                 ready = False
+            if require_connected and not bool(compact.get("connected")):
+                ready = False
             if not isinstance(contact_count, int) or contact_count < min_contacts_per_client:
                 ready = False
         observation = {
@@ -317,6 +377,7 @@ def wait_for_local_swarm(
             return {
                 "ready": True,
                 "min_contacts_per_client": min_contacts_per_client,
+                "require_connected": require_connected,
                 "observations": observations,
             }
         return None
@@ -357,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
             "rest_bind_addr": args.bind_addr,
+            "bootstrap_mode": args.bootstrap_mode,
             "clients": [asdict(spec) for spec in specs],
         }
 
@@ -377,12 +439,21 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
             )
+            preseed_summary = None
+            if args.bootstrap_mode in {"preseed", "both"}:
+                preseed_summary = write_nodes_dat(
+                    Path(profile["config_dir"]) / "nodes.dat",
+                    owner=spec,
+                    peers=specs,
+                    peer_address=p2p_address,
+                )
             profile_reports[spec.profile_id] = {
                 "profile_base": str(profile["profile_base"]),
                 "config_dir": str(profile["config_dir"]),
                 "incoming_dir": str(profile["incoming_dir"]),
                 "temp_dir": str(profile["temp_dir"]),
                 **configured,
+                "nodes_dat_preseed": preseed_summary,
             }
         report["profiles"] = profile_reports
 
@@ -406,31 +477,43 @@ def main(argv: list[str] | None = None) -> int:
                 args.kad_running_timeout_seconds,
             )
 
-        current_phase = "bootstrap_swarm"
-        bootstrap_rows: list[dict[str, object]] = []
-        for source, target in build_bootstrap_plan(specs):
-            bootstrap_rows.append(
-                {
-                    "source": source.profile_id,
-                    "target": target.profile_id,
-                    "target_udp_port": target.udp_port,
-                    "result": bootstrap_kad(
-                        base_url(args.bind_addr, source),
-                        args.api_key,
-                        peer_address=p2p_address,
-                        peer_udp_port=target.udp_port,
-                    ),
-                }
-            )
-            time.sleep(KAD_BOOTSTRAP_THROTTLE_SECONDS)
-        report["checks"]["bootstrap_plan"] = bootstrap_rows
+        if args.bootstrap_mode in {"rest", "both"}:
+            current_phase = "bootstrap_swarm"
+            bootstrap_rows: list[dict[str, object]] = []
+            for source, target in build_bootstrap_plan(specs):
+                bootstrap_rows.append(
+                    {
+                        "source": source.profile_id,
+                        "target": target.profile_id,
+                        "target_udp_port": target.udp_port,
+                        "result": bootstrap_kad(
+                            base_url(args.bind_addr, source),
+                            args.api_key,
+                            peer_address=p2p_address,
+                            peer_udp_port=target.udp_port,
+                        ),
+                    }
+                )
+                time.sleep(KAD_BOOTSTRAP_THROTTLE_SECONDS)
+            report["checks"]["bootstrap_plan"] = bootstrap_rows
+        else:
+            report["checks"]["bootstrap_plan"] = {
+                "mode": "preseed",
+                "rest_bootstrap_skipped": True,
+            }
 
         current_phase = "wait_for_swarm"
+        require_connected = args.bootstrap_mode != "preseed"
+        report["checks"]["swarm_readiness_policy"] = {
+            "min_contacts_per_client": args.min_contacts_per_client,
+            "require_connected": require_connected,
+        }
         report["checks"]["swarm_ready"] = wait_for_local_swarm(
             specs=specs,
             bind_addr=args.bind_addr,
             api_key=args.api_key,
             min_contacts_per_client=args.min_contacts_per_client,
+            require_connected=require_connected,
             timeout_seconds=args.swarm_ready_timeout_seconds,
         )
         report["checks"]["final_kad_status"] = {
