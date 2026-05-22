@@ -553,6 +553,7 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "local-ed2k-chaos-mode.py",
         "local-ed2k-protocol-combinations.py",
         "local-kad-swarm.py",
+        "local-kad-mixed-client-swarm.py",
         "amutorrent-local-ed2k-ui-live.py",
     ]
     assert [suite["name"] for suite in summary["suites"]] == [
@@ -561,6 +562,7 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
         "local-ed2k-chaos-mode",
         "local-ed2k-protocol-combinations",
         "local-kad-swarm",
+        "local-kad-mixed-client-swarm",
         "amutorrent-local-ed2k-ui-live",
     ]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
@@ -570,6 +572,7 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[4], "--p2p-bind-interface-name") == []
     assert option_values(commands[4], "--bootstrap-mode") == ["rest"]
     assert option_values(commands[5], "--p2p-bind-interface-name") == []
+    assert option_values(commands[6], "--p2p-bind-interface-name") == []
 
 
 def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> None:

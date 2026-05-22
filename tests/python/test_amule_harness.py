@@ -55,6 +55,28 @@ def test_prepare_amule_profile_writes_isolated_config(request: pytest.FixtureReq
     assert f"IncomingDir={amule.win_path_text(profile.incoming_dir)}" in config_text
 
 
+def test_prepare_amule_profile_can_enable_local_kad_without_ed2k(request: pytest.FixtureRequest) -> None:
+    root = workspace_unit_root("prepare-kad-profile", request)
+    profile = amule.prepare_amule_profile(
+        root_dir=root / "artifacts" / "clients" / "cl-amule-004",
+        profile_id="cl-amule-004",
+        nick="cl-amule-004",
+        tcp_port=41010,
+        udp_port=41011,
+        ec_port=41012,
+        advertised_address="10.55.0.7",
+        connect_to_kad=True,
+        connect_to_ed2k=False,
+    )
+
+    config_text = (profile.config_dir / "amule.conf").read_text(encoding="utf-8")
+
+    assert "ConnectToKad=1" in config_text
+    assert "ConnectToED2K=0" in config_text
+    assert "FilterLanIPs=0" in config_text
+    assert "IPFilterAutoLoad=0" in config_text
+
+
 def test_amule_commands_pin_config_dir_and_ec_endpoint(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     root = workspace_unit_root("commands", request)
     profile = amule.prepare_amule_profile(
@@ -123,6 +145,30 @@ def test_wait_for_shared_file_hash_parses_amulecmd_output(
     assert amule.build_file_link("fixture.bin", 123, str(row["hash"])) == (
         "ed2k://|file|fixture.bin|123|0123456789abcdef0123456789abcdef|/"
     )
+
+
+def test_parse_kad_status_from_amulecmd_status() -> None:
+    assert amule.parse_kad_status("eD2k: Not connected\nKad: Not running\n") == {
+        "present": True,
+        "state": "Not running",
+        "running": False,
+        "connected": False,
+        "firewalled": False,
+    }
+    assert amule.parse_kad_status("Kad: Connected (firewalled)\n") == {
+        "present": True,
+        "state": "Connected (firewalled)",
+        "running": True,
+        "connected": True,
+        "firewalled": True,
+    }
+    assert amule.parse_kad_status(" > Kad: Not connected\n") == {
+        "present": True,
+        "state": "Not connected",
+        "running": True,
+        "connected": False,
+        "firewalled": False,
+    }
 
 
 def test_build_server_link_validates_ed2k_endpoint() -> None:

@@ -225,6 +225,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="local-kad-mixed-client-swarm",
+        script_name="local-kad-mixed-client-swarm.py",
+        category="protocol",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="amutorrent-local-ed2k-ui-live",
         script_name="amutorrent-local-ed2k-ui-live.py",
         category="ui",
@@ -409,6 +415,7 @@ PROFILE_SUITE_NAMES = {
         "local-ed2k-chaos-mode",
         "local-ed2k-protocol-combinations",
         "local-kad-swarm",
+        "local-kad-mixed-client-swarm",
         "amutorrent-local-ed2k-ui-live",
     ),
     "beta-green": (
@@ -845,6 +852,7 @@ def build_suite_command(
             "local-ed2k-chaos-mode",
             "local-ed2k-protocol-combinations",
             "local-kad-swarm",
+            "local-kad-mixed-client-swarm",
             "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_name

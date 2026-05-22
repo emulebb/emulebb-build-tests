@@ -13,6 +13,7 @@ from emule_test_harness.paths import reject_windows_temp_path
 
 
 SHARED_FILE_PATTERN = re.compile(r"(?im)^\s*(?:>\s*)?([0-9a-f]{32})\s+(.+)$")
+KAD_STATUS_PATTERN = re.compile(r"(?im)^\s*(?:>\s*)?Kad\s*:\s*(.+?)\s*$")
 UNLIMITED_THROTTLE = "0"
 
 
@@ -65,8 +66,13 @@ def win_path_text(path: Path) -> str:
     return str(path.resolve()).replace("\\", "\\\\")
 
 
-def build_amule_conf(profile: AmuleRuntimeProfile) -> str:
-    """Builds a deterministic `amule.conf` for a headless ED2K-only daemon."""
+def build_amule_conf(
+    profile: AmuleRuntimeProfile,
+    *,
+    connect_to_kad: bool = False,
+    connect_to_ed2k: bool = True,
+) -> str:
+    """Builds a deterministic `amule.conf` for a headless daemon profile."""
 
     return "\n".join(
         [
@@ -89,8 +95,8 @@ def build_amule_conf(profile: AmuleRuntimeProfile) -> str:
             "MaxConnections=1000",
             "MaxConnectionsPerFiveSeconds=100",
             "UPnPEnabled=0",
-            "ConnectToKad=0",
-            "ConnectToED2K=1",
+            f"ConnectToKad={1 if connect_to_kad else 0}",
+            f"ConnectToED2K={1 if connect_to_ed2k else 0}",
             f"TempDir={win_path_text(profile.temp_dir)}",
             f"IncomingDir={win_path_text(profile.incoming_dir)}",
             "CheckDiskspace=1",
@@ -137,6 +143,8 @@ def prepare_amule_profile(
     udp_port: int,
     ec_port: int,
     advertised_address: str,
+    connect_to_kad: bool = False,
+    connect_to_ed2k: bool = True,
 ) -> AmuleRuntimeProfile:
     """Creates one isolated aMule profile under the suite artifact tree."""
 
@@ -159,7 +167,11 @@ def prepare_amule_profile(
     for directory in (profile.config_dir, profile.incoming_dir, profile.temp_dir, profile.logs_dir):
         reject_windows_temp_path(directory, f"aMule {directory.name} directory")
         directory.mkdir(parents=True, exist_ok=True)
-    (profile.config_dir / "amule.conf").write_text(build_amule_conf(profile), encoding="utf-8", newline="\n")
+    (profile.config_dir / "amule.conf").write_text(
+        build_amule_conf(profile, connect_to_kad=connect_to_kad, connect_to_ed2k=connect_to_ed2k),
+        encoding="utf-8",
+        newline="\n",
+    )
     return profile
 
 
@@ -249,6 +261,55 @@ def wait_for_ec_ready(control_exe: Path, profile: AmuleRuntimeProfile, timeout_s
             return {"ready": True, "observations": observations[-5:]}
         time.sleep(1.0)
     raise RuntimeError(f"Timed out waiting for aMule EC readiness. Observations: {observations[-5:]!r}")
+
+
+def parse_kad_status(stdout: str) -> dict[str, object]:
+    """Parses the `Kad:` line from `amulecmd Status` output."""
+
+    match = KAD_STATUS_PATTERN.search(stdout)
+    state = match.group(1).strip() if match else ""
+    state_lower = state.lower()
+    return {
+        "present": bool(match),
+        "state": state,
+        "running": bool(match) and state_lower != "not running",
+        "connected": state_lower.startswith("connected"),
+        "firewalled": "firewalled" in state_lower,
+    }
+
+
+def wait_for_kad_status(
+    control_exe: Path,
+    profile: AmuleRuntimeProfile,
+    timeout_seconds: float,
+    *,
+    require_connected: bool = False,
+) -> dict[str, object]:
+    """Waits until aMule reports Kad running, optionally connected, through EC."""
+
+    deadline = time.monotonic() + timeout_seconds
+    observations: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        completed = run_amulecmd(control_exe, profile, "Status", timeout_seconds=10.0, check=False)
+        status = parse_kad_status(completed.stdout)
+        observations.append(
+            {
+                "return_code": completed.returncode,
+                "kad": status,
+                "stdout_tail": completed.stdout[-1000:],
+                "stderr_tail": completed.stderr[-1000:],
+                "observed_at": round(time.time(), 3),
+            }
+        )
+        if completed.returncode == 0 and status["running"] and (not require_connected or status["connected"]):
+            return {
+                "ready": True,
+                "require_connected": require_connected,
+                "kad": status,
+                "observations": observations[-5:],
+            }
+        time.sleep(1.0)
+    raise RuntimeError(f"Timed out waiting for aMule Kad readiness. Observations: {observations[-5:]!r}")
 
 
 def wait_for_shared_file_hash(
