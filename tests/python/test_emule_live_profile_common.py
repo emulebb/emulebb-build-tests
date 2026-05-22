@@ -53,7 +53,7 @@ def test_launch_app_rejects_interactive_minimized_conflict(tmp_path: Path) -> No
 
     try:
         module.launch_app(
-            tmp_path / "emule.exe",
+            tmp_path / "emulebb.exe",
             tmp_path / "profile-base",
             minimized_to_tray=True,
             requires_interactive_ui=True,
@@ -81,7 +81,7 @@ def test_launch_app_appends_extra_arguments(monkeypatch, tmp_path: Path) -> None
     monkeypatch.setattr(module, "Application", FakeApplication)
 
     module.launch_app(
-        tmp_path / "emule.exe",
+        tmp_path / "emulebb.exe",
         tmp_path / "profile-base",
         minimized_to_tray=False,
         extra_args=["--sharefile", str(tmp_path / "shared.bin")],
@@ -98,7 +98,7 @@ def test_main_window_detection_accepts_runtime_speed_prefix(monkeypatch) -> None
     monkeypatch.setattr(
         module.win32gui,
         "GetWindowText",
-        lambda hwnd: "(U:0.0 D:0.0) eMule BB 0.7.3 x64",
+        lambda hwnd: "(U:0.0 D:0.0) eMuleBB 0.7.3 x64",
     )
 
     assert module.is_main_emule_window(1001)
@@ -144,7 +144,7 @@ def test_find_process_main_window_enumerates_hidden_top_level_dialog(monkeypatch
     monkeypatch.setattr(
         module.win32gui,
         "GetWindowText",
-        lambda hwnd: "(U:0.0 D:0.0) eMule BB 0.7.3 x64",
+        lambda hwnd: "(U:0.0 D:0.0) eMuleBB 0.7.3 x64",
     )
     monkeypatch.setattr(module.win32gui, "IsWindowVisible", lambda hwnd: False)
 
@@ -171,7 +171,7 @@ def test_find_app_main_window_scans_pywinauto_window_list(monkeypatch) -> None:
 
     def fake_title(hwnd: int) -> str:
         if hwnd == 3002:
-            return "(U:0.0 D:0.0) eMule BB 0.7.3 x64"
+            return "(U:0.0 D:0.0) eMuleBB 0.7.3 x64"
         return "Socket Notification Sink"
 
     monkeypatch.setattr(module.win32gui, "GetClassName", lambda hwnd: "#32770")

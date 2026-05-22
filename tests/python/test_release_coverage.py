@@ -10,7 +10,7 @@ def repo_root() -> Path:
 
 
 def campaign_scenario_ids() -> set[str]:
-    campaign = release_campaigns.load_release_campaign(repo_root(), "emule-bb-0.7.3")
+    campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-0.7.3")
     return {
         scenario["id"]
         for phase in campaign["phases"]

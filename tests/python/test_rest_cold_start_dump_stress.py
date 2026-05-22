@@ -418,7 +418,7 @@ def test_access_violation_without_emule_dump_is_release_blocking() -> None:
     assert not module.access_violation_without_emule_dump(
         {
             "failure_process_state": {"exit_code": 0xC0000005},
-            "local_dump_files": {"files": [{"name": "emule.exe.1234.dmp"}]},
+            "local_dump_files": {"files": [{"name": "emulebb.exe.1234.dmp"}]},
         }
     )
 
@@ -643,12 +643,12 @@ def test_umdh_gflags_commands_are_explicit(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(module, "run_tool_to_file", fake_run)
 
-    module.set_umdh_stack_tracing("gflags.exe", tmp_path / "emule.exe", True, tmp_path / "enable.txt", 1.0)
-    module.set_umdh_stack_tracing("gflags.exe", tmp_path / "emule.exe", False, tmp_path / "disable.txt", 1.0)
+    module.set_umdh_stack_tracing("gflags.exe", tmp_path / "emulebb.exe", True, tmp_path / "enable.txt", 1.0)
+    module.set_umdh_stack_tracing("gflags.exe", tmp_path / "emulebb.exe", False, tmp_path / "disable.txt", 1.0)
 
     assert calls == [
-        ["gflags.exe", "/i", "emule.exe", "+ust"],
-        ["gflags.exe", "/i", "emule.exe", "-ust"],
+        ["gflags.exe", "/i", "emulebb.exe", "+ust"],
+        ["gflags.exe", "/i", "emulebb.exe", "-ust"],
     ]
 
 
@@ -801,8 +801,8 @@ def test_build_live_diagnostic_findings_compacts_cpu_memory_and_dumps() -> None:
 
 def test_initialize_cpu_profile_report_records_tools_paths_and_symbol_status(monkeypatch, tmp_path: Path) -> None:
     module = load_script_module()
-    app_exe = tmp_path / "emule.exe"
-    app_pdb = tmp_path / "emule.pdb"
+    app_exe = tmp_path / "emulebb.exe"
+    app_pdb = tmp_path / "emulebb.pdb"
     app_exe.write_bytes(b"exe")
     app_pdb.write_bytes(b"pdb")
 

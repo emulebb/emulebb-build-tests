@@ -11,7 +11,7 @@ from emule_test_harness import live_e2e_suite
 
 SCHEMA_VERSION = "emule-build-tests.release-campaign.v1"
 DEFAULT_TEMPLATE_ID = "emulebb.release.template.default.v1"
-DEFAULT_CAMPAIGN_ID = "emule-bb-0.7.3"
+DEFAULT_CAMPAIGN_ID = "emulebb-0.7.3"
 STRICT_PHASE_TAXONOMY = (
     "preflight",
     "protocol-parity",

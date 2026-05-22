@@ -1,4 +1,4 @@
-"""Runs the live Radarr acquisition check through Prowlarr and eMule BB."""
+"""Runs the live Radarr acquisition check through Prowlarr and eMuleBB."""
 
 from __future__ import annotations
 

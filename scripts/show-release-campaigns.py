@@ -23,7 +23,7 @@ from emule_test_harness.release_campaigns import (
 def build_parser() -> argparse.ArgumentParser:
     """Builds the release campaign reporter CLI parser."""
 
-    parser = argparse.ArgumentParser(description="Show eMule BB release campaign phases, flows, and evidence status.")
+    parser = argparse.ArgumentParser(description="Show eMuleBB release campaign phases, flows, and evidence status.")
     parser.add_argument("--test-repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--workspace-root", type=Path, default=None)
     parser.add_argument("--workspace-state-root", type=Path, default=None)

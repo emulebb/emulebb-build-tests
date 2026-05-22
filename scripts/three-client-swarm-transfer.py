@@ -156,7 +156,7 @@ def create_seed_file(root_dir: Path, client_key: str, profile_id: str, size_byte
 
 
 def choose_swarm_ports() -> dict[str, int]:
-    """Allocates ports for eMule BB, tracing harness, aMule, and ED2K server."""
+    """Allocates ports for eMuleBB, tracing harness, aMule, and ED2K server."""
 
     return amule_seed.choose_amule_ports(dtt.choose_distinct_ports())
 
@@ -242,7 +242,7 @@ def add_amule_downloads(control_exe: Path, profile: amule_harness.AmuleRuntimePr
 
 
 def add_emule_downloads(base_url: str, api_key: str, seeds: list[SeedFile]) -> list[dict[str, object]]:
-    """Queues multiple ED2K file links through eMule BB REST."""
+    """Queues multiple ED2K file links through eMuleBB REST."""
 
     rows = []
     for seed in seeds:
@@ -270,7 +270,7 @@ def require_shared_file_hash(row: dict[str, object], expected_name: str) -> str:
 
 
 def add_emule_shared_file(base_url: str, api_key: str, file_path: Path) -> dict[str, object]:
-    """Adds one eMule BB seed file to the shared-file model."""
+    """Adds one eMuleBB seed file to the shared-file model."""
 
     result = rest_smoke.http_request(
         base_url,
@@ -281,7 +281,7 @@ def add_emule_shared_file(base_url: str, api_key: str, file_path: Path) -> dict[
         request_timeout_seconds=30.0,
     )
     if int(result.get("status", 0)) != 200:
-        raise RuntimeError(f"Adding eMule BB shared file failed: {rest_smoke.compact_http_result(result)!r}")
+        raise RuntimeError(f"Adding eMuleBB shared file failed: {rest_smoke.compact_http_result(result)!r}")
     return rest_smoke.compact_http_result(result)
 
 
@@ -297,7 +297,7 @@ def reload_emule_shared_files(base_url: str, api_key: str) -> dict[str, object]:
         request_timeout_seconds=30.0,
     )
     if int(result.get("status", 0)) != 200:
-        raise RuntimeError(f"Reloading eMule BB shared files failed: {rest_smoke.compact_http_result(result)!r}")
+        raise RuntimeError(f"Reloading eMuleBB shared files failed: {rest_smoke.compact_http_result(result)!r}")
     return rest_smoke.compact_http_result(result)
 
 
@@ -307,7 +307,7 @@ def wait_for_emule_shared_file_link(
     seed: SeedFile,
     timeout_seconds: float,
 ) -> SeedFile:
-    """Waits until eMule BB exposes a shared-file row and ED2K link."""
+    """Waits until eMuleBB exposes a shared-file row and ED2K link."""
 
     observations: list[dict[str, object]] = []
 
@@ -331,9 +331,9 @@ def wait_for_emule_shared_file_link(
         return None
 
     try:
-        return live_common.wait_for(resolve, timeout_seconds, 1.0, f"eMule BB shared link for {seed.name}")
+        return live_common.wait_for(resolve, timeout_seconds, 1.0, f"eMuleBB shared link for {seed.name}")
     except Exception as exc:
-        raise RuntimeError(f"Timed out waiting for eMule BB shared link. Observations: {observations[-20:]!r}") from exc
+        raise RuntimeError(f"Timed out waiting for eMuleBB shared link. Observations: {observations[-20:]!r}") from exc
 
 
 def wait_for_harness_download_report(path: Path, timeout_seconds: float) -> dict[str, object]:

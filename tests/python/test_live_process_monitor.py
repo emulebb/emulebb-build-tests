@@ -52,13 +52,13 @@ def test_parse_config_payload_rejects_wrong_schema() -> None:
 
 def test_build_launch_command_uses_real_profile_override() -> None:
     command = live_process_monitor.build_launch_command(
-        Path(r"C:\build\emule.exe"),
+        Path(r"C:\build\emulebb.exe"),
         Path(r"X:\M\profile"),
         extra_args=("-foo",),
     )
 
     assert command == [
-        r"C:\build\emule.exe",
+        r"C:\build\emulebb.exe",
         "-ignoreinstances",
         "-c",
         r"X:\M\profile",

@@ -198,8 +198,8 @@ TEST_CASE("Other-functions seam routes deep unicode deletes through the recycle-
 TEST_CASE("Other-functions seam quotes Windows autorun commands")
 {
 	CHECK(OtherFunctionsSeams::BuildAutoStartRunCommand(CString(_T(""))).IsEmpty());
-	CHECK(OtherFunctionsSeams::BuildAutoStartRunCommand(CString(_T("C:\\Program Files\\eMule BB\\eMule.exe")))
-		== CString(_T("\"C:\\Program Files\\eMule BB\\eMule.exe\" -AutoStart")));
+	CHECK(OtherFunctionsSeams::BuildAutoStartRunCommand(CString(_T("C:\\Program Files\\eMuleBB\\eMule.exe")))
+		== CString(_T("\"C:\\Program Files\\eMuleBB\\eMule.exe\" -AutoStart")));
 }
 
 TEST_CASE("Other-functions seam keeps debug builds from writing autorun registry state")
@@ -222,7 +222,7 @@ TEST_CASE("Other-functions seam classifies ShellExecute legacy result codes")
 	CHECK(OtherFunctionsSeams::GetShellExecuteErrorCode(reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(33))) == ERROR_SUCCESS);
 }
 
-TEST_CASE("App registry identity seam keeps eMule BB registry ownership separate")
+TEST_CASE("App registry identity seam keeps eMuleBB registry ownership separate")
 {
 	CHECK(CString(AppRegistryIdentitySeams::GetAppSettingsKey()) == CString(_T("Software\\eMuleBB")));
 	CHECK(CString(AppRegistryIdentitySeams::GetAutoStartRunValueName()) == CString(_T("eMuleBBAutoStart")));
@@ -242,7 +242,7 @@ TEST_CASE("App registry identity seam keeps ed2k as the intentionally shared URL
 
 TEST_CASE("Path-helper seam grows module-path buffers past MAX_PATH")
 {
-	const CString strExpected = CString(_T("C:\\module-root\\")) + RepeatPathFragment(_T("segment\\"), 80) + CString(_T("emule.exe"));
+	const CString strExpected = CString(_T("C:\\module-root\\")) + RepeatPathFragment(_T("segment\\"), 80) + CString(_T("emulebb.exe"));
 
 	const CString strActual = PathHelpers::GetModuleFilePath(
 		reinterpret_cast<HMODULE>(static_cast<INT_PTR>(0x7777)),
@@ -619,7 +619,7 @@ TEST_CASE("Path-helper seam enumerates child entries whose full paths exceed MAX
 
 TEST_CASE("Path-helper seam formats MiniMule resource URLs from overlong module paths")
 {
-	const CString strModulePath = CString(_T("C:\\Program Files\\eMule\\")) + RepeatPathFragment(_T("segment\\"), 70) + CString(_T("emule.exe"));
+	const CString strModulePath = CString(_T("C:\\Program Files\\eMule\\")) + RepeatPathFragment(_T("segment\\"), 70) + CString(_T("emulebb.exe"));
 	const CString strResourceUrl = PathHelpers::BuildModuleResourceBaseUrl(
 		reinterpret_cast<HMODULE>(static_cast<INT_PTR>(0x2222)),
 		[&](HMODULE hModule, LPTSTR pszBuffer, DWORD cchBuffer) -> DWORD {

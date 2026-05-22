@@ -1,4 +1,4 @@
-"""Runs full aMuTorrent eMule BB live UI E2E checks."""
+"""Runs full aMuTorrent eMuleBB live UI E2E checks."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ write_json = live_common.write_json
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Builds the aMuTorrent eMule BB full UI live parser."""
+    """Builds the aMuTorrent eMuleBB full UI live parser."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace-root")
@@ -198,7 +198,7 @@ def assert_no_unexpected_browser_diagnostics(diagnostics: dict[str, list[dict[st
         "request_failures": list(diagnostics.get("request_failures", [])),
     }
     if any(unexpected.values()):
-        raise RuntimeError(f"aMuTorrent eMule BB UI browser diagnostics were not clean: {unexpected!r}")
+        raise RuntimeError(f"aMuTorrent eMuleBB UI browser diagnostics were not clean: {unexpected!r}")
 
 
 def click_visible_test_id(page: Any, test_id: str) -> None:
@@ -273,7 +273,7 @@ def dismiss_first_run_version_modal(page: Any) -> bool:
 
 
 def navigate_and_verify_views(page: Any) -> list[dict[str, str]]:
-    """Navigates every major eMule BB integration view and verifies its root hook."""
+    """Navigates every major eMuleBB integration view and verifies its root hook."""
 
     view_names = ("home", "search", "downloads", "shared", "uploads", "servers", "logs", "statistics", "history", "settings")
     visited: list[dict[str, str]] = []
@@ -324,7 +324,7 @@ def wait_for_emule_category(
     category_name: str,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    """Waits until eMule BB REST reports a category created through aMuTorrent."""
+    """Waits until eMuleBB REST reports a category created through aMuTorrent."""
 
     expected = category_name.strip().lower()
 
@@ -336,7 +336,7 @@ def wait_for_emule_category(
         data = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
         rows = data.get("items") if isinstance(data, dict) else data
         if not isinstance(rows, list):
-            raise RuntimeError(f"eMule BB category response did not contain a category list: {result!r}")
+            raise RuntimeError(f"eMuleBB category response did not contain a category list: {result!r}")
         matching = [
             row
             for row in rows
@@ -354,7 +354,7 @@ def wait_for_emule_category(
             },
         }
 
-    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=f"eMule BB category {category_name!r}")
+    return wait_for(resolve, timeout=timeout_seconds, interval=1.0, description=f"eMuleBB category {category_name!r}")
 
 
 def wait_for_enabled_test_id(page: Any, test_id: str, timeout_seconds: float = 15.0) -> None:
@@ -410,7 +410,7 @@ def select_download_transfer(page: Any, transfer_hash: str) -> dict[str, Any]:
 
 
 def delete_transfer(page: Any, *, transfer_hash: str, instance_id: str, file_name: str, timeout_seconds: float) -> dict[str, Any]:
-    """Deletes one harness-created eMule BB transfer and verifies it disappears."""
+    """Deletes one harness-created eMuleBB transfer and verifies it disappears."""
 
     delete_result = fetch_page_json(
         page,
@@ -455,7 +455,7 @@ def run_visible_transfer_actions(
     file_name: str,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    """Exercises visible transfer actions on one live eMule BB download."""
+    """Exercises visible transfer actions on one live eMuleBB download."""
 
     batch_state: dict[str, Any] = {}
     select_download_transfer(page, transfer_hash)
@@ -541,7 +541,7 @@ def run_visible_transfer_actions(
 
 
 def run_supporting_visible_views(page: Any, *, instance_id: str) -> dict[str, Any]:
-    """Exercises supporting visible eMule BB UI surfaces beyond downloads/search."""
+    """Exercises supporting visible eMuleBB UI surfaces beyond downloads/search."""
 
     checks: dict[str, Any] = {}
 
@@ -578,7 +578,7 @@ def run_supporting_visible_views(page: Any, *, instance_id: str) -> dict[str, An
     page.locator('[data-testid="view-logs"]').wait_for(timeout=15000)
     page.locator('[data-testid="app-logs-section"]').wait_for(timeout=15000)
     page.locator('[data-testid="app-logs-records"]').wait_for(timeout=15000)
-    page.locator('[data-testid="client-log-section-emule-bb-logs"]').wait_for(timeout=15000)
+    page.locator('[data-testid="client-log-section-emulebb-logs"]').wait_for(timeout=15000)
     checks["logs"] = {"app_logs_visible": True, "emulebb_logs_visible": True}
 
     return checks
@@ -593,7 +593,7 @@ def run_visible_search_download(
     inputs: live_wire_inputs.LiveWireInputs,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    """Runs a live eMule BB search and download through visible aMuTorrent controls."""
+    """Runs a live eMuleBB search and download through visible aMuTorrent controls."""
 
     term_index, query = live_wire_inputs.select_daily(inputs.generic_open_terms)
     click_visible_test_id(page, "nav-search")
@@ -678,7 +678,7 @@ def run_add_download_modal(
 
 
 def run_supporting_endpoint_checks(page: Any, *, instance_id: str) -> dict[str, Any]:
-    """Checks eMule BB supporting surfaces used by diagnostics views."""
+    """Checks eMuleBB supporting surfaces used by diagnostics views."""
 
     checks = {
         "servers": fetch_page_json(page, f"/api/v1/ed2k/servers?instanceId={instance_id}"),
@@ -722,12 +722,12 @@ def run_browser_ui_workflows(
     artifacts_dir: Path,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    """Runs full visible aMuTorrent eMule BB browser workflows."""
+    """Runs full visible aMuTorrent eMuleBB browser workflows."""
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - depends on operator environment
-        raise RuntimeError("Playwright is required for the aMuTorrent eMule BB UI live proof.") from exc
+        raise RuntimeError("Playwright is required for the aMuTorrent eMuleBB UI live proof.") from exc
 
     checks: dict[str, Any] = {
         "screenshots": {},
@@ -782,7 +782,7 @@ def run_browser_ui_workflows(
 
 
 def main() -> int:
-    """Runs the full aMuTorrent eMule BB live UI E2E proof."""
+    """Runs the full aMuTorrent eMuleBB live UI E2E proof."""
 
     args = build_parser().parse_args()
     inputs = live_wire_inputs.load_live_wire_inputs(

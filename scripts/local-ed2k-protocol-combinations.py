@@ -149,7 +149,7 @@ def bool_pref(value: bool) -> str:
 
 
 def apply_protocol_preferences(config_dir: Path, case: ProtocolCase) -> dict[str, object]:
-    """Applies protocol-obfuscation preferences shared by eMule BB and the tracing harness."""
+    """Applies protocol-obfuscation preferences shared by eMuleBB and the tracing harness."""
 
     live_common.apply_emule_preferences(
         config_dir,

@@ -127,7 +127,7 @@ def resolve_client2_app_exe(workspace_root: Path, configuration: str, override: 
             / "srchybrid"
             / "x64"
             / configuration
-            / "emule.exe"
+            / "emulebb.exe"
         ).resolve()
     if not candidate.is_file():
         raise RuntimeError(f"Client2 tracing-harness executable was not found at '{candidate}'.")
@@ -285,8 +285,8 @@ def build_server_config(
         "admin_listen_address": f"127.0.0.1:{admin_port}",
         "admin_token": token,
         "server_name": "emulebb-local-e2e",
-        "server_description": "Workspace deterministic eMule BB live E2E server",
-        "message": "Workspace deterministic eMule BB live E2E server",
+        "server_description": "Workspace deterministic eMuleBB live E2E server",
+        "message": "Workspace deterministic eMuleBB live E2E server",
         "storage_backend": "json",
         "catalog_path": str(catalog_path),
         "search_batch_size": 200,

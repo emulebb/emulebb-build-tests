@@ -33,7 +33,7 @@ def test_workspace_parent_root_honors_env_override(tmp_path: Path, monkeypatch) 
 def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"
-    app_exe = workspace / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emule.exe"
+    app_exe = workspace / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
     harness_exe = workspace / "app" / "eMule-community-tracing-harness" / "srchybrid" / "x64" / "Release" / "emule.exe"
     app_exe.parent.mkdir(parents=True)
     harness_exe.parent.mkdir(parents=True)

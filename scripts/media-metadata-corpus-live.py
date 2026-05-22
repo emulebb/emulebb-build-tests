@@ -1,4 +1,4 @@
-"""Runs eMule BB media metadata extractor comparisons over local video roots."""
+"""Runs eMuleBB media metadata extractor comparisons over local video roots."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 def default_emule_exe() -> Path:
     """Returns the default release app binary used by live corpus diagnostics."""
 
-    return WORKSPACE_ROOT / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emule.exe"
+    return WORKSPACE_ROOT / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
 
 def path_id(path: Path) -> str:

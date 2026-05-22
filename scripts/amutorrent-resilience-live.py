@@ -1,4 +1,4 @@
-"""Runs aMuTorrent resilience live E2E checks against eMule BB REST."""
+"""Runs aMuTorrent resilience live E2E checks against eMuleBB REST."""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def is_config_test_failure(result: dict[str, Any]) -> bool:
 
 
 def build_emulebb_config_payload(*, host: str, port: int, api_key: str, use_ssl: bool = False, enabled: bool = True) -> dict[str, Any]:
-    """Builds the eMule BB section accepted by aMuTorrent config test/save endpoints."""
+    """Builds the eMuleBB section accepted by aMuTorrent config test/save endpoints."""
 
     return {
         "enabled": enabled,
@@ -145,7 +145,7 @@ def find_client_config(config_payload: dict[str, Any], *, instance_id: str) -> d
     for client in clients:
         if isinstance(client, dict) and client.get("id") == instance_id:
             return dict(client)
-    raise RuntimeError(f"aMuTorrent current config did not contain expected eMule BB instance {instance_id!r}.")
+    raise RuntimeError(f"aMuTorrent current config did not contain expected eMuleBB instance {instance_id!r}.")
 
 
 def build_saved_config_with_key(
@@ -157,7 +157,7 @@ def build_saved_config_with_key(
     api_key: str,
     use_ssl: bool = False,
 ) -> dict[str, Any]:
-    """Returns a complete config object with one eMule BB client key replaced."""
+    """Returns a complete config object with one eMuleBB client key replaced."""
 
     updated = dict(current_config)
     updated_clients: list[dict[str, Any]] = []
@@ -176,7 +176,7 @@ def build_saved_config_with_key(
             replaced = True
         updated_clients.append(next_client)
     if not replaced:
-        raise RuntimeError(f"Could not update missing eMule BB instance {instance_id!r}.")
+        raise RuntimeError(f"Could not update missing eMuleBB instance {instance_id!r}.")
     updated["clients"] = updated_clients
     return updated
 
@@ -209,7 +209,7 @@ def run_bad_credential_recovery(
     use_ssl: bool,
     instance_id: str,
 ) -> dict[str, Any]:
-    """Verifies a bad eMule BB key fails cleanly and a valid key recovers."""
+    """Verifies a bad eMuleBB key fails cleanly and a valid key recovers."""
 
     current = fetch_page_json(page, "/api/config/current")
     current_payload = require_browser_http_ok("current-config-before-bad-key", current)
@@ -450,7 +450,7 @@ def restart_emule_for_reconnect(
     ready_timeout_seconds: float,
     network_ready_timeout_seconds: float,
 ) -> tuple[Any, dict[str, Any]]:
-    """Restarts eMule BB with the same profile and waits for REST/network recovery."""
+    """Restarts eMuleBB with the same profile and waits for REST/network recovery."""
 
     started_at = time.monotonic()
     close_app_cleanly(app)

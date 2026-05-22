@@ -23,6 +23,8 @@ except ImportError:  # pragma: no cover - non-Windows import guard
 
 WORKSPACE_NAME = "workspace"
 DEFAULT_APP_VARIANTS = ("main", "community", "tracing-harness")
+MAIN_APP_EXE_NAME = "emulebb.exe"
+LEGACY_APP_EXE_NAME = "emule.exe"
 APP_VARIANT_WORKTREE_NAMES = {
     "community": "eMule-community-baseline",
     "tracing-harness": "eMule-community-tracing-harness",
@@ -610,7 +612,8 @@ def resolve_app_executable(
     if app_exe:
         resolved_app_exe = Path(app_exe).resolve()
     else:
-        resolved_app_exe = (resolved_app_root / "srchybrid" / "x64" / configuration / "emule.exe").resolve()
+        exe_name = MAIN_APP_EXE_NAME if resolved_app_root.name == "eMule-main" else LEGACY_APP_EXE_NAME
+        resolved_app_exe = (resolved_app_root / "srchybrid" / "x64" / configuration / exe_name).resolve()
     if not resolved_app_exe.is_file():
         raise RuntimeError(f"App executable was not found at '{resolved_app_exe}'.")
     return resolved_workspace_root, resolved_app_root, resolved_app_exe

@@ -10,16 +10,16 @@ TEST_CASE("firewall repair seam builds broad inbound and outbound TCP UDP rules"
 		WindowsFirewallRepairSeams::BuildDesiredRules(4662, 4672, true, 4711, _T(""));
 
 	REQUIRE(rules.size() == 4);
-	CHECK(rules[0].strName == _T("eMule BB Inbound TCP"));
+	CHECK(rules[0].strName == _T("eMuleBB Inbound TCP"));
 	CHECK(rules[0].strDirection == _T("Inbound"));
 	CHECK(rules[0].strProtocol == _T("TCP"));
-	CHECK(rules[1].strName == _T("eMule BB Inbound UDP"));
+	CHECK(rules[1].strName == _T("eMuleBB Inbound UDP"));
 	CHECK(rules[1].strDirection == _T("Inbound"));
 	CHECK(rules[1].strProtocol == _T("UDP"));
-	CHECK(rules[2].strName == _T("eMule BB Outbound TCP"));
+	CHECK(rules[2].strName == _T("eMuleBB Outbound TCP"));
 	CHECK(rules[2].strDirection == _T("Outbound"));
 	CHECK(rules[2].strProtocol == _T("TCP"));
-	CHECK(rules[3].strName == _T("eMule BB Outbound UDP"));
+	CHECK(rules[3].strName == _T("eMuleBB Outbound UDP"));
 	CHECK(rules[3].strDirection == _T("Outbound"));
 	CHECK(rules[3].strProtocol == _T("UDP"));
 }
@@ -33,8 +33,8 @@ TEST_CASE("firewall repair seam ignores current listen and REST ports")
 
 TEST_CASE("firewall repair seam safely quotes PowerShell literals")
 {
-	CHECK(WindowsFirewallRepairSeams::QuotePowerShellSingleQuotedLiteral(_T("C:\\Users\\O'Brien\\emule.exe"))
-		== _T("'C:\\Users\\O''Brien\\emule.exe'"));
+	CHECK(WindowsFirewallRepairSeams::QuotePowerShellSingleQuotedLiteral(_T("C:\\Users\\O'Brien\\emulebb.exe"))
+		== _T("'C:\\Users\\O''Brien\\emulebb.exe'"));
 }
 
 TEST_CASE("firewall repair script owns broad rule names and all firewall profiles")
@@ -42,21 +42,21 @@ TEST_CASE("firewall repair script owns broad rule names and all firewall profile
 	const std::vector<WindowsFirewallRepairSeams::CFirewallRuleSpec> rules =
 		WindowsFirewallRepairSeams::BuildDesiredRules(4662, 4672, true, 4711, _T("0.0.0.0"));
 	const CString script = WindowsFirewallRepairSeams::BuildRepairScript(
-		_T("C:\\Apps\\eMule BB\\emule.exe"),
+		_T("C:\\Apps\\eMuleBB\\emulebb.exe"),
 		rules,
 		_T("C:\\Temp\\repair-result.json"));
 
-	CHECK(script.Find(_T("eMule BB Inbound TCP")) >= 0);
-	CHECK(script.Find(_T("eMule BB Inbound UDP")) >= 0);
-	CHECK(script.Find(_T("eMule BB Outbound TCP")) >= 0);
-	CHECK(script.Find(_T("eMule BB Outbound UDP")) >= 0);
-	CHECK(script.Find(_T("eMule BB REST")) < 0);
+	CHECK(script.Find(_T("eMuleBB Inbound TCP")) >= 0);
+	CHECK(script.Find(_T("eMuleBB Inbound UDP")) >= 0);
+	CHECK(script.Find(_T("eMuleBB Outbound TCP")) >= 0);
+	CHECK(script.Find(_T("eMuleBB Outbound UDP")) >= 0);
+	CHECK(script.Find(_T("eMuleBB REST")) < 0);
 	CHECK(script.Find(_T("-Profile Domain,Private,Public")) >= 0);
 	CHECK(script.Find(_T("-Direction $Direction")) >= 0);
 	CHECK(script.Find(_T("-Protocol $Protocol")) >= 0);
 	CHECK(script.Find(_T("-LocalPort")) < 0);
 	CHECK(script.Find(_T("-RemotePort")) < 0);
-	CHECK(script.Find(_T("Write-Host 'eMule BB Windows Firewall Repair'")) >= 0);
+	CHECK(script.Find(_T("Write-Host 'eMuleBB Windows Firewall Repair'")) >= 0);
 	CHECK(script.Find(_T("all ports, all hosts, all interfaces")) >= 0);
 	CHECK(script.Find(_T("Windows Firewall repair completed successfully.")) >= 0);
 	CHECK(script.Find(_T("Press Enter to close this window")) >= 0);

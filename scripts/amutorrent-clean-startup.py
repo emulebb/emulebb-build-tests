@@ -1,4 +1,4 @@
-"""Runs a clean-startup aMuTorrent first-run wizard proof against eMule BB REST."""
+"""Runs a clean-startup aMuTorrent first-run wizard proof against eMuleBB REST."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def build_clean_amutorrent_environment(
     data_dir: Path,
     extra_ca_cert: str = "",
 ) -> dict[str, str]:
-    """Builds the environment for first-run aMuTorrent without pre-seeding eMule BB."""
+    """Builds the environment for first-run aMuTorrent without pre-seeding eMuleBB."""
 
     env = dict(base_env)
     env.update(
@@ -232,7 +232,7 @@ def wait_for_emule_transfer_materialized(
     transfer_hash: str,
     timeout_seconds: float,
 ) -> dict[str, object]:
-    """Waits until eMule BB REST can see the transfer triggered by aMuTorrent."""
+    """Waits until eMuleBB REST can see the transfer triggered by aMuTorrent."""
 
     return rest_api_smoke.wait_for_triggered_transfer(
         emule_base_url,
@@ -299,11 +299,11 @@ def drive_first_run_wizard(
             page.get_by_role("button", name="Next").click()
 
             page.get_by_role("heading", name="ED2K Integration").wait_for(timeout=int(timeout_seconds * 1000))
-            emulebb_card = page.locator("xpath=//h3[normalize-space()='eMule BB (REST API)']/ancestor::div[contains(@class,'border')][1]")
-            emulebb_card.get_by_text("Enable eMule BB", exact=True).click()
+            emulebb_card = page.locator("xpath=//h3[normalize-space()='eMuleBB (REST API)']/ancestor::div[contains(@class,'border')][1]")
+            emulebb_card.get_by_text("Enable eMuleBB", exact=True).click()
             emulebb_card.get_by_placeholder("127.0.0.1").fill(emule_host)
             emulebb_card.get_by_placeholder("4711").fill(str(emule_port))
-            emulebb_card.get_by_placeholder("Enter eMule BB API key").fill(api_key)
+            emulebb_card.get_by_placeholder("Enter eMuleBB API key").fill(api_key)
             if use_ssl:
                 emulebb_card.get_by_text("Use SSL (HTTPS)", exact=True).click()
 
@@ -316,7 +316,7 @@ def drive_first_run_wizard(
             checks["emulebb_connection_test"] = connection
             connection_payload = require_browser_http_ok("emulebb-connection-test", connection)
             if connection_payload.get("success") is not True:
-                raise RuntimeError(f"aMuTorrent eMule BB connection test did not pass: {connection!r}")
+                raise RuntimeError(f"aMuTorrent eMuleBB connection test did not pass: {connection!r}")
 
             configured = artifacts_dir / "wizard-emulebb-configured.png"
             page.screenshot(path=str(configured), full_page=True)
@@ -337,7 +337,7 @@ def drive_first_run_wizard(
             current_payload = require_browser_http_ok("current-config-after-setup", current)
             clients = current_payload.get("clients")
             if not isinstance(clients, list) or not any(item.get("type") == "emulebb" and item.get("enabled") is not False for item in clients if isinstance(item, dict)):
-                raise RuntimeError(f"aMuTorrent config did not persist an enabled eMule BB client: {current!r}")
+                raise RuntimeError(f"aMuTorrent config did not persist an enabled eMuleBB client: {current!r}")
 
             after_setup = artifacts_dir / "wizard-complete.png"
             page.screenshot(path=str(after_setup), full_page=True)

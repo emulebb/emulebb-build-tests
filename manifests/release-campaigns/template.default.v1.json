@@ -2,8 +2,8 @@
   "schemaVersion": "emule-build-tests.release-campaign.v1",
   "kind": "template",
   "templateId": "emulebb.release.template.default.v1",
-  "title": "eMule BB release campaign template",
-  "description": "Strict release-test taxonomy owned by eMule BB for current and future releases.",
+  "title": "eMuleBB release campaign template",
+  "description": "Strict release-test taxonomy owned by eMuleBB for current and future releases.",
   "taxonomy": {
     "phases": [
       {

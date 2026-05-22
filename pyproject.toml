@@ -24,7 +24,7 @@ addopts = [
 markers = [
     "unit: fast pure-Python harness tests",
     "native: tests that require a built emule-tests.exe",
-    "live: tests that launch emule.exe or drive the Win32 UI",
+    "live: tests that launch emulebb.exe or drive the Win32 UI",
     "slow: long-running scenarios",
 ]
 pythonpath = [

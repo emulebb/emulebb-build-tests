@@ -18,7 +18,7 @@ vectors and state-machine summaries. Raw tracing-harness JSONL dumps, packet
 hex, timestamps, peer addresses, and passive capture files must stay under
 generated `reports` artifacts and must not be committed as protocol goldens.
 
-`release-campaigns\` contains the eMule BB-owned release test campaign model.
+`release-campaigns\` contains the eMuleBB-owned release test campaign model.
 The default template defines the strict release phase taxonomy used by future
 release instances. Concrete campaign manifests map feature-flow scenarios to
 the current command and evidence surfaces without executing those commands.

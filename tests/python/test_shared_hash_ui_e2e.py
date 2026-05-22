@@ -183,14 +183,14 @@ def test_launch_app_with_fresh_startup_trace_removes_stale_trace(monkeypatch, tm
     monkeypatch.setattr(module.live_common, "launch_app", launch_app)
 
     app = module.launch_app_with_fresh_startup_trace(
-        tmp_path / "emule.exe",
+        tmp_path / "emulebb.exe",
         {
             "profile_base": profile_base,
             "startup_profile_path": trace_path,
         },
     )
 
-    assert app == {"app": str(tmp_path / "emule.exe")}
+    assert app == {"app": str(tmp_path / "emulebb.exe")}
     assert launched == [profile_base]
 
 

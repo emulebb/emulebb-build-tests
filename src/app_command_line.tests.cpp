@@ -24,9 +24,9 @@ TEST_SUITE_BEGIN("startup");
 
 TEST_CASE("App command line accepts help aliases without starting the app")
 {
-	const auto helpLong = Parse({_T("emule.exe"), _T("--help")});
-	const auto helpShort = Parse({_T("emule.exe"), _T("-h")});
-	const auto helpWindows = Parse({_T("emule.exe"), _T("/?")});
+	const auto helpLong = Parse({_T("emulebb.exe"), _T("--help")});
+	const auto helpShort = Parse({_T("emulebb.exe"), _T("-h")});
+	const auto helpWindows = Parse({_T("emulebb.exe"), _T("/?")});
 
 	CHECK(helpLong.eMode == AppCommandLineSeams::EMode::Help);
 	CHECK(helpShort.eMode == AppCommandLineSeams::EMode::Help);
@@ -37,7 +37,7 @@ TEST_CASE("App command line accepts help aliases without starting the app")
 
 TEST_CASE("App command line rejects unknown switches")
 {
-	const auto result = Parse({_T("emule.exe"), _T("--wat")});
+	const auto result = Parse({_T("emulebb.exe"), _T("--wat")});
 
 	CHECK(result.eMode == AppCommandLineSeams::EMode::Invalid);
 	CHECK(result.strError == CString(_T("Unknown command-line switch: --wat")));
@@ -45,7 +45,7 @@ TEST_CASE("App command line rejects unknown switches")
 
 TEST_CASE("App command line accepts and normalizes an isolated profile base")
 {
-	const auto result = Parse({_T("emule.exe"), _T("-c"), _T("C:\\profiles\\test-root")});
+	const auto result = Parse({_T("emulebb.exe"), _T("-c"), _T("C:\\profiles\\test-root")});
 
 	CHECK(result.eMode == AppCommandLineSeams::EMode::NormalStartup);
 	CHECK(result.bHasConfigBaseDir);
@@ -54,8 +54,8 @@ TEST_CASE("App command line accepts and normalizes an isolated profile base")
 
 TEST_CASE("App command line rejects invalid and duplicate isolated profile bases")
 {
-	const auto relative = Parse({_T("emule.exe"), _T("-c"), _T("relative\\profile")});
-	const auto duplicate = Parse({_T("emule.exe"), _T("/c"), _T("C:\\one"), _T("-c"), _T("C:\\two")});
+	const auto relative = Parse({_T("emulebb.exe"), _T("-c"), _T("relative\\profile")});
+	const auto duplicate = Parse({_T("emulebb.exe"), _T("/c"), _T("C:\\one"), _T("-c"), _T("C:\\two")});
 
 	CHECK(relative.eMode == AppCommandLineSeams::EMode::Invalid);
 	CHECK(relative.strError == CString(_T("The -c option requires a canonical absolute eMule base directory like C:\\path.")));
@@ -65,7 +65,7 @@ TEST_CASE("App command line rejects invalid and duplicate isolated profile bases
 
 TEST_CASE("App command line accepts startup singleton switches")
 {
-	const auto result = Parse({_T("emule.exe"), _T("-ignoreinstances"), _T("-AutoStart"), _T("-assertfile")});
+	const auto result = Parse({_T("emulebb.exe"), _T("-ignoreinstances"), _T("-AutoStart"), _T("-assertfile")});
 
 	CHECK(result.eMode == AppCommandLineSeams::EMode::NormalStartup);
 	CHECK(result.bIgnoreInstances);
@@ -75,8 +75,8 @@ TEST_CASE("App command line accepts startup singleton switches")
 
 TEST_CASE("App command line rejects duplicate and valued no-value switches")
 {
-	const auto duplicate = Parse({_T("emule.exe"), _T("-ignoreinstances"), _T("-ignoreinstances")});
-	const auto valued = Parse({_T("emule.exe"), _T("-AutoStart=yes")});
+	const auto duplicate = Parse({_T("emulebb.exe"), _T("-ignoreinstances"), _T("-ignoreinstances")});
+	const auto valued = Parse({_T("emulebb.exe"), _T("-AutoStart=yes")});
 
 	CHECK(duplicate.eMode == AppCommandLineSeams::EMode::Invalid);
 	CHECK(duplicate.strError == CString(_T("The -ignoreinstances option may be specified only once.")));
@@ -86,8 +86,8 @@ TEST_CASE("App command line rejects duplicate and valued no-value switches")
 
 TEST_CASE("App command line preserves a single positional command link or file")
 {
-	const auto result = Parse({_T("emule.exe"), _T("ed2k://|file|operator-smoke.bin|42|0123456789abcdef0123456789abcdef|/")});
-	const auto duplicate = Parse({_T("emule.exe"), _T("ed2k://|server|127.0.0.1|4661|/"), _T("exit")});
+	const auto result = Parse({_T("emulebb.exe"), _T("ed2k://|file|operator-smoke.bin|42|0123456789abcdef0123456789abcdef|/")});
+	const auto duplicate = Parse({_T("emulebb.exe"), _T("ed2k://|server|127.0.0.1|4661|/"), _T("exit")});
 
 	CHECK(result.eMode == AppCommandLineSeams::EMode::NormalStartup);
 	CHECK(result.strPositional == CString(_T("ed2k://|file|operator-smoke.bin|42|0123456789abcdef0123456789abcdef|/")));
@@ -98,7 +98,7 @@ TEST_CASE("App command line preserves a single positional command link or file")
 TEST_CASE("App command line parses certificate generation inputs")
 {
 	const auto result = Parse({
-		_T("emule.exe"),
+		_T("emulebb.exe"),
 		_T("--generate-webserver-cert"),
 		_T("--cert=cert.pem"),
 		_T("--key"),
@@ -123,9 +123,9 @@ TEST_CASE("App command line parses certificate generation inputs")
 
 TEST_CASE("App command line rejects partial certificate generation inputs")
 {
-	const auto missingKey = Parse({_T("emule.exe"), _T("--generate-webserver-cert"), _T("--cert"), _T("cert.pem")});
-	const auto certWithoutMode = Parse({_T("emule.exe"), _T("--cert"), _T("cert.pem"), _T("--key"), _T("key.pem")});
-	const auto missingCertValue = Parse({_T("emule.exe"), _T("--generate-webserver-cert"), _T("--cert"), _T("--key"), _T("key.pem")});
+	const auto missingKey = Parse({_T("emulebb.exe"), _T("--generate-webserver-cert"), _T("--cert"), _T("cert.pem")});
+	const auto certWithoutMode = Parse({_T("emulebb.exe"), _T("--cert"), _T("cert.pem"), _T("--key"), _T("key.pem")});
+	const auto missingCertValue = Parse({_T("emulebb.exe"), _T("--generate-webserver-cert"), _T("--cert"), _T("--key"), _T("key.pem")});
 
 	CHECK(missingKey.eMode == AppCommandLineSeams::EMode::Invalid);
 	CHECK(missingKey.strError == CString(_T("The --generate-webserver-cert command requires --cert and --key.")));
@@ -138,7 +138,7 @@ TEST_CASE("App command line rejects partial certificate generation inputs")
 TEST_CASE("App command line parses media metadata diagnostics")
 {
 	const auto result = Parse({
-		_T("emule.exe"),
+		_T("emulebb.exe"),
 		_T("--diagnose-media-metadata"),
 		_T("--input"),
 		_T("C:\\media\\sample.mkv"),
@@ -152,10 +152,10 @@ TEST_CASE("App command line parses media metadata diagnostics")
 
 TEST_CASE("App command line rejects incomplete media metadata diagnostics")
 {
-	const auto missingInput = Parse({_T("emule.exe"), _T("--diagnose-media-metadata")});
-	const auto inputWithoutMode = Parse({_T("emule.exe"), _T("--input"), _T("C:\\media\\sample.mkv")});
+	const auto missingInput = Parse({_T("emulebb.exe"), _T("--diagnose-media-metadata")});
+	const auto inputWithoutMode = Parse({_T("emulebb.exe"), _T("--input"), _T("C:\\media\\sample.mkv")});
 	const auto twoHeadlessModes = Parse({
-		_T("emule.exe"),
+		_T("emulebb.exe"),
 		_T("--generate-webserver-cert"),
 		_T("--cert"),
 		_T("cert.pem"),

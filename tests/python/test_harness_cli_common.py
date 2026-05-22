@@ -91,7 +91,7 @@ def test_cleanup_source_artifacts_leaves_locked_temp_payloads(monkeypatch, tmp_p
         repo_root=tmp_path,
         workspace_root=tmp_path,
         app_root=tmp_path,
-        app_exe=tmp_path / "emule.exe",
+        app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path,
         configuration="Release",
         suite_name="locked-cleanup",
@@ -112,7 +112,7 @@ def test_resolve_profile_seed_dir_uses_default_or_override(tmp_path: Path) -> No
         repo_root=tmp_path,
         workspace_root=tmp_path,
         app_root=tmp_path,
-        app_exe=tmp_path / "emule.exe",
+        app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path / "default-seed",
         configuration="Release",
         suite_name="seed-resolution",
@@ -132,7 +132,7 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
     app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
-    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emule.exe"
+    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emulebb.exe"
     seed_dir.mkdir(parents=True)
     app_exe.parent.mkdir(parents=True)
     app_exe.write_text("exe", encoding="utf-8")
@@ -171,7 +171,7 @@ def test_prepare_run_paths_rejects_explicit_windows_temp_artifacts(monkeypatch, 
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
     app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
-    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emule.exe"
+    app_exe = app_root / "srchybrid" / "x64" / "Release" / "emulebb.exe"
     local_temp = tmp_path / "Users" / "tester" / "AppData" / "Local" / "Temp"
     seed_dir.mkdir(parents=True)
     app_exe.parent.mkdir(parents=True)
@@ -258,7 +258,7 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
 
     monkeypatch.setattr(module, "winreg", FakeWinReg)
     stale_dump_root = tmp_path / "state" / "live-e2e-artifacts" / "old-run" / "crash-dumps"
-    for image_name in ("emule.exe", "umdh.exe", "procdump64.exe"):
+    for image_name in ("emulebb.exe", "umdh.exe", "procdump64.exe"):
         subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\" + image_name)
         registry[subkey] = {
             "DumpFolder": (str(stale_dump_root), FakeWinReg.REG_EXPAND_SZ),
@@ -267,7 +267,7 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
 
     result = module.configure_local_dumps(
         artifact_dir=tmp_path / "artifacts",
-        app_exe=tmp_path / "emule.exe",
+        app_exe=tmp_path / "emulebb.exe",
         tool_image_names=("umdh.exe", "procdump64.exe"),
     )
 
@@ -276,7 +276,7 @@ def test_configure_local_dumps_enables_full_dumps_for_emule_and_tools(monkeypatc
     assert result["dump_count"] == 64
     assert result["dump_type"] == 2
     assert (tmp_path / "artifacts" / "crash-dumps").is_dir()
-    assert result["image_names"] == ["emule.exe", "umdh.exe", "procdump64.exe"]
+    assert result["image_names"] == ["emulebb.exe", "umdh.exe", "procdump64.exe"]
     for image_name in result["image_names"]:
         subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\" + image_name)
         assert registry[subkey]["DumpFolder"][0] == str((tmp_path / "artifacts" / "crash-dumps").resolve())
@@ -358,7 +358,7 @@ def test_cleanup_source_artifacts_restores_or_clears_local_dumps_registry(monkey
     artifact_dir.mkdir(parents=True)
     previous_external_dump = tmp_path / "operator-dumps"
     previous_harness_dump = tmp_path / "state" / "live-e2e-artifacts" / "old-run" / "crash-dumps"
-    emule_subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\emule.exe")
+    emule_subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\emulebb.exe")
     tool_subkey = FakeWinReg.key_name(FakeWinReg.HKEY_CURRENT_USER, module.LOCAL_DUMPS_BASE_SUBKEY + "\\umdh.exe")
     registry[emule_subkey] = {
         "DumpFolder": (str(previous_external_dump), FakeWinReg.REG_EXPAND_SZ),
@@ -371,14 +371,14 @@ def test_cleanup_source_artifacts_restores_or_clears_local_dumps_registry(monkey
 
     local_dumps = module.configure_local_dumps(
         artifact_dir=artifact_dir,
-        app_exe=tmp_path / "emule.exe",
+        app_exe=tmp_path / "emulebb.exe",
         tool_image_names=("umdh.exe",),
     )
     paths = module.HarnessRunPaths(
         repo_root=tmp_path,
         workspace_root=tmp_path,
         app_root=tmp_path,
-        app_exe=tmp_path / "emule.exe",
+        app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path,
         configuration="Release",
         suite_name="suite",
@@ -406,7 +406,7 @@ def test_cleanup_source_artifacts_restores_local_dumps_when_artifacts_are_kept(m
         repo_root=tmp_path,
         workspace_root=tmp_path,
         app_root=tmp_path,
-        app_exe=tmp_path / "emule.exe",
+        app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path,
         configuration="Release",
         suite_name="suite",
@@ -454,7 +454,7 @@ def test_publish_run_artifacts_rewrites_json_paths_to_report_dir(tmp_path: Path)
         repo_root=tmp_path,
         workspace_root=tmp_path / "workspaces" / "workspace",
         app_root=tmp_path / "app",
-        app_exe=tmp_path / "app" / "emule.exe",
+        app_exe=tmp_path / "app" / "emulebb.exe",
         seed_config_dir=tmp_path / "seed",
         configuration="Release",
         suite_name="suite",
@@ -478,23 +478,23 @@ def test_collect_local_dump_files_filters_configured_images(tmp_path: Path) -> N
     module = load_harness_cli_common_module()
     dump_dir = tmp_path / "crash-dumps"
     dump_dir.mkdir()
-    (dump_dir / "emule.exe.1234.dmp").write_bytes(b"product")
+    (dump_dir / "emulebb.exe.1234.dmp").write_bytes(b"product")
     (dump_dir / "umdh.exe.2222.dmp").write_bytes(b"tool")
     (dump_dir / "other.exe.3333.dmp").write_bytes(b"noise")
 
     summary = module.collect_local_dump_files(
         {
             "dump_folder": str(dump_dir),
-            "image_names": ["emule.exe", "umdh.exe"],
+            "image_names": ["emulebb.exe", "umdh.exe"],
         }
     )
 
     assert summary["count"] == 2
-    assert [row["name"] for row in summary["files"]] == ["emule.exe.1234.dmp", "umdh.exe.2222.dmp"]
-    assert [row["image_name"] for row in summary["files"]] == ["emule.exe", "umdh.exe"]
-    assert summary["image_counts"] == {"emule.exe": 1, "umdh.exe": 1}
-    assert summary["non_empty_image_counts"] == {"emule.exe": 1, "umdh.exe": 1}
-    assert [row["name"] for row in module.local_dump_files_for_image(summary, "emule.exe")] == ["emule.exe.1234.dmp"]
+    assert [row["name"] for row in summary["files"]] == ["emulebb.exe.1234.dmp", "umdh.exe.2222.dmp"]
+    assert [row["image_name"] for row in summary["files"]] == ["emulebb.exe", "umdh.exe"]
+    assert summary["image_counts"] == {"emulebb.exe": 1, "umdh.exe": 1}
+    assert summary["non_empty_image_counts"] == {"emulebb.exe": 1, "umdh.exe": 1}
+    assert [row["name"] for row in module.local_dump_files_for_image(summary, "emulebb.exe")] == ["emulebb.exe.1234.dmp"]
 
 
 def test_process_exited_with_access_violation_matches_windows_code() -> None:

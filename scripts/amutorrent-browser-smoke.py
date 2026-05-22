@@ -1,4 +1,4 @@
-"""Runs a live aMuTorrent browser smoke against eMule BB REST."""
+"""Runs a live aMuTorrent browser smoke against eMuleBB REST."""
 
 from __future__ import annotations
 
@@ -473,7 +473,7 @@ def assert_browser_search_workflows(checks: dict[str, Any]) -> None:
 
 
 def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
-    """Verifies the browser-visible snapshot carries eMule BB detail hydration fields."""
+    """Verifies the browser-visible snapshot carries eMuleBB detail hydration fields."""
 
     if "snapshot_after_add" not in checks:
         return
@@ -486,7 +486,7 @@ def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
         value = added.get(field_name)
         if not isinstance(value, list):
             raise RuntimeError(
-                f"aMuTorrent browser workflow did not expose hydrated eMule BB field "
+                f"aMuTorrent browser workflow did not expose hydrated eMuleBB field "
                 f"{field_name!r} as a list: {value!r}"
             )
     segment_added = segment_snapshot_item(checks, "segment_snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
@@ -496,7 +496,7 @@ def assert_emulebb_detail_hydration(checks: dict[str, Any]) -> None:
         value = segment_added.get(field_name)
         if not isinstance(value, list):
             raise RuntimeError(
-                f"aMuTorrent browser workflow did not expose segment-subscribed eMule BB field "
+                f"aMuTorrent browser workflow did not expose segment-subscribed eMuleBB field "
                 f"{field_name!r} as a list: {value!r}"
             )
 
@@ -923,7 +923,7 @@ def main() -> int:
                 "EMULEBB_API_KEY": args.api_key,
                 "EMULEBB_USE_SSL": "false",
                 "EMULEBB_ID": instance_id,
-                "EMULEBB_NAME": "eMule BB Browser Smoke",
+                "EMULEBB_NAME": "eMuleBB Browser Smoke",
             }
         )
         node_path = Path(str(node_info["path"]))

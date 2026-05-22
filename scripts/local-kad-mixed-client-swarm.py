@@ -1,4 +1,4 @@
-"""Local Kad swarm matrix across eMule BB, tracing harness, and aMule."""
+"""Local Kad swarm matrix across eMuleBB, tracing harness, and aMule."""
 
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ def build_participant_specs(ports: list[tuple[int, int, int]], amule_ports: dict
 
 
 def explicit_rest_bootstrap_plan(specs: dict[str, Any]) -> list[tuple[str, Any, str, Any]]:
-    """Returns every targeted REST bootstrap path available from eMule BB."""
+    """Returns every targeted REST bootstrap path available from eMuleBB."""
 
     emulebb = specs["emulebb"]
     harness = specs["harness"]
@@ -473,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
             "min_contacts_per_emule_client": args.min_contacts_per_emule_client,
             "require_connected": True,
             "single_bind_address_limit": "Kad accepts one contact per IP in this local single-address matrix; multi-contact assertions require per-client local IP aliases or adapters.",
-            "tracing_harness_policy": "Kad autostarts from preferences and preseeded nodes.dat; no eMule BB JSON REST API is expected on the harness branch.",
+            "tracing_harness_policy": "Kad autostarts from preferences and preseeded nodes.dat; no eMuleBB JSON REST API is expected on the harness branch.",
             "amule_policy": "Kad must be running through EC; outbound paths are driven by nodes.dat preseed.",
         }
         report["checks"]["emule_family_swarm_ready"] = local_kad.wait_for_local_swarm(

@@ -57,7 +57,7 @@ def test_nat_backend_order_requires_attempts() -> None:
     module = load_rest_api_smoke_module()
 
     with pytest.raises(AssertionError, match="No NAT mapping backend attempts"):
-        module.assert_upnp_backend_order([{"message": "eMule BB 0.7.3 x64 ready"}])
+        module.assert_upnp_backend_order([{"message": "eMuleBB 0.7.3 x64 ready"}])
 
 
 def test_p2p_bind_override_writes_interface_name(tmp_path: Path) -> None:
@@ -86,7 +86,7 @@ def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tm
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
     preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
-    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emule.exe"
+    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
     module.configure_webserver_profile(config_dir, app_exe, "api-key", 4711, "127.0.0.1")
 
@@ -101,7 +101,7 @@ def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
     preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
-    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emule.exe"
+    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
     module.configure_webserver_profile(
         config_dir,
@@ -181,14 +181,14 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    material = module.create_https_certificate_pair(Path("emule.exe"), tmp_path, hosts=("192.168.1.210", "127.0.0.1"))
+    material = module.create_https_certificate_pair(Path("emulebb.exe"), tmp_path, hosts=("192.168.1.210", "127.0.0.1"))
 
     assert material["generator"] == "emule-cli"
     assert Path(material["certificate"]).read_text(encoding="utf-8") == "certificate"
     assert Path(material["key"]).read_text(encoding="utf-8") == "key"
     assert observed_commands == [
         [
-            "emule.exe",
+            "emulebb.exe",
             "--generate-webserver-cert",
             "--cert",
             str(tmp_path / "https-cert" / "webserver-cert.pem"),
@@ -538,7 +538,7 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
         closed_apps.append(app)
 
     def fake_launch(app_exe: Path, profile_base: Path) -> str:
-        assert app_exe == Path("emule.exe")
+        assert app_exe == Path("emulebb.exe")
         assert profile_base == Path("profile")
         return "new-app"
 
@@ -558,7 +558,7 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
 
     relaunched, summary = module.restart_app_after_churn(
         "old-app",
-        app_exe=Path("emule.exe"),
+        app_exe=Path("emulebb.exe"),
         profile_base=Path("profile"),
         base_url="https://127.0.0.1:4711",
         api_key="api-key",
@@ -620,7 +620,7 @@ def test_restart_app_after_churn_tolerates_tray_relaunch_window_absence() -> Non
 
     relaunched, summary = module.restart_app_after_churn(
         "old-app",
-        app_exe=Path("emule.exe"),
+        app_exe=Path("emulebb.exe"),
         profile_base=Path("profile"),
         base_url="http://127.0.0.1:4711",
         api_key="api-key",

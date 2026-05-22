@@ -155,7 +155,7 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
 
     module.configure_client_profile(
         config_dir=config_dir,
-        app_exe=tmp_path / "app" / "emule.exe",
+        app_exe=tmp_path / "app" / "emulebb.exe",
         nick=module.CLIENT01.nick,
         tcp_port=4662,
         udp_port=4672,

@@ -1,4 +1,4 @@
-"""Runs deterministic local ED2K aMuTorrent UI downloads against eMule BB and aMule."""
+"""Runs deterministic local ED2K aMuTorrent UI downloads against eMuleBB and aMule."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def choose_ports() -> dict[str, int]:
-    """Allocates local ED2K, eMule BB, aMule, and aMuTorrent ports."""
+    """Allocates local ED2K, eMuleBB, aMule, and aMuTorrent ports."""
 
     ports = amule_transfer.choose_amule_ports(dtt.choose_distinct_ports())
     used = set(ports.values())

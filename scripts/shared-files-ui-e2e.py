@@ -1326,7 +1326,7 @@ def is_main_emule_window(hwnd: int) -> bool:
     """Reports whether one visible top-level window is the real main eMule dialog."""
 
     title = win32gui.GetWindowText(hwnd)
-    return win32gui.GetClassName(hwnd) == "#32770" and title.startswith(("eMule v", "eMule BB"))
+    return win32gui.GetClassName(hwnd) == "#32770" and title.startswith(("eMule v", "eMuleBB"))
 
 
 def describe_startup_dialog(hwnd: int) -> str:

@@ -76,7 +76,7 @@ def test_upsert_creates_indexer_with_force_save_to_avoid_live_validation(monkeyp
     }
     saved = {
         "id": 40,
-        "name": "eMule BB Local",
+        "name": "eMuleBB Local",
         "implementation": "Torznab",
         "enable": True,
         "fields": schema["fields"],
@@ -107,7 +107,7 @@ def test_upsert_creates_indexer_with_force_save_to_avoid_live_validation(monkeyp
     result = module.upsert_indexer(
         "http://prowlarr.test",
         "secret",
-        indexer_name="eMule BB Local",
+        indexer_name="eMuleBB Local",
         torznab_base_url="http://127.0.0.1:61920/indexer/emulebb",
         emule_api_key="emule-key",
     )
@@ -128,7 +128,7 @@ def test_upsert_preserves_existing_indexer_when_prowlarr_marked_it_unavailable(m
 
     existing = {
         "id": 40,
-        "name": "eMule BB Local",
+        "name": "eMuleBB Local",
         "implementation": "Torznab",
         "fields": [
             {"name": "baseUrl", "value": ""},
@@ -162,7 +162,7 @@ def test_upsert_preserves_existing_indexer_when_prowlarr_marked_it_unavailable(m
     result = module.upsert_indexer(
         "http://prowlarr.test",
         "secret",
-        indexer_name="eMule BB Local",
+        indexer_name="eMuleBB Local",
         torznab_base_url="http://127.0.0.1:61920/indexer/emulebb",
         emule_api_key="emule-key",
     )
@@ -242,14 +242,14 @@ def test_qbit_download_client_payload_sets_emule_connection_and_category() -> No
 
     payload = module.build_qbit_download_client_payload(
         qbit_schema(),
-        name="eMule BB Live Prowlarr 12345",
+        name="eMuleBB Live Prowlarr 12345",
         host="192.168.1.210",
         port=12345,
         emule_api_key="emule-key",
         category="prowlarr_grabs_cat",
     )
 
-    assert payload["name"] == "eMule BB Live Prowlarr 12345"
+    assert payload["name"] == "eMuleBB Live Prowlarr 12345"
     assert payload["enable"] is True
     assert payload["implementation"] == "QBittorrent"
     assert field_value(payload, "host") == "192.168.1.210"
@@ -278,13 +278,13 @@ def test_indexer_payload_covers_http_and_https_certificate_policy() -> None:
 
     http_payload = module.build_indexer_payload(
         schema_with_certificate_validation(schema),
-        name="eMule BB Local",
+        name="eMuleBB Local",
         torznab_base_url="http://127.0.0.1:61920/indexer/emulebb",
         emule_api_key="emule-key",
     )
     https_payload = module.build_indexer_payload(
         schema_with_certificate_validation(schema),
-        name="eMule BB Local",
+        name="eMuleBB Local",
         torznab_base_url="https://127.0.0.1:61920/indexer/emulebb",
         emule_api_key="emule-key",
     )
@@ -302,7 +302,7 @@ def test_qbit_download_client_payload_covers_http_and_https_transport() -> None:
 
     http_payload = module.build_qbit_download_client_payload(
         schema_with_certificate_validation(qbit_schema()),
-        name="eMule BB Live Prowlarr HTTP",
+        name="eMuleBB Live Prowlarr HTTP",
         host="127.0.0.1",
         port=61920,
         emule_api_key="emule-key",
@@ -311,7 +311,7 @@ def test_qbit_download_client_payload_covers_http_and_https_transport() -> None:
     )
     https_payload = module.build_qbit_download_client_payload(
         schema_with_certificate_validation(qbit_schema()),
-        name="eMule BB Live Prowlarr HTTPS",
+        name="eMuleBB Live Prowlarr HTTPS",
         host="127.0.0.1",
         port=61921,
         emule_api_key="emule-key",
@@ -333,7 +333,7 @@ def test_qbit_download_client_payload_rejects_https_without_certificate_policy()
     with pytest.raises(RuntimeError, match="does not expose disposable HTTPS certificate validation policy"):
         module.build_qbit_download_client_payload(
             qbit_schema(),
-            name="eMule BB Live Prowlarr HTTPS",
+            name="eMuleBB Live Prowlarr HTTPS",
             host="127.0.0.1",
             port=61921,
             emule_api_key="emule-key",
@@ -366,7 +366,7 @@ def test_temp_qbit_download_client_creates_and_tests(monkeypatch) -> None:
             return {"status": 200, "json": [qbit_schema()], "body_text": "[]"}
         if path == "/api/v1/downloadclient?forceSave=true" and method == "POST":
             assert isinstance(json_body, dict)
-            assert json_body["name"] == "eMule BB Live Prowlarr 8080"
+            assert json_body["name"] == "eMuleBB Live Prowlarr 8080"
             assert "_emulebbCertificatePolicy" not in json_body
             return {"status": 201, "json": {"id": 41, "name": json_body["name"], "fields": json_body["fields"]}, "body_text": "{}"}
         if path == "/api/v1/downloadclient/test" and method == "POST":
@@ -380,7 +380,7 @@ def test_temp_qbit_download_client_creates_and_tests(monkeypatch) -> None:
     client = module.create_temp_qbit_download_client(
         "http://prowlarr.test",
         "key",
-        name="eMule BB Live Prowlarr 8080",
+        name="eMuleBB Live Prowlarr 8080",
         host="127.0.0.1",
         port=8080,
         emule_api_key="emule-key",

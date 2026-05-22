@@ -1,6 +1,6 @@
 {
   "schemaVersion": "emule-build-tests.release-coverage.v1",
-  "title": "eMule BB release coverage ownership",
+  "title": "eMuleBB release coverage ownership",
   "description": "Release-owned weak areas and the single test lane responsible for each area.",
   "areas": [
     {
@@ -298,7 +298,7 @@
         "srchybrid/res/emuleARM64.manifest"
       ],
       "coverage": [
-        "manifests/release-campaigns/emule-bb-0.7.3.v1.json"
+        "manifests/release-campaigns/emulebb-0.7.3.v1.json"
       ],
       "campaignScenarioIds": [
         "emulebb.flow.package.core.x64.v1",

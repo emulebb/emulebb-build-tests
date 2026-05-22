@@ -22,7 +22,7 @@ class FakeHarnessCliCommon:
             repo_root=self.root,
             workspace_root=self.root / "workspaces" / "workspace",
             app_root=self.root / "workspaces" / "workspace" / "app" / "eMule-main",
-            app_exe=self.root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / kwargs["configuration"] / "emule.exe",
+            app_exe=self.root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / kwargs["configuration"] / "emulebb.exe",
             seed_config_dir=self.root / "repos" / "eMule-build-tests" / "manifests" / "live-profile-seed" / "config",
             configuration=kwargs["configuration"],
             suite_name=kwargs["suite_name"],
@@ -30,7 +30,7 @@ class FakeHarnessCliCommon:
             run_report_dir=self.root / "reports" / kwargs["suite_name"] / "run",
             latest_report_dir=self.root / "reports" / f"{kwargs['suite_name']}-latest",
             keep_source_artifacts=True,
-            local_dumps={"dump_folder": str(source_artifacts_dir / "crash-dumps"), "image_names": ["emule.exe"]},
+            local_dumps={"dump_folder": str(source_artifacts_dir / "crash-dumps"), "image_names": ["emulebb.exe"]},
         )
 
     def find_python_executable(self) -> str:

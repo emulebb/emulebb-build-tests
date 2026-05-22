@@ -52,7 +52,7 @@ def test_vhd_monitored_scenario_requires_admin_monitor_root(tmp_path: Path) -> N
 
     try:
         module.run_shared_files_ui_suite(
-            app_exe=tmp_path / "emule.exe",
+            app_exe=tmp_path / "emulebb.exe",
             seed_config_dir=tmp_path / "seed",
             artifacts_dir=tmp_path / "artifacts",
             shared_root=tmp_path / "shared",
@@ -85,7 +85,7 @@ def test_vhd_monitored_scenario_dispatches_with_explicit_root(tmp_path: Path, mo
     monkeypatch.setattr(module, "run_monitored_folder_events_e2e", fake_run)
 
     module.run_shared_files_ui_suite(
-        app_exe=tmp_path / "emule.exe",
+        app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path / "seed",
         artifacts_dir=tmp_path / "artifacts",
         shared_root=tmp_path / "shared",

@@ -56,7 +56,7 @@ def test_write_stop_script_closes_emule_and_stops_amutorrent(tmp_path: Path) -> 
     session.write_stop_script(stop_script, emule_pid=1234, amutorrent_pid=5678)
 
     text = stop_script.read_text(encoding="utf-8")
-    assert 'call :stop_process "eMule BB" "1234"' in text
+    assert 'call :stop_process "eMuleBB" "1234"' in text
     assert 'call :stop_process "aMuTorrent" "5678"' in text
     assert "taskkill /PID %pid%" in text
     assert "taskkill /PID %pid% /F" in text

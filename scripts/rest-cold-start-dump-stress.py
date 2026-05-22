@@ -3025,7 +3025,7 @@ def access_violation_without_emule_dump(report: dict[str, object]) -> bool:
 
     if not harness_cli_common.process_exited_with_access_violation(report.get("failure_process_state")):
         return False
-    return not harness_cli_common.local_dump_files_for_image(report.get("local_dump_files"), "emule.exe")
+    return not harness_cli_common.local_dump_files_for_image(report.get("local_dump_files"), "emulebb.exe")
 
 
 def main(argv: list[str] | None = None) -> int:

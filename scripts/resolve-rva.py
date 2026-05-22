@@ -1,4 +1,4 @@
-"""Resolve one or more RVAs in emule.exe to symbols and source lines."""
+"""Resolve one or more RVAs in emulebb.exe to symbols and source lines."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def default_workspace_root() -> Path:
 
 def default_exe_path(workspace_root: Path) -> Path:
     candidates = (
-        workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / "Debug" / "emule.exe",
+        workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / "Debug" / "emulebb.exe",
         workspace_root / "workspaces" / "workspace" / "app" / "eMule-community-baseline" / "srchybrid" / "x64" / "Debug" / "emule.exe",
     )
     for candidate in candidates:
@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--exe",
         default=str(default_exe_path(workspace_root)),
-        help="Path to the emule.exe to resolve against. Defaults to the main Debug build when present.",
+        help="Path to the emulebb.exe to resolve against. Defaults to the main Debug build when present.",
     )
     parser.add_argument(
         "--image-base",

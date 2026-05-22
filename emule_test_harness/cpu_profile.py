@@ -17,7 +17,7 @@ DEFAULT_CPU_PROFILE_TOP_LIMIT = 25
 CPU_PROFILE_KERNEL_FLAGS = "PROC_THREAD+LOADER+PROFILE"
 CPU_PROFILE_STACKWALK_FLAGS = "Profile"
 XPERF_ERROR_ALREADY_EXISTS = 2147942583
-EMULE_SYMBOL_PREFIXES = ("emule!", "emule.exe!")
+EMULE_SYMBOL_PREFIXES = ("emulebb!", "emulebb.exe!", "emule!", "emule.exe!")
 EMULE_SYMBOL_PREFIX = EMULE_SYMBOL_PREFIXES[0]
 
 _PERCENT_RE = re.compile(r"(?P<value>[0-9]+(?:\.[0-9]+)?)\s*%")
@@ -25,7 +25,7 @@ _XPERF_CSV_ROW_RE = re.compile(
     r"^\s*(?P<process>[^,]+),\s*(?P<count>[0-9][0-9,]*),\s*(?P<weight>[0-9]+(?:\.[0-9]+)?),\s*(?P<function>.+?)\s*$"
 )
 _SAMPLE_COUNT_RE = re.compile(r"(?<![A-Za-z0-9_.])([0-9][0-9,]*)(?![A-Za-z0-9_.])")
-_SYMBOL_RE = re.compile(r"\bemule(?:\.exe)?![^\s,;|]+", re.IGNORECASE)
+_SYMBOL_RE = re.compile(r"\bemulebb(?:\.exe)?![^\s,;|]+|\bemule(?:\.exe)?![^\s,;|]+", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _STACK_ROW_RE = re.compile(
     r"<tr><td>(?P<function>.*?)</td><td>(?P<hits>[0-9][0-9,]*)</td><td>(?P<percent>[0-9]+(?:\.[0-9]+)?)%</td><td>(?P<exclusive>[0-9][0-9,]*)</td>",
@@ -186,7 +186,7 @@ def build_xperf_stack_export_command(
     tools: CpuProfileTools,
     paths: CpuProfilePaths,
     *,
-    process_image: str = "emule.exe",
+    process_image: str = "emulebb.exe",
     min_hits: int = 10,
 ) -> list[str]:
     """Builds the xperf command that exports a caller/callee stack report."""
@@ -351,7 +351,7 @@ def export_cpu_profile(
 def parse_xperf_profile_detail(
     text: str,
     *,
-    process_image: str = "emule.exe",
+    process_image: str = "emulebb.exe",
     symbol_prefix: str = EMULE_SYMBOL_PREFIX,
     limit: int = DEFAULT_CPU_PROFILE_TOP_LIMIT,
 ) -> dict[str, object]:
@@ -402,7 +402,7 @@ def parse_xperf_profile_detail(
         reverse=True,
     )
     top_rows = rows[:limit]
-    app_rows = [row for row in rows if isinstance(row.get("function"), str) and str(row["function"]).casefold().startswith("emule!")]
+    app_rows = [row for row in rows if isinstance(row.get("function"), str) and str(row["function"]).casefold().startswith(EMULE_SYMBOL_PREFIX)]
     return {
         "available": bool(top_rows),
         "app_row_count": len(app_rows),
@@ -415,10 +415,14 @@ def parse_xperf_profile_detail(
 
 
 def normalize_emule_symbol(symbol: str) -> str:
-    """Normalizes xperf's app module spellings to the historical emule! prefix."""
+    """Normalizes xperf's app module spellings to the current emulebb! prefix."""
 
+    if symbol.casefold().startswith("emulebb.exe!"):
+        return f"emulebb!{symbol[len('emulebb.exe!'):]}"
     if symbol.casefold().startswith("emule.exe!"):
-        return f"emule!{symbol[len('emule.exe!'):]}"
+        return f"emulebb!{symbol[len('emule.exe!'):]}"
+    if symbol.casefold().startswith("emule!"):
+        return f"emulebb!{symbol[len('emule!'):]}"
     return symbol
 
 
@@ -468,7 +472,7 @@ def parse_xperf_stack_report(
     for match in _STACK_ROW_RE.finditer(section):
         function = strip_html_cell(match.group("function"))
         folded = function.casefold()
-        if not folded.startswith(("emule!", "emule.exe!")):
+        if not folded.startswith(EMULE_SYMBOL_PREFIXES):
             continue
         rows.append(
             {

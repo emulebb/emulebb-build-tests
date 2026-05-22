@@ -1,4 +1,4 @@
-"""Deterministic eMule BB download from a headless aMule seed client."""
+"""Deterministic eMuleBB download from a headless aMule seed client."""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def write_reports(paths, report: dict[str, object]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Runs the deterministic eMule BB versus aMule transfer suite."""
+    """Runs the deterministic eMuleBB versus aMule transfer suite."""
 
     args = parse_args(argv)
     paths = harness_cli_common.prepare_run_paths(

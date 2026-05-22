@@ -67,8 +67,8 @@ CLIENT_IDENTITIES = {
         key="emulebb",
         profile_id=CLIENT01_EMULEBB,
         nick=NICK_CLIENT01_EMULEBB,
-        product="eMule BB",
-        role="primary eMule BB client",
+        product="eMuleBB",
+        role="primary eMuleBB client",
     ),
     "harness": ClientIdentity(
         key="harness",
@@ -153,7 +153,7 @@ def first_existing_file(candidates: list[Path]) -> Path | None:
 
 
 def resolve_emulebb_client(app_exe: Path) -> ClientAvailability:
-    """Builds the mandatory eMule BB client descriptor from the active app executable."""
+    """Builds the mandatory eMuleBB client descriptor from the active app executable."""
 
     identity = CLIENT_IDENTITIES["emulebb"]
     resolved = app_exe.resolve()

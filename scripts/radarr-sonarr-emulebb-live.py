@@ -1,4 +1,4 @@
-"""Runs a live Radarr movie download check through Prowlarr and eMule BB."""
+"""Runs a live Radarr movie download check through Prowlarr and eMuleBB."""
 
 from __future__ import annotations
 
@@ -189,7 +189,7 @@ def arr_health_rows(arr_url: str, api_key: str) -> list[dict[str, Any]]:
 
 
 def arr_indexer_unavailable_due_to_failures(health_rows: list[dict[str, Any]], indexer_name: str) -> bool:
-    """Returns true when Arr health has quarantined the eMule BB indexer."""
+    """Returns true when Arr health has quarantined the eMuleBB indexer."""
 
     expected = indexer_name.lower()
     for row in health_rows:
@@ -346,7 +346,7 @@ def force_prowlarr_application_sync(prowlarr_url: str, api_key: str, timeout_sec
 
 
 def wait_for_synced_indexer(arr_url: str, api_key: str, indexer_name: str, timeout_seconds: float) -> dict[str, Any]:
-    """Waits until Radarr/Sonarr exposes the synced eMule BB indexer."""
+    """Waits until Radarr/Sonarr exposes the synced eMuleBB indexer."""
 
     attempts: list[dict[str, object]] = []
     deadline = time.monotonic() + timeout_seconds
@@ -363,7 +363,7 @@ def wait_for_synced_indexer(arr_url: str, api_key: str, indexer_name: str, timeo
                 return indexer
         attempts.append({"names": names})
         time.sleep(5.0)
-    raise RuntimeError(f"Synced eMule BB indexer did not appear before timeout: {attempts!r}")
+    raise RuntimeError(f"Synced eMuleBB indexer did not appear before timeout: {attempts!r}")
 
 
 def is_arr_indexer_enabled(indexer: dict[str, Any]) -> bool:
@@ -418,7 +418,7 @@ def get_arr_torznab_schema(arr_url: str, api_key: str) -> dict[str, Any]:
 
 
 def find_arr_emule_indexer(arr_url: str, api_key: str, indexer_name: str) -> dict[str, Any] | None:
-    """Finds the current eMule BB Arr indexer provider when it exists."""
+    """Finds the current eMuleBB Arr indexer provider when it exists."""
 
     for indexer in list_arr_indexers(arr_url, api_key):
         if is_emulebb_indexer_name(str(indexer.get("name") or ""), indexer_name):
@@ -502,7 +502,7 @@ def delete_arr_indexer_provider(arr_url: str, api_key: str, indexer_id: int) -> 
     result = arr_request(arr_url, api_key, f"/api/v3/indexer/{indexer_id}", method="DELETE", timeout_seconds=60.0)
     status = int(result.get("status") or 0)
     if status != 404 and (status < 200 or status >= 300):
-        require_success(result, "Arr eMule BB indexer delete")
+        require_success(result, "Arr eMuleBB indexer delete")
     return {"id": int(indexer_id), "status": status}
 
 
@@ -518,7 +518,7 @@ def save_enabled_arr_emule_indexer_with_validation_retry(
     prowlarr_indexer_id: int,
     category_id: int,
 ) -> tuple[dict[str, Any], dict[str, object]]:
-    """Saves the eMule BB Arr provider, retrying disabled-then-enabled on validation-only blockers."""
+    """Saves the eMuleBB Arr provider, retrying disabled-then-enabled on validation-only blockers."""
 
     payload = build_arr_emule_indexer_payload(
         base_payload,
@@ -542,7 +542,7 @@ def save_enabled_arr_emule_indexer_with_validation_retry(
     if status >= 200 and status < 300:
         saved = result.get("json")
         if not isinstance(saved, dict) or int(saved.get("id") or 0) <= 0:
-            raise RuntimeError("Arr eMule BB indexer repair did not return a saved indexer id.")
+            raise RuntimeError("Arr eMuleBB indexer repair did not return a saved indexer id.")
         saved["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
         return saved, {
             "mode": "updated" if existing_id else "created",
@@ -552,7 +552,7 @@ def save_enabled_arr_emule_indexer_with_validation_retry(
         }
 
     if not is_arr_validation_blocker(result):
-        require_success(result, "Arr eMule BB indexer repair")
+        require_success(result, "Arr eMuleBB indexer repair")
 
     disabled_payload = build_arr_emule_indexer_payload(
         base_payload,
@@ -568,7 +568,7 @@ def save_enabled_arr_emule_indexer_with_validation_retry(
         api_key,
         disabled_payload,
         existing_id=existing_id,
-        description="Arr disabled eMule BB indexer repair",
+        description="Arr disabled eMuleBB indexer repair",
     )
     enabled_payload = build_arr_emule_indexer_payload(
         disabled_saved,
@@ -584,7 +584,7 @@ def save_enabled_arr_emule_indexer_with_validation_retry(
         api_key,
         enabled_payload,
         existing_id=int(disabled_saved["id"]),
-        description="Arr enabled eMule BB indexer repair",
+        description="Arr enabled eMuleBB indexer repair",
     )
     return enabled_saved, {
         "mode": "updated" if existing_id else "created",
@@ -606,7 +606,7 @@ def recreate_arr_emule_indexer_if_unavailable(
     prowlarr_indexer_id: int,
     category_id: int,
 ) -> tuple[dict[str, Any], dict[str, object]]:
-    """Recreates the eMule BB provider when Arr health has quarantined its status."""
+    """Recreates the eMuleBB provider when Arr health has quarantined its status."""
 
     health = arr_health_rows(arr_url, api_key)
     messages = [
@@ -619,7 +619,7 @@ def recreate_arr_emule_indexer_if_unavailable(
 
     old_id = int(indexer.get("id") or 0)
     if old_id <= 0:
-        raise RuntimeError("Arr eMule BB indexer cannot be recreated because it has no provider id.")
+        raise RuntimeError("Arr eMuleBB indexer cannot be recreated because it has no provider id.")
 
     delete_summary = delete_arr_indexer_provider(arr_url, api_key, old_id)
     schema = get_arr_torznab_schema(arr_url, api_key)
@@ -655,7 +655,7 @@ def ensure_arr_emule_indexer(
     prowlarr_indexer_id: int,
     category_id: int,
 ) -> tuple[dict[str, Any], dict[str, object]]:
-    """Repairs or creates the Arr eMule BB provider using public Arr APIs."""
+    """Repairs or creates the Arr eMuleBB provider using public Arr APIs."""
 
     existing = find_arr_emule_indexer(arr_url, api_key, indexer_name)
     base_payload = existing if existing is not None else get_arr_torznab_schema(arr_url, api_key)
@@ -698,7 +698,7 @@ def ensure_arr_indexer_enabled(arr_url: str, api_key: str, indexer: dict[str, An
         json_body=public_provider_payload(payload),
         timeout_seconds=60.0,
     )
-    saved = require_success(result, "Arr eMule BB synced indexer enable")
+    saved = require_success(result, "Arr eMuleBB synced indexer enable")
     if not isinstance(saved, dict) or int(saved.get("id") or 0) != indexer_id:
         raise RuntimeError("Arr did not return the enabled synced indexer.")
     if not is_arr_indexer_enabled(saved):
@@ -726,7 +726,7 @@ def ensure_arr_indexer_untagged(arr_url: str, api_key: str, indexer: dict[str, A
         json_body=public_provider_payload(payload),
         timeout_seconds=60.0,
     )
-    saved = require_success(result, "Arr eMule BB synced indexer tag clear")
+    saved = require_success(result, "Arr eMuleBB synced indexer tag clear")
     if not isinstance(saved, dict) or int(saved.get("id") or 0) != indexer_id:
         raise RuntimeError("Arr did not return the untagged synced indexer.")
     if saved.get("tags"):
@@ -755,7 +755,7 @@ def list_arr_download_clients(arr_url: str, api_key: str) -> list[dict[str, Any]
 def delete_stale_live_download_clients(arr_url: str, api_key: str, *, kind: str) -> list[dict[str, object]]:
     """Removes stale live-test download clients left by interrupted runs."""
 
-    prefix = f"eMule BB Live {kind} "
+    prefix = f"eMuleBB Live {kind} "
     removed: list[dict[str, object]] = []
     for client in list_arr_download_clients(arr_url, api_key):
         client_id = int(client.get("id") or 0)
@@ -793,7 +793,7 @@ def set_arr_indexer_search_state(arr_url: str, api_key: str, indexer: dict[str, 
 
 
 def isolate_arr_indexer_search(arr_url: str, api_key: str, allowed_indexer_id: int) -> tuple[list[dict[str, Any]], list[dict[str, object]]]:
-    """Temporarily leaves only the eMule BB indexer searchable for Arr release queries."""
+    """Temporarily leaves only the eMuleBB indexer searchable for Arr release queries."""
 
     snapshots = list_arr_indexers(arr_url, api_key)
     changes: list[dict[str, object]] = []
@@ -912,7 +912,7 @@ def build_qbit_client_payload(
     category: str,
     use_ssl: bool = False,
 ) -> dict[str, Any]:
-    """Builds a temporary qBittorrent client payload for eMule BB."""
+    """Builds a temporary qBittorrent client payload for eMuleBB."""
 
     schema_summary = summarize_qbit_schema(schema, category_field=category_field)
     if not bool(schema_summary["ok"]):
@@ -982,7 +982,7 @@ def create_temp_qbit_client(
                 method="POST",
                 json_body=public_provider_payload(payload),
             ),
-            "Arr eMule BB qBittorrent client create",
+            "Arr eMuleBB qBittorrent client create",
         )
         if not isinstance(created, dict) or not created.get("id"):
             raise RuntimeError("Arr did not return a created qBittorrent client id.")
@@ -990,7 +990,7 @@ def create_temp_qbit_client(
 
         test_payload = public_provider_payload(json.loads(json.dumps(created)))
         test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
-        require_success(test_result, "Arr eMule BB qBittorrent client test")
+        require_success(test_result, "Arr eMuleBB qBittorrent client test")
         created["_emulebbSchemaSummary"] = schema_summary
         created["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
         created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
@@ -1058,7 +1058,7 @@ def require_sonarr_import_series_terms(inputs: Any) -> tuple[str, ...]:
 
 
 def is_emulebb_arr_release(row: dict[str, Any], indexer_id: int) -> bool:
-    """Returns true when an Arr release row belongs to the eMule BB indexer."""
+    """Returns true when an Arr release row belongs to the eMuleBB indexer."""
 
     return int(row.get("indexerId") or 0) == indexer_id or "emule bb" in str(row.get("indexer") or "").lower()
 
@@ -1817,7 +1817,7 @@ def grab_first_arr_release(
     category_id: int | None = None,
     min_sources: int | None = None,
 ) -> dict[str, object]:
-    """Searches Arr releases and grabs the best eMule BB indexer match."""
+    """Searches Arr releases and grabs the best eMuleBB indexer match."""
 
     required_sources = min_sources if min_sources is not None else (MIN_ARR_RELEASE_SOURCES if kind == "radarr" else 1)
     deadline = time.monotonic() + timeout_seconds
@@ -1930,15 +1930,15 @@ def grab_first_arr_release(
                             "body_preview": str(grab_result.get("body_text") or "")[:160],
                         }
                     )
-                raise RuntimeError(f"{kind} release grab rejected all ranked eMule BB rows: {rejected!r}")
+                raise RuntimeError(f"{kind} release grab rejected all ranked eMuleBB rows: {rejected!r}")
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(5.0, remaining))
-    raise RuntimeError(f"{kind} release search returned no eMule BB rows before timeout. Attempts: {attempts!r}")
+    raise RuntimeError(f"{kind} release search returned no eMuleBB rows before timeout. Attempts: {attempts!r}")
 
 
 def grab_first_radarr_release(arr_url: str, api_key: str, indexer_id: int, title: str, timeout_seconds: float) -> dict[str, object]:
-    """Searches Radarr releases and grabs the best eMule BB indexer match."""
+    """Searches Radarr releases and grabs the best eMuleBB indexer match."""
 
     return grab_first_arr_release(arr_url, api_key, indexer_id, title, timeout_seconds, kind="radarr")
 
@@ -1947,7 +1947,7 @@ def arr_release_search_error_can_fallback(error_message: str) -> bool:
     """Returns true for Arr search results that direct Prowlarr can still prove."""
 
     return (
-        "release search returned no eMule BB rows" in error_message
+        "release search returned no eMuleBB rows" in error_message
         or "Arr release selection found no release" in error_message
     )
 
@@ -2013,7 +2013,7 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
             if not arr_release_search_error_can_fallback(direct_error):
                 raise RuntimeError(f"{kind} manual Arr release acquisition failed: {direct_error}") from exc
     else:
-        direct_error = "Arr health reports the eMule BB indexer unavailable due to failures."
+        direct_error = "Arr health reports the eMuleBB indexer unavailable due to failures."
 
     release_grab = grab_first_arr_release_via_prowlarr(
         kind=kind,
@@ -2319,7 +2319,7 @@ def grab_first_arr_release_via_prowlarr(
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(5.0, remaining))
-    raise RuntimeError(f"{kind} eMule BB Prowlarr search returned no grabbable rows before timeout. Attempts: {attempts!r}")
+    raise RuntimeError(f"{kind} eMuleBB Prowlarr search returned no grabbable rows before timeout. Attempts: {attempts!r}")
 
 
 def redact_direct_magnet(magnet: dict[str, object]) -> dict[str, object]:
@@ -2535,7 +2535,7 @@ def qbit_direct_add(
     *,
     cookie: str | None = None,
 ) -> dict[str, object]:
-    """Exercises the qBittorrent add endpoint directly against eMule BB."""
+    """Exercises the qBittorrent add endpoint directly against eMuleBB."""
 
     login_status: int | None = None
     if cookie is None:
@@ -2757,14 +2757,14 @@ def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, ob
 
 
 def ed2k_hash_from_magnet(magnet: str) -> str:
-    """Extracts the eD2K hash carried by an eMule BB fake BTIH magnet."""
+    """Extracts the eD2K hash carried by an eMuleBB fake BTIH magnet."""
 
     parsed = urllib.parse.urlparse(magnet)
     query = urllib.parse.parse_qs(parsed.query)
     xt = query.get("xt", [""])[0].lower()
     prefix = "urn:btih:"
     if not xt.startswith(prefix) or len(xt) < len(prefix) + 40:
-        raise RuntimeError("Magnet does not contain an eMule BB fake BTIH hash.")
+        raise RuntimeError("Magnet does not contain an eMuleBB fake BTIH hash.")
     return xt[len(prefix) : len(prefix) + 32]
 
 
@@ -3458,7 +3458,7 @@ def wait_for_arr_release_results(
                     "attempt_count": len(attempts),
                 }
         time.sleep(5.0)
-    raise RuntimeError(f"Arr release searches returned no eMule BB rows before timeout. Attempts: {attempts!r}")
+    raise RuntimeError(f"Arr release searches returned no eMuleBB rows before timeout. Attempts: {attempts!r}")
 
 
 def build_admin_fixture_config(paths, args: argparse.Namespace, suite_name: str) -> AdminVolumeFixtureConfig:
@@ -3480,7 +3480,7 @@ def build_admin_fixture_config(paths, args: argparse.Namespace, suite_name: str)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Builds the Radarr/Sonarr eMule BB live test argument parser."""
+    """Builds the Radarr/Sonarr eMuleBB live test argument parser."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace-root")
@@ -3562,7 +3562,7 @@ def run_arr_checks(
     category = category_override or RADARR_IMPORT_CATEGORY
     category_field = "movieCategory" if kind == "radarr" else "tvCategory"
     torznab_category = TORZNAB_MOVIE_CATEGORY if kind == "radarr" else TORZNAB_TV_CATEGORY
-    temp_client_name = f"eMule BB Live {kind} {port}"
+    temp_client_name = f"eMuleBB Live {kind} {port}"
     status_payload = require_success(arr_request(arr_url, arr_api_key, "/api/v3/system/status"), f"{kind} status")
     synced_indexer, indexer_repair = ensure_arr_emule_indexer(
         arr_url=arr_url,
@@ -3718,7 +3718,7 @@ def run_radarr_movie_download_e2e(
     report["release_grab"] = {key: value for key, value in release_grab.items() if key != "hash"}
     transfer_hash = str(release_grab.get("hash") or "")
     if not transfer_hash:
-        raise RuntimeError("Radarr release grab did not expose an eMule BB magnet hash.")
+        raise RuntimeError("Radarr release grab did not expose an eMuleBB magnet hash.")
     if isinstance(release_grab.get("category_transfer"), dict):
         report["category_transfer"] = release_grab["category_transfer"]
     else:
@@ -3857,7 +3857,7 @@ def run_sonarr_series_download_e2e(
     report["release_grab"] = {key: value for key, value in release_grab.items() if key != "hash"}
     transfer_hash = str(release_grab.get("hash") or "")
     if not transfer_hash:
-        raise RuntimeError("Sonarr release grab did not expose an eMule BB magnet hash.")
+        raise RuntimeError("Sonarr release grab did not expose an eMuleBB magnet hash.")
     if isinstance(release_grab.get("category_transfer"), dict):
         report["category_transfer"] = release_grab["category_transfer"]
     else:
@@ -3916,10 +3916,10 @@ def require_arr_check_passed(kind: str, report: dict[str, object]) -> None:
 
     readiness = report.get("readiness")
     if not isinstance(readiness, dict) or not all(bool(value) for value in readiness.values()):
-        raise RuntimeError(f"{kind} eMule BB readiness failed: {readiness!r}")
+        raise RuntimeError(f"{kind} eMuleBB readiness failed: {readiness!r}")
     release_search = report.get("release_search")
     if isinstance(release_search, dict) and release_search.get("status") == "inconclusive":
-        raise RuntimeError(f"{kind} eMule BB release search failed: {release_search!r}")
+        raise RuntimeError(f"{kind} eMuleBB release search failed: {release_search!r}")
 
 
 def read_log_tail(path: Path, max_lines: int = 80) -> list[str]:
@@ -3992,7 +3992,7 @@ def parse_timeout_minutes(value: str | None, default_minutes: float) -> float:
 
 
 def main() -> int:
-    """Runs the live Radarr/Sonarr eMule BB bridge test."""
+    """Runs the live Radarr/Sonarr eMuleBB bridge test."""
 
     args = build_parser().parse_args()
     kind = args.arr_kind
@@ -4018,7 +4018,7 @@ def main() -> int:
             "SONARR_API_KEY",
         ),
         env_file=Path(args.env_file).resolve(),
-        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMule BB Local"},
+        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMuleBB Local"},
     )
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
@@ -4660,7 +4660,7 @@ def main() -> int:
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)
-        print(f"{kind.title()} eMule BB live test {report['status']}. Report directory: {paths.run_report_dir}")
+        print(f"{kind.title()} eMuleBB live test {report['status']}. Report directory: {paths.run_report_dir}")
 
 
 if __name__ == "__main__":

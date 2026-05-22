@@ -704,7 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", default="Release", choices=("Debug", "Release"))
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--profile-seed-dir")
-    parser.add_argument("--api-key", default="emule-bb-rest-test-key")
+    parser.add_argument("--api-key", default="emulebb-rest-test-key")
     parser.add_argument("--duration-seconds", type=float, default=DEFAULT_DURATION_SECONDS)
     parser.add_argument("--cycle-pause-seconds", type=float, default=DEFAULT_CYCLE_PAUSE_SECONDS)
     parser.add_argument("--search-observation-timeout-seconds", type=float, default=DEFAULT_SEARCH_OBSERVATION_TIMEOUT_SECONDS)

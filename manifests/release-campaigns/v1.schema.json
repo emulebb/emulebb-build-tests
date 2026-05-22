@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "emule-build-tests.release-campaign.v1",
-  "title": "eMule BB release campaign manifest",
+  "title": "eMuleBB release campaign manifest",
   "type": "object",
   "required": [
     "schemaVersion",

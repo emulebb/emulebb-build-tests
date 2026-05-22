@@ -48,15 +48,15 @@ def test_help_menu_and_update_strings_use_emulebb_copy() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
     expected = {
-        "IDS_ERR_NOHELP": "Online help is available in the eMule BB documentation.\\n\\nDo you want to open the online help now?",
-        "IDS_CHECK4UPDATE": "Check for eMule BB updates",
-        "IDS_NEWVERSIONAVL": "A new version of eMule BB is available. Check GitHub Releases for more information.",
-        "IDS_NEWVERSIONAVLPOPUP": "A new version of eMule BB is available. Click here to read about the new version.",
-        "IDS_VERSIONCHECK": "&Check for eMule BB updates",
+        "IDS_ERR_NOHELP": "Online help is available in the eMuleBB documentation.\\n\\nDo you want to open the online help now?",
+        "IDS_CHECK4UPDATE": "Check for eMuleBB updates",
+        "IDS_NEWVERSIONAVL": "A new version of eMuleBB is available. Check GitHub Releases for more information.",
+        "IDS_NEWVERSIONAVLPOPUP": "A new version of eMuleBB is available. Click here to read about the new version.",
+        "IDS_VERSIONCHECK": "&Check for eMuleBB updates",
         "IDS_VISITVERSIONCHECK": "\\n\\nDo you want to open GitHub Releases now?",
-        "IDS_HM_LINKHP": "eMule BB Homepage",
-        "IDS_HM_LINKFAQ": "eMule BB Help",
-        "IDS_HM_LINKVC": "eMule BB Releases",
+        "IDS_HM_LINKHP": "eMuleBB Homepage",
+        "IDS_HM_LINKFAQ": "eMuleBB Help",
+        "IDS_HM_LINKVC": "eMuleBB Releases",
     }
 
     rc_files = [app_source / "emule.rc", *sorted((app_source / "lang").glob("*.rc"))]

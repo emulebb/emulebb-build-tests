@@ -1,6 +1,6 @@
 # eMule Shared Tests
 
-This repository is the shared test harness for the canonical eMule BB workspace rooted at `EMULE_WORKSPACE_ROOT`.
+This repository is the shared test harness for the canonical eMuleBB workspace rooted at `EMULE_WORKSPACE_ROOT`.
 
 This repo assumes the canonical workspace created by
 `python -m emule_workspace materialize` from `repos\eMule-build`.
@@ -67,7 +67,7 @@ Release coverage ownership:
 - `manifests\release-coverage\ownership.v1.json` is the release-owned weak-area
   map for the shared harness
 - each blocking release-owned area must map to a campaign scenario in
-  `manifests\release-campaigns\emule-bb-0.7.3.v1.json`
+  `manifests\release-campaigns\emulebb-0.7.3.v1.json`
 - planned and deferred areas stay visible in that manifest instead of living in
   loose notes
 - deterministic file-format goldens live in
@@ -100,7 +100,7 @@ Script inventory:
 | `scripts\normalize-protocol-oracle.py` | protocol evidence normalizer | maintained | normalizes tracing-harness UDP/eD2K JSONL dumps into candidate goldens |
 | `scripts\compare-protocol-oracle.py` | protocol evidence comparator | maintained | compares normalized protocol oracle manifests |
 | `scripts\protocol-pcap-capture.py` | optional capture helper | maintained | wraps passive `dumpcap` capture when available; raw pcap stays under workspace test reports |
-| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs the deterministic eMule BB versus tracing-harness transfer and records optional eMuleAI/aMule client readiness |
+| `scripts\multi-client-p2p-matrix.py` | operator-facing Windows P2P matrix | maintained | runs the deterministic eMuleBB versus tracing-harness transfer and records optional eMuleAI/aMule client readiness |
 | `scripts\run-live-e2e-suite.py` | operator-facing aggregate E2E runner | maintained | sequential UI, REST, and live-wire coverage lane |
 | `scripts\publish-harness-summary.py` | shared report publisher | maintained | combines coverage, parity, and optional live status |
 | `scripts\harness-cli-common.py` | internal Python helper | maintained | canonical app/report/profile-seed resolution for Python-first live/UI harnesses |
@@ -152,7 +152,7 @@ Standalone probe mode:
 - by default it executes a buffered scan first and then the shared `MappedFileReader` path
 - use `--reader buffered`, `--reader mapped`, or `--reader both` to narrow the probe
 - use `--byte-limit <N>` to cap the scan length and `--progress-mib <N>` to control progress output
-- `build\<tag>\x64\Debug\emule-tests.exe --full-hash-probe "<full file path>"` runs the offline MD4 plus AICH hashing pipeline without launching `emule.exe`
+- `build\<tag>\x64\Debug\emule-tests.exe --full-hash-probe "<full file path>"` runs the offline MD4 plus AICH hashing pipeline without launching `emulebb.exe`
 - the full-hash mode also supports `--reader buffered|mapped|both` and `--progress-mib <N>`
 - use the full-hash mode when you need to separate raw file access from higher-level `CKnownFile::CreateFromFile` work such as metadata extraction, known-file registration, or UI progress handling
 
@@ -193,7 +193,7 @@ Canonical live REST E2E lane:
 
 - `scripts\rest-api-smoke.py` is the operator-facing entrypoint for the canonical isolated REST live E2E lane
 - the Python runner is intentionally strict pass/fail and owns app resolution, report publication, and latest-report mirroring directly
-- the lane launches `emule.exe` with explicit `-ignoreinstances -c <profile-base>` and enables WebServer REST against one per-run localhost port
+- the lane launches `emulebb.exe` with explicit `-ignoreinstances -c <profile-base>` and enables WebServer REST against one per-run localhost port
 - the default REST coverage budget is `contract`, which records safe coverage
   for the broadband `/api/v1` contract; `--rest-coverage-budget smoke` keeps
   the older lighter pass, while `contract-stress` also enables stress unless a
@@ -236,7 +236,7 @@ Cold-start REST dump stress lane:
 
 Real-profile process monitor:
 
-- `scripts\live-process-monitor.py` launches the selected `emule.exe` with
+- `scripts\live-process-monitor.py` launches the selected `emulebb.exe` with
   `-ignoreinstances -c <profileDir>` and samples CPU, private bytes, working
   set, handles, REST `/api/v1/status` counters when `baseUrl` and `apiKey` are
   configured, ETW/xperf CPU samples by default, delayed spike dumps, and an
@@ -246,7 +246,7 @@ Real-profile process monitor:
   transients
 - CPU diagnosis should use the default ETW/xperf sampling run first; full spike
   dumps now default to at most two captures after the initial startup delay
-- optional `--enable-umdh` wraps the run with `gflags /i emule.exe +ust`,
+- optional `--enable-umdh` wraps the run with `gflags /i emulebb.exe +ust`,
   captures baseline/final UMDH snapshots, diffs them, and disables UST during
   cleanup; UMDH is rejected when combined with ETW CPU profiling or full
   ProcDump captures so heap runs stay separate from CPU runs
@@ -322,7 +322,7 @@ Canonical live auto-browse lane:
 Shared Files live UI regression:
 
 - `scripts\shared-files-ui-e2e.py` is the operator-facing entrypoint for the real Win32 Shared Files regression
-- it launches `emule.exe` with explicit `-ignoreinstances -c <profile-base>` so the run stays isolated from local user sessions
+- it launches `emulebb.exe` with explicit `-ignoreinstances -c <profile-base>` so the run stays isolated from local user sessions
 - the checked-in seed profile must stay initialized; the Python harness validates the seed keys, writes deterministic maximized window placement, and patches only per-run incoming, temp, and shared-directory paths
 - the default UI run now covers two scenarios: the original three-file deterministic smoke case plus a generated recursive robustness tree under the configured long-path shared root
 - the regression asserts that the main window starts maximized and exercises exact default-name ordering, size ascending and descending sorts, name ascending and descending sorts after reload, selection-detail updates, reload preservation of the active descending size sort, and large-tree row-count/set/prefix checks driven by the generated manifest
@@ -336,7 +336,7 @@ Shared Files live UI regression:
 Config-stability live UI regression:
 
 - `scripts\config-stability-ui-e2e.py` is the operator-facing entrypoint for long `-c` config-path startup, settings-save, and relaunch-stability coverage
-- it launches `emule.exe` with explicit `-ignoreinstances -c <profile-base>` under a deliberately deep profile root so `profile-base\config\preferences.ini` exceeds normal Win32 path limits
+- it launches `emulebb.exe` with explicit `-ignoreinstances -c <profile-base>` under a deliberately deep profile root so `profile-base\config\preferences.ini` exceeds normal Win32 path limits
 - the default run covers `long-config-settings-roundtrip` and `long-config-shared-stress`
 - the roundtrip scenario edits the real Preferences dialog, saves `OnlineSignature`, verifies `preferences.ini`, relaunches the same long-path profile, and confirms persisted UI state
 - the stress scenario repeats launch, Preferences save, Shared Files activation, and clean shutdown across multiple cycles while recursively sharing the generated robustness tree under the configured long-path shared root

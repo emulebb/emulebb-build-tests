@@ -2,10 +2,10 @@
   "schemaVersion": "emule-build-tests.release-campaign.v1",
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
-  "campaignId": "emule-bb-0.7.3",
+  "campaignId": "emulebb-0.7.3",
   "releaseVersion": "0.7.3",
-  "title": "eMule BB 0.7.3 release campaign",
-  "description": "First concrete release instance for the eMule BB-owned campaign model.",
+  "title": "eMuleBB 0.7.3 release campaign",
+  "description": "First concrete release instance for the eMuleBB-owned campaign model.",
   "phases": [
     {
       "id": "preflight",
@@ -260,7 +260,7 @@
         },
         {
           "id": "emulebb.flow.arr.radarr.import.live.v1",
-          "title": "Radarr eMule BB acquisition flow",
+          "title": "Radarr eMuleBB acquisition flow",
           "phase": "controller-surface",
           "flowCategory": "arr",
           "required": true,
@@ -284,7 +284,7 @@
         },
         {
           "id": "emulebb.flow.arr.sonarr.import.live.v1",
-          "title": "Sonarr eMule BB acquisition flow",
+          "title": "Sonarr eMuleBB acquisition flow",
           "phase": "controller-surface",
           "flowCategory": "arr",
           "required": true,
@@ -656,7 +656,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emule-bb-v0.7.3/eMule-broadband-0.7.3-x64.manifest.json"
+              "path": "release/emulebb-v0.7.3/emulebb-0.7.3-x64.manifest.json"
             }
           ]
         },
@@ -673,7 +673,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emule-bb-v0.7.3/eMule-broadband-0.7.3-arm64.manifest.json"
+              "path": "release/emulebb-v0.7.3/emulebb-0.7.3-arm64.manifest.json"
             }
           ]
         },
@@ -690,7 +690,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emule-bb-v0.7.3/eMule-broadband-0.7.3-amutorrent-x64.manifest.json"
+              "path": "release/emulebb-v0.7.3/emulebb-0.7.3-amutorrent-x64.manifest.json"
             }
           ]
         },

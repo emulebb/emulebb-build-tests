@@ -1,4 +1,4 @@
-"""Starts a persistent interactive aMuTorrent session against eMule BB REST."""
+"""Starts a persistent interactive aMuTorrent session against eMuleBB REST."""
 
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def build_amutorrent_environment(
             "EMULEBB_API_KEY": api_key,
             "EMULEBB_USE_SSL": "true" if use_ssl else "false",
             "EMULEBB_ID": instance_id,
-            "EMULEBB_NAME": "eMule BB Interactive",
+            "EMULEBB_NAME": "eMuleBB Interactive",
         }
     )
     if extra_ca_cert:
@@ -128,7 +128,7 @@ def write_stop_script(path: Path, *, emule_pid: int | None, amutorrent_pid: int 
     """Writes a command helper that stops the launched interactive processes."""
 
     process_rows = [
-        ("eMule BB", emule_pid),
+        ("eMuleBB", emule_pid),
         ("aMuTorrent", amutorrent_pid),
     ]
     stop_calls = "\n".join(
@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Starts eMule BB and aMuTorrent, then leaves both running for the operator."""
+    """Starts eMuleBB and aMuTorrent, then leaves both running for the operator."""
 
     args = build_parser().parse_args()
     paths = harness_cli_common.prepare_run_paths(
@@ -309,7 +309,7 @@ def main() -> int:
         if not args.no_open_browser:
             webbrowser.open(amutorrent_base_url)
 
-        print(f"eMule BB REST: {emule_base_url}")
+        print(f"eMuleBB REST: {emule_base_url}")
         print(f"aMuTorrent UI: {amutorrent_base_url}")
         print(f"Artifacts: {paths.run_report_dir}")
         print(f"Stop script: {paths.run_report_dir / 'stop-session.cmd'}")

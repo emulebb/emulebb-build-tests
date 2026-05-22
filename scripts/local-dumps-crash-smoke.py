@@ -110,7 +110,7 @@ def wait_for_emule_local_dump(local_dumps: dict[str, object], timeout_seconds: f
         last_files = harness_cli_common.collect_local_dump_files(local_dumps)
         emule_dumps = [
             row
-            for row in harness_cli_common.local_dump_files_for_image(last_files, "emule.exe")
+            for row in harness_cli_common.local_dump_files_for_image(last_files, "emulebb.exe")
             if int(row.get("size_bytes") or 0) > 0
         ]
         if emule_dumps:
@@ -124,7 +124,7 @@ def wait_for_emule_local_dump(local_dumps: dict[str, object], timeout_seconds: f
         "ok": False,
         "local_dump_files": last_files,
         "emule_dumps": [],
-        "reason": "timed out waiting for emule.exe LocalDump",
+        "reason": "timed out waiting for emulebb.exe LocalDump",
     }
 
 

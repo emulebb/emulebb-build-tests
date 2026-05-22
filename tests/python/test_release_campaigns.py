@@ -37,7 +37,7 @@ def test_default_template_defines_strict_phase_taxonomy() -> None:
 def test_073_campaign_validates_and_covers_all_release_gates() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
-    campaign = release_campaigns.load_release_campaign(root, "emule-bb-0.7.3")
+    campaign = release_campaigns.load_release_campaign(root, "emulebb-0.7.3")
 
     assert release_campaigns.validate_release_campaign(campaign, template) == []
     scenario_ids = {
@@ -57,7 +57,7 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
 def test_campaign_validation_warns_for_unmapped_gate() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
-    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emule-bb-0.7.3"))
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
     campaign["releaseGates"].append({"id": "future-gate", "coveredBy": []})
 
     warnings = release_campaigns.validate_release_campaign(campaign, template)
@@ -68,7 +68,7 @@ def test_campaign_validation_warns_for_unmapped_gate() -> None:
 def test_campaign_validation_rejects_duplicate_scenario_ids() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
-    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emule-bb-0.7.3"))
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
     duplicate = copy.deepcopy(campaign["phases"][0]["scenarios"][0])
     campaign["phases"][0]["scenarios"].append(duplicate)
 
@@ -79,7 +79,7 @@ def test_campaign_validation_rejects_duplicate_scenario_ids() -> None:
 def test_campaign_validation_rejects_unknown_live_e2e_profile() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
-    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emule-bb-0.7.3"))
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
     campaign["phases"][2]["scenarios"][0]["liveE2eProfile"] = "unknown-profile"
 
     with pytest.raises(release_campaigns.ReleaseCampaignError, match="unknown live E2E profile"):
@@ -105,7 +105,7 @@ def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
             tests_repo_root=tests_root,
             workspace_state_root=state_root,
         ),
-        campaign_id="emule-bb-0.7.3",
+        campaign_id="emulebb-0.7.3",
     )
 
     scenarios = {scenario["id"]: scenario for scenario in report["scenarios"]}
@@ -123,7 +123,7 @@ def test_terminal_report_contains_phase_status_and_warning(tmp_path: Path) -> No
 
     report = release_campaigns.build_release_campaign_report(
         release_campaigns.ReleaseCampaignPaths(tests_repo_root=tests_root, workspace_state_root=tmp_path / "state"),
-        campaign_id="emule-bb-0.7.3",
+        campaign_id="emulebb-0.7.3",
         phase_id="packaging-provenance",
     )
     text = release_campaigns.format_release_campaign_report(report)

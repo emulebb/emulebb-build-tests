@@ -52,7 +52,7 @@ def test_corpus_summary_tracks_failures_and_divergences() -> None:
 
 def test_run_one_diagnostic_reads_app_variant_report(tmp_path: Path, monkeypatch) -> None:
     module = load_module()
-    emule = tmp_path / "emule.exe"
+    emule = tmp_path / "emulebb.exe"
     media = tmp_path / "sample.mp4"
     output = tmp_path / "out.json"
     emule.write_text("stub", encoding="utf-8")

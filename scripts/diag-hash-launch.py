@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         workspace_root,
         preferred_variant_names=("main", "community", "tracing-harness"),
     )
-    emule_exe = (args.emule_exe or (app_root / "srchybrid" / "x64" / "Debug" / "emule.exe")).resolve()
+    emule_exe = (args.emule_exe or (app_root / "srchybrid" / "x64" / "Debug" / "emulebb.exe")).resolve()
     report_root = (args.report_root or (get_test_reports_root(workspace_root) / "diag-hash")).resolve()
     reject_windows_temp_path(report_root, "report root")
     latest_report_dir = report_root.parent / "diag-hash-latest"

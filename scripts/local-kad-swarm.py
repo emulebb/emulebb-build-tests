@@ -1,4 +1,4 @@
-"""Local deterministic Kad swarm connectivity matrix for eMule BB."""
+"""Local deterministic Kad swarm connectivity matrix for eMuleBB."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ KAD_STATE_FILES = (
 
 @dataclass(frozen=True)
 class KadClientSpec:
-    """One local eMule BB client participating in a deterministic Kad swarm."""
+    """One local eMuleBB client participating in a deterministic Kad swarm."""
 
     index: int
     profile_id: str
@@ -275,7 +275,7 @@ def configure_kad_client_profile(
     p2p_bind_interface_name: str,
     p2p_bind_addr: str,
 ) -> dict[str, object]:
-    """Applies local-only Kad and REST preferences to one eMule BB profile."""
+    """Applies local-only Kad and REST preferences to one eMuleBB profile."""
 
     bind_interface = p2p_bind_interface_name.strip()
     bind_addr = "" if bind_interface else p2p_bind_addr.strip()

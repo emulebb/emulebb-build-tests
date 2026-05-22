@@ -57,13 +57,13 @@ def test_wait_for_emule_local_dump_accepts_non_empty_dump(monkeypatch) -> None:
     monkeypatch.setattr(
         module.harness_cli_common,
         "collect_local_dump_files",
-        lambda _local_dumps: {"files": [{"name": "emule.exe.1234.dmp", "size_bytes": 4096}]},
+        lambda _local_dumps: {"files": [{"name": "emulebb.exe.1234.dmp", "size_bytes": 4096}]},
     )
 
     result = module.wait_for_emule_local_dump({"dump_folder": "unused"}, 1.0)
 
     assert result["ok"] is True
-    assert result["emule_dumps"][0]["name"] == "emule.exe.1234.dmp"
+    assert result["emule_dumps"][0]["name"] == "emulebb.exe.1234.dmp"
 
 
 def test_collect_dumps_in_directory_reports_non_empty_dumps(tmp_path: Path) -> None:
@@ -120,7 +120,7 @@ def test_dump_channel_summary_counts_independent_crash_channels(tmp_path: Path) 
             "manual_dump": {"ok": True, "dump_path": str(manual_dump)},
             "process_exit": {"ok": True},
             "process_stopped": {"ok": True},
-            "local_dump": {"emule_dumps": [{"name": "emule.exe.1234.dmp", "size_bytes": 4096}]},
+            "local_dump": {"emule_dumps": [{"name": "emulebb.exe.1234.dmp", "size_bytes": 4096}]},
             "procdump_dump_files": {
                 "files": [{"name": procdump_crash_dump.name, "path": str(procdump_crash_dump), "size_bytes": 4}]
             },

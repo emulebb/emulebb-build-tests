@@ -64,7 +64,7 @@ def test_default_manifest_path_accepts_variant_workspace_root(tmp_path: Path) ->
 
 def test_release_scope_marks_missing_language_dlls_as_failed(tmp_path: Path) -> None:
     smoke = load_resource_ui_smoke()
-    app_exe = tmp_path / "emule.exe"
+    app_exe = tmp_path / "emulebb.exe"
     app_exe.write_text("", encoding="utf-8")
     languages = smoke.attach_language_dlls(
         [{"code": "it_IT", "name": "Italian", "rc": "it_IT.rc", "dll_stem": "it_IT", "language_id": 0x0410}],
@@ -81,7 +81,7 @@ def test_release_scope_marks_missing_language_dlls_as_failed(tmp_path: Path) -> 
 
 def test_available_scope_filters_missing_language_dlls(tmp_path: Path) -> None:
     smoke = load_resource_ui_smoke()
-    app_exe = tmp_path / "emule.exe"
+    app_exe = tmp_path / "emulebb.exe"
     app_exe.write_text("", encoding="utf-8")
     (tmp_path / "it_IT.dll").write_text("", encoding="utf-8")
     languages = smoke.attach_language_dlls(
@@ -104,7 +104,7 @@ def test_resource_report_fails_before_launching_when_release_dlls_are_missing(tm
         tmp_path / "rc-release-languages.json",
         [{"code": "it_IT", "name": "Italian", "rc": "it_IT.rc"}],
     )
-    app_exe = tmp_path / "bin" / "emule.exe"
+    app_exe = tmp_path / "bin" / "emulebb.exe"
     app_exe.parent.mkdir()
     app_exe.write_text("", encoding="utf-8")
     paths = SimpleNamespace(
@@ -137,7 +137,7 @@ def test_language_child_command_carries_isolated_language_contract(tmp_path: Pat
     smoke = load_resource_ui_smoke()
     app_root = tmp_path / "app"
     app_root.mkdir()
-    app_exe = app_root / "emule.exe"
+    app_exe = app_root / "emulebb.exe"
     app_exe.write_text("", encoding="utf-8")
     paths = SimpleNamespace(
         workspace_root=tmp_path / "workspaces" / "workspace",
@@ -182,7 +182,7 @@ def test_language_subprocess_timeout_records_failure_and_kills_process_tree(tmp_
     paths = SimpleNamespace(
         workspace_root=tmp_path,
         app_root=tmp_path / "app",
-        app_exe=tmp_path / "app" / "emule.exe",
+        app_exe=tmp_path / "app" / "emulebb.exe",
         source_artifacts_dir=tmp_path / "artifacts",
         configuration="Release",
     )
@@ -241,7 +241,7 @@ def test_resource_report_language_fail_fast_stops_after_first_failure(tmp_path: 
             {"code": "de_DE", "name": "German", "rc": "de_DE.rc"},
         ],
     )
-    app_exe = tmp_path / "bin" / "emule.exe"
+    app_exe = tmp_path / "bin" / "emulebb.exe"
     lang_dir = app_exe.parent / "lang"
     lang_dir.mkdir(parents=True)
     app_exe.write_text("", encoding="utf-8")

@@ -125,7 +125,7 @@ def test_launch_and_wait_tolerates_minimized_to_tray_startup(tmp_path: Path, mon
 
     monkeypatch.setattr(module, "wait_for_main_window", fail_wait_for_main_window)
 
-    app, title, ready = module.launch_and_wait(tmp_path / "emule.exe", tmp_path / "profile", "http://127.0.0.1:4712", "k", 30.0)
+    app, title, ready = module.launch_and_wait(tmp_path / "emulebb.exe", tmp_path / "profile", "http://127.0.0.1:4712", "k", 30.0)
 
     assert app is launched
     assert title == "not observed (minimized to tray)"

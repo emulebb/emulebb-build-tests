@@ -1,4 +1,4 @@
-"""Runs release-gate command-line process smoke checks for eMule BB."""
+"""Runs release-gate command-line process smoke checks for eMuleBB."""
 
 from __future__ import annotations
 

@@ -49,7 +49,7 @@ def test_run_case_fails_on_missing_expected_output(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(smoke.subprocess, "run", fake_run)
 
     result = smoke.run_case(
-        tmp_path / "emule.exe",
+        tmp_path / "emulebb.exe",
         smoke.CommandLineCase(
             name="unknown-switch",
             arguments=("--unknown",),
@@ -74,7 +74,7 @@ def test_certificate_generation_case_requires_output_files(tmp_path: Path, monke
 
     monkeypatch.setattr(smoke.subprocess, "run", fake_run)
 
-    result = smoke.run_certificate_generation_case(tmp_path / "emule.exe", tmp_path)
+    result = smoke.run_certificate_generation_case(tmp_path / "emulebb.exe", tmp_path)
 
     assert result["status"] == "passed"
     artifacts = result["artifacts"]

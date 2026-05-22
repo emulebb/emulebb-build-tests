@@ -265,7 +265,7 @@ def test_arr_release_grab_skips_ranked_rows_rejected_by_arr(monkeypatch: pytest.
     rejected = {
         "title": "Operator Movie Small",
         "indexerId": 14,
-        "indexer": "eMule BB Local",
+        "indexer": "eMuleBB Local",
         "sources": 20,
         "size": 1_000_000_000,
         "downloadUrl": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000&dn=Operator.Movie.Small.mkv&xl=1000000000",
@@ -273,7 +273,7 @@ def test_arr_release_grab_skips_ranked_rows_rejected_by_arr(monkeypatch: pytest.
     accepted = {
         "title": "Operator Movie Larger",
         "indexerId": 14,
-        "indexer": "eMule BB Local",
+        "indexer": "eMuleBB Local",
         "sources": 20,
         "size": 2_000_000_000,
         "downloadUrl": "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000&dn=Operator.Movie.Larger.mkv&xl=2000000000",
@@ -317,7 +317,7 @@ def test_arr_release_grab_enriches_zero_arr_sources_from_direct_torznab(monkeypa
     larger = {
         "title": "Operator Movie Large",
         "indexerId": 14,
-        "indexer": "eMule BB Local",
+        "indexer": "eMuleBB Local",
         "sources": 0,
         "size": 4_000_000_000,
         "downloadUrl": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000&dn=Operator.Movie.Large.mkv&xl=4000000000",
@@ -325,7 +325,7 @@ def test_arr_release_grab_enriches_zero_arr_sources_from_direct_torznab(monkeypa
     smaller = {
         "title": "Operator Movie Small",
         "indexerId": 14,
-        "indexer": "eMule BB Local",
+        "indexer": "eMuleBB Local",
         "sources": 0,
         "size": 1_400_000_000,
         "downloadUrl": "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000&dn=Operator.Movie.Small.mkv&xl=1400000000",
@@ -472,7 +472,7 @@ def test_radarr_movie_download_e2e_requires_release_grab_and_category_transfer(
         emule_base_url="http://127.0.0.1:1",
         emule_api_key="emule-key",
         indexer_id=40,
-        indexer_name="eMule BB Local (Prowlarr)",
+        indexer_name="eMuleBB Local (Prowlarr)",
         prowlarr_indexer_id=50,
         movie_title="operator movie",
         movie_root=tmp_path,
@@ -549,7 +549,7 @@ def test_radarr_movie_download_e2e_handoff_skips_completion_and_import(
         emule_base_url="http://127.0.0.1:1",
         emule_api_key="emule-key",
         indexer_id=40,
-        indexer_name="eMule BB Local (Prowlarr)",
+        indexer_name="eMuleBB Local (Prowlarr)",
         prowlarr_indexer_id=50,
         movie_title="operator movie",
         movie_root=tmp_path,
@@ -627,7 +627,7 @@ def test_radarr_movie_download_e2e_local_synthetic_fixture_skips_arr_import(
         emule_base_url="http://127.0.0.1:1",
         emule_api_key="emule-key",
         indexer_id=40,
-        indexer_name="eMule BB Local",
+        indexer_name="eMuleBB Local",
         prowlarr_indexer_id=50,
         movie_title="operator movie",
         movie_root=tmp_path,
@@ -664,7 +664,7 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
         lambda *_args, **_kwargs: [
             {
                 "source": "IndexerStatusCheck",
-                "message": "Indexers unavailable due to failures: eMule BB Local (Prowlarr)",
+                "message": "Indexers unavailable due to failures: eMuleBB Local (Prowlarr)",
             }
         ],
     )
@@ -714,7 +714,7 @@ def test_radarr_movie_download_e2e_uses_prowlarr_source_when_arr_quarantined_ind
         emule_base_url="http://127.0.0.1:1",
         emule_api_key="emule-key",
         indexer_id=40,
-        indexer_name="eMule BB Local (Prowlarr)",
+        indexer_name="eMuleBB Local (Prowlarr)",
         prowlarr_indexer_id=50,
         movie_title="operator movie",
         movie_root=tmp_path,
@@ -813,7 +813,7 @@ def test_radarr_movie_download_e2e_uses_manual_import_when_downloaded_scan_stall
         emule_base_url="http://127.0.0.1:1",
         emule_api_key="emule-key",
         indexer_id=40,
-        indexer_name="eMule BB Local (Prowlarr)",
+        indexer_name="eMuleBB Local (Prowlarr)",
         prowlarr_indexer_id=50,
         movie_title="operator movie",
         movie_root=tmp_path,
@@ -889,7 +889,7 @@ def test_prowlarr_fallback_adds_selected_magnet_through_qbit_category(monkeypatc
         arr_url="http://radarr.test",
         arr_api_key="key",
         arr_indexer_id=40,
-        arr_indexer_name="eMule BB Local",
+        arr_indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=50,
@@ -967,7 +967,7 @@ def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatc
         arr_url="http://sonarr.test",
         arr_api_key="key",
         arr_indexer_id=40,
-        arr_indexer_name="eMule BB Local",
+        arr_indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=50,
@@ -1061,7 +1061,7 @@ def test_arr_release_grab_discovers_new_category_transfer_when_release_hash_miss
         arr_url="http://radarr.test",
         arr_api_key="key",
         arr_indexer_id=40,
-        arr_indexer_name="eMule BB Local",
+        arr_indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=50,
@@ -1095,7 +1095,7 @@ def test_sonarr_release_grab_falls_back_to_prowlarr_when_healthy_arr_returns_no_
         module,
         "grab_first_arr_release",
         lambda *_args, **_kwargs: calls.append(("direct_arr_search", _args[3]))
-        or (_ for _ in ()).throw(RuntimeError("sonarr release search returned no eMule BB rows before timeout.")),
+        or (_ for _ in ()).throw(RuntimeError("sonarr release search returned no eMuleBB rows before timeout.")),
     )
 
     def fake_prowlarr_source_grab(**kwargs):
@@ -1114,7 +1114,7 @@ def test_sonarr_release_grab_falls_back_to_prowlarr_when_healthy_arr_returns_no_
         arr_url="http://sonarr.test",
         arr_api_key="key",
         arr_indexer_id=40,
-        arr_indexer_name="eMule BB Local",
+        arr_indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=50,
@@ -1147,7 +1147,7 @@ def test_radarr_release_grab_falls_back_to_prowlarr_when_healthy_arr_returns_no_
         module,
         "grab_first_arr_release",
         lambda *_args, **_kwargs: calls.append(("direct_arr_search", _args[3]))
-        or (_ for _ in ()).throw(RuntimeError("radarr release search returned no eMule BB rows before timeout.")),
+        or (_ for _ in ()).throw(RuntimeError("radarr release search returned no eMuleBB rows before timeout.")),
     )
 
     def fake_prowlarr_source_grab(**kwargs):
@@ -1166,7 +1166,7 @@ def test_radarr_release_grab_falls_back_to_prowlarr_when_healthy_arr_returns_no_
         arr_url="http://radarr.test",
         arr_api_key="key",
         arr_indexer_id=40,
-        arr_indexer_name="eMule BB Local",
+        arr_indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=50,
@@ -1182,7 +1182,7 @@ def test_radarr_release_grab_falls_back_to_prowlarr_when_healthy_arr_returns_no_
 
     assert result["source"] == "prowlarr_eMule_indexer_qbit_add"
     assert result["arr_indexer_unavailable_due_to_failures"] is False
-    assert "radarr release search returned no eMule BB rows" in result["arr_direct_search_error"]
+    assert "radarr release search returned no eMuleBB rows" in result["arr_direct_search_error"]
     assert calls == [
         ("direct_arr_search", "operator movie"),
         ("prowlarr_source_grab", ("radarr", module.TORZNAB_MOVIE_CATEGORY, module.RADARR_IMPORT_CATEGORY)),
@@ -1219,7 +1219,7 @@ def test_sonarr_release_grab_falls_back_when_arr_rows_fail_episode_filter(
         arr_url="http://sonarr.test",
         arr_api_key="key",
         arr_indexer_id=40,
-        arr_indexer_name="eMule BB Local",
+        arr_indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=50,
@@ -1303,7 +1303,7 @@ def test_arr_release_grab_does_not_fallback_when_arr_indexer_is_healthy(
             arr_url="http://radarr.test",
             arr_api_key="key",
             arr_indexer_id=40,
-            arr_indexer_name="eMule BB Local",
+            arr_indexer_name="eMuleBB Local",
             prowlarr_url="http://prowlarr.test",
             prowlarr_api_key="prowlarr-key",
             prowlarr_indexer_id=50,
@@ -1605,7 +1605,7 @@ def test_qbit_client_payload_starts_media_downloads() -> None:
 
     payload = module.build_qbit_client_payload(
         arr_qbit_schema(),
-        name="eMule BB Live radarr 4711",
+        name="eMuleBB Live radarr 4711",
         host="127.0.0.1",
         port=4711,
         api_key="emule-key",
@@ -1624,7 +1624,7 @@ def test_qbit_client_payload_covers_http_and_https_transport() -> None:
 
     http_payload = module.build_qbit_client_payload(
         arr_qbit_schema(certificate_validation=True),
-        name="eMule BB Live radarr HTTP",
+        name="eMuleBB Live radarr HTTP",
         host="127.0.0.1",
         port=61920,
         api_key="emule-key",
@@ -1634,7 +1634,7 @@ def test_qbit_client_payload_covers_http_and_https_transport() -> None:
     )
     https_payload = module.build_qbit_client_payload(
         arr_qbit_schema(certificate_validation=True),
-        name="eMule BB Live radarr HTTPS",
+        name="eMuleBB Live radarr HTTPS",
         host="127.0.0.1",
         port=61921,
         api_key="emule-key",
@@ -1657,7 +1657,7 @@ def test_qbit_client_payload_rejects_https_without_certificate_policy() -> None:
     with pytest.raises(RuntimeError, match="does not expose disposable HTTPS certificate validation policy"):
         module.build_qbit_client_payload(
             arr_qbit_schema(),
-            name="eMule BB Live radarr HTTPS",
+            name="eMuleBB Live radarr HTTPS",
             host="127.0.0.1",
             port=61921,
             api_key="emule-key",
@@ -1693,7 +1693,7 @@ def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.M
         module.create_temp_qbit_client(
             "http://radarr.test",
             "key",
-            name="eMule BB Live radarr 4711",
+            name="eMuleBB Live radarr 4711",
             host="127.0.0.1",
             port=4711,
             emule_api_key="emule-key",
@@ -1714,7 +1714,7 @@ def test_arr_readiness_summaries_are_compact() -> None:
     indexer = module.summarize_arr_indexer(
         {
             "id": 40,
-            "name": "eMule BB Local",
+            "name": "eMuleBB Local",
             "implementation": "Torznab",
             "enable": True,
             "protocol": "torrent",
@@ -1724,7 +1724,7 @@ def test_arr_readiness_summaries_are_compact() -> None:
     client = module.summarize_arr_download_client(
         {
             "id": 50,
-            "name": "eMule BB Live radarr 4711",
+            "name": "eMuleBB Live radarr 4711",
             "implementation": "QBittorrent",
             "protocol": "torrent",
             "enable": True,
@@ -1736,7 +1736,7 @@ def test_arr_readiness_summaries_are_compact() -> None:
 
     assert indexer == {
         "id": 40,
-        "name": "eMule BB Local",
+        "name": "eMuleBB Local",
         "implementation": "Torznab",
         "enable": True,
         "enableRss": None,
@@ -2028,7 +2028,7 @@ def test_ensure_arr_indexer_enabled_reenables_disabled_provider(monkeypatch: pyt
     enabled, summary = module.ensure_arr_indexer_enabled(
         "http://sonarr.test",
         "key",
-        {"id": 15, "name": "eMule BB Local", "enable": False, "fields": []},
+        {"id": 15, "name": "eMuleBB Local", "enable": False, "fields": []},
     )
 
     assert enabled["enable"] is True
@@ -2048,7 +2048,7 @@ def test_ensure_arr_emule_indexer_reuses_existing_provider(monkeypatch: pytest.M
                 "json": [
                     {
                         "id": 14,
-                        "name": "eMule BB Local (Prowlarr)",
+                        "name": "eMuleBB Local (Prowlarr)",
                         "enableRss": False,
                         "enableAutomaticSearch": False,
                         "enableInteractiveSearch": False,
@@ -2059,7 +2059,7 @@ def test_ensure_arr_emule_indexer_reuses_existing_provider(monkeypatch: pytest.M
                 "body_text": "[]",
             }
         if path == "/api/v3/indexer/14?forceSave=true" and method == "PUT":
-            assert json_body["name"] == "eMule BB Local"
+            assert json_body["name"] == "eMuleBB Local"
             assert json_body["enableRss"] is False
             assert json_body["enableAutomaticSearch"] is True
             assert json_body["enableInteractiveSearch"] is True
@@ -2073,7 +2073,7 @@ def test_ensure_arr_emule_indexer_reuses_existing_provider(monkeypatch: pytest.M
     indexer, summary = module.ensure_arr_emule_indexer(
         arr_url="http://radarr.test",
         api_key="key",
-        indexer_name="eMule BB Local",
+        indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=40,
@@ -2119,7 +2119,7 @@ def test_ensure_arr_emule_indexer_creates_missing_sonarr_provider(monkeypatch: p
     indexer, summary = module.ensure_arr_emule_indexer(
         arr_url="http://sonarr.test",
         api_key="key",
-        indexer_name="eMule BB Local",
+        indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test/",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=40,
@@ -2171,7 +2171,7 @@ def test_ensure_arr_emule_indexer_retries_disabled_save_on_validation_blocker(mo
     indexer, summary = module.ensure_arr_emule_indexer(
         arr_url="http://radarr.test",
         api_key="key",
-        indexer_name="eMule BB Local",
+        indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=40,
@@ -2217,7 +2217,7 @@ def test_recreate_arr_emule_indexer_if_unavailable_uses_public_arr_apis(monkeypa
                 "json": [
                     {
                         "source": "IndexerStatusCheck",
-                        "message": "Indexers unavailable due to failures: eMule BB Local",
+                        "message": "Indexers unavailable due to failures: eMuleBB Local",
                     }
                 ],
                 "body_text": "[]",
@@ -2227,7 +2227,7 @@ def test_recreate_arr_emule_indexer_if_unavailable_uses_public_arr_apis(monkeypa
         if path == "/api/v3/indexer/schema" and method == "GET":
             return {"status": 200, "json": [schema], "body_text": "[]"}
         if path == "/api/v3/indexer?forceSave=true" and method == "POST":
-            assert json_body["name"] == "eMule BB Local"
+            assert json_body["name"] == "eMuleBB Local"
             assert json_body["fields"][0]["value"] == "http://prowlarr.test/40/"
             assert json_body["fields"][3]["value"] == [module.TORZNAB_MOVIE_CATEGORY]
             return {"status": 201, "json": {**json_body, "id": 44}, "body_text": "{}"}
@@ -2238,8 +2238,8 @@ def test_recreate_arr_emule_indexer_if_unavailable_uses_public_arr_apis(monkeypa
     indexer, summary = module.recreate_arr_emule_indexer_if_unavailable(
         arr_url="http://radarr.test",
         api_key="key",
-        indexer={"id": 15, "name": "eMule BB Local"},
-        indexer_name="eMule BB Local",
+        indexer={"id": 15, "name": "eMuleBB Local"},
+        indexer_name="eMuleBB Local",
         prowlarr_url="http://prowlarr.test",
         prowlarr_api_key="prowlarr-key",
         prowlarr_indexer_id=40,
@@ -2284,7 +2284,7 @@ def test_ensure_arr_indexer_untagged_clears_tags(monkeypatch: pytest.MonkeyPatch
     indexer, summary = module.ensure_arr_indexer_untagged(
         "http://radarr.test",
         "key",
-        {"id": 15, "name": "eMule BB Local", "tags": [3]},
+        {"id": 15, "name": "eMuleBB Local", "tags": [3]},
     )
 
     assert indexer["tags"] == []
@@ -2402,7 +2402,7 @@ def test_isolate_arr_indexer_search_force_refreshes_allowed_indexer(monkeypatch:
         module,
         "list_arr_indexers",
         lambda *_args: [
-            {"id": 22, "name": "eMule BB Local", "enableAutomaticSearch": True, "enableInteractiveSearch": True},
+            {"id": 22, "name": "eMuleBB Local", "enableAutomaticSearch": True, "enableInteractiveSearch": True},
             {"id": 30, "name": "Other", "enableAutomaticSearch": True, "enableInteractiveSearch": True},
         ],
     )

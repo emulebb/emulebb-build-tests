@@ -1,4 +1,4 @@
-"""Runs a live Prowlarr check against the eMule BB Torznab bridge."""
+"""Runs a live Prowlarr check against the eMuleBB Torznab bridge."""
 
 from __future__ import annotations
 
@@ -218,7 +218,7 @@ def build_indexer_payload(
     emule_api_key: str,
     tags: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Builds the persistent Generic Torznab indexer payload for eMule BB."""
+    """Builds the persistent Generic Torznab indexer payload for eMuleBB."""
 
     payload = json.loads(json.dumps(base_payload))
     payload["name"] = name
@@ -301,7 +301,7 @@ def build_qbit_download_client_payload(
     category: str,
     use_ssl: bool = False,
 ) -> dict[str, Any]:
-    """Builds the managed Prowlarr qBittorrent client payload for eMule BB."""
+    """Builds the managed Prowlarr qBittorrent client payload for eMuleBB."""
 
     schema_summary = summarize_qbit_download_client_schema(base_payload)
     if not bool(schema_summary["ok"]):
@@ -352,7 +352,7 @@ def test_qbit_download_client(prowlarr_url: str, api_key: str, client: dict[str,
         json_body=test_payload,
         timeout_seconds=60.0,
     )
-    require_success(test_result, "Prowlarr eMule BB qBittorrent client test")
+    require_success(test_result, "Prowlarr eMuleBB qBittorrent client test")
     return int(test_result.get("status") or 0)
 
 
@@ -390,7 +390,7 @@ def create_temp_qbit_download_client(
                 method="POST",
                 json_body=public_provider_payload(payload),
             ),
-            "Prowlarr eMule BB qBittorrent client create",
+            "Prowlarr eMuleBB qBittorrent client create",
         )
         if not isinstance(saved, dict) or not saved.get("id"):
             raise RuntimeError("Prowlarr did not return a created qBittorrent client id.")
@@ -581,7 +581,7 @@ def upsert_indexer(
                 method="POST",
                 json_body=public_provider_payload(disabled_payload),
             )
-            created = require_success(create_result, "Prowlarr disabled eMule BB indexer create")
+            created = require_success(create_result, "Prowlarr disabled eMuleBB indexer create")
             if not isinstance(created, dict) or not created.get("id"):
                 raise RuntimeError("Prowlarr did not return a created indexer id.")
             payload["id"] = int(created["id"])
@@ -592,7 +592,7 @@ def upsert_indexer(
                 method="PUT",
                 json_body=public_provider_payload(payload),
             )
-    saved = require_success(result, "Prowlarr eMule BB indexer upsert")
+    saved = require_success(result, "Prowlarr eMuleBB indexer upsert")
     if not isinstance(saved, dict) or not saved.get("id"):
         if payload.get("id"):
             saved = get_indexer_by_id(prowlarr_url, api_key, int(payload["id"]))
@@ -606,7 +606,7 @@ def upsert_indexer(
 
 
 def test_indexer(prowlarr_url: str, api_key: str, indexer_payload: dict[str, Any]) -> dict[str, object]:
-    """Runs Prowlarr's indexer test endpoint for the eMule BB indexer."""
+    """Runs Prowlarr's indexer test endpoint for the eMuleBB indexer."""
 
     result = prowlarr_request(
         prowlarr_url,
@@ -622,12 +622,12 @@ def test_indexer(prowlarr_url: str, api_key: str, indexer_payload: dict[str, Any
             "http_status": int(result.get("status") or 0),
             "body_preview": compact_body_preview(result),
         }
-    require_success(result, "Prowlarr eMule BB indexer test")
+    require_success(result, "Prowlarr eMuleBB indexer test")
     return {"status": "passed", "http_status": int(result.get("status") or 0)}
 
 
 def check_direct_caps(base_url: str, emule_api_key: str) -> dict[str, object]:
-    """Validates the direct eMule BB Torznab caps endpoint."""
+    """Validates the direct eMuleBB Torznab caps endpoint."""
 
     path = "/indexer/emulebb/api?t=caps&apikey=" + urllib.parse.quote(emule_api_key)
     result = rest_smoke.http_request(base_url, path, request_timeout_seconds=20.0)
@@ -647,7 +647,7 @@ def build_direct_torznab_search_path(
     *,
     extra_params: dict[str, object] | None = None,
 ) -> str:
-    """Builds one direct eMule BB Torznab search path."""
+    """Builds one direct eMuleBB Torznab search path."""
 
     params: dict[str, object] = {"t": "search"}
     if category_id is not None:
@@ -829,7 +829,7 @@ def wait_for_direct_torznab_results(
             if status == 200 and count > 0:
                 return {"query": query, "count": count, "attempts": attempts}
         time.sleep(5.0)
-    raise RuntimeError(f"Direct eMule BB Torznab search returned no results before timeout. Attempts: {attempts!r}")
+    raise RuntimeError(f"Direct eMuleBB Torznab search returned no results before timeout. Attempts: {attempts!r}")
 
 
 def stress_cached_direct_torznab_search(
@@ -1380,14 +1380,14 @@ def require_first_radarr_movie_term_results(diagnostic: dict[str, object]) -> No
 
 
 def ed2k_hash_from_magnet(magnet: str) -> str:
-    """Extracts the eMule BB fake BTIH hash from a magnet URL."""
+    """Extracts the eMuleBB fake BTIH hash from a magnet URL."""
 
     parsed = urllib.parse.urlparse(magnet)
     query = urllib.parse.parse_qs(parsed.query)
     xt = query.get("xt", [""])[0].lower()
     prefix = "urn:btih:"
     if not xt.startswith(prefix) or len(xt) < len(prefix) + 40:
-        raise RuntimeError("Magnet does not contain an eMule BB fake BTIH hash.")
+        raise RuntimeError("Magnet does not contain an eMuleBB fake BTIH hash.")
     return xt[len(prefix) : len(prefix) + 32]
 
 
@@ -1491,7 +1491,7 @@ def wait_for_prowlarr_results(
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(5.0, remaining))
-    raise RuntimeError(f"Prowlarr did not return eMule BB results before timeout. Attempts: {attempts!r}")
+    raise RuntimeError(f"Prowlarr did not return eMuleBB results before timeout. Attempts: {attempts!r}")
 
 
 def normalized_match_text(value: object) -> str:
@@ -1570,7 +1570,7 @@ def select_grabbable_release(rows: list[Any], indexer_id: int, query: str) -> di
     if candidates:
         candidates.sort(reverse=True)
         return candidates[0][3]
-    raise RuntimeError("Prowlarr search returned rows but none were grabbable for the eMule BB indexer.")
+    raise RuntimeError("Prowlarr search returned rows but none were grabbable for the eMuleBB indexer.")
 
 
 def summarize_grabbed_release(release: dict[str, Any], query: str) -> dict[str, object]:
@@ -1645,7 +1645,7 @@ def prowlarr_download_client_grab_roundtrip(
                 json_body=grab_payload,
                 timeout_seconds=max(1.0, min(30.0, deadline - time.monotonic())),
             )
-            require_success(grabbed, "Prowlarr eMule BB release grab")
+            require_success(grabbed, "Prowlarr eMuleBB release grab")
             return {
                 "status": "passed",
                 "category": int(category_id),
@@ -1669,7 +1669,7 @@ def prowlarr_download_client_grab_roundtrip(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Builds the Prowlarr eMule BB live test argument parser."""
+    """Builds the Prowlarr eMuleBB live test argument parser."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace-root")
@@ -1714,7 +1714,7 @@ def resolve_bind_addr(prowlarr_url: str, explicit_bind_addr: str | None) -> str:
 
 
 def main() -> int:
-    """Runs the live Prowlarr eMule BB bridge test."""
+    """Runs the live Prowlarr eMuleBB bridge test."""
 
     args = build_parser().parse_args()
     if args.cached_search_stress_count <= 0:
@@ -1740,7 +1740,7 @@ def main() -> int:
     env_values = live_env.load_env_values(
         ("PROWLARR_URL", "PROWLARR_API_KEY"),
         env_file=Path(args.env_file).resolve(),
-        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMule BB Local"},
+        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMuleBB Local"},
     )
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
@@ -1951,7 +1951,7 @@ def main() -> int:
         qbit_client = create_temp_qbit_download_client(
             prowlarr_url,
             prowlarr_api_key,
-            name=f"eMule BB Live Prowlarr {port}",
+            name=f"eMuleBB Live Prowlarr {port}",
             host=bind_addr,
             port=port,
             emule_api_key=args.emule_api_key,
@@ -2019,7 +2019,7 @@ def main() -> int:
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)
-        print(f"Prowlarr eMule BB live test {report['status']}. Report directory: {paths.run_report_dir}")
+        print(f"Prowlarr eMuleBB live test {report['status']}. Report directory: {paths.run_report_dir}")
 
 
 if __name__ == "__main__":

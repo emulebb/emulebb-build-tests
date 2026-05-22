@@ -133,7 +133,7 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
 
 
 def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the mandatory eMule BB download from tracing-harness seed scenario."""
+    """Runs the mandatory eMuleBB download from tracing-harness seed scenario."""
 
     scenario_id = HARNESS_TRANSFER_SCENARIO_ID
     scenario_artifacts = paths.source_artifacts_dir / "h2"
@@ -166,7 +166,7 @@ def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict
 
 
 def run_amule_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the eMule BB download from a headless aMule seed scenario."""
+    """Runs the eMuleBB download from a headless aMule seed scenario."""
 
     scenario_artifacts = paths.source_artifacts_dir / "a4"
     command = build_python_command()
@@ -200,7 +200,7 @@ def run_amule_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, ob
 
 
 def run_three_client_swarm_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the full eMule BB, tracing-harness, and aMule concurrent swarm."""
+    """Runs the full eMuleBB, tracing-harness, and aMule concurrent swarm."""
 
     scenario_artifacts = paths.source_artifacts_dir / "sw3"
     command = build_python_command()

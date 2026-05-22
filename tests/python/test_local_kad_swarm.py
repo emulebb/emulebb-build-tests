@@ -98,7 +98,7 @@ def test_configure_kad_client_profile_is_local_only(monkeypatch, tmp_path: Path)
 
     result = module.configure_kad_client_profile(
         config_dir=config_dir,
-        app_exe=tmp_path / "app" / "emule.exe",
+        app_exe=tmp_path / "app" / "emulebb.exe",
         spec=spec,
         api_key="key",
         rest_bind_addr="127.0.0.1",

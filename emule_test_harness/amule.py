@@ -346,7 +346,7 @@ def wait_for_shared_file_hash(
 
 
 def build_file_link(file_name: str, size: int, file_hash: str) -> str:
-    """Builds the deterministic ED2K file link consumed by eMule BB."""
+    """Builds the deterministic ED2K file link consumed by eMuleBB."""
 
     return f"ed2k://|file|{file_name}|{size}|{file_hash.lower()}|/"
 
