@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+
+def load_suite_module():
+    """Loads the hyphenated local Kad swarm script for unit tests."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "scripts" / "local-kad-swarm.py"
+    spec = importlib.util.spec_from_file_location("local_kad_swarm_test_module", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_local_kad_defaults_are_local_and_bounded() -> None:
+    module = load_suite_module()
+    args = module.parse_args([])
+
+    assert args.client_count == 3
+    assert args.min_contacts_per_client == 1
+    assert args.p2p_bind_interface_name == ""
+    assert args.bind_addr == "127.0.0.1"
+    assert args.swarm_ready_timeout_seconds == 240.0
+
+
+def test_validate_args_requires_real_swarm() -> None:
+    module = load_suite_module()
+
+    with pytest.raises(ValueError, match="at least 2"):
+        module.validate_args(module.parse_args(["--client-count", "1"]))
+    with pytest.raises(ValueError, match="at least 1"):
+        module.validate_args(module.parse_args(["--min-contacts-per-client", "0"]))
+    with pytest.raises(ValueError, match="lower than client count"):
+        module.validate_args(module.parse_args(["--client-count", "3", "--min-contacts-per-client", "3"]))
+
+
+def test_build_client_specs_uses_stable_emulebb_names() -> None:
+    module = load_suite_module()
+
+    specs = module.build_client_specs(3, [(4701, 4801, 4901), (4702, 4802, 4902), (4703, 4803, 4903)])
+
+    assert [spec.profile_id for spec in specs] == ["cl-emulebb-001", "cl-emulebb-002", "cl-emulebb-003"]
+    assert [spec.nick for spec in specs] == ["cl-emulebb-001", "cl-emulebb-002", "cl-emulebb-003"]
+    assert specs[1].rest_port == 4702
+    assert specs[1].tcp_port == 4802
+    assert specs[1].udp_port == 4902
+
+
+def test_build_bootstrap_plan_connects_to_and_from_seed() -> None:
+    module = load_suite_module()
+    specs = module.build_client_specs(3, [(4701, 4801, 4901), (4702, 4802, 4902), (4703, 4803, 4903)])
+
+    plan = [(source.profile_id, target.profile_id) for source, target in module.build_bootstrap_plan(specs)]
+
+    assert ("cl-emulebb-002", "cl-emulebb-001") in plan
+    assert ("cl-emulebb-003", "cl-emulebb-001") in plan
+    assert ("cl-emulebb-001", "cl-emulebb-002") in plan
+    assert ("cl-emulebb-001", "cl-emulebb-003") in plan
+
+
+def test_configure_kad_client_profile_is_local_only(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    config_dir = tmp_path / "profile" / "config"
+    config_dir.mkdir(parents=True)
+    module.live_common.write_utf16_ini_text(
+        config_dir / "preferences.ini",
+        "[eMule]\nNetworkED2K=1\nNetworkKademlia=0\nFilterBadIPs=1\n[WebServer]\nEnabled=0\n[UPnP]\nEnableUPnP=1\n",
+    )
+    for name in module.KAD_STATE_FILES:
+        (config_dir / name).write_bytes(b"stale")
+
+    monkeypatch.setattr(module.live_common, "apply_webserver_profile", lambda *_args, **_kwargs: None)
+    spec = module.KadClientSpec(
+        index=1,
+        profile_id="cl-emulebb-001",
+        nick="cl-emulebb-001",
+        tcp_port=4662,
+        udp_port=4672,
+        rest_port=8080,
+    )
+
+    result = module.configure_kad_client_profile(
+        config_dir=config_dir,
+        app_exe=tmp_path / "app" / "emule.exe",
+        spec=spec,
+        api_key="key",
+        rest_bind_addr="127.0.0.1",
+        p2p_bind_interface_name="",
+        p2p_bind_addr="10.1.2.3",
+    )
+
+    text = module.live_common.read_ini_text(config_dir / "preferences.ini")
+    assert "NetworkED2K=0" in text
+    assert "NetworkKademlia=1" in text
+    assert "FilterBadIPs=0" in text
+    assert "IPFilterEnabled=0" in text
+    assert "BindAddr=10.1.2.3" in text
+    assert "EnableUPnP=0" in text
+    assert sorted(result["removed_kad_state_files"]) == sorted(module.KAD_STATE_FILES)
+    assert not any((config_dir / name).exists() for name in module.KAD_STATE_FILES)

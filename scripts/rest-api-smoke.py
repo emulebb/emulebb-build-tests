@@ -2278,6 +2278,8 @@ def compact_kad_status(payload: dict[str, Any]) -> dict[str, Any]:
         "connected": payload.get("connected"),
         "bootstrapping": payload.get("bootstrapping"),
         "firewalled": payload.get("firewalled"),
+        "contactCount": payload.get("contactCount"),
+        "lanMode": payload.get("lanMode"),
         "users": payload.get("users"),
         "files": payload.get("files"),
     }
