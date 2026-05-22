@@ -86,6 +86,8 @@ OWNER_TOKEN_TO_SCHEMA_ID = {
     "autobroadbandioenabled": "AutoBroadbandIO",
     "exitonbindinterfaceloss": "ExitOnBindInterfaceLoss",
     "exitonbindinterfacelossenabled": "ExitOnBindInterfaceLoss",
+    "startupprogressdialogmode": "StartupProgressDialog",
+    "shutdownprogressdialogmode": "ShutdownProgressDialog",
     "port": "Port::<default>",
     "udpport": "UDPPort",
     "bindaddr": "BindAddr::<default>",

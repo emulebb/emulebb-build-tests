@@ -1550,6 +1550,28 @@
       "notes": ""
     },
     {
+      "id": "DailyConfigBackup",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "DailyConfigBackup",
+      "sourceExpression": "prefini::BackupKeys::DailyConfigBackup",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": "Defaults to enabled; exposed in Tweaks as the daily configuration backup switch."
+    },
+    {
       "id": "DateTimeFormat",
       "storageFile": "preferences.ini",
       "sections": [
@@ -1636,6 +1658,28 @@
       "clampOrNormalizer": "",
       "classification": "active-roundtrip",
       "notes": ""
+    },
+    {
+      "id": "DesktopUiRefreshIntervalMs",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "DesktopUiRefreshIntervalMs",
+      "sourceExpression": "prefini::DisplayKeys::DesktopUiRefreshIntervalMs",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Int"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "NormalizeDesktopUiRefreshIntervalMs",
+      "classification": "active-roundtrip",
+      "notes": "Native desktop Tools menu setting. Supported values are 500, 1000, 2000, 5000, and 10000 milliseconds; invalid persisted values fall back to 2000."
     },
     {
       "id": "DebugClientKadUDP",
@@ -6873,6 +6917,28 @@
       "notes": ""
     },
     {
+      "id": "ShutdownProgressDialog",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "ShutdownProgressDialog",
+      "sourceExpression": "prefini::LifecycleKeys::ShutdownProgressDialog",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Int"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "NormalizeLifecycleProgressDialogMode",
+      "classification": "active-roundtrip",
+      "notes": "Tweaks lifecycle progress dialog mode. Supported modes are normalized by CPreferences."
+    },
+    {
       "id": "ShowActiveDownloadsBold",
       "storageFile": "preferences.ini",
       "sections": [
@@ -7292,28 +7358,6 @@
       "notes": ""
     },
     {
-      "id": "Splashscreen",
-      "storageFile": "preferences.ini",
-      "sections": [
-        "<default>"
-      ],
-      "key": "Splashscreen",
-      "sourceExpression": "_T(\"Splashscreen\")",
-      "kind": "literal",
-      "access": [
-        "read",
-        "write"
-      ],
-      "valueKinds": [
-        "Bool"
-      ],
-      "ownerField": "",
-      "uiApiSurface": "",
-      "clampOrNormalizer": "",
-      "classification": "active-roundtrip",
-      "notes": ""
-    },
-    {
       "id": "SplitterbarPosition",
       "storageFile": "preferences.ini",
       "sections": [
@@ -7598,6 +7642,28 @@
       "clampOrNormalizer": "",
       "classification": "active-roundtrip",
       "notes": ""
+    },
+    {
+      "id": "StartupProgressDialog",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "StartupProgressDialog",
+      "sourceExpression": "prefini::LifecycleKeys::StartupProgressDialog",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Int"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "NormalizeLifecycleProgressDialogMode",
+      "classification": "active-roundtrip",
+      "notes": "Tweaks lifecycle progress dialog mode. Supported modes are normalized by CPreferences."
     },
     {
       "id": "StatGraphsInterval",
