@@ -21,6 +21,10 @@
 #include "SharedFilesWndSeams.h"
 #define EMULE_TESTS_HAS_SHARED_FILES_WND_SEAMS 1
 #endif
+#if __has_include("SharedFilesCtrlSeams.h")
+#include "SharedFilesCtrlSeams.h"
+#define EMULE_TESTS_HAS_SHARED_FILES_CTRL_SEAMS 1
+#endif
 #if __has_include("SharedDirectoryMonitorSeams.h")
 #include "SharedDirectoryMonitorSeams.h"
 #ifndef EMULE_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS
@@ -233,6 +237,30 @@ TEST_CASE("Shared hash shutdown invalidates warm caches only when hashing work w
 	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ true, false, false }));
 	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, true, false }));
 	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, true }));
+}
+#endif
+
+#ifdef EMULE_TESTS_HAS_SHARED_FILES_CTRL_SEAMS
+TEST_CASE("Shared files moved-index range covers only rotated rows")
+{
+	SharedFilesCtrlSeams::VisibleIndexRange range = SharedFilesCtrlSeams::GetMovedVisibleIndexRange(10, 40, 100);
+	CHECK(range.bValid);
+	CHECK_EQ(range.iFirst, 10);
+	CHECK_EQ(range.iLast, 40);
+
+	range = SharedFilesCtrlSeams::GetMovedVisibleIndexRange(40, 10, 100);
+	CHECK(range.bValid);
+	CHECK_EQ(range.iFirst, 10);
+	CHECK_EQ(range.iLast, 40);
+}
+
+TEST_CASE("Shared files moved-index range rejects no-op and out-of-bounds moves")
+{
+	CHECK_FALSE(SharedFilesCtrlSeams::GetMovedVisibleIndexRange(-1, 2, 10).bValid);
+	CHECK_FALSE(SharedFilesCtrlSeams::GetMovedVisibleIndexRange(2, -1, 10).bValid);
+	CHECK_FALSE(SharedFilesCtrlSeams::GetMovedVisibleIndexRange(2, 10, 10).bValid);
+	CHECK_FALSE(SharedFilesCtrlSeams::GetMovedVisibleIndexRange(2, 2, 10).bValid);
+	CHECK_FALSE(SharedFilesCtrlSeams::GetMovedVisibleIndexRange(0, 0, 0).bValid);
 }
 #endif
 
