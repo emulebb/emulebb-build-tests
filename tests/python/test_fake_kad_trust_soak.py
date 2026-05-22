@@ -41,9 +41,9 @@ def test_fake_report_validation_rejects_inconsistent_score_and_divergence() -> N
                 "reasons": ["multiple_names"],
             },
             "nameEvidence": {
-                "canonicalNames": ["one | ext:avi", "two | ext:avi"],
+                "canonicalNames": ["one", "two"],
                 "ignoredNameTokens": ["DivX"],
-                "divergenceGroups": ["one | ext:avi"],
+                "divergenceGroups": ["one"],
             },
             "integrityEvidence": {
                 "pendingHeaderCheck": False,
@@ -66,9 +66,9 @@ def test_fake_report_validation_rejects_removed_fake_file_contract() -> None:
             "score": 15,
             "severity": "low",
             "reasons": ["multiple_names"],
-            "canonicalNames": ["one | ext:avi", "two | ext:avi"],
+            "canonicalNames": ["one", "two"],
             "ignoredNameTokens": [],
-            "nameDivergenceGroups": ["one | ext:avi", "two | ext:avi"],
+            "nameDivergenceGroups": ["one", "two"],
         },
     }
 
@@ -83,7 +83,7 @@ def test_result_summary_counts_risk_and_kad_metrics() -> None:
     rows = [
         {
             "hash": "0123456789abcdef0123456789abcdef",
-            "name": "Operator Movie DivX 1080p.avi",
+            "name": "The Longest Movie DivX 1080p.avi",
             "kadPublishInfo": (2 << 24) | (4 << 16) | 99,
             "evidence": {
                 "riskEvidence": {
@@ -92,7 +92,7 @@ def test_result_summary_counts_risk_and_kad_metrics() -> None:
                     "reasons": [],
                 },
                 "nameEvidence": {
-                    "canonicalNames": ["operator movie | ext:avi"],
+                    "canonicalNames": ["the longest movie"],
                     "ignoredNameTokens": ["divx", "1080p"],
                     "divergenceGroups": [],
                 },
@@ -103,7 +103,7 @@ def test_result_summary_counts_risk_and_kad_metrics() -> None:
         },
         {
             "hash": "fedcba98765432100123456789abcdef",
-            "name": "Different Movie.avi",
+            "name": "Sports Madness 2000.avi",
             "kadPublishInfo": (1 << 24) | (8 << 16) | 300,
             "evidence": {
                 "riskEvidence": {
@@ -112,9 +112,9 @@ def test_result_summary_counts_risk_and_kad_metrics() -> None:
                     "reasons": ["multiple_names"],
                 },
                 "nameEvidence": {
-                    "canonicalNames": ["different movie | ext:avi"],
+                    "canonicalNames": ["sports madness 2000"],
                     "ignoredNameTokens": [],
-                    "divergenceGroups": ["operator movie | ext:avi", "different movie | ext:avi"],
+                    "divergenceGroups": ["the longest movie", "sports madness 2000"],
                 },
                 "integrityEvidence": {
                     "pendingHeaderCheck": False,

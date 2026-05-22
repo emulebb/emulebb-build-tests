@@ -130,14 +130,14 @@ TEST_CASE("fake-file analyzer combines names bad signals and header mismatch")
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_aich") != report.reasons.end());
 }
 
-TEST_CASE("fake-file analyzer ignores codec quality and source name noise")
+TEST_CASE("fake-file analyzer ignores release metadata around matching title tokens")
 {
 	FakeFileDetectorSeams::RuleSet rules;
 	FakeFileDetectorSeams::Evidence evidence;
 	evidence.names = {
-		L"Operator Movie DivX 1080p WEBRip.avi",
-		L"Operator.Movie.XviD.DVDRip.avi",
-		L"Operator Movie x264 proper.avi",
+		L"The Longest Movie DivX 1080p WEBRip.avi",
+		L"ITA.The.Longest.Movie.XviD.DVDRip-GROUP.avi",
+		L"[GROUP] The Longest Movie 2020 2160p BluRay x265 10bit DDP 5.1 AAC.avi",
 	};
 	evidence.extensionType = VIDEO_AVI;
 
@@ -145,10 +145,34 @@ TEST_CASE("fake-file analyzer ignores codec quality and source name noise")
 	CHECK(report.score == 0);
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
 	CHECK(report.canonicalNames.size() == 1);
-	CHECK(report.canonicalNames[0] == L"operator movie | ext:avi");
+	CHECK(report.canonicalNames[0] == L"the longest movie");
 	CHECK(report.nameDivergenceGroups.empty());
 	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"divx") != report.ignoredNameTokens.end());
 	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"1080p") != report.ignoredNameTokens.end());
+	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"ita") != report.ignoredNameTokens.end());
+	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"group") != report.ignoredNameTokens.end());
+	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"2020") != report.ignoredNameTokens.end());
+	CHECK(std::find(report.ignoredNameTokens.begin(), report.ignoredNameTokens.end(), L"5.1") != report.ignoredNameTokens.end());
+}
+
+TEST_CASE("fake-file analyzer treats extension-only title matches as soft evidence")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"The Longest Movie.avi",
+		L"The.Longest.Movie.mkv",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.canonicalNames.size() == 1);
+	CHECK(report.canonicalNames[0] == L"the longest movie");
+	CHECK(report.observedExtensions.size() == 2);
+	CHECK(std::find(report.observedExtensions.begin(), report.observedExtensions.end(), L"avi") != report.observedExtensions.end());
+	CHECK(std::find(report.observedExtensions.begin(), report.observedExtensions.end(), L"mkv") != report.observedExtensions.end());
 }
 
 TEST_CASE("fake-file analyzer still flags meaningful title divergence")
@@ -156,8 +180,8 @@ TEST_CASE("fake-file analyzer still flags meaningful title divergence")
 	FakeFileDetectorSeams::RuleSet rules;
 	FakeFileDetectorSeams::Evidence evidence;
 	evidence.names = {
-		L"Operator Movie DivX 1080p.avi",
-		L"Different Movie XviD 1080p.avi",
+		L"The Longest Movie DivX 1080p.avi",
+		L"Sports Madness 2000 XviD 1080p.avi",
 	};
 	evidence.extensionType = VIDEO_AVI;
 
@@ -165,6 +189,8 @@ TEST_CASE("fake-file analyzer still flags meaningful title divergence")
 	CHECK(report.score == 15);
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") != report.reasons.end());
 	CHECK(report.nameDivergenceGroups.size() == 2);
+	CHECK(std::find(report.nameDivergenceGroups.begin(), report.nameDivergenceGroups.end(), L"the longest movie") != report.nameDivergenceGroups.end());
+	CHECK(std::find(report.nameDivergenceGroups.begin(), report.nameDivergenceGroups.end(), L"sports madness 2000") != report.nameDivergenceGroups.end());
 }
 
 TEST_CASE("fake-file analyzer ignores generic download fallback names")
@@ -172,7 +198,7 @@ TEST_CASE("fake-file analyzer ignores generic download fallback names")
 	FakeFileDetectorSeams::RuleSet rules;
 	FakeFileDetectorSeams::Evidence evidence;
 	evidence.names = {
-		L"Operator Movie.avi",
+		L"The Longest Movie.avi",
 		L"download.avi",
 	};
 	evidence.extensionType = VIDEO_AVI;
@@ -181,8 +207,25 @@ TEST_CASE("fake-file analyzer ignores generic download fallback names")
 	CHECK(report.score == 0);
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
 	CHECK(report.canonicalNames.size() == 1);
-	CHECK(report.canonicalNames[0] == L"operator movie | ext:avi");
+	CHECK(report.canonicalNames[0] == L"the longest movie");
 	CHECK(report.nameDivergenceGroups.empty());
+}
+
+TEST_CASE("fake-file analyzer ignores metadata-only names without suppressing title evidence")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"The Longest Movie.avi",
+		L"1080p x264 WEB-DL.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.canonicalNames.size() == 1);
+	CHECK(report.canonicalNames[0] == L"the longest movie");
 }
 
 TEST_CASE("fake-file analyzer flags implausible video length metadata")
