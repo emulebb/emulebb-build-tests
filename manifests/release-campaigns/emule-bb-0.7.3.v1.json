@@ -515,6 +515,58 @@
       "title": "Stabilization stress",
       "scenarios": [
         {
+          "id": "emulebb.flow.stress.heavy-profile.cpu-memory.v1",
+          "title": "Disposable heavy-profile CPU and memory proof",
+          "phase": "stabilization-stress",
+          "flowCategory": "stress",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile cpu-heavy --fail-fast",
+          "liveE2eProfile": "cpu-heavy",
+          "liveE2eSuite": "shared-files-ui",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/live-e2e-suite-latest/result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "cpu-heavy"
+              }
+            },
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/shared-files-ui-e2e-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.stress.real-profile.live-monitor.v1",
+          "title": "Real live-wire profile long-run monitor",
+          "phase": "stabilization-stress",
+          "flowCategory": "stress",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --suite live-process-monitor --fail-fast",
+          "liveE2eSuite": "live-process-monitor",
+          "localInputs": [
+            "live-process-monitor.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/live-process-monitor-latest/result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
           "id": "emulebb.flow.stress.rest.crash-leak-dump.v1",
           "title": "REST stress, crash dump, leak, and CPU profile add-on",
           "phase": "stabilization-stress",
@@ -745,6 +797,18 @@
       "coveredBy": [
         "emulebb.flow.ui.resources.release-languages.v1",
         "emulebb.flow.ui.preferences.resource-depth.v1"
+      ]
+    },
+    {
+      "id": "heavy-profile-cpu-memory",
+      "coveredBy": [
+        "emulebb.flow.stress.heavy-profile.cpu-memory.v1"
+      ]
+    },
+    {
+      "id": "real-profile-live-monitor",
+      "coveredBy": [
+        "emulebb.flow.stress.real-profile.live-monitor.v1"
       ]
     },
     {
