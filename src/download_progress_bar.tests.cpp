@@ -21,4 +21,16 @@ TEST_CASE("Download progress-bar drawing isolates DC state only for flat bars")
 	CHECK_FALSE(DownloadProgressBarSeams::ShouldIsolateFlatBarDcState(false));
 }
 
+TEST_CASE("Download progress-bar status bitmap cache follows normalized desktop refresh values")
+{
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(500u) == 500u);
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(1000u) == 1000u);
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(2000u) == 2000u);
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(5000u) == 5000u);
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(10000u) == 10000u);
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(0u) == 2000u);
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(750u) == 2000u);
+	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(60000u) == 2000u);
+}
+
 TEST_SUITE_END();
