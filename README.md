@@ -108,6 +108,7 @@ Script inventory:
 | `scripts\rest-api-smoke.py` | operator-facing Python E2E | maintained | canonical isolated REST live E2E lane |
 | `scripts\fake-kad-trust-soak.py` | operator-facing live soak | maintained | long-running Kad search soak for fake-file risk and Kad trust telemetry |
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
+| `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |
 | `scripts\auto-browse-live.py` | operator-facing Python E2E | maintained | isolated live auto-browse validation with `hide.me` bind and P2P UPnP |
 | `scripts\preference-ui-e2e.py` | operator-facing Python E2E | maintained | real Preferences dialog coverage for WebServer fields and Tweaks tree controls |
 | `scripts\config-stability-ui-e2e.py` | operator-facing Python E2E | maintained | long `-c` config path, settings save, relaunch, and stability regression |
@@ -175,6 +176,7 @@ Live Arr environment:
 - `.env.local`, `.env`, and `.env.*` are ignored; do not commit real API keys
 - `.env.example` is the tracked redacted template for live Arr/Prowlarr variables
 - live-wire runtime search terms, Radarr movie terms, Sonarr series terms, bootstrap hashes, and direct ED2K bootstrap rows live only in an ignored JSON file selected by `--live-wire-inputs-file`; the default is `live-wire-inputs.local.json`
+- real-profile process-monitor inputs live only in ignored `live-process-monitor.local.json`; copy `live-process-monitor.example.json` and set `profileDir` locally instead of committing operator paths
 - do not commit operator-owned live search terms, live transfer hashes, live magnets, or direct ED2K bootstrap rows to tracked files; tracked fixtures and docs must use placeholders or redacted summaries
 - `live-wire-inputs.example.json` is the tracked schema example; copy its shape into the ignored local file and replace the placeholder values with operator-owned current inputs
 - auto-browse live fallback automatically refreshes the ignored live-wire JSON when it discovers a safe live search result with usable hash, name, size, and source metadata
@@ -231,6 +233,22 @@ Cold-start REST dump stress lane:
 - run it explicitly with `python -m emule_workspace test live-e2e --suite
   rest-cold-start-dump-stress`; it is not part of the default aggregate suite
   because it captures full process dumps
+
+Real-profile process monitor:
+
+- `scripts\live-process-monitor.py` launches the selected `emule.exe` with
+  `-ignoreinstances -c <profileDir>` and samples CPU, private bytes, working
+  set, handles, optional REST `/api/v1/status` counters, spike dumps, and an
+  optional final full-memory dump
+- runs are intentionally long; `durationSeconds` and `--duration-seconds` must
+  be at least 1800 seconds so memory trends are not confused with startup
+  transients
+- optional `--enable-umdh` wraps the run with `gflags /i emule.exe +ust`,
+  captures baseline/final UMDH snapshots, diffs them, and disables UST during
+  cleanup
+- run it directly with `python scripts\live-process-monitor.py --configuration
+  Release --capture-final-dump`, or through the aggregate runner with
+  `--suite live-process-monitor`
 
 Fake/Kad trust soak lane:
 

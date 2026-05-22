@@ -11,3 +11,4 @@ __pycache__/
 !.env.example
 .tracked-file-privacy-identifiers.local.json
 live-wire-inputs.local.json
+live-process-monitor.local.json

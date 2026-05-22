@@ -349,6 +349,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="live-process-monitor",
+        script_name="live-process-monitor.py",
+        category="diagnostics",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="amutorrent-browser-smoke",
         script_name="amutorrent-browser-smoke.py",
         category="rest",
