@@ -81,6 +81,16 @@ TEST_CASE("Shared file list accepts part files outside shared directories")
 	CHECK(SharedFileListSeams::CanAddSharedFile(true, false, false));
 }
 
+#ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_PUBLISH_BATCH_SEAMS
+TEST_CASE("Shared file list batches eD2K publish UI refreshes only for multiple changed rows")
+{
+	CHECK_FALSE(SharedFileListSeams::ShouldBatchPublishedED2KUiRefresh(0u));
+	CHECK_FALSE(SharedFileListSeams::ShouldBatchPublishedED2KUiRefresh(1u));
+	CHECK(SharedFileListSeams::ShouldBatchPublishedED2KUiRefresh(2u));
+	CHECK(SharedFileListSeams::ShouldBatchPublishedED2KUiRefresh(200u));
+}
+#endif
+
 #ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_ASYNC_HASH_SEAMS
 TEST_CASE("Shared file hash worker allows only a bounded UI completion backlog")
 {
