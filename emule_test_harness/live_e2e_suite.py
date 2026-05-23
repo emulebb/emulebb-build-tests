@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from emule_test_harness.artifact_names import result_file_name
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
 from emule_test_harness import cpu_profile, live_wire_inputs
 
@@ -1264,7 +1265,8 @@ def get_suite_status_from_return_code(return_code: int) -> str:
 def read_child_suite_result(child_artifacts_dir: Path) -> dict[str, object] | None:
     """Reads a child suite result file when the child runner published one."""
 
-    result_path = child_artifacts_dir / "result.json"
+    result_paths = sorted(child_artifacts_dir.glob("*-result.json"))
+    result_path = result_paths[0] if result_paths else child_artifacts_dir / result_file_name(child_artifacts_dir.name)
     if not result_path.is_file():
         return None
     try:
@@ -1647,7 +1649,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     )
 
     summary: dict[str, object] = {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "passed",
         "suite": "live-e2e-suite",
         "profile": args.profile,
@@ -2016,7 +2018,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 break
 
     summary["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
-    result_path = paths.source_artifacts_dir / "result.json"
+    result_path = paths.source_artifacts_dir / result_file_name(paths.suite_name)
     harness_cli_common.write_json_file(result_path, summary)
     harness_cli_common.publish_run_artifacts(paths)
     harness_cli_common.publish_latest_report(paths)

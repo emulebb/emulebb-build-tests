@@ -382,8 +382,7 @@ def stop_amutorrent(process: subprocess.Popen[str] | None) -> None:
 def write_reports(paths, report: dict[str, object]) -> None:
     """Writes suite-specific and generic JSON reports."""
 
-    harness_cli_common.write_json_file(paths.source_artifacts_dir / f"{SUITE_NAME}.json", report)
-    harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", report)
+    harness_cli_common.write_json_file(paths.source_artifacts_dir / "amutorrent-local-ed2k-ui-live-result.json", report)
 
 
 def main(argv: list[str] | None = None) -> int:

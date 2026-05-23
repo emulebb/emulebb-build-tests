@@ -1031,7 +1031,7 @@ def run_search_ui_live(
         report["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "search-ui-live-result.json", report)
         if process_handle:
             close_process(process_handle)
         if app is not None:
@@ -1101,7 +1101,7 @@ def main(argv: list[str]) -> int:
         harness_cli_common.publish_run_artifacts(paths)
         status = str(report.get("status") or "failed")
         summary_payload = harness_cli_common.build_live_ui_summary(status=status, paths=paths)
-        summary_path = paths.run_report_dir / "ui-summary.json"
+        summary_path = paths.run_report_dir / "search-ui-live-summary.json"
         harness_cli_common.write_json_file(summary_path, summary_payload)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.update_harness_summary(paths.repo_root, live_ui_summary_path=summary_path)
@@ -1113,7 +1113,7 @@ def main(argv: list[str]) -> int:
         (artifacts_dir / "error.txt").write_text(f"{exc}\n", encoding="utf-8")
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="failed", paths=paths, error_message=str(exc))
-        summary_path = paths.run_report_dir / "ui-summary.json"
+        summary_path = paths.run_report_dir / "search-ui-live-summary.json"
         harness_cli_common.write_json_file(summary_path, summary_payload)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.update_harness_summary(paths.repo_root, live_ui_summary_path=summary_path)

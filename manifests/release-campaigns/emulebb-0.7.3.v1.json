@@ -40,7 +40,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "glob": "certification/*-fast/result.json",
+              "glob": "certification/*-fast/certification-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -112,7 +112,7 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/community-core-coverage/latest/summary.json",
+              "path": "test-reports/community-core-coverage/latest/community-core-coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -135,7 +135,7 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/native-coverage-latest/coverage-summary.json",
+              "path": "test-reports/native-coverage/latest/coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -158,7 +158,7 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/native-coverage-latest/coverage-summary.json",
+              "path": "test-reports/native-coverage/latest/coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -220,7 +220,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite-latest/result.json",
+              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "controller-surface"
@@ -230,7 +230,7 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/rest-api-smoke-latest/result.json",
+              "path": "test-reports/rest-api-smoke/latest/rest-api-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -253,7 +253,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/prowlarr-emulebb-live-latest/result.json",
+              "path": "test-reports/prowlarr-emulebb-live/latest/prowlarr-emulebb-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -277,7 +277,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/radarr-emulebb-live-latest/result.json",
+              "path": "test-reports/radarr-emulebb-live/latest/radarr-emulebb-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -301,7 +301,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/sonarr-emulebb-live-latest/result.json",
+              "path": "test-reports/sonarr-emulebb-live/latest/sonarr-emulebb-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -321,7 +321,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/amutorrent-browser-smoke-latest/result.json",
+              "path": "test-reports/amutorrent-browser-smoke/latest/amutorrent-browser-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -349,7 +349,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite-latest/result.json",
+              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "release-expanded"
@@ -375,7 +375,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/search-ui-live-latest/result.json",
+              "path": "test-reports/search-ui-live/latest/search-ui-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -398,7 +398,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/rest-api-smoke-latest/result.json",
+              "path": "test-reports/rest-api-smoke/latest/rest-api-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -417,21 +417,21 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/preference-ui-e2e-latest/result.json",
+              "path": "test-reports/preference-ui-e2e/latest/preference-ui-e2e-summary.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/shared-files-ui-e2e-latest/result.json",
+              "path": "test-reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/shared-hash-ui-e2e-latest/result.json",
+              "path": "test-reports/shared-hash-ui-e2e/latest/shared-hash-ui-e2e-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -457,7 +457,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite-latest/result.json",
+              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "ui-resource-depth"
@@ -467,7 +467,7 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/resource-ui-smoke-latest/ui-summary.json",
+              "path": "test-reports/resource-ui-smoke/latest/resource-ui-smoke-summary.json",
               "statusPointer": "/status"
             }
           ]
@@ -487,7 +487,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/preference-ui-e2e-latest/result.json",
+              "path": "test-reports/preference-ui-e2e/latest/preference-ui-e2e-summary.json",
               "statusPointer": "/status"
             }
           ]
@@ -529,7 +529,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite-latest/result.json",
+              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "cpu-heavy"
@@ -539,7 +539,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/shared-files-ui-e2e-latest/result.json",
+              "path": "test-reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -561,7 +561,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "test-reports/live-process-monitor-latest/result.json",
+              "path": "test-reports/live-process-monitor/latest/live-process-monitor-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -580,7 +580,7 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite-latest/result.json",
+              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "stabilization-stress"
@@ -590,14 +590,14 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/rest-cold-start-dump-stress-latest/result.json",
+              "path": "test-reports/rest-cold-start-dump-stress/latest/rest-cold-start-dump-stress-result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/local-dumps-crash-smoke-latest/result.json",
+              "path": "test-reports/local-dumps-crash-smoke/latest/local-dumps-crash-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -618,21 +618,21 @@
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/amutorrent-clean-startup-latest/result.json",
+              "path": "test-reports/amutorrent-clean-startup/latest/amutorrent-clean-startup-result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/amutorrent-emulebb-ui-live-latest/result.json",
+              "path": "test-reports/amutorrent-emulebb-ui-live/latest/amutorrent-emulebb-ui-live-result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": false,
               "base": "workspace-state",
-              "path": "test-reports/amutorrent-resilience-live-latest/result.json",
+              "path": "test-reports/amutorrent-resilience-live/latest/amutorrent-resilience-live-result.json",
               "statusPointer": "/status"
             }
           ]

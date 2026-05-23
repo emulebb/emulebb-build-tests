@@ -685,7 +685,7 @@ def run_soak(args: argparse.Namespace) -> int:
                         report["status"] = "failed"
                         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
 
-        live_common.write_json(artifacts_dir / "result.json", report)
+        live_common.write_json(artifacts_dir / "fake-kad-trust-soak-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

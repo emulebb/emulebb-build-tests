@@ -116,7 +116,7 @@ Script inventory:
 | `scripts\startup-profile-scenarios.py` | operator-facing Python E2E | maintained | Chrome Trace startup-profile scenarios |
 | `scripts\create-long-paths-tree.py` | fixture generator | maintained | deterministic long-path tree materialization |
 | `scripts\diag-hash-launch.py` | targeted diagnostic | maintained | seeded profile + procdump launcher for hash stall investigations |
-| `scripts\parse-dump.py` | targeted diagnostic | maintained | parses `diag-hash` dumps, defaults to `diag-hash-latest` |
+| `scripts\parse-dump.py` | targeted diagnostic | maintained | parses `diag-hash-launch` dumps, defaults to `diag-hash-launch\latest` |
 | `scripts\resolve-rva.py` | targeted diagnostic | maintained | resolves caller-provided RVAs against a selected debug build |
 
 Workspace quick reference:
@@ -132,8 +132,13 @@ Workspace quick reference:
 
 Harness output roots:
 
-- published reports and `*-latest` pointers live under
+- published reports live under
   `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-reports`
+- each suite publishes timestamped UTC `YYYYMMDDTHHMMSSZ` run folders plus a
+  stable `<suite>\latest` snapshot
+- suite result leaves use `<suite>-result.json`; partial result leaves use
+  `<suite>-result.partial.json`; suite summary leaves use
+  `<suite>-summary.json`
 - scratch artifacts, live profiles, VHD images, admin mount working folders,
   CPU/heap traces, browser data directories, dumps, and child-suite scratch live
   under `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-artifacts`
@@ -268,7 +273,7 @@ Fake/Kad trust soak lane:
   ignored release-noise tokens, Kad publish-info buckets, result volume,
   failed/zero-result cycles, and process resource/CPU samples
 - reports are written under `state\test-reports\fake-kad-trust-soak\...` and
-  mirrored to `state\test-reports\fake-kad-trust-soak-latest`
+  mirrored to `state\test-reports\fake-kad-trust-soak\latest`
 
 Aggregate live E2E lane:
 
@@ -310,8 +315,8 @@ Aggregate live E2E lane:
 - REST and auto-browse child runs refresh `server.met` and `nodes.dat` from `https://emule-security.org/` / `https://upd.emule-security.org/` unless `--skip-live-seed-refresh` is supplied
 - the aggregate runner continues after child-suite failures by default to expose multiple breaking points in one pass; use `--fail-fast` only when a short diagnostic run is needed
 - each child suite keeps its normal report directory, while the aggregate run
-  also writes `state\test-reports\live-e2e-suite\...\result.json` and refreshes
-  `state\test-reports\live-e2e-suite-latest`
+  also writes `state\test-reports\live-e2e-suite\...\live-e2e-suite-result.json`
+  and refreshes `state\test-reports\live-e2e-suite\latest`
 
 Canonical live auto-browse lane:
 
@@ -340,10 +345,10 @@ Shared Files live UI regression:
 - the default UI run now covers two scenarios: the original three-file deterministic smoke case plus a generated recursive robustness tree under the configured long-path shared root
 - the regression asserts that the main window starts maximized and exercises exact default-name ordering, size ascending and descending sorts, name ascending and descending sorts after reload, selection-detail updates, reload preservation of the active descending size sort, and large-tree row-count/set/prefix checks driven by the generated manifest
 - `--scenario` can be repeated on the Python entrypoint to run only `fixture-three-files` or only `generated-robustness-recursive`
-- each run publishes artifacts and `ui-summary.json` under
+- each run publishes artifacts and `shared-files-ui-e2e-summary.json` under
   `state\test-reports\shared-files-ui-e2e\...` and refreshes
-  `state\test-reports\shared-files-ui-e2e-latest`
-- the shared `state\test-reports\harness-summary.json` now includes a
+  `state\test-reports\shared-files-ui-e2e\latest`
+- the shared `state\test-reports\harness-summary-result.json` now includes a
   `live_ui` section when that regression is run
 
 Config-stability live UI regression:
@@ -353,18 +358,18 @@ Config-stability live UI regression:
 - the default run covers `long-config-settings-roundtrip` and `long-config-shared-stress`
 - the roundtrip scenario edits the real Preferences dialog, saves `OnlineSignature`, verifies `preferences.ini`, relaunches the same long-path profile, and confirms persisted UI state
 - the stress scenario repeats launch, Preferences save, Shared Files activation, and clean shutdown across multiple cycles while recursively sharing the generated robustness tree under the configured long-path shared root
-- each run publishes artifacts and `ui-summary.json` under
+- each run publishes artifacts and `config-stability-ui-e2e-summary.json` under
   `state\test-reports\config-stability-ui-e2e\...` and refreshes
-  `state\test-reports\config-stability-ui-e2e-latest`
+  `state\test-reports\config-stability-ui-e2e\latest`
 
 Preferences live UI regression:
 
 - `scripts\preference-ui-e2e.py` is the operator-facing entrypoint for the real Preferences dialog regression
 - it launches an isolated profile, opens Preferences, drives the WebServer page fields for max upload size and allowed IPs, then drives the Tweaks advanced tree through real tree selection, checkbox/radio activation, and in-place edit controls
 - the scenario saves through the dialog and asserts `preferences.ini` persistence for crash dumps, log size/buffer/format, performance logging, text editor command, preview small-block policy, chat/session limits, WebServer max upload, and WebServer allowed IPs
-- each run publishes `ui-summary.json` under
+- each run publishes `preference-ui-e2e-summary.json` under
   `state\test-reports\preference-ui-e2e\...` and refreshes
-  `state\test-reports\preference-ui-e2e-latest`
+  `state\test-reports\preference-ui-e2e\latest`
 
 Startup-profile scenarios:
 
@@ -376,11 +381,12 @@ Startup-profile scenarios:
 - the long-path scenarios target the configured long-path shared root by default, regenerate the repo-owned fixture tree as needed, and expand `shareddir.dat` deterministically in the recursive cases
 - each scenario summary now also records shareddir payload metrics plus tree-shape metrics such as depth, longest paths, and counts beyond the Windows path thresholds
 - each scenario summary includes highlighted timings, normalized derived timings, and the top slowest startup phases, and the combined summary adds direct delta comparisons between the main long-path, generated output, and Shared Files robustness root-only vs recursive variants
-- each run publishes scenario artifacts plus `startup-profiles-summary.json`
-  and `startup-profiles-wrapper-summary.json` under
+- each run publishes scenario artifacts plus
+  `startup-profile-scenarios-result.json` and
+  `startup-profile-scenarios-summary.json` under
   `state\test-reports\startup-profile-scenarios\...` and refreshes
-  `state\test-reports\startup-profile-scenarios-latest`
-- the shared `state\test-reports\harness-summary.json` now includes a
+  `state\test-reports\startup-profile-scenarios\latest`
+- the shared `state\test-reports\harness-summary-result.json` now includes a
   `startup_profiles` section when that runner is used
 
 Tracked-file privacy guard:

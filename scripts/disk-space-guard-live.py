@@ -367,7 +367,7 @@ def run_disk_space_guard_case(
                 summary["shutdown"] = rest_smoke.close_app_cleanly_with_timing(app)
             except Exception as exc:
                 summary["shutdown_error"] = {"type": type(exc).__name__, "message": str(exc)}
-        harness_cli_common.write_json_file(case_artifacts_dir / "result.json", summary)
+        harness_cli_common.write_json_file(case_artifacts_dir / "disk-space-guard-live-result.json", summary)
     return summary
 
 
@@ -474,7 +474,7 @@ def run_disk_space_guard(args: argparse.Namespace) -> dict[str, object]:
         summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
     finally:
         summary["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
-        harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", summary)
+        harness_cli_common.write_json_file(paths.source_artifacts_dir / "disk-space-guard-live-result.json", summary)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

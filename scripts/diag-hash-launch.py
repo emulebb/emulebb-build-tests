@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness.live_profile_seed import validate_seed_config_dir
 from emule_test_harness.paths import get_test_artifacts_root, get_test_reports_root, reject_windows_temp_path
 from emule_test_harness.workspace_layout import get_default_workspace_root, resolve_workspace_app_root
+from emule_test_harness.artifact_names import utc_run_id
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,12 +89,12 @@ def main(argv: list[str] | None = None) -> int:
         preferred_variant_names=("main", "community", "tracing-harness"),
     )
     emule_exe = (args.emule_exe or (app_root / "srchybrid" / "x64" / "Debug" / "emulebb.exe")).resolve()
-    report_root = (args.report_root or (get_test_reports_root(workspace_root) / "diag-hash")).resolve()
+    report_root = (args.report_root or (get_test_reports_root(workspace_root) / "diag-hash-launch")).resolve()
     reject_windows_temp_path(report_root, "report root")
-    latest_report_dir = report_root.parent / "diag-hash-latest"
+    latest_report_dir = report_root / "latest"
     seed_config_dir = (args.profile_seed_dir or (test_repo_root / "manifests" / "live-profile-seed" / "config")).resolve()
 
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    timestamp = utc_run_id()
     run_dir = report_root / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
     profile_root = (args.profile_root or (get_test_artifacts_root(workspace_root) / "diag-hash" / timestamp / "profile-base")).resolve()
@@ -138,8 +139,8 @@ def main(argv: list[str] | None = None) -> int:
         stderr=(run_dir / "procdump-stderr.txt").open("w", encoding="utf-8"),
     )
 
-    main_log = log_dir / "eMule.log"
-    verbose_log = log_dir / "eMule_Verbose.log"
+    main_log = log_dir / "emulebb.log"
+    verbose_log = log_dir / "emulebb-verbose.log"
     deadline = time.monotonic() + args.timeout_seconds
     last_verbose_log_size = 0
     hashing_started = False
@@ -171,9 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"WARNING: Failed to refresh latest report pointer '{latest_report_dir}': {exc}", file=sys.stderr)
 
-    summary_path = run_dir / "summary.json"
+    summary_path = run_dir / "diag-hash-launch-summary.json"
     summary = {
-        "generated_at": datetime.now().isoformat(),
+        "generated_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "app_exe": str(emule_exe),
         "app_root": str(app_root),
         "workspace_root": str(workspace_root),

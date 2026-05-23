@@ -467,7 +467,7 @@ def run_roundtrip_scenario(
                     app.kill()
                 except Exception:
                     pass
-        write_json(scenario_dir / "result.json", summary)
+        write_json(scenario_dir / "config-stability-ui-e2e-result.json", summary)
 
 
 def run_stress_scenario(
@@ -588,7 +588,7 @@ def run_stress_scenario(
                     app.kill()
                 except Exception:
                     pass
-        write_json(scenario_dir / "result.json", summary)
+        write_json(scenario_dir / "config-stability-ui-e2e-result.json", summary)
 
 
 def run_scenario(
@@ -696,14 +696,14 @@ def main(argv: list[str]) -> int:
     if failures:
         combined["status"] = "failed"
 
-    write_json(artifacts_dir / "result.json", combined)
+    write_json(artifacts_dir / "config-stability-ui-e2e-result.json", combined)
     harness_cli_common.publish_run_artifacts(paths)
     summary_payload = harness_cli_common.build_live_ui_summary(
         status=str(combined["status"]),
         paths=paths,
         error_message="" if not failures else "Config-stability UI scenarios failed: " + ", ".join(failures),
     )
-    summary_path = paths.run_report_dir / "ui-summary.json"
+    summary_path = paths.run_report_dir / "config-stability-ui-e2e-summary.json"
     harness_cli_common.write_json_file(summary_path, summary_payload)
     harness_cli_common.publish_latest_report(paths)
     harness_cli_common.update_harness_summary(paths.repo_root, live_ui_summary_path=summary_path)

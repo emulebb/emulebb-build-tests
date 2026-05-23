@@ -139,10 +139,10 @@ def main(argv: list[str] | None = None) -> int:
     test_repo_root = Path(args.test_repo_root).resolve()
     workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else get_default_workspace_root(test_repo_root)
     report_root = get_test_reports_root(workspace_root)
-    coverage_summary_path = Path(args.coverage_summary_path).resolve() if args.coverage_summary_path else report_root / "native-coverage-latest" / "coverage-summary.json"
+    coverage_summary_path = Path(args.coverage_summary_path).resolve() if args.coverage_summary_path else report_root / "native-coverage" / "latest" / "coverage-summary.json"
     live_diff_summary_path = Path(args.live_diff_summary_path).resolve() if args.live_diff_summary_path else report_root / "live-diff-summary.json"
-    live_ui_summary_path = Path(args.live_ui_summary_path).resolve() if args.live_ui_summary_path else report_root / "shared-files-ui-e2e-latest" / "ui-summary.json"
-    startup_profile_summary_path = Path(args.startup_profile_summary_path).resolve() if args.startup_profile_summary_path else report_root / "startup-profile-scenarios-latest" / "startup-profiles-wrapper-summary.json"
+    live_ui_summary_path = Path(args.live_ui_summary_path).resolve() if args.live_ui_summary_path else report_root / "shared-files-ui-e2e" / "latest" / "shared-files-ui-e2e-summary.json"
+    startup_profile_summary_path = Path(args.startup_profile_summary_path).resolve() if args.startup_profile_summary_path else report_root / "startup-profile-scenarios" / "latest" / "startup-profile-scenarios-summary.json"
     live_session_manifest_path = Path(args.live_session_manifest_path).resolve() if args.live_session_manifest_path else None
 
     combined_summary = build_combined_summary(
@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         live_ui_summary=read_json_file(live_ui_summary_path),
         startup_profile_summary=read_json_file(startup_profile_summary_path),
     )
-    json_path = report_root / "harness-summary.json"
+    json_path = report_root / "harness-summary-result.json"
     text_path = report_root / "harness-summary.txt"
     json_path.write_text(json.dumps(combined_summary, indent=2, sort_keys=False), encoding="utf-8")
     text_path.write_text("\n".join(build_text_summary(combined_summary)) + "\n", encoding="utf-8")

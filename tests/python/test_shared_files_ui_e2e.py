@@ -62,7 +62,7 @@ def test_vhd_monitored_scenario_requires_admin_monitor_root(tmp_path: Path) -> N
             vhd_monitor_root=None,
     )
     except RuntimeError as exc:
-        assert "requires --admin-volume-fixtures" in str(exc) or "did not produce result.json" in str(exc)
+        assert "requires --admin-volume-fixtures" in str(exc) or "did not produce shared-files-ui-e2e-result.json" in str(exc)
     else:
         raise AssertionError("Expected VHD monitored scenario without admin root to fail.")
 
@@ -80,7 +80,7 @@ def test_vhd_monitored_scenario_dispatches_with_explicit_root(tmp_path: Path, mo
             }
         )
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        module.write_json(artifacts_dir / "result.json", {"name": scenario_name, "status": "passed"})
+        module.write_json(artifacts_dir / "shared-files-ui-e2e-result.json", {"name": scenario_name, "status": "passed"})
 
     monkeypatch.setattr(module, "run_monitored_folder_events_e2e", fake_run)
 

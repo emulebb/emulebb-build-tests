@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .paths import get_build_tag, make_file_token
+from .artifact_names import utc_run_id
 from .privacy_guard import PrivacyGuardFailure, run_privacy_guard
 from .workspace_layout import get_default_workspace_root, resolve_workspace_app_root
 
@@ -80,7 +81,7 @@ def resolve_build_config(
         out_file=out_file.resolve() if out_file is not None else None,
         allow_test_failure=allow_test_failure,
         build_tag=resolved_build_tag,
-        build_log_session_stamp=build_log_session_stamp or time.strftime("%Y%m%d-%H%M%S"),
+        build_log_session_stamp=build_log_session_stamp or utc_run_id(),
         skip_tracked_file_privacy_guard=skip_tracked_file_privacy_guard,
         test_arguments=tuple(test_arguments),
     )

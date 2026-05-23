@@ -513,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         dtt.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        report_path = paths.source_artifacts_dir / "local-ed2k-search-soak.json"
+        report_path = paths.source_artifacts_dir / "local-ed2k-search-soak-result.json"
         harness_cli_common.write_json_file(report_path, report)
         try:
             harness_cli_common.publish_run_artifacts(paths)

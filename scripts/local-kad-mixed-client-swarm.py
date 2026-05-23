@@ -401,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         report["checks"][f"{CLIENT02.profile_id}_startup_log_ready"] = wait_for_log_patterns(
-            Path(emule_profiles["harness"]["profile_base"]) / "logs" / "eMule.log",
+            Path(emule_profiles["harness"]["profile_base"]) / "logs" / "emulebb.log",
             ("eMule Version", "ready"),
             args.rest_ready_timeout_seconds,
             "tracing harness startup log readiness",
@@ -426,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             args.kad_running_timeout_seconds,
         )
         report["checks"][f"{CLIENT02.profile_id}_kad_log_started"] = wait_for_log_patterns(
-            Path(emule_profiles["harness"]["profile_base"]) / "logs" / "eMule.log",
+            Path(emule_profiles["harness"]["profile_base"]) / "logs" / "emulebb.log",
             ("Connecting", "contacts from file."),
             args.kad_running_timeout_seconds,
             "tracing harness Kad startup from preseeded nodes.dat",
@@ -530,8 +530,7 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup[profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        harness_cli_common.write_json_file(paths.source_artifacts_dir / "local-kad-mixed-client-swarm.json", report)
-        harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", report)
+        harness_cli_common.write_json_file(paths.source_artifacts_dir / "local-kad-mixed-client-swarm-result.json", report)
         try:
             harness_cli_common.publish_run_artifacts(paths)
             harness_cli_common.publish_latest_report(paths)

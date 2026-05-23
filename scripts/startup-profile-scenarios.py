@@ -645,7 +645,7 @@ def run_scenario(
 
         summary["status"] = "passed"
         summary["error"] = None
-        live_common.write_json(scenario_dir / "result.json", summary)
+        live_common.write_json(scenario_dir / "startup-profile-scenarios-result.json", summary)
         return summary
     except Exception as exc:
         summary["error"] = str(exc)
@@ -660,7 +660,7 @@ def run_scenario(
                     pass
             except Exception:
                 pass
-        live_common.write_json(scenario_dir / "result.json", summary)
+        live_common.write_json(scenario_dir / "startup-profile-scenarios-result.json", summary)
         return summary
     finally:
         if app is not None:
@@ -802,7 +802,7 @@ def main(argv: list[str]) -> int:
     if failures:
         combined["status"] = "failed"
 
-    live_common.write_json(artifacts_dir / "startup-profiles-summary.json", combined)
+    live_common.write_json(artifacts_dir / "startup-profile-scenarios-result.json", combined)
     harness_cli_common.publish_run_artifacts(paths)
     summary_payload = harness_cli_common.build_startup_profiles_summary(
         status=str(combined["status"]),
@@ -810,7 +810,7 @@ def main(argv: list[str]) -> int:
         shared_root=shared_root,
         error_message="" if not failures else "Startup-profile scenarios failed: " + ", ".join(failures),
     )
-    summary_path = paths.run_report_dir / "startup-profiles-wrapper-summary.json"
+    summary_path = paths.run_report_dir / "startup-profile-scenarios-summary.json"
     harness_cli_common.write_json_file(summary_path, summary_payload)
     harness_cli_common.publish_latest_report(paths)
     harness_cli_common.update_harness_summary(paths.repo_root, startup_profile_summary_path=summary_path)

@@ -1010,7 +1010,7 @@ def main() -> None:
         keep_artifacts=args.keep_artifacts or args.keep_running,
     )
 
-    report_path = paths.source_artifacts_dir / "ui-summary.json"
+    report_path = paths.source_artifacts_dir / "preference-ui-e2e-summary.json"
     report: dict[str, object] | None = None
     try:
         report = run_preference_roundtrip(paths, args)

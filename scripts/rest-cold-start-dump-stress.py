@@ -3541,7 +3541,7 @@ def main(argv: list[str] | None = None) -> int:
             report["status"] = "failed"
             report["failure_reason"] = "one or more diagnostic tools crashed"
         report["diagnostics"]["findings"] = build_live_diagnostic_findings(report)
-        harness_cli_common.write_json_file(artifacts_dir / "result.json", report)
+        harness_cli_common.write_json_file(artifacts_dir / "rest-cold-start-dump-stress-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

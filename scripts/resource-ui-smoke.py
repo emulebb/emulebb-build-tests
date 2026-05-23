@@ -707,7 +707,7 @@ def main() -> int:
         keep_artifacts=args.keep_artifacts,
     )
 
-    report_path = paths.source_artifacts_dir / "ui-summary.json"
+    report_path = paths.source_artifacts_dir / "resource-ui-smoke-summary.json"
     report: dict[str, object] | None = None
     try:
         report = run_resource_ui_smoke(paths, args)

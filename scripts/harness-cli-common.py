@@ -15,6 +15,12 @@ from emule_test_harness.paths import (
     get_test_reports_root,
     reject_windows_temp_path,
 )
+from emule_test_harness.artifact_names import (
+    partial_result_file_name,
+    result_file_name,
+    summary_file_name,
+    utc_run_id,
+)
 
 try:
     import winreg
@@ -647,7 +653,7 @@ def prepare_run_paths(
     report_root = get_test_reports_root(resolved_workspace_root)
     reject_windows_temp_path(report_root, "report root")
     suite_report_root = report_root / suite_name
-    report_stamp = time.strftime("%Y%m%d-%H%M%S")
+    report_stamp = utc_run_id()
     report_label = f"{report_stamp}-{sanitize_report_token(get_app_variant_label(resolved_app_exe))}-{configuration.lower()}-{os.getpid()}"
     source_artifacts_dir = (
         Path(artifacts_dir).resolve()
@@ -672,7 +678,7 @@ def prepare_run_paths(
         suite_name=suite_name,
         source_artifacts_dir=source_artifacts_dir,
         run_report_dir=(suite_report_root / report_label).resolve(),
-        latest_report_dir=(report_root / f"{suite_name}-latest").resolve(),
+        latest_report_dir=(report_root / suite_name / "latest").resolve(),
         keep_source_artifacts=keep_artifacts or bool(artifacts_dir),
         local_dumps=local_dumps,
     )
@@ -737,7 +743,7 @@ def publish_run_artifacts(paths: HarnessRunPaths) -> None:
 
 
 def publish_latest_report(paths: HarnessRunPaths) -> None:
-    """Refreshes the suite-level `-latest` snapshot from one run report."""
+    """Refreshes the suite-level latest snapshot from one run report."""
 
     publish_directory_snapshot(paths.run_report_dir, paths.latest_report_dir)
 
@@ -776,13 +782,13 @@ def build_live_ui_summary(
     *,
     status: str,
     paths: HarnessRunPaths,
-    result_filename: str = "result.json",
+    result_filename: str | None = None,
     error_message: str = "",
 ) -> dict[str, object]:
     """Builds the UI-harness summary shape consumed by the shared summary publisher."""
 
     return {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generated_utc": utc_generated_timestamp(),
         "status": status,
         "app_exe": str(paths.app_exe),
         "configuration": paths.configuration,
@@ -790,7 +796,7 @@ def build_live_ui_summary(
         "latest_report_dir": str(paths.latest_report_dir),
         "source_artifact_dir": str(paths.source_artifacts_dir),
         "local_dumps": paths.local_dumps,
-        "result": read_json_file(paths.run_report_dir / result_filename),
+        "result": read_json_file(paths.run_report_dir / (result_filename or result_file_name(paths.suite_name))),
         "error": error_message or None,
     }
 
@@ -800,13 +806,13 @@ def build_startup_profiles_summary(
     status: str,
     paths: HarnessRunPaths,
     shared_root: Path,
-    result_filename: str = "startup-profiles-summary.json",
+    result_filename: str | None = None,
     error_message: str = "",
 ) -> dict[str, object]:
     """Builds the startup-profile wrapper summary consumed by the shared harness summary."""
 
     return {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generated_utc": utc_generated_timestamp(),
         "status": status,
         "app_exe": str(paths.app_exe),
         "configuration": paths.configuration,
@@ -815,7 +821,7 @@ def build_startup_profiles_summary(
         "latest_report_dir": str(paths.latest_report_dir),
         "source_artifact_dir": str(paths.source_artifacts_dir),
         "local_dumps": paths.local_dumps,
-        "result": read_json_file(paths.run_report_dir / result_filename),
+        "result": read_json_file(paths.run_report_dir / (result_filename or result_file_name(paths.suite_name))),
         "error": error_message or None,
     }
 
@@ -828,6 +834,30 @@ def find_python_executable() -> str:
         if resolved:
             return resolved
     raise RuntimeError("Python 3 was not found on PATH.")
+
+
+def utc_generated_timestamp() -> str:
+    """Returns an ISO-like UTC timestamp for machine-readable reports."""
+
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def suite_result_file_name(suite_name: str) -> str:
+    """Returns the canonical suite result filename."""
+
+    return result_file_name(suite_name)
+
+
+def suite_partial_result_file_name(suite_name: str) -> str:
+    """Returns the canonical suite partial result filename."""
+
+    return partial_result_file_name(suite_name)
+
+
+def suite_summary_file_name(suite_name: str) -> str:
+    """Returns the canonical suite summary filename."""
+
+    return summary_file_name(suite_name)
 
 
 def update_harness_summary(

@@ -118,7 +118,7 @@ def run_live_diff(config: LiveDiffConfig) -> int:
     summary_json_path = config.report_root / "live-diff-summary.json"
     write_live_diff_summary(
         summary_json_path,
-        generated_at=datetime.now(UTC).isoformat(),
+        generated_utc=datetime.now(UTC).isoformat(),
         report_root=config.report_root,
         test_run_workspace_root=config.test_run_workspace_root,
         baseline_workspace_root=config.baseline_workspace_root,
@@ -139,7 +139,7 @@ def run_live_diff(config: LiveDiffConfig) -> int:
 def write_live_diff_summary(
     summary_json_path: Path,
     *,
-    generated_at: str,
+    generated_utc: str,
     report_root: Path,
     test_run_workspace_root: Path,
     baseline_workspace_root: Path,
@@ -152,7 +152,7 @@ def write_live_diff_summary(
     """Writes the machine-readable live-diff summary consumed by the publisher."""
 
     payload = {
-        "generated_at": generated_at,
+        "generated_utc": generated_utc,
         "report_root": str(report_root),
         "test_run_workspace_root": str(test_run_workspace_root),
         "baseline_workspace_root": str(baseline_workspace_root),

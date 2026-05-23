@@ -23,7 +23,7 @@ def make_config(tmp_path: Path) -> BuildTestsConfig:
         out_file=None,
         allow_test_failure=False,
         build_tag="tag",
-        build_log_session_stamp="20260421-120000",
+        build_log_session_stamp="20260421T120000Z",
         skip_tracked_file_privacy_guard=False,
     )
 
@@ -33,7 +33,7 @@ def test_build_log_paths_match_workspace_state_layout(tmp_path: Path) -> None:
 
     paths = get_build_log_paths(config)
 
-    assert paths.text_log_path == tmp_path / "workspaces" / "workspace" / "state" / "build-logs" / "20260421-120000" / "emule-tests-tag-debug-x64.log"
+    assert paths.text_log_path == tmp_path / "workspaces" / "workspace" / "state" / "build-logs" / "20260421T120000Z" / "emule-tests-tag-debug-x64.log"
     assert paths.binary_log_path.name == "emule-tests-tag-debug-x64.binlog"
 
 

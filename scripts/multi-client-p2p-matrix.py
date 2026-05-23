@@ -300,8 +300,7 @@ def build_optional_scenario_rows(
 def write_reports(paths, report: dict[str, object]) -> None:
     """Writes matrix report files using both suite-specific and generic names."""
 
-    harness_cli_common.write_json_file(paths.source_artifacts_dir / "multi-client-p2p-matrix.json", report)
-    harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", report)
+    harness_cli_common.write_json_file(paths.source_artifacts_dir / "multi-client-p2p-matrix-result.json", report)
 
 
 def main(argv: list[str] | None = None) -> int:

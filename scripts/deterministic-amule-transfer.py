@@ -119,8 +119,7 @@ def shutdown_amule(control_exe: Path | None, profile: amule_harness.AmuleRuntime
 def write_reports(paths, report: dict[str, object]) -> None:
     """Writes suite-specific and generic JSON reports for matrix callers."""
 
-    harness_cli_common.write_json_file(paths.source_artifacts_dir / "deterministic-amule-transfer.json", report)
-    harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", report)
+    harness_cli_common.write_json_file(paths.source_artifacts_dir / "deterministic-amule-transfer-result.json", report)
 
 
 def main(argv: list[str] | None = None) -> int:

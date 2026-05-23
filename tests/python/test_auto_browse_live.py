@@ -505,7 +505,7 @@ def test_record_phase_writes_partial_report(tmp_path: Path, capsys) -> None:
 
     assert report["current_phase"] == "network_ready"
     assert report["phase_history"] and report["phase_history"][0]["phase"] == "network_ready"
-    assert (tmp_path / "result.partial.json").is_file()
+    assert (tmp_path / "auto-browse-live-result.partial.json").is_file()
     assert "auto-browse-live phase: network_ready" in capsys.readouterr().out
 
 
@@ -530,7 +530,7 @@ def test_record_auto_browse_observation_keeps_recent_partial_state(tmp_path: Pat
     assert len(progress["observations"]) == 20
     assert progress["observations"][0]["observed_at"] == 5.0
     assert progress["last_observation"]["observed_at"] == 24.0
-    assert (tmp_path / "result.partial.json").is_file()
+    assert (tmp_path / "auto-browse-live-result.partial.json").is_file()
 
 
 def test_cleanup_error_only_promotes_passing_runs_to_failure() -> None:

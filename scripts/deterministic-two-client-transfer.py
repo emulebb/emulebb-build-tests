@@ -1035,7 +1035,7 @@ def main(argv: list[str] | None = None) -> int:
         stop_process(server_process)
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        report_path = paths.source_artifacts_dir / "deterministic-two-client-transfer.json"
+        report_path = paths.source_artifacts_dir / "deterministic-two-client-transfer-result.json"
         harness_cli_common.write_json_file(report_path, report)
         try:
             harness_cli_common.publish_run_artifacts(paths)

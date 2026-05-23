@@ -533,7 +533,7 @@ def run_local_ed2k_chaos(args: argparse.Namespace) -> dict[str, object]:
         dtt.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        report_path = paths.source_artifacts_dir / "local-ed2k-chaos-mode.json"
+        report_path = paths.source_artifacts_dir / "local-ed2k-chaos-mode-result.json"
         harness_cli_common.write_json_file(report_path, report)
         try:
             harness_cli_common.publish_run_artifacts(paths)

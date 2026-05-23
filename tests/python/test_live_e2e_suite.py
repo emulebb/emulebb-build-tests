@@ -28,7 +28,7 @@ class FakeHarnessCliCommon:
             suite_name=kwargs["suite_name"],
             source_artifacts_dir=source_artifacts_dir,
             run_report_dir=self.root / "reports" / kwargs["suite_name"] / "run",
-            latest_report_dir=self.root / "reports" / f"{kwargs['suite_name']}-latest",
+            latest_report_dir=self.root / "reports" / kwargs["suite_name"] / "latest",
             keep_source_artifacts=True,
             local_dumps={"dump_folder": str(source_artifacts_dir / "crash-dumps"), "image_names": ["emulebb.exe"]},
         )

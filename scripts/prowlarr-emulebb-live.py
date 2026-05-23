@@ -1833,7 +1833,7 @@ def main() -> int:
         },
         "checks": {},
     }
-    result_path = artifacts_dir / "result.json"
+    result_path = artifacts_dir / "prowlarr-emulebb-live-result.json"
 
     def record_phase(phase: str) -> None:
         report["current_phase"] = phase

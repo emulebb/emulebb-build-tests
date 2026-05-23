@@ -30,19 +30,19 @@ def test_publish_directory_snapshot_skips_generated_shared_hash_payloads(tmp_pat
     payload_dir = scenario / "shared-hash-root" / "branch"
     payload_dir.mkdir(parents=True)
     (payload_dir / "large-payload.bin").write_bytes(b"x" * 1024)
-    (scenario / "result.json").write_text("{}", encoding="utf-8")
+    (scenario / "suite-result.json").write_text("{}", encoding="utf-8")
     (source / "suite-result.json").write_text("{}", encoding="utf-8")
 
     module.publish_directory_snapshot(source, destination)
 
     assert (destination / "suite-result.json").is_file()
-    assert (destination / "scenario" / "result.json").is_file()
+    assert (destination / "scenario" / "suite-result.json").is_file()
     assert not (destination / "scenario" / "shared-hash-root").exists()
 
 
 def test_write_json_file_recreates_parent_directory(tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
-    result_path = tmp_path / "missing" / "result.json"
+    result_path = tmp_path / "missing" / "suite-result.json"
 
     module.write_json_file(result_path, {"status": "failed"})
 
@@ -137,7 +137,7 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
     app_exe.parent.mkdir(parents=True)
     app_exe.write_text("exe", encoding="utf-8")
 
-    monkeypatch.setattr(module.time, "strftime", lambda _format: "20260521-120000")
+    monkeypatch.setattr(module, "utc_run_id", lambda: "20260521T120000Z")
     monkeypatch.setattr(module.os, "getpid", lambda: 4242)
     monkeypatch.setattr(module, "configure_local_dumps", lambda **_kwargs: {"enabled": False})
     monkeypatch.setenv("TEMP", r"C:\not-the-workspace-temp")
@@ -152,7 +152,7 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
         app_root=app_root,
     )
 
-    label = "20260521-120000-eMule-main-release-4242"
+    label = "20260521T120000Z-eMule-main-release-4242"
     assert paths.source_artifacts_dir == (
         tmp_path / "workspaces" / "workspace" / "state" / "test-artifacts" / "rest-api-live-e2e" / label
     ).resolve()
@@ -160,7 +160,7 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
         tmp_path / "workspaces" / "workspace" / "state" / "test-reports" / "rest-api-live-e2e" / label
     ).resolve()
     assert paths.latest_report_dir == (
-        tmp_path / "workspaces" / "workspace" / "state" / "test-reports" / "rest-api-live-e2e-latest"
+        tmp_path / "workspaces" / "workspace" / "state" / "test-reports" / "rest-api-live-e2e" / "latest"
     ).resolve()
     assert paths.keep_source_artifacts is False
 
@@ -384,7 +384,7 @@ def test_cleanup_source_artifacts_restores_or_clears_local_dumps_registry(monkey
         suite_name="suite",
         source_artifacts_dir=artifact_dir,
         run_report_dir=tmp_path / "reports" / "suite" / "run",
-        latest_report_dir=tmp_path / "reports" / "suite-latest",
+        latest_report_dir=tmp_path / "reports" / "suite" / "latest",
         keep_source_artifacts=False,
         local_dumps=local_dumps,
     )
@@ -412,7 +412,7 @@ def test_cleanup_source_artifacts_restores_local_dumps_when_artifacts_are_kept(m
         suite_name="suite",
         source_artifacts_dir=artifact_dir,
         run_report_dir=tmp_path / "reports" / "suite" / "run",
-        latest_report_dir=tmp_path / "reports" / "suite-latest",
+        latest_report_dir=tmp_path / "reports" / "suite" / "latest",
         keep_source_artifacts=True,
         local_dumps={"dump_folder": str(artifact_dir / "crash-dumps")},
     )
@@ -429,7 +429,7 @@ def test_publish_run_artifacts_rewrites_json_paths_to_report_dir(tmp_path: Path)
     source_dir = tmp_path / "state" / "test-artifacts" / "suite" / "run"
     report_dir = tmp_path / "state" / "test-reports" / "suite" / "run"
     source_dir.mkdir(parents=True)
-    (source_dir / "result.json").write_text(
+    (source_dir / "suite-result.json").write_text(
         json.dumps(
             {
                 "artifact_dir": str(report_dir),
@@ -460,14 +460,14 @@ def test_publish_run_artifacts_rewrites_json_paths_to_report_dir(tmp_path: Path)
         suite_name="suite",
         source_artifacts_dir=source_dir,
         run_report_dir=report_dir,
-        latest_report_dir=tmp_path / "state" / "test-reports" / "suite-latest",
+        latest_report_dir=tmp_path / "state" / "test-reports" / "suite" / "latest",
         keep_source_artifacts=False,
         local_dumps={},
     )
 
     module.publish_run_artifacts(paths)
 
-    published = json.loads((report_dir / "result.json").read_text(encoding="utf-8"))
+    published = json.loads((report_dir / "suite-result.json").read_text(encoding="utf-8"))
     assert published["source_artifact_dir"] == str(report_dir)
     assert published["local_dumps"]["dump_folder"] == str(report_dir / "crash-dumps")
     assert published["local_dumps"]["entries"][0]["after"]["DumpFolder"]["value"] == str(report_dir / "crash-dumps")

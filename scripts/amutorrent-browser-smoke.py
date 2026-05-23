@@ -991,7 +991,7 @@ def main() -> int:
                 )
                 if report["fixture_cleanup"].get("status") != "passed":
                     report["status"] = "failed"
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "amutorrent-browser-smoke-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

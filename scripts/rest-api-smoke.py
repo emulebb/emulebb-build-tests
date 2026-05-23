@@ -6641,7 +6641,7 @@ def main() -> int:
                             "type": type(exc).__name__,
                             "message": str(exc),
                         }
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "rest-api-smoke-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

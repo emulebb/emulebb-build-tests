@@ -90,7 +90,7 @@ def test_preseed_autoconnect_paths_cover_non_rest_clients() -> None:
 
 def test_read_client_log_text_accepts_utf16_logs(tmp_path: Path) -> None:
     module = load_suite_module()
-    log_path = tmp_path / "eMule.log"
+    log_path = tmp_path / "emulebb.log"
     log_path.write_text("Connecting\nRead 1 contacts from file.\n", encoding="utf-16")
 
     assert "Read 1 contacts" in module.read_client_log_text(log_path)

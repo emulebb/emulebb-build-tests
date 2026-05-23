@@ -532,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
                         "type": type(exc).__name__,
                         "message": str(exc),
                     }
-        harness_cli_common.write_json_file(artifacts_dir / "result.json", report)
+        harness_cli_common.write_json_file(artifacts_dir / "local-dumps-crash-smoke-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

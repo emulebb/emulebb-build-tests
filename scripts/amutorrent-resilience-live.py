@@ -672,7 +672,7 @@ def main() -> int:
                 report["cleanup"]["emule_closed"] = False
                 report["cleanup"]["emule_killed"] = True
                 report["cleanup"]["emule_close_error"] = repr(exc)
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "amutorrent-resilience-live-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         if not args.keep_artifacts:

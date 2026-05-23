@@ -302,7 +302,7 @@ def main() -> int:
             emule_pid=int(report["emule_process_id"]),
             amutorrent_pid=amutorrent.pid,
         )
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "amutorrent-interactive-session-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
 
@@ -317,7 +317,7 @@ def main() -> int:
     except Exception as exc:
         report["status"] = "failed"
         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "amutorrent-interactive-session-result.json", report)
         if amutorrent is not None:
             amutorrent.terminate()
             try:

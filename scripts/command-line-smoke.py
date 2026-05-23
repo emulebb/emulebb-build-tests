@@ -231,7 +231,7 @@ def run_command_line_smoke(args: argparse.Namespace) -> dict[str, object]:
             "checks": checks,
         }
         summary["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
-        harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", summary)
+        harness_cli_common.write_json_file(paths.source_artifacts_dir / "command-line-smoke-result.json", summary)
         return summary
     finally:
         harness_cli_common.publish_run_artifacts(paths)

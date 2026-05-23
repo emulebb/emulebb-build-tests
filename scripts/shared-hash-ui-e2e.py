@@ -693,7 +693,7 @@ def run_interruption_scenario(
                     hard_kill_app(app)
                 except Exception:
                     pass
-        write_json(scenario_dir / "result.json", summary)
+        write_json(scenario_dir / "shared-hash-ui-e2e-result.json", summary)
 
 
 def run_repeated_interruption_cycle_scenario(
@@ -854,7 +854,7 @@ def run_repeated_interruption_cycle_scenario(
                     hard_kill_app(app)
                 except Exception:
                     pass
-        write_json(scenario_dir / "result.json", summary)
+        write_json(scenario_dir / "shared-hash-ui-e2e-result.json", summary)
 
 
 def record_immediate_reload_convergence(
@@ -1053,7 +1053,7 @@ def run_reload_then_interrupt_scenario(
                     hard_kill_app(app)
                 except Exception:
                     pass
-        write_json(scenario_dir / "result.json", summary)
+        write_json(scenario_dir / "shared-hash-ui-e2e-result.json", summary)
 
 
 def run_reload_during_hash_scenario(
@@ -1170,7 +1170,7 @@ def run_reload_during_hash_scenario(
                     hard_kill_app(app)
                 except Exception:
                     pass
-        write_json(scenario_dir / "result.json", summary)
+        write_json(scenario_dir / "shared-hash-ui-e2e-result.json", summary)
 
 
 def run_shared_hash_ui_suite(
@@ -1243,7 +1243,7 @@ def run_shared_hash_ui_suite(
 
     if failures:
         combined["status"] = "failed"
-    write_json(artifacts_dir / "result.json", combined)
+    write_json(artifacts_dir / "shared-hash-ui-e2e-result.json", combined)
     if failures:
         raise RuntimeError("Shared hash UI scenarios failed: " + ", ".join(failures))
 
@@ -1290,7 +1290,7 @@ def main(argv: list[str]) -> int:
         )
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="passed", paths=paths)
-        summary_path = paths.run_report_dir / "ui-summary.json"
+        summary_path = paths.run_report_dir / "shared-hash-ui-e2e-summary.json"
         harness_cli_common.write_json_file(summary_path, summary_payload)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.update_harness_summary(paths.repo_root, live_ui_summary_path=summary_path)
@@ -1299,7 +1299,7 @@ def main(argv: list[str]) -> int:
     except Exception as exc:
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="failed", paths=paths, error_message=str(exc))
-        summary_path = paths.run_report_dir / "ui-summary.json"
+        summary_path = paths.run_report_dir / "shared-hash-ui-e2e-summary.json"
         harness_cli_common.write_json_file(summary_path, summary_payload)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.update_harness_summary(paths.repo_root, live_ui_summary_path=summary_path)

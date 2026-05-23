@@ -3935,8 +3935,8 @@ def summarize_live_logs(profile: dict[str, object]) -> dict[str, object]:
     """Builds report metadata proving live logs were enabled and persisted."""
 
     log_dir = Path(profile["log_dir"])
-    main_log = log_dir / "eMule.log"
-    verbose_log = log_dir / "eMule_Verbose.log"
+    main_log = log_dir / "emulebb.log"
+    verbose_log = log_dir / "emulebb-verbose.log"
     return {
         "log_dir": str(log_dir),
         "main_log": str(main_log),
@@ -3975,8 +3975,8 @@ def append_failure_log_tails(report: dict[str, object], profile: dict[str, objec
 
     log_dir = Path(profile["log_dir"])
     report["failure_log_tails"] = {
-        "eMule.log": read_log_tail(log_dir / "eMule.log"),
-        "eMule_Verbose.log": read_log_tail(log_dir / "eMule_Verbose.log"),
+        "emulebb.log": read_log_tail(log_dir / "emulebb.log"),
+        "emulebb-verbose.log": read_log_tail(log_dir / "emulebb-verbose.log"),
     }
 
 
@@ -4078,7 +4078,7 @@ def main() -> int:
     )
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
-    result_path = artifacts_dir / "result.json"
+    result_path = artifacts_dir / f"{suite_name}-result.json"
     fixture_context = None
     fixture_cleanup_inputs: dict[str, Path] | None = None
     admin_storage: dict[str, object] = {"enabled": False}

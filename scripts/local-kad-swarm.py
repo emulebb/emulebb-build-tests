@@ -601,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
                 close_results[profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        report_path = paths.source_artifacts_dir / "local-kad-swarm.json"
+        report_path = paths.source_artifacts_dir / "local-kad-swarm-result.json"
         harness_cli_common.write_json_file(report_path, report)
         try:
             harness_cli_common.publish_run_artifacts(paths)

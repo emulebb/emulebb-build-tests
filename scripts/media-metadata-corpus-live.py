@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import live_wire_inputs  # noqa: E402
+from emule_test_harness.artifact_names import utc_run_id  # noqa: E402
 from emule_test_harness.paths import get_test_reports_root, reject_windows_temp_path  # noqa: E402
 
 VIDEO_EXTENSIONS = {
@@ -41,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live-wire-inputs-file", default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)))
     parser.add_argument("--emule-exe", type=Path)
-    parser.add_argument("--report-root", type=Path, default=get_test_reports_root(WORKSPACE_ROOT / "workspaces" / "workspace") / "media-metadata-corpus")
+    parser.add_argument("--report-root", type=Path, default=get_test_reports_root(WORKSPACE_ROOT / "workspaces" / "workspace") / "media-metadata-corpus-live")
     parser.add_argument("--timeout-seconds", type=int, default=60)
     parser.add_argument("--fail-fast", action="store_true")
     return parser
@@ -154,10 +155,10 @@ def run(args: argparse.Namespace) -> int:
 
     report_root = args.report_root.resolve()
     reject_windows_temp_path(report_root, "report root")
-    run_dir = report_root / datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = report_root / utc_run_id()
     detail_dir = run_dir / "files"
     detail_dir.mkdir(parents=True, exist_ok=True)
-    latest_dir = report_root.parent / "media-metadata-corpus-latest"
+    latest_dir = report_root / "latest"
     files = discover_video_files(inputs.video_roots)
     if not files:
         raise RuntimeError("No video files were discovered in media_corpus.video_roots")
@@ -187,7 +188,7 @@ def run(args: argparse.Namespace) -> int:
 
     report = {
         "schema": "emule-build-tests.media-metadata-corpus.v1",
-        "createdAt": datetime.now().isoformat(timespec="seconds"),
+        "createdUtc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "liveWireInputs": {
             "path": str(inputs.path),
             "videoRoots": live_wire_inputs.summarize_paths(inputs.video_roots),
@@ -196,7 +197,7 @@ def run(args: argparse.Namespace) -> int:
         "summary": summarize_results(results),
         "results": results,
     }
-    summary_path = run_dir / "summary.json"
+    summary_path = run_dir / "media-metadata-corpus-live-summary.json"
     summary_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if latest_dir.exists():
         shutil.rmtree(latest_dir)

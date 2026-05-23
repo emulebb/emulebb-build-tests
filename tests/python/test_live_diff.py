@@ -62,7 +62,7 @@ def test_write_live_diff_summary_matches_publisher_contract(tmp_path: Path) -> N
 
     write_live_diff_summary(
         summary_path,
-        generated_at="2026-04-21T00:00:00+00:00",
+        generated_utc="2026-04-21T00:00:00Z",
         report_root=tmp_path,
         test_run_workspace_root=Path("C:/test-run"),
         baseline_workspace_root=Path("C:/baseline"),

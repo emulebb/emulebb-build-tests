@@ -2236,7 +2236,7 @@ def run_shared_files_e2e(
         summary["status"] = "passed"
         summary["error"] = None
 
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
         if app is not None:
@@ -2250,7 +2250,7 @@ def run_shared_files_e2e(
                     pass
             except Exception:
                 pass
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
         raise
     finally:
         if process_handle:
@@ -2398,7 +2398,7 @@ def run_dynamic_folder_lifecycle_e2e(
 
         summary["status"] = "passed"
         summary["error"] = None
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
         append_shared_state_failure_observation(
@@ -2419,7 +2419,7 @@ def run_dynamic_folder_lifecycle_e2e(
                     pass
             except Exception:
                 pass
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
         raise
     finally:
         if process_handle:
@@ -2640,7 +2640,7 @@ def run_monitored_folder_events_e2e(
 
         summary["status"] = "passed"
         summary["error"] = None
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
         append_shared_state_failure_observation(
@@ -2661,7 +2661,7 @@ def run_monitored_folder_events_e2e(
                     pass
             except Exception:
                 pass
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
         raise
     finally:
         if process_handle:
@@ -2818,7 +2818,7 @@ def run_generated_robustness_e2e(
 
         summary["status"] = "passed"
         summary["error"] = None
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
         if app is not None:
@@ -2832,7 +2832,7 @@ def run_generated_robustness_e2e(
                     pass
             except Exception:
                 pass
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
         raise
     finally:
         if process_handle:
@@ -3111,7 +3111,7 @@ def run_tree_refresh_stress_e2e(
 
         summary["status"] = "passed"
         summary["error"] = None
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
         if app is not None:
@@ -3125,7 +3125,7 @@ def run_tree_refresh_stress_e2e(
                     pass
             except Exception:
                 pass
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
         raise
     finally:
         if process_handle:
@@ -3276,7 +3276,7 @@ def run_duplicate_startup_reuse_e2e(
 
         summary["status"] = "passed"
         summary["error"] = None
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
     except Exception as exc:
         summary["error"] = str(exc)
         if app is not None:
@@ -3290,7 +3290,7 @@ def run_duplicate_startup_reuse_e2e(
                     pass
             except Exception:
                 pass
-        write_json(artifacts_dir / "result.json", summary)
+        write_json(artifacts_dir / "shared-files-ui-e2e-result.json", summary)
         raise
     finally:
         if process_handle:
@@ -3396,9 +3396,9 @@ def run_shared_files_ui_suite(
         except Exception:
             failures.append(scenario_name)
 
-        result_path = scenario_dir / "result.json"
+        result_path = scenario_dir / "shared-files-ui-e2e-result.json"
         if not result_path.exists():
-            raise RuntimeError(f"Shared Files UI scenario '{scenario_name}' did not produce result.json.")
+            raise RuntimeError(f"Shared Files UI scenario '{scenario_name}' did not produce shared-files-ui-e2e-result.json.")
         scenario_result = json.loads(result_path.read_text(encoding="utf-8"))
         combined["scenarios"].append(scenario_result)
         generated_manifest_path = scenario_result.get("generated_fixture_manifest_path")
@@ -3408,7 +3408,7 @@ def run_shared_files_ui_suite(
     if failures:
         combined["status"] = "failed"
 
-    write_json(artifacts_dir / "result.json", combined)
+    write_json(artifacts_dir / "shared-files-ui-e2e-result.json", combined)
     if failures:
         raise RuntimeError("Shared Files UI scenarios failed: " + ", ".join(failures))
 
@@ -3493,7 +3493,7 @@ def main(argv: list[str]) -> int:
             admin_fixture_context = None
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="passed", paths=paths)
-        summary_path = paths.run_report_dir / "ui-summary.json"
+        summary_path = paths.run_report_dir / "shared-files-ui-e2e-summary.json"
         harness_cli_common.write_json_file(summary_path, summary_payload)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.update_harness_summary(paths.repo_root, live_ui_summary_path=summary_path)
@@ -3506,7 +3506,7 @@ def main(argv: list[str]) -> int:
             admin_fixture_context = None
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="failed", paths=paths, error_message=str(exc))
-        summary_path = paths.run_report_dir / "ui-summary.json"
+        summary_path = paths.run_report_dir / "shared-files-ui-e2e-summary.json"
         harness_cli_common.write_json_file(summary_path, summary_payload)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.update_harness_summary(paths.repo_root, live_ui_summary_path=summary_path)

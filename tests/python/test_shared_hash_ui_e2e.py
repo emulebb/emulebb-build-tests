@@ -80,7 +80,7 @@ def test_partial_hash_progress_uses_trace_counters(tmp_path: Path) -> None:
 
 def test_write_json_recreates_parent_directory(tmp_path: Path) -> None:
     module = load_shared_hash_module()
-    result_path = tmp_path / "missing-scenario" / "result.json"
+    result_path = tmp_path / "missing-scenario" / "shared-hash-ui-e2e-result.json"
 
     module.write_json(result_path, {"status": "failed"})
 

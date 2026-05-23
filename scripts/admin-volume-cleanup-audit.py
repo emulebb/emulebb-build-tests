@@ -348,7 +348,7 @@ def run_cleanup_audit(args: argparse.Namespace) -> dict[str, object]:
     except Exception as exc:
         summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
     finally:
-        harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", summary)
+        harness_cli_common.write_json_file(paths.source_artifacts_dir / "admin-volume-cleanup-audit-result.json", summary)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

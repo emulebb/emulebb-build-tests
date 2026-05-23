@@ -10,8 +10,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .artifact_names import utc_run_id
 from .live_diff import LiveDiffConfig, run_live_diff
-from .native_coverage import NativeCoverageConfig, run_native_coverage
+from .native_coverage import NativeCoverageConfig, publish_directory_snapshot, run_native_coverage
 from .paths import get_test_artifacts_root, get_test_reports_root
 from .workspace_layout import get_default_workspace_root
 
@@ -51,7 +52,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
     """Runs the canonical main-vs-community coverage and live-diff comparison."""
 
     report_root = get_test_reports_root(config.workspace_root)
-    run_report_dir = report_root / "community-core-coverage" / time.strftime("%Y%m%d-%H%M%S")
+    run_report_dir = report_root / "community-core-coverage" / utc_run_id()
     run_report_dir.mkdir(parents=True, exist_ok=True)
 
     run_native_coverage(
@@ -103,7 +104,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
 
     combined_summary_path = run_report_dir / "community-core-coverage-summary.json"
     payload = {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "workspace_root": str(config.workspace_root),
         "main_app_root": str(config.main_app_root),
         "community_app_root": str(config.community_app_root),
@@ -115,6 +116,7 @@ def run_community_core_coverage(config: CommunityCoreCoverageConfig) -> int:
         "live_rest_e2e": live_rest_e2e,
     }
     combined_summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    publish_directory_snapshot(run_report_dir, report_root / "community-core-coverage" / "latest")
     print(f"Community core coverage summary: {combined_summary_path}")
     if isinstance(live_rest_e2e, dict) and live_rest_e2e.get("return_code") not in (None, 0):
         return int(live_rest_e2e["return_code"])

@@ -92,7 +92,7 @@ def checkpoint_report(artifacts_dir: Path, report: dict[str, object]) -> None:
     """Persists best-effort live progress so interrupted runs keep diagnostic context."""
 
     try:
-        write_json(artifacts_dir / "result.partial.json", report)
+        write_json(artifacts_dir / "auto-browse-live-result.partial.json", report)
     except Exception as exc:  # pragma: no cover - diagnostics must not mask the live failure
         (artifacts_dir / "result.partial.write-error.txt").write_text(repr(exc), encoding="utf-8")
 
@@ -1431,7 +1431,7 @@ def main() -> int:
                         }
 
         record_phase(artifacts_dir, report, "cleanup_done")
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "auto-browse-live-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

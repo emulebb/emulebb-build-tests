@@ -477,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        report_path = paths.source_artifacts_dir / "local-ed2k-protocol-combinations.json"
+        report_path = paths.source_artifacts_dir / "local-ed2k-protocol-combinations-result.json"
         harness_cli_common.write_json_file(report_path, report)
         try:
             harness_cli_common.publish_run_artifacts(paths)

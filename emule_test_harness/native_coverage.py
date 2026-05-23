@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from .artifact_names import utc_run_id
 from .live_diff import build_emule_tests_command, get_default_workspace_root
 from .paths import get_build_tag, get_test_binary_path, get_test_reports_root
 from .processes import run_captured
@@ -186,9 +187,9 @@ def run_native_coverage(config: NativeCoverageConfig) -> int:
     build_tag = get_build_tag(config.workspace_root, config.app_root)
     report_root = get_test_reports_root(config.workspace_root)
     coverage_report_root = report_root / "native-coverage"
-    report_stamp = time.strftime("%Y%m%d-%H%M%S")
+    report_stamp = utc_run_id()
     run_report_dir = coverage_report_root / f"{report_stamp}-{build_tag}-{config.platform}-{config.configuration}"
-    latest_report_dir = report_root / "native-coverage-latest"
+    latest_report_dir = coverage_report_root / "latest"
     coverage_summary_path = run_report_dir / "coverage-summary.json"
     coverage_summary_text_path = run_report_dir / "coverage-summary.txt"
     cobertura_path = run_report_dir / "coverage.cobertura.xml"
@@ -267,7 +268,7 @@ def run_native_coverage(config: NativeCoverageConfig) -> int:
 
     lines_covered, lines_valid, line_rate_percent = read_cobertura_line_metrics(cobertura_path)
     summary = {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "test_repo_root": str(config.test_repo_root),
         "workspace_root": str(config.workspace_root),
         "app_root": str(config.app_root),

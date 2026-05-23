@@ -141,7 +141,7 @@ def main() -> int:
         "checks": {},
         "diagnostics": {},
     }
-    write_json(artifacts_dir / "result.json", report)
+    write_json(artifacts_dir / "live-process-monitor-result.json", report)
 
     tools = {
         "gflags": live_process_monitor.find_tool("gflags.exe", "gflags"),
@@ -215,7 +215,7 @@ def main() -> int:
 
         command = live_process_monitor.build_launch_command(app_exe, config.profile_dir)
         report["launch"] = {"command": command}
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "live-process-monitor-result.json", report)
         process = subprocess.Popen(command)
         report["pid"] = process.pid
         process_handle = live_process_monitor.open_process(process.pid)
@@ -383,7 +383,7 @@ def main() -> int:
                 enabled=False,
                 output_path=analysis_dir / "gflags-disable-ust.txt",
             )
-        write_json(artifacts_dir / "result.json", report)
+        write_json(artifacts_dir / "live-process-monitor-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)

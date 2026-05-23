@@ -394,7 +394,7 @@ def run_shared_cache_invalidation(args: argparse.Namespace) -> dict[str, object]
             if summary["fixture_cleanup"].get("status") != "passed":  # type: ignore[union-attr]
                 summary["status"] = "failed"
         summary["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
-        harness_cli_common.write_json_file(paths.source_artifacts_dir / "result.json", summary)
+        harness_cli_common.write_json_file(paths.source_artifacts_dir / "shared-cache-invalidation-result.json", summary)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         harness_cli_common.cleanup_source_artifacts(paths)
