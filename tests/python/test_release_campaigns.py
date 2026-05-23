@@ -115,7 +115,10 @@ def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
         (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     latest = state_root / "test-reports" / "live-e2e-suite" / "latest"
     latest.mkdir(parents=True)
-    (latest / "live-e2e-suite-result.json").write_text(json.dumps({"status": "passed", "profile": "release-expanded"}), encoding="utf-8")
+    (latest / "live-e2e-suite-result.json").write_text(
+        json.dumps({"status": "passed", "profile": "release-expanded-quick"}),
+        encoding="utf-8",
+    )
     fast = state_root / "certification" / "20260517-010203-fast"
     fast.mkdir(parents=True)
     (fast / "certification-result.json").write_text(json.dumps({"status": "inconclusive"}), encoding="utf-8")

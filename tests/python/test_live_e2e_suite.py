@@ -1125,6 +1125,10 @@ def test_release_expanded_quick_profile_tolerates_sparse_live_cold_start_candida
     ]
 
 
+def test_release_expanded_quick_profile_keeps_required_search_ui_live() -> None:
+    assert "search-ui-live" in live_e2e_suite.PROFILE_SUITE_NAMES["release-expanded-quick"]
+
+
 def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     install_profiled_command_capture(monkeypatch, commands)

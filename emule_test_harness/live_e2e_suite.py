@@ -485,6 +485,7 @@ PROFILE_SUITE_NAMES = {
         "preference-ui",
         "shared-files-ui",
         "shared-hash-ui",
+        "search-ui-live",
         "shared-directories-rest",
         "shared-cache-invalidation",
         "unc-mapped-drive-identity",

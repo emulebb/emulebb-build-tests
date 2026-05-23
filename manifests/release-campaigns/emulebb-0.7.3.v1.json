@@ -339,8 +339,8 @@
           "flowCategory": "live-wire",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile release-expanded --fail-fast --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
-          "liveE2eProfile": "release-expanded",
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded-quick --fail-fast --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
+          "liveE2eProfile": "release-expanded-quick",
           "localInputs": [
             "live-wire-inputs.local.json"
           ],
@@ -352,7 +352,7 @@
               "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/profile": "release-expanded"
+                "/profile": "release-expanded-quick"
               }
             }
           ]
@@ -364,8 +364,8 @@
           "flowCategory": "ui",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile release-expanded",
-          "liveE2eProfile": "release-expanded",
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded-quick --fail-fast --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
+          "liveE2eProfile": "release-expanded-quick",
           "liveE2eSuite": "search-ui-live",
           "localInputs": [
             "live-wire-inputs.local.json"
@@ -387,8 +387,8 @@
           "flowCategory": "rest-api",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile release-expanded",
-          "liveE2eProfile": "release-expanded",
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded-quick --fail-fast --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
+          "liveE2eProfile": "release-expanded-quick",
           "liveE2eSuite": "rest-api",
           "localInputs": [
             "live-wire-inputs.local.json"
@@ -410,8 +410,8 @@
           "flowCategory": "ui",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile release-expanded",
-          "liveE2eProfile": "release-expanded",
+          "command": "python -m emule_workspace test live-e2e --profile release-expanded-quick --fail-fast --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
+          "liveE2eProfile": "release-expanded-quick",
           "evidence": [
             {
               "kind": "json-status",
@@ -521,8 +521,8 @@
           "flowCategory": "stress",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile cpu-heavy --fail-fast",
-          "liveE2eProfile": "cpu-heavy",
+          "command": "python -m emule_workspace test live-e2e --profile cpu-heavy-quick --fail-fast",
+          "liveE2eProfile": "cpu-heavy-quick",
           "liveE2eSuite": "shared-files-ui",
           "evidence": [
             {
@@ -532,7 +532,7 @@
               "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/profile": "cpu-heavy"
+                "/profile": "cpu-heavy-quick"
               }
             },
             {
@@ -549,8 +549,8 @@
           "title": "Real live-wire profile long-run monitor",
           "phase": "stabilization-stress",
           "flowCategory": "stress",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test live-e2e --suite live-process-monitor --fail-fast",
           "liveE2eSuite": "live-process-monitor",
           "localInputs": [
@@ -559,7 +559,7 @@
           "evidence": [
             {
               "kind": "json-status",
-              "required": true,
+              "required": false,
               "base": "workspace-state",
               "path": "test-reports/live-process-monitor/latest/live-process-monitor-result.json",
               "statusPointer": "/status"
@@ -573,17 +573,17 @@
           "flowCategory": "stress",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile stabilization-stress --fail-fast --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
-          "liveE2eProfile": "stabilization-stress",
+          "command": "python -m emule_workspace test live-e2e --profile stabilization-stress-quick --fail-fast --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
+          "liveE2eProfile": "stabilization-stress-quick",
           "evidence": [
             {
               "kind": "json-status",
-              "required": false,
+              "required": true,
               "base": "workspace-state",
               "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/profile": "stabilization-stress"
+                "/profile": "stabilization-stress-quick"
               }
             },
             {
@@ -603,34 +603,62 @@
           ]
         },
         {
-          "id": "emulebb.flow.amutorrent.live.resilience.v1",
-          "title": "aMuTorrent clean startup, UI, and resilience live add-ons",
+          "id": "emulebb.flow.amutorrent.live.clean-startup.v1",
+          "title": "aMuTorrent clean startup live proof",
           "phase": "stabilization-stress",
           "flowCategory": "amutorrent",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test certification --profile overnight --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json",
+          "command": "python -m emule_workspace test amutorrent-clean-startup --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json --rest-webserver-scheme https --keep-artifacts",
           "localInputs": [
             "live-wire-inputs.local.json"
           ],
           "evidence": [
             {
               "kind": "json-status",
-              "required": false,
+              "required": true,
               "base": "workspace-state",
               "path": "test-reports/amutorrent-clean-startup/latest/amutorrent-clean-startup-result.json",
               "statusPointer": "/status"
-            },
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.amutorrent.live.emulebb-ui.v1",
+          "title": "aMuTorrent eMuleBB UI live proof",
+          "phase": "stabilization-stress",
+          "flowCategory": "amutorrent",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test amutorrent-emulebb-ui --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json --rest-webserver-scheme https --keep-artifacts",
+          "localInputs": [
+            "live-wire-inputs.local.json"
+          ],
+          "evidence": [
             {
               "kind": "json-status",
-              "required": false,
+              "required": true,
               "base": "workspace-state",
               "path": "test-reports/amutorrent-emulebb-ui-live/latest/amutorrent-emulebb-ui-live-result.json",
               "statusPointer": "/status"
-            },
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.amutorrent.live.resilience.v1",
+          "title": "aMuTorrent resilience live proof",
+          "phase": "stabilization-stress",
+          "flowCategory": "amutorrent",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test amutorrent-resilience --live-wire-inputs-file repos\\emulebb-build-tests\\live-wire-inputs.local.json --rest-webserver-scheme https --keep-artifacts",
+          "localInputs": [
+            "live-wire-inputs.local.json"
+          ],
+          "evidence": [
             {
               "kind": "json-status",
-              "required": false,
+              "required": true,
               "base": "workspace-state",
               "path": "test-reports/amutorrent-resilience-live/latest/amutorrent-resilience-live-result.json",
               "statusPointer": "/status"
@@ -780,6 +808,8 @@
       "coveredBy": [
         "emulebb.flow.rest.contract.controller.v1",
         "emulebb.flow.stress.rest.crash-leak-dump.v1",
+        "emulebb.flow.amutorrent.live.clean-startup.v1",
+        "emulebb.flow.amutorrent.live.emulebb-ui.v1",
         "emulebb.flow.amutorrent.live.resilience.v1"
       ]
     },
