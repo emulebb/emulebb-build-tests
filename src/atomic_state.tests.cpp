@@ -58,14 +58,20 @@ TEST_CASE("Desktop UI refresh intervals use the supported System Informer values
 
 TEST_CASE("Desktop UI refresh intervals throttle non-forced list refreshes")
 {
-	CHECK_FALSE(ShouldRunDisplayRefresh(false, 599u, 100u, NormalizeDesktopUiRefreshIntervalMs(500u), 0u));
-	CHECK(ShouldRunDisplayRefresh(false, 600u, 100u, NormalizeDesktopUiRefreshIntervalMs(500u), 0u));
-	CHECK_FALSE(ShouldRunDisplayRefresh(false, 2099u, 100u, NormalizeDesktopUiRefreshIntervalMs(2000u), 0u));
-	CHECK(ShouldRunDisplayRefresh(false, 2100u, 100u, NormalizeDesktopUiRefreshIntervalMs(2000u), 0u));
-	CHECK_FALSE(ShouldRunDisplayRefresh(false, 10099u, 100u, NormalizeDesktopUiRefreshIntervalMs(10000u), 0u));
-	CHECK(ShouldRunDisplayRefresh(false, 10100u, 100u, NormalizeDesktopUiRefreshIntervalMs(10000u), 0u));
+	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 599u, 100u, 500u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(false, 600u, 100u, 500u));
+	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 1099u, 100u, 1000u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(false, 1100u, 100u, 1000u));
+	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 2099u, 100u, 2000u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(false, 2100u, 100u, 2000u));
+	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 5099u, 100u, 5000u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(false, 5100u, 100u, 5000u));
+	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 10099u, 100u, 10000u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(false, 10100u, 100u, 10000u));
 
-	CHECK(ShouldRunDisplayRefresh(true, 101u, 100u, NormalizeDesktopUiRefreshIntervalMs(10000u), 800u));
+	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 2099u, 100u, 750u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(false, 2100u, 100u, 750u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(true, 101u, 100u, 10000u));
 }
 
 #if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)

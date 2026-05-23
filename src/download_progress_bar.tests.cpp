@@ -33,4 +33,15 @@ TEST_CASE("Download progress-bar status bitmap cache follows normalized desktop 
 	CHECK(DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(60000u) == 2000u);
 }
 
+TEST_CASE("Download progress-bar status bitmap cache does not add jitter")
+{
+	const ULONGLONG currentTick = 12000u;
+
+	CHECK(currentTick + DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(500u) == 12500u);
+	CHECK(currentTick + DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(1000u) == 13000u);
+	CHECK(currentTick + DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(2000u) == 14000u);
+	CHECK(currentTick + DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(5000u) == 17000u);
+	CHECK(currentTick + DownloadProgressBarSeams::GetStatusBitmapCacheDelayMs(10000u) == 22000u);
+}
+
 TEST_SUITE_END();
