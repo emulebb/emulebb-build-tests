@@ -167,6 +167,15 @@ TEST_CASE("Startup-cache save scheduling waits until deferred hashing has draine
 	CHECK(SharedFileListSeams::ShouldStartStartupCacheSave({ true, false, false, false, 15000ui64, 0ui64 }));
 }
 
+TEST_CASE("Startup-cache save starts immediately after startup hashing drains")
+{
+	CHECK(SharedFileListSeams::ShouldStartStartupCacheSaveAfterHashDrain({ true, false, false, false }));
+	CHECK_FALSE(SharedFileListSeams::ShouldStartStartupCacheSaveAfterHashDrain({ false, false, false, false }));
+	CHECK_FALSE(SharedFileListSeams::ShouldStartStartupCacheSaveAfterHashDrain({ true, true, false, false }));
+	CHECK_FALSE(SharedFileListSeams::ShouldStartStartupCacheSaveAfterHashDrain({ true, false, true, false }));
+	CHECK_FALSE(SharedFileListSeams::ShouldStartStartupCacheSaveAfterHashDrain({ true, false, false, true }));
+}
+
 TEST_CASE("Startup-cache save scheduling stays blocked while closing, clean, or already saving")
 {
 	CHECK_FALSE(SharedFileListSeams::ShouldStartStartupCacheSave({ false, false, false, false, 20000ui64, 0ui64 }));

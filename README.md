@@ -123,6 +123,10 @@ Workspace quick reference:
 
 - default canonical workspace: `EMULE_WORKSPACE_ROOT\workspaces\workspace`
 - canonical target app paths are `app\eMule-main`, `app\eMule-community-baseline`, and `app\eMule-community-tracing-harness`
+- workspace orchestration commands use variant keys, not folder names:
+  `main` maps to `app\eMule-main`, `community` maps to
+  `app\eMule-community-baseline`, and `tracing-harness` maps to
+  `app\eMule-community-tracing-harness`
 - for live-diff runs, point `-TestRunWorkspaceRoot` and `-BaselineWorkspaceRoot` at the two workspace roots you want to compare
 - for cleanroom validation, pass both `-WorkspaceRoot` and `-AppRoot` explicitly so reports and build tags stay tied to the selected workspace root
 
@@ -274,6 +278,15 @@ Aggregate live E2E lane:
   Preferences with directory-tree stress, Shared Files, shared-hash shutdown,
   Search UI, shared-directories REST, REST API adversity, cold-start telemetry,
   local dump/crash smoke, and aMuTorrent browser smoke
+- `--profile release-expanded-quick`, `--profile stabilization-stress-quick`,
+  and `--profile cpu-heavy-quick` are the first-pass failure triage gates; they
+  keep the same fixture classes and live-profile isolation but reduce REST
+  budgets and run the 1k Shared Files tree-refresh scenario instead of the full
+  50k tree
+- full stress profiles run Shared Files tree-refresh in two stages: the 1k
+  smoke fixture (`tree-refresh-smoke-1k`) runs first to catch setup and cache
+  regressions quickly, then `tree-refresh-stress-50k` runs as the overnight/full
+  capacity check
 - `release-expanded` requires 50 server searches plus 50 Kad searches and
   100 successful paused download triggers; success means REST accepted the
   download and the transfer materialized in the queue, not that the download

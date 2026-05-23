@@ -455,6 +455,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     shared_files_command = commands[1]
     assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_CORE_SCENARIOS)
     assert "dynamic-folder-lifecycle" in option_values(shared_files_command, "--scenario")
+    assert "tree-refresh-smoke-1k" not in option_values(shared_files_command, "--scenario")
     assert "tree-refresh-stress-50k" not in option_values(shared_files_command, "--scenario")
     assert "--tree-stress-churn-cycles" not in shared_files_command
     config_command = commands[2]
@@ -810,7 +811,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
     ]
-    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
+    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
     assert summary["arr_live_wire_suites"] == []
     assert summary["rest_coverage_budget"] == "contract-stress"
     assert summary["rest_stress_budget"] == "soak"
@@ -844,7 +845,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["suites"][4]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
 
     shared_files_command = commands[0]
-    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
+    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
 
     search_ui_command = commands[1]
     assert option_values(search_ui_command, "--ui-search-rounds") == ["3"]
@@ -1152,13 +1153,44 @@ def test_cpu_heavy_profile_runs_shared_files_50k_under_cpu_profile(tmp_path: Pat
     assert summary["status"] == "passed"
     assert summary["profile"] == "cpu-heavy"
     assert summary["profile_suite_selection_applied"] is True
-    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
+    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
     assert summary["shared_files_ui_cpu_profile"]["enabled"] is True
     assert summary["shared_files_ui_cpu_profile"]["stack"] is True
     assert [script_name(call["command"]) for call in calls] == ["shared-files-ui-e2e.py"]
     shared_files_command = calls[0]["command"]
-    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_STRESS_SCENARIOS)
+    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
     assert option_values(shared_files_command, "--tree-stress-churn-cycles") == ["80"]
+    assert summary["suites"][0]["cpu_profile"]["status"] == "passed"
+
+
+def test_cpu_heavy_quick_profile_runs_shared_files_1k_under_cpu_profile(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run_profiled(command, *, spec, args, child_artifacts_dir, app_exe):
+        calls.append(
+            {
+                "command": command,
+                "spec": spec.name,
+                "profile": args.profile,
+                "child_artifacts_dir": str(child_artifacts_dir),
+                "app_exe": str(app_exe),
+            }
+        )
+        return 0, {"enabled": True, "status": "passed", "summary": {"detail": {"available": True}}}
+
+    monkeypatch.setattr(live_e2e_suite, "run_suite_command_with_optional_cpu_profile", fake_run_profiled)
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args("--workspace-root", str(tmp_path / "workspaces" / "workspace"), "--profile", "cpu-heavy-quick"),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["profile"] == "cpu-heavy-quick"
+    assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS)
+    shared_files_command = calls[0]["command"]
+    assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS)
+    assert option_values(shared_files_command, "--tree-stress-churn-cycles") == ["8"]
     assert summary["suites"][0]["cpu_profile"]["status"] == "passed"
 
 

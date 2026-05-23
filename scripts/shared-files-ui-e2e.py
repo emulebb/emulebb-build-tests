@@ -152,6 +152,8 @@ GR_USEROBJECTS = 1
 
 SHARED_DUPLICATE_PATH_CACHE_MAGIC = 0x50554453
 SHARED_DUPLICATE_PATH_CACHE_VERSION = 1
+TREE_REFRESH_SMOKE_SCENARIO = "tree-refresh-smoke-1k"
+TREE_REFRESH_STRESS_SCENARIO = "tree-refresh-stress-50k"
 TREE_STRESS_RESOURCE_THRESHOLDS = {
     "handles": {"after_churn_max": 64},
     "gdi_objects": {"after_churn_max": 32},
@@ -368,11 +370,23 @@ def prepare_generated_robustness_fixture(seed_config_dir: Path, artifacts_dir: P
     return fixture
 
 
-def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Path, shared_root: Path, app_exe: Path) -> dict:
-    """Creates a profile base that shares the 50k-file tree-refresh stress subtree recursively."""
+def prepare_tree_refresh_stress_fixture(
+    seed_config_dir: Path,
+    artifacts_dir: Path,
+    shared_root: Path,
+    app_exe: Path,
+    *,
+    scenario_name: str,
+) -> dict:
+    """Creates a profile base that shares a tree-refresh stress subtree recursively."""
 
-    manifest = generated_fixture.ensure_fixture(shared_root, include_tree_stress=True)
-    subtree = manifest["subtrees"]["shared_files_tree_stress"]
+    is_smoke = scenario_name == TREE_REFRESH_SMOKE_SCENARIO
+    manifest = generated_fixture.ensure_fixture(
+        shared_root,
+        include_tree_stress=not is_smoke,
+        include_tree_stress_smoke=is_smoke,
+    )
+    subtree = manifest["subtrees"]["shared_files_tree_stress_1k" if is_smoke else "shared_files_tree_stress"]
     subtree_root = Path(str(subtree["root"])).resolve()
     shared_dirs = live_common.enumerate_recursive_directories(subtree_root)
     fixture = live_common.prepare_profile_base(
@@ -381,7 +395,7 @@ def prepare_tree_refresh_stress_fixture(seed_config_dir: Path, artifacts_dir: Pa
         shared_dirs=shared_dirs,
         scenario_id=artifacts_dir.name,
     )
-    rest_api_key = "shared-files-ui-tree-stress-key"
+    rest_api_key = f"shared-files-ui-{scenario_name}-key"
     rest_port = choose_rest_listen_port()
     configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port)
     fixture.update(
@@ -1569,6 +1583,132 @@ def wait_for_rest_ready(base_url: str, api_key: str) -> dict[str, object]:
     )
 
 
+def get_rest_status_model(base_url: str, api_key: str) -> dict[str, object]:
+    """Returns the current status REST model."""
+
+    result = http_request(base_url, "/api/v1/status", api_key=api_key)
+    if int(result["status"]) != 200:
+        raise RuntimeError(f"Unexpected status REST status {result['status']}: {result['body_text']!r}")
+    payload = result["json"]
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Expected status JSON object, got {payload!r}.")
+    return payload
+
+
+def get_rest_shared_startup_cache_status(base_url: str, api_key: str) -> dict[str, object]:
+    """Returns the shared startup-cache diagnostics from the status REST model."""
+
+    payload = get_rest_status_model(base_url, api_key)
+    status = payload.get("sharedStartupCache")
+    if not isinstance(status, dict):
+        raise RuntimeError(f"Expected sharedStartupCache JSON object, got {status!r}.")
+    return status
+
+
+def is_shared_startup_cache_idle_clean(status: dict[str, object]) -> bool:
+    """Reports whether startup cache persistence is no longer dirty or in flight."""
+
+    save = status.get("save")
+    if not isinstance(save, dict):
+        return False
+    return (
+        status.get("available") is True
+        and status.get("ready") is True
+        and status.get("hashingCount") == 0
+        and status.get("deferredHashingActive") is False
+        and status.get("interruptedHashingInvalidatedCache") is False
+        and save.get("running") is False
+        and save.get("dirty") is False
+        and save.get("phase") == "idle"
+    )
+
+
+def get_file_state(path: Path) -> dict[str, object]:
+    """Returns a compact, JSON-safe snapshot for a cache sidecar file."""
+
+    if not path.exists():
+        return {"exists": False}
+    stat = path.stat()
+    return {
+        "exists": True,
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def read_known_met_record_count(path: Path) -> int | None:
+    """Reads the known.met record-count header without parsing all records."""
+
+    if not path.exists() or path.stat().st_size < 5:
+        return None
+    with path.open("rb") as handle:
+        handle.read(1)
+        return struct.unpack("<I", handle.read(4))[0]
+
+
+def wait_for_known_met_records(
+    path: Path,
+    expected_count: int,
+    *,
+    description: str,
+    timeout: float = 180.0,
+) -> dict[str, object]:
+    """Waits until known.met has enough records for startup-cache rehydration."""
+
+    last_state: dict[str, object] = {}
+
+    def resolve() -> dict[str, object] | None:
+        nonlocal last_state
+        file_state = get_file_state(path)
+        record_count = read_known_met_record_count(path)
+        last_state = {
+            "file": file_state,
+            "record_count": record_count,
+        }
+        if record_count is not None and record_count >= expected_count:
+            return dict(last_state)
+        return None
+
+    try:
+        return wait_for(resolve, timeout=timeout, interval=0.5, description=description)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} Last known.met state: {last_state!r}") from exc
+
+
+def wait_for_shared_startup_cache_persisted(
+    base_url: str,
+    api_key: str,
+    cache_path: Path,
+    *,
+    description: str,
+    timeout: float = 180.0,
+) -> dict[str, object]:
+    """Waits until the live app reports a complete idle shared startup-cache save."""
+
+    last_state: dict[str, object] = {}
+
+    def resolve() -> dict[str, object] | None:
+        nonlocal last_state
+        status = get_rest_shared_startup_cache_status(base_url, api_key)
+        file_state = get_file_state(cache_path)
+        last_state = {
+            "status": status,
+            "file": file_state,
+        }
+        if (
+            is_shared_startup_cache_idle_clean(status)
+            and file_state.get("exists") is True
+            and int(file_state.get("size", 0)) > 0
+        ):
+            return dict(last_state)
+        return None
+
+    try:
+        return wait_for(resolve, timeout=timeout, interval=0.5, description=description)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} Last shared startup-cache state: {last_state!r}") from exc
+
+
 def get_rest_shared_names(base_url: str, api_key: str) -> list[str]:
     """Returns the current shared-file names exposed by the REST read model."""
 
@@ -2715,12 +2855,19 @@ def run_tree_refresh_stress_e2e(
     *,
     require_startup_profile: bool,
     churn_cycles: int,
+    scenario_name: str = TREE_REFRESH_STRESS_SCENARIO,
 ) -> None:
-    """Executes the 50k-file Shared Files tree-refresh stress regression."""
+    """Executes a Shared Files tree-refresh stress regression."""
 
-    fixture = prepare_tree_refresh_stress_fixture(seed_config_dir, artifacts_dir, shared_root, app_exe)
+    fixture = prepare_tree_refresh_stress_fixture(
+        seed_config_dir,
+        artifacts_dir,
+        shared_root,
+        app_exe,
+        scenario_name=scenario_name,
+    )
     summary = {
-        "name": "tree-refresh-stress-50k",
+        "name": scenario_name,
         "status": "failed",
         "app_exe": str(app_exe),
         "profile_base": str(fixture["profile_base"]),
@@ -2789,7 +2936,7 @@ def run_tree_refresh_stress_e2e(
             str(fixture["rest_base_url"]),
             str(fixture["rest_api_key"]),
             fixture["expected_row_count"],
-            "initial tree stress REST shared-files count",
+            f"initial {scenario_name} REST shared-files count",
         )
         summary["resources_before_churn"] = get_process_resource_snapshot(process_handle)
 
@@ -2822,7 +2969,7 @@ def run_tree_refresh_stress_e2e(
             str(fixture["rest_base_url"]),
             str(fixture["rest_api_key"]),
             fixture["expected_row_count"],
-            "final tree stress REST shared-files count",
+            f"final {scenario_name} REST shared-files count",
         )
         summary["final_name_preview"] = get_list_names(process_handle, list_hwnd, min(20, final_count))
         summary["resources_after_churn"] = get_process_resource_snapshot(process_handle)
@@ -2832,7 +2979,7 @@ def run_tree_refresh_stress_e2e(
         )
         summary["resource_thresholds"] = evaluate_tree_stress_resources(summary["resource_deltas"])
         if not summary["resource_thresholds"]["ok"]:
-            raise RuntimeError(f"50k tree stress resource thresholds exceeded: {summary['resource_thresholds']!r}")
+            raise RuntimeError(f"{scenario_name} resource thresholds exceeded: {summary['resource_thresholds']!r}")
 
         if require_startup_profile:
             summary["first_launch_hashing_done"] = wait_for_shared_hashing_done_profile(
@@ -2845,12 +2992,23 @@ def run_tree_refresh_stress_e2e(
             summary["first_launch_startup_profile_artifact"] = str(first_launch_trace_artifact)
 
         shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
+        known_met_path = Path(str(fixture["config_dir"])) / "known.met"
         summary["shared_cache_path"] = str(shared_cache_path)
-        wait_for(
-            lambda: shared_cache_path.stat().st_size if shared_cache_path.exists() else None,
-            timeout=60.0,
-            interval=0.5,
-            description="50k shared startup cache persistence",
+        summary["known_met_path"] = str(known_met_path)
+        summary["first_launch_startup_cache_after_hashing"] = get_rest_shared_startup_cache_status(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+        )
+        summary["first_launch_known_met_persisted"] = wait_for_known_met_records(
+            known_met_path,
+            fixture["expected_row_count"],
+            description=f"{scenario_name} known.met persistence",
+        )
+        summary["first_launch_startup_cache_persisted"] = wait_for_shared_startup_cache_persisted(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+            shared_cache_path,
+            description=f"{scenario_name} shared startup cache persistence",
         )
         summary["shared_cache_size_bytes_after_first_launch"] = shared_cache_path.stat().st_size
 
@@ -2873,6 +3031,12 @@ def run_tree_refresh_stress_e2e(
         process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
         summary["cached_relaunch_process_id"] = process_id
         process_handle = open_process(process_id)
+
+        wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
+        summary["cached_relaunch_startup_cache_after_rest_ready"] = get_rest_shared_startup_cache_status(
+            str(fixture["rest_base_url"]),
+            str(fixture["rest_api_key"]),
+        )
 
         relaunch_profile_summary, relaunch_profile_phases, _relaunch_profile_counters = collect_startup_profile_bundle(
             fixture["startup_profile_path"],
@@ -2907,19 +3071,21 @@ def run_tree_refresh_stress_e2e(
         if require_startup_profile:
             if cached_files_queued_for_hash != 0:
                 raise RuntimeError(
-                    f"Expected files_queued_for_hash=0 on cached 50k relaunch, got {cached_files_queued_for_hash!r}."
+                    f"Expected files_queued_for_hash=0 on cached {scenario_name} relaunch, "
+                    f"got {cached_files_queued_for_hash!r}."
                 )
             if cached_pending_hashes != 0:
-                raise RuntimeError(f"Expected pending_hashes=0 on cached 50k relaunch, got {cached_pending_hashes!r}.")
+                raise RuntimeError(
+                    f"Expected pending_hashes=0 on cached {scenario_name} relaunch, got {cached_pending_hashes!r}."
+                )
             if cached_shared_files_after_scan != fixture["expected_row_count"]:
                 raise RuntimeError(
-                    "Expected cached 50k relaunch shared_files_after_scan="
+                    f"Expected cached {scenario_name} relaunch shared_files_after_scan="
                     f"{fixture['expected_row_count']}, got {cached_shared_files_after_scan!r}."
                 )
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-cached-relaunch.json")
         list_hwnd, tree_hwnd = open_shared_files_tree_page(main_hwnd)
-        wait_for_rest_ready(str(fixture["rest_base_url"]), str(fixture["rest_api_key"]))
         select_tree_root_by_label(process_handle, tree_hwnd, "All Shared Files")
         cached_count = wait_for_exact_list_count_with_progress(
             list_hwnd,
@@ -2935,13 +3101,13 @@ def run_tree_refresh_stress_e2e(
             str(fixture["rest_base_url"]),
             str(fixture["rest_api_key"]),
             fixture["expected_row_count"],
-            "cached 50k relaunch REST shared-files count",
+            f"cached {scenario_name} relaunch REST shared-files count",
         )
         summary["resources_after_cached_relaunch"] = get_process_resource_snapshot(process_handle)
-        summary["cold_vs_cached_50k_metrics"] = build_tree_stress_cold_cached_metrics(
-            summary,
-            fixture["expected_row_count"],
-        )
+        metrics = build_tree_stress_cold_cached_metrics(summary, fixture["expected_row_count"])
+        summary["cold_vs_cached_tree_stress_metrics"] = metrics
+        if scenario_name == TREE_REFRESH_STRESS_SCENARIO:
+            summary["cold_vs_cached_50k_metrics"] = metrics
 
         summary["status"] = "passed"
         summary["error"] = None
@@ -3176,7 +3342,7 @@ def run_shared_files_ui_suite(
                     shared_root,
                     require_startup_profile=require_startup_profile,
                 )
-            elif scenario_name == "tree-refresh-stress-50k":
+            elif scenario_name in (TREE_REFRESH_SMOKE_SCENARIO, TREE_REFRESH_STRESS_SCENARIO):
                 run_tree_refresh_stress_e2e(
                     app_exe,
                     seed_config_dir,
@@ -3184,6 +3350,7 @@ def run_shared_files_ui_suite(
                     shared_root,
                     require_startup_profile=require_startup_profile,
                     churn_cycles=tree_stress_churn_cycles,
+                    scenario_name=scenario_name,
                 )
             elif scenario_name == "duplicate-startup-reuse":
                 run_duplicate_startup_reuse_e2e(
@@ -3260,7 +3427,8 @@ def main(argv: list[str]) -> int:
         choices=[
             "fixture-three-files",
             "generated-robustness-recursive",
-            "tree-refresh-stress-50k",
+            TREE_REFRESH_SMOKE_SCENARIO,
+            TREE_REFRESH_STRESS_SCENARIO,
             "duplicate-startup-reuse",
             "dynamic-folder-lifecycle",
             "monitored-folder-events",

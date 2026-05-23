@@ -95,12 +95,18 @@ ROBUSTNESS_FILE_SPECS = [
     ("archive", "162_stream.capture.sample.mkv", 3407881, 0xB01B, True),
     ("archive", "163_large_tail_payload.iso", 3670027, 0xB01C, True),
 ]
-TREE_STRESS_BRANCH_COUNT = 500
-TREE_STRESS_FILES_PER_BRANCH = 100
+TREE_STRESS_FULL_BRANCH_COUNT = 500
+TREE_STRESS_FULL_FILES_PER_BRANCH = 100
+TREE_STRESS_SMOKE_BRANCH_COUNT = 10
+TREE_STRESS_SMOKE_FILES_PER_BRANCH = 100
+TREE_STRESS_BRANCH_COUNT = TREE_STRESS_FULL_BRANCH_COUNT
+TREE_STRESS_FILES_PER_BRANCH = TREE_STRESS_FULL_FILES_PER_BRANCH
 TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH = 0
 TREE_STRESS_GROUP_SIZE = 10
 TREE_STRESS_MIN_FILE_COUNT = 50000
 TREE_STRESS_MIN_OBSERVABLE_NODES = 10000
+TREE_STRESS_SMOKE_MIN_FILE_COUNT = 1000
+TREE_STRESS_SMOKE_MIN_OBSERVABLE_NODES = 1000
 
 
 def to_windows_long_path(path: Path) -> str:
@@ -240,12 +246,17 @@ def summarize_generated_subtree(root: Path, directories: list[Path], files: list
     }
 
 
-def estimate_shared_files_tree_stress_observable_nodes() -> int:
+def estimate_shared_files_tree_stress_observable_nodes(
+    *,
+    branch_count: int = TREE_STRESS_BRANCH_COUNT,
+    files_per_branch: int = TREE_STRESS_FILES_PER_BRANCH,
+    empty_children_per_branch: int = TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH,
+) -> int:
     """Returns the expected minimum observable tree/list node count for the stress fixture."""
 
-    group_count = (TREE_STRESS_BRANCH_COUNT + TREE_STRESS_GROUP_SIZE - 1) // TREE_STRESS_GROUP_SIZE
-    directory_count = 1 + group_count + (TREE_STRESS_BRANCH_COUNT * (1 + TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH))
-    file_count = TREE_STRESS_BRANCH_COUNT * TREE_STRESS_FILES_PER_BRANCH
+    group_count = (branch_count + TREE_STRESS_GROUP_SIZE - 1) // TREE_STRESS_GROUP_SIZE
+    directory_count = 1 + group_count + (branch_count * (1 + empty_children_per_branch))
+    file_count = branch_count * files_per_branch
     return directory_count + file_count
 
 
@@ -313,7 +324,7 @@ def build_shared_files_robustness(root: Path) -> dict[str, object]:
 
 
 def make_tree_stress_file_name(branch_index: int, file_index: int) -> str:
-    """Returns one deterministic file name for the 50k-file tree-refresh fixture."""
+    """Returns one deterministic file name for a tree-refresh fixture."""
 
     stem = [
         "alpha duplicate-name",
@@ -328,15 +339,24 @@ def make_tree_stress_file_name(branch_index: int, file_index: int) -> str:
     return f"{file_index:03d}_{stem}_branch_{branch_index:03d}.bin"
 
 
-def build_shared_files_tree_stress(root: Path) -> dict[str, object]:
-    """Builds the 50k-file Shared Files tree-refresh stress subtree."""
+def build_shared_files_tree_stress(
+    root: Path,
+    *,
+    branch_count: int = TREE_STRESS_BRANCH_COUNT,
+    files_per_branch: int = TREE_STRESS_FILES_PER_BRANCH,
+    empty_children_per_branch: int = TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH,
+    min_file_count: int = TREE_STRESS_MIN_FILE_COUNT,
+    min_observable_node_count: int = TREE_STRESS_MIN_OBSERVABLE_NODES,
+    subtree_name: str = "shared_files_tree_stress",
+) -> dict[str, object]:
+    """Builds a Shared Files tree-refresh stress subtree."""
 
     ensure_directory(root)
     directories = [root]
     files: list[dict[str, object]] = []
     sample_directories: list[str] = [str(root.resolve())]
 
-    for branch_index in range(TREE_STRESS_BRANCH_COUNT):
+    for branch_index in range(branch_count):
         group_index = branch_index // TREE_STRESS_GROUP_SIZE
         group_dir = root / f"group_{group_index:02d}_wide stress"
         if group_dir not in directories:
@@ -346,14 +366,14 @@ def build_shared_files_tree_stress(root: Path) -> dict[str, object]:
         branch_dir = group_dir / f"branch_{branch_index:03d}_unicode_\u03bb_\u4f8b"
         ensure_directory(branch_dir)
         directories.append(branch_dir)
-        for child_index in range(TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH):
+        for child_index in range(empty_children_per_branch):
             empty_child_dir = branch_dir / f"empty_child_{branch_index:03d}_{child_index:02d}"
             ensure_directory(empty_child_dir)
             directories.append(empty_child_dir)
         if len(sample_directories) < 12:
             sample_directories.append(str(branch_dir.resolve()))
 
-        for file_index in range(TREE_STRESS_FILES_PER_BRANCH):
+        for file_index in range(files_per_branch):
             size_bytes = 1 + ((branch_index * 17 + file_index * 31) % 4096)
             seed = 0xD00000 + (branch_index * 257) + file_index
             file_path = branch_dir / make_tree_stress_file_name(branch_index, file_index)
@@ -361,27 +381,32 @@ def build_shared_files_tree_stress(root: Path) -> dict[str, object]:
             files.append(build_file_entry(root, file_path, size_bytes, seed, materialization, True))
 
     summary = summarize_generated_subtree(root, directories, files)
-    summary["subtree_name"] = "shared_files_tree_stress"
-    summary["stress_branch_count"] = TREE_STRESS_BRANCH_COUNT
-    summary["stress_files_per_branch"] = TREE_STRESS_FILES_PER_BRANCH
-    summary["stress_empty_children_per_branch"] = TREE_STRESS_EMPTY_CHILDREN_PER_BRANCH
-    summary["min_file_count"] = TREE_STRESS_MIN_FILE_COUNT
-    summary["min_observable_node_count"] = TREE_STRESS_MIN_OBSERVABLE_NODES
+    summary["subtree_name"] = subtree_name
+    summary["stress_branch_count"] = branch_count
+    summary["stress_files_per_branch"] = files_per_branch
+    summary["stress_empty_children_per_branch"] = empty_children_per_branch
+    summary["min_file_count"] = min_file_count
+    summary["min_observable_node_count"] = min_observable_node_count
     summary["sample_directories"] = sample_directories
-    if int(summary["expected_visible_file_count"]) < TREE_STRESS_MIN_FILE_COUNT:
+    if int(summary["expected_visible_file_count"]) < min_file_count:
         raise RuntimeError(
             "Shared Files tree stress fixture has too few shared files: "
-            f"{summary['expected_visible_file_count']} < {TREE_STRESS_MIN_FILE_COUNT}"
+            f"{summary['expected_visible_file_count']} < {min_file_count}"
         )
-    if int(summary["observable_node_count"]) < TREE_STRESS_MIN_OBSERVABLE_NODES:
+    if int(summary["observable_node_count"]) < min_observable_node_count:
         raise RuntimeError(
             "Shared Files tree stress fixture is undersized: "
-            f"{summary['observable_node_count']} < {TREE_STRESS_MIN_OBSERVABLE_NODES}"
+            f"{summary['observable_node_count']} < {min_observable_node_count}"
         )
     return summary
 
 
-def ensure_fixture(shared_root: Path | str = DEFAULT_SHARED_ROOT, *, include_tree_stress: bool = False) -> dict[str, object]:
+def ensure_fixture(
+    shared_root: Path | str = DEFAULT_SHARED_ROOT,
+    *,
+    include_tree_stress: bool = False,
+    include_tree_stress_smoke: bool = False,
+) -> dict[str, object]:
     """Ensures the deterministic generated long-path fixture tree exists and returns its manifest."""
 
     resolved_root = Path(shared_root).resolve()
@@ -396,6 +421,15 @@ def ensure_fixture(shared_root: Path | str = DEFAULT_SHARED_ROOT, *, include_tre
     if include_tree_stress:
         subtrees["shared_files_tree_stress"] = build_shared_files_tree_stress(
             resolved_root / "shared_files_tree_stress_50k"
+        )
+    if include_tree_stress_smoke:
+        subtrees["shared_files_tree_stress_1k"] = build_shared_files_tree_stress(
+            resolved_root / "shared_files_tree_stress_1k",
+            branch_count=TREE_STRESS_SMOKE_BRANCH_COUNT,
+            files_per_branch=TREE_STRESS_SMOKE_FILES_PER_BRANCH,
+            min_file_count=TREE_STRESS_SMOKE_MIN_FILE_COUNT,
+            min_observable_node_count=TREE_STRESS_SMOKE_MIN_OBSERVABLE_NODES,
+            subtree_name="shared_files_tree_stress_1k",
         )
 
     manifest_path = resolved_root / MANIFEST_FILENAME
@@ -427,9 +461,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also materialize the 50k-file Shared Files tree-refresh stress subtree.",
     )
+    parser.add_argument(
+        "--include-tree-stress-smoke",
+        action="store_true",
+        help="Also materialize the 1k-file Shared Files tree-refresh smoke subtree.",
+    )
     args = parser.parse_args(argv)
 
-    manifest = ensure_fixture(args.root, include_tree_stress=args.include_tree_stress)
+    manifest = ensure_fixture(
+        args.root,
+        include_tree_stress=args.include_tree_stress,
+        include_tree_stress_smoke=args.include_tree_stress_smoke,
+    )
     print(f"Generated fixture root: {manifest['shared_root']}")
     print(f"Manifest: {manifest['manifest_path']}")
     for subtree_name, subtree in manifest["subtrees"].items():

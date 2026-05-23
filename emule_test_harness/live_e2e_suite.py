@@ -23,10 +23,19 @@ SHARED_FILES_UI_CORE_SCENARIOS = (
 SHARED_FILES_UI_STRESS_SCENARIOS = (
     "tree-refresh-stress-50k",
 )
+SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS = (
+    "tree-refresh-smoke-1k",
+)
+SHARED_FILES_UI_FULL_STRESS_SCENARIOS = SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS + SHARED_FILES_UI_STRESS_SCENARIOS
 SHARED_FILES_UI_ADMIN_SCENARIOS = (
     "monitored-folder-events-vhd",
 )
-SHARED_FILES_UI_SCENARIOS = SHARED_FILES_UI_CORE_SCENARIOS + SHARED_FILES_UI_STRESS_SCENARIOS + SHARED_FILES_UI_ADMIN_SCENARIOS
+SHARED_FILES_UI_SCENARIOS = (
+    SHARED_FILES_UI_CORE_SCENARIOS
+    + SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS
+    + SHARED_FILES_UI_STRESS_SCENARIOS
+    + SHARED_FILES_UI_ADMIN_SCENARIOS
+)
 CONFIG_STABILITY_UI_SCENARIOS = (
     "long-config-settings-roundtrip",
     "long-config-shared-stress",
@@ -468,6 +477,21 @@ PROFILE_SUITE_NAMES = {
         "local-dumps-crash-smoke",
         "amutorrent-browser-smoke",
     ),
+    "release-expanded-quick": (
+        "command-line-smoke",
+        "preference-ui",
+        "shared-files-ui",
+        "shared-hash-ui",
+        "shared-directories-rest",
+        "shared-cache-invalidation",
+        "unc-mapped-drive-identity",
+        "vhd-long-path-special-names",
+        "rest-api",
+        "disk-space-guard-live",
+        "vhd-partfile-recovery",
+        "admin-volume-cleanup-audit",
+        "rest-cold-start-dump-stress",
+    ),
     "stabilization-stress": (
         "shared-files-ui",
         "search-ui-live",
@@ -477,7 +501,18 @@ PROFILE_SUITE_NAMES = {
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
     ),
+    "stabilization-stress-quick": (
+        "shared-files-ui",
+        "search-ui-live",
+        "shared-directories-rest",
+        "rest-api",
+        "rest-cold-start-dump-stress",
+        "local-dumps-crash-smoke",
+    ),
     "cpu-heavy": (
+        "shared-files-ui",
+    ),
+    "cpu-heavy-quick": (
         "shared-files-ui",
     ),
     "ui-resource-depth": (
@@ -539,6 +574,41 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
     if args.profile == "controller-surface" and args.arr_download_proof_mode == DEFAULT_ARR_DOWNLOAD_PROOF_MODE:
         args.arr_download_proof_mode = CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
 
+    if args.profile == "release-expanded-quick":
+        args.admin_volume_fixtures = True
+        if not args.preference_ui_directories_tree_stress:
+            args.preference_ui_directories_tree_stress = True
+        if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
+            args.shared_files_ui_scenario = list(SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS)
+        if args.rest_coverage_budget == "contract":
+            args.rest_coverage_budget = "contract-stress"
+        if args.rest_stress_duration_seconds == 30.0:
+            args.rest_stress_duration_seconds = 15.0
+        if args.rest_stress_concurrency == 4:
+            args.rest_stress_concurrency = 2
+        if args.rest_stress_max_failures == 1:
+            args.rest_stress_max_failures = 0
+        if args.rest_socket_adversity_budget == "off":
+            args.rest_socket_adversity_budget = "smoke"
+        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
+            args.rest_tls_handshake_adversity_budget = "smoke"
+        if args.rest_leak_churn_budget == "off":
+            args.rest_leak_churn_budget = "smoke"
+        if args.rest_leak_churn_cycles is None:
+            args.rest_leak_churn_cycles = 1
+        if not args.rest_stop_start_after_churn:
+            args.rest_stop_start_after_churn = True
+        if args.rest_cold_start_dump_stress_waves == DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES:
+            args.rest_cold_start_dump_stress_waves = 1
+        if args.rest_cold_start_dump_stress_searches_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE:
+            args.rest_cold_start_dump_stress_searches_per_wave = 2
+        if args.rest_cold_start_dump_stress_max_concurrent_searches == DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES:
+            args.rest_cold_start_dump_stress_max_concurrent_searches = 2
+        if args.rest_cold_start_dump_stress_downloads_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE:
+            args.rest_cold_start_dump_stress_downloads_per_wave = 0
+        if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
+            args.rest_cold_start_dump_stress_post_drain_seconds = 5.0
+
     if args.profile == "release-expanded":
         args.admin_volume_fixtures = True
         if not args.preference_ui_directories_tree_stress:
@@ -586,7 +656,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
 
     if args.profile == "stabilization-stress":
         if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
-            args.shared_files_ui_scenario = list(SHARED_FILES_UI_STRESS_SCENARIOS)
+            args.shared_files_ui_scenario = list(SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
         if args.rest_coverage_budget == "contract":
             args.rest_coverage_budget = "contract-stress"
         if args.rest_stress_budget == "smoke":
@@ -636,11 +706,55 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         if args.search_ui_download_lifecycle_count == DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT:
             args.search_ui_download_lifecycle_count = STABILIZATION_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT
 
+    if args.profile == "stabilization-stress-quick":
+        if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
+            args.shared_files_ui_scenario = list(SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS)
+        if args.rest_coverage_budget == "contract":
+            args.rest_coverage_budget = "contract-stress"
+        if args.rest_stress_duration_seconds == 30.0:
+            args.rest_stress_duration_seconds = 15.0
+        if args.rest_stress_concurrency == 4:
+            args.rest_stress_concurrency = 2
+        if args.rest_stress_max_failures == 1:
+            args.rest_stress_max_failures = 0
+        if args.rest_socket_adversity_budget == "off":
+            args.rest_socket_adversity_budget = "smoke"
+        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
+            args.rest_tls_handshake_adversity_budget = "smoke"
+        if args.rest_leak_churn_budget == "off":
+            args.rest_leak_churn_budget = "smoke"
+        if args.rest_leak_churn_cycles is None:
+            args.rest_leak_churn_cycles = 1
+        if not args.rest_stop_start_after_churn:
+            args.rest_stop_start_after_churn = True
+        if args.rest_cold_start_dump_stress_waves == DEFAULT_REST_COLD_START_DUMP_STRESS_WAVES:
+            args.rest_cold_start_dump_stress_waves = 1
+        if args.rest_cold_start_dump_stress_searches_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE:
+            args.rest_cold_start_dump_stress_searches_per_wave = 2
+        if args.rest_cold_start_dump_stress_max_concurrent_searches == DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES:
+            args.rest_cold_start_dump_stress_max_concurrent_searches = 2
+        if args.rest_cold_start_dump_stress_downloads_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE:
+            args.rest_cold_start_dump_stress_downloads_per_wave = 20
+        if args.rest_cold_start_dump_stress_downloads_per_search == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_SEARCH:
+            args.rest_cold_start_dump_stress_downloads_per_search = 5
+        if args.rest_cold_start_dump_stress_synthetic_queue_fill_count == DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT:
+            args.rest_cold_start_dump_stress_synthetic_queue_fill_count = 25
+        if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
+            args.rest_cold_start_dump_stress_post_drain_seconds = 5.0
+
     if args.profile == "cpu-heavy":
         if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
-            args.shared_files_ui_scenario = list(SHARED_FILES_UI_STRESS_SCENARIOS)
+            args.shared_files_ui_scenario = list(SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
         if args.shared_files_tree_stress_churn_cycles is None:
             args.shared_files_tree_stress_churn_cycles = 80
+        args.shared_files_ui_cpu_profile = True
+        args.shared_files_ui_cpu_profile_stack = True
+
+    if args.profile == "cpu-heavy-quick":
+        if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
+            args.shared_files_ui_scenario = list(SHARED_FILES_UI_SMOKE_STRESS_SCENARIOS)
+        if args.shared_files_tree_stress_churn_cycles is None:
+            args.shared_files_tree_stress_churn_cycles = 8
         args.shared_files_ui_cpu_profile = True
         args.shared_files_ui_cpu_profile_stack = True
 
