@@ -54,6 +54,26 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
 
 
+def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = release_campaigns.load_release_campaign(root, "p2p-overlord-post-0.7.3")
+
+    assert release_campaigns.validate_release_campaign(campaign, template) == []
+    scenario_ids = {
+        scenario["id"]
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    }
+    covered_ids = {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        for scenario_id in gate["coveredBy"]
+    }
+    assert covered_ids <= scenario_ids
+    assert "emulebb.flow.p2p-overlord.rest.openapi-subset.v1" in scenario_ids
+
+
 def test_campaign_validation_warns_for_unmapped_gate() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)

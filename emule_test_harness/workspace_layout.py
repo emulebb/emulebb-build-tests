@@ -25,6 +25,7 @@ class WorkspaceManifest:
 
     seed_repo_path: Path | None
     variants: tuple[AppVariant, ...]
+    repos: dict[str, Path]
 
 
 def get_emule_workspace_root(test_repo_root: Path) -> Path:
@@ -47,7 +48,7 @@ def load_workspace_manifest(workspace_root: Path) -> WorkspaceManifest:
 
     manifest_path = workspace_root.resolve() / "deps.json"
     if not manifest_path.is_file():
-        return WorkspaceManifest(seed_repo_path=None, variants=())
+        return WorkspaceManifest(seed_repo_path=None, variants=(), repos={})
 
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     workspace = payload.get("workspace", {})
@@ -58,7 +59,23 @@ def load_workspace_manifest(workspace_root: Path) -> WorkspaceManifest:
         AppVariant(name=str(raw["name"]), path=Path(str(raw["path"])))
         for raw in app_repo.get("variants", [])
     )
-    return WorkspaceManifest(seed_repo_path=Path(seed_repo_path) if seed_repo_path else None, variants=variants)
+    repos = {
+        str(key): Path(str(value))
+        for key, value in workspace.get("repos", {}).items()
+        if isinstance(value, str) and value
+    }
+    return WorkspaceManifest(seed_repo_path=Path(seed_repo_path) if seed_repo_path else None, variants=variants, repos=repos)
+
+
+def resolve_workspace_repo(workspace_root: Path, repo_key: str) -> Path:
+    """Resolves one repository path from the generated workspace manifest."""
+
+    resolved_workspace_root = workspace_root.resolve()
+    manifest = load_workspace_manifest(resolved_workspace_root)
+    repo_path = manifest.repos.get(repo_key)
+    if repo_path is None:
+        raise RuntimeError(f"Workspace manifest does not define workspace.repos.{repo_key}.")
+    return (resolved_workspace_root / repo_path).resolve()
 
 
 def resolve_workspace_app_root(

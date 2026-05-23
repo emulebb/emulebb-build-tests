@@ -1,0 +1,176 @@
+{
+  "schemaVersion": "emule-build-tests.release-campaign.v1",
+  "kind": "instance",
+  "templateId": "emulebb.release.template.default.v1",
+  "campaignId": "p2p-overlord-post-0.7.3",
+  "releaseVersion": "post-0.7.3",
+  "title": "p2p-overlord product-family campaign",
+  "description": "Future shared campaign instance for the eMuleBB-owned p2p-overlord agents and backend.",
+  "phases": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.p2p-overlord.workspace.materialization.v1",
+          "title": "p2p-overlord repos materialize from the eMuleBB org",
+          "phase": "preflight",
+          "flowCategory": "workspace-policy",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace sync",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Workspace deps.json contains p2p_overlord_agents and p2p_overlord_be, both resolving to eMulebb-owned repositories."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.p2p-overlord.quality.toolchains.v1",
+          "title": "p2p-overlord Rust and backend quality gates",
+          "phase": "preflight",
+          "flowCategory": "python-harness",
+          "required": true,
+          "blocking": true,
+          "command": "cargo fmt --all --check; cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all -W clippy::too_many_arguments -W clippy::type_complexity -W clippy::cognitive_complexity; npm run quality",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Run from p2p-overlord-agents and p2p-overlord-be after a concrete integration slice exists."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "protocol-parity",
+      "title": "Protocol parity",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.p2p-overlord.protocol.kad-ed2k-parity.v1",
+          "title": "p2p-overlord ED2K/Kad agent parity",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "manual",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Future Rust agent parity evidence must compare against stock eMuleBB/eMule behavior and use goed2k-server for deterministic ED2K server scenarios."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "controller-surface",
+      "title": "Controller surface",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.p2p-overlord.rest.openapi-subset.v1",
+          "title": "p2p-overlord claimed REST subset conforms to OpenAPI",
+          "phase": "controller-surface",
+          "flowCategory": "rest-api",
+          "required": true,
+          "blocking": true,
+          "command": "manual",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Future conformance runner must load repos.eMule-tooling/docs/rest/REST-API-OPENAPI.yaml and fail drift in any claimed p2p-overlord /api/v1 route."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-wire-release",
+      "title": "Live-wire release",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.p2p-overlord.longrun.live-wire.v1",
+          "title": "p2p-overlord long-run live-wire monitoring",
+          "phase": "live-wire-release",
+          "flowCategory": "live-wire",
+          "required": false,
+          "blocking": false,
+          "command": "manual",
+          "localInputs": [
+            "operator-owned live-wire terms and profile roots stay in ignored local files"
+          ],
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": false,
+              "description": "Long-running p2p-overlord agent/backend monitoring should reuse eMuleBB evidence structure without committing live data."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ui-resource-depth",
+      "title": "UI resource depth",
+      "scenarios": []
+    },
+    {
+      "id": "stabilization-stress",
+      "title": "Stabilization stress",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.p2p-overlord.resource.stress.v1",
+          "title": "p2p-overlord CPU and memory stress",
+          "phase": "stabilization-stress",
+          "flowCategory": "stress",
+          "required": false,
+          "blocking": false,
+          "command": "manual",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": false,
+              "description": "Future resource runs should collect CPU, memory, handles, and REST counters separately from UMDH memory runs."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "packaging-provenance",
+      "title": "Packaging provenance",
+      "scenarios": []
+    }
+  ],
+  "releaseGates": [
+    {
+      "id": "p2p-overlord-workspace-materialization",
+      "coveredBy": [
+        "emulebb.flow.p2p-overlord.workspace.materialization.v1"
+      ]
+    },
+    {
+      "id": "p2p-overlord-quality",
+      "coveredBy": [
+        "emulebb.flow.p2p-overlord.quality.toolchains.v1"
+      ]
+    },
+    {
+      "id": "p2p-overlord-protocol-parity",
+      "coveredBy": [
+        "emulebb.flow.p2p-overlord.protocol.kad-ed2k-parity.v1"
+      ]
+    },
+    {
+      "id": "p2p-overlord-rest-conformance",
+      "coveredBy": [
+        "emulebb.flow.p2p-overlord.rest.openapi-subset.v1"
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ from pathlib import Path
 from emule_test_harness.workspace_layout import (
     get_default_workspace_root,
     load_workspace_manifest,
+    resolve_workspace_repo,
     resolve_workspace_app_root,
 )
 
@@ -30,6 +31,10 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
         { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
         { "name": "community", "path": "app\\\\eMule-community-baseline", "branch": "baseline/community-0.72a" }
       ]
+    },
+    "repos": {
+      "tooling": "..\\\\..\\\\repos\\\\eMule-tooling",
+      "p2p_overlord_agents": "..\\\\..\\\\repos\\\\p2p-overlord-agents"
     }
   }
 }
@@ -44,6 +49,28 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
         ("main", Path("app\\eMule-main")),
         ("community", Path("app\\eMule-community-baseline")),
     ]
+    assert manifest.repos["tooling"] == Path("..\\..\\repos\\eMule-tooling")
+    assert manifest.repos["p2p_overlord_agents"] == Path("..\\..\\repos\\p2p-overlord-agents")
+
+
+def test_resolve_workspace_repo_uses_manifest_repo_map(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    workspace_root.mkdir(parents=True)
+    (workspace_root / "deps.json").write_text(
+        """{
+  "workspace": {
+    "repos": {
+      "p2p_overlord_be": "..\\\\..\\\\repos\\\\p2p-overlord-be"
+    }
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    assert resolve_workspace_repo(workspace_root, "p2p_overlord_be") == (
+        tmp_path / "repos" / "p2p-overlord-be"
+    ).resolve()
 
 
 def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path: Path) -> None:
