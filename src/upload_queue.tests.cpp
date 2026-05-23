@@ -29,6 +29,7 @@ TEST_CASE("Upload queue timer diagnostics count only loops slower than the inter
 
 TEST_CASE("Upload queue presentation cadence is owned by the transfer display timer")
 {
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(0u) == 0u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(500u) == 500u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(2000u) == 2000u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(10000u) == 10000u);

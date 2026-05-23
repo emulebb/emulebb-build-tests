@@ -45,19 +45,21 @@ TEST_CASE("Display refresh helper respects force and the randomized throttle win
 
 TEST_CASE("Desktop UI refresh intervals use the supported System Informer values")
 {
+	CHECK(NormalizeDesktopUiRefreshIntervalMs(0u) == 0u);
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(500u) == 500u);
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(1000u) == 1000u);
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(2000u) == 2000u);
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(5000u) == 5000u);
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(10000u) == 10000u);
 
-	CHECK(NormalizeDesktopUiRefreshIntervalMs(0u) == 2000u);
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(750u) == 2000u);
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(60000u) == 2000u);
 }
 
 TEST_CASE("Desktop UI refresh intervals throttle non-forced list refreshes")
 {
+	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 10100u, 100u, 0u));
+	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(true, 101u, 100u, 0u));
 	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 599u, 100u, 500u));
 	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(false, 600u, 100u, 500u));
 	CHECK_FALSE(ShouldRunPreferenceAlignedDisplayRefresh(false, 1099u, 100u, 1000u));
@@ -76,6 +78,7 @@ TEST_CASE("Desktop UI refresh intervals throttle non-forced list refreshes")
 
 TEST_CASE("Transfer display timer uses the normalized desktop refresh cadence")
 {
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(0u) == 0u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(500u) == 500u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(1000u) == 1000u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(2000u) == 2000u);
@@ -86,12 +89,21 @@ TEST_CASE("Transfer display timer uses the normalized desktop refresh cadence")
 
 TEST_CASE("Transfer display refresh state pauses when the UI should not present updates")
 {
-	CHECK(ResolveTransferDisplayRefreshState(false, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_RUNNING);
-	CHECK(ResolveTransferDisplayRefreshState(true, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, false, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, true, false, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, true, true, true, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, true, true, false, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_RUNNING);
+	CHECK(ResolveTransferDisplayRefreshState(true, false, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, true, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, false, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, false, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, true, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, false, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+}
+
+TEST_CASE("Transfer-rate presentation remains lightweight and visible-window scoped")
+{
+	CHECK(GetTransferRateDisplayRefreshTimerDelayMs() == 1000u);
+	CHECK(ShouldRefreshTransferRatePresentation(false, true));
+	CHECK_FALSE(ShouldRefreshTransferRatePresentation(true, true));
+	CHECK_FALSE(ShouldRefreshTransferRatePresentation(false, false));
 }
 
 TEST_CASE("Transfer display mask keeps hidden-list work pending")
