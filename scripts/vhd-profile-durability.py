@@ -154,6 +154,7 @@ def run_first_launch_and_crash(
         shared_dirs=[live_common.win_path(shared_dir, trailing_slash=True)],
         scenario_id="mounted-profile",
     )
+    profile["expected_shared_files"] = int(shared_tree.get("file_count", 0) or 0)
     rest_smoke.configure_webserver_profile(
         Path(str(profile["config_dir"])),
         paths.app_exe,
@@ -190,7 +191,13 @@ def run_first_launch_and_crash(
             require_startup_profile=True,
             wait_for_shared_hashing_done=True,
         )
-        startup_profiles.wait_for_shared_cache(shared_cache_path)
+        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+            shared_cache_path,
+            expected_known_records=int(shared_tree.get("file_count", 0) or 0),
+            base_url=base_url,
+            api_key=API_KEY,
+            require_rest_status=True,
+        )
         summary["pre_crash_files"] = collect_durability_file_states(profile)
         summary["trigger_crash"] = crash_smoke.trigger_crash(base_url, API_KEY, args.request_timeout_seconds)
         summary["process_exit"] = crash_smoke.wait_for_process_access_violation(process_id, args.crash_timeout_seconds)
@@ -246,7 +253,10 @@ def run_remounted_relaunch(
             require_startup_profile=True,
             wait_for_shared_hashing_done=True,
         )
-        startup_profiles.wait_for_shared_cache(shared_cache_path)
+        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+            shared_cache_path,
+            expected_known_records=int(profile.get("expected_shared_files", 0) or 0),
+        )
         rest_smoke.close_app_cleanly(app)
         app = None
         summary["post_relaunch_files"] = collect_durability_file_states(profile)

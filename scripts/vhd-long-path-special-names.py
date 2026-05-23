@@ -279,7 +279,10 @@ def run_launch_phase(
             require_startup_profile=True,
             wait_for_shared_hashing_done=True,
         )
-        startup_profiles.wait_for_shared_cache(shared_cache_path)
+        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+            shared_cache_path,
+            expected_known_records=expected_files,
+        )
         summary["counter_snapshot"] = build_counter_snapshot(summary)
         summary["shared_cache_after"] = cache_file_state(shared_cache_path)
         errors = assert_counter_state(

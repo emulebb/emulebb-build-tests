@@ -3213,7 +3213,14 @@ def run_duplicate_startup_reuse_e2e(
             raise RuntimeError(f"Unexpected duplicate cache version: {duplicate_cache_header['version']}")
 
         shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
+        known_met_path = Path(str(fixture["config_dir"])) / "known.met"
         summary["shared_cache_path"] = str(shared_cache_path)
+        summary["known_met_path"] = str(known_met_path)
+        summary["first_launch_known_met_persisted"] = wait_for_known_met_records(
+            known_met_path,
+            1,
+            description="duplicate startup known.met persistence",
+        )
         if not shared_cache_path.exists():
             raise RuntimeError("Expected sharedcache.dat to exist after the first launch warm-up.")
         shared_cache_path.unlink()

@@ -179,7 +179,10 @@ def run_profile_case(
             require_startup_profile=True,
             wait_for_shared_hashing_done=True,
         )
-        startup_profiles.wait_for_shared_cache(shared_cache_path)
+        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+            shared_cache_path,
+            expected_known_records=int(tree_summary.get("file_count", 0) or 0),
+        )
         live_common.close_app_cleanly(app)
         app = None
         rows = profile_path_rows(profile, extra_paths)

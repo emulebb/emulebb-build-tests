@@ -290,7 +290,10 @@ def run_cache_probe(
             require_startup_profile=True,
             wait_for_shared_hashing_done=True,
         )
-        startup_profiles.wait_for_shared_cache(shared_cache_path)
+        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+            shared_cache_path,
+            expected_known_records=expected_files,
+        )
         summary["first_launch"] = first_summary
         summary["shared_cache_first_launch"] = cache_file_state(shared_cache_path)
         live_common.close_app_cleanly(app)

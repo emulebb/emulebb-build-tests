@@ -195,7 +195,10 @@ def run_launch_phase(
             require_startup_profile=True,
             wait_for_shared_hashing_done=True,
         )
-        startup_profiles.wait_for_shared_cache(shared_cache_path)
+        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+            shared_cache_path,
+            expected_known_records=expected_shared_files,
+        )
         cache_before = summary["shared_cache_before"]
         if wait_for_cache_refresh and isinstance(cache_before, dict) and cache_before.get("mtime") is not None:
             before_mtime = float(cache_before["mtime"])

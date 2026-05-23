@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
+import struct
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import win32con
@@ -324,15 +327,130 @@ def build_comparison(left: dict[str, object], right: dict[str, object]) -> dict[
     return result
 
 
-def wait_for_shared_cache(path: Path, *, timeout: float = WARM_RELAUNCH_SHARED_CACHE_TIMEOUT_SECONDS) -> None:
-    """Waits until `sharedcache.dat` exists for one warmed profile run."""
+def get_file_state(path: Path) -> dict[str, object]:
+    """Returns a compact state snapshot for a profile sidecar file."""
 
-    live_common.wait_for(
-        lambda: path.exists(),
-        timeout=timeout,
-        interval=0.25,
-        description="shared startup cache persistence",
+    if not path.exists():
+        return {"exists": False}
+    stat = path.stat()
+    return {
+        "exists": True,
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "mtime": stat.st_mtime,
+    }
+
+
+def read_known_met_record_count(path: Path) -> int | None:
+    """Reads the known.met record-count header without parsing file records."""
+
+    if not path.exists() or path.stat().st_size < 5:
+        return None
+    with path.open("rb") as handle:
+        handle.read(1)
+        return struct.unpack("<I", handle.read(4))[0]
+
+
+def unwrap_rest_payload(payload: object) -> object:
+    """Returns the payload body inside the public REST envelope."""
+
+    if isinstance(payload, dict) and "data" in payload and "meta" in payload:
+        return payload["data"]
+    return payload
+
+
+def get_rest_status_model(base_url: str, api_key: str, *, timeout_seconds: float = 5.0) -> dict[str, object]:
+    """Reads the status REST model from a live eMule process."""
+
+    request = urllib.request.Request(base_url + "/api/v1/status", headers={"X-API-Key": api_key}, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        payload = json.loads(body)
+    model = unwrap_rest_payload(payload)
+    if not isinstance(model, dict):
+        raise RuntimeError(f"Expected status JSON object, got {model!r}.")
+    return model
+
+
+def get_rest_shared_startup_cache_status(base_url: str, api_key: str) -> dict[str, object]:
+    """Reads shared startup-cache diagnostics from the status REST model."""
+
+    status_model = get_rest_status_model(base_url, api_key)
+    status = status_model.get("sharedStartupCache")
+    if not isinstance(status, dict):
+        raise RuntimeError(f"Expected sharedStartupCache JSON object, got {status!r}.")
+    return status
+
+
+def is_shared_startup_cache_idle_clean(status: dict[str, object]) -> bool:
+    """Reports whether the live app says shared startup-cache persistence is settled."""
+
+    save = status.get("save")
+    if not isinstance(save, dict):
+        return False
+    return (
+        status.get("available") is True
+        and status.get("ready") is True
+        and status.get("hashingCount") == 0
+        and status.get("deferredHashingActive") is False
+        and status.get("interruptedHashingInvalidatedCache") is False
+        and save.get("running") is False
+        and save.get("dirty") is False
+        and save.get("phase") == "idle"
     )
+
+
+def wait_for_shared_cache(
+    path: Path,
+    *,
+    expected_known_records: int | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    require_rest_status: bool = False,
+    timeout: float = WARM_RELAUNCH_SHARED_CACHE_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Waits until warm shared-cache dependencies are ready for relaunch reuse."""
+
+    known_met_path = path.parent / "known.met"
+    last_state: dict[str, object] = {}
+
+    def resolve() -> dict[str, object] | None:
+        nonlocal last_state
+        cache_state = get_file_state(path)
+        known_state = get_file_state(known_met_path)
+        known_records = read_known_met_record_count(known_met_path)
+        rest_status = None
+        if base_url is not None and api_key is not None:
+            rest_status = get_rest_shared_startup_cache_status(base_url, api_key)
+
+        expected_records = 0 if expected_known_records is None else expected_known_records
+        cache_ready = cache_state.get("exists") is True and int(cache_state.get("size", 0)) > 0
+        known_ready = expected_records <= 0 or (known_records is not None and known_records >= expected_records)
+        rest_ready = (
+            is_shared_startup_cache_idle_clean(rest_status)
+            if rest_status is not None
+            else not require_rest_status
+        )
+        last_state = {
+            "shared_cache": cache_state,
+            "known_met": known_state,
+            "known_met_record_count": known_records,
+            "expected_known_records": expected_known_records,
+            "shared_startup_cache": rest_status,
+        }
+        if cache_ready and known_ready and rest_ready:
+            return dict(last_state)
+        return None
+
+    try:
+        return live_common.wait_for(
+            resolve,
+            timeout=timeout,
+            interval=0.25,
+            description="shared startup cache dependency persistence",
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} Last shared cache dependency state: {last_state!r}") from exc
 
 
 def collect_startup_profile_metrics(
@@ -469,8 +587,10 @@ def run_scenario(
         if warm_relaunch:
             shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
             summary["shared_cache_path"] = str(shared_cache_path)
-            wait_for_shared_cache(shared_cache_path)
-            summary["shared_cache_ready_before_relaunch"] = True
+            summary["shared_cache_ready_before_relaunch"] = wait_for_shared_cache(
+                shared_cache_path,
+                expected_known_records=int(scenario["tree_summary"].get("file_count", 0) or 0),
+            )
 
             first_launch_trace_artifact = scenario_dir / "startup-profile-first-launch.trace.json"
             first_launch_trace_artifact.write_bytes(Path(str(fixture["startup_profile_path"])).read_bytes())
