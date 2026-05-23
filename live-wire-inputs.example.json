@@ -1,5 +1,5 @@
 {
-  "schema": "emule-build-tests.live-wire-inputs.v1",
+  "schema": "emulebb-build-tests.live-wire-inputs.v1",
   "search_terms": {
     "generic_open": [
       "linux",

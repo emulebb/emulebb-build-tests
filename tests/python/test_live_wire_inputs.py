@@ -92,6 +92,15 @@ def test_parse_live_wire_inputs_keeps_media_corpus_optional() -> None:
     assert inputs.video_roots == ()
 
 
+def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> None:
+    old_payload = payload()
+    old_payload["schema"] = live_wire_inputs.LEGACY_SCHEMAS[0]
+
+    inputs = live_wire_inputs.parse_live_wire_inputs(old_payload)
+
+    assert inputs.generic_open_terms == ("linux", "ubuntu")
+
+
 def test_select_daily_and_redaction_are_deterministic() -> None:
     items = ("a", "b", "c")
     index, selected = live_wire_inputs.select_daily(items, today=dt.date(2026, 5, 4))
@@ -136,6 +145,7 @@ def test_update_live_wire_bootstrap_inputs_replaces_placeholders(tmp_path: Path)
         "bootstrap_hash_count": 1,
         "direct_row_count": 1,
     }
+    assert updated["schema"] == live_wire_inputs.SCHEMA
     assert updated["search_terms"] == update_payload["search_terms"]
     assert updated["auto_browse"]["bootstrap_transfer_hashes"] == ["abcdef0123456789abcdef0123456789"]
     assert updated["auto_browse"]["direct_bootstrap_transfers"] == [

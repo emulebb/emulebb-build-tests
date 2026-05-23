@@ -1,5 +1,5 @@
 {
-  "schema": "emule-build-tests.release-live-wire-golden.v1",
+  "schema": "emulebb-build-tests.release-live-wire-golden.v1",
   "seed_sources": {
     "home_url": "https://emule-security.org/",
     "files": [
@@ -18,7 +18,7 @@
     ]
   },
   "operator_runtime_inputs": {
-    "schema": "emule-build-tests.live-wire-inputs.v1",
+    "schema": "emulebb-build-tests.live-wire-inputs.v1",
     "default_file": "live-wire-inputs.local.json",
     "example_file": "live-wire-inputs.example.json"
   },

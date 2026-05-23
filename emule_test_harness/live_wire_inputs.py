@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "emule-build-tests.live-wire-inputs.v1"
+SCHEMA = "emulebb-build-tests.live-wire-inputs.v1"
+LEGACY_SCHEMAS = ("emule-build-tests.live-wire-inputs.v1",)
 DEFAULT_INPUTS_FILE_NAME = "live-wire-inputs.local.json"
 HASH_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 PLACEHOLDER_HASH = "0123456789abcdef0123456789abcdef"
@@ -77,7 +78,7 @@ def load_live_wire_inputs_payload(path: Path) -> dict[str, Any]:
 def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None) -> LiveWireInputs:
     """Validates one live-wire input payload and returns normalized values."""
 
-    if payload.get("schema") != SCHEMA:
+    if payload.get("schema") not in (SCHEMA, *LEGACY_SCHEMAS):
         raise RuntimeError(f"Live-wire inputs schema must be {SCHEMA!r}.")
     search_terms = require_object(payload, "search_terms")
     auto_browse = require_object(payload, "auto_browse")
@@ -219,6 +220,7 @@ def merge_live_wire_bootstrap_result(payload: dict[str, Any], result_row: dict[s
     """Merges one selected live result into the auto-browse bootstrap inputs."""
 
     parse_live_wire_inputs(payload)
+    payload["schema"] = SCHEMA
     auto_browse = require_object(payload, "auto_browse")
     direct_row = build_direct_bootstrap_transfer(result_row)
     transfer_hash = str(direct_row["hash"])

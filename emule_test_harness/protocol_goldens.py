@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-GOLDEN_SCHEMA_VERSION = "emule-build-tests.protocol-oracle-golden.v1"
+GOLDEN_SCHEMA_VERSION = "emulebb-build-tests.protocol-oracle-golden.v1"
 SENSITIVE_FIELD_NAMES = {
     "decoded_hex",
     "payload_hex",

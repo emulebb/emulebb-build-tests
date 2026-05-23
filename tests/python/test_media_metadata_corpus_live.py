@@ -31,6 +31,12 @@ def test_discover_video_files_recurses_supported_extensions(tmp_path: Path) -> N
     assert module.discover_video_files((root,)) == [keep.resolve()]
 
 
+def test_media_metadata_report_schema_uses_emulebb_namespace() -> None:
+    module = load_module()
+
+    assert module.REPORT_SCHEMA == "emulebb-build-tests.media-metadata-corpus.v1"
+
+
 def test_corpus_summary_tracks_failures_and_divergences() -> None:
     module = load_module()
 

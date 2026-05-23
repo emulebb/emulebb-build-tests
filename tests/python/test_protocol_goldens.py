@@ -9,6 +9,7 @@ from emule_test_harness.protocol_goldens import (
     build_dumpcap_command,
     compare_record_sets,
     default_golden_path,
+    GOLDEN_SCHEMA_VERSION,
     normalize_ed2k_records,
     normalize_udp_records,
     pcap_tool_status,
@@ -29,7 +30,7 @@ def test_protocol_oracle_manifest_rejects_raw_capture_fields(tmp_path: Path) -> 
     manifest.write_text(
         json.dumps(
             {
-                "schemaVersion": "emule-build-tests.protocol-oracle-golden.v1",
+                "schemaVersion": GOLDEN_SCHEMA_VERSION,
                 "scenarios": [{"scenarioId": "kad.example.v1", "protocol": "kad2"}],
                 "records": [
                     {
@@ -58,7 +59,7 @@ def test_protocol_oracle_manifest_rejects_unredacted_ipv4(tmp_path: Path) -> Non
     manifest.write_text(
         json.dumps(
             {
-                "schemaVersion": "emule-build-tests.protocol-oracle-golden.v1",
+                "schemaVersion": GOLDEN_SCHEMA_VERSION,
                 "scenarios": [{"scenarioId": "ed2k.example.v1", "protocol": "ed2k"}],
                 "records": [
                     {
@@ -173,7 +174,7 @@ def test_normalize_cli_writes_manifest(tmp_path: Path) -> None:
     assert run_normalize_cli(["--scenario-id", "kad.cli.v1", "--udp-jsonl", str(udp_jsonl), "--output", str(output)]) == 0
 
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schemaVersion"] == "emule-build-tests.protocol-oracle-golden.v1"
+    assert payload["schemaVersion"] == GOLDEN_SCHEMA_VERSION
     assert payload["records"][0]["opcodeName"] == "KADEMLIA2_HELLO_REQ"
 
 
@@ -181,7 +182,7 @@ def test_compare_cli_detects_manifest_drift(tmp_path: Path) -> None:
     left = tmp_path / "left.json"
     right = tmp_path / "right.json"
     payload = {
-        "schemaVersion": "emule-build-tests.protocol-oracle-golden.v1",
+        "schemaVersion": GOLDEN_SCHEMA_VERSION,
         "records": [{"scenarioId": "a", "recordType": "udp-packet"}],
     }
     left.write_text(json.dumps(payload), encoding="utf-8")

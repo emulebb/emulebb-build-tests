@@ -14,6 +14,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = REPO_ROOT.parents[1]
+REPORT_SCHEMA = "emulebb-build-tests.media-metadata-corpus.v1"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -187,7 +188,7 @@ def run(args: argparse.Namespace) -> int:
             break
 
     report = {
-        "schema": "emule-build-tests.media-metadata-corpus.v1",
+        "schema": REPORT_SCHEMA,
         "createdUtc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "liveWireInputs": {
             "path": str(inputs.path),

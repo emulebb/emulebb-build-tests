@@ -157,5 +157,5 @@
       "source": "tracing-harness"
     }
   ],
-  "schemaVersion": "emule-build-tests.protocol-oracle-golden.v1"
+  "schemaVersion": "emulebb-build-tests.protocol-oracle-golden.v1"
 }
