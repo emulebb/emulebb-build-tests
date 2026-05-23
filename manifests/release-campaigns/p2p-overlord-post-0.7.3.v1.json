@@ -6,6 +6,7 @@
   "releaseVersion": "post-0.7.3",
   "title": "p2p-overlord product-family campaign",
   "description": "Future shared campaign instance for the eMuleBB-owned p2p-overlord agents and backend.",
+  "proofTier": "future",
   "phases": [
     {
       "id": "preflight",

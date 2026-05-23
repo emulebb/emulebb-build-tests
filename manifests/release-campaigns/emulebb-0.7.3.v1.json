@@ -4,8 +4,9 @@
   "templateId": "emulebb.release.template.default.v1",
   "campaignId": "emulebb-0.7.3",
   "releaseVersion": "0.7.3-rc.1",
-  "title": "eMuleBB 0.7.3-rc.1 release campaign",
-  "description": "First concrete release instance for the eMuleBB-owned campaign model.",
+  "title": "eMuleBB 0.7.3-rc.1 quick release campaign",
+  "description": "Repeatable RC-blocking campaign for package readiness. Uses bounded quick live/stress profiles plus targeted controller and aMuTorrent proof; full overnight soak is tracked by emulebb-0.7.3-overnight.",
+  "proofTier": "rc-blocking-quick",
   "phases": [
     {
       "id": "preflight",

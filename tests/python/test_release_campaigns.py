@@ -52,6 +52,28 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
     }
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
+    assert campaign["proofTier"] == "rc-blocking-quick"
+
+
+def test_073_overnight_campaign_validates_and_covers_all_release_gates() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = release_campaigns.load_release_campaign(root, "emulebb-0.7.3-overnight")
+
+    assert release_campaigns.validate_release_campaign(campaign, template) == []
+    scenario_ids = {
+        scenario["id"]
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    }
+    covered_ids = {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        for scenario_id in gate["coveredBy"]
+    }
+    assert covered_ids <= scenario_ids
+    assert campaign["proofTier"] == "overnight-full"
+    assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
 
 
 def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
@@ -152,6 +174,7 @@ def test_terminal_report_contains_phase_status_and_warning(tmp_path: Path) -> No
     text = release_campaigns.format_release_campaign_report(report)
 
     assert "packaging-provenance" in text
+    assert "Proof tier: rc-blocking-quick" in text
     assert "emulebb.flow.package.core.x64.v1" in text
     assert "missing required evidence" in text
 

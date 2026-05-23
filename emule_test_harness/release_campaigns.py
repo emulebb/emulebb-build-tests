@@ -190,6 +190,9 @@ def build_release_campaign_report(
         "campaignId": campaign["campaignId"],
         "templateId": campaign["templateId"],
         "releaseVersion": campaign.get("releaseVersion", ""),
+        "title": campaign.get("title", ""),
+        "description": campaign.get("description", ""),
+        "proofTier": campaign.get("proofTier", ""),
         "phase": phase_id or "",
         "statusPolicy": "warn-only",
         "warnings": warnings,
@@ -214,7 +217,9 @@ def format_release_campaign_report(report: dict[str, Any]) -> str:
 
     lines = [
         f"Campaign: {report['campaignId']}",
+        f"Title: {report.get('title') or report['campaignId']}",
         f"Release: {report.get('releaseVersion') or 'generic'}",
+        f"Proof tier: {report.get('proofTier') or 'unspecified'}",
         f"Status policy: {report['statusPolicy']}",
         "",
         "Phase                  Req  Status            Scenario",

@@ -28,6 +28,19 @@
     "releaseVersion": {
       "type": "string"
     },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "proofTier": {
+      "enum": [
+        "rc-blocking-quick",
+        "overnight-full",
+        "future"
+      ]
+    },
     "taxonomy": {
       "type": "object"
     },

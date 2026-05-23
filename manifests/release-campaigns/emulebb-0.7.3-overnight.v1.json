@@ -1,0 +1,141 @@
+{
+  "schemaVersion": "emule-build-tests.release-campaign.v1",
+  "kind": "instance",
+  "templateId": "emulebb.release.template.default.v1",
+  "campaignId": "emulebb-0.7.3-overnight",
+  "releaseVersion": "0.7.3-rc.1",
+  "title": "eMuleBB 0.7.3-rc.1 full overnight campaign",
+  "description": "Long-form overnight and soak campaign. Runs full certification, full generated CPU-heavy stress, and the operator-owned real live profile monitor.",
+  "proofTier": "overnight-full",
+  "phases": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.overnight.certification.full.v1",
+          "title": "Full overnight certification matrix",
+          "phase": "preflight",
+          "flowCategory": "certification",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test certification --profile overnight",
+          "localInputs": [
+            "live-wire-inputs.local.json",
+            "radarr movie root",
+            "sonarr series root"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "certification/*-overnight/certification-result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "protocol-parity",
+      "title": "Protocol parity",
+      "scenarios": []
+    },
+    {
+      "id": "controller-surface",
+      "title": "Controller surface",
+      "scenarios": []
+    },
+    {
+      "id": "live-wire-release",
+      "title": "Live-wire release",
+      "scenarios": []
+    },
+    {
+      "id": "ui-resource-depth",
+      "title": "UI resource depth",
+      "scenarios": []
+    },
+    {
+      "id": "stabilization-stress",
+      "title": "Stabilization stress",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.overnight.cpu-heavy.full.v1",
+          "title": "Full generated CPU-heavy shared-files stress",
+          "phase": "stabilization-stress",
+          "flowCategory": "stress",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile cpu-heavy --fail-fast",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "cpu-heavy"
+              }
+            },
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.overnight.real-profile.monitor.v1",
+          "title": "Operator real-profile long-run monitor",
+          "phase": "stabilization-stress",
+          "flowCategory": "stress",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --suite live-process-monitor --fail-fast",
+          "localInputs": [
+            "live-process-monitor.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/live-process-monitor/latest/live-process-monitor-result.json",
+              "statusPointer": "/status"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "packaging-provenance",
+      "title": "Packaging provenance",
+      "scenarios": []
+    }
+  ],
+  "releaseGates": [
+    {
+      "id": "overnight-certification-full",
+      "coveredBy": [
+        "emulebb.flow.overnight.certification.full.v1"
+      ]
+    },
+    {
+      "id": "overnight-cpu-heavy-full",
+      "coveredBy": [
+        "emulebb.flow.overnight.cpu-heavy.full.v1"
+      ]
+    },
+    {
+      "id": "overnight-real-profile-monitor",
+      "coveredBy": [
+        "emulebb.flow.overnight.real-profile.monitor.v1"
+      ]
+    }
+  ]
+}
