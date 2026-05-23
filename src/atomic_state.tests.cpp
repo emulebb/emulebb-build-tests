@@ -84,6 +84,16 @@ TEST_CASE("Transfer display timer uses the normalized desktop refresh cadence")
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(750u) == 2000u);
 }
 
+TEST_CASE("Transfer display refresh state pauses when the UI should not present updates")
+{
+	CHECK(ResolveTransferDisplayRefreshState(false, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_RUNNING);
+	CHECK(ResolveTransferDisplayRefreshState(true, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, true, false, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, true, true, true, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, true, true, false, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+}
+
 TEST_CASE("Transfer display mask keeps hidden-list work pending")
 {
 	const uint32_t allTransferLists =
@@ -94,11 +104,13 @@ TEST_CASE("Transfer display mask keeps hidden-list work pending")
 		| DISPLAY_REFRESH_CLIENT_LIST
 		| DISPLAY_REFRESH_TRANSFER_SUMMARY;
 
-	CHECK(FilterVisibleTransferDisplayRefreshMask(allTransferLists, false, true, true, true, true, true, true) == DISPLAY_REFRESH_NONE);
-	CHECK(FilterVisibleTransferDisplayRefreshMask(allTransferLists, true, false, true, true, true, true, true) == DISPLAY_REFRESH_NONE);
+	CHECK(FilterVisibleTransferDisplayRefreshMask(allTransferLists, TRANSFER_DISPLAY_REFRESH_PAUSED, true, true, true, true, true, true, true) == DISPLAY_REFRESH_NONE);
+	CHECK(FilterVisibleTransferDisplayRefreshMask(allTransferLists, TRANSFER_DISPLAY_REFRESH_RUNNING, false, true, true, true, true, true, true) == DISPLAY_REFRESH_NONE);
+	CHECK(FilterVisibleTransferDisplayRefreshMask(allTransferLists, TRANSFER_DISPLAY_REFRESH_RUNNING, true, false, true, true, true, true, true) == DISPLAY_REFRESH_NONE);
 
 	const uint32_t onlyDownloadsVisible = FilterVisibleTransferDisplayRefreshMask(
 		allTransferLists,
+		TRANSFER_DISPLAY_REFRESH_RUNNING,
 		true,
 		true,
 		true,
@@ -110,6 +122,7 @@ TEST_CASE("Transfer display mask keeps hidden-list work pending")
 
 	const uint32_t secondaryPaneVisible = FilterVisibleTransferDisplayRefreshMask(
 		allTransferLists,
+		TRANSFER_DISPLAY_REFRESH_RUNNING,
 		true,
 		true,
 		false,
@@ -119,6 +132,30 @@ TEST_CASE("Transfer display mask keeps hidden-list work pending")
 		false);
 	CHECK(secondaryPaneVisible == (DISPLAY_REFRESH_DOWNLOAD_CLIENTS | DISPLAY_REFRESH_TRANSFER_SUMMARY));
 	CHECK((allTransferLists & ~secondaryPaneVisible) == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_UPLOAD_LIST | DISPLAY_REFRESH_QUEUE_LIST | DISPLAY_REFRESH_CLIENT_LIST));
+}
+
+TEST_CASE("Explicit transfer display refresh includes only visible lists while running")
+{
+	const uint32_t visibleDownloadsAndUploads = BuildExplicitTransferDisplayRefreshMask(
+		TRANSFER_DISPLAY_REFRESH_RUNNING,
+		true,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false);
+	CHECK(visibleDownloadsAndUploads == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_UPLOAD_LIST | DISPLAY_REFRESH_TRANSFER_SUMMARY));
+
+	CHECK(BuildExplicitTransferDisplayRefreshMask(
+		TRANSFER_DISPLAY_REFRESH_PAUSED,
+		true,
+		true,
+		true,
+		true,
+		true,
+		true,
+		true) == DISPLAY_REFRESH_NONE);
 }
 
 #if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
