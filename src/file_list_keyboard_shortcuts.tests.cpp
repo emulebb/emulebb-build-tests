@@ -83,6 +83,14 @@ TEST_CASE("file-list sort shortcut roles map only to supported columns")
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SharedDirs, FileListKeyboardShortcutsSeams::ESortRole::Name) == -1);
 }
 
+TEST_CASE("file-list sort shortcut columns apply only when available")
+{
+	CHECK(FileListKeyboardShortcutsSeams::ShouldApplySortShortcutColumn(0, false));
+	CHECK(FileListKeyboardShortcutsSeams::ShouldApplySortShortcutColumn(14, false));
+	CHECK_FALSE(FileListKeyboardShortcutsSeams::ShouldApplySortShortcutColumn(14, true));
+	CHECK_FALSE(FileListKeyboardShortcutsSeams::ShouldApplySortShortcutColumn(-1, false));
+}
+
 TEST_CASE("menu shortcut labels use native right-aligned menu hint format")
 {
 	CHECK(AddMenuShortcutLabel(CString(_T("Find")), _T("Ctrl+F")).Compare(_T("Find\tCtrl+F")) == 0);
