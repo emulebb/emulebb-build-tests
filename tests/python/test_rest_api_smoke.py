@@ -204,6 +204,171 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
     ]
 
 
+def write_https_preferences(
+    module,
+    config_dir: Path,
+    *,
+    certificate: Path,
+    key: Path,
+    use_https: str = "1",
+    port: int = 4711,
+    bind_addr: str = "127.0.0.1",
+) -> None:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    module.live_common.write_utf16_ini_text(
+        config_dir / "preferences.ini",
+        "\n".join(
+            [
+                "[WebServer]",
+                f"UseHTTPS={use_https}",
+                f"HTTPSCertificate={certificate}",
+                f"HTTPSKey={key}",
+                f"Port={port}",
+                f"BindAddr={bind_addr}",
+            ]
+        ),
+    )
+
+
+def test_https_pem_readiness_accepts_generated_pair_and_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    cert_path = tmp_path / "webserver-cert.pem"
+    key_path = tmp_path / "webserver-key.pem"
+    config_dir = tmp_path / "config"
+    cert_path.write_text("certificate", encoding="ascii")
+    key_path.write_text("key", encoding="ascii")
+    write_https_preferences(module, config_dir, certificate=cert_path, key=key_path)
+    monkeypatch.setattr(module, "decode_certificate_metadata", lambda _path: {"sha256": "abc123"})
+    monkeypatch.setattr(module, "require_usable_https_pem_pair", lambda _cert, _key: None)
+
+    summary = module.verify_https_pem_readiness(
+        config_dir=config_dir,
+        base_url="https://127.0.0.1:4711",
+        certificate_path=str(cert_path),
+        key_path=str(key_path),
+        bind_addr="127.0.0.1",
+    )
+
+    assert summary["ok"] is True
+    assert summary["tls_pair_loadable"] is True
+    assert summary["trust_anchor_loadable"] is True
+    assert summary["certificate"]["size_bytes"] == len("certificate")
+    assert summary["certificate_metadata"]["sha256"] == "abc123"
+    assert summary["profile"]["observed"]["UseHTTPS"] == "1"
+
+
+def test_https_pem_readiness_rejects_missing_certificate(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    cert_path = tmp_path / "missing-cert.pem"
+    key_path = tmp_path / "webserver-key.pem"
+    config_dir = tmp_path / "config"
+    key_path.write_text("key", encoding="ascii")
+    write_https_preferences(module, config_dir, certificate=cert_path, key=key_path)
+
+    with pytest.raises(RuntimeError, match="certificate PEM is missing"):
+        module.verify_https_pem_readiness(
+            config_dir=config_dir,
+            base_url="https://127.0.0.1:4711",
+            certificate_path=str(cert_path),
+            key_path=str(key_path),
+            bind_addr="127.0.0.1",
+        )
+
+
+def test_https_pem_readiness_rejects_empty_key(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    cert_path = tmp_path / "webserver-cert.pem"
+    key_path = tmp_path / "webserver-key.pem"
+    config_dir = tmp_path / "config"
+    cert_path.write_text("certificate", encoding="ascii")
+    key_path.write_text("", encoding="ascii")
+    write_https_preferences(module, config_dir, certificate=cert_path, key=key_path)
+
+    with pytest.raises(RuntimeError, match="key PEM is empty"):
+        module.verify_https_pem_readiness(
+            config_dir=config_dir,
+            base_url="https://127.0.0.1:4711",
+            certificate_path=str(cert_path),
+            key_path=str(key_path),
+            bind_addr="127.0.0.1",
+        )
+
+
+def test_https_pem_readiness_rejects_unloadable_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    cert_path = tmp_path / "webserver-cert.pem"
+    key_path = tmp_path / "webserver-key.pem"
+    config_dir = tmp_path / "config"
+    cert_path.write_text("certificate", encoding="ascii")
+    key_path.write_text("key", encoding="ascii")
+    write_https_preferences(module, config_dir, certificate=cert_path, key=key_path)
+    monkeypatch.setattr(module, "decode_certificate_metadata", lambda _path: {"sha256": "abc123"})
+
+    def fail_load(_cert: Path, _key: Path) -> None:
+        raise ssl.SSLError("[X509] PEM lib")
+
+    monkeypatch.setattr(module, "require_usable_https_pem_pair", fail_load)
+
+    with pytest.raises(RuntimeError, match="HTTPS PEM pair is not TLS-loadable"):
+        module.verify_https_pem_readiness(
+            config_dir=config_dir,
+            base_url="https://127.0.0.1:4711",
+            certificate_path=str(cert_path),
+            key_path=str(key_path),
+            bind_addr="127.0.0.1",
+        )
+
+
+def test_https_pem_readiness_rejects_profile_config_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    cert_path = tmp_path / "webserver-cert.pem"
+    key_path = tmp_path / "webserver-key.pem"
+    config_dir = tmp_path / "config"
+    cert_path.write_text("certificate", encoding="ascii")
+    key_path.write_text("key", encoding="ascii")
+    write_https_preferences(module, config_dir, use_https="0", certificate=cert_path, key=key_path)
+    monkeypatch.setattr(module, "decode_certificate_metadata", lambda _path: {"sha256": "abc123"})
+    monkeypatch.setattr(module, "require_usable_https_pem_pair", lambda _cert, _key: None)
+
+    with pytest.raises(RuntimeError, match="UseHTTPS"):
+        module.verify_https_pem_readiness(
+            config_dir=config_dir,
+            base_url="https://127.0.0.1:4711",
+            certificate_path=str(cert_path),
+            key_path=str(key_path),
+            bind_addr="127.0.0.1",
+        )
+
+
+def test_rest_ready_timeout_reports_https_pem_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    def fake_http_request(_base_url, _path, **_kwargs):
+        raise module.urllib.error.URLError(ssl.SSLError("[X509] PEM lib"))
+
+    def fake_wait_for(resolve, **_kwargs):
+        assert resolve() is None
+        raise RuntimeError("Timed out waiting for REST API readiness")
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+    monkeypatch.setattr(module, "wait_for", fake_wait_for)
+
+    with pytest.raises(RuntimeError, match="HTTPSCertificate"):
+        module.wait_for_rest_ready(
+            "https://127.0.0.1:4711",
+            "api-key",
+            1.0,
+            readiness_context={
+                "profile": {
+                    "observed": {
+                        "HTTPSCertificate": "webserver-cert.pem",
+                        "HTTPSKey": "webserver-key.pem",
+                    }
+                }
+            },
+        )
+
+
 def test_https_certificate_validation_requires_trust_anchor_and_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     request_ca_files: list[object] = []

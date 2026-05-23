@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import importlib.util
 import json
 import re
@@ -1032,6 +1033,160 @@ def configure_https_trust(certificate_path: str | None) -> None:
 
     global HTTPS_TRUST_CA_FILE
     HTTPS_TRUST_CA_FILE = certificate_path or None
+
+
+def collect_file_readiness(path: Path) -> dict[str, object]:
+    """Returns stable existence/size evidence for one generated file."""
+
+    exists = path.exists()
+    is_file = path.is_file()
+    size = path.stat().st_size if is_file else 0
+    return {
+        "path": str(path),
+        "exists": exists,
+        "is_file": is_file,
+        "size_bytes": size,
+    }
+
+
+def parse_ini_section_values(text: str, section: str) -> dict[str, str]:
+    """Parses simple key/value rows from one INI section."""
+
+    values: dict[str, str] = {}
+    inside_target = False
+    section_header = f"[{section}]"
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            inside_target = stripped.lower() == section_header.lower()
+            continue
+        if inside_target and "=" in raw_line:
+            key, value = raw_line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+def same_config_path(actual: str, expected: Path) -> bool:
+    """Compares a profile path value with the generated absolute path."""
+
+    if not actual:
+        return False
+    try:
+        return Path(actual).resolve() == expected.resolve()
+    except OSError:
+        return str(Path(actual)).lower() == str(expected).lower()
+
+
+def decode_certificate_metadata(certificate_path: Path) -> dict[str, object]:
+    """Returns compact, non-secret metadata for a PEM certificate."""
+
+    certificate_text = certificate_path.read_text(encoding="ascii")
+    der_bytes = ssl.PEM_cert_to_DER_cert(certificate_text)
+    metadata: dict[str, object] = {
+        "sha256": hashlib.sha256(der_bytes).hexdigest(),
+    }
+    decoded = ssl._ssl._test_decode_cert(str(certificate_path))  # type: ignore[attr-defined]
+    for key in ("subject", "issuer", "notBefore", "notAfter", "serialNumber"):
+        if key in decoded:
+            metadata[key] = decoded[key]
+    return metadata
+
+
+def require_usable_https_pem_pair(certificate_path: Path, key_path: Path) -> None:
+    """Requires the certificate/key pair to be loadable by Python TLS."""
+
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(certfile=str(certificate_path), keyfile=str(key_path))
+    ssl.create_default_context(cafile=str(certificate_path))
+
+
+def verify_https_pem_readiness(
+    *,
+    config_dir: Path,
+    base_url: str,
+    certificate_path: str,
+    key_path: str,
+    bind_addr: str,
+) -> dict[str, object]:
+    """Verifies generated HTTPS PEM material and profile wiring before launch."""
+
+    endpoint = parse_base_url_endpoint(base_url)
+    certificate = Path(certificate_path)
+    key = Path(key_path)
+    preferences_path = config_dir / "preferences.ini"
+    summary: dict[str, object] = {
+        "enabled": True,
+        "base_url": base_url,
+        "endpoint": endpoint,
+        "certificate": collect_file_readiness(certificate),
+        "key": collect_file_readiness(key),
+        "profile": {
+            "preferences": str(preferences_path),
+            "expected": {
+                "UseHTTPS": "1",
+                "HTTPSCertificate": str(certificate),
+                "HTTPSKey": str(key),
+                "Port": str(endpoint["port"]),
+                "BindAddr": bind_addr,
+            },
+        },
+    }
+    errors: list[str] = []
+
+    for label, path in (("certificate", certificate), ("key", key)):
+        if not path.is_file():
+            errors.append(f"{label} PEM is missing: {path}")
+        elif path.stat().st_size <= 0:
+            errors.append(f"{label} PEM is empty: {path}")
+
+    if certificate.is_file() and key.is_file() and certificate.stat().st_size > 0 and key.stat().st_size > 0:
+        try:
+            summary["certificate_metadata"] = decode_certificate_metadata(certificate)
+            require_usable_https_pem_pair(certificate, key)
+            summary["tls_pair_loadable"] = True
+            summary["trust_anchor_loadable"] = True
+        except Exception as exc:
+            summary["tls_pair_loadable"] = False
+            summary["tls_error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+            errors.append(f"HTTPS PEM pair is not TLS-loadable: {type(exc).__name__}: {exc}")
+
+    if not preferences_path.is_file():
+        errors.append(f"preferences.ini is missing: {preferences_path}")
+    else:
+        profile_values = parse_ini_section_values(live_common.read_ini_text(preferences_path), "WebServer")
+        observed = {
+            "UseHTTPS": profile_values.get("UseHTTPS", ""),
+            "HTTPSCertificate": profile_values.get("HTTPSCertificate", ""),
+            "HTTPSKey": profile_values.get("HTTPSKey", ""),
+            "Port": profile_values.get("Port", ""),
+            "BindAddr": profile_values.get("BindAddr", ""),
+        }
+        profile_summary = summary["profile"]
+        assert isinstance(profile_summary, dict)
+        profile_summary["observed"] = observed
+        if observed["UseHTTPS"] != "1":
+            errors.append(f"WebServer UseHTTPS is {observed['UseHTTPS']!r}, expected '1'.")
+        if not same_config_path(observed["HTTPSCertificate"], certificate):
+            errors.append(
+                f"WebServer HTTPSCertificate is {observed['HTTPSCertificate']!r}, expected {str(certificate)!r}."
+            )
+        if not same_config_path(observed["HTTPSKey"], key):
+            errors.append(f"WebServer HTTPSKey is {observed['HTTPSKey']!r}, expected {str(key)!r}.")
+        if observed["Port"] != str(endpoint["port"]):
+            errors.append(f"WebServer Port is {observed['Port']!r}, expected {endpoint['port']!r}.")
+        if observed["BindAddr"] != bind_addr:
+            errors.append(f"WebServer BindAddr is {observed['BindAddr']!r}, expected {bind_addr!r}.")
+
+    summary["ok"] = not errors
+    if errors:
+        summary["errors"] = errors
+        raise RuntimeError(f"HTTPS PEM readiness failed: {'; '.join(errors)}. Summary: {json.dumps(summary, default=str)}")
+    return summary
 
 
 def build_urlopen_context(base_url: str, *, cafile: str | None | object = DEFAULT_HTTPS_CA_FILE):
@@ -5874,7 +6029,13 @@ def execute_search_plan(
     return completed_cycles, active_search_id
 
 
-def wait_for_rest_ready(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
+def wait_for_rest_ready(
+    base_url: str,
+    api_key: str,
+    timeout_seconds: float,
+    *,
+    readiness_context: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Polls until the live REST listener answers the version route."""
 
     last_error: dict[str, str] = {}
@@ -5901,8 +6062,13 @@ def wait_for_rest_ready(base_url: str, api_key: str, timeout_seconds: float) -> 
     try:
         return wait_for(resolve, timeout=timeout_seconds, interval=0.5, description="REST API readiness")
     except RuntimeError as exc:
+        context_text = ""
+        if readiness_context:
+            context_text = f". Readiness context: {json.dumps(readiness_context, default=str)}"
         if last_error:
-            raise RuntimeError(f"{exc}. Last REST error: {last_error}") from exc
+            raise RuntimeError(f"{exc}. Last REST error: {last_error}{context_text}") from exc
+        if context_text:
+            raise RuntimeError(f"{exc}{context_text}") from exc
         raise
 
 
@@ -6088,6 +6254,19 @@ def main() -> int:
     pending_error: Exception | None = None
 
     try:
+        https_pem_readiness: dict[str, object] | None = None
+        if args.webserver_scheme == "https":
+            current_phase = set_phase(report, "https_pem_readiness")
+            https_pem_readiness = verify_https_pem_readiness(
+                config_dir=Path(profile["config_dir"]),
+                base_url=base_url,
+                certificate_path=https_material["certificate"],
+                key_path=https_material["key"],
+                bind_addr=args.bind_addr,
+            )
+            report["checks"]["https_pem_readiness"] = https_pem_readiness
+
+        current_phase = set_phase(report, "launch")
         app = launch_app(app_exe, Path(profile["profile_base"]))
         launched_process_id = get_app_process_id(app)
         report["launched_process_id"] = launched_process_id
@@ -6098,7 +6277,12 @@ def main() -> int:
         report["main_window_title"] = main_window.window_text()
 
         current_phase = set_phase(report, "rest_ready")
-        ready = wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
+        ready = wait_for_rest_ready(
+            base_url,
+            args.api_key,
+            args.rest_ready_timeout_seconds,
+            readiness_context=https_pem_readiness,
+        )
         report["checks"]["ready"] = compact_http_result(ready)
 
         if args.webserver_scheme == "https":
