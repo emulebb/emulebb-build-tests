@@ -3,8 +3,8 @@
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
   "campaignId": "emulebb-0.7.3",
-  "releaseVersion": "0.7.3",
-  "title": "eMuleBB 0.7.3 release campaign",
+  "releaseVersion": "0.7.3-rc.1",
+  "title": "eMuleBB 0.7.3-rc.1 release campaign",
   "description": "First concrete release instance for the eMuleBB-owned campaign model.",
   "phases": [
     {
@@ -656,7 +656,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emulebb-v0.7.3/emulebb-0.7.3-x64.manifest.json"
+              "path": "release/emulebb-v0.7.3-rc.1/emulebb-0.7.3-rc.1-x64.manifest.json"
             }
           ]
         },
@@ -673,7 +673,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emulebb-v0.7.3/emulebb-0.7.3-arm64.manifest.json"
+              "path": "release/emulebb-v0.7.3-rc.1/emulebb-0.7.3-rc.1-arm64.manifest.json"
             }
           ]
         },
@@ -690,7 +690,7 @@
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emulebb-v0.7.3/emulebb-0.7.3-amutorrent-x64.manifest.json"
+              "path": "release/emulebb-v0.7.3-rc.1/emulebb-0.7.3-rc.1-amutorrent-x64.manifest.json"
             }
           ]
         },
