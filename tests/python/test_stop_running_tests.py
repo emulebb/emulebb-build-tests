@@ -41,14 +41,14 @@ def test_selects_workspace_test_runner_tree_and_orphaned_helpers() -> None:
             12,
             11,
             "emulebb.exe",
-            rf"{workspace_root}\workspaces\workspace\app\eMule-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {workspace_root}\workspaces\workspace\state\test-reports\run\profile-base",
+            rf"{workspace_root}\workspaces\workspace\app\emulebb-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {workspace_root}\workspaces\workspace\state\test-reports\run\profile-base",
         ),
         module.ProcessInfo(20, 1, "python.exe", r"C:\Python313\python.exe C:\tools\unrelated.py"),
         module.ProcessInfo(
             30,
             1,
             "emulebb.exe",
-            rf"{workspace_root}\workspaces\workspace\app\eMule-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {workspace_root}\workspaces\workspace\state\test-artifacts\orphan\profile-base",
+            rf"{workspace_root}\workspaces\workspace\app\emulebb-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {workspace_root}\workspaces\workspace\state\test-artifacts\orphan\profile-base",
         ),
         module.ProcessInfo(
             40,
@@ -87,7 +87,7 @@ def test_does_not_select_helper_itself_or_unscoped_python() -> None:
             102,
             1,
             "emulebb.exe",
-            rf"{workspace_root}\workspaces\workspace\app\eMule-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c F:\real-profile",
+            rf"{workspace_root}\workspaces\workspace\app\emulebb-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c F:\real-profile",
         ),
     ]
 

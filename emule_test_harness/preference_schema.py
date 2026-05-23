@@ -106,7 +106,7 @@ class PreferencePaths:
 def get_preference_paths(workspace_root: Path) -> PreferencePaths:
     return PreferencePaths(
         workspace_root=workspace_root,
-        app_source=workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid",
+        app_source=workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid",
         build_tests_root=workspace_root / "repos" / "emulebb-build-tests",
     )
 

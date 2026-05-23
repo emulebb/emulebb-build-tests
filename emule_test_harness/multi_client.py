@@ -177,7 +177,7 @@ def resolve_harness_client(workspace_root: Path, configuration: str, override: s
         candidate = (
             workspace_root
             / "app"
-            / "eMule-community-tracing-harness"
+            / "emulebb-community-tracing-harness"
             / "srchybrid"
             / "x64"
             / configuration

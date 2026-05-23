@@ -201,7 +201,7 @@ def _normalize_ini_expression(expression: str, constants: dict[str, str]) -> tup
 
 
 def _extract_ini_key_uses(workspace_root: Path) -> dict[str, IniKeyUse]:
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     preferences_cpp = _strip_cpp_comments((app_source / "Preferences.cpp").read_text(encoding="utf-8", errors="ignore"))
     constants = _load_preference_ini_constants(
         (app_source / "PreferenceIniMap.h").read_text(encoding="utf-8", errors="ignore")
@@ -268,7 +268,7 @@ def test_preferences_cpp_ini_keys_match_machine_readable_inventory() -> None:
 
 def test_rest_mutable_preference_surface_is_covered_by_one_metadata_table() -> None:
     workspace_root = _workspace_root()
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     surface_header = (app_source / "WebApiSurfaceSeams.h").read_text(encoding="utf-8", errors="ignore")
     json_seams_header = (app_source / "WebServerJsonSeams.h").read_text(encoding="utf-8", errors="ignore")
     json_cpp = (app_source / "WebServerJson.cpp").read_text(encoding="utf-8", errors="ignore")

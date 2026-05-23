@@ -169,7 +169,7 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
     write_utf16_ini_text(preferences_path, "[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n")
-    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
     live_profiles.apply_webserver_profile(
         config_dir,

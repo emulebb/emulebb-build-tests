@@ -3,7 +3,7 @@ from pathlib import Path
 
 def test_web_compat_responses_use_shared_http_writer() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_root = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_root = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     helper_text = (app_root / "WebServerHttpResponse.h").read_text(encoding="utf-8")
 
     assert "SendBody" in helper_text

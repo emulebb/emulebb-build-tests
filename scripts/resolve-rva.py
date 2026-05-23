@@ -54,8 +54,8 @@ def default_workspace_root() -> Path:
 
 def default_exe_path(workspace_root: Path) -> Path:
     candidates = (
-        workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / "Debug" / "emulebb.exe",
-        workspace_root / "workspaces" / "workspace" / "app" / "eMule-community-baseline" / "srchybrid" / "x64" / "Debug" / "emule.exe",
+        workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "x64" / "Debug" / "emulebb.exe",
+        workspace_root / "workspaces" / "workspace" / "app" / "emulebb-community-baseline" / "srchybrid" / "x64" / "Debug" / "emule.exe",
     )
     for candidate in candidates:
         if candidate.is_file():

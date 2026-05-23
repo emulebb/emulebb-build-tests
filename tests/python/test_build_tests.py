@@ -14,7 +14,7 @@ def make_config(tmp_path: Path) -> BuildTestsConfig:
     return BuildTestsConfig(
         test_repo_root=tmp_path / "repos" / "emulebb-build-tests",
         workspace_root=tmp_path / "workspaces" / "workspace",
-        app_root=tmp_path / "workspaces" / "workspace" / "app" / "eMule-main",
+        app_root=tmp_path / "workspaces" / "workspace" / "app" / "emulebb-main",
         configuration="Debug",
         platform="x64",
         build_output_mode="ErrorsOnly",

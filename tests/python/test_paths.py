@@ -12,10 +12,10 @@ def test_make_file_token_matches_workspace_safe_filename_shape() -> None:
 
 def test_get_build_tag_matches_workspace_and_app_segments(tmp_path: Path) -> None:
     workspace_root = tmp_path / "owner with space" / "workspaces" / "workspace"
-    app_root = workspace_root / "app" / "eMule-main"
+    app_root = workspace_root / "app" / "emulebb-main"
     app_root.mkdir(parents=True)
 
-    assert get_build_tag(workspace_root, app_root) == "owner_with_space-workspace-eMule-main"
+    assert get_build_tag(workspace_root, app_root) == "owner_with_space-workspace-emulebb-main"
 
 
 def test_get_test_binary_path_uses_existing_repo_layout(tmp_path: Path) -> None:

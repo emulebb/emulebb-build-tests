@@ -29,8 +29,8 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
         "path": "..\\\\..\\\\repos\\\\emulebb"
       },
       "variants": [
-        { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
-        { "name": "community", "path": "app\\\\eMule-community-baseline", "branch": "baseline/community-0.72a" }
+        { "name": "main", "path": "app\\\\emulebb-main", "branch": "main" },
+        { "name": "community", "path": "app\\\\emulebb-community-baseline", "branch": "baseline/community-0.72a" }
       ]
     },
     "repos": {
@@ -47,8 +47,8 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
 
     assert manifest.seed_repo_path == Path("..\\..\\repos\\emulebb")
     assert [(variant.name, variant.path) for variant in manifest.variants] == [
-        ("main", Path("app\\eMule-main")),
-        ("community", Path("app\\eMule-community-baseline")),
+        ("main", Path("app\\emulebb-main")),
+        ("community", Path("app\\emulebb-community-baseline")),
     ]
     assert manifest.repos["tooling"] == Path("..\\..\\repos\\emulebb-tooling")
     assert manifest.repos["p2p_overlord_agents"] == Path("..\\..\\repos\\p2p-overlord-agents")
@@ -76,7 +76,7 @@ def test_resolve_workspace_repo_uses_manifest_repo_map(tmp_path: Path) -> None:
 
 def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
-    community_root = workspace_root / "app" / "eMule-community-baseline"
+    community_root = workspace_root / "app" / "emulebb-community-baseline"
     community_root.mkdir(parents=True)
     (workspace_root / "deps.json").write_text(
         """{
@@ -84,8 +84,8 @@ def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path
     "app_repo": {
       "seed_repo": { "name": "emulebb", "path": "..\\\\..\\\\repos\\\\emulebb" },
       "variants": [
-        { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
-        { "name": "community", "path": "app\\\\eMule-community-baseline", "branch": "baseline/community-0.72a" }
+        { "name": "main", "path": "app\\\\emulebb-main", "branch": "main" },
+        { "name": "community", "path": "app\\\\emulebb-community-baseline", "branch": "baseline/community-0.72a" }
       ]
     }
   }

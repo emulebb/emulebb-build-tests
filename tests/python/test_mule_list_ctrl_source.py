@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def app_source_root() -> Path:
-    return Path(__file__).resolve().parents[4] / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    return Path(__file__).resolve().parents[4] / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
 
 def test_end_scroll_cleanup_releases_window_dc() -> None:

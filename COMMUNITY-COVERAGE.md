@@ -42,8 +42,8 @@ only. It is not a product release or public tag/package target.
 - Live-diff implementation: `scripts/run-live-diff.py`
 - Latest wrapper run:
   - combined summary: `reports/community-core-coverage/20260411-195801/community-core-coverage-summary.json`
-  - canonical `main` coverage: `reports/native-coverage/20260411-195802-eMuleaz01-v0.72a-eMule-main-x64-Debug`
-  - canonical `baseline/community-0.72a` coverage: `reports/native-coverage/20260411-195836-eMuleaz01-v0.72a-eMule-community-baseline-x64-Debug`
+  - canonical `main` coverage: `reports/native-coverage/20260411-195802-eMuleaz01-v0.72a-emulebb-main-x64-Debug`
+  - canonical `baseline/community-0.72a` coverage: `reports/native-coverage/20260411-195836-eMuleaz01-v0.72a-emulebb-community-baseline-x64-Debug`
   - live diff summary: `reports/live-diff-summary.json`
 - Latest wrapper metrics:
   - canonical `main`: `parity` 328 passed, `community-core-divergence` 3 passed, line rate `88.32%`

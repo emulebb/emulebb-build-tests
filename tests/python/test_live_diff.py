@@ -31,7 +31,7 @@ def test_build_emule_tests_command_uses_python_build_wrapper() -> None:
     command = build_emule_tests_command(
         test_repo_root=Path("C:/repo/tests"),
         workspace_root=Path("C:/repo/workspaces/workspace"),
-        app_root=Path("C:/repo/workspaces/workspace/app/eMule-main"),
+        app_root=Path("C:/repo/workspaces/workspace/app/emulebb-main"),
         configuration="Debug",
         platform="x64",
         build_tag="tag",

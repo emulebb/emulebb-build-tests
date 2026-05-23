@@ -131,7 +131,7 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
     repo_root = tmp_path / "repos" / "emulebb-build-tests"
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
-    app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
+    app_root = tmp_path / "workspaces" / "workspace" / "app" / "emulebb-main"
     app_exe = app_root / "srchybrid" / "x64" / "Release" / "emulebb.exe"
     seed_dir.mkdir(parents=True)
     app_exe.parent.mkdir(parents=True)
@@ -152,7 +152,7 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
         app_root=app_root,
     )
 
-    label = "20260521T120000Z-eMule-main-release-4242"
+    label = "20260521T120000Z-emulebb-main-release-4242"
     assert paths.source_artifacts_dir == (
         tmp_path / "workspaces" / "workspace" / "state" / "test-artifacts" / "rest-api-live-e2e" / label
     ).resolve()
@@ -170,7 +170,7 @@ def test_prepare_run_paths_rejects_explicit_windows_temp_artifacts(monkeypatch, 
     repo_root = tmp_path / "repos" / "emulebb-build-tests"
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
-    app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
+    app_root = tmp_path / "workspaces" / "workspace" / "app" / "emulebb-main"
     app_exe = app_root / "srchybrid" / "x64" / "Release" / "emulebb.exe"
     local_temp = tmp_path / "Users" / "tester" / "AppData" / "Local" / "Temp"
     seed_dir.mkdir(parents=True)

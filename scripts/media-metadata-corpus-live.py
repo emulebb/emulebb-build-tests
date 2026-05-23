@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 def default_emule_exe() -> Path:
     """Returns the default release app binary used by live corpus diagnostics."""
 
-    return WORKSPACE_ROOT / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    return WORKSPACE_ROOT / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
 
 def path_id(path: Path) -> str:

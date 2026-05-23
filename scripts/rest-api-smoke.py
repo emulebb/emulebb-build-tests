@@ -251,7 +251,7 @@ NATIVE_ROUTE_HEADER_PATH = (
     / "workspaces"
     / "workspace"
     / "app"
-    / "eMule-main"
+    / "emulebb-main"
     / "srchybrid"
     / "WebServerJsonSeams.h"
 )

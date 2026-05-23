@@ -86,7 +86,7 @@ def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tm
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
     preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
-    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
     module.configure_webserver_profile(config_dir, app_exe, "api-key", 4711, "127.0.0.1")
 
@@ -101,7 +101,7 @@ def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
     preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
-    app_exe = tmp_path / "app" / "eMule-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+    app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
     module.configure_webserver_profile(
         config_dir,
@@ -1520,7 +1520,7 @@ def test_rest_vocabulary_source_and_openapi_stay_in_sync() -> None:
     module = load_rest_api_smoke_module()
     schemas = module.load_openapi_document()["components"]["schemas"]
     workspace_root = Path(__file__).resolve().parents[4]
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     json_source = (app_source / "WebServerJson.cpp").read_text(encoding="utf-8")
     surface_source = (app_source / "WebApiSurfaceSeams.h").read_text(encoding="utf-8")
     command_source = (app_source / "WebApiCommandSeams.h").read_text(encoding="utf-8")
@@ -1563,7 +1563,7 @@ def test_rest_vocabulary_source_and_openapi_stay_in_sync() -> None:
 
 def test_native_transfer_operation_responses_use_stable_bulk_items() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
     assert 'return json{{"items", json::array({result})}};' in source
@@ -1640,7 +1640,7 @@ def test_arr_adapter_http_step_records_transport_failure(monkeypatch) -> None:
 
 def test_peer_add_friend_never_returns_ok_for_friend_response() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
     assert 'pFriend != NULL ? BuildFriendJson(*pFriend) : json{{"ok", true}}' not in source
@@ -1684,7 +1684,7 @@ def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_bounda
         / "workspaces"
         / "workspace"
         / "app"
-        / "eMule-main"
+        / "emulebb-main"
         / "srchybrid"
         / "WebServerQBitCompatSeams.h"
     ).read_text(encoding="utf-8")
@@ -1851,7 +1851,7 @@ def _native_route_token_value(token: str, workspace_root: Path) -> str:
             / "workspaces"
             / "workspace"
             / "app"
-            / "eMule-main"
+            / "emulebb-main"
             / "srchybrid"
             / "WebApiSurfaceSeams.h"
         ).read_text(encoding="utf-8")
@@ -1867,7 +1867,7 @@ def _native_route_token_value(token: str, workspace_root: Path) -> str:
 
 def _native_route_contracts() -> dict[tuple[str, str], dict[str, set[str]]]:
     workspace_root = Path(__file__).resolve().parents[4]
-    route_header = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJsonSeams.h"
+    route_header = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJsonSeams.h"
     route_specs = re.findall(
         r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*("[^"]*"|WebApiSurfaceSeams::kMutablePreferenceFieldListCsv)\s*,\s*("[^"]*")(?:\s*,\s*([^}]+?))?\s*\}',
         route_header.read_text(encoding="utf-8"),
@@ -2256,7 +2256,7 @@ def test_openapi_custom_success_responses_reject_generic_ok_fallbacks() -> None:
 
 def test_openapi_error_code_enum_covers_native_rest_codes() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     openapi_text = (workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml").read_text(
         encoding="utf-8"
     )
@@ -2324,7 +2324,7 @@ def test_openapi_response_dtos_require_core_implementation_fields() -> None:
 
 def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerQBitCompat.cpp"
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerQBitCompat.cpp"
     source = source_path.read_text(encoding="utf-8")
 
     assert 'BuildInternalCommand("transfers/list"' in source
@@ -2334,7 +2334,7 @@ def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
 
 def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     tooling_docs = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     source = (app_source / "WebServerArrCompat.cpp").read_text(encoding="utf-8")
     seams = (app_source / "WebServerArrCompatSeams.h").read_text(encoding="utf-8")
@@ -2380,7 +2380,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
 
 def test_native_search_resources_echo_selected_type() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
 
     rest_type_formatter = "WebServerJsonSeams::GetRestSearchFileTypeName(StdUtf8FromCString(rFileType))"
@@ -2397,7 +2397,7 @@ def test_native_search_resources_echo_selected_type() -> None:
 
 def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     source = (app_source / "WebServerQBitCompat.cpp").read_text(encoding="utf-8")
     seams = (app_source / "WebServerQBitCompatSeams.h").read_text(encoding="utf-8")
 
@@ -2434,7 +2434,7 @@ def test_qbit_adapter_smoke_add_uses_native_ed2k_url() -> None:
 
 def test_native_transfer_add_reports_queue_rejection_as_failure() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJson.cpp"
     source = source_path.read_text(encoding="utf-8")
     transfer_add_block = source[source.index('if (strCommand == "transfers/add")') : source.index("auto handleTransferBulkMutation")]
 
@@ -2454,7 +2454,7 @@ def test_qbit_compat_documents_hash_mutation_cap() -> None:
         / "workspaces"
         / "workspace"
         / "app"
-        / "eMule-main"
+        / "emulebb-main"
         / "srchybrid"
         / "WebServerQBitCompatSeams.h"
     ).read_text(encoding="utf-8")

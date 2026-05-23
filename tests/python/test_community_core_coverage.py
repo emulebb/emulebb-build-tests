@@ -34,8 +34,8 @@ def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path)
 def test_build_config_resolves_default_app_roots(tmp_path: Path) -> None:
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
-    (workspace_root / "app" / "eMule-main").mkdir(parents=True)
-    (workspace_root / "app" / "eMule-community-baseline").mkdir(parents=True)
+    (workspace_root / "app" / "emulebb-main").mkdir(parents=True)
+    (workspace_root / "app" / "emulebb-community-baseline").mkdir(parents=True)
 
     config = build_config(
         test_repo_root=test_repo_root,
@@ -47,16 +47,16 @@ def test_build_config_resolves_default_app_roots(tmp_path: Path) -> None:
         preferred_coverage_root=None,
     )
 
-    assert config.main_app_root == workspace_root / "app" / "eMule-main"
-    assert config.community_app_root == workspace_root / "app" / "eMule-community-baseline"
+    assert config.main_app_root == workspace_root / "app" / "emulebb-main"
+    assert config.community_app_root == workspace_root / "app" / "emulebb-community-baseline"
     assert config.include_live_rest_e2e is False
 
 
 def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeypatch) -> None:
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
-    main_app_root = workspace_root / "app" / "eMule-main"
-    community_app_root = workspace_root / "app" / "eMule-community-baseline"
+    main_app_root = workspace_root / "app" / "emulebb-main"
+    community_app_root = workspace_root / "app" / "emulebb-community-baseline"
     main_app_root.mkdir(parents=True)
     community_app_root.mkdir(parents=True)
     captured: dict[str, object] = {}

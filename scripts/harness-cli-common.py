@@ -32,8 +32,8 @@ DEFAULT_APP_VARIANTS = ("main", "community", "tracing-harness")
 MAIN_APP_EXE_NAME = "emulebb.exe"
 LEGACY_APP_EXE_NAME = "emule.exe"
 APP_VARIANT_WORKTREE_NAMES = {
-    "community": "eMule-community-baseline",
-    "tracing-harness": "eMule-community-tracing-harness",
+    "community": "emulebb-community-baseline",
+    "tracing-harness": "emulebb-community-tracing-harness",
 }
 REPORT_EXCLUDED_DIRECTORY_NAMES = frozenset(("shared-hash-root",))
 WER_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting"
@@ -578,7 +578,7 @@ def resolve_app_root(
     if not app_parent.is_dir():
         raise RuntimeError(f"Workspace app directory does not exist: {app_parent}")
 
-    candidates: list[Path] = [app_parent / "eMule-main"]
+    candidates: list[Path] = [app_parent / "emulebb-main"]
     for variant_name in preferred_variant_names:
         if variant_name == "main":
             continue
@@ -618,7 +618,7 @@ def resolve_app_executable(
     if app_exe:
         resolved_app_exe = Path(app_exe).resolve()
     else:
-        exe_name = MAIN_APP_EXE_NAME if resolved_app_root.name == "eMule-main" else LEGACY_APP_EXE_NAME
+        exe_name = MAIN_APP_EXE_NAME if resolved_app_root.name == "emulebb-main" else LEGACY_APP_EXE_NAME
         resolved_app_exe = (resolved_app_root / "srchybrid" / "x64" / configuration / exe_name).resolve()
     if not resolved_app_exe.is_file():
         raise RuntimeError(f"App executable was not found at '{resolved_app_exe}'.")

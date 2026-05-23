@@ -21,8 +21,8 @@ class FakeHarnessCliCommon:
         return SimpleNamespace(
             repo_root=self.root,
             workspace_root=self.root / "workspaces" / "workspace",
-            app_root=self.root / "workspaces" / "workspace" / "app" / "eMule-main",
-            app_exe=self.root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / kwargs["configuration"] / "emulebb.exe",
+            app_root=self.root / "workspaces" / "workspace" / "app" / "emulebb-main",
+            app_exe=self.root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "x64" / kwargs["configuration"] / "emulebb.exe",
             seed_config_dir=self.root / "repos" / "emulebb-build-tests" / "manifests" / "live-profile-seed" / "config",
             configuration=kwargs["configuration"],
             suite_name=kwargs["suite_name"],

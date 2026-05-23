@@ -63,7 +63,7 @@
   <PropertyGroup>
     <_ProjectFileVersion>11.0.60610.1</_ProjectFileVersion>
     <WorkspaceRoot Condition="'$(WorkspaceRoot)'==''">$(MSBuildThisFileDirectory)..\..\workspaces\workspace</WorkspaceRoot>
-    <AppRoot Condition="'$(AppRoot)'==''">$(WorkspaceRoot)\app\eMule-main</AppRoot>
+    <AppRoot Condition="'$(AppRoot)'==''">$(WorkspaceRoot)\app\emulebb-main</AppRoot>
     <BuildTag Condition="'$(BuildTag)'==''">default</BuildTag>
     <HasMappedFileReader>0</HasMappedFileReader>
     <HasMappedFileReader Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')">1</HasMappedFileReader>

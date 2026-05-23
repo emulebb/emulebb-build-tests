@@ -3,7 +3,7 @@ from pathlib import Path
 
 def test_http_file_sources_are_removed_from_transfer_engine() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    app_root = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_root = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
     for removed_file in (
         "URLClient.cpp",

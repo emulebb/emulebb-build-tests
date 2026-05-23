@@ -64,7 +64,7 @@ def test_preference_schema_has_no_duplicate_ids_or_storage_keys() -> None:
 def test_preference_schema_rest_bindings_match_native_metadata() -> None:
     workspace_root = _workspace_root()
     schema = load_preference_schema(workspace_root)
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     native_rest_fields = parse_rest_mutable_preference_names(app_source)
     schema_by_id = {entry["id"]: entry for entry in schema["entries"]}
     rest_bindings = {
@@ -84,7 +84,7 @@ def test_preference_schema_rest_bindings_match_native_metadata() -> None:
 def test_preference_schema_ui_bindings_are_unique_and_resource_backed() -> None:
     workspace_root = _workspace_root()
     schema = load_preference_schema(workspace_root)
-    app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    app_source = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
     resource_ids = parse_resource_ids(app_source)
     dialog_controls = parse_preference_dialog_controls(app_source)
     schema_ids = {entry["id"] for entry in schema["entries"]}

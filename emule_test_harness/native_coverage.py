@@ -44,7 +44,7 @@ def resolve_app_root(workspace_root: Path, app_root: Path | None = None) -> Path
         if not resolved.is_dir():
             raise RuntimeError(f"Explicit app root does not exist: {resolved}")
         return resolved
-    resolved = (workspace_root.resolve() / "app" / "eMule-main").resolve()
+    resolved = (workspace_root.resolve() / "app" / "emulebb-main").resolve()
     if not resolved.is_dir():
         raise RuntimeError(f"Default app root does not exist: {resolved}")
     return resolved

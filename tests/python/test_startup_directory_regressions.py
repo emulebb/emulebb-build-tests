@@ -5,7 +5,7 @@ from pathlib import Path
 
 def _app_source_root() -> Path:
     workspace_root = Path(__file__).resolve().parents[4]
-    return workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
+    return workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
 
 def test_startup_profile_directory_errors_are_non_modal() -> None:
