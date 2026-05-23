@@ -178,11 +178,11 @@ TEST_CASE("Producer transfer refresh requests stay on the shared timer cadence")
 	CHECK(BuildQueuedTransferDisplayRefreshMask(DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS, true) == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS));
 }
 
-TEST_CASE("Forced transfer refreshes flush only when there is visible work")
+TEST_CASE("Producer transfer refreshes stay on the shared timer even when forced")
 {
 	CHECK_FALSE(ShouldFlushForcedTransferDisplayRefresh(false, DISPLAY_REFRESH_DOWNLOAD_LIST));
 	CHECK_FALSE(ShouldFlushForcedTransferDisplayRefresh(true, DISPLAY_REFRESH_NONE));
-	CHECK(ShouldFlushForcedTransferDisplayRefresh(true, DISPLAY_REFRESH_DOWNLOAD_LIST));
+	CHECK_FALSE(ShouldFlushForcedTransferDisplayRefresh(true, DISPLAY_REFRESH_DOWNLOAD_LIST));
 }
 
 TEST_CASE("Transfer refresh resort policy tracks volatile transfer sort columns")
