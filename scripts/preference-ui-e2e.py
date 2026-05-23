@@ -316,10 +316,22 @@ def control_rect(control_hwnd: int) -> dict[str, int]:
     return {"left": left, "top": top, "right": right, "bottom": bottom}
 
 
-def capture_dialog_screenshot(app: Application, dialog_hwnd: int, output_path: Path) -> str:
+def capture_dialog_screenshot(app: Application, dialog_hwnd: int, output_path: Path) -> dict[str, object]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    app.window(handle=dialog_hwnd).capture_as_image().save(output_path)
-    return str(output_path)
+    last_error: dict[str, str] | None = None
+    for attempt in range(1, 4):
+        try:
+            app.window(handle=dialog_hwnd).capture_as_image().save(output_path)
+            return {"status": "captured", "path": str(output_path), "attempt": attempt}
+        except OSError as exc:
+            last_error = {"type": type(exc).__name__, "message": str(exc)}
+            time.sleep(0.2)
+    return {
+        "status": "unavailable",
+        "path": str(output_path),
+        "attempts": 3,
+        "error": last_error or {"type": "OSError", "message": "screen grab failed"},
+    }
 
 
 def assert_vertical_gap(upper_hwnd: int, lower_hwnd: int, minimum_pixels: int, label: str) -> None:
@@ -829,7 +841,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         select_page(dialog_hwnd, "Web Interface")
         web_interface_screenshot = artifacts_dir / args.web_interface_screenshot_name
         report["checks"]["web_interface_screenshot"] = {
-            "path": capture_dialog_screenshot(app, dialog_hwnd, web_interface_screenshot),
+            "screenshot": capture_dialog_screenshot(app, dialog_hwnd, web_interface_screenshot),
             "port": control_rect(find_control(dialog_hwnd, IDC_WSPORT, "Edit")),
             "bind_address": control_rect(find_control(dialog_hwnd, IDC_WEBBINDADDR, "Edit")),
             "template": control_rect(find_control(dialog_hwnd, IDC_TMPLPATH, "Edit")),

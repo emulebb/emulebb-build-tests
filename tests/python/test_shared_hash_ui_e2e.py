@@ -250,3 +250,32 @@ def test_shared_hash_snapshot_does_not_require_details_static(monkeypatch) -> No
 
     assert module.open_shared_files_page_snapshot(5678) == {"row_count": 7}
     assert opened_pages == [5678]
+
+
+def test_reload_during_hash_records_fast_small_fixture_convergence() -> None:
+    module = load_shared_hash_module()
+    summary: dict[str, object] = {}
+
+    assert module.record_immediate_reload_convergence(summary, immediate_row_count=3, expected_row_count=3)
+    assert summary["reload_converged_before_hash_drain"] is True
+    assert "larger many-file scenarios" in str(summary["reload_converged_before_hash_drain_reason"])
+
+
+def test_reload_during_hash_keeps_deferred_path_for_partial_snapshot() -> None:
+    module = load_shared_hash_module()
+    summary: dict[str, object] = {}
+
+    assert not module.record_immediate_reload_convergence(summary, immediate_row_count=2, expected_row_count=3)
+    assert summary["reload_converged_before_hash_drain"] is False
+    assert "reload_converged_before_hash_drain_reason" not in summary
+
+
+def test_reload_interrupt_sidecars_are_allowed_after_fast_convergence() -> None:
+    module = load_shared_hash_module()
+
+    assert not module.should_require_absent_sidecars_after_interrupt(
+        {"reload_converged_before_hash_drain": True}
+    )
+    assert module.should_require_absent_sidecars_after_interrupt(
+        {"reload_converged_before_hash_drain": False}
+    )

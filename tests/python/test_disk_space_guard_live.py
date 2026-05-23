@@ -63,6 +63,28 @@ def test_download_queue_temp_selection_reaches_placement_seam_before_rejecting()
     assert "IsProtectedVolumeBreached" not in block
 
 
+def test_download_queue_normal_diskspace_checks_honor_snapshot_freshness() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "DownloadQueue.cpp"
+    source = source_path.read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("void CDownloadQueue::CheckDiskspace") : source.index("void CDownloadQueue::GetDownloadSourcesStats")]
+
+    assert "GetProtectedVolumeStatusSnapshot(bNotEnoughSpaceLeft, bNotEnoughSpaceLeft)" in block
+    assert "GetProtectedVolumeStatusSnapshot(bNotEnoughSpaceLeft, true)" not in block
+
+
+def test_download_queue_required_space_uses_configured_root_cache_before_child_volume_probe() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "DownloadQueue.cpp"
+    source = source_path.read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("ULONGLONG CDownloadQueue::GetRequiredFreeDiskSpaceForPath") : source.index("void CDownloadQueue::AddPartFilesToShare")]
+
+    configured_root_index = block.index("TryCacheConfiguredRootForPath")
+    child_probe_index = block.index("TryGetVolumeIdentityPath(pszPath, strVolumeId)")
+    assert configured_root_index < child_probe_index
+    assert "IsRequiredFreeSpacePathCacheKeyWithinRoot" in block
+
+
 def test_case_hash_is_deterministic_unique_hex() -> None:
     module = load_script_module()
 

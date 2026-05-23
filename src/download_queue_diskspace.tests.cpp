@@ -167,6 +167,21 @@ TEST_CASE("Queue disk-space seam normalizes required-space cache keys")
 	CHECK(NormalizePathCacheKey(_T("D:\\")) == RequiredFreeSpacePathCacheKey(_T("d:\\")));
 }
 
+TEST_CASE("Queue disk-space seam matches required-space cache entries by configured root")
+{
+	const RequiredFreeSpacePathCacheKey tempRoot = NormalizePathCacheKey(_T("C:\\Temp\\eMule\\Temp"));
+	const RequiredFreeSpacePathCacheKey partFile = NormalizePathCacheKey(_T("C:\\Temp\\eMule\\Temp\\001.part"));
+	const RequiredFreeSpacePathCacheKey sibling = NormalizePathCacheKey(_T("C:\\Temp\\eMule\\Temp2\\001.part"));
+	const RequiredFreeSpacePathCacheKey driveRoot = NormalizePathCacheKey(_T("D:\\"));
+	const RequiredFreeSpacePathCacheKey driveChild = NormalizePathCacheKey(_T("D:\\Downloads\\001.part"));
+
+	CHECK(DownloadQueueDiskSpaceSeams::IsRequiredFreeSpacePathCacheKeyWithinRoot(partFile, tempRoot));
+	CHECK(DownloadQueueDiskSpaceSeams::IsRequiredFreeSpacePathCacheKeyWithinRoot(tempRoot, tempRoot));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsRequiredFreeSpacePathCacheKeyWithinRoot(sibling, tempRoot));
+	CHECK(DownloadQueueDiskSpaceSeams::IsRequiredFreeSpacePathCacheKeyWithinRoot(driveChild, driveRoot));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsRequiredFreeSpacePathCacheKeyWithinRoot(tempRoot, RequiredFreeSpacePathCacheKey()));
+}
+
 TEST_CASE("Queue disk-space production flow treats mounted temp and parent incoming as distinct volumes")
 {
 	const VolumeIdentity parentVolume(_T("\\\\?\\Volume{parent-drive}\\"));
