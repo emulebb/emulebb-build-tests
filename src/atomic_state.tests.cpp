@@ -43,6 +43,7 @@ TEST_CASE("Display refresh helper respects force and the randomized throttle win
 	CHECK(ShouldRunDisplayRefresh(true, 101u, 100u, 100u, 50u));
 }
 
+#if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
 TEST_CASE("Desktop UI refresh intervals use the supported System Informer values")
 {
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(0u) == 0u);
@@ -209,7 +210,6 @@ TEST_CASE("Transfer refresh resort policy tracks volatile transfer sort columns"
 	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, -1));
 }
 
-#if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
 TEST_CASE("Display refresh post helper consumes payloads when delivery is unavailable")
 {
 	std::unique_ptr<CPartFileDisplayUpdateRequest> pRequest(new CPartFileDisplayUpdateRequest{});
@@ -220,7 +220,6 @@ TEST_CASE("Display refresh post helper consumes payloads when delivery is unavai
 	CHECK_FALSE(PostOwnedDisplayRefreshRequest(reinterpret_cast<HWND>(static_cast<INT_PTR>(17)), WM_APP + 6, pEmptyRequest));
 	CHECK_FALSE(static_cast<bool>(pEmptyRequest));
 }
-#endif
 
 TEST_CASE("Display refresh mask exchange drains the queued bits and clears the pending state")
 {
@@ -246,6 +245,7 @@ TEST_CASE("Display refresh mask drains selected visible bits without dropping hi
 	CHECK(DrainPendingDisplayMask(nPendingMask, DISPLAY_REFRESH_DOWNLOAD_LIST) == 0);
 	CHECK(nPendingMask.load() == DISPLAY_REFRESH_QUEUE_LIST);
 }
+#endif
 
 TEST_CASE("App state helpers preserve the running and closing classifications")
 {

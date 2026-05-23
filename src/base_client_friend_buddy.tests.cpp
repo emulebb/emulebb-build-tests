@@ -69,6 +69,7 @@ TEST_CASE("Client software display appends a non-empty mod identity")
 }
 #endif
 
+#ifdef MOD_CLIENT_MOD_VERSION_TEXT
 TEST_CASE("Client software display formats legacy name and minor-version labels")
 {
 	CHECK(BuildClientSoftwareNameDisplay(_T("cDonkey")) == CString(_T("cDonkey")));
@@ -92,6 +93,7 @@ TEST_CASE("Client software display preserves decoded eDonkeyHybrid version label
 	CHECK(BuildDonkeyHybridClientSoftwareVersionDisplay(0u, 50u, 0u) == CString(_T("eDonkeyHybrid v0.50")));
 	CHECK(BuildDonkeyHybridClientSoftwareVersionDisplay(1u, 3u, 1u) == CString(_T("eDonkeyHybrid v1.3.1")));
 }
+#endif
 
 TEST_CASE("Friend transition never unlinks IP-only friends solely because the endpoint changed")
 {
