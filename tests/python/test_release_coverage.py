@@ -10,12 +10,15 @@ def repo_root() -> Path:
 
 
 def campaign_scenario_ids() -> set[str]:
-    campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-0.7.3")
-    return {
-        scenario["id"]
-        for phase in campaign["phases"]
-        for scenario in phase["scenarios"]
-    }
+    ids: set[str] = set()
+    for campaign_id in ("emulebb-0.7.3", "emulebb-0.7.3-overnight"):
+        campaign = release_campaigns.load_release_campaign(repo_root(), campaign_id)
+        ids.update(
+            scenario["id"]
+            for phase in campaign["phases"]
+            for scenario in phase["scenarios"]
+        )
+    return ids
 
 
 def test_release_coverage_manifest_validates_against_campaign() -> None:
@@ -26,6 +29,8 @@ def test_release_coverage_manifest_validates_against_campaign() -> None:
     )
 
     assert validation.errors == ()
+    assert manifest["schemaVersion"] == release_coverage.SCHEMA_VERSION
+    assert "emulebb-build-tests" in release_coverage.SCHEMA_VERSION
 
 
 def test_release_coverage_manifest_keeps_required_weak_areas_owned() -> None:
@@ -45,6 +50,7 @@ def test_release_coverage_manifest_keeps_required_weak_areas_owned() -> None:
         "server-ipfilter-update-flows",
         "irc-chat-friends",
         "archive-preview-comment-diagnostics",
+        "overnight-soak-confidence",
         "packaging-provenance",
     }
 

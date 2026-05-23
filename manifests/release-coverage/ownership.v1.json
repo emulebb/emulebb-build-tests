@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "emule-build-tests.release-coverage.v1",
+  "schemaVersion": "emulebb-build-tests.release-coverage.v1",
   "title": "eMuleBB release coverage ownership",
   "description": "Release-owned weak areas and the single test lane responsible for each area.",
   "areas": [
@@ -284,6 +284,29 @@
       "coverage": [],
       "campaignScenarioIds": [],
       "deferredReason": "Archive preview and archive recovery are frozen surfaces: no support, no new test coverage, no release gate, and possible removal."
+    },
+    {
+      "id": "overnight-soak-confidence",
+      "title": "Full overnight soak and real-profile monitoring",
+      "releasePhase": "stabilization-stress",
+      "ownerLane": "campaign",
+      "status": "covered",
+      "blocking": false,
+      "releaseOwned": true,
+      "appPathGlobs": [
+        "srchybrid/Emule*",
+        "srchybrid/SharedFiles*",
+        "srchybrid/TransferWnd*",
+        "srchybrid/WebServer*"
+      ],
+      "coverage": [
+        "manifests/release-campaigns/emulebb-0.7.3-overnight.v1.json"
+      ],
+      "campaignScenarioIds": [
+        "emulebb.flow.overnight.certification.full.v1",
+        "emulebb.flow.overnight.cpu-heavy.full.v1",
+        "emulebb.flow.overnight.real-profile.monitor.v1"
+      ]
     },
     {
       "id": "packaging-provenance",

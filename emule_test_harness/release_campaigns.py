@@ -9,9 +9,14 @@ from typing import Any
 
 from emule_test_harness import live_e2e_suite
 
-SCHEMA_VERSION = "emule-build-tests.release-campaign.v1"
+SCHEMA_VERSION = "emulebb-build-tests.release-campaign.v1"
 DEFAULT_TEMPLATE_ID = "emulebb.release.template.default.v1"
 DEFAULT_CAMPAIGN_ID = "emulebb-0.7.3"
+PROOF_TIERS = (
+    "rc-blocking-quick",
+    "overnight-full",
+    "future",
+)
 STRICT_PHASE_TAXONOMY = (
     "preflight",
     "protocol-parity",
@@ -115,6 +120,13 @@ def validate_release_campaign(campaign: dict[str, Any], template: dict[str, Any]
         raise ReleaseCampaignError("Release campaign instance kind must be 'instance'.")
     if campaign.get("templateId") != template.get("templateId"):
         raise ReleaseCampaignError("Release campaign instance references the wrong template id.")
+    _required_str(campaign, "campaignId")
+    _required_str(campaign, "releaseVersion")
+    _required_str(campaign, "title")
+    _required_str(campaign, "description")
+    proof_tier = _required_str(campaign, "proofTier")
+    if proof_tier not in PROOF_TIERS:
+        raise ReleaseCampaignError(f"Release campaign proofTier must be one of: {', '.join(PROOF_TIERS)}.")
     phases = _required_list(campaign, "phases")
     phase_ids = tuple(str(phase.get("id")) for phase in phases)
     if phase_ids != STRICT_PHASE_TAXONOMY:

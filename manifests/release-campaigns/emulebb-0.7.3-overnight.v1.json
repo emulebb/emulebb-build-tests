@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "emule-build-tests.release-campaign.v1",
+  "schemaVersion": "emulebb-build-tests.release-campaign.v1",
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
   "campaignId": "emulebb-0.7.3-overnight",

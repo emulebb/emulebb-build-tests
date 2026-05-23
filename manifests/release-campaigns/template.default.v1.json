@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "emule-build-tests.release-campaign.v1",
+  "schemaVersion": "emulebb-build-tests.release-campaign.v1",
   "kind": "template",
   "templateId": "emulebb.release.template.default.v1",
   "title": "eMuleBB release campaign template",

@@ -27,6 +27,14 @@ def test_release_campaign_manifests_match_json_schema() -> None:
         validator.validate(json.loads(path.read_text(encoding="utf-8")))
 
 
+def test_release_campaign_schema_uses_emulebb_namespace() -> None:
+    root = repo_root()
+    schema = json.loads((root / "manifests" / "release-campaigns" / "v1.schema.json").read_text(encoding="utf-8"))
+
+    assert schema["$id"] == release_campaigns.SCHEMA_VERSION
+    assert "emulebb-build-tests" in release_campaigns.SCHEMA_VERSION
+
+
 def test_default_template_defines_strict_phase_taxonomy() -> None:
     template = release_campaigns.load_release_campaign_template(repo_root())
 
@@ -94,6 +102,17 @@ def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
     }
     assert covered_ids <= scenario_ids
     assert "emulebb.flow.p2p-overlord.rest.openapi-subset.v1" in scenario_ids
+    assert campaign["proofTier"] == "future"
+
+
+def test_campaign_validation_rejects_missing_proof_tier() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
+    campaign.pop("proofTier")
+
+    with pytest.raises(release_campaigns.ReleaseCampaignError, match="proofTier"):
+        release_campaigns.validate_release_campaign(campaign, template)
 
 
 def test_campaign_validation_warns_for_unmapped_gate() -> None:

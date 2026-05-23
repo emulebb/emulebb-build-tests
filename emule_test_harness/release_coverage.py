@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "emule-build-tests.release-coverage.v1"
+SCHEMA_VERSION = "emulebb-build-tests.release-coverage.v1"
 DEFAULT_MANIFEST_PATH = Path("manifests") / "release-coverage" / "ownership.v1.json"
 OWNER_LANES = {
     "native",

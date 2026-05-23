@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "emule-build-tests.release-campaign.v1",
+  "$id": "emulebb-build-tests.release-campaign.v1",
   "title": "eMuleBB release campaign manifest",
   "type": "object",
   "required": [
@@ -9,7 +9,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "emule-build-tests.release-campaign.v1"
+      "const": "emulebb-build-tests.release-campaign.v1"
     },
     "kind": {
       "enum": [
@@ -57,6 +57,46 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "template"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "templateId",
+          "title",
+          "description",
+          "taxonomy"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "instance"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "templateId",
+          "campaignId",
+          "releaseVersion",
+          "title",
+          "description",
+          "proofTier",
+          "phases",
+          "releaseGates"
+        ]
+      }
+    }
+  ],
   "$defs": {
     "phase": {
       "type": "object",
