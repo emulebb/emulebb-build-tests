@@ -49,6 +49,7 @@ SUITE_NAME = "category-incoming-path-matrix"
 API_KEY = "category-incoming-path-matrix-key"
 CATEGORY_SELECTOR_ID = "categoryId"
 CATEGORY_SELECTOR_NAME = "categoryName"
+CATEGORY_NAME_PREFIX = "CI035"
 STORAGE_ROLE_LOCAL = disk_guard.STORAGE_ROLE_LOCAL
 STORAGE_ROLE_VHD_DRIVE = disk_guard.STORAGE_ROLE_VHD_DRIVE
 STORAGE_ROLE_VHD_MOUNT = disk_guard.STORAGE_ROLE_VHD_MOUNT
@@ -171,6 +172,29 @@ def find_category_row(rows: list[Any], category_id: int, category_name: str) -> 
     return None
 
 
+def compact_category_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Returns stable category fields for cleanup diagnostics."""
+
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "path": row.get("path"),
+    }
+
+
+def is_test_owned_category_row(row: dict[str, Any], case_name: str, category_name: str) -> bool:
+    """Returns true for category rows owned by one matrix case."""
+
+    name = row.get("name")
+    return isinstance(name, str) and (name == category_name or (name.startswith(CATEGORY_NAME_PREFIX) and case_name in name))
+
+
+def find_test_owned_category_rows(rows: list[Any], case_name: str, category_name: str) -> list[dict[str, Any]]:
+    """Finds category rows that belong to one matrix case."""
+
+    return [row for row in rows if isinstance(row, dict) and is_test_owned_category_row(row, case_name, category_name)]
+
+
 def compact_result(result: dict[str, object] | None) -> dict[str, object] | None:
     """Returns bounded HTTP result diagnostics for JSON reports."""
 
@@ -181,6 +205,160 @@ def compact_result(result: dict[str, object] | None) -> dict[str, object] | None
         "content_type": result.get("content_type"),
         "json": result.get("json"),
         "body_text": str(result.get("body_text", ""))[:4000],
+    }
+
+
+def list_categories(base_url: str, api_key: str) -> tuple[dict[str, object], list[Any]]:
+    """Lists REST categories and returns the raw result plus parsed rows."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        "/api/v1/categories",
+        api_key=api_key,
+        request_timeout_seconds=5.0,
+    )
+    return result, rest_smoke.require_json_array(result, 200)
+
+
+def transfer_absent(result: dict[str, object]) -> bool:
+    """Returns true when a transfer lookup reports the expected NOT_FOUND state."""
+
+    if int(result.get("status", 0) or 0) != 404:
+        return False
+    payload = result.get("json")
+    if isinstance(payload, dict):
+        if payload.get("error") == "NOT_FOUND":
+            return True
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("code") == "NOT_FOUND":
+            return True
+    return "NOT_FOUND" in str(result.get("body_text", ""))
+
+
+def lookup_transfer(base_url: str, api_key: str, transfer_hash: str) -> dict[str, object]:
+    """Looks up one transfer hash through the public REST API."""
+
+    return rest_smoke.http_request(
+        base_url,
+        f"/api/v1/transfers/{transfer_hash.lower()}",
+        api_key=api_key,
+        request_timeout_seconds=5.0,
+    )
+
+
+def collect_case_record_state(
+    base_url: str,
+    api_key: str,
+    *,
+    case_name: str,
+    category_name: str,
+    transfer_hash: str,
+) -> dict[str, object]:
+    """Collects category and transfer records owned by one matrix case."""
+
+    categories_result, category_rows = list_categories(base_url, api_key)
+    matching_categories = find_test_owned_category_rows(category_rows, case_name, category_name)
+    transfer_lookup = lookup_transfer(base_url, api_key, transfer_hash)
+    transfer_is_absent = transfer_absent(transfer_lookup)
+    errors: list[str] = []
+    if matching_categories:
+        errors.append(f"found {len(matching_categories)} test-owned category record(s)")
+    if not transfer_is_absent:
+        errors.append(f"transfer hash {transfer_hash.lower()} is not absent")
+    return {
+        "clean": not errors,
+        "errors": errors,
+        "categories": compact_result(categories_result),
+        "matching_categories": [compact_category_row(row) for row in matching_categories],
+        "transfer_lookup": compact_result(transfer_lookup),
+        "transfer_absent": transfer_is_absent,
+    }
+
+
+def require_clean_case_records(state: dict[str, object], phase: str) -> None:
+    """Fails when a case has leftover REST records at a lifecycle boundary."""
+
+    if state.get("clean") is True:
+        return
+    raise RuntimeError(f"{phase} case record cleanup assertion failed: {json.dumps(state, default=str)}")
+
+
+def delete_category(base_url: str, api_key: str, category_id: int) -> dict[str, object]:
+    """Deletes one non-default category by id."""
+
+    if category_id == 0:
+        return {"skipped": True, "reason": "default category"}
+    result = rest_smoke.http_request(
+        base_url,
+        f"/api/v1/categories/{category_id}",
+        method="DELETE",
+        api_key=api_key,
+        request_timeout_seconds=10.0,
+    )
+    return compact_result(result) or {}
+
+
+def delete_transfer(base_url: str, api_key: str, transfer_hash: str) -> dict[str, object]:
+    """Deletes one transfer and its partial files when it exists."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        f"/api/v1/transfers/{transfer_hash.lower()}",
+        method="DELETE",
+        api_key=api_key,
+        json_body={"deleteFiles": True},
+        request_timeout_seconds=10.0,
+    )
+    return compact_result(result) or {}
+
+
+def cleanup_case_records(
+    base_url: str,
+    api_key: str,
+    *,
+    case_name: str,
+    category_name: str,
+    transfer_hash: str,
+    created_category_id: int | None,
+) -> dict[str, object]:
+    """Best-effort cleanup for records created by one matrix case."""
+
+    before = collect_case_record_state(
+        base_url,
+        api_key,
+        case_name=case_name,
+        category_name=category_name,
+        transfer_hash=transfer_hash,
+    )
+    deleted_transfers: list[dict[str, object]] = []
+    deleted_categories: list[dict[str, object]] = []
+    transfer_lookup = before.get("transfer_lookup")
+    if isinstance(transfer_lookup, dict) and transfer_lookup.get("status") != 404:
+        deleted_transfers.append(delete_transfer(base_url, api_key, transfer_hash))
+
+    category_ids: list[int] = []
+    if created_category_id is not None:
+        category_ids.append(created_category_id)
+    for row in before.get("matching_categories", []):
+        if isinstance(row, dict) and isinstance(row.get("id"), int):
+            category_ids.append(int(row["id"]))
+    for category_id in dict.fromkeys(category_ids):
+        if category_id != 0:
+            deleted_categories.append(delete_category(base_url, api_key, category_id))
+
+    after = collect_case_record_state(
+        base_url,
+        api_key,
+        case_name=case_name,
+        category_name=category_name,
+        transfer_hash=transfer_hash,
+    )
+    return {
+        "before": before,
+        "deleted_transfers": deleted_transfers,
+        "deleted_categories": deleted_categories,
+        "after": after,
+        "clean": after.get("clean") is True,
     }
 
 
@@ -260,6 +438,9 @@ def run_category_case(
         },
     }
     app = None
+    rest_ready = False
+    transfer_attempted = False
+    created_category_id: int | None = None
     try:
         profile_fixture = live_common.prepare_profile_base(
             seed_config_dir=seed_config_dir,
@@ -284,20 +465,26 @@ def run_category_case(
         summary["process_id"] = process_id
         summary["resource_snapshots"] = {"after_launch": rest_smoke.get_process_resource_snapshot(process_id)}
         summary["rest_ready"] = compact_result(rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds))
+        rest_ready = True
+        pre_case_state = collect_case_record_state(
+            base_url,
+            args.api_key,
+            case_name=case.name,
+            category_name=category_name,
+            transfer_hash=transfer_hash,
+        )
+        summary["pre_case_cleanup"] = pre_case_state
+        require_clean_case_records(pre_case_state, "pre-case")
 
         category_create_result, category = create_category(base_url, args.api_key, category_name, category_incoming_dir)
         category_id = int(category["id"])
-        categories_result = rest_smoke.http_request(
-            base_url,
-            "/api/v1/categories",
-            api_key=args.api_key,
-            request_timeout_seconds=5.0,
-        )
-        category_rows = rest_smoke.require_json_array(categories_result, 200)
+        created_category_id = category_id
+        categories_result, category_rows = list_categories(base_url, args.api_key)
         category_row = find_category_row(category_rows, category_id, category_name)
         category_path_ok = category_row is not None and category_path_matches(category_row, category_incoming_dir)
         selector_payload = category_selector_payload(case.selector, category_id, category_name)
 
+        transfer_attempted = True
         add_result = rest_smoke.http_request(
             base_url,
             "/api/v1/transfers",
@@ -360,6 +547,34 @@ def run_category_case(
     except Exception as exc:
         summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
     finally:
+        if rest_ready and (created_category_id is not None or transfer_attempted):
+            try:
+                post_case_cleanup = cleanup_case_records(
+                    base_url,
+                    args.api_key,
+                    case_name=case.name,
+                    category_name=category_name,
+                    transfer_hash=transfer_hash,
+                    created_category_id=created_category_id,
+                )
+                summary["post_case_cleanup"] = post_case_cleanup
+                if post_case_cleanup.get("clean") is not True:
+                    summary["record_leak_diagnostics"] = post_case_cleanup
+                    summary["status"] = "failed"
+                    cleanup_error = "post-case cleanup left category or transfer records behind"
+                    assertion = summary.get("guard_assertion")
+                    if isinstance(assertion, dict):
+                        errors = assertion.setdefault("errors", [])
+                        if isinstance(errors, list):
+                            errors.append(cleanup_error)
+                        assertion["status"] = "failed"
+                    if "error" not in summary:
+                        summary["error"] = {"type": "RuntimeError", "message": cleanup_error}
+            except Exception as exc:
+                summary["post_case_cleanup_error"] = {"type": type(exc).__name__, "message": str(exc)}
+                summary["status"] = "failed"
+                if "error" not in summary:
+                    summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
         if app is not None:
             try:
                 summary["shutdown"] = rest_smoke.close_app_cleanly_with_timing(app)
