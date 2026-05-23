@@ -1088,6 +1088,38 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(amutorrent_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)]
 
 
+def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    install_profiled_command_capture(monkeypatch, commands)
+    live_wire_inputs_file = tmp_path / "live-wire-inputs.local.json"
+    live_wire_inputs_file.write_text("{}", encoding="utf-8")
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "release-expanded",
+            "--live-wire-inputs-file",
+            str(live_wire_inputs_file),
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    by_script = {script_name(command): command for command in commands}
+    for script in ("search-ui-live.py", "rest-api-smoke.py", "rest-cold-start-dump-stress.py", "amutorrent-browser-smoke.py"):
+        command = by_script[script]
+        assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
+        if script in {"rest-api-smoke.py", "rest-cold-start-dump-stress.py"}:
+            assert "--enable-upnp" in command
+        if script in {"search-ui-live.py", "rest-api-smoke.py", "rest-cold-start-dump-stress.py"}:
+            assert option_values(command, "--live-wire-inputs-file") == [str(live_wire_inputs_file.resolve())]
+
+    deterministic_command = by_script["deterministic-two-client-transfer.py"]
+    assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
+
+
 def test_admin_storage_suite_requires_explicit_fixture_gate(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="require --admin-volume-fixtures"):
         live_e2e_suite.run_live_e2e_suite(

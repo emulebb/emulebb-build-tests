@@ -8,6 +8,14 @@ from emule_test_harness import live_profile_seed, live_profiles
 from emule_test_harness.ini import UTF16_LE_BOM, write_utf16_ini_text
 
 
+def section_text(text: str, section: str) -> str:
+    """Returns the body for one simple INI section."""
+
+    marker = f"[{section}]"
+    tail = text.split(marker, 1)[1]
+    return tail.split("\n[", 1)[0]
+
+
 def write_valid_seed(root: Path) -> Path:
     """Writes the minimal live-profile seed expected by the profile builder."""
 
@@ -40,15 +48,19 @@ def test_build_profile_base_creates_fresh_isolated_profile(tmp_path: Path) -> No
     assert preferences_path.read_bytes().startswith(UTF16_LE_BOM)
     text = live_profiles.read_ini_text(preferences_path)
     scenario_dir = artifacts_dir / "profiles" / "fixture-three-files"
+    emule_section = section_text(text, "eMule")
+    upnp_section = section_text(text, "UPnP")
     assert profile["scenario_id"] == "fixture-three-files"
     assert profile["scenario_artifacts_dir"] == scenario_dir
     assert profile["profile_base"] == scenario_dir / "profile-base"
     assert f"IncomingDir={live_profiles.win_path(scenario_dir / 'incoming', trailing_slash=True)}" in text
     assert f"TempDir={live_profiles.win_path(scenario_dir / 'temp', trailing_slash=True)}" in text
     assert f"TempDirs={live_profiles.win_path(scenario_dir / 'temp', trailing_slash=True)}" in text
-    assert "BindInterface=hide.me" in text
-    assert "BindAddr=" in text
-    assert "EnableUPnP=1" in text
+    assert "BindInterface=hide.me" in emule_section
+    assert "BindAddr=" in emule_section
+    assert "BindAddr=hide.me" not in emule_section
+    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in emule_section
+    assert "EnableUPnP=1" in upnp_section
     assert (config_dir / "preferences.dat").read_bytes() != b"prefs"
     assert live_profiles.read_ini_text(config_dir / "shareddir.dat") == shared_dir + "\r\n"
     assert profile["startup_profile_path"] == config_dir / live_profiles.STARTUP_PROFILE_TRACE_FILE_NAME
@@ -77,18 +89,25 @@ def test_apply_live_network_profile_sets_bind_interface_and_upnp(tmp_path: Path)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     preferences_path = config_dir / "preferences.ini"
-    write_utf16_ini_text(preferences_path, "[eMule]\nBindAddr=127.0.0.1\n[UPnP]\nEnableUPnP=0\n")
+    write_utf16_ini_text(
+        preferences_path,
+        "[eMule]\nBindAddr=127.0.0.1\n[WebServer]\nBindAddr=127.0.0.1\n[UPnP]\nEnableUPnP=0\n",
+    )
 
     live_profiles.apply_live_network_profile(config_dir, live_profiles.LiveNetworkProfileSpec())
 
     text = live_profiles.read_ini_text(preferences_path)
-    assert "BindInterface=hide.me" in text
-    assert "BindAddr=hide.me" not in text
-    assert "BindAddr=" in text
-    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in text
-    assert "EnableUPnP=1" in text
+    emule_section = section_text(text, "eMule")
+    webserver_section = section_text(text, "WebServer")
+    upnp_section = section_text(text, "UPnP")
+    assert "BindInterface=hide.me" in emule_section
+    assert "BindAddr=hide.me" not in emule_section
+    assert "BindAddr=" in emule_section
+    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in emule_section
+    assert "EnableUPnP=1" in upnp_section
     assert "CloseUPnPOnExit=0" in text
-    assert "127.0.0.1" not in text
+    assert "127.0.0.1" not in emule_section
+    assert "BindAddr=127.0.0.1" in webserver_section
 
 
 def test_apply_live_network_profile_rejects_empty_interface(tmp_path: Path) -> None:

@@ -25,7 +25,8 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
   "workspace": {
     "app_repo": {
       "seed_repo": {
-        "path": "..\\\\..\\\\repos\\\\eMule"
+        "name": "emulebb",
+        "path": "..\\\\..\\\\repos\\\\emulebb"
       },
       "variants": [
         { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
@@ -44,7 +45,7 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
 
     manifest = load_workspace_manifest(workspace_root)
 
-    assert manifest.seed_repo_path == Path("..\\..\\repos\\eMule")
+    assert manifest.seed_repo_path == Path("..\\..\\repos\\emulebb")
     assert [(variant.name, variant.path) for variant in manifest.variants] == [
         ("main", Path("app\\eMule-main")),
         ("community", Path("app\\eMule-community-baseline")),
@@ -81,7 +82,7 @@ def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path
         """{
   "workspace": {
     "app_repo": {
-      "seed_repo": { "path": "..\\\\..\\\\repos\\\\eMule" },
+      "seed_repo": { "name": "emulebb", "path": "..\\\\..\\\\repos\\\\emulebb" },
       "variants": [
         { "name": "main", "path": "app\\\\eMule-main", "branch": "main" },
         { "name": "community", "path": "app\\\\eMule-community-baseline", "branch": "baseline/community-0.72a" }

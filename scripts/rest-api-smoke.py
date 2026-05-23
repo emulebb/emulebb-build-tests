@@ -4719,12 +4719,7 @@ def exercise_arr_adapter_smoke(base_url: str, api_key: str) -> dict[str, object]
     qbit_add_category = "REST-QBIT-SMOKE"
     qbit_add_form = urllib.parse.urlencode(
         {
-            "urls": (
-                "magnet:?xt=urn:btih:"
-                f"{REST_SURFACE_QBIT_DOWNLOAD_HASH}00000000"
-                "&dn=qbit-rest-smoke.bin"
-                "&xl=1024"
-            ),
+            "urls": f"ed2k://|file|qbit-rest-smoke.bin|1024|{REST_SURFACE_QBIT_DOWNLOAD_HASH}|/",
             "category": qbit_add_category,
             "stopped": "true",
         }

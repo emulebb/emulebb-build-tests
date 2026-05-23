@@ -2384,6 +2384,23 @@ def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None
     assert "only eD2K URLs are supported" in seams
 
 
+def test_qbit_adapter_smoke_add_uses_native_ed2k_url() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    script_path = workspace_root / "repos" / "emulebb-build-tests" / "scripts" / "rest-api-smoke.py"
+    source = script_path.read_text(encoding="utf-8")
+    qbit_add_block = source[
+        source.index("qbit_add_form = urllib.parse.urlencode") : source.index(
+            "qbit_add_valid = record_arr_adapter_http_request"
+        )
+    ]
+
+    assert (
+        '"urls": f"ed2k://|file|qbit-rest-smoke.bin|1024|{REST_SURFACE_QBIT_DOWNLOAD_HASH}|/"'
+        in qbit_add_block
+    )
+    assert "magnet:?xt=urn:btih:" not in qbit_add_block
+
+
 def test_native_transfer_add_reports_queue_rejection_as_failure() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "WebServerJson.cpp"
