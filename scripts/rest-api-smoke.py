@@ -158,6 +158,7 @@ UNSAFE_LIVE_DOWNLOAD_SUFFIXES = (
 NAT_BACKEND_ATTEMPT_PREFIX = "Attempting NAT mapping backend "
 UPNP_IGD_BACKEND_NAME = "UPnP IGD (MiniUPnP)"
 PCP_NATPMP_BACKEND_NAME = "PCP/NAT-PMP"
+STARTUP_BIND_UNAVAILABLE_FRAGMENT = "selected bind interface is no longer available"
 LIVE_NETWORK_UNAVAILABLE_EXIT_CODE = 2
 REST_SURFACE_TEST_SERVER = {
     "address": "192.0.2.254",
@@ -3198,17 +3199,30 @@ def assert_upnp_backend_order(log_entries: list[object]) -> dict[str, object]:
 def wait_for_upnp_backend_order(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
     """Waits until the live log exposes NAT backend ordering and asserts UPnP is first."""
 
-    def resolve():
+    deadline = time.monotonic() + timeout_seconds
+    last_value: object = None
+    while time.monotonic() < deadline:
         result = http_request(base_url, "/api/v1/logs?limit=400", api_key=api_key)
         if int(result["status"]) != 200:
-            return None
+            last_value = compact_http_result(result)
+            time.sleep(0.5)
+            continue
         entries = require_json_array(result, 200)
+        messages = extract_log_messages(entries)
+        bind_unavailable_message = next(
+            (message for message in messages if STARTUP_BIND_UNAVAILABLE_FRAGMENT in message),
+            None,
+        )
+        if bind_unavailable_message is not None:
+            raise LiveNetworkUnavailableError(bind_unavailable_message)
         summary = summarize_nat_backend_order(entries)
         if not summary["backend_names"]:
-            return None
+            last_value = summary
+            time.sleep(0.5)
+            continue
         return assert_upnp_backend_order(entries)
 
-    return wait_for(resolve, timeout=timeout_seconds, interval=0.5, description="UPnP NAT backend order")
+    raise RuntimeError(f"Timed out waiting for UPnP NAT backend order. Last value: {last_value!r}")
 
 
 def wait_for_log_message_containing(

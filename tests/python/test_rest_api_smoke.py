@@ -60,6 +60,40 @@ def test_nat_backend_order_requires_attempts() -> None:
         module.assert_upnp_backend_order([{"message": "eMuleBB 0.7.3 x64 ready"}])
 
 
+def test_nat_backend_order_reports_missing_bind_interface_as_live_network_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": [
+                {
+                    "message": (
+                        "Networking disabled for this session because the selected "
+                        "bind interface is no longer available: hide.me"
+                    )
+                }
+            ],
+            "raw_json": {
+                "data": [
+                    {
+                        "message": (
+                            "Networking disabled for this session because the selected "
+                            "bind interface is no longer available: hide.me"
+                        )
+                    }
+                ],
+                "meta": {"apiVersion": "v1"},
+            },
+        },
+    )
+
+    with pytest.raises(module.LiveNetworkUnavailableError, match="hide\\.me"):
+        module.wait_for_upnp_backend_order("https://127.0.0.1:1", "api-key", 0.1)
+
+
 def test_p2p_bind_override_writes_interface_name(tmp_path: Path) -> None:
     module = load_rest_api_smoke_module()
     config_dir = tmp_path / "config"
