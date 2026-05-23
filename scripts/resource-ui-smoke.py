@@ -130,10 +130,10 @@ def canonical_workspace_root(workspace_root: Path) -> Path:
 
 
 def default_release_languages_path(workspace_root: Path, repo_root: Path) -> Path:
-    workspace_candidate = canonical_workspace_root(workspace_root) / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json"
+    workspace_candidate = canonical_workspace_root(workspace_root) / "repos" / "emulebb-tooling" / "helpers" / "rc-release-languages.json"
     if workspace_candidate.is_file():
         return workspace_candidate
-    return (repo_root.parent / "eMule-tooling" / "helpers" / "rc-release-languages.json").resolve()
+    return (repo_root.parent / "emulebb-tooling" / "helpers" / "rc-release-languages.json").resolve()
 
 
 def load_release_languages(manifest_path: Path) -> list[dict[str, object]]:

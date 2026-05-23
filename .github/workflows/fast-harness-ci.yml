@@ -24,19 +24,19 @@ jobs:
       - name: Checkout test harness
         uses: actions/checkout@v6
         with:
-          path: repos/eMule-build-tests
+          path: repos/emulebb-build-tests
 
       - name: Checkout app source
         uses: actions/checkout@v6
         with:
-          repository: eMulebb/eMule
+          repository: emulebb/emulebb
           path: workspaces/workspace/app/eMule-main
 
       - name: Checkout tooling docs
         uses: actions/checkout@v6
         with:
-          repository: eMulebb/eMule-tooling
-          path: repos/eMule-tooling
+          repository: emulebb/emulebb-tooling
+          path: repos/emulebb-tooling
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -44,9 +44,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install harness dependencies
-        working-directory: repos/eMule-build-tests
+        working-directory: repos/emulebb-build-tests
         run: python -m pip install -e .[dev,live]
 
       - name: Run fast harness tests
-        working-directory: repos/eMule-build-tests
+        working-directory: repos/emulebb-build-tests
         run: python -m pytest

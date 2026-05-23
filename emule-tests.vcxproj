@@ -71,7 +71,7 @@
     <HasUploadScoreSeams Condition="Exists('$(AppRoot)\srchybrid\UploadScoreSeams.h')">1</HasUploadScoreSeams>
     <HasPartFilePersistenceSeams>0</HasPartFilePersistenceSeams>
     <HasPartFilePersistenceSeams Condition="Exists('$(AppRoot)\srchybrid\PartFilePersistenceSeams.h')">1</HasPartFilePersistenceSeams>
-    <NlohmannJsonIncludeDir Condition="'$(NlohmannJsonIncludeDir)'==''">$(WorkspaceRoot)\..\..\repos\third_party\eMule-nlohmann-json\single_include</NlohmannJsonIncludeDir>
+    <NlohmannJsonIncludeDir Condition="'$(NlohmannJsonIncludeDir)'==''">$(WorkspaceRoot)\..\..\repos\third_party\emulebb-nlohmann-json\single_include</NlohmannJsonIncludeDir>
     <OutDir>build\$(BuildTag)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>build\$(BuildTag)\$(Platform)\$(Configuration)\obj\</IntDir>
     <TargetName>emule-tests</TargetName>

@@ -23,7 +23,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Workspace deps.json contains p2p_overlord_agents and p2p_overlord_be, both resolving to eMulebb-owned repositories."
+              "description": "Workspace deps.json contains p2p_overlord_agents and p2p_overlord_be, both resolving to emulebb-owned repositories."
             }
           ]
         },
@@ -83,7 +83,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Future conformance runner must load repos.eMule-tooling/docs/rest/REST-API-OPENAPI.yaml and fail drift in any claimed p2p-overlord /api/v1 route."
+              "description": "Future conformance runner must load repos.emulebb-tooling/docs/rest/REST-API-OPENAPI.yaml and fail drift in any claimed p2p-overlord /api/v1 route."
             }
           ]
         }

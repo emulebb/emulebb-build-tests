@@ -909,7 +909,7 @@ def build_suite_command(
         if shared_root is not None:
             command.extend(["--shared-root", str(shared_root.resolve())])
     if spec.is_resource_ui_smoke:
-        release_languages_json = workspace_root.parent.parent / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json"
+        release_languages_json = workspace_root.parent.parent / "repos" / "emulebb-tooling" / "helpers" / "rc-release-languages.json"
         command.extend(["--release-languages-json", str(release_languages_json.resolve())])
         command.extend(["--language-scope", "release"])
         command.extend(["--language-timeout-seconds", str(resource_ui_language_timeout_seconds)])

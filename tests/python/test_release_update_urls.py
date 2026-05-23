@@ -25,21 +25,21 @@ def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
     release_tests_cpp = (
         workspace_root
         / "repos"
-        / "eMule-build-tests"
+        / "emulebb-build-tests"
         / "src"
         / "release_update_check.tests.cpp"
     ).read_text(encoding="utf-8", errors="ignore")
 
-    assert "https://emulebb.github.io/eMule-tooling/HELP/" in preferences_cpp
+    assert "https://emulebb.github.io/emulebb-tooling/HELP/" in preferences_cpp
     assert "GetOnlineHelpURL()" in emule_cpp
     assert "GetOnlineHelpURL()" in emule_dlg_cpp
     assert 'GetHomepageBaseURL() + _T("/faq/")' not in emule_dlg_cpp
-    assert "https://github.com/eMulebb/eMule/releases" in preferences_cpp
-    assert "https://api.github.com/repos/eMulebb/eMule/releases/latest" in preferences_cpp
-    assert "https://github.com/eMulebb/eMule/releases/tag/" in release_tests_cpp
+    assert "https://github.com/emulebb/emulebb/releases" in preferences_cpp
+    assert "https://api.github.com/repos/emulebb/emulebb/releases/latest" in preferences_cpp
+    assert "https://github.com/emulebb/emulebb/releases/tag/" in release_tests_cpp
 
     combined = "\n".join([emule_cpp, preferences_cpp, emule_dlg_cpp, release_tests_cpp])
-    assert "github.com/eMulebb/eMule-tooling/blob/main/docs/HELP.md" not in combined
+    assert "github.com/emulebb/emulebb-tooling/blob/main/docs/HELP.md" not in combined
     assert "github.com/itlezy" not in combined
     assert "api.github.com/repos/itlezy" not in combined
 

@@ -12,7 +12,7 @@ from emule_test_harness.build_tests import (
 
 def make_config(tmp_path: Path) -> BuildTestsConfig:
     return BuildTestsConfig(
-        test_repo_root=tmp_path / "repos" / "eMule-build-tests",
+        test_repo_root=tmp_path / "repos" / "emulebb-build-tests",
         workspace_root=tmp_path / "workspaces" / "workspace",
         app_root=tmp_path / "workspaces" / "workspace" / "app" / "eMule-main",
         configuration="Debug",

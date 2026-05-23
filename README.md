@@ -3,15 +3,15 @@
 This repository is the shared test harness for the canonical eMuleBB workspace rooted at `EMULE_WORKSPACE_ROOT`.
 
 This repo assumes the canonical workspace created by
-`python -m emule_workspace materialize` from `repos\eMule-build`.
+`python -m emule_workspace materialize` from `repos\emulebb-build`.
 
 Minimum expected roots:
 
-- `EMULE_WORKSPACE_ROOT\repos\eMule-build`
-- `EMULE_WORKSPACE_ROOT\repos\eMule-build-tests`
+- `EMULE_WORKSPACE_ROOT\repos\emulebb-build`
+- `EMULE_WORKSPACE_ROOT\repos\emulebb-build-tests`
 - `EMULE_WORKSPACE_ROOT\workspaces\workspace`
 
-Use `repos\eMule-build\README.md` for the full workspace topology and
+Use `repos\emulebb-build\README.md` for the full workspace topology and
 materialization contract.
 
 It owns:
@@ -32,7 +32,7 @@ Supported branch:
 - `main`
 
 Workspace branch roles are owned by
-`EMULE_WORKSPACE_ROOT\repos\eMule-tooling\docs\WORKSPACE-POLICY.md`. Do not
+`EMULE_WORKSPACE_ROOT\repos\emulebb-tooling\docs\WORKSPACE-POLICY.md`. Do not
 infer release status from branch names. Baseline workspaces may be edited only
 when the change is strictly to enable tests, seams, logging, tracing, or
 debugging; they are not feature-development branches.
@@ -92,7 +92,7 @@ Script inventory:
 | Path | Role | Status | Notes |
 | --- | --- | --- | --- |
 | `scripts\build-emule-tests.py` | operator-facing build wrapper | maintained | builds `emule-tests.exe`, optional run |
-| `scripts\guard-tracked-files.py` | operator-facing guard | maintained | privacy/path leak gate before builds, implemented by `repos\eMule-tooling\ci\policy_guards.py` |
+| `scripts\guard-tracked-files.py` | operator-facing guard | maintained | privacy/path leak gate before builds, implemented by `repos\emulebb-tooling\ci\policy_guards.py` |
 | `scripts\run-native-coverage.py` | operator-facing Python coverage runner | maintained | OpenCppCoverage orchestration |
 | `scripts\run-live-diff.py` | operator-facing Python parity runner | maintained | Python-first live-diff implementation |
 | `scripts\run-community-core-coverage.py` | operator-facing Python comparison runner | maintained | canonical `main` vs `community` pass |
@@ -140,7 +140,7 @@ Harness output roots:
 - explicit artifact, profile, mount, or report paths below `%TEMP%`, `%TMP%`,
   or `%LOCALAPPDATA%\Temp` are rejected; test outcomes must be predictable and
   workspace-owned
-- older repo-local `repos\eMule-build-tests\reports` and
+- older repo-local `repos\emulebb-build-tests\reports` and
   `workspaces\workspace\state\live-e2e-artifacts` paths are legacy evidence
   locations only and are not used for new runs
 
@@ -386,7 +386,7 @@ Startup-profile scenarios:
 Tracked-file privacy guard:
 
 - `scripts\guard-tracked-files.py` fails when tracked files contain local user-home paths or personal-identifier filename leaks derived from the current environment or an untracked local override file
-- the guard implementation is owned by `repos\eMule-tooling\ci\policy_guards.py`; this repo keeps only a compatibility import facade and operator wrapper
+- the guard implementation is owned by `repos\emulebb-tooling\ci\policy_guards.py`; this repo keeps only a compatibility import facade and operator wrapper
 - `scripts\build-emule-tests.py` runs that guard by default before building
 - the same guard is enforced in GitHub Actions for pushes and pull requests
 

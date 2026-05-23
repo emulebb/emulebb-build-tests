@@ -12,7 +12,7 @@ from emule_test_harness.workspace_layout import (
 
 def test_default_roots_use_canonical_repo_layout(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
-    test_repo_root = tmp_path / "repos" / "eMule-build-tests"
+    test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
 
     assert get_default_workspace_root(test_repo_root) == tmp_path / "workspaces" / "workspace"
 
@@ -33,7 +33,7 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
       ]
     },
     "repos": {
-      "tooling": "..\\\\..\\\\repos\\\\eMule-tooling",
+      "tooling": "..\\\\..\\\\repos\\\\emulebb-tooling",
       "p2p_overlord_agents": "..\\\\..\\\\repos\\\\p2p-overlord-agents"
     }
   }
@@ -49,7 +49,7 @@ def test_workspace_manifest_parser_reads_seed_and_variants(tmp_path: Path) -> No
         ("main", Path("app\\eMule-main")),
         ("community", Path("app\\eMule-community-baseline")),
     ]
-    assert manifest.repos["tooling"] == Path("..\\..\\repos\\eMule-tooling")
+    assert manifest.repos["tooling"] == Path("..\\..\\repos\\emulebb-tooling")
     assert manifest.repos["p2p_overlord_agents"] == Path("..\\..\\repos\\p2p-overlord-agents")
 
 

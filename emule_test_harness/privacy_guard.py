@@ -13,16 +13,16 @@ def tooling_ci_root() -> Path:
     env_root = os.environ.get("EMULE_WORKSPACE_ROOT")
     candidates: list[Path] = []
     if env_root:
-        candidates.append(Path(env_root).resolve() / "repos" / "eMule-tooling" / "ci")
+        candidates.append(Path(env_root).resolve() / "repos" / "emulebb-tooling" / "ci")
 
     test_repo_root = Path(__file__).resolve().parent.parent
-    candidates.append(test_repo_root.parent / "eMule-tooling" / "ci")
-    candidates.append(test_repo_root.parent.parent / "repos" / "eMule-tooling" / "ci")
+    candidates.append(test_repo_root.parent / "emulebb-tooling" / "ci")
+    candidates.append(test_repo_root.parent.parent / "repos" / "emulebb-tooling" / "ci")
 
     for candidate in candidates:
         if (candidate / "policy_guards.py").is_file():
             return candidate
-    raise RuntimeError("Unable to locate repos\\eMule-tooling\\ci\\policy_guards.py.")
+    raise RuntimeError("Unable to locate repos\\emulebb-tooling\\ci\\policy_guards.py.")
 
 
 TOOLING_CI_ROOT = tooling_ci_root()

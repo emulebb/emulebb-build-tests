@@ -44,7 +44,7 @@ def test_release_language_manifest_uses_historical_dll_stems(tmp_path: Path) -> 
 def test_language_id_table_covers_canonical_release_manifest() -> None:
     smoke = load_resource_ui_smoke()
     workspace_root = Path(__file__).resolve().parents[3]
-    manifest = workspace_root / "eMule-tooling" / "helpers" / "rc-release-languages.json"
+    manifest = workspace_root / "emulebb-tooling" / "helpers" / "rc-release-languages.json"
 
     languages = smoke.load_release_languages(manifest)
 
@@ -55,11 +55,11 @@ def test_language_id_table_covers_canonical_release_manifest() -> None:
 def test_default_manifest_path_accepts_variant_workspace_root(tmp_path: Path) -> None:
     smoke = load_resource_ui_smoke()
     workspace_root = tmp_path / "workspaces" / "workspace"
-    manifest = tmp_path / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json"
+    manifest = tmp_path / "repos" / "emulebb-tooling" / "helpers" / "rc-release-languages.json"
     manifest.parent.mkdir(parents=True)
     manifest.write_text('{"languages": []}', encoding="utf-8")
 
-    assert smoke.default_release_languages_path(workspace_root, tmp_path / "repos" / "eMule-build-tests") == manifest
+    assert smoke.default_release_languages_path(workspace_root, tmp_path / "repos" / "emulebb-build-tests") == manifest
 
 
 def test_release_scope_marks_missing_language_dlls_as_failed(tmp_path: Path) -> None:

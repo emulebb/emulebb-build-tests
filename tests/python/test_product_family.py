@@ -12,7 +12,7 @@ def test_product_family_resolves_p2p_overlord_repos_and_openapi(tmp_path: Path) 
         """{
   "workspace": {
     "repos": {
-      "tooling": "..\\\\..\\\\repos\\\\eMule-tooling",
+      "tooling": "..\\\\..\\\\repos\\\\emulebb-tooling",
       "p2p_overlord_agents": "..\\\\..\\\\repos\\\\p2p-overlord-agents",
       "p2p_overlord_be": "..\\\\..\\\\repos\\\\p2p-overlord-be"
     }
@@ -27,5 +27,5 @@ def test_product_family_resolves_p2p_overlord_repos_and_openapi(tmp_path: Path) 
     assert repos["p2p_overlord_agents"] == (tmp_path / "repos" / "p2p-overlord-agents").resolve()
     assert repos["p2p_overlord_be"] == (tmp_path / "repos" / "p2p-overlord-be").resolve()
     assert product_family.resolve_canonical_rest_openapi(workspace_root) == (
-        tmp_path / "repos" / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+        tmp_path / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
     ).resolve()

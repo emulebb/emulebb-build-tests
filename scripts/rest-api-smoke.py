@@ -245,7 +245,7 @@ REST_STRESS_LONG_UNICODE_PATH = (
     ("deep_unicode_λ_例" * 24)
     + "-linux-iso-library-Ω-例.mkv"
 )
-OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
 NATIVE_ROUTE_HEADER_PATH = (
     REPO_ROOT.parent.parent
     / "workspaces"

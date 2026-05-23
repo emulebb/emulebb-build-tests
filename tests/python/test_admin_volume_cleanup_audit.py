@@ -22,7 +22,7 @@ def test_transient_path_detection_catches_workspace_artifacts() -> None:
     module = load_script_module()
 
     assert module.is_transient_harness_path(r"C:\repo\workspaces\workspace\state\test-artifacts\suite\crash-dumps")
-    assert module.is_transient_harness_path(r"C:\repo\repos\eMule-build-tests\reports\old\crash-dumps")
+    assert module.is_transient_harness_path(r"C:\repo\repos\emulebb-build-tests\reports\old\crash-dumps")
     assert not module.is_transient_harness_path(r"C:\operator-data\Documents\eMuleDumps")
 
 

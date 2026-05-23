@@ -32,7 +32,7 @@ def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path)
 
 
 def test_build_config_resolves_default_app_roots(tmp_path: Path) -> None:
-    test_repo_root = tmp_path / "repos" / "eMule-build-tests"
+    test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
     (workspace_root / "app" / "eMule-main").mkdir(parents=True)
     (workspace_root / "app" / "eMule-community-baseline").mkdir(parents=True)
@@ -53,7 +53,7 @@ def test_build_config_resolves_default_app_roots(tmp_path: Path) -> None:
 
 
 def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeypatch) -> None:
-    test_repo_root = tmp_path / "repos" / "eMule-build-tests"
+    test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
     main_app_root = workspace_root / "app" / "eMule-main"
     community_app_root = workspace_root / "app" / "eMule-community-baseline"

@@ -126,7 +126,7 @@ def _is_harness_owned_dump_folder(value: object) -> bool:
     return (
         _path_has_parts(value, ("state", "test-artifacts"))
         or _path_has_parts(value, ("state", "live-e2e-artifacts"))
-        or _path_has_parts(value, ("repos", "eMule-build-tests", "reports"))
+        or _path_has_parts(value, ("repos", "emulebb-build-tests", "reports"))
     )
 
 
@@ -519,7 +519,7 @@ def exact_rmtree(path: Path) -> None:
 
 
 def get_repo_root(script_file: str | Path) -> Path:
-    """Returns the `eMule-build-tests` repo root from one script path."""
+    """Returns the `emulebb-build-tests` repo root from one script path."""
 
     return Path(script_file).resolve().parent.parent
 

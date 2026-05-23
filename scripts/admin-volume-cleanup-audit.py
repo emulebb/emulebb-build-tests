@@ -65,7 +65,7 @@ def is_transient_harness_path(path_text: object) -> bool:
     return (
         path_has_parts(path_text, ("state", "test-artifacts"))
         or path_has_parts(path_text, ("state", "live-e2e-artifacts"))
-        or path_has_parts(path_text, ("repos", "eMule-build-tests", "reports"))
+        or path_has_parts(path_text, ("repos", "emulebb-build-tests", "reports"))
     )
 
 

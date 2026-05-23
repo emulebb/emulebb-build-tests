@@ -21,7 +21,7 @@ namespace
 	std::string BuildReleaseJson(const char *pszTagName, const char *pszAssetName, bool bDraft = false, bool bPrerelease = false)
 	{
 		return std::string("{\"tag_name\":\"") + pszTagName
-			+ "\",\"html_url\":\"https://github.com/eMulebb/eMule/releases/tag/" + pszTagName
+			+ "\",\"html_url\":\"https://github.com/emulebb/emulebb/releases/tag/" + pszTagName
 			+ "\",\"draft\":" + (bDraft ? "true" : "false")
 			+ ",\"prerelease\":" + (bPrerelease ? "true" : "false")
 			+ ",\"assets\":[{\"name\":\"" + pszAssetName + "\"}]}";

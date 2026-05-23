@@ -68,9 +68,9 @@ def test_rest_scheme_defaults_to_https_and_accepts_http() -> None:
 
 def test_live_wire_inputs_path_accepts_workspace_relative_explicit_path(tmp_path: Path, monkeypatch) -> None:
     clean = load_clean_module()
-    repo_root = tmp_path / "repos" / "eMule-build-tests"
+    repo_root = tmp_path / "repos" / "emulebb-build-tests"
     repo_root.mkdir(parents=True)
-    workspace_relative = Path("repos") / "eMule-build-tests" / "live-wire-inputs.local.json"
+    workspace_relative = Path("repos") / "emulebb-build-tests" / "live-wire-inputs.local.json"
     inputs_file = tmp_path / workspace_relative
     inputs_file.write_text("{}", encoding="utf-8")
     monkeypatch.chdir(tmp_path)

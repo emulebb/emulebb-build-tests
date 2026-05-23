@@ -23,7 +23,7 @@ class FakeHarnessCliCommon:
             workspace_root=self.root / "workspaces" / "workspace",
             app_root=self.root / "workspaces" / "workspace" / "app" / "eMule-main",
             app_exe=self.root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "x64" / kwargs["configuration"] / "emulebb.exe",
-            seed_config_dir=self.root / "repos" / "eMule-build-tests" / "manifests" / "live-profile-seed" / "config",
+            seed_config_dir=self.root / "repos" / "emulebb-build-tests" / "manifests" / "live-profile-seed" / "config",
             configuration=kwargs["configuration"],
             suite_name=kwargs["suite_name"],
             source_artifacts_dir=source_artifacts_dir,
@@ -1244,7 +1244,7 @@ def test_ui_resource_depth_profile_runs_resource_smoke_and_preferences(tmp_path:
     resource_command = commands[0]
     assert option_values(resource_command, "--language-scope") == ["release"]
     assert option_values(resource_command, "--release-languages-json") == [
-        str((tmp_path / "repos" / "eMule-tooling" / "helpers" / "rc-release-languages.json").resolve())
+        str((tmp_path / "repos" / "emulebb-tooling" / "helpers" / "rc-release-languages.json").resolve())
     ]
     assert option_values(resource_command, "--language-timeout-seconds") == [str(live_e2e_suite.DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS)]
     assert "--fail-fast-languages" not in resource_command

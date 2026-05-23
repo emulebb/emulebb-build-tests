@@ -22,7 +22,7 @@ def main() -> int:
 
     workspace_root = args.workspace_root.resolve()
     schema = build_preference_schema(workspace_root)
-    output_path = workspace_root / "repos" / "eMule-build-tests" / "manifests" / "preference-schema.v1.json"
+    output_path = workspace_root / "repos" / "emulebb-build-tests" / "manifests" / "preference-schema.v1.json"
     output_path.write_text(json.dumps(schema, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     print(f"Wrote {len(schema['entries'])} schema entries and {len(schema['uiBindings'])} UI bindings to {output_path}")
     return 0

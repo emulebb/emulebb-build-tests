@@ -45,7 +45,7 @@ def default_seed_sources() -> tuple[LiveSeedSource, ...]:
 def fetch_url_bytes(url: str, timeout_seconds: float) -> bytes:
     """Downloads one URL using a stable harness user agent."""
 
-    request = urllib.request.Request(url, headers={"User-Agent": "eMule-build-tests/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "emulebb-build-tests/1.0"})
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         return response.read()
 

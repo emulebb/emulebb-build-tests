@@ -997,7 +997,7 @@ def test_rest_payload_unwraps_success_and_error_envelopes() -> None:
 
 
 def test_openapi_error_envelope_documents_stable_error_codes() -> None:
-    openapi_path = Path(__file__).resolve().parents[3] / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+    openapi_path = Path(__file__).resolve().parents[3] / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
     text = openapi_path.read_text(encoding="utf-8")
     error_schema = text[text.index("    ErrorEnvelope:\n") : text.index("    Collection:\n")]
 
@@ -1018,7 +1018,7 @@ def test_openapi_error_envelope_documents_stable_error_codes() -> None:
 
 
 def test_openapi_metadata_tracks_beta_release_contract() -> None:
-    openapi_path = Path(__file__).resolve().parents[3] / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+    openapi_path = Path(__file__).resolve().parents[3] / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
     text = openapi_path.read_text(encoding="utf-8")
 
     assert "  version: 0.7.3\n" in text
@@ -1626,7 +1626,7 @@ def test_rest_smoke_uses_v1_upload_remove_operation_route() -> None:
 
 def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
+    rest_docs_dir = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     docs = "\n".join(
         (rest_docs_dir / name).read_text(encoding="utf-8")
         for name in ("REST-API-CONTRACT.md", "REST-API-ADAPTERS.md", "REST-API-PARITY-INVENTORY.md")
@@ -1644,7 +1644,7 @@ def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
 
 def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_boundary() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
-    rest_docs_dir = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
+    rest_docs_dir = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     adapter_doc = (rest_docs_dir / "REST-API-ADAPTERS.md").read_text(encoding="utf-8")
     contract_doc = (rest_docs_dir / "REST-API-CONTRACT.md").read_text(encoding="utf-8")
     parity_doc = (rest_docs_dir / "REST-API-PARITY-INVENTORY.md").read_text(encoding="utf-8")
@@ -2226,7 +2226,7 @@ def test_openapi_custom_success_responses_reject_generic_ok_fallbacks() -> None:
 def test_openapi_error_code_enum_covers_native_rest_codes() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
-    openapi_text = (workspace_root / "repos" / "eMule-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml").read_text(
+    openapi_text = (workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml").read_text(
         encoding="utf-8"
     )
     native_text = (app_source / "WebServerJson.cpp").read_text(encoding="utf-8")
@@ -2304,7 +2304,7 @@ def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
 def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
     workspace_root = Path(__file__).resolve().parents[4]
     app_source = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid"
-    tooling_docs = workspace_root / "repos" / "eMule-tooling" / "docs" / "rest"
+    tooling_docs = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     source = (app_source / "WebServerArrCompat.cpp").read_text(encoding="utf-8")
     seams = (app_source / "WebServerArrCompatSeams.h").read_text(encoding="utf-8")
     adapter_docs = (tooling_docs / "REST-API-ADAPTERS.md").read_text(encoding="utf-8")
@@ -2411,7 +2411,7 @@ def test_qbit_compat_documents_hash_mutation_cap() -> None:
         / "WebServerQBitCompatSeams.h"
     ).read_text(encoding="utf-8")
     adapter_docs = (
-        workspace_root / "repos" / "eMule-tooling" / "docs" / "rest" / "REST-API-ADAPTERS.md"
+        workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-ADAPTERS.md"
     ).read_text(encoding="utf-8")
 
     assert "kMaxHashMutationCount = 100" in seams

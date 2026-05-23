@@ -128,7 +128,7 @@ def test_resolve_profile_seed_dir_uses_default_or_override(tmp_path: Path) -> No
 
 def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
-    repo_root = tmp_path / "repos" / "eMule-build-tests"
+    repo_root = tmp_path / "repos" / "emulebb-build-tests"
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
     app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
@@ -167,7 +167,7 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
 
 def test_prepare_run_paths_rejects_explicit_windows_temp_artifacts(monkeypatch, tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
-    repo_root = tmp_path / "repos" / "eMule-build-tests"
+    repo_root = tmp_path / "repos" / "emulebb-build-tests"
     script_file = repo_root / "scripts" / "suite.py"
     seed_dir = repo_root / "manifests" / "live-profile-seed" / "config"
     app_root = tmp_path / "workspaces" / "workspace" / "app" / "eMule-main"
