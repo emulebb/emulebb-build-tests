@@ -177,6 +177,13 @@ TEST_CASE("Producer transfer refresh requests stay on the shared timer cadence")
 	CHECK(BuildQueuedTransferDisplayRefreshMask(DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS, true) == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS));
 }
 
+TEST_CASE("Forced transfer refreshes flush only when there is visible work")
+{
+	CHECK_FALSE(ShouldFlushForcedTransferDisplayRefresh(false, DISPLAY_REFRESH_DOWNLOAD_LIST));
+	CHECK_FALSE(ShouldFlushForcedTransferDisplayRefresh(true, DISPLAY_REFRESH_NONE));
+	CHECK(ShouldFlushForcedTransferDisplayRefresh(true, DISPLAY_REFRESH_DOWNLOAD_LIST));
+}
+
 TEST_CASE("Transfer refresh resort policy tracks volatile transfer sort columns")
 {
 	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, 0));
@@ -224,6 +231,20 @@ TEST_CASE("Display refresh mask exchange drains the queued bits and clears the p
 
 	CHECK(nPendingMask.exchange(0) == (DISPLAY_REFRESH_UPLOAD_LIST | DISPLAY_REFRESH_QUEUE_LIST));
 	CHECK(nPendingMask.load() == 0);
+}
+
+TEST_CASE("Display refresh mask drains selected visible bits without dropping hidden work")
+{
+	std::atomic<LONG> nPendingMask(0);
+
+	AccumulatePendingDisplayMask(nPendingMask, DISPLAY_REFRESH_DOWNLOAD_LIST);
+	AccumulatePendingDisplayMask(nPendingMask, DISPLAY_REFRESH_CLIENT_LIST);
+	AccumulatePendingDisplayMask(nPendingMask, DISPLAY_REFRESH_QUEUE_LIST);
+
+	CHECK(DrainPendingDisplayMask(nPendingMask, DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_CLIENT_LIST) == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_CLIENT_LIST));
+	CHECK(nPendingMask.load() == DISPLAY_REFRESH_QUEUE_LIST);
+	CHECK(DrainPendingDisplayMask(nPendingMask, DISPLAY_REFRESH_DOWNLOAD_LIST) == 0);
+	CHECK(nPendingMask.load() == DISPLAY_REFRESH_QUEUE_LIST);
 }
 
 TEST_CASE("App state helpers preserve the running and closing classifications")
