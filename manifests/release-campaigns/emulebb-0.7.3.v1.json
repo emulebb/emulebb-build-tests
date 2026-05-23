@@ -804,9 +804,14 @@
       ]
     },
     {
-      "id": "certification-overnight",
+      "id": "quick-rc-live-proof",
       "coveredBy": [
         "emulebb.flow.rest.contract.controller.v1",
+        "emulebb.flow.livewire.release-expanded.weak-path.v1",
+        "emulebb.flow.livewire.search-ui.download.lifecycle.v1",
+        "emulebb.flow.livewire.rest.download-trigger.v1",
+        "emulebb.flow.ui.preferences.shared-files.hash.release.v1",
+        "emulebb.flow.stress.heavy-profile.cpu-memory.v1",
         "emulebb.flow.stress.rest.crash-leak-dump.v1",
         "emulebb.flow.amutorrent.live.clean-startup.v1",
         "emulebb.flow.amutorrent.live.emulebb-ui.v1",
