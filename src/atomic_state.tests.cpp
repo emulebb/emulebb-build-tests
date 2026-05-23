@@ -177,6 +177,31 @@ TEST_CASE("Producer transfer refresh requests stay on the shared timer cadence")
 	CHECK(BuildQueuedTransferDisplayRefreshMask(DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS, true) == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS));
 }
 
+TEST_CASE("Transfer refresh resort policy tracks volatile transfer sort columns")
+{
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, 0));
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, 1));
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, 14));
+	CHECK(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, 4));
+	CHECK(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, 10));
+
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_UPLOADS, 0));
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_UPLOADS, 19));
+	CHECK(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_UPLOADS, 2));
+	CHECK(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_UPLOADS, 20));
+
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOAD_CLIENTS, 2));
+	CHECK(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOAD_CLIENTS, 3));
+
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_QUEUE, 20));
+	CHECK(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_QUEUE, 4));
+
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_CLIENTS, 0));
+	CHECK(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_CLIENTS, 2));
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(static_cast<ETransferDisplayListKind>(999), 2));
+	CHECK_FALSE(IsTransferRefreshSensitiveSortColumn(TRANSFER_DISPLAY_LIST_DOWNLOADS, -1));
+}
+
 #if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
 TEST_CASE("Display refresh post helper consumes payloads when delivery is unavailable")
 {
