@@ -41,16 +41,16 @@ TEST_CASE("Win32 callback timer dispatch guards preserve shutdown and visibility
 	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(true, true));
 }
 
-TEST_CASE("Queue-list timer delay keeps the legacy ten-second minimum")
+TEST_CASE("Queue-list timer delay follows the shared transfer cadence")
 {
-	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(500u) == 10000u);
-	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(1000u) == 10000u);
-	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(2000u) == 10000u);
-	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(5000u) == 10000u);
+	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(500u) == 500u);
+	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(1000u) == 1000u);
+	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(2000u) == 2000u);
+	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(5000u) == 5000u);
 	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(10000u) == 10000u);
-	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(0u) == 10000u);
-	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(750u) == 10000u);
-	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(60000u) == 10000u);
+	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(0u) == 2000u);
+	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(750u) == 2000u);
+	CHECK(Win32CallbackTimerSeams::GetQueueListRefreshTimerDelayMs(60000u) == 2000u);
 }
 
 TEST_SUITE_END();

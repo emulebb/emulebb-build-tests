@@ -74,6 +74,53 @@ TEST_CASE("Desktop UI refresh intervals throttle non-forced list refreshes")
 	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(true, 101u, 100u, 10000u));
 }
 
+TEST_CASE("Transfer display timer uses the normalized desktop refresh cadence")
+{
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(500u) == 500u);
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(1000u) == 1000u);
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(2000u) == 2000u);
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(5000u) == 5000u);
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(10000u) == 10000u);
+	CHECK(GetTransferDisplayRefreshTimerDelayMs(750u) == 2000u);
+}
+
+TEST_CASE("Transfer display mask keeps hidden-list work pending")
+{
+	const uint32_t allTransferLists =
+		DISPLAY_REFRESH_DOWNLOAD_LIST
+		| DISPLAY_REFRESH_UPLOAD_LIST
+		| DISPLAY_REFRESH_DOWNLOAD_CLIENTS
+		| DISPLAY_REFRESH_QUEUE_LIST
+		| DISPLAY_REFRESH_CLIENT_LIST
+		| DISPLAY_REFRESH_TRANSFER_SUMMARY;
+
+	CHECK(FilterVisibleTransferDisplayRefreshMask(allTransferLists, false, true, true, true, true, true, true) == DISPLAY_REFRESH_NONE);
+	CHECK(FilterVisibleTransferDisplayRefreshMask(allTransferLists, true, false, true, true, true, true, true) == DISPLAY_REFRESH_NONE);
+
+	const uint32_t onlyDownloadsVisible = FilterVisibleTransferDisplayRefreshMask(
+		allTransferLists,
+		true,
+		true,
+		true,
+		false,
+		false,
+		false,
+		false);
+	CHECK(onlyDownloadsVisible == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_TRANSFER_SUMMARY));
+
+	const uint32_t secondaryPaneVisible = FilterVisibleTransferDisplayRefreshMask(
+		allTransferLists,
+		true,
+		true,
+		false,
+		false,
+		true,
+		false,
+		false);
+	CHECK(secondaryPaneVisible == (DISPLAY_REFRESH_DOWNLOAD_CLIENTS | DISPLAY_REFRESH_TRANSFER_SUMMARY));
+	CHECK((allTransferLists & ~secondaryPaneVisible) == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_UPLOAD_LIST | DISPLAY_REFRESH_QUEUE_LIST | DISPLAY_REFRESH_CLIENT_LIST));
+}
+
 #if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
 TEST_CASE("Display refresh post helper consumes payloads when delivery is unavailable")
 {
