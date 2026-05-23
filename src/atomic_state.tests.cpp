@@ -158,6 +158,13 @@ TEST_CASE("Explicit transfer display refresh includes only visible lists while r
 		true) == DISPLAY_REFRESH_NONE);
 }
 
+TEST_CASE("Producer transfer refresh requests stay on the shared timer cadence")
+{
+	CHECK(BuildQueuedTransferDisplayRefreshMask(DISPLAY_REFRESH_DOWNLOAD_LIST, false) == DISPLAY_REFRESH_DOWNLOAD_LIST);
+	CHECK(BuildQueuedTransferDisplayRefreshMask(DISPLAY_REFRESH_DOWNLOAD_LIST, true) == DISPLAY_REFRESH_DOWNLOAD_LIST);
+	CHECK(BuildQueuedTransferDisplayRefreshMask(DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS, true) == (DISPLAY_REFRESH_DOWNLOAD_LIST | DISPLAY_REFRESH_DOWNLOAD_CLIENTS));
+}
+
 #if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
 TEST_CASE("Display refresh post helper consumes payloads when delivery is unavailable")
 {
