@@ -106,6 +106,8 @@ RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_SEARCHES_PER_WAVE = 3
 RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_MAX_CONCURRENT_SEARCHES = 2
 RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE = 0
 RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 5.0
+RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS = 50
+RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT = 100
 RELEASE_EXPANDED_SEARCH_UI_SEARCH_ROUNDS = 2
 RELEASE_EXPANDED_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 2
 BETA_RELEASE_REST_COLD_START_DUMP_STRESS_WAVES = 1
@@ -533,6 +535,18 @@ CPU_PROFILED_SUITE_NAMES = {
 }
 
 
+def enable_default_rest_transport_adversity(args: argparse.Namespace) -> None:
+    """Enables the transport-adversity probe that matches the selected REST scheme."""
+
+    if args.rest_webserver_scheme == "https":
+        if args.rest_tls_handshake_adversity_budget == "off":
+            args.rest_tls_handshake_adversity_budget = "smoke"
+        return
+
+    if args.rest_socket_adversity_budget == "off":
+        args.rest_socket_adversity_budget = "smoke"
+
+
 def resolve_suite_specs(selected_names: list[str] | None) -> tuple[SuiteSpec, ...]:
     """Resolves selected suite names while preserving the canonical order."""
 
@@ -588,10 +602,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.rest_stress_concurrency = 2
         if args.rest_stress_max_failures == 1:
             args.rest_stress_max_failures = 0
-        if args.rest_socket_adversity_budget == "off":
-            args.rest_socket_adversity_budget = "smoke"
-        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
-            args.rest_tls_handshake_adversity_budget = "smoke"
+        enable_default_rest_transport_adversity(args)
         if args.rest_leak_churn_budget == "off":
             args.rest_leak_churn_budget = "smoke"
         if args.rest_leak_churn_cycles is None:
@@ -606,6 +617,20 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.rest_cold_start_dump_stress_max_concurrent_searches = 2
         if args.rest_cold_start_dump_stress_downloads_per_wave == DEFAULT_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE:
             args.rest_cold_start_dump_stress_downloads_per_wave = 0
+        if (
+            args.rest_cold_start_dump_stress_max_missing_download_triggers
+            == DEFAULT_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS
+        ):
+            args.rest_cold_start_dump_stress_max_missing_download_triggers = (
+                RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS
+            )
+        if (
+            args.rest_cold_start_dump_stress_synthetic_queue_fill_count
+            == DEFAULT_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT
+        ):
+            args.rest_cold_start_dump_stress_synthetic_queue_fill_count = (
+                RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT
+            )
         if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
             args.rest_cold_start_dump_stress_post_drain_seconds = 5.0
 
@@ -627,10 +652,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.rest_stress_concurrency = RELEASE_EXPANDED_REST_STRESS_CONCURRENCY
         if args.rest_stress_max_failures == 1:
             args.rest_stress_max_failures = RELEASE_EXPANDED_REST_STRESS_MAX_FAILURES
-        if args.rest_socket_adversity_budget == "off":
-            args.rest_socket_adversity_budget = "smoke"
-        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
-            args.rest_tls_handshake_adversity_budget = "smoke"
+        enable_default_rest_transport_adversity(args)
         if args.rest_leak_churn_budget == "off":
             args.rest_leak_churn_budget = "smoke"
         if args.rest_leak_churn_cycles is None:
@@ -667,10 +689,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.rest_stress_concurrency = STABILIZATION_REST_STRESS_CONCURRENCY
         if args.rest_stress_max_failures == 1:
             args.rest_stress_max_failures = STABILIZATION_REST_STRESS_MAX_FAILURES
-        if args.rest_socket_adversity_budget == "off":
-            args.rest_socket_adversity_budget = "smoke"
-        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
-            args.rest_tls_handshake_adversity_budget = "smoke"
+        enable_default_rest_transport_adversity(args)
         if args.rest_leak_churn_budget == "off":
             args.rest_leak_churn_budget = "smoke"
         if args.rest_leak_churn_cycles is None:
@@ -717,10 +736,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.rest_stress_concurrency = 2
         if args.rest_stress_max_failures == 1:
             args.rest_stress_max_failures = 0
-        if args.rest_socket_adversity_budget == "off":
-            args.rest_socket_adversity_budget = "smoke"
-        if args.rest_webserver_scheme == "https" and args.rest_tls_handshake_adversity_budget == "off":
-            args.rest_tls_handshake_adversity_budget = "smoke"
+        enable_default_rest_transport_adversity(args)
         if args.rest_leak_churn_budget == "off":
             args.rest_leak_churn_budget = "smoke"
         if args.rest_leak_churn_cycles is None:

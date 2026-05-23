@@ -1302,7 +1302,7 @@ def test_openapi_response_dtos_expose_runtime_required_fields() -> None:
             "acceptingMutations",
             "shutdownInProgress",
         ],
-        "Status": ["lifecycle", "stats", "servers", "kad", "sharedStartupCache"],
+        "Status": ["lifecycle", "stats", "servers", "kad", "sharedStartupCache", "runtimeDiagnostics"],
         "Stats": [
             "connected",
             "downloadSpeedKiBps",
@@ -1407,7 +1407,38 @@ def test_openapi_response_dtos_expose_runtime_required_fields() -> None:
             "files",
         ],
         "ServerStatus": ["connected", "connecting", "currentServer", "lowId", "serverCount"],
-        "Kad": ["running", "connected", "firewalled", "bootstrapping", "bootstrapProgress", "users", "files"],
+        "Kad": [
+            "running",
+            "connected",
+            "firewalled",
+            "bootstrapping",
+            "bootstrapProgress",
+            "contactCount",
+            "lanMode",
+            "users",
+            "files",
+        ],
+        "RuntimeDiagnostics": [
+            "processId",
+            "knownFileCount",
+            "sharedFileCount",
+            "sharedHashingCount",
+            "downloadFileCount",
+            "activeUploads",
+            "waitingUploads",
+            "geolocation",
+        ],
+        "GeolocationRuntimeDiagnostics": [
+            "enabled",
+            "databaseLoaded",
+            "databaseBytes",
+            "indexBytes",
+            "nodeCount",
+            "recordSize",
+            "lookupCacheCount",
+            "decodedNodeCacheCount",
+            "refreshQueued",
+        ],
     }
 
     for schema_name, required_fields in expected_required_fields.items():

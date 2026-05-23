@@ -818,7 +818,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["rest_stress_duration_seconds"] == live_e2e_suite.STABILIZATION_REST_STRESS_DURATION_SECONDS
     assert summary["rest_stress_concurrency"] == live_e2e_suite.STABILIZATION_REST_STRESS_CONCURRENCY
     assert summary["rest_stress_max_failures"] == live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES
-    assert summary["rest_socket_adversity_budget"] == "smoke"
+    assert summary["rest_socket_adversity_budget"] == "off"
     assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
     assert summary["rest_leak_churn_budget"] == "smoke"
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
@@ -870,7 +870,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert option_values(rest_command, "--rest-stress-max-failures") == [
         str(live_e2e_suite.STABILIZATION_REST_STRESS_MAX_FAILURES)
     ]
-    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-leak-churn-cycles") == [
@@ -946,7 +946,8 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["rest_stress_duration_seconds"] == live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_DURATION_SECONDS
     assert summary["rest_stress_concurrency"] == live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_CONCURRENCY
     assert summary["rest_stress_max_failures"] == live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_MAX_FAILURES
-    assert summary["rest_socket_adversity_budget"] == "smoke"
+    assert summary["rest_socket_adversity_budget"] == "off"
+    assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
     assert summary["rest_leak_churn_budget"] == "smoke"
     assert summary["rest_leak_churn_cycles"] == live_e2e_suite.RELEASE_EXPANDED_REST_LEAK_CHURN_CYCLES
     assert summary["rest_stop_start_after_churn"] is True
@@ -1040,7 +1041,8 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert option_values(rest_command, "--rest-stress-max-failures") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_STRESS_MAX_FAILURES)
     ]
-    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
+    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-leak-churn-cycles") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_LEAK_CHURN_CYCLES)
@@ -1086,6 +1088,41 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert script_name(amutorrent_command) == "amutorrent-browser-smoke.py"
     assert "--admin-volume-fixtures" in amutorrent_command
     assert option_values(amutorrent_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)]
+
+
+def test_release_expanded_quick_profile_tolerates_sparse_live_cold_start_candidates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    commands: list[list[str]] = []
+    install_profiled_command_capture(monkeypatch, commands)
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "release-expanded-quick",
+            "--suite",
+            "rest-cold-start-dump-stress",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["rest_cold_start_dump_stress"]["max_missing_download_triggers"] == (
+        live_e2e_suite.RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS
+    )
+    assert summary["rest_cold_start_dump_stress"]["synthetic_queue_fill_count"] == (
+        live_e2e_suite.RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT
+    )
+    cold_start_command = commands[0]
+    assert option_values(cold_start_command, "--max-missing-download-triggers") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_MAX_MISSING_DOWNLOAD_TRIGGERS)
+    ]
+    assert option_values(cold_start_command, "--synthetic-queue-fill-count") == [
+        str(live_e2e_suite.RELEASE_EXPANDED_QUICK_REST_COLD_START_DUMP_STRESS_SYNTHETIC_QUEUE_FILL_COUNT)
+    ]
 
 
 def test_release_expanded_profile_propagates_real_live_profile_inputs(tmp_path: Path, monkeypatch) -> None:
@@ -1150,14 +1187,41 @@ def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: 
     )
 
     assert summary["status"] == "passed"
+    assert summary["rest_socket_adversity_budget"] == "off"
     assert summary["rest_tls_handshake_adversity_budget"] == "smoke"
     assert summary["rest_stress_budget"] == "soak"
     assert summary["rest_leak_churn_budget"] == "smoke"
 
     rest_command = commands[4]
+    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["smoke"]
+
+
+def test_stabilization_stress_profile_enables_raw_socket_adversity_for_http(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    install_profiled_command_capture(monkeypatch, commands)
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "stabilization-stress",
+            "--rest-webserver-scheme",
+            "http",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["rest_socket_adversity_budget"] == "smoke"
+    assert summary["rest_tls_handshake_adversity_budget"] == "off"
+
+    rest_command = commands[4]
+    assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
+    assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
 
 
 def test_cpu_heavy_profile_runs_shared_files_50k_under_cpu_profile(tmp_path: Path, monkeypatch) -> None:

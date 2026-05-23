@@ -1,4 +1,4 @@
-"""Live proof for VHD-backed part-file recovery and missing temp-volume startup."""
+"""Live proof for VHD-backed part-file recovery and non-blocking missing temp-volume startup."""
 
 from __future__ import annotations
 
@@ -138,6 +138,41 @@ def is_missing_temp_directory_dialog(title: str, body: str) -> bool:
     return "failed to create temporary files directory" in text and "system cannot find the path specified" in text
 
 
+def startup_error_log_path(profile_base: Path) -> Path:
+    """Returns the durable startup error log path for one isolated profile."""
+
+    return profile_base / "logs" / "eMule-startup-errors.log"
+
+
+def read_startup_error_log(profile_base: Path) -> str:
+    """Reads the durable startup error log when it exists."""
+
+    path = startup_error_log_path(profile_base)
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def wait_for_missing_temp_directory_startup_log(profile_base: Path, timeout_seconds: float = 20.0) -> dict[str, object]:
+    """Waits until non-modal startup recovery records the missing temp directory."""
+
+    def resolve() -> dict[str, object] | None:
+        text = read_startup_error_log(profile_base)
+        if not is_missing_temp_directory_dialog("eMule", text):
+            return None
+        return {
+            "path": str(startup_error_log_path(profile_base)),
+            "text": text[-4000:],
+        }
+
+    return live_common.wait_for(
+        resolve,
+        timeout=timeout_seconds,
+        interval=0.25,
+        description="missing temp directory startup log",
+    )
+
+
 def wait_for_missing_temp_directory_dialog(app: Any, timeout_seconds: float = 20.0) -> dict[str, object]:
     """Waits for eMule's missing temp-volume startup dialog and captures it."""
 
@@ -162,8 +197,8 @@ def wait_for_missing_temp_directory_dialog(app: Any, timeout_seconds: float = 20
     )
 
 
-def kill_blocked_startup_app(app: Any) -> dict[str, object]:
-    """Force-stops an app instance that is intentionally blocked on a startup modal."""
+def kill_intermediate_recovery_app(app: Any) -> dict[str, object]:
+    """Force-stops the missing-volume relaunch before it can persist fallback paths."""
 
     process_id = rest_smoke.get_app_process_id(app)
     app.kill(soft=False)
@@ -287,13 +322,17 @@ def run_vhd_partfile_recovery(args: argparse.Namespace) -> dict[str, object]:
             )
 
         app = live_common.launch_app(paths.app_exe, profile_base, minimized_to_tray=True)
-        missing_dialog = wait_for_missing_temp_directory_dialog(app)
-        missing_kill = kill_blocked_startup_app(app)
+        missing_ready = rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
+        missing_lookup = fetch_transfer(base_url, args.api_key, transfer_hash)
+        missing_startup_log = wait_for_missing_temp_directory_startup_log(profile_base)
+        missing_kill = kill_intermediate_recovery_app(app)
         app = None
-        missing_ok = bool(missing_dialog)
+        missing_ok = int(missing_ready.get("status", 0) or 0) == 200 and bool(missing_startup_log)
         summary["checks"]["missing_volume_relaunch"] = {
             "status": "passed" if missing_ok else "failed",
-            "startup_dialog": missing_dialog,
+            "non_modal_rest_ready": compact_result(missing_ready),
+            "transfer_lookup_without_vhd": compact_result(missing_lookup),
+            "startup_error_log": missing_startup_log,
             "forced_shutdown": missing_kill,
         }
 

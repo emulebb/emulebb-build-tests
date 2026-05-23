@@ -60,6 +60,19 @@ def test_missing_temp_directory_dialog_matcher_requires_specific_error() -> None
     assert not module.is_missing_temp_directory_dialog("eMule", "Some unrelated startup warning")
 
 
+def test_missing_temp_startup_log_helpers_use_profile_log_dir(tmp_path: Path) -> None:
+    module = load_script_module()
+    log_path = tmp_path / "logs" / "eMule-startup-errors.log"
+    log_path.parent.mkdir()
+    log_path.write_text(
+        '2026-05-23 16:25:38 Failed to create Temporary Files directory "Z:\\vhd-partfile-recovery\\temp\\" - The system cannot find the path specified.\n',
+        encoding="utf-8",
+    )
+
+    assert module.startup_error_log_path(tmp_path) == log_path
+    assert module.is_missing_temp_directory_dialog("eMule", module.read_startup_error_log(tmp_path))
+
+
 def test_build_admin_fixture_config_defaults_to_large_vhd_and_sibling_mount(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

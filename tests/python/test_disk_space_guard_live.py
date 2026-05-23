@@ -53,6 +53,16 @@ def test_disk_space_guard_cases_cover_required_storage_matrix() -> None:
     assert any(case.extra_temp_roles == (module.STORAGE_ROLE_LOCAL,) and not case.expected_rejected for case in cases)
 
 
+def test_download_queue_temp_selection_reaches_placement_seam_before_rejecting() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source_path = workspace_root / "workspaces" / "workspace" / "app" / "eMule-main" / "srchybrid" / "DownloadQueue.cpp"
+    source = source_path.read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("CString CDownloadQueue::GetOptimalTempDir") : source.index("void CDownloadQueue::RefilterAllComments")]
+
+    assert "SelectTempDirForProtectedVolumeSnapshot" in block
+    assert "IsProtectedVolumeBreached" not in block
+
+
 def test_case_hash_is_deterministic_unique_hex() -> None:
     module = load_script_module()
 

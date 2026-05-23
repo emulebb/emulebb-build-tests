@@ -221,6 +221,30 @@ TEST_CASE("Queue disk-space production flow accepts same mounted temp and incomi
 	CHECK_EQ(decision.CandidateIndex, 0u);
 }
 
+TEST_CASE("Queue disk-space production flow falls back from a breached temp volume to a healthy extra temp")
+{
+	const VolumeIdentity lowTempVolume(_T("\\\\?\\Volume{low-temp}\\"));
+	const VolumeIdentity healthyLocalVolume(_T("\\\\?\\Volume{healthy-local}\\"));
+	const TempDirVolumeCandidate tempCandidates[] = {
+		MakeTempCandidate(lowTempVolume.c_str()),
+		MakeTempCandidate(healthyLocalVolume.c_str())
+	};
+	const ProtectedVolumeAvailability volumes[] = {
+		MakeVolumeAvailability(lowTempVolume.c_str(), -static_cast<int64_t>(4u * kGiB)),
+		MakeVolumeAvailability(healthyLocalVolume.c_str(), static_cast<int64_t>(10u * kGiB))
+	};
+
+	const TempDirPlacementDecision decision = SelectTempDir(
+		tempCandidates,
+		std::size(tempCandidates),
+		volumes,
+		std::size(volumes),
+		healthyLocalVolume,
+		512u * 1024u * 1024u);
+	CHECK(decision.HasSelection);
+	CHECK_EQ(decision.CandidateIndex, 1u);
+}
+
 TEST_CASE("Queue disk-space production flow fails closed for unresolved mounted temp candidates")
 {
 	const VolumeIdentity parentVolume(_T("\\\\?\\Volume{parent-drive}\\"));
