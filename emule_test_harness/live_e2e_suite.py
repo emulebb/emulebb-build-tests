@@ -838,6 +838,8 @@ def build_suite_command(
     rest_leak_churn_cycles: int | None = None,
     rest_stop_start_after_churn: bool = False,
     p2p_bind_interface_name: str = "hide.me",
+    godzilla_visible_ui: bool = False,
+    godzilla_p2p_bind_interface_address: str | None = None,
     live_wire_inputs_file: Path | None = None,
     search_ui_search_rounds: int = DEFAULT_SEARCH_UI_SEARCH_ROUNDS,
     search_ui_download_lifecycle_count: int = DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT,
@@ -1004,6 +1006,11 @@ def build_suite_command(
         and p2p_bind_interface_name != "hide.me"
     ):
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.name == "godzilla-local-swarm":
+        if godzilla_visible_ui:
+            command.append("--visible-ui")
+        if godzilla_p2p_bind_interface_address:
+            command.extend(["--p2p-bind-interface-address", godzilla_p2p_bind_interface_address])
     if spec.name == "local-kad-swarm":
         command.extend(["--bootstrap-mode", local_kad_bootstrap_mode])
         command.extend(["--nodes-dat-fixture-mode", local_kad_nodes_dat_fixture_mode])
@@ -1514,6 +1521,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--search-ui-search-rounds", type=int, default=DEFAULT_SEARCH_UI_SEARCH_ROUNDS)
     parser.add_argument("--search-ui-download-lifecycle-count", type=int, default=DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT)
+    parser.add_argument("--godzilla-visible-ui", action="store_true")
+    parser.add_argument("--godzilla-p2p-bind-interface-address")
     return parser
 
 
@@ -1787,6 +1796,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures
             ],
         },
+        "godzilla_local_swarm": {
+            "visible_ui": bool(args.godzilla_visible_ui),
+            "p2p_bind_interface_address": args.godzilla_p2p_bind_interface_address,
+        },
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
             "searches_per_wave": args.rest_cold_start_dump_stress_searches_per_wave,
@@ -1863,6 +1876,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_leak_churn_cycles=args.rest_leak_churn_cycles,
             rest_stop_start_after_churn=args.rest_stop_start_after_churn,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
+            godzilla_visible_ui=args.godzilla_visible_ui,
+            godzilla_p2p_bind_interface_address=args.godzilla_p2p_bind_interface_address,
             live_wire_inputs_file=live_wire_inputs_file,
             search_ui_search_rounds=args.search_ui_search_rounds,
             search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,

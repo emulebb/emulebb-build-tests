@@ -640,6 +640,39 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
 
 
+def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "godzilla-local-swarm",
+            "--p2p-bind-interface-name",
+            "Ethernet",
+            "--godzilla-p2p-bind-interface-address",
+            "192.168.1.210",
+            "--godzilla-visible-ui",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert "--visible-ui" in commands[0]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == ["Ethernet"]
+    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.210"]
+    assert summary["godzilla_local_swarm"] == {
+        "visible_ui": True,
+        "p2p_bind_interface_address": "192.168.1.210",
+    }
+
+
 def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> None:
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("local-kad-swarm"),
