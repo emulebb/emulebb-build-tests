@@ -660,6 +660,8 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
             "192.168.1.210",
             "--godzilla-visible-ui",
             "--godzilla-cpu-profile",
+            "--godzilla-vhd-runtime-root",
+            "drive-letter",
             "--admin-volume-fixtures",
             "--vhd-size-mb",
             "8192",
@@ -672,12 +674,14 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert "--cpu-profile" in commands[0]
     assert "--admin-volume-fixtures" in commands[0]
     assert option_values(commands[0], "--vhd-size-mb") == ["8192"]
+    assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["Ethernet"]
     assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.210"]
     assert summary["godzilla_local_swarm"] == {
         "visible_ui": True,
         "p2p_bind_interface_address": "192.168.1.210",
         "cpu_profile": True,
+        "vhd_runtime_root": "drive-letter",
     }
 
 

@@ -135,7 +135,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--vhd-size-mb", type=int, default=DEFAULT_VHD_SIZE_MB)
     parser.add_argument("--mount-root")
     parser.add_argument("--keep-admin-fixtures", action="store_true")
-    parser.add_argument("--vhd-runtime-root", choices=["folder-mount", "drive-letter"], default="folder-mount")
+    parser.add_argument(
+        "--vhd-runtime-root",
+        choices=["folder-mount", "drive-letter"],
+        default="drive-letter",
+        help="Runtime root for generated Godzilla profiles. drive-letter keeps the legacy tracing harness below MAX_PATH.",
+    )
     parser.add_argument("--capture-final-dump", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--procdump-path")
     parser.add_argument("--cpu-profile", action=argparse.BooleanOptionalAction, default=False)

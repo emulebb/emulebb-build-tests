@@ -842,6 +842,7 @@ def build_suite_command(
     godzilla_visible_ui: bool = False,
     godzilla_p2p_bind_interface_address: str | None = None,
     godzilla_cpu_profile: bool = False,
+    godzilla_vhd_runtime_root: str = "drive-letter",
     live_wire_inputs_file: Path | None = None,
     search_ui_search_rounds: int = DEFAULT_SEARCH_UI_SEARCH_ROUNDS,
     search_ui_download_lifecycle_count: int = DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT,
@@ -1015,6 +1016,7 @@ def build_suite_command(
             command.extend(["--p2p-bind-interface-address", godzilla_p2p_bind_interface_address])
         if godzilla_cpu_profile:
             command.append("--cpu-profile")
+        command.extend(["--vhd-runtime-root", godzilla_vhd_runtime_root])
     if spec.name == "local-kad-swarm":
         command.extend(["--bootstrap-mode", local_kad_bootstrap_mode])
         command.extend(["--nodes-dat-fixture-mode", local_kad_nodes_dat_fixture_mode])
@@ -1528,6 +1530,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--godzilla-visible-ui", action="store_true")
     parser.add_argument("--godzilla-p2p-bind-interface-address")
     parser.add_argument("--godzilla-cpu-profile", action="store_true")
+    parser.add_argument("--godzilla-vhd-runtime-root", choices=["drive-letter", "folder-mount"], default="drive-letter")
     return parser
 
 
@@ -1805,6 +1808,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "visible_ui": bool(args.godzilla_visible_ui),
             "p2p_bind_interface_address": args.godzilla_p2p_bind_interface_address,
             "cpu_profile": bool(args.godzilla_cpu_profile),
+            "vhd_runtime_root": args.godzilla_vhd_runtime_root,
         },
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
@@ -1885,6 +1889,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             godzilla_visible_ui=args.godzilla_visible_ui,
             godzilla_p2p_bind_interface_address=args.godzilla_p2p_bind_interface_address,
             godzilla_cpu_profile=args.godzilla_cpu_profile,
+            godzilla_vhd_runtime_root=args.godzilla_vhd_runtime_root,
             live_wire_inputs_file=live_wire_inputs_file,
             search_ui_search_rounds=args.search_ui_search_rounds,
             search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,
