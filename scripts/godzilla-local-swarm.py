@@ -925,6 +925,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_port=ports["client1_rest"],
             rest_bind_addr=args.bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_addr=p2p_address,
         )
         dtt.configure_client_profile(
             config_dir=Path(client2["config_dir"]),
@@ -935,6 +936,7 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_enabled=True,
             autoconnect=True,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_addr=p2p_address,
         )
         for client in extra_emulebb_clients:
             dtt.configure_client_profile(
@@ -949,6 +951,7 @@ def main(argv: list[str] | None = None) -> int:
                 rest_port=int(client["rest_port"]),
                 rest_bind_addr=args.bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
+                p2p_bind_addr=p2p_address,
             )
         for config_dir in (
             Path(client1["config_dir"]),

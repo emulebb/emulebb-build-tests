@@ -599,6 +599,7 @@ def configure_client_profile(
     rest_port: int | None = None,
     rest_bind_addr: str = "127.0.0.1",
     p2p_bind_interface_name: str = "",
+    p2p_bind_addr: str = "",
 ) -> None:
     """Applies deterministic network and optional REST settings to one profile."""
 
@@ -632,7 +633,7 @@ def configure_client_profile(
             ("SparsePartFiles", "0"),
             ("CloseUPnPOnExit", "0"),
             ("BindInterface", p2p_bind_interface_name.strip()),
-            ("BindAddr", ""),
+            ("BindAddr", p2p_bind_addr.strip()),
             ("BlockNetworkWhenBindUnavailableAtStartup", "1" if p2p_bind_interface_name.strip() else "0"),
         ),
     )
