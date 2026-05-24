@@ -841,6 +841,7 @@ def build_suite_command(
     p2p_bind_interface_name: str = "hide.me",
     godzilla_visible_ui: bool = False,
     godzilla_p2p_bind_interface_address: str | None = None,
+    godzilla_cpu_profile: bool = False,
     live_wire_inputs_file: Path | None = None,
     search_ui_search_rounds: int = DEFAULT_SEARCH_UI_SEARCH_ROUNDS,
     search_ui_download_lifecycle_count: int = DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT,
@@ -1012,6 +1013,8 @@ def build_suite_command(
             command.append("--visible-ui")
         if godzilla_p2p_bind_interface_address:
             command.extend(["--p2p-bind-interface-address", godzilla_p2p_bind_interface_address])
+        if godzilla_cpu_profile:
+            command.append("--cpu-profile")
     if spec.name == "local-kad-swarm":
         command.extend(["--bootstrap-mode", local_kad_bootstrap_mode])
         command.extend(["--nodes-dat-fixture-mode", local_kad_nodes_dat_fixture_mode])
@@ -1524,6 +1527,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--search-ui-download-lifecycle-count", type=int, default=DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT)
     parser.add_argument("--godzilla-visible-ui", action="store_true")
     parser.add_argument("--godzilla-p2p-bind-interface-address")
+    parser.add_argument("--godzilla-cpu-profile", action="store_true")
     return parser
 
 
@@ -1800,6 +1804,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "godzilla_local_swarm": {
             "visible_ui": bool(args.godzilla_visible_ui),
             "p2p_bind_interface_address": args.godzilla_p2p_bind_interface_address,
+            "cpu_profile": bool(args.godzilla_cpu_profile),
         },
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
@@ -1879,6 +1884,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             godzilla_visible_ui=args.godzilla_visible_ui,
             godzilla_p2p_bind_interface_address=args.godzilla_p2p_bind_interface_address,
+            godzilla_cpu_profile=args.godzilla_cpu_profile,
             live_wire_inputs_file=live_wire_inputs_file,
             search_ui_search_rounds=args.search_ui_search_rounds,
             search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,

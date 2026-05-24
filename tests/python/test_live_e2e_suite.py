@@ -659,6 +659,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
             "--godzilla-p2p-bind-interface-address",
             "192.168.1.210",
             "--godzilla-visible-ui",
+            "--godzilla-cpu-profile",
             "--admin-volume-fixtures",
             "--vhd-size-mb",
             "8192",
@@ -668,6 +669,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
 
     assert summary["status"] == "passed"
     assert "--visible-ui" in commands[0]
+    assert "--cpu-profile" in commands[0]
     assert "--admin-volume-fixtures" in commands[0]
     assert option_values(commands[0], "--vhd-size-mb") == ["8192"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["Ethernet"]
@@ -675,6 +677,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert summary["godzilla_local_swarm"] == {
         "visible_ui": True,
         "p2p_bind_interface_address": "192.168.1.210",
+        "cpu_profile": True,
     }
 
 
