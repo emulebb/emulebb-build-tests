@@ -216,6 +216,7 @@ SUITE_SPECS = (
         script_name="godzilla-local-swarm.py",
         category="protocol",
         default_enabled=False,
+        accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
         name="local-ed2k-search-soak",
