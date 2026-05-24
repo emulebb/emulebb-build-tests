@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: emulebb/emulebb
-          path: workspaces/workspace/app/eMule-main
+          path: workspaces/workspace/app/emulebb-main
 
       - name: Checkout tooling docs
         uses: actions/checkout@v6
