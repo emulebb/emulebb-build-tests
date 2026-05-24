@@ -193,12 +193,49 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     assert f"MaxDownload={module.DETERMINISTIC_BANDWIDTH_LIMIT_KIB}" in emule_section
     assert "MaxUploadClientsAllowed=32" in text
     assert module.read_preferences_snapshot(config_dir)["CryptLayerSupported"] is None
+    assert "SaveLogToDisk=1" in emule_section
+    assert "SaveDebugToDisk=1" in emule_section
+    assert "VerboseOptions=1" in emule_section
+    assert "Verbose=1" in emule_section
+    assert "FullVerbose=1" in emule_section
+    assert "MaxLogFileSize=10485760" in emule_section
+    assert "MaxLogBuff=256" in emule_section
     assert "CommitFiles=2" in emule_section
     assert "FileBufferSize=16384" in emule_section
     assert "FileBufferTimeLimit=1" in emule_section
     assert "AllocateFullFile=0" in emule_section
     assert "SparsePartFiles=0" in emule_section
     assert f"Nick={module.CLIENT01.nick}" in emule_section
+
+
+def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp_path: Path) -> None:
+    module = load_suite_module()
+    config_dir = tmp_path / "profile" / "config"
+    config_dir.mkdir(parents=True)
+    module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+
+    module.configure_client_profile(
+        config_dir=config_dir,
+        app_exe=tmp_path / "app" / "emulebb.exe",
+        nick=module.CLIENT01.nick,
+        tcp_port=4662,
+        udp_port=4672,
+        ed2k_enabled=True,
+        autoconnect=True,
+        p2p_bind_addr="192.168.1.210",
+        crypt_layer_supported=True,
+        crypt_layer_requested=True,
+        crypt_layer_required=True,
+        crypt_tcp_padding_length=128,
+    )
+
+    text = module.live_common.read_ini_text(config_dir / "preferences.ini")
+    emule_section = text.split("[WebServer]", 1)[0]
+    assert "BindAddr=192.168.1.210" in emule_section
+    assert "CryptLayerSupported=1" in emule_section
+    assert "CryptLayerRequested=1" in emule_section
+    assert "CryptLayerRequired=1" in emule_section
+    assert "CryptTCPPaddingLength=128" in emule_section
 
 
 def test_default_fixture_size_is_132_mib() -> None:

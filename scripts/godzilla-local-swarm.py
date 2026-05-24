@@ -39,6 +39,7 @@ def load_local_module(module_name: str, filename: str):
 
 dtt = load_local_module("deterministic_two_client_transfer_godzilla", "deterministic-two-client-transfer.py")
 amule_seed = load_local_module("deterministic_amule_transfer_godzilla", "deterministic-amule-transfer.py")
+protocol_matrix = load_local_module("local_ed2k_protocol_combinations_godzilla", "local-ed2k-protocol-combinations.py")
 harness_cli_common = dtt.harness_cli_common
 live_common = dtt.live_common
 rest_smoke = dtt.rest_smoke
@@ -63,6 +64,7 @@ DEFAULT_UI_CYCLE_INTERVAL_SECONDS = 0.75
 DEFAULT_FILE_BASE_SIZE_BYTES = 4096
 DEFAULT_FILE_MEDIUM_SIZE_BYTES = 64 * 1024
 DEFAULT_FILE_LARGE_SIZE_BYTES = 1024 * 1024
+DEFAULT_PROTOCOL_CASE = "obfuscated-preferred"
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
 OWNER_SEEDS = {
     "emulebb": 0xE001,
@@ -132,6 +134,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--file-base-size-bytes", type=int, default=DEFAULT_FILE_BASE_SIZE_BYTES)
     parser.add_argument("--file-medium-size-bytes", type=int, default=DEFAULT_FILE_MEDIUM_SIZE_BYTES)
     parser.add_argument("--file-large-size-bytes", type=int, default=DEFAULT_FILE_LARGE_SIZE_BYTES)
+    parser.add_argument("--protocol-case", choices=tuple(protocol_matrix.PROTOCOL_CASE_MAP.keys()), default=DEFAULT_PROTOCOL_CASE)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--amule-daemon-exe")
@@ -274,6 +277,17 @@ def resolve_required_amule(paths, args: argparse.Namespace):
     if not availability.available or availability.executable is None or availability.control_executable is None:
         raise RuntimeError(f"aMule is unavailable for Godzilla swarm: {availability.reason}")
     return availability
+
+
+def protocol_preferences(case) -> dict[str, object]:
+    """Returns the client preference values for one protocol-obfuscation case."""
+
+    return {
+        "crypt_layer_supported": bool(case.client_crypt_supported),
+        "crypt_layer_requested": bool(case.client_crypt_requested),
+        "crypt_layer_required": bool(case.client_crypt_required),
+        "crypt_tcp_padding_length": int(protocol_matrix.PROTOCOL_PADDING_LENGTH),
+    }
 
 
 def admin_files_page(admin_base_url: str, api_key: str, *, search: str, page: int = 1) -> dict[str, object]:
@@ -801,6 +815,8 @@ def main(argv: list[str] | None = None) -> int:
         amule_daemon_exe = amule_client.executable
         amule_control_exe = amule_client.control_executable
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
+        protocol_case = protocol_matrix.PROTOCOL_CASE_MAP[args.protocol_case]
+        client_protocol_preferences = protocol_preferences(protocol_case)
         p2p_address = resolve_local_p2p_address(args)
         ports = choose_ports(args.extra_emulebb_clients)
         base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
@@ -834,6 +850,15 @@ def main(argv: list[str] | None = None) -> int:
             ],
         }
         report["network"] = {"p2p_bind_interface_address": p2p_address, "ports": ports}
+        report["protocol_case"] = {
+            "name": protocol_case.name,
+            "server_protocol_obfuscation": protocol_case.server_protocol_obfuscation,
+            "server_udp": protocol_case.server_udp,
+            "client_crypt_supported": protocol_case.client_crypt_supported,
+            "client_crypt_requested": protocol_case.client_crypt_requested,
+            "client_crypt_required": protocol_case.client_crypt_required,
+            "crypt_tcp_padding_length": protocol_matrix.PROTOCOL_PADDING_LENGTH,
+        }
 
         current_phase = "build_ed2k_server"
         ed2k_repo = dtt.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
@@ -849,6 +874,8 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             catalog_path=catalog_path,
             token=args.api_key,
+            protocol_obfuscation=protocol_case.server_protocol_obfuscation,
+            server_udp=protocol_case.server_udp,
         )
         server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
         report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
@@ -926,6 +953,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_bind_addr=args.bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=p2p_address,
+            **client_protocol_preferences,
         )
         dtt.configure_client_profile(
             config_dir=Path(client2["config_dir"]),
@@ -937,6 +965,7 @@ def main(argv: list[str] | None = None) -> int:
             autoconnect=True,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=p2p_address,
+            **client_protocol_preferences,
         )
         for client in extra_emulebb_clients:
             dtt.configure_client_profile(
@@ -952,6 +981,7 @@ def main(argv: list[str] | None = None) -> int:
                 rest_bind_addr=args.bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
+                **client_protocol_preferences,
             )
         for config_dir in (
             Path(client1["config_dir"]),

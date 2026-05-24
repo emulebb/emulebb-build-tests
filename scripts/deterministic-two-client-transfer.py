@@ -600,12 +600,14 @@ def configure_client_profile(
     rest_bind_addr: str = "127.0.0.1",
     p2p_bind_interface_name: str = "",
     p2p_bind_addr: str = "",
+    crypt_layer_supported: bool | None = None,
+    crypt_layer_requested: bool | None = None,
+    crypt_layer_required: bool | None = None,
+    crypt_tcp_padding_length: int | None = None,
 ) -> None:
     """Applies deterministic network and optional REST settings to one profile."""
 
-    live_common.apply_emule_preferences(
-        config_dir,
-        (
+    values: list[tuple[str, str]] = [
             ("Nick", nick),
             ("Port", str(tcp_port)),
             ("UDPPort", str(udp_port)),
@@ -632,11 +634,27 @@ def configure_client_profile(
             ("AllocateFullFile", "0"),
             ("SparsePartFiles", "0"),
             ("CloseUPnPOnExit", "0"),
+            ("SaveLogToDisk", "1"),
+            ("SaveDebugToDisk", "1"),
+            ("VerboseOptions", "1"),
+            ("Verbose", "1"),
+            ("FullVerbose", "1"),
+            ("MaxLogFileSize", "10485760"),
+            ("MaxLogBuff", "256"),
+            ("LogFileFormat", "0"),
             ("BindInterface", p2p_bind_interface_name.strip()),
             ("BindAddr", p2p_bind_addr.strip()),
             ("BlockNetworkWhenBindUnavailableAtStartup", "1" if p2p_bind_interface_name.strip() else "0"),
-        ),
-    )
+    ]
+    if crypt_layer_supported is not None:
+        values.append(("CryptLayerSupported", "1" if crypt_layer_supported else "0"))
+    if crypt_layer_requested is not None:
+        values.append(("CryptLayerRequested", "1" if crypt_layer_requested else "0"))
+    if crypt_layer_required is not None:
+        values.append(("CryptLayerRequired", "1" if crypt_layer_required else "0"))
+    if crypt_tcp_padding_length is not None:
+        values.append(("CryptTCPPaddingLength", str(crypt_tcp_padding_length)))
+    live_common.apply_emule_preferences(config_dir, tuple(values))
     live_common.apply_section_preferences(
         config_dir,
         "UploadPolicy",
