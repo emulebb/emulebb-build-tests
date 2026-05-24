@@ -24,4 +24,12 @@ TEST_CASE("Standby prevention keeps system awake without forcing display awake")
 	CHECK(StandbyPreventionSeams::GetReleaseSystemSleepFlags() == ES_CONTINUOUS);
 }
 
+TEST_CASE("Standby prevention releases only previously asserted sleep prevention")
+{
+	CHECK(StandbyPreventionSeams::ShouldReleaseSystemSleepAssertion(true, false));
+	CHECK_FALSE(StandbyPreventionSeams::ShouldReleaseSystemSleepAssertion(true, true));
+	CHECK_FALSE(StandbyPreventionSeams::ShouldReleaseSystemSleepAssertion(false, false));
+	CHECK_FALSE(StandbyPreventionSeams::ShouldReleaseSystemSleepAssertion(false, true));
+}
+
 TEST_SUITE_END();

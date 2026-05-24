@@ -245,6 +245,33 @@ TEST_CASE("Part-file persistence seam keeps the non-shutdown flush path intact")
 {
 	CHECK(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(false, false, false));
 	CHECK(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, true, true));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, false, false));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, true, false));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(false));
+	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true));
+}
+
+TEST_CASE("Part-file persistence seam resolves completed size and percent defensively")
+{
+	PartFilePersistenceSeams::CompletedInfo info = PartFilePersistenceSeams::ResolveCompletedInfo(1000u, 250u, true);
+	CHECK_EQ(info.CompletedBytes, 750u);
+	CHECK_EQ(info.PercentCompleted, doctest::Approx(75.0));
+	CHECK_FALSE(info.ClampedInvalidTotalGaps);
+
+	info = PartFilePersistenceSeams::ResolveCompletedInfo(1000u, 1200u, true);
+	CHECK_EQ(info.CompletedBytes, 0u);
+	CHECK_EQ(info.PercentCompleted, doctest::Approx(0.0));
+	CHECK(info.ClampedInvalidTotalGaps);
+
+	info = PartFilePersistenceSeams::ResolveCompletedInfo(0u, 1u, true);
+	CHECK_EQ(info.CompletedBytes, 0u);
+	CHECK_EQ(info.PercentCompleted, doctest::Approx(0.0));
+	CHECK(info.ClampedInvalidTotalGaps);
+
+	info = PartFilePersistenceSeams::ResolveCompletedInfo(0u, 0u, false);
+	CHECK_EQ(info.CompletedBytes, 0u);
+	CHECK_EQ(info.PercentCompleted, doctest::Approx(100.0));
+	CHECK_FALSE(info.ClampedInvalidTotalGaps);
 }
 
 TEST_CASE("Part-file persistence helper rejects invalid atomic replace parameters")
@@ -509,6 +536,8 @@ TEST_CASE("Part-file persistence seam skips destructor flushes only during shutd
 {
 	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, false, false));
 	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, true, false));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(false));
+	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true));
 }
 
 TEST_CASE("Part-file persistence helper preserves destination content when the atomic replace fails")

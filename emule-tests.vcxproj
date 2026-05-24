@@ -194,6 +194,7 @@
     <ClCompile Include="src\ini2.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\Ini2Helpers.h')" />
     <ClCompile Include="src\ip_filter.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\IPFilterSeams.h')" />
     <ClCompile Include="src\known_file_metadata.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\KnownFileMetadataSeams.h')" />
+    <ClCompile Include="src\known_file_hash_open.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\KnownFileHashOpenSeams.h')" />
     <ClCompile Include="src\known_file_list.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\KnownFileListSeams.h')" />
     <ClCompile Include="src\lock_scope.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\LockScopeSeams.h')" />
     <ClCompile Include="src\listen_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ListenSocketSeams.h')" />
@@ -210,6 +211,7 @@
     <ClCompile Include="src\null_guard.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
     <ClCompile Include="src\other_functions.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\OtherFunctionsSeams.h')" />
     <ClCompile Include="src\web_api.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerJsonSeams.h')" />
+    <ClCompile Include="src\packets.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PacketsSeams.h')" />
     <ClCompile Include="src\web_services.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServicesSeams.h')" />
     <ClCompile Include="src\web_server_legacy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerLegacySeams.h')" />
     <ClCompile Include="src\windows_firewall_repair.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WindowsFirewallRepairSeams.h')" />
@@ -316,6 +318,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\kademlia\Defines.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\KadClientSearcher.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\KnownFileListSeams.h" Condition="Exists('$(AppRoot)\srchybrid\KnownFileListSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\KnownFileHashOpenSeams.h" Condition="Exists('$(AppRoot)\srchybrid\KnownFileHashOpenSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\LockScopeSeams.h" Condition="Exists('$(AppRoot)\srchybrid\LockScopeSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ListenSocketFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ListenSocketFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\LongPathSeams.h" Condition="Exists('$(AppRoot)\srchybrid\LongPathSeams.h')" />
@@ -344,6 +347,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFileNumericSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFileSourceOwnershipSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileSourceOwnershipSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\PacketsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PacketsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PreferenceUiSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PreferenceUiSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProUserMenuCopySeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProUserMenuCopySeams.h')" />
