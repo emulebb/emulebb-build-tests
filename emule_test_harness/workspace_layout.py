@@ -102,6 +102,11 @@ def resolve_workspace_app_root(
     for variant in manifest.variants:
         candidates.append(resolved_workspace_root / variant.path)
 
+    # Fast hosted CI checks out only the app worktree, not the generated
+    # workspace manifest. Keep that minimal layout usable for source-only tests.
+    if not manifest.variants and manifest.seed_repo_path is None:
+        candidates.append(resolved_workspace_root / "app" / "emulebb-main")
+
     seen: set[Path] = set()
     for candidate in candidates:
         resolved_candidate = candidate.resolve()

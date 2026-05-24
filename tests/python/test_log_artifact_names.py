@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from emule_test_harness.workspace_layout import get_default_workspace_root, load_workspace_manifest
+from emule_test_harness.workspace_layout import get_default_workspace_root, resolve_workspace_app_root
 
 
 OLD_APP_LOG_TOKENS = (
@@ -19,11 +19,7 @@ OLD_APP_LOG_TOKENS = (
 def _app_root() -> Path:
     test_repo_root = Path(__file__).resolve().parents[2]
     workspace_root = get_default_workspace_root(test_repo_root)
-    manifest = load_workspace_manifest(workspace_root)
-    for variant in manifest.variants:
-        if variant.name == "main":
-            return (workspace_root / variant.path).resolve()
-    raise RuntimeError("Workspace manifest does not define the main app variant.")
+    return resolve_workspace_app_root(workspace_root, preferred_variant_names=("main",))
 
 
 def test_runtime_log_artifact_names_are_strictly_renamed() -> None:

@@ -95,3 +95,11 @@ def test_resolve_workspace_app_root_prefers_existing_seed_then_variants(tmp_path
     )
 
     assert resolve_workspace_app_root(workspace_root) == community_root.resolve()
+
+
+def test_resolve_workspace_app_root_accepts_minimal_fast_ci_checkout(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    app_root = workspace_root / "app" / "emulebb-main"
+    app_root.mkdir(parents=True)
+
+    assert resolve_workspace_app_root(workspace_root, preferred_variant_names=("main",)) == app_root.resolve()
