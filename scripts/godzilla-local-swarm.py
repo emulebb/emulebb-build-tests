@@ -231,6 +231,42 @@ def choose_ports(extra_emulebb_clients: int = 0) -> dict[str, int]:
     return ports
 
 
+def discover_local_lan_ipv4() -> str:
+    """Finds a LAN IPv4 address for local multi-client tests, preferring 192.* over VPNs."""
+
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            "Get-NetIPAddress -AddressFamily IPv4 "
+            "| Where-Object { "
+            "$_.IPAddress -and $_.IPAddress -ne '127.0.0.1' "
+            "-and $_.IPAddress -notlike '169.254.*' "
+            "-and $_.PrefixOrigin -ne 'WellKnown' "
+            "} "
+            "| Sort-Object @{Expression={if ($_.IPAddress -like '192.*') { 0 } else { 1 }}}, "
+            "@{Expression={if ($_.IPAddress -like '10.*') { 1 } else { 0 }}}, InterfaceMetric "
+            "| Select-Object -First 1 -ExpandProperty IPAddress"
+        ),
+    ]
+    completed = subprocess.run(command, text=True, capture_output=True, timeout=15, check=False)
+    candidate = completed.stdout.strip().splitlines()[0].strip() if completed.stdout.strip() else ""
+    if not candidate:
+        raise RuntimeError("Could not discover a local LAN IPv4 address. Pass --p2p-bind-interface-address explicitly.")
+    return candidate
+
+
+def resolve_local_p2p_address(args: argparse.Namespace) -> str:
+    """Resolves the advertised local P2P address for the Godzilla local stack."""
+
+    if args.p2p_bind_interface_address:
+        return str(args.p2p_bind_interface_address)
+    if args.p2p_bind_interface_name.strip():
+        return dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+    return discover_local_lan_ipv4()
+
+
 def resolve_required_amule(paths, args: argparse.Namespace):
     """Resolves the staged aMule daemon/control pair or raises an actionable error."""
 
@@ -765,7 +801,7 @@ def main(argv: list[str] | None = None) -> int:
         amule_daemon_exe = amule_client.executable
         amule_control_exe = amule_client.control_executable
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
-        p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+        p2p_address = resolve_local_p2p_address(args)
         ports = choose_ports(args.extra_emulebb_clients)
         base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
         admin_base_url = f"http://127.0.0.1:{ports['ed2k_admin']}"
