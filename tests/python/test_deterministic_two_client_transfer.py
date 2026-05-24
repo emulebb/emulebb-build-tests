@@ -21,6 +21,20 @@ def load_suite_module():
     return module
 
 
+def load_script_module(filename: str, module_name: str):
+    """Loads one hyphenated script by filename for unit tests."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "scripts" / filename
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_resolve_manifest_repo_uses_workspace_deps(tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
@@ -236,6 +250,23 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
     assert "CryptLayerRequested=1" in emule_section
     assert "CryptLayerRequired=1" in emule_section
     assert "CryptTCPPaddingLength=128" in emule_section
+
+
+def test_configure_client_profile_preserves_recursive_shared_directory_contract(tmp_path: Path) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_recursive_share_test")
+    root = tmp_path / "library"
+    (root / "000").mkdir(parents=True)
+    (root / "001").mkdir()
+    (root / "000" / "a.bin").write_bytes(b"a")
+    (root / "001" / "b.bin").write_bytes(b"b")
+
+    shared_dirs = godzilla.generated_library_shared_dirs(root)
+
+    assert shared_dirs == [
+        godzilla.live_common.win_path(root, trailing_slash=True),
+        godzilla.live_common.win_path(root / "000", trailing_slash=True),
+        godzilla.live_common.win_path(root / "001", trailing_slash=True),
+    ]
 
 
 def test_default_fixture_size_is_132_mib() -> None:

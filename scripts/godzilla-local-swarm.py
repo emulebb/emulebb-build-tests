@@ -214,6 +214,12 @@ def generate_library(root: Path, *, owner_key: str, count: int, args: argparse.N
     return rows
 
 
+def generated_library_shared_dirs(root: Path) -> list[str]:
+    """Returns recursive eMule share entries for a generated bucketed library."""
+
+    return live_common.enumerate_recursive_directories(root)
+
+
 def choose_ports(extra_emulebb_clients: int = 0) -> dict[str, int]:
     """Allocates local ports for all clients and the ED2K server."""
 
@@ -909,20 +915,20 @@ def main(argv: list[str] | None = None) -> int:
         client1 = live_common.prepare_scenario_profile(
             profile_seed_dir,
             paths.source_artifacts_dir,
-            [live_common.win_path(library_root / CLIENT01.profile_id, trailing_slash=True)],
+            generated_library_shared_dirs(library_root / CLIENT01.profile_id),
             CLIENT01.profile_id,
         )
         client2 = live_common.prepare_scenario_profile(
             profile_seed_dir,
             paths.source_artifacts_dir,
-            [live_common.win_path(library_root / CLIENT02.profile_id, trailing_slash=True)],
+            generated_library_shared_dirs(library_root / CLIENT02.profile_id),
             CLIENT02.profile_id,
         )
         for client in extra_emulebb_clients:
             profile = live_common.prepare_scenario_profile(
                 profile_seed_dir,
                 paths.source_artifacts_dir,
-                [live_common.win_path(Path(str(client["library_root"])), trailing_slash=True)],
+                generated_library_shared_dirs(Path(str(client["library_root"]))),
                 str(client["profile_id"]),
             )
             client["profile_base"] = str(profile["profile_base"])
