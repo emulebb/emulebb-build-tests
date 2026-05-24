@@ -216,7 +216,7 @@ SUITE_SPECS = (
         script_name="godzilla-local-swarm.py",
         category="protocol",
         default_enabled=False,
-        accepts_admin_volume_fixtures=True,
+        requires_admin_volume_fixtures=True,
     ),
     SuiteSpec(
         name="local-ed2k-search-soak",
@@ -1530,7 +1530,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--godzilla-visible-ui", action="store_true")
     parser.add_argument("--godzilla-p2p-bind-interface-address")
     parser.add_argument("--godzilla-cpu-profile", action="store_true")
-    parser.add_argument("--godzilla-vhd-runtime-root", choices=["drive-letter", "folder-mount"], default="drive-letter")
+    parser.add_argument("--godzilla-vhd-runtime-root", choices=["drive-letter"], default="drive-letter")
     return parser
 
 

@@ -628,6 +628,7 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
             str(tmp_path / "workspaces" / "workspace"),
             "--suite",
             "godzilla-local-swarm",
+            "--admin-volume-fixtures",
             "--p2p-bind-interface-name",
             "hide.me",
         ),
@@ -637,7 +638,20 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert summary["status"] == "passed"
     assert [script_name(command) for command in commands] == ["godzilla-local-swarm.py"]
     assert [suite["name"] for suite in summary["suites"]] == ["godzilla-local-swarm"]
+    assert "--admin-volume-fixtures" in commands[0]
+    assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
+
+
+def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(
+            "--suite",
+            "godzilla-local-swarm",
+            "--admin-volume-fixtures",
+            "--godzilla-vhd-runtime-root",
+            "folder-mount",
+        )
 
 
 def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, monkeypatch) -> None:

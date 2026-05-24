@@ -6,6 +6,8 @@ import struct
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def load_suite_module():
     """Loads the hyphenated deterministic transfer script for unit tests."""
@@ -268,6 +270,14 @@ def test_configure_client_profile_preserves_recursive_shared_directory_contract(
         godzilla.live_common.win_path(root / "000", trailing_slash=True),
         godzilla.live_common.win_path(root / "001", trailing_slash=True),
     ]
+
+
+def test_godzilla_runtime_root_is_drive_letter_only() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_runtime_root_test")
+
+    assert godzilla.parse_args([]).vhd_runtime_root == "drive-letter"
+    with pytest.raises(SystemExit):
+        godzilla.parse_args(["--vhd-runtime-root", "folder-mount"])
 
 
 def test_default_fixture_size_is_132_mib() -> None:

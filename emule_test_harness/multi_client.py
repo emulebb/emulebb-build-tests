@@ -28,6 +28,7 @@ class ClientIdentity:
     nick: str
     product: str
     role: str
+    supports_long_paths: bool
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class ClientAvailability:
             "nick": self.identity.nick,
             "product": self.identity.product,
             "role": self.identity.role,
+            "supports_long_paths": self.identity.supports_long_paths,
             "available": self.available,
             "reason": self.reason,
             "executable": str(self.executable) if self.executable is not None else None,
@@ -69,6 +71,7 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT01_EMULEBB,
         product="eMuleBB",
         role="primary eMuleBB client",
+        supports_long_paths=True,
     ),
     "harness": ClientIdentity(
         key="harness",
@@ -76,6 +79,7 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT02_HARNESS,
         product="eMule community tracing harness",
         role="deterministic parity seed client",
+        supports_long_paths=False,
     ),
     "emuleai": ClientIdentity(
         key="emuleai",
@@ -83,6 +87,7 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT03_EMULEAI,
         product="eMuleAI",
         role="optional Windows eMule-family comparison client",
+        supports_long_paths=False,
     ),
     "amule": ClientIdentity(
         key="amule",
@@ -90,8 +95,23 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT04_AMULE,
         product="aMule",
         role="optional Windows aMule daemon/control comparison client",
+        supports_long_paths=False,
     ),
 }
+
+
+def long_path_capability_report(client_keys: tuple[str, ...] | list[str]) -> dict[str, dict[str, object]]:
+    """Returns long-path capability metadata for the selected deterministic clients."""
+
+    report: dict[str, dict[str, object]] = {}
+    for key in client_keys:
+        identity = CLIENT_IDENTITIES[key]
+        report[key] = {
+            "profile_id": identity.profile_id,
+            "product": identity.product,
+            "supports_long_paths": identity.supports_long_paths,
+        }
+    return report
 
 
 def workspace_parent_root(workspace_root: Path) -> Path:

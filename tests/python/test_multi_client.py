@@ -16,6 +16,14 @@ def test_client_identities_use_stable_workspace_names() -> None:
     assert multi_client.CLIENT_IDENTITIES["amule"].profile_id == "cl-amule-004"
 
 
+def test_client_long_path_capabilities_are_explicit() -> None:
+    report = multi_client.long_path_capability_report(["emulebb", "harness", "amule"])
+
+    assert report["emulebb"]["supports_long_paths"] is True
+    assert report["harness"]["supports_long_paths"] is False
+    assert report["amule"]["supports_long_paths"] is False
+
+
 def test_workspace_parent_root_derives_canonical_root(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"

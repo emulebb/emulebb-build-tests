@@ -31,7 +31,7 @@ from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     create_admin_volume_fixture,
 )
 from emule_test_harness import live_process_monitor  # noqa: E402
-from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_amule_client  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES, long_path_capability_report, resolve_amule_client  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 
@@ -137,9 +137,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-admin-fixtures", action="store_true")
     parser.add_argument(
         "--vhd-runtime-root",
-        choices=["folder-mount", "drive-letter"],
+        choices=["drive-letter"],
         default="drive-letter",
-        help="Runtime root for generated Godzilla profiles. drive-letter keeps the legacy tracing harness below MAX_PATH.",
+        help="Runtime root for generated Godzilla profiles. Mixed aMule/tracing-harness runs must stay on the short VHD drive-letter root.",
     )
     parser.add_argument("--capture-final-dump", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--procdump-path")
@@ -334,17 +334,12 @@ def godzilla_runtime_storage(paths, args: argparse.Namespace):
     """Yields the runtime root used for generated libraries and throwaway profiles."""
 
     if not args.admin_volume_fixtures:
-        yield {
-            "enabled": False,
-            "root": paths.source_artifacts_dir,
-            "mode": "workspace-artifacts",
-        }
-        return
+        raise RuntimeError("godzilla-local-swarm requires --admin-volume-fixtures so legacy clients run from a short throwaway VHD profile root.")
 
     config = build_admin_fixture_config(paths, args)
     with create_admin_volume_fixture(config) as fixture:
         topology = build_storage_topology(fixture, SUITE_NAME)
-        runtime_root = topology.vhd_mount_root if args.vhd_runtime_root == "folder-mount" else topology.vhd_drive_root
+        runtime_root = topology.vhd_drive_root
         runtime_root.mkdir(parents=True, exist_ok=True)
         yield {
             "enabled": True,
@@ -1548,6 +1543,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "parameters": vars(args),
+        "client_path_capabilities": long_path_capability_report([CLIENT01.key, CLIENT02.key, CLIENT04.key]),
         "checks": {},
     }
     server_process: subprocess.Popen | None = None
