@@ -57,6 +57,21 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     assert inventory["amule"].launch_adapter == "amuled-amulecmd"
 
 
+def test_resolve_harness_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspaces" / "workspace"
+    harness_dir = workspace / "app" / "emulebb-community-tracing-harness" / "srchybrid" / "x64" / "Release"
+    harness_dir.mkdir(parents=True)
+    legacy_exe = harness_dir / "emule.exe"
+    renamed_exe = harness_dir / "emulebb.exe"
+
+    legacy_exe.write_bytes(b"")
+    assert multi_client.resolve_harness_client(workspace, "Release").executable == legacy_exe.resolve()
+
+    legacy_exe.unlink()
+    renamed_exe.write_bytes(b"")
+    assert multi_client.resolve_harness_client(workspace, "Release").executable == renamed_exe.resolve()
+
+
 def test_resolve_optional_clients_accepts_workspace_state_artifacts(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"

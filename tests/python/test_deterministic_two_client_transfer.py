@@ -46,6 +46,25 @@ def test_resolve_ed2k_server_exe_defaults_to_workspace_state(tmp_path: Path) -> 
     assert resolved == (workspace / "state" / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
 
 
+def test_resolve_client2_app_exe_uses_tracing_harness_executable(tmp_path: Path) -> None:
+    module = load_suite_module()
+    workspace = tmp_path / "workspaces" / "workspace"
+    harness_exe = workspace / "app" / "emulebb-community-tracing-harness" / "srchybrid" / "x64" / "Release" / "emule.exe"
+    harness_exe.parent.mkdir(parents=True)
+    harness_exe.write_bytes(b"")
+
+    assert module.resolve_client2_app_exe(workspace, "Release", None) == harness_exe.resolve()
+
+
+def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
+    module = load_suite_module()
+    override = tmp_path / "custom" / "harness.exe"
+    override.parent.mkdir()
+    override.write_bytes(b"")
+
+    assert module.resolve_client2_app_exe(tmp_path / "workspace", "Release", str(override)) == override.resolve()
+
+
 def test_write_server_met_creates_dynamic_ip_single_server(tmp_path: Path) -> None:
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"

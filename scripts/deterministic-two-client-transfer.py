@@ -23,7 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.ini import read_ini_text  # noqa: E402
-from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 
@@ -117,21 +117,10 @@ def resolve_manifest_repo(workspace_root: Path, repo_key: str) -> Path:
 def resolve_client2_app_exe(workspace_root: Path, configuration: str, override: str | None) -> Path:
     """Resolves the eMule testing-harness client executable."""
 
-    if override:
-        candidate = Path(override).resolve()
-    else:
-        candidate = (
-            workspace_root
-            / "app"
-            / "emulebb-community-tracing-harness"
-            / "srchybrid"
-            / "x64"
-            / configuration
-            / "emulebb.exe"
-        ).resolve()
-    if not candidate.is_file():
-        raise RuntimeError(f"Client2 tracing-harness executable was not found at '{candidate}'.")
-    return candidate
+    availability = resolve_harness_client(workspace_root, configuration, override)
+    if not availability.available or availability.executable is None:
+        raise RuntimeError(f"Client2 tracing-harness executable was not found: {availability.reason}.")
+    return availability.executable
 
 
 def resolve_ed2k_server_repo(workspace_root: Path, override: str | None) -> Path:

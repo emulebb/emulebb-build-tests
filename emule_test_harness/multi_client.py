@@ -172,22 +172,23 @@ def resolve_harness_client(workspace_root: Path, configuration: str, override: s
 
     identity = CLIENT_IDENTITIES["harness"]
     if override:
-        candidate = Path(override).resolve()
+        executable = first_existing_file([Path(override)])
     else:
-        candidate = (
+        base_dir = (
             workspace_root
             / "app"
             / "emulebb-community-tracing-harness"
             / "srchybrid"
             / "x64"
             / configuration
-            / "emule.exe"
-        ).resolve()
+        )
+        executable = first_existing_file([base_dir / "emule.exe", base_dir / "emulebb.exe"])
+    reason = "available" if executable is not None else "missing tracing-harness executable"
     return ClientAvailability(
         identity=identity,
-        available=candidate.is_file(),
-        executable=candidate if candidate.is_file() else None,
-        reason="available" if candidate.is_file() else f"missing executable: {candidate}",
+        available=executable is not None,
+        executable=executable,
+        reason=reason if executable is not None else f"{reason} under {workspace_root / 'app' / 'emulebb-community-tracing-harness'}",
         launch_adapter="tracing-harness-gui-profile",
         deterministic_transfer_adapter=True,
     )
