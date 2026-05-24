@@ -212,6 +212,12 @@ SUITE_SPECS = (
         default_enabled=False,
     ),
     SuiteSpec(
+        name="godzilla-local-swarm",
+        script_name="godzilla-local-swarm.py",
+        category="protocol",
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="local-ed2k-search-soak",
         script_name="local-ed2k-search-soak.py",
         category="protocol",
@@ -986,6 +992,7 @@ def build_suite_command(
         in {
             "deterministic-two-client-transfer",
             "multi-client-p2p-matrix",
+            "godzilla-local-swarm",
             "local-ed2k-search-soak",
             "local-ed2k-chaos-mode",
             "local-ed2k-protocol-combinations",

@@ -614,6 +614,32 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[6], "--p2p-bind-interface-name") == []
 
 
+def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "godzilla-local-swarm",
+            "--p2p-bind-interface-name",
+            "hide.me",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert [script_name(command) for command in commands] == ["godzilla-local-swarm.py"]
+    assert [suite["name"] for suite in summary["suites"]] == ["godzilla-local-swarm"]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == []
+
+
 def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> None:
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("local-kad-swarm"),
