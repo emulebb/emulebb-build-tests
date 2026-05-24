@@ -144,6 +144,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cpu-profile-stack-min-hits", type=int, default=10)
     parser.add_argument("--enable-umdh", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--require-umdh", action="store_true")
+    parser.add_argument("--enable-pageheap", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--crash-monitor", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
@@ -1046,6 +1048,138 @@ def capture_primary_memory_diagnostics(
         live_process_monitor.close_handle(process_handle)
 
 
+def run_diagnostic_tool(command: list[str], output_path: Path, timeout_seconds: float) -> dict[str, object]:
+    """Runs one diagnostic tool from the artifact folder so stray logs stay contained."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(output_path.parent),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+        )
+        duration = round(time.monotonic() - started, 3)
+        output_path.write_text(
+            "\n".join(
+                [
+                    "command: " + subprocess.list2cmdline(command),
+                    f"return_code: {completed.returncode}",
+                    f"duration_seconds: {duration}",
+                    "",
+                    completed.stdout,
+                    completed.stderr,
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return {"command": command, "output_path": str(output_path), "return_code": completed.returncode, "duration_seconds": duration, "timed_out": False}
+    except subprocess.TimeoutExpired as exc:
+        output_path.write_text(
+            "\n".join(["command: " + subprocess.list2cmdline(command), "timed_out: true", "", str(exc.stdout or ""), str(exc.stderr or "")]),
+            encoding="utf-8",
+        )
+        return {"command": command, "output_path": str(output_path), "return_code": None, "timed_out": True}
+
+
+def set_pageheap(gflags_path: str | None, app_exe: Path, *, enabled: bool, output_path: Path) -> dict[str, object]:
+    """Enables or disables full page heap for the eMuleBB image."""
+
+    if not gflags_path:
+        return {"skipped": True, "reason": "gflags was not found"}
+    command = [gflags_path, "/p", "/enable" if enabled else "/disable", app_exe.name]
+    if enabled:
+        command.append("/full")
+    return run_diagnostic_tool(command, output_path, 30.0)
+
+
+def start_procdump_crash_monitor(
+    *,
+    procdump_path: Path | None,
+    process_id: int,
+    dump_dir: Path,
+) -> tuple[dict[str, object], subprocess.Popen | None]:
+    """Starts ProcDump in crash-monitor mode for the primary eMuleBB process."""
+
+    result: dict[str, object] = {
+        "started": False,
+        "procdump": str(procdump_path) if procdump_path else None,
+        "process_id": process_id,
+        "dump_dir": str(dump_dir),
+    }
+    if procdump_path is None or not procdump_path.is_file():
+        result["error"] = "procdump was not found"
+        return result, None
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    log_path = dump_dir / "procdump-crash-monitor.txt"
+    command = [str(procdump_path), "-accepteula", "-ma", "-e", "1", "-o", str(process_id), str(dump_dir)]
+    log_handle = log_path.open("w", encoding="utf-8", errors="replace")
+    log_handle.write("command: " + subprocess.list2cmdline(command) + "\n\n")
+    log_handle.flush()
+    try:
+        process = subprocess.Popen(command, stdout=log_handle, stderr=subprocess.STDOUT, cwd=str(dump_dir))
+    except OSError as exc:
+        log_handle.close()
+        result["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        return result, None
+    setattr(process, "_emulebb_log_handle", log_handle)
+    result.update({"started": True, "pid": process.pid, "log_path": str(log_path), "command": command})
+    return result, process
+
+
+def finish_procdump_crash_monitor(process: subprocess.Popen | None, timeout_seconds: float) -> dict[str, object]:
+    """Stops the ProcDump crash monitor and records its exit state."""
+
+    result: dict[str, object] = {"started": process is not None, "return_code": None, "timed_out": False}
+    if process is None:
+        return result
+    try:
+        result["return_code"] = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        result["timed_out"] = True
+        process.terminate()
+        try:
+            result["return_code"] = process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            result["return_code"] = process.wait(timeout=5.0)
+    finally:
+        log_handle = getattr(process, "_emulebb_log_handle", None)
+        if log_handle is not None:
+            log_handle.close()
+    return result
+
+
+def collect_crash_monitor_dumps(dump_dir: Path) -> dict[str, object]:
+    """Returns ProcDump crash-monitor dump files."""
+
+    files = []
+    if dump_dir.is_dir():
+        for dump_path in sorted(dump_dir.glob("*.dmp"), key=lambda item: item.stat().st_mtime):
+            stat = dump_path.stat()
+            files.append({"name": dump_path.name, "path": str(dump_path), "size_bytes": stat.st_size, "mtime": round(stat.st_mtime, 3)})
+    return {"dump_folder": str(dump_dir), "files": files, "count": len(files)}
+
+
+def cleanup_external_tool_logs(*roots: Path) -> list[str]:
+    """Deletes known stray diagnostic-tool logs from workspace roots."""
+
+    deleted: list[str] = []
+    for root in roots:
+        path = root / "myeasylog.log"
+        try:
+            if path.exists():
+                path.unlink()
+                deleted.append(str(path))
+        except OSError:
+            pass
+    return deleted
+
+
 def shutdown_amule(control_exe: Path | None, profile: amule_harness.AmuleRuntimeProfile | None) -> dict[str, object]:
     """Requests graceful aMule daemon shutdown through EC when possible."""
 
@@ -1434,6 +1568,9 @@ def main(argv: list[str] | None = None) -> int:
     cpu_profile_active = False
     cpu_profile_stopped = False
     gflags_enabled = False
+    pageheap_enabled = False
+    procdump_crash_monitor_process: subprocess.Popen | None = None
+    procdump_crash_dump_dir = diagnostics_dir / "procdump-crash-monitor"
     current_phase = "initializing"
 
     try:
@@ -1446,6 +1583,13 @@ def main(argv: list[str] | None = None) -> int:
                 "wpaexporter": cpu_profile_tools.wpaexporter,
             },
             "capture_final_dump_enabled": bool(args.capture_final_dump),
+            "pageheap": {
+                "enabled": bool(args.enable_pageheap),
+            },
+            "crash_monitor": {
+                "enabled": bool(args.crash_monitor),
+                "dump_dir": str(procdump_crash_dump_dir),
+            },
             "cpu_profile": {
                 "enabled": bool(args.cpu_profile),
                 "paths": cpu_profile_paths_to_report(cpu_profile_paths),
@@ -1477,6 +1621,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 gflags_enabled = True
                 umdh_report["status"] = "active"
+        if args.enable_pageheap:
+            pageheap_report = diagnostics["pageheap"]
+            assert isinstance(pageheap_report, dict)
+            pageheap_report["enable"] = set_pageheap(
+                gflags_path,
+                paths.app_exe,
+                enabled=True,
+                output_path=analysis_dir / "gflags-enable-pageheap.txt",
+            )
+            pageheap_enabled = isinstance(pageheap_report["enable"], dict) and pageheap_report["enable"].get("return_code") == 0
+            pageheap_report["status"] = "active" if pageheap_enabled else "failed"
         if args.cpu_profile:
             cpu_report = diagnostics["cpu_profile"]
             assert isinstance(cpu_report, dict)
@@ -1736,6 +1891,13 @@ def main(argv: list[str] | None = None) -> int:
         diagnostics = report.get("diagnostics")
         if isinstance(diagnostics, dict):
             diagnostics["primary_pid"] = app_process_id(client1_app)
+            crash_report = diagnostics.get("crash_monitor")
+            if isinstance(crash_report, dict) and crash_report.get("enabled"):
+                crash_report["start"], procdump_crash_monitor_process = start_procdump_crash_monitor(
+                    procdump_path=procdump_path,
+                    process_id=app_process_id(client1_app),
+                    dump_dir=procdump_crash_dump_dir,
+                )
             umdh_report = diagnostics.get("umdh")
             if isinstance(umdh_report, dict) and umdh_report.get("status") == "active":
                 umdh_report["baseline"] = live_process_monitor.capture_umdh_snapshot(
@@ -2065,6 +2227,13 @@ def main(argv: list[str] | None = None) -> int:
                 stack_min_hits=args.cpu_profile_stack_min_hits,
             )
             cpu_profile_stopped = True
+        diagnostics = report.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            crash_report = diagnostics.get("crash_monitor")
+            if isinstance(crash_report, dict):
+                crash_report["finish"] = finish_procdump_crash_monitor(procdump_crash_monitor_process, 5.0)
+                procdump_crash_monitor_process = None
+                crash_report["dump_files"] = collect_crash_monitor_dumps(procdump_crash_dump_dir)
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -2074,6 +2243,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         cleanup: dict[str, object] = {}
+        if procdump_crash_monitor_process is not None:
+            try:
+                diagnostics = report.setdefault("diagnostics", {})
+                assert isinstance(diagnostics, dict)
+                crash_report = diagnostics.setdefault("crash_monitor", {})
+                assert isinstance(crash_report, dict)
+                crash_report["finish"] = finish_procdump_crash_monitor(procdump_crash_monitor_process, 5.0)
+                crash_report["dump_files"] = collect_crash_monitor_dumps(procdump_crash_dump_dir)
+                cleanup["crash_monitor"] = {"stopped": True}
+            except Exception as exc:  # pragma: no cover - diagnostics best effort during cleanup
+                cleanup["crash_monitor"] = {"error": str(exc) or repr(exc)}
         if client1_app is not None:
             diagnostics = report.get("diagnostics")
             already_dumped = isinstance(diagnostics, dict) and "final_dump" in diagnostics
@@ -2160,6 +2340,28 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception as exc:  # pragma: no cover - cleanup diagnostics only
                 cleanup["gflags_disable_ust"] = {"error": str(exc) or repr(exc)}
+        if pageheap_enabled:
+            try:
+                diagnostics = report.setdefault("diagnostics", {})
+                assert isinstance(diagnostics, dict)
+                pageheap_report = diagnostics.setdefault("pageheap", {})
+                assert isinstance(pageheap_report, dict)
+                pageheap_report["disable"] = set_pageheap(
+                    gflags_path,
+                    paths.app_exe,
+                    enabled=False,
+                    output_path=analysis_dir / "gflags-disable-pageheap.txt",
+                )
+            except Exception as exc:  # pragma: no cover - cleanup diagnostics only
+                cleanup["pageheap_disable"] = {"error": str(exc) or repr(exc)}
+        cleanup["external_tool_logs_deleted"] = cleanup_external_tool_logs(
+            paths.workspace_root,
+            Path.cwd(),
+            REPO_ROOT,
+            paths.source_artifacts_dir,
+            analysis_dir,
+            diagnostics_dir,
+        )
         report["cleanup"] = cleanup
         write_reports(paths, report)
         if runtime_storage_context is not None:

@@ -219,6 +219,7 @@ def run_tool_to_file(
     timeout_seconds: float,
     *,
     env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> dict[str, object]:
     """Runs one profiling tool command and records stdout/stderr metadata."""
 
@@ -234,6 +235,7 @@ def run_tool_to_file(
             errors="replace",
             timeout=timeout_seconds,
             env=env,
+            cwd=str(cwd or output_path.parent),
         )
         duration = round(time.monotonic() - started, 3)
         output_path.write_text(
