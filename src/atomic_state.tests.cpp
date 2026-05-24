@@ -11,6 +11,50 @@
 #include "DisplayRefreshSeams.h"
 #include "SharedFileListSeams.h"
 
+namespace
+{
+	class CScopedDisplayRefreshMessageWindow
+	{
+	public:
+		CScopedDisplayRefreshMessageWindow()
+			: m_hWnd(::CreateWindowEx(0, L"STATIC", L"display-refresh-test", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, ::GetModuleHandle(NULL), NULL))
+		{
+		}
+
+		~CScopedDisplayRefreshMessageWindow()
+		{
+			if (m_hWnd != NULL)
+				(void)::DestroyWindow(m_hWnd);
+		}
+
+		HWND GetHwnd() const
+		{
+			return m_hWnd;
+		}
+
+	private:
+		HWND m_hWnd;
+	};
+
+	struct STrackedDisplayRefreshPayload
+	{
+		explicit STrackedDisplayRefreshPayload(int nValue)
+			: value(nValue)
+		{
+		}
+
+		~STrackedDisplayRefreshPayload()
+		{
+			++s_nDestroyCount;
+		}
+
+		int value;
+		static int s_nDestroyCount;
+	};
+
+	int STrackedDisplayRefreshPayload::s_nDestroyCount = 0;
+}
+
 TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("Display refresh mask atomically merges new bits without losing the previous state")
@@ -219,6 +263,40 @@ TEST_CASE("Display refresh post helper consumes payloads when delivery is unavai
 	std::unique_ptr<CPartFileDisplayUpdateRequest> pEmptyRequest;
 	CHECK_FALSE(PostOwnedDisplayRefreshRequest(reinterpret_cast<HWND>(static_cast<INT_PTR>(17)), WM_APP + 6, pEmptyRequest));
 	CHECK_FALSE(static_cast<bool>(pEmptyRequest));
+}
+
+TEST_CASE("Display refresh post helper transfers and discards registered payloads")
+{
+#if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_POST_REGISTRY)
+	CScopedDisplayRefreshMessageWindow window;
+	const HWND hWnd = window.GetHwnd();
+	if (hWnd == NULL)
+		FAIL("Expected the message-only test window to be created.");
+
+	STrackedDisplayRefreshPayload::s_nDestroyCount = 0;
+	std::unique_ptr<STrackedDisplayRefreshPayload> pRequest(new STrackedDisplayRefreshPayload(17));
+	REQUIRE(PostOwnedDisplayRefreshRequest(hWnd, WM_APP + 61, pRequest));
+	CHECK_FALSE(static_cast<bool>(pRequest));
+
+	MSG msg = {};
+	REQUIRE(::PeekMessage(&msg, hWnd, WM_APP + 61, WM_APP + 61, PM_REMOVE) != FALSE);
+	std::unique_ptr<STrackedDisplayRefreshPayload> pReceived = TakePostedDisplayRefreshRequest<STrackedDisplayRefreshPayload>(msg.wParam);
+	if (pReceived.get() == NULL)
+		FAIL("Expected the queued display refresh payload to be available.");
+	CHECK_EQ(pReceived->value, 17);
+	pReceived.reset();
+	CHECK_EQ(STrackedDisplayRefreshPayload::s_nDestroyCount, 1);
+
+	std::unique_ptr<STrackedDisplayRefreshPayload> pDroppedRequest(new STrackedDisplayRefreshPayload(33));
+	REQUIRE(PostOwnedDisplayRefreshRequest(hWnd, WM_APP + 62, pDroppedRequest));
+	DiscardPostedDisplayRefreshRequests(hWnd);
+	CHECK_EQ(STrackedDisplayRefreshPayload::s_nDestroyCount, 2);
+
+	MSG droppedMsg = {};
+	REQUIRE(::PeekMessage(&droppedMsg, hWnd, WM_APP + 62, WM_APP + 62, PM_REMOVE) != FALSE);
+	std::unique_ptr<STrackedDisplayRefreshPayload> pDropped = TakePostedDisplayRefreshRequest<STrackedDisplayRefreshPayload>(droppedMsg.wParam);
+	CHECK_FALSE(static_cast<bool>(pDropped));
+#endif
 }
 
 TEST_CASE("Display refresh mask exchange drains the queued bits and clears the pending state")
