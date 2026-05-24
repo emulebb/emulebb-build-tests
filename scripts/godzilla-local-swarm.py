@@ -58,6 +58,8 @@ DEFAULT_OBSERVATION_SECONDS = 600.0
 DEFAULT_PUBLISH_TIMEOUT_SECONDS = 1800.0
 DEFAULT_CLIENT_ROTATION_CYCLES = 8
 DEFAULT_CLIENT_ROTATION_INTERVAL_SECONDS = 45.0
+DEFAULT_UI_CYCLE_CYCLES = 16
+DEFAULT_UI_CYCLE_INTERVAL_SECONDS = 0.75
 DEFAULT_FILE_BASE_SIZE_BYTES = 4096
 DEFAULT_FILE_MEDIUM_SIZE_BYTES = 64 * 1024
 DEFAULT_FILE_LARGE_SIZE_BYTES = 1024 * 1024
@@ -106,6 +108,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
+    parser.add_argument("--visible-ui", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
@@ -118,6 +121,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resource-sample-interval-seconds", type=float, default=2.0)
     parser.add_argument("--client-rotation-cycles", type=int, default=DEFAULT_CLIENT_ROTATION_CYCLES)
     parser.add_argument("--client-rotation-interval-seconds", type=float, default=DEFAULT_CLIENT_ROTATION_INTERVAL_SECONDS)
+    parser.add_argument("--ui-cycle-cycles", type=int, default=DEFAULT_UI_CYCLE_CYCLES)
+    parser.add_argument("--ui-cycle-interval-seconds", type=float, default=DEFAULT_UI_CYCLE_INTERVAL_SECONDS)
     parser.add_argument("--emulebb-files", type=int, default=DEFAULT_EMULEBB_FILES)
     parser.add_argument("--extra-emulebb-clients", type=int, default=DEFAULT_EXTRA_EMULEBB_CLIENTS)
     parser.add_argument("--extra-emulebb-files", type=int, default=DEFAULT_EXTRA_EMULEBB_FILES)
@@ -145,6 +150,7 @@ def validate_args(args: argparse.Namespace) -> None:
         "amule_files",
         "transfer_count",
         "client_rotation_cycles",
+        "ui_cycle_cycles",
     ):
         if int(getattr(args, name)) < 0:
             raise ValueError(f"{name.replace('_', '-')} must not be negative.")
@@ -160,6 +166,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("observation seconds must be greater than zero.")
     if args.client_rotation_interval_seconds <= 0:
         raise ValueError("client rotation interval must be greater than zero.")
+    if args.ui_cycle_interval_seconds <= 0:
+        raise ValueError("UI cycle interval must be greater than zero.")
 
 
 def write_generated_file(path: Path, *, size_bytes: int, seed: int) -> str:
@@ -443,7 +451,9 @@ def app_process_id(app) -> int:
 
     process_attr = getattr(app, "process", None)
     if callable(process_attr):
-        return int(process_attr())
+        process_attr = process_attr()
+    if isinstance(process_attr, int):
+        return process_attr
     pid = getattr(process_attr, "pid", None)
     if pid is None:
         raise RuntimeError(f"Could not resolve pywinauto application process id from {app!r}.")
@@ -478,6 +488,55 @@ def interleave_rows(groups: list[list[GeneratedFile]], limit: int) -> list[Gener
     return selected
 
 
+def post_key(hwnd: int, virtual_key: int) -> None:
+    """Posts one key press to a top-level eMule window."""
+
+    live_common.win32gui.PostMessage(hwnd, live_common.win32con.WM_KEYDOWN, virtual_key, 0)
+    live_common.win32gui.PostMessage(hwnd, live_common.win32con.WM_KEYUP, virtual_key, 0)
+
+
+def post_ctrl_key(hwnd: int, virtual_key: int) -> None:
+    """Posts one Ctrl-modified key press to a top-level eMule window."""
+
+    live_common.win32gui.PostMessage(hwnd, live_common.win32con.WM_KEYDOWN, live_common.win32con.VK_CONTROL, 0)
+    live_common.win32gui.PostMessage(hwnd, live_common.win32con.WM_KEYDOWN, virtual_key, 0)
+    live_common.win32gui.PostMessage(hwnd, live_common.win32con.WM_KEYUP, virtual_key, 0)
+    live_common.win32gui.PostMessage(hwnd, live_common.win32con.WM_KEYUP, live_common.win32con.VK_CONTROL, 0)
+
+
+def ui_cycle_hammer(*, args: argparse.Namespace, apps: list[tuple[str, object]]) -> list[dict[str, object]]:
+    """Exercises visible eMule-family windows with explicit refresh and tab cycling."""
+
+    if args.ui_cycle_cycles <= 0:
+        return []
+    events: list[dict[str, object]] = []
+    vk_f5 = 0x74
+    vk_tab = 0x09
+    for cycle in range(args.ui_cycle_cycles):
+        for label, app in apps:
+            event: dict[str, object] = {"cycle": cycle + 1, "client": label, "observed_at": round(time.time(), 3)}
+            try:
+                window = live_common.wait_for_main_window(app, timeout=8.0, require_visible=False)
+                hwnd = int(window.handle)
+                event["hwnd"] = hwnd
+                event["pid"] = app_process_id(app)
+                event["visible_before"] = bool(live_common.win32gui.IsWindowVisible(hwnd))
+                event["show_cmd_before"] = live_common.get_window_show_cmd(hwnd)
+                live_common.bring_window_to_front(window)
+                post_key(hwnd, vk_f5)
+                post_ctrl_key(hwnd, vk_tab)
+                post_key(hwnd, vk_f5)
+                event["visible_after"] = bool(live_common.win32gui.IsWindowVisible(hwnd))
+                event["show_cmd_after"] = live_common.get_window_show_cmd(hwnd)
+                event["status"] = "posted"
+            except Exception as exc:  # pragma: no cover - diagnostic path for live UI churn
+                event["status"] = "failed"
+                event["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
+            events.append(event)
+        time.sleep(args.ui_cycle_interval_seconds)
+    return events
+
+
 def build_harness_args(download_link_file: Path, download_report_file: Path) -> list[str]:
     """Builds tracing-harness arguments for later link-file driven downloads."""
 
@@ -493,13 +552,15 @@ def restart_tracing_harness_client(
     admin_base_url: str,
     api_key: str,
     timeout_seconds: float,
+    visible_ui: bool,
 ) -> tuple[object, dict[str, object]]:
     """Restarts the tracing harness client and waits for server visibility."""
 
     event: dict[str, object] = {"client": CLIENT02.profile_id, "operation": "restart", "started_at": round(time.time(), 3)}
     if app is not None:
-        event["terminate"] = live_common.terminate_app(app)
-    restarted = live_common.launch_app(app_exe, profile_base, minimized_to_tray=True, extra_args=extra_args)
+        live_common.close_app_cleanly(app)
+        event["terminate"] = {"ok": True}
+    restarted = live_common.launch_app(app_exe, profile_base, minimized_to_tray=not visible_ui, extra_args=extra_args)
     event["pid"] = app_process_id(restarted)
     event["server_client"] = dtt.wait_for_server_client(admin_base_url, api_key, CLIENT02.nick, timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
@@ -512,6 +573,7 @@ def restart_extra_emulebb_client(
     admin_base_url: str,
     api_key: str,
     timeout_seconds: float,
+    visible_ui: bool,
 ) -> dict[str, object]:
     """Restarts one extra REST-controlled eMuleBB source client."""
 
@@ -522,8 +584,13 @@ def restart_extra_emulebb_client(
     }
     app = client.get("app")
     if app is not None:
-        event["terminate"] = live_common.terminate_app(app)
-    restarted = live_common.launch_app(Path(str(client["app_exe"])), Path(str(client["profile_base"])), minimized_to_tray=True)
+        live_common.close_app_cleanly(app)
+        event["terminate"] = {"ok": True}
+    restarted = live_common.launch_app(
+        Path(str(client["app_exe"])),
+        Path(str(client["profile_base"])),
+        minimized_to_tray=not visible_ui,
+    )
     client["app"] = restarted
     event["pid"] = app_process_id(restarted)
     event["rest_ready"] = rest_smoke.compact_http_result(
@@ -620,6 +687,7 @@ def rotate_source_clients(
                 admin_base_url=admin_base_url,
                 api_key=api_key,
                 timeout_seconds=args.server_connect_timeout_seconds,
+                visible_ui=args.visible_ui,
             )
         elif target == "amule":
             amule_process, event = restart_amule_client(
@@ -640,6 +708,7 @@ def rotate_source_clients(
                 admin_base_url=admin_base_url,
                 api_key=api_key,
                 timeout_seconds=args.server_connect_timeout_seconds,
+                visible_ui=args.visible_ui,
             )
         if primary_source_links:
             start = (cycle * 3) % len(primary_source_links)
@@ -869,7 +938,7 @@ def main(argv: list[str] | None = None) -> int:
         current_phase = "launch_extra_emulebb_sources"
         report["checks"]["extra_emulebb_sources"] = {}
         for client in extra_emulebb_clients:
-            client["app"] = live_common.launch_app(paths.app_exe, Path(str(client["profile_base"])), minimized_to_tray=True)
+            client["app"] = live_common.launch_app(paths.app_exe, Path(str(client["profile_base"])), minimized_to_tray=not args.visible_ui)
             report["checks"]["extra_emulebb_sources"][str(client["profile_id"])] = {
                 "pid": app_process_id(client["app"]),
                 "rest_ready": rest_smoke.compact_http_result(
@@ -891,12 +960,12 @@ def main(argv: list[str] | None = None) -> int:
         client2_app = live_common.launch_app(
             client2_app_exe,
             Path(client2["profile_base"]),
-            minimized_to_tray=True,
+            minimized_to_tray=not args.visible_ui,
             extra_args=build_harness_args(harness_download_links_path, harness_download_report_path),
         )
 
         current_phase = "launch_emulebb"
-        client1_app = live_common.launch_app(paths.app_exe, Path(client1["profile_base"]), minimized_to_tray=True)
+        client1_app = live_common.launch_app(paths.app_exe, Path(client1["profile_base"]), minimized_to_tray=not args.visible_ui)
         report["checks"]["emulebb_rest_ready"] = rest_smoke.compact_http_result(
             rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
         )
@@ -1040,6 +1109,16 @@ def main(argv: list[str] | None = None) -> int:
             primary_source_links=emulebb_links,
         )
 
+        current_phase = "ui_cycle_hammer"
+        report["checks"]["ui_cycle_hammer"] = ui_cycle_hammer(
+            args=args,
+            apps=[
+                (CLIENT01.profile_id, client1_app),
+                (CLIENT02.profile_id, client2_app),
+                *[(str(client["profile_id"]), client["app"]) for client in extra_emulebb_clients if client.get("app") is not None],
+            ],
+        )
+
         current_phase = "resource_observation"
         report["checks"]["resource_summary"] = sample_emulebb_metrics(
             app=client1_app,
@@ -1066,7 +1145,8 @@ def main(argv: list[str] | None = None) -> int:
             if app is None:
                 continue
             try:
-                cleanup[identity.profile_id] = live_common.terminate_app(app)
+                live_common.close_app_cleanly(app)
+                cleanup[identity.profile_id] = {"ok": True}
             except Exception as exc:  # pragma: no cover - cleanup diagnostics only
                 cleanup[identity.profile_id] = {"error": str(exc)}
         for client in extra_emulebb_clients:
@@ -1074,7 +1154,8 @@ def main(argv: list[str] | None = None) -> int:
             if app is None:
                 continue
             try:
-                cleanup[str(client["profile_id"])] = live_common.terminate_app(app)
+                live_common.close_app_cleanly(app)
+                cleanup[str(client["profile_id"])] = {"ok": True}
             except Exception as exc:  # pragma: no cover - cleanup diagnostics only
                 cleanup[str(client["profile_id"])] = {"error": str(exc)}
         try:
@@ -1089,7 +1170,8 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup["amule_process_terminate_error"] = str(exc)
         if server_process is not None:
             try:
-                cleanup["ed2k_server"] = dtt.terminate_process(server_process)
+                dtt.stop_process(server_process)
+                cleanup["ed2k_server"] = {"ok": True}
             except Exception as exc:  # pragma: no cover - cleanup diagnostics only
                 cleanup["ed2k_server"] = {"error": str(exc)}
         report["cleanup"] = cleanup
