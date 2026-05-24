@@ -2361,6 +2361,7 @@ def main(argv: list[str] | None = None) -> int:
             paths.source_artifacts_dir,
             analysis_dir,
             diagnostics_dir,
+            procdump_crash_dump_dir,
         )
         report["cleanup"] = cleanup
         write_reports(paths, report)
