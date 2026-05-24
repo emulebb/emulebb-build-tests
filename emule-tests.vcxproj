@@ -154,6 +154,7 @@
     <ClCompile Include="src\background_refresh.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\BackgroundRefreshSeams.h')" />
     <ClCompile Include="src\community_core_divergence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueSeams.h')" />
     <ClCompile Include="src\compression_buffer.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
+    <ClCompile Include="src\corruption_black_box.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CorruptionBlackBoxSeams.h')" />
     <ClCompile Include="src\comment_dialog.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CommentDialogSeams.h')" />
     <ClCompile Include="src\client_credits.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
     <ClCompile Include="src\client_socket_lifetime.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
@@ -301,6 +302,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\CategoryDialogSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CategoryDialogSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ClientCreditsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CompressionBufferSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CompressionBufferSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\CorruptionBlackBoxSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CorruptionBlackBoxSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ConfigStartupBackupSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\CollectionSeams.h" Condition="Exists('$(AppRoot)\srchybrid\CollectionSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ComInitializationSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ComInitializationSeams.h')" />
