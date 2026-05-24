@@ -221,6 +221,7 @@
     <ClCompile Include="src\part_file_preview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePreviewSeams.h')" />
     <ClCompile Include="src\part_file_pause_resume.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h')" />
     <ClCompile Include="src\part_file_numeric.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h')" />
+    <ClCompile Include="src\part_file_source_ownership.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileSourceOwnershipSeams.h')" />
     <ClCompile Include="src\perf_log.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PerfLogSeams.h')" />
     <ClCompile Include="src\preference_validation_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PreferenceValidationSeams.h')" />
     <ClCompile Include="src\preference_ui_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PreferenceUiSeams.h')" />
@@ -342,6 +343,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\PartFilePersistenceSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFilePersistenceSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFileNumericSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\PartFileSourceOwnershipSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileSourceOwnershipSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PreferenceUiSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PreferenceUiSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProUserMenuCopySeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProUserMenuCopySeams.h')" />
