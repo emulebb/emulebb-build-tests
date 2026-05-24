@@ -11,7 +11,35 @@ from pathlib import Path
 
 TEST_SCRIPT_NAME = "stop-running-tests.py"
 TEST_PROCESS_NAMES = {"python.exe", "python", "py.exe", "py"}
-TEST_HELPER_PROCESS_NAMES = {"emulebb.exe", "emule.exe", "xperf.exe", "procdump.exe", "procdump64.exe", "cdb.exe"}
+TEST_HELPER_PROCESS_NAMES = {
+    "amulecmd.exe",
+    "amuled.exe",
+    "emulebb.exe",
+    "emule.exe",
+    "goed2k-server.exe",
+    "node.exe",
+    "xperf.exe",
+    "procdump.exe",
+    "procdump64.exe",
+    "cdb.exe",
+}
+TEST_RUNNER_MARKERS = (
+    "-m emule_workspace test",
+    "run-live-e2e-suite.py",
+    "\\repos\\emulebb-build-tests\\scripts\\",
+    "\\repos\\emulebb-build-tests\\tests\\",
+    "pytest",
+    "scripts\\godzilla-local-swarm.py",
+    "godzilla-local-swarm.py",
+)
+TEST_HELPER_MARKERS = (
+    "\\state\\test-reports\\",
+    "\\state\\test-artifacts\\",
+    "\\profile-base",
+    "\\profile-work",
+    "cpu-profile",
+    "\\repos\\amutorrent\\server\\server.js",
+)
 
 
 @dataclass(frozen=True)
@@ -44,20 +72,13 @@ def is_test_runner_process(process: ProcessInfo, workspace_root: Path, current_p
     if is_self_helper(process, current_pid):
         return False
     command = normalize(process.command_line)
-    if not command_mentions_workspace(process.command_line, workspace_root):
+    has_workspace_scope = command_mentions_workspace(process.command_line, workspace_root)
+    has_godzilla_script = "godzilla-local-swarm.py" in command
+    if not has_workspace_scope and not has_godzilla_script:
         return False
     if process.name.lower() not in TEST_PROCESS_NAMES:
         return False
-    return any(
-        marker in command
-        for marker in (
-            "-m emule_workspace test",
-            "run-live-e2e-suite.py",
-            "\\repos\\emulebb-build-tests\\scripts\\",
-            "\\repos\\emulebb-build-tests\\tests\\",
-            "pytest",
-        )
-    )
+    return any(marker in command for marker in TEST_RUNNER_MARKERS)
 
 
 def is_orphaned_test_helper_process(process: ProcessInfo, workspace_root: Path, current_pid: int) -> bool:
@@ -68,16 +89,7 @@ def is_orphaned_test_helper_process(process: ProcessInfo, workspace_root: Path, 
         return False
     if process.name.lower() not in TEST_HELPER_PROCESS_NAMES:
         return False
-    return any(
-        marker in command
-        for marker in (
-            "\\state\\test-reports\\",
-            "\\state\\test-artifacts\\",
-            "\\profile-base",
-            "\\profile-work",
-            "cpu-profile",
-        )
-    )
+    return any(marker in command for marker in TEST_HELPER_MARKERS)
 
 
 def build_children_by_parent(processes: list[ProcessInfo]) -> dict[int, list[ProcessInfo]]:

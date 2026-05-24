@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import amule as amule_harness  # noqa: E402
+from emule_test_harness import cpu_profile  # noqa: E402
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     AdminVolumeFixtureConfig,
     build_storage_topology,
@@ -135,6 +136,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mount-root")
     parser.add_argument("--keep-admin-fixtures", action="store_true")
     parser.add_argument("--vhd-runtime-root", choices=["folder-mount", "drive-letter"], default="folder-mount")
+    parser.add_argument("--capture-final-dump", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--procdump-path")
+    parser.add_argument("--cpu-profile", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--cpu-profile-max-file-mb", type=int, default=cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB)
+    parser.add_argument("--cpu-profile-stack", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--cpu-profile-stack-min-hits", type=int, default=10)
+    parser.add_argument("--enable-umdh", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--require-umdh", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
@@ -211,6 +220,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("VHD size must be greater than zero.")
     if args.hammer_wave_sleep_seconds < 0:
         raise ValueError("Hammer wave sleep seconds must not be negative.")
+    if args.cpu_profile_max_file_mb <= 0:
+        raise ValueError("CPU profile max file MB must be greater than zero.")
+    if args.cpu_profile_stack_min_hits <= 0:
+        raise ValueError("CPU profile stack min hits must be greater than zero.")
 
 
 def write_generated_file(path: Path, *, size_bytes: int, seed: int) -> str:
@@ -297,7 +310,7 @@ def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFi
     mount_parent = (
         Path(args.mount_root).resolve()
         if args.mount_root
-        else paths.source_artifacts_dir.parent / "admin-mounts" / SUITE_NAME
+        else paths.source_artifacts_dir / "admin-mounts"
     )
     reject_windows_temp_path(mount_parent, "Godzilla admin fixture mount root")
     return AdminVolumeFixtureConfig(
@@ -930,6 +943,109 @@ def sample_emulebb_metrics(
     return summary
 
 
+def cpu_profile_paths_to_report(paths: cpu_profile.CpuProfilePaths) -> dict[str, str]:
+    """Returns stable CPU profile artifact paths for the Godzilla result report."""
+
+    return {
+        "raw_etl": str(paths.raw_etl_path),
+        "etl": str(paths.etl_path),
+        "detail": str(paths.detail_path),
+        "summary": str(paths.summary_path),
+        "stack": str(paths.stack_path),
+    }
+
+
+def finalize_cpu_profile_capture(
+    *,
+    report: dict[str, object],
+    tools: cpu_profile.CpuProfileTools,
+    paths: cpu_profile.CpuProfilePaths,
+    app_exe: Path,
+    include_stack: bool,
+    stack_min_hits: int,
+) -> None:
+    """Stops, exports, and summarizes the active Godzilla CPU ETW profile."""
+
+    diagnostics = report.setdefault("diagnostics", {})
+    assert isinstance(diagnostics, dict)
+    cpu_report = diagnostics.setdefault("cpu_profile", {})
+    assert isinstance(cpu_report, dict)
+    cpu_report["stop"] = cpu_profile.stop_cpu_profile(tools=tools, paths=paths, timeout_seconds=60.0)
+    if (
+        isinstance(cpu_report.get("start"), dict)
+        and cpu_report["start"].get("return_code") == 0
+        and isinstance(cpu_report.get("stop"), dict)
+        and cpu_report["stop"].get("return_code") == 0
+        and paths.etl_path.is_file()
+    ):
+        cpu_report["export"] = cpu_profile.export_cpu_profile(
+            tools=tools,
+            paths=paths,
+            app_exe=app_exe,
+            timeout_seconds=90.0,
+            include_stack=include_stack,
+            stack_min_hits=stack_min_hits,
+        )
+        summary = {
+            "detail": cpu_profile.parse_xperf_profile_detail_file(paths.detail_path),
+            "stack": cpu_profile.parse_xperf_stack_report_file(paths.stack_path)
+            if include_stack
+            else {"available": False, "reason": "stack export disabled"},
+        }
+        paths.summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+        cpu_report["summary"] = summary
+        cpu_report["status"] = "passed" if summary["detail"].get("available") else "failed"
+    else:
+        cpu_report["status"] = "failed"
+
+
+def capture_primary_memory_diagnostics(
+    *,
+    report: dict[str, object],
+    app,
+    procdump_path: Path | None,
+    umdh_path: str | None,
+    analysis_dir: Path,
+    diagnostics_dir: Path,
+) -> None:
+    """Captures final dump and UMDH heap evidence for the primary eMuleBB client."""
+
+    if app is None:
+        return
+    process_id = app_process_id(app)
+    process_handle = live_process_monitor.open_process(process_id)
+    try:
+        if live_process_monitor.get_process_exit_code(process_handle) != live_process_monitor.STILL_ACTIVE:
+            return
+        diagnostics = report.setdefault("diagnostics", {})
+        assert isinstance(diagnostics, dict)
+        if diagnostics.get("capture_final_dump_enabled"):
+            final_dump = live_process_monitor.capture_procdump(
+                procdump_path,
+                process_id,
+                diagnostics_dir / "primary-final-memory.dmp",
+                analysis_dir / "procdump-primary-final-memory.txt",
+            )
+            diagnostics["final_dump"] = final_dump
+            if isinstance(final_dump, dict) and final_dump.get("dump_exists"):
+                diagnostics["cdb_final_dump"] = live_process_monitor.analyze_dump_with_cdb(
+                    Path(str(final_dump["dump_path"])),
+                    analysis_dir / "cdb-primary-final-memory-summary.txt",
+                )
+        umdh_report = diagnostics.get("umdh")
+        if isinstance(umdh_report, dict) and umdh_report.get("enabled"):
+            final_path = analysis_dir / "umdh-primary-final.txt"
+            umdh_report["final"] = live_process_monitor.capture_umdh_snapshot(umdh_path, process_id, final_path)
+            umdh_report["diff"] = live_process_monitor.diff_umdh_snapshots(
+                umdh_path,
+                analysis_dir / "umdh-primary-baseline.txt",
+                final_path,
+                analysis_dir / "umdh-primary-baseline-final.diff.txt",
+            )
+    finally:
+        live_process_monitor.close_handle(process_handle)
+
+
 def shutdown_amule(control_exe: Path | None, profile: amule_harness.AmuleRuntimeProfile | None) -> dict[str, object]:
     """Requests graceful aMule daemon shutdown through EC when possible."""
 
@@ -1306,9 +1422,77 @@ def main(argv: list[str] | None = None) -> int:
     amutorrent_output = None
     amutorrent_log_path: Path | None = None
     runtime_storage_context = None
+    analysis_dir = paths.source_artifacts_dir / "analysis"
+    diagnostics_dir = paths.source_artifacts_dir / "diagnostics"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    procdump_path = Path(args.procdump_path).resolve() if args.procdump_path else live_process_monitor.discover_procdump_path()
+    gflags_path = live_process_monitor.find_tool("gflags.exe", "gflags")
+    umdh_path = live_process_monitor.find_tool("umdh.exe", "umdh")
+    cpu_profile_tools = cpu_profile.discover_cpu_profile_tools()
+    cpu_profile_paths = cpu_profile.build_cpu_profile_paths(paths.source_artifacts_dir)
+    cpu_profile_active = False
+    cpu_profile_stopped = False
+    gflags_enabled = False
     current_phase = "initializing"
 
     try:
+        report["diagnostics"] = {
+            "tools": {
+                "procdump": str(procdump_path) if procdump_path else None,
+                "gflags": gflags_path,
+                "umdh": umdh_path,
+                "xperf": cpu_profile_tools.xperf,
+                "wpaexporter": cpu_profile_tools.wpaexporter,
+            },
+            "capture_final_dump_enabled": bool(args.capture_final_dump),
+            "cpu_profile": {
+                "enabled": bool(args.cpu_profile),
+                "paths": cpu_profile_paths_to_report(cpu_profile_paths),
+                "max_file_mb": args.cpu_profile_max_file_mb,
+                "stack": bool(args.cpu_profile_stack),
+                "stack_min_hits": args.cpu_profile_stack_min_hits,
+            },
+            "umdh": {
+                "enabled": bool(args.enable_umdh),
+            },
+        }
+        diagnostics = report["diagnostics"]
+        assert isinstance(diagnostics, dict)
+        if args.enable_umdh:
+            umdh_report = diagnostics["umdh"]
+            assert isinstance(umdh_report, dict)
+            if not gflags_path or not umdh_path:
+                message = "UMDH requested but gflags or umdh was not found."
+                if args.require_umdh:
+                    raise RuntimeError(message)
+                umdh_report["status"] = "skipped"
+                umdh_report["reason"] = message
+            else:
+                umdh_report["gflags_enable_ust"] = live_process_monitor.set_umdh_stack_tracing(
+                    gflags_path,
+                    paths.app_exe,
+                    enabled=True,
+                    output_path=analysis_dir / "gflags-enable-ust.txt",
+                )
+                gflags_enabled = True
+                umdh_report["status"] = "active"
+        if args.cpu_profile:
+            cpu_report = diagnostics["cpu_profile"]
+            assert isinstance(cpu_report, dict)
+            if not cpu_profile_tools.xperf:
+                cpu_report["status"] = "skipped"
+                cpu_report["reason"] = "xperf was not found"
+            else:
+                cpu_report["start"] = cpu_profile.start_cpu_profile(
+                    tools=cpu_profile_tools,
+                    paths=cpu_profile_paths,
+                    max_file_mb=args.cpu_profile_max_file_mb,
+                    timeout_seconds=30.0,
+                )
+                cpu_profile_active = cpu_report["start"].get("return_code") == 0
+                if not cpu_profile_active:
+                    cpu_report["status"] = "failed"
         runtime_storage_context = godzilla_runtime_storage(paths, args)
         runtime_storage = runtime_storage_context.__enter__()
         runtime_root = Path(str(runtime_storage["root"]))
@@ -1549,6 +1733,16 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
+        diagnostics = report.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            diagnostics["primary_pid"] = app_process_id(client1_app)
+            umdh_report = diagnostics.get("umdh")
+            if isinstance(umdh_report, dict) and umdh_report.get("status") == "active":
+                umdh_report["baseline"] = live_process_monitor.capture_umdh_snapshot(
+                    umdh_path,
+                    app_process_id(client1_app),
+                    analysis_dir / "umdh-primary-baseline.txt",
+                )
 
         if args.amutorrent_controller:
             current_phase = "launch_amutorrent_controller"
@@ -1852,6 +2046,25 @@ def main(argv: list[str] | None = None) -> int:
         final_rows = rest_smoke.require_json_array(final_transfers, 200)
         report["checks"]["final_transfer_count"] = len(final_rows)
         report["checks"]["ed2k_server_stats_final"] = dtt.admin_request(admin_base_url, args.api_key, "/api/stats")
+        current_phase = "diagnostic_capture"
+        capture_primary_memory_diagnostics(
+            report=report,
+            app=client1_app,
+            procdump_path=procdump_path,
+            umdh_path=umdh_path,
+            analysis_dir=analysis_dir,
+            diagnostics_dir=diagnostics_dir,
+        )
+        if cpu_profile_active:
+            finalize_cpu_profile_capture(
+                report=report,
+                tools=cpu_profile_tools,
+                paths=cpu_profile_paths,
+                app_exe=paths.app_exe,
+                include_stack=bool(args.cpu_profile_stack),
+                stack_min_hits=args.cpu_profile_stack_min_hits,
+            )
+            cpu_profile_stopped = True
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -1861,6 +2074,34 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         cleanup: dict[str, object] = {}
+        if client1_app is not None:
+            diagnostics = report.get("diagnostics")
+            already_dumped = isinstance(diagnostics, dict) and "final_dump" in diagnostics
+            if not already_dumped and (args.capture_final_dump or args.enable_umdh):
+                try:
+                    capture_primary_memory_diagnostics(
+                        report=report,
+                        app=client1_app,
+                        procdump_path=procdump_path,
+                        umdh_path=umdh_path,
+                        analysis_dir=analysis_dir,
+                        diagnostics_dir=diagnostics_dir,
+                    )
+                except Exception as exc:  # pragma: no cover - diagnostics best effort during cleanup
+                    cleanup["primary_diagnostics"] = {"error": str(exc) or repr(exc)}
+        if cpu_profile_active and not cpu_profile_stopped:
+            try:
+                finalize_cpu_profile_capture(
+                    report=report,
+                    tools=cpu_profile_tools,
+                    paths=cpu_profile_paths,
+                    app_exe=paths.app_exe,
+                    include_stack=bool(args.cpu_profile_stack),
+                    stack_min_hits=args.cpu_profile_stack_min_hits,
+                )
+                cleanup["cpu_profile"] = {"stopped": True}
+            except Exception as exc:  # pragma: no cover - diagnostics best effort during cleanup
+                cleanup["cpu_profile"] = {"error": str(exc) or repr(exc)}
         if amutorrent_process is not None:
             try:
                 amutorrent_local.stop_amutorrent(amutorrent_process)
@@ -1905,6 +2146,20 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup["ed2k_server"] = {"ok": True}
             except Exception as exc:  # pragma: no cover - cleanup diagnostics only
                 cleanup["ed2k_server"] = {"error": str(exc)}
+        if gflags_enabled and gflags_path:
+            try:
+                diagnostics = report.setdefault("diagnostics", {})
+                assert isinstance(diagnostics, dict)
+                umdh_report = diagnostics.setdefault("umdh", {})
+                assert isinstance(umdh_report, dict)
+                umdh_report["gflags_disable_ust"] = live_process_monitor.set_umdh_stack_tracing(
+                    gflags_path,
+                    paths.app_exe,
+                    enabled=False,
+                    output_path=analysis_dir / "gflags-disable-ust.txt",
+                )
+            except Exception as exc:  # pragma: no cover - cleanup diagnostics only
+                cleanup["gflags_disable_ust"] = {"error": str(exc) or repr(exc)}
         report["cleanup"] = cleanup
         write_reports(paths, report)
         if runtime_storage_context is not None:
