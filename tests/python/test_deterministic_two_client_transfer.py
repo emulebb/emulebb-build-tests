@@ -220,6 +220,7 @@ def test_configure_client_profile_disables_private_server_filter(tmp_path: Path)
     assert "AllocateFullFile=0" in emule_section
     assert "SparsePartFiles=0" in emule_section
     assert f"Nick={module.CLIENT01.nick}" in emule_section
+    assert "EnableUPnP=0" in text
 
 
 def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp_path: Path) -> None:

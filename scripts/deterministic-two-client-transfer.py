@@ -660,6 +660,11 @@ def configure_client_profile(
         "UploadPolicy",
         (("MaxUploadClientsAllowed", str(DETERMINISTIC_MAX_UPLOAD_CLIENTS)),),
     )
+    live_common.apply_section_preferences(
+        config_dir,
+        "UPnP",
+        (("EnableUPnP", "0"),),
+    )
     if rest_api_key is not None and rest_port is not None:
         live_common.apply_webserver_profile(
             config_dir,

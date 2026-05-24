@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import json
+import os
 import random
 import shutil
 import subprocess
@@ -13,15 +15,23 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
+import urllib.request
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import amule as amule_harness  # noqa: E402
+from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
+    AdminVolumeFixtureConfig,
+    build_storage_topology,
+    create_admin_volume_fixture,
+)
 from emule_test_harness import live_process_monitor  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_amule_client  # noqa: E402
+from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -40,6 +50,8 @@ def load_local_module(module_name: str, filename: str):
 dtt = load_local_module("deterministic_two_client_transfer_godzilla", "deterministic-two-client-transfer.py")
 amule_seed = load_local_module("deterministic_amule_transfer_godzilla", "deterministic-amule-transfer.py")
 protocol_matrix = load_local_module("local_ed2k_protocol_combinations_godzilla", "local-ed2k-protocol-combinations.py")
+amutorrent_smoke = load_local_module("amutorrent_browser_smoke_godzilla", "amutorrent-browser-smoke.py")
+amutorrent_local = load_local_module("amutorrent_local_ed2k_ui_godzilla", "amutorrent-local-ed2k-ui-live.py")
 harness_cli_common = dtt.harness_cli_common
 live_common = dtt.live_common
 rest_smoke = dtt.rest_smoke
@@ -65,6 +77,13 @@ DEFAULT_FILE_BASE_SIZE_BYTES = 4096
 DEFAULT_FILE_MEDIUM_SIZE_BYTES = 64 * 1024
 DEFAULT_FILE_LARGE_SIZE_BYTES = 1024 * 1024
 DEFAULT_PROTOCOL_CASE = "obfuscated-preferred"
+DEFAULT_VHD_SIZE_MB = 8192
+DEFAULT_REST_SEARCH_ROUNDS = 12
+DEFAULT_AMULE_COMMAND_ROUNDS = 12
+DEFAULT_AMUTORRENT_API_ROUNDS = 8
+DEFAULT_MIN_PUBLISHED_FILES_TO_START = 1
+DEFAULT_HAMMER_WAVES = 6
+DEFAULT_HAMMER_WAVE_SLEEP_SECONDS = 1.0
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
 OWNER_SEEDS = {
     "emulebb": 0xE001,
@@ -111,6 +130,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--visible-ui", action="store_true")
+    parser.add_argument("--admin-volume-fixtures", action="store_true")
+    parser.add_argument("--vhd-size-mb", type=int, default=DEFAULT_VHD_SIZE_MB)
+    parser.add_argument("--mount-root")
+    parser.add_argument("--keep-admin-fixtures", action="store_true")
+    parser.add_argument("--vhd-runtime-root", choices=["folder-mount", "drive-letter"], default="folder-mount")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
@@ -125,6 +149,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--client-rotation-interval-seconds", type=float, default=DEFAULT_CLIENT_ROTATION_INTERVAL_SECONDS)
     parser.add_argument("--ui-cycle-cycles", type=int, default=DEFAULT_UI_CYCLE_CYCLES)
     parser.add_argument("--ui-cycle-interval-seconds", type=float, default=DEFAULT_UI_CYCLE_INTERVAL_SECONDS)
+    parser.add_argument("--rest-search-rounds", type=int, default=DEFAULT_REST_SEARCH_ROUNDS)
+    parser.add_argument("--amule-command-rounds", type=int, default=DEFAULT_AMULE_COMMAND_ROUNDS)
+    parser.add_argument("--amutorrent-controller", action="store_true")
+    parser.add_argument("--amutorrent-api-rounds", type=int, default=DEFAULT_AMUTORRENT_API_ROUNDS)
+    parser.add_argument("--min-published-files-to-start", type=int, default=DEFAULT_MIN_PUBLISHED_FILES_TO_START)
+    parser.add_argument("--hammer-waves", type=int, default=DEFAULT_HAMMER_WAVES)
+    parser.add_argument("--hammer-wave-sleep-seconds", type=float, default=DEFAULT_HAMMER_WAVE_SLEEP_SECONDS)
     parser.add_argument("--emulebb-files", type=int, default=DEFAULT_EMULEBB_FILES)
     parser.add_argument("--extra-emulebb-clients", type=int, default=DEFAULT_EXTRA_EMULEBB_CLIENTS)
     parser.add_argument("--extra-emulebb-files", type=int, default=DEFAULT_EXTRA_EMULEBB_FILES)
@@ -154,6 +185,11 @@ def validate_args(args: argparse.Namespace) -> None:
         "transfer_count",
         "client_rotation_cycles",
         "ui_cycle_cycles",
+        "rest_search_rounds",
+        "amule_command_rounds",
+        "amutorrent_api_rounds",
+        "min_published_files_to_start",
+        "hammer_waves",
     ):
         if int(getattr(args, name)) < 0:
             raise ValueError(f"{name.replace('_', '-')} must not be negative.")
@@ -171,6 +207,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("client rotation interval must be greater than zero.")
     if args.ui_cycle_interval_seconds <= 0:
         raise ValueError("UI cycle interval must be greater than zero.")
+    if args.vhd_size_mb <= 0:
+        raise ValueError("VHD size must be greater than zero.")
+    if args.hammer_wave_sleep_seconds < 0:
+        raise ValueError("Hammer wave sleep seconds must not be negative.")
 
 
 def write_generated_file(path: Path, *, size_bytes: int, seed: int) -> str:
@@ -220,6 +260,17 @@ def generated_library_shared_dirs(root: Path) -> list[str]:
     return live_common.enumerate_recursive_directories(root)
 
 
+def allocate_free_tcp_port(used: set[int]) -> int:
+    """Allocates one additional unique local TCP port."""
+
+    for _ in range(100):
+        candidate = rest_smoke.choose_listen_port()
+        if candidate not in used and dtt.is_port_available(candidate):
+            used.add(candidate)
+            return candidate
+    raise RuntimeError("Could not allocate an additional TCP port.")
+
+
 def choose_ports(extra_emulebb_clients: int = 0) -> dict[str, int]:
     """Allocates local ports for all clients and the ED2K server."""
 
@@ -238,6 +289,55 @@ def choose_ports(extra_emulebb_clients: int = 0) -> dict[str, int]:
             else:
                 raise RuntimeError(f"Could not allocate port for {key}.")
     return ports
+
+
+def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
+    """Builds the optional throwaway VHD fixture for Godzilla runtime state."""
+
+    mount_parent = (
+        Path(args.mount_root).resolve()
+        if args.mount_root
+        else paths.source_artifacts_dir.parent / "admin-mounts" / SUITE_NAME
+    )
+    reject_windows_temp_path(mount_parent, "Godzilla admin fixture mount root")
+    return AdminVolumeFixtureConfig(
+        vhd_path=paths.source_artifacts_dir / "admin-volumes" / f"{SUITE_NAME}.vhdx",
+        mount_root=mount_parent / SUITE_NAME,
+        local_control_root=paths.source_artifacts_dir / "local-control-volume",
+        size_mb=args.vhd_size_mb,
+        keep=args.keep_admin_fixtures,
+    )
+
+
+@contextmanager
+def godzilla_runtime_storage(paths, args: argparse.Namespace):
+    """Yields the runtime root used for generated libraries and throwaway profiles."""
+
+    if not args.admin_volume_fixtures:
+        yield {
+            "enabled": False,
+            "root": paths.source_artifacts_dir,
+            "mode": "workspace-artifacts",
+        }
+        return
+
+    config = build_admin_fixture_config(paths, args)
+    with create_admin_volume_fixture(config) as fixture:
+        topology = build_storage_topology(fixture, SUITE_NAME)
+        runtime_root = topology.vhd_mount_root if args.vhd_runtime_root == "folder-mount" else topology.vhd_drive_root
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        yield {
+            "enabled": True,
+            "root": runtime_root,
+            "mode": args.vhd_runtime_root,
+            "vhd_path": str(fixture.vhd_path),
+            "drive_root": str(fixture.drive_root),
+            "mount_root": str(fixture.mount_root),
+            "local_control_root": str(fixture.local_control_root),
+            "drive_identity": fixture.drive_identity.__dict__,
+            "mount_identity": fixture.mount_identity.__dict__,
+            "local_control_identity": fixture.local_control_identity.__dict__,
+        }
 
 
 def discover_local_lan_ipv4() -> str:
@@ -334,6 +434,49 @@ def wait_for_server_file_count(
     return live_common.wait_for(resolve, timeout_seconds, 5.0, f"server published files for {search}")
 
 
+def server_total_file_count(admin_base_url: str, api_key: str) -> int:
+    """Returns the current dynamic/shared file count from the local ED2K server."""
+
+    stats = dtt.admin_request(admin_base_url, api_key, "/api/stats")
+    data = stats.get("data") if isinstance(stats, dict) else None
+    if not isinstance(data, dict):
+        return 0
+    return int(data.get("current_files") or 0)
+
+
+def wait_for_server_min_file_count(
+    admin_base_url: str,
+    api_key: str,
+    *,
+    minimum_count: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Starts the hammer as soon as any requested minimum publication exists."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        count = server_total_file_count(admin_base_url, api_key)
+        observations.append({"count": count, "minimum": minimum_count, "observed_at": round(time.time(), 3)})
+        return {"count": count, "minimum": minimum_count, "observations": observations} if count >= minimum_count else None
+
+    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"minimum published file count {minimum_count}")
+
+
+def snapshot_publication_counts(
+    admin_base_url: str,
+    api_key: str,
+    *,
+    owner_keys: list[str],
+) -> dict[str, object]:
+    """Records current publication coverage without blocking the hammer."""
+
+    counts = {"total": server_total_file_count(admin_base_url, api_key)}
+    for owner_key in owner_keys:
+        counts[owner_key] = server_file_count(admin_base_url, api_key, search=f"{owner_key}-godzilla-")
+    return counts
+
+
 def collect_server_files(admin_base_url: str, api_key: str, *, search: str, limit: int) -> list[GeneratedFile]:
     """Collects published file rows from the local ED2K server."""
 
@@ -371,6 +514,282 @@ def wait_for_rest_shared_count(base_url: str, api_key: str, expected_count: int,
         return {"count": len(rows), "observations": observations} if len(rows) >= expected_count else None
 
     return live_common.wait_for(resolve, timeout_seconds, 5.0, "eMuleBB REST shared-file count")
+
+
+def wait_for_known_met_size(config_dir: Path, expected_files: int, timeout_seconds: float) -> dict[str, object]:
+    """Waits until a generated eMule profile has persisted a plausible known.met."""
+
+    if expected_files <= 0:
+        return {"skipped": True, "reason": "no expected files"}
+    known_path = config_dir / "known.met"
+    min_size = max(128, expected_files * 64)
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        size = known_path.stat().st_size if known_path.exists() else 0
+        observations.append({"size": size, "minimum": min_size, "observed_at": round(time.time(), 3)})
+        return {"path": str(known_path), "size": size, "minimum": min_size, "observations": observations} if size >= min_size else None
+
+    return live_common.wait_for(resolve, timeout_seconds, 5.0, f"known.met hash persistence in {config_dir}")
+
+
+def try_wait_for_known_met_size(config_dir: Path, expected_files: int, timeout_seconds: float) -> dict[str, object]:
+    """Records known.met readiness without blocking the hammer campaign."""
+
+    try:
+        result = wait_for_known_met_size(config_dir, expected_files, timeout_seconds)
+        result["ok"] = True
+        return result
+    except Exception as exc:
+        known_path = config_dir / "known.met"
+        return {
+            "ok": False,
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "path": str(known_path),
+            "size": known_path.stat().st_size if known_path.exists() else 0,
+        }
+
+
+def force_emulebb_publish(base_url: str, api_key: str, *, address: str, port: int, timeout_seconds: float) -> dict[str, object]:
+    """Forces shared-file reload and reconnect for one REST-controlled eMuleBB client."""
+
+    reload_result = rest_smoke.http_request(
+        base_url,
+        "/api/v1/shared-files/operations/reload",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    return {
+        "reload_shared_files": rest_smoke.compact_http_result(reload_result),
+        "server_reconnect": dtt.add_and_connect_server(
+            base_url,
+            api_key,
+            address=address,
+            port=port,
+            timeout_seconds=timeout_seconds,
+        ),
+    }
+
+
+def run_emulebb_search_hammer(base_url: str, api_key: str, *, queries: list[str], rounds: int) -> dict[str, object]:
+    """Starts local-server search rounds through native eMuleBB REST."""
+
+    if rounds <= 0:
+        return {"skipped": True, "reason": "rounds disabled"}
+    rows: list[dict[str, object]] = []
+    for index in range(rounds):
+        query = queries[index % len(queries)]
+        row: dict[str, object] = {"round": index + 1, "query": query}
+        start = rest_smoke.start_live_search(base_url, api_key, "server", query, forced_method="server")
+        row["start"] = rest_smoke.compact_http_result(start["response"]) if start.get("response") else start
+        search_id = None
+        response = start.get("response")
+        if isinstance(response, dict) and isinstance(response.get("json"), dict):
+            search_id = response["json"].get("id")
+        if search_id:
+            row["observation"] = rest_smoke.wait_for_search_observation(base_url, api_key, str(search_id), 20.0)
+        rows.append(row)
+    cleanup = rest_smoke.compact_http_result(rest_smoke.delete_all_searches(base_url, api_key))
+    return {"rounds": rows, "cleanup": cleanup}
+
+
+def run_amule_command_hammer(
+    control_exe: Path,
+    profile: amule_harness.AmuleRuntimeProfile,
+    *,
+    links: list[str],
+    queries: list[str],
+    rounds: int,
+) -> dict[str, object]:
+    """Runs non-fatal aMule external-control commands to stress EC and ED2K paths."""
+
+    if rounds <= 0:
+        return {"skipped": True, "reason": "rounds disabled"}
+    command_templates = [
+        "Status",
+        "Show DL",
+        "Show UL",
+        "Show Shared",
+        "Reload Shared",
+        "Connect ed2k",
+        "Search global {query}",
+        "Search local {query}",
+    ]
+    rows: list[dict[str, object]] = []
+    for index in range(rounds):
+        template = command_templates[index % len(command_templates)]
+        command = template.format(query=queries[index % len(queries)])
+        rows.append({"round": index + 1, "command": command, **amule_command_summary(amule_harness.run_amulecmd(control_exe, profile, command, timeout_seconds=30.0, check=False))})
+        if links and index % 4 == 3:
+            link = links[(index // 4) % len(links)]
+            rows.append({"round": index + 1, "command": "Add <ed2k-link>", **amule_command_summary(amule_harness.run_amulecmd(control_exe, profile, f"Add {link}", timeout_seconds=30.0, check=False))})
+    return {"rounds": rows}
+
+
+def amutorrent_http_json(base_url: str, path: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Runs one JSON aMuTorrent controller request."""
+
+    data = None
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=20.0) as response:
+        payload_text = response.read().decode("utf-8", errors="replace")
+        payload = json.loads(payload_text) if payload_text else None
+        return {"status": response.status, "payload": payload}
+
+
+def run_amutorrent_api_hammer(base_url: str, *, links: list[str], rounds: int) -> dict[str, object]:
+    """Runs optional aMuTorrent controller API traffic against eMuleBB and aMule."""
+
+    if rounds <= 0:
+        return {"skipped": True, "reason": "rounds disabled"}
+    rows: list[dict[str, object]] = []
+    instance_cycle = [CLIENT01.profile_id, CLIENT04.profile_id]
+    for index in range(rounds):
+        instance_id = instance_cycle[index % len(instance_cycle)]
+        row: dict[str, object] = {
+            "round": index + 1,
+            "instance_id": instance_id,
+            "health": amutorrent_http_json(base_url, "/health"),
+            "snapshot_before": amutorrent_http_json(base_url, "/api/v1/data/snapshot"),
+        }
+        if links:
+            link = links[index % len(links)]
+            row["add_ed2k"] = amutorrent_http_json(
+                base_url,
+                "/api/v1/downloads/ed2k",
+                method="POST",
+                body={"links": [link], "instanceId": instance_id},
+            )
+        query = "linux" if index % 2 == 0 else "debian"
+        row["search"] = amutorrent_http_json(
+            base_url,
+            "/api/v1/search?wait=false",
+            method="POST",
+            body={"query": query, "type": "server", "instanceId": instance_id},
+        )
+        row["search_results"] = amutorrent_http_json(base_url, f"/api/v1/search/results?type=server&instanceId={instance_id}")
+        row["snapshot_after"] = amutorrent_http_json(base_url, "/api/v1/data/snapshot")
+        rows.append(row)
+    return {"rounds": rows}
+
+
+def server_telemetry_snapshot(admin_base_url: str, api_key: str) -> dict[str, object]:
+    """Captures a compact Go ED2K server telemetry snapshot through the admin API."""
+
+    snapshot: dict[str, object] = {"observed_at": round(time.time(), 3)}
+    endpoints = {
+        "stats": "/api/stats",
+        "clients": "/api/clients?page=1&per_page=100&sort=last_seen",
+        "audit": "/api/audit?page=1&per_page=25",
+    }
+    for name, endpoint in endpoints.items():
+        try:
+            snapshot[name] = dtt.admin_request(admin_base_url, api_key, endpoint)
+        except Exception as exc:  # noqa: BLE001 - telemetry must not abort the hammer
+            snapshot[name] = {"error_type": type(exc).__name__, "error_message": str(exc) or repr(exc)}
+    return snapshot
+
+
+def run_spiral_hammer(
+    *,
+    base_url: str,
+    api_key: str,
+    admin_base_url: str,
+    amule_control_exe: Path,
+    amule_profile: amule_harness.AmuleRuntimeProfile,
+    links: list[str],
+    queries: list[str],
+    waves: int,
+    sleep_seconds: float,
+) -> dict[str, object]:
+    """Runs increasing search/download/churn/EC waves after first publication."""
+
+    if waves <= 0:
+        return {"skipped": True, "reason": "waves disabled"}
+    rows: list[dict[str, object]] = []
+    link_count = len(links)
+    for wave in range(1, waves + 1):
+        wave_row: dict[str, object] = {
+            "wave": wave,
+            "started_at": round(time.time(), 3),
+            "actions": [],
+        }
+        wave_row["server_before"] = server_telemetry_snapshot(admin_base_url, api_key)
+        actions = wave_row["actions"]
+        assert isinstance(actions, list)
+        for index in range(wave * 3):
+            query = queries[(wave + index) % len(queries)]
+            start = rest_smoke.start_live_search(base_url, api_key, "server", query, forced_method="server")
+            actions.append(
+                {
+                    "kind": "rest-search",
+                    "query": query,
+                    "response": rest_smoke.compact_http_result(start["response"]) if start.get("response") else start,
+                }
+            )
+        if link_count:
+            start = ((wave - 1) * 3) % link_count
+            wave_links = [links[(start + offset) % link_count] for offset in range(min(link_count, wave * 6))]
+            add_results = queue_emulebb_downloads(base_url, api_key, wave_links)
+            actions.extend({"kind": "rest-add", "response": result} for result in add_results)
+            hashes = []
+            for link in wave_links[: min(len(wave_links), wave * 4)]:
+                try:
+                    hashes.append(str(dtt.parse_ed2k_file_link(link)["hash"]).lower())
+                except Exception:
+                    continue
+            for transfer_hash in hashes:
+                operations = ("pause", "resume", "stop", "resume")[: 1 + (wave % 4)]
+                for operation in operations:
+                    result = rest_smoke.http_request(
+                        base_url,
+                        f"/api/v1/transfers/{transfer_hash}/operations/{operation}",
+                        method="POST",
+                        api_key=api_key,
+                        json_body={},
+                        request_timeout_seconds=10.0,
+                    )
+                    actions.append(
+                        {
+                            "kind": "rest-churn",
+                            "hash": transfer_hash,
+                            "operation": operation,
+                            "response": rest_smoke.compact_http_result(result),
+                        }
+                    )
+        amule_commands = [
+            "Status",
+            "Show DL",
+            "Show UL",
+            "Show Shared",
+            "Reload Shared",
+            "Connect ed2k",
+            f"Search global {queries[wave % len(queries)]}",
+            f"Search local {queries[(wave + 1) % len(queries)]}",
+        ][: 2 + wave]
+        for command in amule_commands:
+            actions.append(
+                {
+                    "kind": "amulecmd",
+                    "command": command,
+                    "response": amule_command_summary(
+                        amule_harness.run_amulecmd(amule_control_exe, amule_profile, command, timeout_seconds=30.0, check=False)
+                    ),
+                }
+            )
+        wave_row["server_after"] = server_telemetry_snapshot(admin_base_url, api_key)
+        wave_row["finished_at"] = round(time.time(), 3)
+        rows.append(wave_row)
+        if sleep_seconds:
+            time.sleep(sleep_seconds)
+    return {"waves": rows}
 
 
 def build_file_link(row: GeneratedFile, *, source_ip: str, source_port: int) -> str:
@@ -468,6 +887,7 @@ def sample_emulebb_metrics(
     """Samples eMuleBB resource usage while the stress workload drains."""
 
     rows: list[dict[str, object]] = []
+    runtime_rows: list[dict[str, object]] = []
     handle = live_process_monitor.open_process(app_process_id(app))
     started = time.monotonic()
     last_sample = None
@@ -481,7 +901,13 @@ def sample_emulebb_metrics(
                 last_sample_monotonic=last_sample,
                 last_cpu_seconds=last_cpu,
             )
-            row["runtime"] = live_process_monitor.sample_runtime_counters(base_url, api_key)
+            runtime_rows.append(
+                {
+                    "utc_time": row.get("utc_time"),
+                    "elapsed_seconds": row.get("elapsed_seconds"),
+                    "runtime": live_process_monitor.sample_runtime_counters(base_url, api_key),
+                }
+            )
             rows.append(row)
             last_sample = time.monotonic()
             last_cpu = float(row["cpu_seconds"])
@@ -491,7 +917,17 @@ def sample_emulebb_metrics(
     finally:
         live_process_monitor.kernel32.CloseHandle(live_process_monitor.ctypes.c_void_p(handle))
     live_process_monitor.write_metric_csv(output_csv, rows)
-    return live_process_monitor.summarize_metric_rows(rows)
+    runtime_jsonl = output_csv.with_name(output_csv.stem + "-runtime-counters.jsonl")
+    runtime_jsonl.write_text(
+        "".join(json.dumps(json_safe(row), sort_keys=True) + "\n" for row in runtime_rows),
+        encoding="utf-8",
+    )
+    summary = live_process_monitor.summarize_metric_rows(rows)
+    summary["runtime_counters_jsonl"] = str(runtime_jsonl)
+    summary["runtime_sample_count"] = len(runtime_rows)
+    if runtime_rows:
+        summary["last_runtime_sample"] = runtime_rows[-1]
+    return summary
 
 
 def shutdown_amule(control_exe: Path | None, profile: amule_harness.AmuleRuntimeProfile | None) -> dict[str, object]:
@@ -664,6 +1100,44 @@ def restart_extra_emulebb_client(
     return event
 
 
+def restart_primary_emulebb_client(
+    *,
+    app,
+    app_exe: Path,
+    profile_base: Path,
+    base_url: str,
+    admin_base_url: str,
+    api_key: str,
+    p2p_address: str,
+    ed2k_port: int,
+    timeout_seconds: float,
+    visible_ui: bool,
+) -> tuple[object, dict[str, object]]:
+    """Restarts the primary REST-controlled eMuleBB client after hashing settles."""
+
+    event: dict[str, object] = {
+        "client": CLIENT01.profile_id,
+        "operation": "restart-after-hash",
+        "started_at": round(time.time(), 3),
+    }
+    if app is not None:
+        live_common.close_app_cleanly(app)
+        event["terminate"] = {"ok": True}
+    restarted = live_common.launch_app(app_exe, profile_base, minimized_to_tray=not visible_ui)
+    event["pid"] = app_process_id(restarted)
+    event["rest_ready"] = rest_smoke.compact_http_result(rest_smoke.wait_for_rest_ready(base_url, api_key, timeout_seconds))
+    event["server_connect"] = dtt.add_and_connect_server(
+        base_url,
+        api_key,
+        address=p2p_address,
+        port=ed2k_port,
+        timeout_seconds=timeout_seconds,
+    )
+    event["server_client"] = dtt.wait_for_server_client(admin_base_url, api_key, CLIENT01.nick, timeout_seconds)
+    event["finished_at"] = round(time.time(), 3)
+    return restarted, event
+
+
 def restart_amule_client(
     *,
     process: subprocess.Popen | None,
@@ -781,7 +1255,21 @@ def rotate_source_clients(
 def write_reports(paths, report: dict[str, object]) -> None:
     """Writes suite-specific JSON evidence."""
 
-    harness_cli_common.write_json_file(paths.source_artifacts_dir / "godzilla-local-swarm-result.json", report)
+    harness_cli_common.write_json_file(paths.source_artifacts_dir / "godzilla-local-swarm-result.json", json_safe(report))
+
+
+def json_safe(value):
+    """Returns a JSON-safe copy of diagnostic values collected from live helpers."""
+
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -814,9 +1302,17 @@ def main(argv: list[str] | None = None) -> int:
     amule_process: subprocess.Popen | None = None
     amule_profile: amule_harness.AmuleRuntimeProfile | None = None
     amule_control_exe: Path | None = None
+    amutorrent_process: subprocess.Popen[str] | None = None
+    amutorrent_output = None
+    amutorrent_log_path: Path | None = None
+    runtime_storage_context = None
     current_phase = "initializing"
 
     try:
+        runtime_storage_context = godzilla_runtime_storage(paths, args)
+        runtime_storage = runtime_storage_context.__enter__()
+        runtime_root = Path(str(runtime_storage["root"]))
+        report["runtime_storage"] = runtime_storage
         amule_client = resolve_required_amule(paths, args)
         amule_daemon_exe = amule_client.executable
         amule_control_exe = amule_client.control_executable
@@ -825,6 +1321,8 @@ def main(argv: list[str] | None = None) -> int:
         client_protocol_preferences = protocol_preferences(protocol_case)
         p2p_address = resolve_local_p2p_address(args)
         ports = choose_ports(args.extra_emulebb_clients)
+        if args.amutorrent_controller:
+            ports["amutorrent"] = allocate_free_tcp_port(set(ports.values()))
         base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
         admin_base_url = f"http://127.0.0.1:{ports['ed2k_admin']}"
         for index in range(args.extra_emulebb_clients):
@@ -887,7 +1385,7 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
 
         current_phase = "generate_libraries"
-        library_root = paths.source_artifacts_dir / "generated-libraries"
+        library_root = runtime_root / "generated-libraries"
         emulebb_library = generate_library(library_root / CLIENT01.profile_id, owner_key=CLIENT01.key, count=args.emulebb_files, args=args)
         extra_emulebb_libraries: dict[str, list[GeneratedFile]] = {}
         for client in extra_emulebb_clients:
@@ -914,27 +1412,27 @@ def main(argv: list[str] | None = None) -> int:
         current_phase = "prepare_profiles"
         client1 = live_common.prepare_scenario_profile(
             profile_seed_dir,
-            paths.source_artifacts_dir,
+            runtime_root,
             generated_library_shared_dirs(library_root / CLIENT01.profile_id),
             CLIENT01.profile_id,
         )
         client2 = live_common.prepare_scenario_profile(
             profile_seed_dir,
-            paths.source_artifacts_dir,
+            runtime_root,
             generated_library_shared_dirs(library_root / CLIENT02.profile_id),
             CLIENT02.profile_id,
         )
         for client in extra_emulebb_clients:
             profile = live_common.prepare_scenario_profile(
                 profile_seed_dir,
-                paths.source_artifacts_dir,
+                runtime_root,
                 generated_library_shared_dirs(Path(str(client["library_root"]))),
                 str(client["profile_id"]),
             )
             client["profile_base"] = str(profile["profile_base"])
             client["config_dir"] = str(profile["config_dir"])
         amule_profile = amule_harness.prepare_amule_profile(
-            root_dir=paths.source_artifacts_dir / "clients" / CLIENT04.profile_id,
+            root_dir=runtime_root / "clients" / CLIENT04.profile_id,
             profile_id=CLIENT04.profile_id,
             nick=CLIENT04.nick,
             tcp_port=ports["amule_tcp"],
@@ -1052,6 +1550,48 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.server_connect_timeout_seconds,
         )
 
+        if args.amutorrent_controller:
+            current_phase = "launch_amutorrent_controller"
+            workspace_repo_root = amutorrent_smoke.find_workspace_repo_root(paths.workspace_root)
+            amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
+            node_info = amutorrent_smoke.resolve_amutorrent_node()
+            node_path = Path(str(node_info["path"]))
+            amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
+            amutorrent_data_dir = runtime_root / "amutorrent-data"
+            amutorrent_log_path = paths.source_artifacts_dir / "amutorrent-server.log"
+            env = amutorrent_local.build_local_amutorrent_environment(
+                base_env=os.environ,
+                amutorrent_port=ports["amutorrent"],
+                node_path=node_path,
+                data_dir=amutorrent_data_dir,
+                emulebb_rest_port=ports["client1_rest"],
+                emulebb_api_key=args.api_key,
+                amule_ec_port=ports["amule_ec"],
+                amule_password=amule_profile.ec_password,
+            )
+            amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
+            amutorrent_process = subprocess.Popen(
+                [str(node_path), "server/server.js"],
+                cwd=str(amutorrent_root),
+                env=env,
+                stdout=amutorrent_output,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            amutorrent_base_url = f"http://127.0.0.1:{ports['amutorrent']}"
+            amutorrent_smoke.wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.rest_ready_timeout_seconds)
+            report["amutorrent"] = {
+                "base_url": amutorrent_base_url,
+                "data_dir": str(amutorrent_data_dir),
+                "process_id": amutorrent_process.pid,
+                "node": node_info,
+            }
+            report["checks"]["amutorrent_clients_connected"] = amutorrent_local.wait_for_amutorrent_clients(
+                base_url=amutorrent_base_url,
+                expected={CLIENT01.profile_id: "emulebb", CLIENT04.profile_id: "amule"},
+                timeout_seconds=args.rest_ready_timeout_seconds,
+            )
+
         current_phase = "wait_for_publish"
         report["checks"]["server_clients"] = {
             CLIENT01.profile_id: dtt.wait_for_server_client(admin_base_url, args.api_key, CLIENT01.nick, args.server_connect_timeout_seconds),
@@ -1067,43 +1607,101 @@ def main(argv: list[str] | None = None) -> int:
                 for client in extra_emulebb_clients
             },
         }
+        current_phase = "force_publish_after_hash"
+        primary_known_met = try_wait_for_known_met_size(Path(client1["config_dir"]), args.emulebb_files, args.publish_timeout_seconds)
         if args.emulebb_files:
-            report["checks"]["emulebb_rest_shared_count"] = wait_for_rest_shared_count(base_url, args.api_key, args.emulebb_files, args.publish_timeout_seconds)
-            report["checks"]["emulebb_server_file_count"] = wait_for_server_file_count(
-                admin_base_url,
-                args.api_key,
-                search=f"{CLIENT01.key}-godzilla-",
-                expected_count=args.emulebb_files,
-                timeout_seconds=args.publish_timeout_seconds,
+            client1_app, primary_republish = restart_primary_emulebb_client(
+                app=client1_app,
+                app_exe=paths.app_exe,
+                profile_base=Path(client1["profile_base"]),
+                base_url=base_url,
+                admin_base_url=admin_base_url,
+                api_key=args.api_key,
+                p2p_address=p2p_address,
+                ed2k_port=ports["ed2k_tcp"],
+                timeout_seconds=args.server_connect_timeout_seconds,
+                visible_ui=args.visible_ui,
             )
-        report["checks"]["harness_server_file_count"] = wait_for_server_file_count(
-            admin_base_url,
-            args.api_key,
-            search=f"{CLIENT02.key}-godzilla-",
-            expected_count=args.harness_files,
-            timeout_seconds=args.publish_timeout_seconds,
-        )
-        report["checks"]["amule_server_file_count"] = wait_for_server_file_count(
-            admin_base_url,
-            args.api_key,
-            search=f"{CLIENT04.key}-godzilla-",
-            expected_count=args.amule_files,
-            timeout_seconds=args.publish_timeout_seconds,
-        )
+        else:
+            primary_republish = {"skipped": True}
+        report["checks"]["post_hash_publication"] = {
+            CLIENT01.profile_id: {
+                "known_met": primary_known_met,
+                "restart": primary_republish,
+            },
+            CLIENT04.profile_id: {
+                "reload_shared": amule_command_summary(
+                    amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Reload Shared", timeout_seconds=60.0, check=False)
+                ),
+                "connect_server": amule_command_summary(
+                    amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Connect ed2k", timeout_seconds=30.0, check=False)
+                ),
+            },
+            "extra_emulebb": {},
+        }
         for client in extra_emulebb_clients:
-            report["checks"][f"{client['profile_id']}_rest_shared_count"] = wait_for_rest_shared_count(
-                str(client["base_url"]),
-                args.api_key,
-                args.extra_emulebb_files,
-                args.publish_timeout_seconds,
-            )
-            report["checks"][f"{client['profile_id']}_server_file_count"] = wait_for_server_file_count(
-                admin_base_url,
-                args.api_key,
-                search=f"{client['key']}-godzilla-",
-                expected_count=args.extra_emulebb_files,
-                timeout_seconds=args.publish_timeout_seconds,
-            )
+            report["checks"]["post_hash_publication"]["extra_emulebb"][str(client["profile_id"])] = {
+                "known_met": try_wait_for_known_met_size(Path(str(client["config_dir"])), args.extra_emulebb_files, args.publish_timeout_seconds),
+                "restart": restart_extra_emulebb_client(
+                    client=client,
+                    admin_base_url=admin_base_url,
+                    api_key=args.api_key,
+                    timeout_seconds=args.server_connect_timeout_seconds,
+                    visible_ui=args.visible_ui,
+                ),
+            }
+        harness_known_met = try_wait_for_known_met_size(Path(client2["config_dir"]), args.harness_files, min(args.publish_timeout_seconds, 20.0))
+        client2_app, harness_republish = restart_tracing_harness_client(
+            app=client2_app,
+            app_exe=client2_app_exe,
+            profile_base=Path(client2["profile_base"]),
+            extra_args=build_harness_args(harness_download_links_path, harness_download_report_path),
+            admin_base_url=admin_base_url,
+            api_key=args.api_key,
+            timeout_seconds=args.server_connect_timeout_seconds,
+            visible_ui=args.visible_ui,
+        )
+        report["checks"]["post_hash_publication"][CLIENT02.profile_id] = {
+            "known_met": harness_known_met,
+            "restart": harness_republish,
+        }
+        current_phase = "wait_for_first_publication"
+        owner_keys = [
+            CLIENT01.key,
+            CLIENT02.key,
+            CLIENT04.key,
+            *(str(client["key"]) for client in extra_emulebb_clients),
+        ]
+        report["checks"]["first_publication_gate"] = wait_for_server_min_file_count(
+            admin_base_url,
+            args.api_key,
+            minimum_count=max(1, args.min_published_files_to_start),
+            timeout_seconds=args.publish_timeout_seconds,
+        )
+        report["checks"]["publication_counts_at_hammer_start"] = snapshot_publication_counts(
+            admin_base_url,
+            args.api_key,
+            owner_keys=owner_keys,
+        )
+        if args.emulebb_files:
+            try:
+                report["checks"]["emulebb_rest_shared_count"] = wait_for_rest_shared_count(base_url, args.api_key, args.emulebb_files, 20.0)
+            except Exception as exc:
+                report["checks"]["emulebb_rest_shared_count"] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+        for client in extra_emulebb_clients:
+            try:
+                report["checks"][f"{client['profile_id']}_rest_shared_count"] = wait_for_rest_shared_count(
+                    str(client["base_url"]),
+                    args.api_key,
+                    args.extra_emulebb_files,
+                    20.0,
+                )
+            except Exception as exc:
+                report["checks"][f"{client['profile_id']}_rest_shared_count"] = {
+                    "ok": False,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
 
         current_phase = "queue_transfer_waves"
         harness_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT02.key}-godzilla-", limit=max(args.transfer_count, 1))
@@ -1155,6 +1753,53 @@ def main(argv: list[str] | None = None) -> int:
             "harness": len(harness_links),
             "extra_emulebb": extra_download_counts,
         }
+        local_search_queries = [
+            f"{CLIENT01.key}-godzilla-",
+            f"{CLIENT02.key}-godzilla-",
+            f"{CLIENT04.key}-godzilla-",
+            *(f"{client['key']}-godzilla-" for client in extra_emulebb_clients),
+            "linux",
+            "debian",
+            "ubuntu",
+        ]
+        current_phase = "spiral_hammer"
+        spiral_links = emulebb_links or amule_links or harness_links
+        report["checks"]["spiral_hammer"] = run_spiral_hammer(
+            base_url=base_url,
+            api_key=args.api_key,
+            admin_base_url=admin_base_url,
+            amule_control_exe=amule_control_exe,
+            amule_profile=amule_profile,
+            links=spiral_links,
+            queries=local_search_queries,
+            waves=args.hammer_waves,
+            sleep_seconds=args.hammer_wave_sleep_seconds,
+        )
+        report["checks"]["publication_counts_after_spiral"] = snapshot_publication_counts(
+            admin_base_url,
+            args.api_key,
+            owner_keys=owner_keys,
+        )
+        current_phase = "control_plane_hammer"
+        report["checks"]["emulebb_rest_search_hammer"] = run_emulebb_search_hammer(
+            base_url,
+            args.api_key,
+            queries=local_search_queries,
+            rounds=args.rest_search_rounds,
+        )
+        report["checks"]["amule_command_hammer"] = run_amule_command_hammer(
+            amule_control_exe,
+            amule_profile,
+            links=amule_links,
+            queries=local_search_queries,
+            rounds=args.amule_command_rounds,
+        )
+        if args.amutorrent_controller:
+            report["checks"]["amutorrent_api_hammer"] = run_amutorrent_api_hammer(
+                str(report["amutorrent"]["base_url"]),
+                links=(emulebb_links[: max(1, min(len(emulebb_links), 20))] if emulebb_links else amule_links),
+                rounds=args.amutorrent_api_rounds,
+            )
 
         current_phase = "transfer_churn"
         queued_hashes = [str(row.ed2k_hash) for row in emulebb_source_rows if row.ed2k_hash]
@@ -1216,6 +1861,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         cleanup: dict[str, object] = {}
+        if amutorrent_process is not None:
+            try:
+                amutorrent_local.stop_amutorrent(amutorrent_process)
+                cleanup["amutorrent"] = {"ok": True}
+            except Exception as exc:  # pragma: no cover - cleanup diagnostics only
+                cleanup["amutorrent"] = {"error": str(exc)}
+        if amutorrent_output is not None:
+            amutorrent_output.close()
+            if amutorrent_log_path is not None and amutorrent_log_path.exists():
+                cleanup["amutorrent_log"] = str(amutorrent_log_path)
+                cleanup["amutorrent_output_tail"] = amutorrent_log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
         for identity, app in ((CLIENT01, client1_app), (CLIENT02, client2_app)):
             if app is None:
                 continue
@@ -1251,6 +1907,12 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup["ed2k_server"] = {"error": str(exc)}
         report["cleanup"] = cleanup
         write_reports(paths, report)
+        if runtime_storage_context is not None:
+            try:
+                runtime_storage_context.__exit__(None, None, None)
+            except Exception as exc:  # pragma: no cover - cleanup diagnostics only
+                report["runtime_storage_cleanup_error"] = str(exc)
+                write_reports(paths, report)
 
 
 if __name__ == "__main__":
