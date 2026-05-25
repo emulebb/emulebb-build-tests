@@ -845,6 +845,28 @@
       "notes": ""
     },
     {
+      "id": "CaptureFullCrashDump",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "CaptureFullCrashDump",
+      "sourceExpression": "_T(\"CaptureFullCrashDump\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
       "id": "Check4NewVersionDelay",
       "storageFile": "preferences.ini",
       "sections": [

@@ -155,8 +155,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1509:0:GetA4AFSaveCpu",
-        "PPgTweaks.cpp:1731:0:m_bA4AFSaveCpu"
+        "PPgTweaks.cpp:1526:0:GetA4AFSaveCpu",
+        "PPgTweaks.cpp:1750:0:m_bA4AFSaveCpu"
       ],
       "restBindings": [],
       "notes": ""
@@ -485,8 +485,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1570:0:IsAutoBroadbandIOEnabled",
-        "PPgTweaks.cpp:1703:0:SetAutoBroadbandIOEnabled"
+        "PPgTweaks.cpp:1587:0:IsAutoBroadbandIOEnabled",
+        "PPgTweaks.cpp:1722:0:SetAutoBroadbandIOEnabled"
       ],
       "restBindings": [
         "autoBroadbandIo"
@@ -699,10 +699,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1462:0:AutoTakeED2KLinks",
-        "PPgTweaks.cpp:1643:0:AutoTakeED2KLinks",
-        "PPgTweaks.cpp:1644:0:autotakeed2klinks",
-        "PPgTweaks.cpp:1645:0:AutoTakeED2KLinks"
+        "PPgTweaks.cpp:1478:0:AutoTakeED2KLinks",
+        "PPgTweaks.cpp:1660:0:AutoTakeED2KLinks",
+        "PPgTweaks.cpp:1661:0:autotakeed2klinks",
+        "PPgTweaks.cpp:1662:0:AutoTakeED2KLinks"
       ],
       "restBindings": [],
       "notes": ""
@@ -766,7 +766,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1696:0:beepOnError"
+        "PPgTweaks.cpp:1715:0:beepOnError"
       ],
       "restBindings": [],
       "notes": ""
@@ -896,6 +896,33 @@
       "notes": ""
     },
     {
+      "id": "CaptureFullCrashDump",
+      "inventoryId": "CaptureFullCrashDump",
+      "storageFile": "preferences.ini",
+      "section": "<default>",
+      "key": "CaptureFullCrashDump",
+      "sourceExpression": "_T(\"CaptureFullCrashDump\")",
+      "valueType": "bool",
+      "access": [
+        "read",
+        "write"
+      ],
+      "classification": "editable-ui",
+      "ownerExpressions": [
+        "GetCaptureFullCrashDump",
+        "SetCaptureFullCrashDump"
+      ],
+      "defaultExpression": "",
+      "clampOrNormalizer": "",
+      "uiBindingIds": [
+        "PPgTweaks.cpp:1494:0:GetCaptureFullCrashDump",
+        "PPgTweaks.cpp:1669:0:SetCaptureFullCrashDump",
+        "PPgTweaks.cpp:1670:0:GetCaptureFullCrashDump"
+      ],
+      "restBindings": [],
+      "notes": ""
+    },
+    {
       "id": "Care4All",
       "inventoryId": "Care4All",
       "storageFile": "Category.ini",
@@ -981,8 +1008,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1504:0:CloseUPnPOnExit",
-        "PPgTweaks.cpp:1726:0:m_bCloseUPnPOnExit"
+        "PPgTweaks.cpp:1521:0:CloseUPnPOnExit",
+        "PPgTweaks.cpp:1745:0:m_bCloseUPnPOnExit"
       ],
       "restBindings": [],
       "notes": ""
@@ -1073,8 +1100,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1487:0:m_iCommitFiles",
-        "PPgTweaks.cpp:1690:0:m_iCommitFiles"
+        "PPgTweaks.cpp:1504:0:m_iCommitFiles",
+        "PPgTweaks.cpp:1709:0:m_iCommitFiles"
       ],
       "restBindings": [],
       "notes": ""
@@ -1099,8 +1126,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1461:0:GetConditionalTCPAccept",
-        "PPgTweaks.cpp:1619:0:m_bConditionalTCPAccept"
+        "PPgTweaks.cpp:1477:0:GetConditionalTCPAccept",
+        "PPgTweaks.cpp:1636:0:m_bConditionalTCPAccept"
       ],
       "restBindings": [],
       "notes": ""
@@ -1230,8 +1257,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1516:2:GetConnectionTimeout",
-        "PPgTweaks.cpp:1608:0:SetConnectionTimeout"
+        "PPgTweaks.cpp:1533:2:GetConnectionTimeout",
+        "PPgTweaks.cpp:1625:0:SetConnectionTimeout"
       ],
       "restBindings": [],
       "notes": ""
@@ -1610,8 +1637,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1513:0:GetDailyConfigBackup",
-        "PPgTweaks.cpp:1734:0:SetDailyConfigBackup"
+        "PPgTweaks.cpp:1530:0:GetDailyConfigBackup",
+        "PPgTweaks.cpp:1753:0:SetDailyConfigBackup"
       ],
       "restBindings": [],
       "notes": "Defaults to enabled; exposed in Tweaks as the daily configuration backup switch."
@@ -1658,8 +1685,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1550:0:GetDateTimeFormat",
-        "PPgTweaks.cpp:1738:0:m_strDateTimeFormat"
+        "PPgTweaks.cpp:1567:0:GetDateTimeFormat",
+        "PPgTweaks.cpp:1757:0:m_strDateTimeFormat"
       ],
       "restBindings": [],
       "notes": ""
@@ -1684,8 +1711,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1549:0:GetDateTimeFormat4Lists",
-        "PPgTweaks.cpp:1740:0:m_strDateTimeFormat4Lists"
+        "PPgTweaks.cpp:1566:0:GetDateTimeFormat4Lists",
+        "PPgTweaks.cpp:1759:0:m_strDateTimeFormat4Lists"
       ],
       "restBindings": [],
       "notes": ""
@@ -1710,8 +1737,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1551:0:GetDateTimeFormat4Log",
-        "PPgTweaks.cpp:1739:0:m_strDateTimeFormat4Log"
+        "PPgTweaks.cpp:1568:0:GetDateTimeFormat4Log",
+        "PPgTweaks.cpp:1758:0:m_strDateTimeFormat4Log"
       ],
       "restBindings": [],
       "notes": ""
@@ -1955,8 +1982,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1466:0:m_bDebugSourceExchange",
-        "PPgTweaks.cpp:1675:0:m_bDebugSourceExchange"
+        "PPgTweaks.cpp:1482:0:m_bDebugSourceExchange",
+        "PPgTweaks.cpp:1694:0:m_bDebugSourceExchange"
       ],
       "restBindings": [],
       "notes": ""
@@ -2021,8 +2048,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1524:0:IsDetectTCPErrorFlooder",
-        "PPgTweaks.cpp:1616:0:m_bDetectTCPErrorFlooder"
+        "PPgTweaks.cpp:1541:0:IsDetectTCPErrorFlooder",
+        "PPgTweaks.cpp:1633:0:m_bDetectTCPErrorFlooder"
       ],
       "restBindings": [],
       "notes": ""
@@ -2660,8 +2687,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1519:0:GetEd2kSearchMaxMoreRequests",
-        "PPgTweaks.cpp:1611:0:SetEd2kSearchMaxMoreRequests"
+        "PPgTweaks.cpp:1536:0:GetEd2kSearchMaxMoreRequests",
+        "PPgTweaks.cpp:1628:0:SetEd2kSearchMaxMoreRequests"
       ],
       "restBindings": [],
       "notes": ""
@@ -2686,8 +2713,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1518:0:GetEd2kSearchMaxResults",
-        "PPgTweaks.cpp:1610:0:SetEd2kSearchMaxResults"
+        "PPgTweaks.cpp:1535:0:GetEd2kSearchMaxResults",
+        "PPgTweaks.cpp:1627:0:SetEd2kSearchMaxResults"
       ],
       "restBindings": [],
       "notes": ""
@@ -2863,8 +2890,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1488:0:m_iExtractMetaData",
-        "PPgTweaks.cpp:1691:0:m_iExtractMetaData"
+        "PPgTweaks.cpp:1505:0:m_iExtractMetaData",
+        "PPgTweaks.cpp:1710:0:m_iExtractMetaData"
       ],
       "restBindings": [],
       "notes": ""
@@ -2889,8 +2916,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1565:0:GetExtraPreviewWithMenu",
-        "PPgTweaks.cpp:1756:0:m_bExtraPreviewWithMenu"
+        "PPgTweaks.cpp:1582:0:GetExtraPreviewWithMenu",
+        "PPgTweaks.cpp:1775:0:m_bExtraPreviewWithMenu"
       ],
       "restBindings": [],
       "notes": ""
@@ -2915,9 +2942,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1572:0:GetFileBufferSize",
-        "PPgTweaks.cpp:1704:0:SetFileBufferSize",
-        "PPgTweaks.cpp:1706:0:GetFileBufferSize"
+        "PPgTweaks.cpp:1589:0:GetFileBufferSize",
+        "PPgTweaks.cpp:1723:0:SetFileBufferSize",
+        "PPgTweaks.cpp:1725:0:GetFileBufferSize"
       ],
       "restBindings": [],
       "notes": ""
@@ -2941,7 +2968,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1541:0:GetFileBufferTimeLimit"
+        "PPgTweaks.cpp:1558:0:GetFileBufferTimeLimit"
       ],
       "restBindings": [],
       "notes": ""
@@ -3155,8 +3182,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1546:0:GetFollowMajorityFilenameForNewDownloads",
-        "PPgTweaks.cpp:1698:0:SetFollowMajorityFilenameForNewDownloads"
+        "PPgTweaks.cpp:1563:0:GetFollowMajorityFilenameForNewDownloads",
+        "PPgTweaks.cpp:1717:0:SetFollowMajorityFilenameForNewDownloads"
       ],
       "restBindings": [],
       "notes": ""
@@ -3181,8 +3208,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1548:0:GetFollowMajorityFilenameMinimumVotes",
-        "PPgTweaks.cpp:1700:0:SetFollowMajorityFilenameMinimumVotes"
+        "PPgTweaks.cpp:1565:0:GetFollowMajorityFilenameMinimumVotes",
+        "PPgTweaks.cpp:1719:0:SetFollowMajorityFilenameMinimumVotes"
       ],
       "restBindings": [],
       "notes": ""
@@ -3207,8 +3234,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1547:0:GetFollowMajorityFilenameRequiredPercent",
-        "PPgTweaks.cpp:1699:0:SetFollowMajorityFilenameRequiredPercent"
+        "PPgTweaks.cpp:1564:0:GetFollowMajorityFilenameRequiredPercent",
+        "PPgTweaks.cpp:1718:0:SetFollowMajorityFilenameRequiredPercent"
       ],
       "restBindings": [],
       "notes": ""
@@ -3233,8 +3260,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1561:0:GetForceSpeedsToKB",
-        "PPgTweaks.cpp:1754:0:m_bForceSpeedsToKB"
+        "PPgTweaks.cpp:1578:0:GetForceSpeedsToKB",
+        "PPgTweaks.cpp:1773:0:m_bForceSpeedsToKB"
       ],
       "restBindings": [],
       "notes": ""
@@ -3278,8 +3305,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1474:0:m_bFullVerbose",
-        "PPgTweaks.cpp:1683:0:m_bFullVerbose"
+        "PPgTweaks.cpp:1490:0:m_bFullVerbose",
+        "PPgTweaks.cpp:1702:0:m_bFullVerbose"
       ],
       "restBindings": [],
       "notes": ""
@@ -3404,8 +3431,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1510:0:GetHighresTimer",
-        "PPgTweaks.cpp:1701:0:m_bHighresTimer"
+        "PPgTweaks.cpp:1527:0:GetHighresTimer",
+        "PPgTweaks.cpp:1720:0:m_bHighresTimer"
       ],
       "restBindings": [],
       "notes": ""
@@ -3503,7 +3530,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1694:0:ICH"
+        "PPgTweaks.cpp:1713:0:ICH"
       ],
       "restBindings": [],
       "notes": ""
@@ -3527,7 +3554,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1755:0:m_bIconflashOnNewMessage"
+        "PPgTweaks.cpp:1774:0:m_bIconflashOnNewMessage"
       ],
       "restBindings": [],
       "notes": ""
@@ -3622,8 +3649,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1554:0:GetInspectAllFileTypes",
-        "PPgTweaks.cpp:1747:0:m_bInspectAllFileTypes"
+        "PPgTweaks.cpp:1571:0:GetInspectAllFileTypes",
+        "PPgTweaks.cpp:1766:0:m_bInspectAllFileTypes"
       ],
       "restBindings": [],
       "notes": ""
@@ -4323,8 +4350,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1520:0:GetKadFileSearchTotal",
-        "PPgTweaks.cpp:1612:0:SetKadFileSearchTotal"
+        "PPgTweaks.cpp:1537:0:GetKadFileSearchTotal",
+        "PPgTweaks.cpp:1629:0:SetKadFileSearchTotal"
       ],
       "restBindings": [],
       "notes": ""
@@ -4369,8 +4396,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1521:0:GetKadKeywordSearchTotal",
-        "PPgTweaks.cpp:1613:0:SetKadKeywordSearchTotal"
+        "PPgTweaks.cpp:1538:0:GetKadKeywordSearchTotal",
+        "PPgTweaks.cpp:1630:0:SetKadKeywordSearchTotal"
       ],
       "restBindings": [],
       "notes": ""
@@ -4414,8 +4441,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1566:0:m_bKeepUnavailableFixedSharedDirs",
-        "PPgTweaks.cpp:1757:0:m_bKeepUnavailableFixedSharedDirs"
+        "PPgTweaks.cpp:1583:0:m_bKeepUnavailableFixedSharedDirs",
+        "PPgTweaks.cpp:1776:0:m_bKeepUnavailableFixedSharedDirs"
       ],
       "restBindings": [],
       "notes": ""
@@ -4503,8 +4530,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1472:0:m_bLogA4AF",
-        "PPgTweaks.cpp:1681:0:m_bLogA4AF"
+        "PPgTweaks.cpp:1488:0:m_bLogA4AF",
+        "PPgTweaks.cpp:1700:0:m_bLogA4AF"
       ],
       "restBindings": [],
       "notes": ""
@@ -4528,8 +4555,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1467:0:m_bLogBannedClients",
-        "PPgTweaks.cpp:1676:0:m_bLogBannedClients"
+        "PPgTweaks.cpp:1483:0:m_bLogBannedClients",
+        "PPgTweaks.cpp:1695:0:m_bLogBannedClients"
       ],
       "restBindings": [],
       "notes": ""
@@ -4573,10 +4600,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1480:0:GetLogFileFormat",
-        "PPgTweaks.cpp:1654:0:m_iLogFileFormat",
-        "PPgTweaks.cpp:1657:0:GetLogFileFormat",
-        "PPgTweaks.cpp:1658:0:GetLogFileFormat"
+        "PPgTweaks.cpp:1497:0:GetLogFileFormat",
+        "PPgTweaks.cpp:1673:0:m_iLogFileFormat",
+        "PPgTweaks.cpp:1676:0:GetLogFileFormat",
+        "PPgTweaks.cpp:1677:0:GetLogFileFormat"
       ],
       "restBindings": [],
       "notes": ""
@@ -4600,8 +4627,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1471:0:m_bLogFileSaving",
-        "PPgTweaks.cpp:1680:0:m_bLogFileSaving"
+        "PPgTweaks.cpp:1487:0:m_bLogFileSaving",
+        "PPgTweaks.cpp:1699:0:m_bLogFileSaving"
       ],
       "restBindings": [],
       "notes": ""
@@ -4625,8 +4652,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1470:0:m_bLogFilteredIPs",
-        "PPgTweaks.cpp:1679:0:m_bLogFilteredIPs"
+        "PPgTweaks.cpp:1486:0:m_bLogFilteredIPs",
+        "PPgTweaks.cpp:1698:0:m_bLogFilteredIPs"
       ],
       "restBindings": [],
       "notes": ""
@@ -4650,8 +4677,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1468:0:m_bLogRatingDescReceived",
-        "PPgTweaks.cpp:1677:0:m_bLogRatingDescReceived"
+        "PPgTweaks.cpp:1484:0:m_bLogRatingDescReceived",
+        "PPgTweaks.cpp:1696:0:m_bLogRatingDescReceived"
       ],
       "restBindings": [],
       "notes": ""
@@ -4675,8 +4702,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1469:0:m_bLogSecureIdent",
-        "PPgTweaks.cpp:1678:0:m_bLogSecureIdent"
+        "PPgTweaks.cpp:1485:0:m_bLogSecureIdent",
+        "PPgTweaks.cpp:1697:0:m_bLogSecureIdent"
       ],
       "restBindings": [],
       "notes": ""
@@ -4739,8 +4766,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1473:0:m_bLogUlDlEvents",
-        "PPgTweaks.cpp:1682:0:m_bLogUlDlEvents"
+        "PPgTweaks.cpp:1489:0:m_bLogUlDlEvents",
+        "PPgTweaks.cpp:1701:0:m_bLogUlDlEvents"
       ],
       "restBindings": [],
       "notes": ""
@@ -4824,8 +4851,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1533:0:IsLowRatioBoostEnabled",
-        "PPgTweaks.cpp:1626:0:SetLowRatioBoostEnabled"
+        "PPgTweaks.cpp:1550:0:IsLowRatioBoostEnabled",
+        "PPgTweaks.cpp:1643:0:SetLowRatioBoostEnabled"
       ],
       "restBindings": [],
       "notes": ""
@@ -4870,8 +4897,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1534:0:GetLowRatioThreshold",
-        "PPgTweaks.cpp:1627:0:SetLowRatioThreshold"
+        "PPgTweaks.cpp:1551:0:GetLowRatioThreshold",
+        "PPgTweaks.cpp:1644:0:SetLowRatioThreshold"
       ],
       "restBindings": [],
       "notes": ""
@@ -4915,7 +4942,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1573:0:GetMaxChatHistoryLines"
+        "PPgTweaks.cpp:1590:0:GetMaxChatHistoryLines"
       ],
       "restBindings": [],
       "notes": ""
@@ -4974,9 +5001,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1459:0:GetMaxConperFive",
-        "PPgTweaks.cpp:1605:0:SetMaxConsPerFive",
-        "PPgTweaks.cpp:1606:0:GetMaxConperFive"
+        "PPgTweaks.cpp:1475:0:GetMaxConperFive",
+        "PPgTweaks.cpp:1622:0:SetMaxConsPerFive",
+        "PPgTweaks.cpp:1623:0:GetMaxConperFive"
       ],
       "restBindings": [
         "maxConnectionsPerFiveSeconds"
@@ -5059,8 +5086,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1460:0:GetMaxHalfConnections",
-        "PPgTweaks.cpp:1607:0:SetMaxHalfConnections"
+        "PPgTweaks.cpp:1476:0:GetMaxHalfConnections",
+        "PPgTweaks.cpp:1624:0:SetMaxHalfConnections"
       ],
       "restBindings": [],
       "notes": ""
@@ -5084,7 +5111,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1479:0:GetMaxLogBuff"
+        "PPgTweaks.cpp:1496:0:GetMaxLogBuff"
       ],
       "restBindings": [],
       "notes": ""
@@ -5108,9 +5135,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1478:0:GetMaxLogFileSize",
-        "PPgTweaks.cpp:1655:0:GetMaxLogFileSize",
-        "PPgTweaks.cpp:1656:0:GetMaxLogFileSize"
+        "PPgTweaks.cpp:1495:0:GetMaxLogFileSize",
+        "PPgTweaks.cpp:1674:0:GetMaxLogFileSize",
+        "PPgTweaks.cpp:1675:0:GetMaxLogFileSize"
       ],
       "restBindings": [],
       "notes": ""
@@ -5213,8 +5240,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1527:0:GetMaxUploadClientsAllowed",
-        "PPgTweaks.cpp:1620:0:SetMaxUploadClientsAllowed"
+        "PPgTweaks.cpp:1544:0:GetMaxUploadClientsAllowed",
+        "PPgTweaks.cpp:1637:0:SetMaxUploadClientsAllowed"
       ],
       "restBindings": [
         "maxUploadSlots",
@@ -5375,7 +5402,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1496:0:GetMinFreeDiskSpaceConfig"
+        "PPgTweaks.cpp:1513:0:GetMinFreeDiskSpaceConfig"
       ],
       "restBindings": [],
       "notes": ""
@@ -5399,7 +5426,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1500:0:GetMinFreeDiskSpaceIncoming"
+        "PPgTweaks.cpp:1517:0:GetMinFreeDiskSpaceIncoming"
       ],
       "restBindings": [],
       "notes": ""
@@ -5423,7 +5450,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1498:0:GetMinFreeDiskSpaceTemp"
+        "PPgTweaks.cpp:1515:0:GetMinFreeDiskSpaceTemp"
       ],
       "restBindings": [],
       "notes": ""
@@ -6047,8 +6074,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1567:0:DoPartiallyPurgeOldKnownFiles",
-        "PPgTweaks.cpp:1758:0:m_bPartiallyPurgeOldKnownFiles"
+        "PPgTweaks.cpp:1584:0:DoPartiallyPurgeOldKnownFiles",
+        "PPgTweaks.cpp:1777:0:m_bPartiallyPurgeOldKnownFiles"
       ],
       "restBindings": [],
       "notes": ""
@@ -6226,8 +6253,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1553:0:GetPreviewCopiedArchives",
-        "PPgTweaks.cpp:1746:0:m_bPreviewCopiedArchives"
+        "PPgTweaks.cpp:1570:0:GetPreviewCopiedArchives",
+        "PPgTweaks.cpp:1765:0:m_bPreviewCopiedArchives"
       ],
       "restBindings": [],
       "notes": ""
@@ -6252,8 +6279,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1555:0:GetPreviewOnIconDblClk",
-        "PPgTweaks.cpp:1748:0:m_bPreviewOnIconDblClk"
+        "PPgTweaks.cpp:1572:0:GetPreviewOnIconDblClk",
+        "PPgTweaks.cpp:1767:0:m_bPreviewOnIconDblClk"
       ],
       "restBindings": [],
       "notes": ""
@@ -6305,8 +6332,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1543:0:GetPreviewSmallBlocks",
-        "PPgTweaks.cpp:1695:0:m_iPreviewSmallBlocks"
+        "PPgTweaks.cpp:1560:0:GetPreviewSmallBlocks",
+        "PPgTweaks.cpp:1714:0:m_iPreviewSmallBlocks"
       ],
       "restBindings": [],
       "notes": ""
@@ -6471,9 +6498,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1571:0:GetQueueSize",
-        "PPgTweaks.cpp:1705:0:SetQueueSize",
-        "PPgTweaks.cpp:1707:0:GetQueueSize"
+        "PPgTweaks.cpp:1588:0:GetQueueSize",
+        "PPgTweaks.cpp:1724:0:SetQueueSize",
+        "PPgTweaks.cpp:1726:0:GetQueueSize"
       ],
       "restBindings": [
         "queueSize"
@@ -6520,8 +6547,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1568:0:GetRearrangeKadSearchKeywords",
-        "PPgTweaks.cpp:1759:0:m_bRearrangeKadSearchKeywords"
+        "PPgTweaks.cpp:1585:0:GetRearrangeKadSearchKeywords",
+        "PPgTweaks.cpp:1778:0:m_bRearrangeKadSearchKeywords"
       ],
       "restBindings": [],
       "notes": ""
@@ -6546,8 +6573,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1558:0:GetReBarToolbar",
-        "PPgTweaks.cpp:1751:0:m_bReBarToolbar"
+        "PPgTweaks.cpp:1575:0:GetReBarToolbar",
+        "PPgTweaks.cpp:1770:0:m_bReBarToolbar"
       ],
       "restBindings": [],
       "notes": ""
@@ -6685,8 +6712,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1512:0:GetRestoreLastLogPane",
-        "PPgTweaks.cpp:1733:0:m_bRestoreLastLogPane"
+        "PPgTweaks.cpp:1529:0:GetRestoreLastLogPane",
+        "PPgTweaks.cpp:1752:0:m_bRestoreLastLogPane"
       ],
       "restBindings": [],
       "notes": ""
@@ -6711,8 +6738,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1511:0:GetRestoreLastMainWndDlg",
-        "PPgTweaks.cpp:1732:0:m_bRestoreLastMainWndDlg"
+        "PPgTweaks.cpp:1528:0:GetRestoreLastMainWndDlg",
+        "PPgTweaks.cpp:1751:0:m_bRestoreLastMainWndDlg"
       ],
       "restBindings": [],
       "notes": ""
@@ -6995,9 +7022,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1490:0:GetServerKeepAliveTimeout",
-        "PPgTweaks.cpp:1492:0:GetServerKeepAliveTimeout",
-        "PPgTweaks.cpp:1712:0:GetServerKeepAliveTimeout"
+        "PPgTweaks.cpp:1507:0:GetServerKeepAliveTimeout",
+        "PPgTweaks.cpp:1509:0:GetServerKeepAliveTimeout",
+        "PPgTweaks.cpp:1731:0:GetServerKeepAliveTimeout"
       ],
       "restBindings": [],
       "notes": ""
@@ -7062,8 +7089,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1540:0:GetSessionTimeLimitSeconds",
-        "PPgTweaks.cpp:1635:0:SetSessionTimeLimitSeconds"
+        "PPgTweaks.cpp:1557:0:GetSessionTimeLimitSeconds",
+        "PPgTweaks.cpp:1652:0:SetSessionTimeLimitSeconds"
       ],
       "restBindings": [],
       "notes": ""
@@ -7088,10 +7115,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1537:0:GetSessionTransferLimitMode",
-        "PPgTweaks.cpp:1538:0:GetSessionTransferLimitMode",
-        "PPgTweaks.cpp:1539:0:GetSessionTransferLimitMode",
-        "PPgTweaks.cpp:1630:0:SetSessionTransferLimitMode"
+        "PPgTweaks.cpp:1554:0:GetSessionTransferLimitMode",
+        "PPgTweaks.cpp:1555:0:GetSessionTransferLimitMode",
+        "PPgTweaks.cpp:1556:0:GetSessionTransferLimitMode",
+        "PPgTweaks.cpp:1647:0:SetSessionTransferLimitMode"
       ],
       "restBindings": [],
       "notes": ""
@@ -7116,10 +7143,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1538:1:GetSessionTransferLimitValue",
-        "PPgTweaks.cpp:1539:1:GetSessionTransferLimitValue",
-        "PPgTweaks.cpp:1632:0:SetSessionTransferLimitValue",
-        "PPgTweaks.cpp:1634:0:SetSessionTransferLimitValue"
+        "PPgTweaks.cpp:1555:1:GetSessionTransferLimitValue",
+        "PPgTweaks.cpp:1556:1:GetSessionTransferLimitValue",
+        "PPgTweaks.cpp:1649:0:SetSessionTransferLimitValue",
+        "PPgTweaks.cpp:1651:0:SetSessionTransferLimitValue"
       ],
       "restBindings": [],
       "notes": ""
@@ -7224,8 +7251,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1556:0:GetShowActiveDownloadsBold",
-        "PPgTweaks.cpp:1749:0:m_bShowActiveDownloadsBold"
+        "PPgTweaks.cpp:1573:0:GetShowActiveDownloadsBold",
+        "PPgTweaks.cpp:1768:0:m_bShowActiveDownloadsBold"
       ],
       "restBindings": [],
       "notes": ""
@@ -7250,9 +7277,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1545:0:GetShowCopyEd2kLinkCmd",
-        "PPgTweaks.cpp:1693:0:GetShowCopyEd2kLinkCmd",
-        "PPgTweaks.cpp:1697:0:m_bShowCopyEd2kLinkCmd"
+        "PPgTweaks.cpp:1562:0:GetShowCopyEd2kLinkCmd",
+        "PPgTweaks.cpp:1712:0:GetShowCopyEd2kLinkCmd",
+        "PPgTweaks.cpp:1716:0:m_bShowCopyEd2kLinkCmd"
       ],
       "restBindings": [],
       "notes": ""
@@ -7414,8 +7441,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1559:0:IsShowUpDownIconInTaskbar",
-        "PPgTweaks.cpp:1752:0:m_bShowUpDownIconInTaskbar"
+        "PPgTweaks.cpp:1576:0:IsShowUpDownIconInTaskbar",
+        "PPgTweaks.cpp:1771:0:m_bShowUpDownIconInTaskbar"
       ],
       "restBindings": [],
       "notes": ""
@@ -7439,8 +7466,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1560:0:m_bShowVerticalHourMarkers",
-        "PPgTweaks.cpp:1753:0:m_bShowVerticalHourMarkers"
+        "PPgTweaks.cpp:1577:0:m_bShowVerticalHourMarkers",
+        "PPgTweaks.cpp:1772:0:m_bShowVerticalHourMarkers"
       ],
       "restBindings": [],
       "notes": ""
@@ -7464,8 +7491,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1560:0:m_bShowVerticalHourMarkers",
-        "PPgTweaks.cpp:1753:0:m_bShowVerticalHourMarkers"
+        "PPgTweaks.cpp:1577:0:m_bShowVerticalHourMarkers",
+        "PPgTweaks.cpp:1772:0:m_bShowVerticalHourMarkers"
       ],
       "restBindings": [],
       "notes": ""
@@ -7515,8 +7542,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "NormalizeLifecycleProgressDialogMode",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1515:0:GetShutdownProgressDialogMode",
-        "PPgTweaks.cpp:1736:0:SetShutdownProgressDialogMode"
+        "PPgTweaks.cpp:1532:0:GetShutdownProgressDialogMode",
+        "PPgTweaks.cpp:1755:0:SetShutdownProgressDialogMode"
       ],
       "restBindings": [],
       "notes": "Tweaks lifecycle progress dialog mode. Supported modes are normalized by CPreferences."
@@ -7581,8 +7608,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1532:0:GetSlowUploadCooldownSeconds",
-        "PPgTweaks.cpp:1625:0:SetSlowUploadCooldownSeconds"
+        "PPgTweaks.cpp:1549:0:GetSlowUploadCooldownSeconds",
+        "PPgTweaks.cpp:1642:0:SetSlowUploadCooldownSeconds"
       ],
       "restBindings": [],
       "notes": ""
@@ -7607,8 +7634,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1529:0:GetSlowUploadGraceSeconds",
-        "PPgTweaks.cpp:1622:0:SetSlowUploadGraceSeconds"
+        "PPgTweaks.cpp:1546:0:GetSlowUploadGraceSeconds",
+        "PPgTweaks.cpp:1639:0:SetSlowUploadGraceSeconds"
       ],
       "restBindings": [],
       "notes": ""
@@ -7633,8 +7660,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1528:0:GetSlowUploadThresholdFactor",
-        "PPgTweaks.cpp:1621:0:SetSlowUploadThresholdFactor"
+        "PPgTweaks.cpp:1545:0:GetSlowUploadThresholdFactor",
+        "PPgTweaks.cpp:1638:0:SetSlowUploadThresholdFactor"
       ],
       "restBindings": [],
       "notes": ""
@@ -7659,8 +7686,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1530:0:GetSlowUploadWarmupSeconds",
-        "PPgTweaks.cpp:1623:0:SetSlowUploadWarmupSeconds"
+        "PPgTweaks.cpp:1547:0:GetSlowUploadWarmupSeconds",
+        "PPgTweaks.cpp:1640:0:SetSlowUploadWarmupSeconds"
       ],
       "restBindings": [],
       "notes": ""
@@ -7705,8 +7732,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1493:0:GetSparsePartFiles",
-        "PPgTweaks.cpp:1715:0:m_bSparsePartFiles"
+        "PPgTweaks.cpp:1510:0:GetSparsePartFiles",
+        "PPgTweaks.cpp:1734:0:m_bSparsePartFiles"
       ],
       "restBindings": [],
       "notes": ""
@@ -8001,8 +8028,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "NormalizeLifecycleProgressDialogMode",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1514:0:GetStartupProgressDialogMode",
-        "PPgTweaks.cpp:1735:0:SetStartupProgressDialogMode"
+        "PPgTweaks.cpp:1531:0:GetStartupProgressDialogMode",
+        "PPgTweaks.cpp:1754:0:SetStartupProgressDialogMode"
       ],
       "restBindings": [],
       "notes": "Tweaks lifecycle progress dialog mode. Supported modes are normalized by CPreferences."
@@ -8235,8 +8262,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1525:0:GetTCPErrorFlooderIntervalMinutes",
-        "PPgTweaks.cpp:1617:0:m_uTCPErrorFlooderIntervalMinutes"
+        "PPgTweaks.cpp:1542:0:GetTCPErrorFlooderIntervalMinutes",
+        "PPgTweaks.cpp:1634:0:m_uTCPErrorFlooderIntervalMinutes"
       ],
       "restBindings": [],
       "notes": ""
@@ -8261,8 +8288,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1526:0:GetTCPErrorFlooderThreshold",
-        "PPgTweaks.cpp:1618:0:m_uTCPErrorFlooderThreshold"
+        "PPgTweaks.cpp:1543:0:GetTCPErrorFlooderThreshold",
+        "PPgTweaks.cpp:1635:0:m_uTCPErrorFlooderThreshold"
       ],
       "restBindings": [],
       "notes": ""
@@ -8610,8 +8637,8 @@
       "uiBindingIds": [
         "PPgSecurity.cpp:306:0:GetTxtEditor",
         "PPgServer.cpp:150:0:GetTxtEditor",
-        "PPgTweaks.cpp:1575:0:GetTxtEditor",
-        "PPgTweaks.cpp:1702:0:m_strTxtEditor"
+        "PPgTweaks.cpp:1592:0:GetTxtEditor",
+        "PPgTweaks.cpp:1721:0:m_strTxtEditor"
       ],
       "restBindings": [],
       "notes": ""
@@ -8829,8 +8856,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1494:0:m_bAllocFull",
-        "PPgTweaks.cpp:1716:0:m_bAllocFull"
+        "PPgTweaks.cpp:1511:0:m_bAllocFull",
+        "PPgTweaks.cpp:1735:0:m_bAllocFull"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: allocfull."
@@ -8953,8 +8980,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1502:0:m_bAutomaticArcPreviewStart",
-        "PPgTweaks.cpp:1724:0:m_bAutomaticArcPreviewStart"
+        "PPgTweaks.cpp:1519:0:m_bAutomaticArcPreviewStart",
+        "PPgTweaks.cpp:1743:0:m_bAutomaticArcPreviewStart"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: automaticarcpreviewstart."
@@ -9121,7 +9148,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1729:0:ChangeUserDirMode"
+        "PPgTweaks.cpp:1748:0:ChangeUserDirMode"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: changeuserdirmode."
@@ -9191,8 +9218,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1477:0:GetCreateCrashDumpMode",
-        "PPgTweaks.cpp:1651:0:SetCreateCrashDumpMode"
+        "PPgTweaks.cpp:1493:0:GetCreateCrashDumpMode",
+        "PPgTweaks.cpp:1668:0:SetCreateCrashDumpMode"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: createcrashdumpmode."
@@ -9338,10 +9365,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1465:0:debug2disk",
-        "PPgTweaks.cpp:1669:0:GetDebug2Disk",
-        "PPgTweaks.cpp:1671:0:GetDebug2Disk",
-        "PPgTweaks.cpp:1673:0:debug2disk"
+        "PPgTweaks.cpp:1481:0:debug2disk",
+        "PPgTweaks.cpp:1688:0:GetDebug2Disk",
+        "PPgTweaks.cpp:1690:0:GetDebug2Disk",
+        "PPgTweaks.cpp:1692:0:debug2disk"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: debug2disk."
@@ -9532,7 +9559,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1608:2:GetDefaultConnectionTimeoutSeconds"
+        "PPgTweaks.cpp:1625:2:GetDefaultConnectionTimeoutSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: defaultconnectiontimeoutseconds."
@@ -9582,7 +9609,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1609:2:GetDefaultDownloadTimeoutSeconds"
+        "PPgTweaks.cpp:1626:2:GetDefaultDownloadTimeoutSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: defaultdownloadtimeoutseconds."
@@ -9605,7 +9632,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1605:1:GetDefaultMaxConperFive"
+        "PPgTweaks.cpp:1622:1:GetDefaultMaxConperFive"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: defaultmaxconperfive."
@@ -9628,7 +9655,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1607:1:GetDefaultMaxHalfConnections"
+        "PPgTweaks.cpp:1624:1:GetDefaultMaxHalfConnections"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: defaultmaxhalfconnections."
@@ -9675,8 +9702,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1517:2:GetDownloadTimeout",
-        "PPgTweaks.cpp:1609:0:SetDownloadTimeout"
+        "PPgTweaks.cpp:1534:2:GetDownloadTimeout",
+        "PPgTweaks.cpp:1626:0:SetDownloadTimeout"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: downloadtimeout."
@@ -9748,10 +9775,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1463:0:GetEnableVerboseOptions",
-        "PPgTweaks.cpp:1668:0:GetEnableVerboseOptions",
-        "PPgTweaks.cpp:1776:0:GetEnableVerboseOptions",
-        "PPgTweaks.cpp:970:0:GetEnableVerboseOptions"
+        "PPgTweaks.cpp:1479:0:GetEnableVerboseOptions",
+        "PPgTweaks.cpp:1687:0:GetEnableVerboseOptions",
+        "PPgTweaks.cpp:1795:0:GetEnableVerboseOptions",
+        "PPgTweaks.cpp:984:0:GetEnableVerboseOptions"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: enableverboseoptions."
@@ -9774,7 +9801,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1544:0:IsErrorBeepEnabled"
+        "PPgTweaks.cpp:1561:0:IsErrorBeepEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: errorbeepenabled."
@@ -9797,7 +9824,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1737:0:SetFileBufferTimeLimitSeconds"
+        "PPgTweaks.cpp:1756:0:SetFileBufferTimeLimitSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: filebuffertimelimitseconds."
@@ -9847,8 +9874,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1489:0:filterLANIPs",
-        "PPgTweaks.cpp:1692:0:filterLANIPs"
+        "PPgTweaks.cpp:1506:0:filterLANIPs",
+        "PPgTweaks.cpp:1711:0:filterLANIPs"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: filterlanips."
@@ -9899,7 +9926,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1562:0:DoFlashOnNewMessage"
+        "PPgTweaks.cpp:1579:0:DoFlashOnNewMessage"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: flashonnewmessage."
@@ -9923,10 +9950,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1564:1:GetGeoLocationCheckDays",
-        "PPgTweaks.cpp:1638:0:GetGeoLocationCheckDays",
-        "PPgTweaks.cpp:1641:0:SetGeoLocationCheckDays",
-        "PPgTweaks.cpp:1771:0:GetGeoLocationCheckDays"
+        "PPgTweaks.cpp:1581:1:GetGeoLocationCheckDays",
+        "PPgTweaks.cpp:1655:0:GetGeoLocationCheckDays",
+        "PPgTweaks.cpp:1658:0:SetGeoLocationCheckDays",
+        "PPgTweaks.cpp:1790:0:GetGeoLocationCheckDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: geolocationcheckdays."
@@ -9950,12 +9977,12 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1563:0:IsGeoLocationEnabled",
-        "PPgTweaks.cpp:1637:0:IsGeoLocationEnabled",
-        "PPgTweaks.cpp:1639:0:m_bGeoLocationEnabled",
-        "PPgTweaks.cpp:1762:0:IsGeoLocationEnabled",
-        "PPgTweaks.cpp:1763:0:IsGeoLocationEnabled",
-        "PPgTweaks.cpp:1770:0:IsGeoLocationEnabled"
+        "PPgTweaks.cpp:1580:0:IsGeoLocationEnabled",
+        "PPgTweaks.cpp:1654:0:IsGeoLocationEnabled",
+        "PPgTweaks.cpp:1656:0:m_bGeoLocationEnabled",
+        "PPgTweaks.cpp:1781:0:IsGeoLocationEnabled",
+        "PPgTweaks.cpp:1782:0:IsGeoLocationEnabled",
+        "PPgTweaks.cpp:1789:0:IsGeoLocationEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: geolocationenabled."
@@ -10002,7 +10029,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1569:0:MsgOnlySecure"
+        "PPgTweaks.cpp:1586:0:MsgOnlySecure"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: gonlysecure."
@@ -10025,7 +10052,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1760:0:msgsecure"
+        "PPgTweaks.cpp:1779:0:msgsecure"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: gsecure."
@@ -10049,8 +10076,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1574:0:GetMsgSessionsMax",
-        "PPgTweaks.cpp:1745:0:SetMsgSessionsMax"
+        "PPgTweaks.cpp:1591:0:GetMsgSessionsMax",
+        "PPgTweaks.cpp:1764:0:SetMsgSessionsMax"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: gsessionsmax."
@@ -10073,7 +10100,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1542:0:IsICHEnabled"
+        "PPgTweaks.cpp:1559:0:IsICHEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ichenabled."
@@ -10096,7 +10123,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1653:0:iMaxLogBuff"
+        "PPgTweaks.cpp:1672:0:iMaxLogBuff"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: imaxlogbuff."
@@ -10365,8 +10392,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1522:0:GetKadFileSearchLifetimeSeconds",
-        "PPgTweaks.cpp:1614:0:SetKadFileSearchLifetimeSeconds"
+        "PPgTweaks.cpp:1539:0:GetKadFileSearchLifetimeSeconds",
+        "PPgTweaks.cpp:1631:0:SetKadFileSearchLifetimeSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: kadfilesearchlifetimeseconds."
@@ -10390,8 +10417,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1523:0:GetKadKeywordSearchLifetimeSeconds",
-        "PPgTweaks.cpp:1615:0:SetKadKeywordSearchLifetimeSeconds"
+        "PPgTweaks.cpp:1540:0:GetKadKeywordSearchLifetimeSeconds",
+        "PPgTweaks.cpp:1632:0:SetKadKeywordSearchLifetimeSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: kadkeywordsearchlifetimeseconds."
@@ -10540,10 +10567,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1481:0:log2disk",
-        "PPgTweaks.cpp:1660:0:log2disk",
-        "PPgTweaks.cpp:1662:0:log2disk",
-        "PPgTweaks.cpp:1664:0:log2disk"
+        "PPgTweaks.cpp:1498:0:log2disk",
+        "PPgTweaks.cpp:1679:0:log2disk",
+        "PPgTweaks.cpp:1681:0:log2disk",
+        "PPgTweaks.cpp:1683:0:log2disk"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: log2disk."
@@ -10567,8 +10594,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1536:0:GetLowIDDivisor",
-        "PPgTweaks.cpp:1629:0:SetLowIDDivisor"
+        "PPgTweaks.cpp:1553:0:GetLowIDDivisor",
+        "PPgTweaks.cpp:1646:0:SetLowIDDivisor"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: lowiddivisor."
@@ -10592,8 +10619,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1535:0:GetLowRatioBonus",
-        "PPgTweaks.cpp:1628:0:SetLowRatioBonus"
+        "PPgTweaks.cpp:1552:0:GetLowRatioBonus",
+        "PPgTweaks.cpp:1645:0:SetLowRatioBonus"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: lowratiobonus."
@@ -10640,7 +10667,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1744:0:m_iMaxChatHistory"
+        "PPgTweaks.cpp:1763:0:m_iMaxChatHistory"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxchathistory."
@@ -10663,7 +10690,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1351:0:GetMaxFileBufferSizeBytes"
+        "PPgTweaks.cpp:1366:0:GetMaxFileBufferSizeBytes"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxfilebuffersizebytes."
@@ -10686,8 +10713,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1302:0:GetMaxFollowMajorityFilenameMinimumVotes",
-        "PPgTweaks.cpp:1304:0:GetMaxFollowMajorityFilenameMinimumVotes"
+        "PPgTweaks.cpp:1317:0:GetMaxFollowMajorityFilenameMinimumVotes",
+        "PPgTweaks.cpp:1319:0:GetMaxFollowMajorityFilenameMinimumVotes"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxfollowmajorityfilenameminimumvotes."
@@ -10710,8 +10737,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1297:1:GetMaxFollowMajorityFilenameRequiredPercent",
-        "PPgTweaks.cpp:1299:1:GetMaxFollowMajorityFilenameRequiredPercent"
+        "PPgTweaks.cpp:1312:1:GetMaxFollowMajorityFilenameRequiredPercent",
+        "PPgTweaks.cpp:1314:1:GetMaxFollowMajorityFilenameRequiredPercent"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxfollowmajorityfilenamerequiredpercent."
@@ -10734,8 +10761,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1316:1:GetMaxGeoLocationCheckDays",
-        "PPgTweaks.cpp:1319:1:GetMaxGeoLocationCheckDays"
+        "PPgTweaks.cpp:1331:1:GetMaxGeoLocationCheckDays",
+        "PPgTweaks.cpp:1334:1:GetMaxGeoLocationCheckDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxgeolocationcheckdays."
@@ -10807,8 +10834,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1185:1:GetMaxKadSearchLifetimeSeconds",
-        "PPgTweaks.cpp:1187:1:GetMaxKadSearchLifetimeSeconds"
+        "PPgTweaks.cpp:1200:1:GetMaxKadSearchLifetimeSeconds",
+        "PPgTweaks.cpp:1202:1:GetMaxKadSearchLifetimeSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxkadsearchlifetimeseconds."
@@ -10831,8 +10858,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1181:1:GetMaxKadSearchTotal",
-        "PPgTweaks.cpp:1183:1:GetMaxKadSearchTotal"
+        "PPgTweaks.cpp:1196:1:GetMaxKadSearchTotal",
+        "PPgTweaks.cpp:1198:1:GetMaxKadSearchTotal"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxkadsearchtotal."
@@ -10855,8 +10882,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1360:1:GetMaxQueueSize",
-        "PPgTweaks.cpp:1362:1:GetMaxQueueSize"
+        "PPgTweaks.cpp:1375:1:GetMaxQueueSize",
+        "PPgTweaks.cpp:1377:1:GetMaxQueueSize"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxqueuesize."
@@ -10903,7 +10930,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1326:1:GetMaxTCPErrorFlooderIntervalMinutes"
+        "PPgTweaks.cpp:1341:1:GetMaxTCPErrorFlooderIntervalMinutes"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxtcperrorflooderintervalminutes."
@@ -10926,7 +10953,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1330:1:GetMaxTCPErrorFlooderThreshold"
+        "PPgTweaks.cpp:1345:1:GetMaxTCPErrorFlooderThreshold"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxtcperrorflooderthreshold."
@@ -10973,8 +11000,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1552:0:GetMediaInfoDllPath",
-        "PPgTweaks.cpp:1743:0:SetMediaInfoDllPath"
+        "PPgTweaks.cpp:1569:0:GetMediaInfoDllPath",
+        "PPgTweaks.cpp:1762:0:SetMediaInfoDllPath"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: mediainfodllpath."
@@ -10997,7 +11024,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1350:0:GetMinFileBufferSizeBytes"
+        "PPgTweaks.cpp:1365:0:GetMinFileBufferSizeBytes"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfilebuffersizebytes."
@@ -11020,8 +11047,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1297:0:GetMinFollowMajorityFilenameRequiredPercent",
-        "PPgTweaks.cpp:1299:0:GetMinFollowMajorityFilenameRequiredPercent"
+        "PPgTweaks.cpp:1312:0:GetMinFollowMajorityFilenameRequiredPercent",
+        "PPgTweaks.cpp:1314:0:GetMinFollowMajorityFilenameRequiredPercent"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfollowmajorityfilenamerequiredpercent."
@@ -11044,7 +11071,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1496:1:GetMinFreeDiskSpaceConfigFloor"
+        "PPgTweaks.cpp:1513:1:GetMinFreeDiskSpaceConfigFloor"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfreediskspaceconfigfloor."
@@ -11067,7 +11094,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1717:0:SetMinFreeDiskSpaceConfigGiB"
+        "PPgTweaks.cpp:1736:0:SetMinFreeDiskSpaceConfigGiB"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfreediskspaceconfiggib."
@@ -11090,7 +11117,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1500:1:GetMinFreeDiskSpaceIncomingFloor"
+        "PPgTweaks.cpp:1517:1:GetMinFreeDiskSpaceIncomingFloor"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfreediskspaceincomingfloor."
@@ -11113,7 +11140,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1719:0:SetMinFreeDiskSpaceIncomingGiB"
+        "PPgTweaks.cpp:1738:0:SetMinFreeDiskSpaceIncomingGiB"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfreediskspaceincominggib."
@@ -11136,7 +11163,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1498:1:GetMinFreeDiskSpaceTempFloor"
+        "PPgTweaks.cpp:1515:1:GetMinFreeDiskSpaceTempFloor"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfreediskspacetempfloor."
@@ -11159,7 +11186,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1718:0:SetMinFreeDiskSpaceTempGiB"
+        "PPgTweaks.cpp:1737:0:SetMinFreeDiskSpaceTempGiB"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nfreediskspacetempgib."
@@ -11182,8 +11209,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1316:0:GetMinGeoLocationCheckDays",
-        "PPgTweaks.cpp:1319:0:GetMinGeoLocationCheckDays"
+        "PPgTweaks.cpp:1331:0:GetMinGeoLocationCheckDays",
+        "PPgTweaks.cpp:1334:0:GetMinGeoLocationCheckDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ngeolocationcheckdays."
@@ -11230,8 +11257,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1185:0:GetMinKadSearchLifetimeSeconds",
-        "PPgTweaks.cpp:1187:0:GetMinKadSearchLifetimeSeconds"
+        "PPgTweaks.cpp:1200:0:GetMinKadSearchLifetimeSeconds",
+        "PPgTweaks.cpp:1202:0:GetMinKadSearchLifetimeSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nkadsearchlifetimeseconds."
@@ -11254,8 +11281,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1181:0:GetMinKadSearchTotal",
-        "PPgTweaks.cpp:1183:0:GetMinKadSearchTotal"
+        "PPgTweaks.cpp:1196:0:GetMinKadSearchTotal",
+        "PPgTweaks.cpp:1198:0:GetMinKadSearchTotal"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nkadsearchtotal."
@@ -11278,8 +11305,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1564:0:NormalizeGeoLocationCheckDays",
-        "PPgTweaks.cpp:1640:0:NormalizeGeoLocationCheckDays"
+        "PPgTweaks.cpp:1581:0:NormalizeGeoLocationCheckDays",
+        "PPgTweaks.cpp:1657:0:NormalizeGeoLocationCheckDays"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: normalizegeolocationcheckdays."
@@ -11302,8 +11329,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1608:1:NormalizeTimeoutSeconds",
-        "PPgTweaks.cpp:1609:1:NormalizeTimeoutSeconds"
+        "PPgTweaks.cpp:1625:1:NormalizeTimeoutSeconds",
+        "PPgTweaks.cpp:1626:1:NormalizeTimeoutSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: normalizetimeoutseconds."
@@ -11553,8 +11580,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1360:0:GetMinQueueSize",
-        "PPgTweaks.cpp:1362:0:GetMinQueueSize"
+        "PPgTweaks.cpp:1375:0:GetMinQueueSize",
+        "PPgTweaks.cpp:1377:0:GetMinQueueSize"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: nqueuesize."
@@ -11577,7 +11604,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1326:0:GetMinTCPErrorFlooderIntervalMinutes"
+        "PPgTweaks.cpp:1341:0:GetMinTCPErrorFlooderIntervalMinutes"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ntcperrorflooderintervalminutes."
@@ -11600,7 +11627,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1330:0:GetMinTCPErrorFlooderThreshold"
+        "PPgTweaks.cpp:1345:0:GetMinTCPErrorFlooderThreshold"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ntcperrorflooderthreshold."
@@ -11623,10 +11650,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1169:0:GetMinTimeoutSeconds",
-        "PPgTweaks.cpp:1171:0:GetMinTimeoutSeconds",
-        "PPgTweaks.cpp:1516:0:GetMinTimeoutSeconds",
-        "PPgTweaks.cpp:1517:0:GetMinTimeoutSeconds"
+        "PPgTweaks.cpp:1184:0:GetMinTimeoutSeconds",
+        "PPgTweaks.cpp:1186:0:GetMinTimeoutSeconds",
+        "PPgTweaks.cpp:1533:0:GetMinTimeoutSeconds",
+        "PPgTweaks.cpp:1534:0:GetMinTimeoutSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: ntimeoutseconds."
@@ -11957,7 +11984,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1713:0:SetServerKeepAliveTimeoutMinutes"
+        "PPgTweaks.cpp:1732:0:SetServerKeepAliveTimeoutMinutes"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: serverkeepalivetimeoutminutes."
@@ -12250,8 +12277,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1516:1:TimeoutMsToSeconds",
-        "PPgTweaks.cpp:1517:1:TimeoutMsToSeconds"
+        "PPgTweaks.cpp:1533:1:TimeoutMsToSeconds",
+        "PPgTweaks.cpp:1534:1:TimeoutMsToSeconds"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: timeoutmstoseconds."
@@ -12396,7 +12423,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1652:0:uMaxLogFileSize"
+        "PPgTweaks.cpp:1671:0:uMaxLogFileSize"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: umaxlogfilesize."
@@ -12446,8 +12473,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1505:0:GetUPnPBackendMode",
-        "PPgTweaks.cpp:1727:0:SetUPnPBackendMode"
+        "PPgTweaks.cpp:1522:0:GetUPnPBackendMode",
+        "PPgTweaks.cpp:1746:0:SetUPnPBackendMode"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: upnpbackendmode."
@@ -12544,8 +12571,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1507:0:m_nCurrentUserDirMode",
-        "PPgTweaks.cpp:2171:0:m_nCurrentUserDirMode"
+        "PPgTweaks.cpp:1524:0:m_nCurrentUserDirMode",
+        "PPgTweaks.cpp:2192:0:m_nCurrentUserDirMode"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: userdirmode."
@@ -12642,8 +12669,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1557:0:GetUseSystemFontForMainControls",
-        "PPgTweaks.cpp:1750:0:m_bUseSystemFontForMainControls"
+        "PPgTweaks.cpp:1574:0:GetUseSystemFontForMainControls",
+        "PPgTweaks.cpp:1769:0:m_bUseSystemFontForMainControls"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: usesystemfontformaincontrols."
@@ -12764,8 +12791,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1475:0:m_byLogLevel",
-        "PPgTweaks.cpp:1684:0:m_byLogLevel"
+        "PPgTweaks.cpp:1491:0:m_byLogLevel",
+        "PPgTweaks.cpp:1703:0:m_byLogLevel"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: yloglevel."
@@ -13341,8 +13368,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1486:0:m_bCreditSystem",
-        "PPgTweaks.cpp:1689:0:m_bCreditSystem"
+        "PPgTweaks.cpp:1503:0:m_bCreditSystem",
+        "PPgTweaks.cpp:1708:0:m_bCreditSystem"
       ],
       "restBindings": [
         "creditSystem"
@@ -13521,8 +13548,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1464:0:m_bVerbose",
-        "PPgTweaks.cpp:1686:0:m_bVerbose"
+        "PPgTweaks.cpp:1480:0:m_bVerbose",
+        "PPgTweaks.cpp:1705:0:m_bVerbose"
       ],
       "restBindings": [],
       "notes": ""
@@ -13863,9 +13890,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1501:0:GetYourHostname",
-        "PPgTweaks.cpp:1720:0:GetYourHostname",
-        "PPgTweaks.cpp:1721:0:SetYourHostname"
+        "PPgTweaks.cpp:1518:0:GetYourHostname",
+        "PPgTweaks.cpp:1739:0:GetYourHostname",
+        "PPgTweaks.cpp:1740:0:SetYourHostname"
       ],
       "restBindings": [],
       "notes": ""
@@ -13890,8 +13917,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgTweaks.cpp:1531:0:GetZeroUploadRateGraceSeconds",
-        "PPgTweaks.cpp:1624:0:SetZeroUploadRateGraceSeconds"
+        "PPgTweaks.cpp:1548:0:GetZeroUploadRateGraceSeconds",
+        "PPgTweaks.cpp:1641:0:SetZeroUploadRateGraceSeconds"
       ],
       "restBindings": [],
       "notes": ""
@@ -21614,10 +21641,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1169:0:GetMinTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1184:0:GetMinTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1169,
+      "line": 1184,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinTimeoutSeconds",
@@ -21628,10 +21655,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1171:0:GetMinTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1186:0:GetMinTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1171,
+      "line": 1186,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinTimeoutSeconds",
@@ -21642,10 +21669,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1181:0:GetMinKadSearchTotal",
+      "id": "PPgTweaks.cpp:1196:0:GetMinKadSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1181,
+      "line": 1196,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinKadSearchTotal",
@@ -21656,10 +21683,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1181:1:GetMaxKadSearchTotal",
+      "id": "PPgTweaks.cpp:1196:1:GetMaxKadSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1181,
+      "line": 1196,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxKadSearchTotal",
@@ -21670,10 +21697,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1183:0:GetMinKadSearchTotal",
+      "id": "PPgTweaks.cpp:1198:0:GetMinKadSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1183,
+      "line": 1198,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinKadSearchTotal",
@@ -21684,10 +21711,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1183:1:GetMaxKadSearchTotal",
+      "id": "PPgTweaks.cpp:1198:1:GetMaxKadSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1183,
+      "line": 1198,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxKadSearchTotal",
@@ -21698,10 +21725,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1185:0:GetMinKadSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1200:0:GetMinKadSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1185,
+      "line": 1200,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinKadSearchLifetimeSeconds",
@@ -21712,10 +21739,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1185:1:GetMaxKadSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1200:1:GetMaxKadSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1185,
+      "line": 1200,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxKadSearchLifetimeSeconds",
@@ -21726,10 +21753,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1187:0:GetMinKadSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1202:0:GetMinKadSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1187,
+      "line": 1202,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinKadSearchLifetimeSeconds",
@@ -21740,10 +21767,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1187:1:GetMaxKadSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1202:1:GetMaxKadSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1187,
+      "line": 1202,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxKadSearchLifetimeSeconds",
@@ -21754,10 +21781,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1297:0:GetMinFollowMajorityFilenameRequiredPercent",
+      "id": "PPgTweaks.cpp:1312:0:GetMinFollowMajorityFilenameRequiredPercent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1297,
+      "line": 1312,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinFollowMajorityFilenameRequiredPercent",
@@ -21768,10 +21795,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1297:1:GetMaxFollowMajorityFilenameRequiredPercent",
+      "id": "PPgTweaks.cpp:1312:1:GetMaxFollowMajorityFilenameRequiredPercent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1297,
+      "line": 1312,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxFollowMajorityFilenameRequiredPercent",
@@ -21782,10 +21809,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1299:0:GetMinFollowMajorityFilenameRequiredPercent",
+      "id": "PPgTweaks.cpp:1314:0:GetMinFollowMajorityFilenameRequiredPercent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1299,
+      "line": 1314,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinFollowMajorityFilenameRequiredPercent",
@@ -21796,10 +21823,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1299:1:GetMaxFollowMajorityFilenameRequiredPercent",
+      "id": "PPgTweaks.cpp:1314:1:GetMaxFollowMajorityFilenameRequiredPercent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1299,
+      "line": 1314,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxFollowMajorityFilenameRequiredPercent",
@@ -21810,10 +21837,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1302:0:GetMaxFollowMajorityFilenameMinimumVotes",
+      "id": "PPgTweaks.cpp:1317:0:GetMaxFollowMajorityFilenameMinimumVotes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1302,
+      "line": 1317,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxFollowMajorityFilenameMinimumVotes",
@@ -21824,10 +21851,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1304:0:GetMaxFollowMajorityFilenameMinimumVotes",
+      "id": "PPgTweaks.cpp:1319:0:GetMaxFollowMajorityFilenameMinimumVotes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1304,
+      "line": 1319,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxFollowMajorityFilenameMinimumVotes",
@@ -21838,10 +21865,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1316:0:GetMinGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1331:0:GetMinGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1316,
+      "line": 1331,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinGeoLocationCheckDays",
@@ -21852,10 +21879,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1316:1:GetMaxGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1331:1:GetMaxGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1316,
+      "line": 1331,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxGeoLocationCheckDays",
@@ -21866,10 +21893,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1319:0:GetMinGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1334:0:GetMinGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1319,
+      "line": 1334,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinGeoLocationCheckDays",
@@ -21880,10 +21907,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1319:1:GetMaxGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1334:1:GetMaxGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1319,
+      "line": 1334,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxGeoLocationCheckDays",
@@ -21894,10 +21921,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1326:0:GetMinTCPErrorFlooderIntervalMinutes",
+      "id": "PPgTweaks.cpp:1341:0:GetMinTCPErrorFlooderIntervalMinutes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1326,
+      "line": 1341,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinTCPErrorFlooderIntervalMinutes",
@@ -21908,10 +21935,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1326:1:GetMaxTCPErrorFlooderIntervalMinutes",
+      "id": "PPgTweaks.cpp:1341:1:GetMaxTCPErrorFlooderIntervalMinutes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1326,
+      "line": 1341,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxTCPErrorFlooderIntervalMinutes",
@@ -21922,10 +21949,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1330:0:GetMinTCPErrorFlooderThreshold",
+      "id": "PPgTweaks.cpp:1345:0:GetMinTCPErrorFlooderThreshold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1330,
+      "line": 1345,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinTCPErrorFlooderThreshold",
@@ -21936,10 +21963,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1330:1:GetMaxTCPErrorFlooderThreshold",
+      "id": "PPgTweaks.cpp:1345:1:GetMaxTCPErrorFlooderThreshold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1330,
+      "line": 1345,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxTCPErrorFlooderThreshold",
@@ -21950,10 +21977,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1350:0:GetMinFileBufferSizeBytes",
+      "id": "PPgTweaks.cpp:1365:0:GetMinFileBufferSizeBytes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1350,
+      "line": 1365,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinFileBufferSizeBytes",
@@ -21964,10 +21991,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1351:0:GetMaxFileBufferSizeBytes",
+      "id": "PPgTweaks.cpp:1366:0:GetMaxFileBufferSizeBytes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1351,
+      "line": 1366,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxFileBufferSizeBytes",
@@ -21978,10 +22005,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1360:0:GetMinQueueSize",
+      "id": "PPgTweaks.cpp:1375:0:GetMinQueueSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1360,
+      "line": 1375,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinQueueSize",
@@ -21992,10 +22019,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1360:1:GetMaxQueueSize",
+      "id": "PPgTweaks.cpp:1375:1:GetMaxQueueSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1360,
+      "line": 1375,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxQueueSize",
@@ -22006,10 +22033,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1362:0:GetMinQueueSize",
+      "id": "PPgTweaks.cpp:1377:0:GetMinQueueSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1362,
+      "line": 1377,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMinQueueSize",
@@ -22020,10 +22047,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1362:1:GetMaxQueueSize",
+      "id": "PPgTweaks.cpp:1377:1:GetMaxQueueSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1362,
+      "line": 1377,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetMaxQueueSize",
@@ -22034,10 +22061,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1459:0:GetMaxConperFive",
+      "id": "PPgTweaks.cpp:1475:0:GetMaxConperFive",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1459,
+      "line": 1475,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMaxConperFive",
@@ -22048,10 +22075,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1460:0:GetMaxHalfConnections",
+      "id": "PPgTweaks.cpp:1476:0:GetMaxHalfConnections",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1460,
+      "line": 1476,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMaxHalfConnections",
@@ -22062,10 +22089,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1461:0:GetConditionalTCPAccept",
+      "id": "PPgTweaks.cpp:1477:0:GetConditionalTCPAccept",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1461,
+      "line": 1477,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetConditionalTCPAccept",
@@ -22076,10 +22103,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1462:0:AutoTakeED2KLinks",
+      "id": "PPgTweaks.cpp:1478:0:AutoTakeED2KLinks",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1462,
+      "line": 1478,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "AutoTakeED2KLinks",
@@ -22090,10 +22117,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1463:0:GetEnableVerboseOptions",
+      "id": "PPgTweaks.cpp:1479:0:GetEnableVerboseOptions",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1463,
+      "line": 1479,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetEnableVerboseOptions",
@@ -22104,10 +22131,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1464:0:m_bVerbose",
+      "id": "PPgTweaks.cpp:1480:0:m_bVerbose",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1464,
+      "line": 1480,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bVerbose",
@@ -22118,10 +22145,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1465:0:debug2disk",
+      "id": "PPgTweaks.cpp:1481:0:debug2disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1465,
+      "line": 1481,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "debug2disk",
@@ -22132,10 +22159,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1466:0:m_bDebugSourceExchange",
+      "id": "PPgTweaks.cpp:1482:0:m_bDebugSourceExchange",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1466,
+      "line": 1482,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bDebugSourceExchange",
@@ -22146,10 +22173,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1467:0:m_bLogBannedClients",
+      "id": "PPgTweaks.cpp:1483:0:m_bLogBannedClients",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1467,
+      "line": 1483,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bLogBannedClients",
@@ -22160,10 +22187,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1468:0:m_bLogRatingDescReceived",
+      "id": "PPgTweaks.cpp:1484:0:m_bLogRatingDescReceived",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1468,
+      "line": 1484,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bLogRatingDescReceived",
@@ -22174,10 +22201,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1469:0:m_bLogSecureIdent",
+      "id": "PPgTweaks.cpp:1485:0:m_bLogSecureIdent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1469,
+      "line": 1485,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bLogSecureIdent",
@@ -22188,10 +22215,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1470:0:m_bLogFilteredIPs",
+      "id": "PPgTweaks.cpp:1486:0:m_bLogFilteredIPs",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1470,
+      "line": 1486,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bLogFilteredIPs",
@@ -22202,10 +22229,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1471:0:m_bLogFileSaving",
+      "id": "PPgTweaks.cpp:1487:0:m_bLogFileSaving",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1471,
+      "line": 1487,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bLogFileSaving",
@@ -22216,10 +22243,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1472:0:m_bLogA4AF",
+      "id": "PPgTweaks.cpp:1488:0:m_bLogA4AF",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1472,
+      "line": 1488,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bLogA4AF",
@@ -22230,10 +22257,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1473:0:m_bLogUlDlEvents",
+      "id": "PPgTweaks.cpp:1489:0:m_bLogUlDlEvents",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1473,
+      "line": 1489,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bLogUlDlEvents",
@@ -22244,10 +22271,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1474:0:m_bFullVerbose",
+      "id": "PPgTweaks.cpp:1490:0:m_bFullVerbose",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1474,
+      "line": 1490,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bFullVerbose",
@@ -22258,10 +22285,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1475:0:m_byLogLevel",
+      "id": "PPgTweaks.cpp:1491:0:m_byLogLevel",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1475,
+      "line": 1491,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_byLogLevel",
@@ -22272,10 +22299,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1477:0:GetCreateCrashDumpMode",
+      "id": "PPgTweaks.cpp:1493:0:GetCreateCrashDumpMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1477,
+      "line": 1493,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetCreateCrashDumpMode",
@@ -22286,10 +22313,24 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1478:0:GetMaxLogFileSize",
+      "id": "PPgTweaks.cpp:1494:0:GetCaptureFullCrashDump",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1478,
+      "line": 1494,
+      "function": "OnInitDialog",
+      "access": "read",
+      "ownerExpression": "GetCaptureFullCrashDump",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "CaptureFullCrashDump"
+      ]
+    },
+    {
+      "id": "PPgTweaks.cpp:1495:0:GetMaxLogFileSize",
+      "page": "PPgTweaks.cpp",
+      "dialogId": "IDD_PPG_TWEAKS",
+      "line": 1495,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMaxLogFileSize",
@@ -22300,10 +22341,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1479:0:GetMaxLogBuff",
+      "id": "PPgTweaks.cpp:1496:0:GetMaxLogBuff",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1479,
+      "line": 1496,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMaxLogBuff",
@@ -22314,10 +22355,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1480:0:GetLogFileFormat",
+      "id": "PPgTweaks.cpp:1497:0:GetLogFileFormat",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1480,
+      "line": 1497,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetLogFileFormat",
@@ -22328,10 +22369,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1481:0:log2disk",
+      "id": "PPgTweaks.cpp:1498:0:log2disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1481,
+      "line": 1498,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "log2disk",
@@ -22342,10 +22383,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1486:0:m_bCreditSystem",
+      "id": "PPgTweaks.cpp:1503:0:m_bCreditSystem",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1486,
+      "line": 1503,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bCreditSystem",
@@ -22356,10 +22397,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1487:0:m_iCommitFiles",
+      "id": "PPgTweaks.cpp:1504:0:m_iCommitFiles",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1487,
+      "line": 1504,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_iCommitFiles",
@@ -22370,10 +22411,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1488:0:m_iExtractMetaData",
+      "id": "PPgTweaks.cpp:1505:0:m_iExtractMetaData",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1488,
+      "line": 1505,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_iExtractMetaData",
@@ -22384,10 +22425,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1489:0:filterLANIPs",
+      "id": "PPgTweaks.cpp:1506:0:filterLANIPs",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1489,
+      "line": 1506,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "filterLANIPs",
@@ -22398,10 +22439,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1490:0:GetServerKeepAliveTimeout",
+      "id": "PPgTweaks.cpp:1507:0:GetServerKeepAliveTimeout",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1490,
+      "line": 1507,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetServerKeepAliveTimeout",
@@ -22412,10 +22453,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1492:0:GetServerKeepAliveTimeout",
+      "id": "PPgTweaks.cpp:1509:0:GetServerKeepAliveTimeout",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1492,
+      "line": 1509,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetServerKeepAliveTimeout",
@@ -22426,10 +22467,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1493:0:GetSparsePartFiles",
+      "id": "PPgTweaks.cpp:1510:0:GetSparsePartFiles",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1493,
+      "line": 1510,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSparsePartFiles",
@@ -22440,10 +22481,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1494:0:m_bAllocFull",
+      "id": "PPgTweaks.cpp:1511:0:m_bAllocFull",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1494,
+      "line": 1511,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bAllocFull",
@@ -22454,10 +22495,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1496:0:GetMinFreeDiskSpaceConfig",
+      "id": "PPgTweaks.cpp:1513:0:GetMinFreeDiskSpaceConfig",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1496,
+      "line": 1513,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinFreeDiskSpaceConfig",
@@ -22468,10 +22509,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1496:1:GetMinFreeDiskSpaceConfigFloor",
+      "id": "PPgTweaks.cpp:1513:1:GetMinFreeDiskSpaceConfigFloor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1496,
+      "line": 1513,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinFreeDiskSpaceConfigFloor",
@@ -22482,10 +22523,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1498:0:GetMinFreeDiskSpaceTemp",
+      "id": "PPgTweaks.cpp:1515:0:GetMinFreeDiskSpaceTemp",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1498,
+      "line": 1515,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinFreeDiskSpaceTemp",
@@ -22496,10 +22537,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1498:1:GetMinFreeDiskSpaceTempFloor",
+      "id": "PPgTweaks.cpp:1515:1:GetMinFreeDiskSpaceTempFloor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1498,
+      "line": 1515,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinFreeDiskSpaceTempFloor",
@@ -22510,10 +22551,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1500:0:GetMinFreeDiskSpaceIncoming",
+      "id": "PPgTweaks.cpp:1517:0:GetMinFreeDiskSpaceIncoming",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1500,
+      "line": 1517,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinFreeDiskSpaceIncoming",
@@ -22524,10 +22565,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1500:1:GetMinFreeDiskSpaceIncomingFloor",
+      "id": "PPgTweaks.cpp:1517:1:GetMinFreeDiskSpaceIncomingFloor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1500,
+      "line": 1517,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinFreeDiskSpaceIncomingFloor",
@@ -22538,10 +22579,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1501:0:GetYourHostname",
+      "id": "PPgTweaks.cpp:1518:0:GetYourHostname",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1501,
+      "line": 1518,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetYourHostname",
@@ -22552,10 +22593,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1502:0:m_bAutomaticArcPreviewStart",
+      "id": "PPgTweaks.cpp:1519:0:m_bAutomaticArcPreviewStart",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1502,
+      "line": 1519,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bAutomaticArcPreviewStart",
@@ -22566,10 +22607,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1504:0:CloseUPnPOnExit",
+      "id": "PPgTweaks.cpp:1521:0:CloseUPnPOnExit",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1504,
+      "line": 1521,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "CloseUPnPOnExit",
@@ -22580,10 +22621,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1505:0:GetUPnPBackendMode",
+      "id": "PPgTweaks.cpp:1522:0:GetUPnPBackendMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1505,
+      "line": 1522,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetUPnPBackendMode",
@@ -22594,10 +22635,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1507:0:m_nCurrentUserDirMode",
+      "id": "PPgTweaks.cpp:1524:0:m_nCurrentUserDirMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1507,
+      "line": 1524,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_nCurrentUserDirMode",
@@ -22608,10 +22649,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1509:0:GetA4AFSaveCpu",
+      "id": "PPgTweaks.cpp:1526:0:GetA4AFSaveCpu",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1509,
+      "line": 1526,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetA4AFSaveCpu",
@@ -22622,10 +22663,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1510:0:GetHighresTimer",
+      "id": "PPgTweaks.cpp:1527:0:GetHighresTimer",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1510,
+      "line": 1527,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetHighresTimer",
@@ -22636,10 +22677,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1511:0:GetRestoreLastMainWndDlg",
+      "id": "PPgTweaks.cpp:1528:0:GetRestoreLastMainWndDlg",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1511,
+      "line": 1528,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetRestoreLastMainWndDlg",
@@ -22650,10 +22691,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1512:0:GetRestoreLastLogPane",
+      "id": "PPgTweaks.cpp:1529:0:GetRestoreLastLogPane",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1512,
+      "line": 1529,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetRestoreLastLogPane",
@@ -22664,10 +22705,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1513:0:GetDailyConfigBackup",
+      "id": "PPgTweaks.cpp:1530:0:GetDailyConfigBackup",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1513,
+      "line": 1530,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetDailyConfigBackup",
@@ -22678,10 +22719,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1514:0:GetStartupProgressDialogMode",
+      "id": "PPgTweaks.cpp:1531:0:GetStartupProgressDialogMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1514,
+      "line": 1531,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetStartupProgressDialogMode",
@@ -22692,10 +22733,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1515:0:GetShutdownProgressDialogMode",
+      "id": "PPgTweaks.cpp:1532:0:GetShutdownProgressDialogMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1515,
+      "line": 1532,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetShutdownProgressDialogMode",
@@ -22706,10 +22747,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1516:0:GetMinTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1533:0:GetMinTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1516,
+      "line": 1533,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinTimeoutSeconds",
@@ -22720,10 +22761,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1516:1:TimeoutMsToSeconds",
+      "id": "PPgTweaks.cpp:1533:1:TimeoutMsToSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1516,
+      "line": 1533,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "TimeoutMsToSeconds",
@@ -22734,10 +22775,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1516:2:GetConnectionTimeout",
+      "id": "PPgTweaks.cpp:1533:2:GetConnectionTimeout",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1516,
+      "line": 1533,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetConnectionTimeout",
@@ -22748,10 +22789,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1517:0:GetMinTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1534:0:GetMinTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1517,
+      "line": 1534,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMinTimeoutSeconds",
@@ -22762,10 +22803,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1517:1:TimeoutMsToSeconds",
+      "id": "PPgTweaks.cpp:1534:1:TimeoutMsToSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1517,
+      "line": 1534,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "TimeoutMsToSeconds",
@@ -22776,10 +22817,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1517:2:GetDownloadTimeout",
+      "id": "PPgTweaks.cpp:1534:2:GetDownloadTimeout",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1517,
+      "line": 1534,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetDownloadTimeout",
@@ -22790,10 +22831,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1518:0:GetEd2kSearchMaxResults",
+      "id": "PPgTweaks.cpp:1535:0:GetEd2kSearchMaxResults",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1518,
+      "line": 1535,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetEd2kSearchMaxResults",
@@ -22804,10 +22845,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1519:0:GetEd2kSearchMaxMoreRequests",
+      "id": "PPgTweaks.cpp:1536:0:GetEd2kSearchMaxMoreRequests",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1519,
+      "line": 1536,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetEd2kSearchMaxMoreRequests",
@@ -22818,10 +22859,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1520:0:GetKadFileSearchTotal",
+      "id": "PPgTweaks.cpp:1537:0:GetKadFileSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1520,
+      "line": 1537,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetKadFileSearchTotal",
@@ -22832,10 +22873,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1521:0:GetKadKeywordSearchTotal",
+      "id": "PPgTweaks.cpp:1538:0:GetKadKeywordSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1521,
+      "line": 1538,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetKadKeywordSearchTotal",
@@ -22846,10 +22887,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1522:0:GetKadFileSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1539:0:GetKadFileSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1522,
+      "line": 1539,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetKadFileSearchLifetimeSeconds",
@@ -22860,10 +22901,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1523:0:GetKadKeywordSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1540:0:GetKadKeywordSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1523,
+      "line": 1540,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetKadKeywordSearchLifetimeSeconds",
@@ -22874,10 +22915,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1524:0:IsDetectTCPErrorFlooder",
+      "id": "PPgTweaks.cpp:1541:0:IsDetectTCPErrorFlooder",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1524,
+      "line": 1541,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsDetectTCPErrorFlooder",
@@ -22888,10 +22929,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1525:0:GetTCPErrorFlooderIntervalMinutes",
+      "id": "PPgTweaks.cpp:1542:0:GetTCPErrorFlooderIntervalMinutes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1525,
+      "line": 1542,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetTCPErrorFlooderIntervalMinutes",
@@ -22902,10 +22943,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1526:0:GetTCPErrorFlooderThreshold",
+      "id": "PPgTweaks.cpp:1543:0:GetTCPErrorFlooderThreshold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1526,
+      "line": 1543,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetTCPErrorFlooderThreshold",
@@ -22916,10 +22957,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1527:0:GetMaxUploadClientsAllowed",
+      "id": "PPgTweaks.cpp:1544:0:GetMaxUploadClientsAllowed",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1527,
+      "line": 1544,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMaxUploadClientsAllowed",
@@ -22930,10 +22971,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1528:0:GetSlowUploadThresholdFactor",
+      "id": "PPgTweaks.cpp:1545:0:GetSlowUploadThresholdFactor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1528,
+      "line": 1545,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSlowUploadThresholdFactor",
@@ -22944,10 +22985,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1529:0:GetSlowUploadGraceSeconds",
+      "id": "PPgTweaks.cpp:1546:0:GetSlowUploadGraceSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1529,
+      "line": 1546,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSlowUploadGraceSeconds",
@@ -22958,10 +22999,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1530:0:GetSlowUploadWarmupSeconds",
+      "id": "PPgTweaks.cpp:1547:0:GetSlowUploadWarmupSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1530,
+      "line": 1547,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSlowUploadWarmupSeconds",
@@ -22972,10 +23013,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1531:0:GetZeroUploadRateGraceSeconds",
+      "id": "PPgTweaks.cpp:1548:0:GetZeroUploadRateGraceSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1531,
+      "line": 1548,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetZeroUploadRateGraceSeconds",
@@ -22986,10 +23027,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1532:0:GetSlowUploadCooldownSeconds",
+      "id": "PPgTweaks.cpp:1549:0:GetSlowUploadCooldownSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1532,
+      "line": 1549,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSlowUploadCooldownSeconds",
@@ -23000,10 +23041,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1533:0:IsLowRatioBoostEnabled",
+      "id": "PPgTweaks.cpp:1550:0:IsLowRatioBoostEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1533,
+      "line": 1550,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsLowRatioBoostEnabled",
@@ -23014,10 +23055,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1534:0:GetLowRatioThreshold",
+      "id": "PPgTweaks.cpp:1551:0:GetLowRatioThreshold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1534,
+      "line": 1551,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetLowRatioThreshold",
@@ -23028,10 +23069,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1535:0:GetLowRatioBonus",
+      "id": "PPgTweaks.cpp:1552:0:GetLowRatioBonus",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1535,
+      "line": 1552,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetLowRatioBonus",
@@ -23042,10 +23083,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1536:0:GetLowIDDivisor",
+      "id": "PPgTweaks.cpp:1553:0:GetLowIDDivisor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1536,
+      "line": 1553,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetLowIDDivisor",
@@ -23056,10 +23097,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1537:0:GetSessionTransferLimitMode",
+      "id": "PPgTweaks.cpp:1554:0:GetSessionTransferLimitMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1537,
+      "line": 1554,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSessionTransferLimitMode",
@@ -23070,10 +23111,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1538:0:GetSessionTransferLimitMode",
+      "id": "PPgTweaks.cpp:1555:0:GetSessionTransferLimitMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1538,
+      "line": 1555,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSessionTransferLimitMode",
@@ -23084,10 +23125,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1538:1:GetSessionTransferLimitValue",
+      "id": "PPgTweaks.cpp:1555:1:GetSessionTransferLimitValue",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1538,
+      "line": 1555,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSessionTransferLimitValue",
@@ -23098,10 +23139,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1539:0:GetSessionTransferLimitMode",
+      "id": "PPgTweaks.cpp:1556:0:GetSessionTransferLimitMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1539,
+      "line": 1556,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSessionTransferLimitMode",
@@ -23112,10 +23153,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1539:1:GetSessionTransferLimitValue",
+      "id": "PPgTweaks.cpp:1556:1:GetSessionTransferLimitValue",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1539,
+      "line": 1556,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSessionTransferLimitValue",
@@ -23126,10 +23167,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1540:0:GetSessionTimeLimitSeconds",
+      "id": "PPgTweaks.cpp:1557:0:GetSessionTimeLimitSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1540,
+      "line": 1557,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetSessionTimeLimitSeconds",
@@ -23140,10 +23181,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1541:0:GetFileBufferTimeLimit",
+      "id": "PPgTweaks.cpp:1558:0:GetFileBufferTimeLimit",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1541,
+      "line": 1558,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetFileBufferTimeLimit",
@@ -23154,10 +23195,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1542:0:IsICHEnabled",
+      "id": "PPgTweaks.cpp:1559:0:IsICHEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1542,
+      "line": 1559,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsICHEnabled",
@@ -23168,10 +23209,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1543:0:GetPreviewSmallBlocks",
+      "id": "PPgTweaks.cpp:1560:0:GetPreviewSmallBlocks",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1543,
+      "line": 1560,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetPreviewSmallBlocks",
@@ -23182,10 +23223,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1544:0:IsErrorBeepEnabled",
+      "id": "PPgTweaks.cpp:1561:0:IsErrorBeepEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1544,
+      "line": 1561,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsErrorBeepEnabled",
@@ -23196,10 +23237,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1545:0:GetShowCopyEd2kLinkCmd",
+      "id": "PPgTweaks.cpp:1562:0:GetShowCopyEd2kLinkCmd",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1545,
+      "line": 1562,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetShowCopyEd2kLinkCmd",
@@ -23210,10 +23251,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1546:0:GetFollowMajorityFilenameForNewDownloads",
+      "id": "PPgTweaks.cpp:1563:0:GetFollowMajorityFilenameForNewDownloads",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1546,
+      "line": 1563,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetFollowMajorityFilenameForNewDownloads",
@@ -23224,10 +23265,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1547:0:GetFollowMajorityFilenameRequiredPercent",
+      "id": "PPgTweaks.cpp:1564:0:GetFollowMajorityFilenameRequiredPercent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1547,
+      "line": 1564,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetFollowMajorityFilenameRequiredPercent",
@@ -23238,10 +23279,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1548:0:GetFollowMajorityFilenameMinimumVotes",
+      "id": "PPgTweaks.cpp:1565:0:GetFollowMajorityFilenameMinimumVotes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1548,
+      "line": 1565,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetFollowMajorityFilenameMinimumVotes",
@@ -23252,10 +23293,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1549:0:GetDateTimeFormat4Lists",
+      "id": "PPgTweaks.cpp:1566:0:GetDateTimeFormat4Lists",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1549,
+      "line": 1566,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetDateTimeFormat4Lists",
@@ -23266,10 +23307,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1550:0:GetDateTimeFormat",
+      "id": "PPgTweaks.cpp:1567:0:GetDateTimeFormat",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1550,
+      "line": 1567,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetDateTimeFormat",
@@ -23280,10 +23321,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1551:0:GetDateTimeFormat4Log",
+      "id": "PPgTweaks.cpp:1568:0:GetDateTimeFormat4Log",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1551,
+      "line": 1568,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetDateTimeFormat4Log",
@@ -23294,10 +23335,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1552:0:GetMediaInfoDllPath",
+      "id": "PPgTweaks.cpp:1569:0:GetMediaInfoDllPath",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1552,
+      "line": 1569,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMediaInfoDllPath",
@@ -23308,10 +23349,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1553:0:GetPreviewCopiedArchives",
+      "id": "PPgTweaks.cpp:1570:0:GetPreviewCopiedArchives",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1553,
+      "line": 1570,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetPreviewCopiedArchives",
@@ -23322,10 +23363,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1554:0:GetInspectAllFileTypes",
+      "id": "PPgTweaks.cpp:1571:0:GetInspectAllFileTypes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1554,
+      "line": 1571,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetInspectAllFileTypes",
@@ -23336,10 +23377,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1555:0:GetPreviewOnIconDblClk",
+      "id": "PPgTweaks.cpp:1572:0:GetPreviewOnIconDblClk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1555,
+      "line": 1572,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetPreviewOnIconDblClk",
@@ -23350,10 +23391,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1556:0:GetShowActiveDownloadsBold",
+      "id": "PPgTweaks.cpp:1573:0:GetShowActiveDownloadsBold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1556,
+      "line": 1573,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetShowActiveDownloadsBold",
@@ -23364,10 +23405,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1557:0:GetUseSystemFontForMainControls",
+      "id": "PPgTweaks.cpp:1574:0:GetUseSystemFontForMainControls",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1557,
+      "line": 1574,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetUseSystemFontForMainControls",
@@ -23378,10 +23419,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1558:0:GetReBarToolbar",
+      "id": "PPgTweaks.cpp:1575:0:GetReBarToolbar",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1558,
+      "line": 1575,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetReBarToolbar",
@@ -23392,10 +23433,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1559:0:IsShowUpDownIconInTaskbar",
+      "id": "PPgTweaks.cpp:1576:0:IsShowUpDownIconInTaskbar",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1559,
+      "line": 1576,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsShowUpDownIconInTaskbar",
@@ -23406,10 +23447,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1560:0:m_bShowVerticalHourMarkers",
+      "id": "PPgTweaks.cpp:1577:0:m_bShowVerticalHourMarkers",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1560,
+      "line": 1577,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bShowVerticalHourMarkers",
@@ -23421,10 +23462,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1561:0:GetForceSpeedsToKB",
+      "id": "PPgTweaks.cpp:1578:0:GetForceSpeedsToKB",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1561,
+      "line": 1578,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetForceSpeedsToKB",
@@ -23435,10 +23476,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1562:0:DoFlashOnNewMessage",
+      "id": "PPgTweaks.cpp:1579:0:DoFlashOnNewMessage",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1562,
+      "line": 1579,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "DoFlashOnNewMessage",
@@ -23449,10 +23490,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1563:0:IsGeoLocationEnabled",
+      "id": "PPgTweaks.cpp:1580:0:IsGeoLocationEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1563,
+      "line": 1580,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsGeoLocationEnabled",
@@ -23463,10 +23504,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1564:0:NormalizeGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1581:0:NormalizeGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1564,
+      "line": 1581,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "NormalizeGeoLocationCheckDays",
@@ -23477,10 +23518,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1564:1:GetGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1581:1:GetGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1564,
+      "line": 1581,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetGeoLocationCheckDays",
@@ -23491,10 +23532,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1565:0:GetExtraPreviewWithMenu",
+      "id": "PPgTweaks.cpp:1582:0:GetExtraPreviewWithMenu",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1565,
+      "line": 1582,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetExtraPreviewWithMenu",
@@ -23505,10 +23546,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1566:0:m_bKeepUnavailableFixedSharedDirs",
+      "id": "PPgTweaks.cpp:1583:0:m_bKeepUnavailableFixedSharedDirs",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1566,
+      "line": 1583,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "m_bKeepUnavailableFixedSharedDirs",
@@ -23519,10 +23560,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1567:0:DoPartiallyPurgeOldKnownFiles",
+      "id": "PPgTweaks.cpp:1584:0:DoPartiallyPurgeOldKnownFiles",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1567,
+      "line": 1584,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "DoPartiallyPurgeOldKnownFiles",
@@ -23533,10 +23574,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1568:0:GetRearrangeKadSearchKeywords",
+      "id": "PPgTweaks.cpp:1585:0:GetRearrangeKadSearchKeywords",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1568,
+      "line": 1585,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetRearrangeKadSearchKeywords",
@@ -23547,10 +23588,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1569:0:MsgOnlySecure",
+      "id": "PPgTweaks.cpp:1586:0:MsgOnlySecure",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1569,
+      "line": 1586,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "MsgOnlySecure",
@@ -23561,10 +23602,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1570:0:IsAutoBroadbandIOEnabled",
+      "id": "PPgTweaks.cpp:1587:0:IsAutoBroadbandIOEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1570,
+      "line": 1587,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "IsAutoBroadbandIOEnabled",
@@ -23575,10 +23616,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1571:0:GetQueueSize",
+      "id": "PPgTweaks.cpp:1588:0:GetQueueSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1571,
+      "line": 1588,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetQueueSize",
@@ -23589,10 +23630,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1572:0:GetFileBufferSize",
+      "id": "PPgTweaks.cpp:1589:0:GetFileBufferSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1572,
+      "line": 1589,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetFileBufferSize",
@@ -23603,10 +23644,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1573:0:GetMaxChatHistoryLines",
+      "id": "PPgTweaks.cpp:1590:0:GetMaxChatHistoryLines",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1573,
+      "line": 1590,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMaxChatHistoryLines",
@@ -23617,10 +23658,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1574:0:GetMsgSessionsMax",
+      "id": "PPgTweaks.cpp:1591:0:GetMsgSessionsMax",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1574,
+      "line": 1591,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetMsgSessionsMax",
@@ -23631,10 +23672,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1575:0:GetTxtEditor",
+      "id": "PPgTweaks.cpp:1592:0:GetTxtEditor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1575,
+      "line": 1592,
       "function": "OnInitDialog",
       "access": "read",
       "ownerExpression": "GetTxtEditor",
@@ -23645,10 +23686,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1605:0:SetMaxConsPerFive",
+      "id": "PPgTweaks.cpp:1622:0:SetMaxConsPerFive",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1605,
+      "line": 1622,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxConsPerFive",
@@ -23659,10 +23700,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1605:1:GetDefaultMaxConperFive",
+      "id": "PPgTweaks.cpp:1622:1:GetDefaultMaxConperFive",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1605,
+      "line": 1622,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetDefaultMaxConperFive",
@@ -23673,10 +23714,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1606:0:GetMaxConperFive",
+      "id": "PPgTweaks.cpp:1623:0:GetMaxConperFive",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1606,
+      "line": 1623,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetMaxConperFive",
@@ -23687,10 +23728,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1607:0:SetMaxHalfConnections",
+      "id": "PPgTweaks.cpp:1624:0:SetMaxHalfConnections",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1607,
+      "line": 1624,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxHalfConnections",
@@ -23701,10 +23742,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1607:1:GetDefaultMaxHalfConnections",
+      "id": "PPgTweaks.cpp:1624:1:GetDefaultMaxHalfConnections",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1607,
+      "line": 1624,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetDefaultMaxHalfConnections",
@@ -23715,10 +23756,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1608:0:SetConnectionTimeout",
+      "id": "PPgTweaks.cpp:1625:0:SetConnectionTimeout",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1608,
+      "line": 1625,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetConnectionTimeout",
@@ -23729,10 +23770,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1608:1:NormalizeTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1625:1:NormalizeTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1608,
+      "line": 1625,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "NormalizeTimeoutSeconds",
@@ -23743,10 +23784,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1608:2:GetDefaultConnectionTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1625:2:GetDefaultConnectionTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1608,
+      "line": 1625,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetDefaultConnectionTimeoutSeconds",
@@ -23757,10 +23798,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1609:0:SetDownloadTimeout",
+      "id": "PPgTweaks.cpp:1626:0:SetDownloadTimeout",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1609,
+      "line": 1626,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetDownloadTimeout",
@@ -23771,10 +23812,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1609:1:NormalizeTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1626:1:NormalizeTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1609,
+      "line": 1626,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "NormalizeTimeoutSeconds",
@@ -23785,10 +23826,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1609:2:GetDefaultDownloadTimeoutSeconds",
+      "id": "PPgTweaks.cpp:1626:2:GetDefaultDownloadTimeoutSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1609,
+      "line": 1626,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetDefaultDownloadTimeoutSeconds",
@@ -23799,10 +23840,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1610:0:SetEd2kSearchMaxResults",
+      "id": "PPgTweaks.cpp:1627:0:SetEd2kSearchMaxResults",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1610,
+      "line": 1627,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetEd2kSearchMaxResults",
@@ -23813,10 +23854,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1611:0:SetEd2kSearchMaxMoreRequests",
+      "id": "PPgTweaks.cpp:1628:0:SetEd2kSearchMaxMoreRequests",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1611,
+      "line": 1628,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetEd2kSearchMaxMoreRequests",
@@ -23827,10 +23868,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1612:0:SetKadFileSearchTotal",
+      "id": "PPgTweaks.cpp:1629:0:SetKadFileSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1612,
+      "line": 1629,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetKadFileSearchTotal",
@@ -23841,10 +23882,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1613:0:SetKadKeywordSearchTotal",
+      "id": "PPgTweaks.cpp:1630:0:SetKadKeywordSearchTotal",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1613,
+      "line": 1630,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetKadKeywordSearchTotal",
@@ -23855,10 +23896,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1614:0:SetKadFileSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1631:0:SetKadFileSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1614,
+      "line": 1631,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetKadFileSearchLifetimeSeconds",
@@ -23869,10 +23910,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1615:0:SetKadKeywordSearchLifetimeSeconds",
+      "id": "PPgTweaks.cpp:1632:0:SetKadKeywordSearchLifetimeSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1615,
+      "line": 1632,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetKadKeywordSearchLifetimeSeconds",
@@ -23883,10 +23924,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1616:0:m_bDetectTCPErrorFlooder",
+      "id": "PPgTweaks.cpp:1633:0:m_bDetectTCPErrorFlooder",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1616,
+      "line": 1633,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bDetectTCPErrorFlooder",
@@ -23897,10 +23938,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1617:0:m_uTCPErrorFlooderIntervalMinutes",
+      "id": "PPgTweaks.cpp:1634:0:m_uTCPErrorFlooderIntervalMinutes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1617,
+      "line": 1634,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_uTCPErrorFlooderIntervalMinutes",
@@ -23911,10 +23952,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1618:0:m_uTCPErrorFlooderThreshold",
+      "id": "PPgTweaks.cpp:1635:0:m_uTCPErrorFlooderThreshold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1618,
+      "line": 1635,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_uTCPErrorFlooderThreshold",
@@ -23925,10 +23966,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1619:0:m_bConditionalTCPAccept",
+      "id": "PPgTweaks.cpp:1636:0:m_bConditionalTCPAccept",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1619,
+      "line": 1636,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bConditionalTCPAccept",
@@ -23939,10 +23980,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1620:0:SetMaxUploadClientsAllowed",
+      "id": "PPgTweaks.cpp:1637:0:SetMaxUploadClientsAllowed",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1620,
+      "line": 1637,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxUploadClientsAllowed",
@@ -23953,10 +23994,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1621:0:SetSlowUploadThresholdFactor",
+      "id": "PPgTweaks.cpp:1638:0:SetSlowUploadThresholdFactor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1621,
+      "line": 1638,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSlowUploadThresholdFactor",
@@ -23967,10 +24008,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1622:0:SetSlowUploadGraceSeconds",
+      "id": "PPgTweaks.cpp:1639:0:SetSlowUploadGraceSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1622,
+      "line": 1639,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSlowUploadGraceSeconds",
@@ -23981,10 +24022,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1623:0:SetSlowUploadWarmupSeconds",
+      "id": "PPgTweaks.cpp:1640:0:SetSlowUploadWarmupSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1623,
+      "line": 1640,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSlowUploadWarmupSeconds",
@@ -23995,10 +24036,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1624:0:SetZeroUploadRateGraceSeconds",
+      "id": "PPgTweaks.cpp:1641:0:SetZeroUploadRateGraceSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1624,
+      "line": 1641,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetZeroUploadRateGraceSeconds",
@@ -24009,10 +24050,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1625:0:SetSlowUploadCooldownSeconds",
+      "id": "PPgTweaks.cpp:1642:0:SetSlowUploadCooldownSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1625,
+      "line": 1642,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSlowUploadCooldownSeconds",
@@ -24023,10 +24064,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1626:0:SetLowRatioBoostEnabled",
+      "id": "PPgTweaks.cpp:1643:0:SetLowRatioBoostEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1626,
+      "line": 1643,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetLowRatioBoostEnabled",
@@ -24037,10 +24078,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1627:0:SetLowRatioThreshold",
+      "id": "PPgTweaks.cpp:1644:0:SetLowRatioThreshold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1627,
+      "line": 1644,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetLowRatioThreshold",
@@ -24051,10 +24092,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1628:0:SetLowRatioBonus",
+      "id": "PPgTweaks.cpp:1645:0:SetLowRatioBonus",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1628,
+      "line": 1645,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetLowRatioBonus",
@@ -24065,10 +24106,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1629:0:SetLowIDDivisor",
+      "id": "PPgTweaks.cpp:1646:0:SetLowIDDivisor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1629,
+      "line": 1646,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetLowIDDivisor",
@@ -24079,10 +24120,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1630:0:SetSessionTransferLimitMode",
+      "id": "PPgTweaks.cpp:1647:0:SetSessionTransferLimitMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1630,
+      "line": 1647,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSessionTransferLimitMode",
@@ -24093,10 +24134,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1632:0:SetSessionTransferLimitValue",
+      "id": "PPgTweaks.cpp:1649:0:SetSessionTransferLimitValue",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1632,
+      "line": 1649,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSessionTransferLimitValue",
@@ -24107,10 +24148,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1634:0:SetSessionTransferLimitValue",
+      "id": "PPgTweaks.cpp:1651:0:SetSessionTransferLimitValue",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1634,
+      "line": 1651,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSessionTransferLimitValue",
@@ -24121,10 +24162,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1635:0:SetSessionTimeLimitSeconds",
+      "id": "PPgTweaks.cpp:1652:0:SetSessionTimeLimitSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1635,
+      "line": 1652,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetSessionTimeLimitSeconds",
@@ -24135,10 +24176,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1637:0:IsGeoLocationEnabled",
+      "id": "PPgTweaks.cpp:1654:0:IsGeoLocationEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1637,
+      "line": 1654,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsGeoLocationEnabled",
@@ -24149,10 +24190,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1638:0:GetGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1655:0:GetGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1638,
+      "line": 1655,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetGeoLocationCheckDays",
@@ -24163,10 +24204,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1639:0:m_bGeoLocationEnabled",
+      "id": "PPgTweaks.cpp:1656:0:m_bGeoLocationEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1639,
+      "line": 1656,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bGeoLocationEnabled",
@@ -24177,10 +24218,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1640:0:NormalizeGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1657:0:NormalizeGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1640,
+      "line": 1657,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "NormalizeGeoLocationCheckDays",
@@ -24191,10 +24232,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1641:0:SetGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1658:0:SetGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1641,
+      "line": 1658,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetGeoLocationCheckDays",
@@ -24205,10 +24246,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1643:0:AutoTakeED2KLinks",
+      "id": "PPgTweaks.cpp:1660:0:AutoTakeED2KLinks",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1643,
+      "line": 1660,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "AutoTakeED2KLinks",
@@ -24219,10 +24260,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1644:0:autotakeed2klinks",
+      "id": "PPgTweaks.cpp:1661:0:autotakeed2klinks",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1644,
+      "line": 1661,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "autotakeed2klinks",
@@ -24233,10 +24274,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1645:0:AutoTakeED2KLinks",
+      "id": "PPgTweaks.cpp:1662:0:AutoTakeED2KLinks",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1645,
+      "line": 1662,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "AutoTakeED2KLinks",
@@ -24247,10 +24288,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1651:0:SetCreateCrashDumpMode",
+      "id": "PPgTweaks.cpp:1668:0:SetCreateCrashDumpMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1651,
+      "line": 1668,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetCreateCrashDumpMode",
@@ -24261,10 +24302,38 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1652:0:uMaxLogFileSize",
+      "id": "PPgTweaks.cpp:1669:0:SetCaptureFullCrashDump",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1652,
+      "line": 1669,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "SetCaptureFullCrashDump",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "CaptureFullCrashDump"
+      ]
+    },
+    {
+      "id": "PPgTweaks.cpp:1670:0:GetCaptureFullCrashDump",
+      "page": "PPgTweaks.cpp",
+      "dialogId": "IDD_PPG_TWEAKS",
+      "line": 1670,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "GetCaptureFullCrashDump",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "CaptureFullCrashDump"
+      ]
+    },
+    {
+      "id": "PPgTweaks.cpp:1671:0:uMaxLogFileSize",
+      "page": "PPgTweaks.cpp",
+      "dialogId": "IDD_PPG_TWEAKS",
+      "line": 1671,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "uMaxLogFileSize",
@@ -24275,10 +24344,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1653:0:iMaxLogBuff",
+      "id": "PPgTweaks.cpp:1672:0:iMaxLogBuff",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1653,
+      "line": 1672,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "iMaxLogBuff",
@@ -24289,10 +24358,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1654:0:m_iLogFileFormat",
+      "id": "PPgTweaks.cpp:1673:0:m_iLogFileFormat",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1654,
+      "line": 1673,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_iLogFileFormat",
@@ -24303,10 +24372,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1655:0:GetMaxLogFileSize",
+      "id": "PPgTweaks.cpp:1674:0:GetMaxLogFileSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1655,
+      "line": 1674,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetMaxLogFileSize",
@@ -24317,10 +24386,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1656:0:GetMaxLogFileSize",
+      "id": "PPgTweaks.cpp:1675:0:GetMaxLogFileSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1656,
+      "line": 1675,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetMaxLogFileSize",
@@ -24331,10 +24400,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1657:0:GetLogFileFormat",
+      "id": "PPgTweaks.cpp:1676:0:GetLogFileFormat",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1657,
+      "line": 1676,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetLogFileFormat",
@@ -24345,10 +24414,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1658:0:GetLogFileFormat",
+      "id": "PPgTweaks.cpp:1677:0:GetLogFileFormat",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1658,
+      "line": 1677,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetLogFileFormat",
@@ -24359,10 +24428,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1660:0:log2disk",
+      "id": "PPgTweaks.cpp:1679:0:log2disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1660,
+      "line": 1679,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "log2disk",
@@ -24373,10 +24442,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1662:0:log2disk",
+      "id": "PPgTweaks.cpp:1681:0:log2disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1662,
+      "line": 1681,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "log2disk",
@@ -24387,10 +24456,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1664:0:log2disk",
+      "id": "PPgTweaks.cpp:1683:0:log2disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1664,
+      "line": 1683,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "log2disk",
@@ -24401,10 +24470,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1668:0:GetEnableVerboseOptions",
+      "id": "PPgTweaks.cpp:1687:0:GetEnableVerboseOptions",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1668,
+      "line": 1687,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetEnableVerboseOptions",
@@ -24415,10 +24484,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1669:0:GetDebug2Disk",
+      "id": "PPgTweaks.cpp:1688:0:GetDebug2Disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1669,
+      "line": 1688,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetDebug2Disk",
@@ -24429,10 +24498,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1671:0:GetDebug2Disk",
+      "id": "PPgTweaks.cpp:1690:0:GetDebug2Disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1671,
+      "line": 1690,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetDebug2Disk",
@@ -24443,10 +24512,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1673:0:debug2disk",
+      "id": "PPgTweaks.cpp:1692:0:debug2disk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1673,
+      "line": 1692,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "debug2disk",
@@ -24457,10 +24526,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1675:0:m_bDebugSourceExchange",
+      "id": "PPgTweaks.cpp:1694:0:m_bDebugSourceExchange",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1675,
+      "line": 1694,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bDebugSourceExchange",
@@ -24471,10 +24540,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1676:0:m_bLogBannedClients",
+      "id": "PPgTweaks.cpp:1695:0:m_bLogBannedClients",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1676,
+      "line": 1695,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bLogBannedClients",
@@ -24485,10 +24554,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1677:0:m_bLogRatingDescReceived",
+      "id": "PPgTweaks.cpp:1696:0:m_bLogRatingDescReceived",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1677,
+      "line": 1696,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bLogRatingDescReceived",
@@ -24499,10 +24568,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1678:0:m_bLogSecureIdent",
+      "id": "PPgTweaks.cpp:1697:0:m_bLogSecureIdent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1678,
+      "line": 1697,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bLogSecureIdent",
@@ -24513,10 +24582,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1679:0:m_bLogFilteredIPs",
+      "id": "PPgTweaks.cpp:1698:0:m_bLogFilteredIPs",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1679,
+      "line": 1698,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bLogFilteredIPs",
@@ -24527,10 +24596,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1680:0:m_bLogFileSaving",
+      "id": "PPgTweaks.cpp:1699:0:m_bLogFileSaving",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1680,
+      "line": 1699,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bLogFileSaving",
@@ -24541,10 +24610,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1681:0:m_bLogA4AF",
+      "id": "PPgTweaks.cpp:1700:0:m_bLogA4AF",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1681,
+      "line": 1700,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bLogA4AF",
@@ -24555,10 +24624,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1682:0:m_bLogUlDlEvents",
+      "id": "PPgTweaks.cpp:1701:0:m_bLogUlDlEvents",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1682,
+      "line": 1701,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bLogUlDlEvents",
@@ -24569,10 +24638,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1683:0:m_bFullVerbose",
+      "id": "PPgTweaks.cpp:1702:0:m_bFullVerbose",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1683,
+      "line": 1702,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bFullVerbose",
@@ -24583,10 +24652,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1684:0:m_byLogLevel",
+      "id": "PPgTweaks.cpp:1703:0:m_byLogLevel",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1684,
+      "line": 1703,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_byLogLevel",
@@ -24597,10 +24666,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1686:0:m_bVerbose",
+      "id": "PPgTweaks.cpp:1705:0:m_bVerbose",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1686,
+      "line": 1705,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bVerbose",
@@ -24611,10 +24680,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1689:0:m_bCreditSystem",
+      "id": "PPgTweaks.cpp:1708:0:m_bCreditSystem",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1689,
+      "line": 1708,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bCreditSystem",
@@ -24625,10 +24694,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1690:0:m_iCommitFiles",
+      "id": "PPgTweaks.cpp:1709:0:m_iCommitFiles",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1690,
+      "line": 1709,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_iCommitFiles",
@@ -24639,10 +24708,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1691:0:m_iExtractMetaData",
+      "id": "PPgTweaks.cpp:1710:0:m_iExtractMetaData",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1691,
+      "line": 1710,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_iExtractMetaData",
@@ -24653,10 +24722,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1692:0:filterLANIPs",
+      "id": "PPgTweaks.cpp:1711:0:filterLANIPs",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1692,
+      "line": 1711,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "filterLANIPs",
@@ -24667,10 +24736,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1693:0:GetShowCopyEd2kLinkCmd",
+      "id": "PPgTweaks.cpp:1712:0:GetShowCopyEd2kLinkCmd",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1693,
+      "line": 1712,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetShowCopyEd2kLinkCmd",
@@ -24681,10 +24750,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1694:0:ICH",
+      "id": "PPgTweaks.cpp:1713:0:ICH",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1694,
+      "line": 1713,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "ICH",
@@ -24695,10 +24764,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1695:0:m_iPreviewSmallBlocks",
+      "id": "PPgTweaks.cpp:1714:0:m_iPreviewSmallBlocks",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1695,
+      "line": 1714,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_iPreviewSmallBlocks",
@@ -24709,10 +24778,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1696:0:beepOnError",
+      "id": "PPgTweaks.cpp:1715:0:beepOnError",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1696,
+      "line": 1715,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "beepOnError",
@@ -24723,10 +24792,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1697:0:m_bShowCopyEd2kLinkCmd",
+      "id": "PPgTweaks.cpp:1716:0:m_bShowCopyEd2kLinkCmd",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1697,
+      "line": 1716,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bShowCopyEd2kLinkCmd",
@@ -24737,10 +24806,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1698:0:SetFollowMajorityFilenameForNewDownloads",
+      "id": "PPgTweaks.cpp:1717:0:SetFollowMajorityFilenameForNewDownloads",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1698,
+      "line": 1717,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetFollowMajorityFilenameForNewDownloads",
@@ -24751,10 +24820,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1699:0:SetFollowMajorityFilenameRequiredPercent",
+      "id": "PPgTweaks.cpp:1718:0:SetFollowMajorityFilenameRequiredPercent",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1699,
+      "line": 1718,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetFollowMajorityFilenameRequiredPercent",
@@ -24765,10 +24834,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1700:0:SetFollowMajorityFilenameMinimumVotes",
+      "id": "PPgTweaks.cpp:1719:0:SetFollowMajorityFilenameMinimumVotes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1700,
+      "line": 1719,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetFollowMajorityFilenameMinimumVotes",
@@ -24779,10 +24848,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1701:0:m_bHighresTimer",
+      "id": "PPgTweaks.cpp:1720:0:m_bHighresTimer",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1701,
+      "line": 1720,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bHighresTimer",
@@ -24793,10 +24862,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1702:0:m_strTxtEditor",
+      "id": "PPgTweaks.cpp:1721:0:m_strTxtEditor",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1702,
+      "line": 1721,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strTxtEditor",
@@ -24807,10 +24876,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1703:0:SetAutoBroadbandIOEnabled",
+      "id": "PPgTweaks.cpp:1722:0:SetAutoBroadbandIOEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1703,
+      "line": 1722,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetAutoBroadbandIOEnabled",
@@ -24821,10 +24890,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1704:0:SetFileBufferSize",
+      "id": "PPgTweaks.cpp:1723:0:SetFileBufferSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1704,
+      "line": 1723,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetFileBufferSize",
@@ -24835,10 +24904,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1705:0:SetQueueSize",
+      "id": "PPgTweaks.cpp:1724:0:SetQueueSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1705,
+      "line": 1724,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetQueueSize",
@@ -24849,10 +24918,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1706:0:GetFileBufferSize",
+      "id": "PPgTweaks.cpp:1725:0:GetFileBufferSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1706,
+      "line": 1725,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetFileBufferSize",
@@ -24863,10 +24932,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1707:0:GetQueueSize",
+      "id": "PPgTweaks.cpp:1726:0:GetQueueSize",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1707,
+      "line": 1726,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetQueueSize",
@@ -24877,10 +24946,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1712:0:GetServerKeepAliveTimeout",
+      "id": "PPgTweaks.cpp:1731:0:GetServerKeepAliveTimeout",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1712,
+      "line": 1731,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetServerKeepAliveTimeout",
@@ -24891,10 +24960,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1713:0:SetServerKeepAliveTimeoutMinutes",
+      "id": "PPgTweaks.cpp:1732:0:SetServerKeepAliveTimeoutMinutes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1713,
+      "line": 1732,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetServerKeepAliveTimeoutMinutes",
@@ -24905,10 +24974,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1715:0:m_bSparsePartFiles",
+      "id": "PPgTweaks.cpp:1734:0:m_bSparsePartFiles",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1715,
+      "line": 1734,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bSparsePartFiles",
@@ -24919,10 +24988,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1716:0:m_bAllocFull",
+      "id": "PPgTweaks.cpp:1735:0:m_bAllocFull",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1716,
+      "line": 1735,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bAllocFull",
@@ -24933,10 +25002,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1717:0:SetMinFreeDiskSpaceConfigGiB",
+      "id": "PPgTweaks.cpp:1736:0:SetMinFreeDiskSpaceConfigGiB",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1717,
+      "line": 1736,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMinFreeDiskSpaceConfigGiB",
@@ -24947,10 +25016,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1718:0:SetMinFreeDiskSpaceTempGiB",
+      "id": "PPgTweaks.cpp:1737:0:SetMinFreeDiskSpaceTempGiB",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1718,
+      "line": 1737,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMinFreeDiskSpaceTempGiB",
@@ -24961,10 +25030,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1719:0:SetMinFreeDiskSpaceIncomingGiB",
+      "id": "PPgTweaks.cpp:1738:0:SetMinFreeDiskSpaceIncomingGiB",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1719,
+      "line": 1738,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMinFreeDiskSpaceIncomingGiB",
@@ -24975,10 +25044,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1720:0:GetYourHostname",
+      "id": "PPgTweaks.cpp:1739:0:GetYourHostname",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1720,
+      "line": 1739,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetYourHostname",
@@ -24989,10 +25058,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1721:0:SetYourHostname",
+      "id": "PPgTweaks.cpp:1740:0:SetYourHostname",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1721,
+      "line": 1740,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetYourHostname",
@@ -25003,10 +25072,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1724:0:m_bAutomaticArcPreviewStart",
+      "id": "PPgTweaks.cpp:1743:0:m_bAutomaticArcPreviewStart",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1724,
+      "line": 1743,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bAutomaticArcPreviewStart",
@@ -25017,10 +25086,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1726:0:m_bCloseUPnPOnExit",
+      "id": "PPgTweaks.cpp:1745:0:m_bCloseUPnPOnExit",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1726,
+      "line": 1745,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bCloseUPnPOnExit",
@@ -25031,10 +25100,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1727:0:SetUPnPBackendMode",
+      "id": "PPgTweaks.cpp:1746:0:SetUPnPBackendMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1727,
+      "line": 1746,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetUPnPBackendMode",
@@ -25045,10 +25114,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1729:0:ChangeUserDirMode",
+      "id": "PPgTweaks.cpp:1748:0:ChangeUserDirMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1729,
+      "line": 1748,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "ChangeUserDirMode",
@@ -25059,10 +25128,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1731:0:m_bA4AFSaveCpu",
+      "id": "PPgTweaks.cpp:1750:0:m_bA4AFSaveCpu",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1731,
+      "line": 1750,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bA4AFSaveCpu",
@@ -25073,10 +25142,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1732:0:m_bRestoreLastMainWndDlg",
+      "id": "PPgTweaks.cpp:1751:0:m_bRestoreLastMainWndDlg",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1732,
+      "line": 1751,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bRestoreLastMainWndDlg",
@@ -25087,10 +25156,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1733:0:m_bRestoreLastLogPane",
+      "id": "PPgTweaks.cpp:1752:0:m_bRestoreLastLogPane",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1733,
+      "line": 1752,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bRestoreLastLogPane",
@@ -25101,10 +25170,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1734:0:SetDailyConfigBackup",
+      "id": "PPgTweaks.cpp:1753:0:SetDailyConfigBackup",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1734,
+      "line": 1753,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetDailyConfigBackup",
@@ -25115,10 +25184,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1735:0:SetStartupProgressDialogMode",
+      "id": "PPgTweaks.cpp:1754:0:SetStartupProgressDialogMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1735,
+      "line": 1754,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetStartupProgressDialogMode",
@@ -25129,10 +25198,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1736:0:SetShutdownProgressDialogMode",
+      "id": "PPgTweaks.cpp:1755:0:SetShutdownProgressDialogMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1736,
+      "line": 1755,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetShutdownProgressDialogMode",
@@ -25143,10 +25212,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1737:0:SetFileBufferTimeLimitSeconds",
+      "id": "PPgTweaks.cpp:1756:0:SetFileBufferTimeLimitSeconds",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1737,
+      "line": 1756,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetFileBufferTimeLimitSeconds",
@@ -25157,10 +25226,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1738:0:m_strDateTimeFormat",
+      "id": "PPgTweaks.cpp:1757:0:m_strDateTimeFormat",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1738,
+      "line": 1757,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strDateTimeFormat",
@@ -25171,10 +25240,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1739:0:m_strDateTimeFormat4Log",
+      "id": "PPgTweaks.cpp:1758:0:m_strDateTimeFormat4Log",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1739,
+      "line": 1758,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strDateTimeFormat4Log",
@@ -25185,10 +25254,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1740:0:m_strDateTimeFormat4Lists",
+      "id": "PPgTweaks.cpp:1759:0:m_strDateTimeFormat4Lists",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1740,
+      "line": 1759,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_strDateTimeFormat4Lists",
@@ -25199,10 +25268,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1743:0:SetMediaInfoDllPath",
+      "id": "PPgTweaks.cpp:1762:0:SetMediaInfoDllPath",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1743,
+      "line": 1762,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMediaInfoDllPath",
@@ -25213,10 +25282,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1744:0:m_iMaxChatHistory",
+      "id": "PPgTweaks.cpp:1763:0:m_iMaxChatHistory",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1744,
+      "line": 1763,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_iMaxChatHistory",
@@ -25227,10 +25296,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1745:0:SetMsgSessionsMax",
+      "id": "PPgTweaks.cpp:1764:0:SetMsgSessionsMax",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1745,
+      "line": 1764,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMsgSessionsMax",
@@ -25241,10 +25310,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1746:0:m_bPreviewCopiedArchives",
+      "id": "PPgTweaks.cpp:1765:0:m_bPreviewCopiedArchives",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1746,
+      "line": 1765,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bPreviewCopiedArchives",
@@ -25255,10 +25324,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1747:0:m_bInspectAllFileTypes",
+      "id": "PPgTweaks.cpp:1766:0:m_bInspectAllFileTypes",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1747,
+      "line": 1766,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bInspectAllFileTypes",
@@ -25269,10 +25338,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1748:0:m_bPreviewOnIconDblClk",
+      "id": "PPgTweaks.cpp:1767:0:m_bPreviewOnIconDblClk",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1748,
+      "line": 1767,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bPreviewOnIconDblClk",
@@ -25283,10 +25352,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1749:0:m_bShowActiveDownloadsBold",
+      "id": "PPgTweaks.cpp:1768:0:m_bShowActiveDownloadsBold",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1749,
+      "line": 1768,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bShowActiveDownloadsBold",
@@ -25297,10 +25366,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1750:0:m_bUseSystemFontForMainControls",
+      "id": "PPgTweaks.cpp:1769:0:m_bUseSystemFontForMainControls",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1750,
+      "line": 1769,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bUseSystemFontForMainControls",
@@ -25311,10 +25380,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1751:0:m_bReBarToolbar",
+      "id": "PPgTweaks.cpp:1770:0:m_bReBarToolbar",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1751,
+      "line": 1770,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bReBarToolbar",
@@ -25325,10 +25394,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1752:0:m_bShowUpDownIconInTaskbar",
+      "id": "PPgTweaks.cpp:1771:0:m_bShowUpDownIconInTaskbar",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1752,
+      "line": 1771,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bShowUpDownIconInTaskbar",
@@ -25339,10 +25408,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1753:0:m_bShowVerticalHourMarkers",
+      "id": "PPgTweaks.cpp:1772:0:m_bShowVerticalHourMarkers",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1753,
+      "line": 1772,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bShowVerticalHourMarkers",
@@ -25354,10 +25423,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1754:0:m_bForceSpeedsToKB",
+      "id": "PPgTweaks.cpp:1773:0:m_bForceSpeedsToKB",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1754,
+      "line": 1773,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bForceSpeedsToKB",
@@ -25368,10 +25437,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1755:0:m_bIconflashOnNewMessage",
+      "id": "PPgTweaks.cpp:1774:0:m_bIconflashOnNewMessage",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1755,
+      "line": 1774,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bIconflashOnNewMessage",
@@ -25382,10 +25451,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1756:0:m_bExtraPreviewWithMenu",
+      "id": "PPgTweaks.cpp:1775:0:m_bExtraPreviewWithMenu",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1756,
+      "line": 1775,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bExtraPreviewWithMenu",
@@ -25396,10 +25465,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1757:0:m_bKeepUnavailableFixedSharedDirs",
+      "id": "PPgTweaks.cpp:1776:0:m_bKeepUnavailableFixedSharedDirs",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1757,
+      "line": 1776,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bKeepUnavailableFixedSharedDirs",
@@ -25410,10 +25479,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1758:0:m_bPartiallyPurgeOldKnownFiles",
+      "id": "PPgTweaks.cpp:1777:0:m_bPartiallyPurgeOldKnownFiles",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1758,
+      "line": 1777,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bPartiallyPurgeOldKnownFiles",
@@ -25424,10 +25493,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1759:0:m_bRearrangeKadSearchKeywords",
+      "id": "PPgTweaks.cpp:1778:0:m_bRearrangeKadSearchKeywords",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1759,
+      "line": 1778,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bRearrangeKadSearchKeywords",
@@ -25438,10 +25507,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1760:0:msgsecure",
+      "id": "PPgTweaks.cpp:1779:0:msgsecure",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1760,
+      "line": 1779,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "msgsecure",
@@ -25452,10 +25521,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1762:0:IsGeoLocationEnabled",
+      "id": "PPgTweaks.cpp:1781:0:IsGeoLocationEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1762,
+      "line": 1781,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsGeoLocationEnabled",
@@ -25466,10 +25535,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1763:0:IsGeoLocationEnabled",
+      "id": "PPgTweaks.cpp:1782:0:IsGeoLocationEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1763,
+      "line": 1782,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsGeoLocationEnabled",
@@ -25480,10 +25549,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1770:0:IsGeoLocationEnabled",
+      "id": "PPgTweaks.cpp:1789:0:IsGeoLocationEnabled",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1770,
+      "line": 1789,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsGeoLocationEnabled",
@@ -25494,10 +25563,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1771:0:GetGeoLocationCheckDays",
+      "id": "PPgTweaks.cpp:1790:0:GetGeoLocationCheckDays",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1771,
+      "line": 1790,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetGeoLocationCheckDays",
@@ -25508,10 +25577,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:1776:0:GetEnableVerboseOptions",
+      "id": "PPgTweaks.cpp:1795:0:GetEnableVerboseOptions",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 1776,
+      "line": 1795,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetEnableVerboseOptions",
@@ -25522,10 +25591,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:2171:0:m_nCurrentUserDirMode",
+      "id": "PPgTweaks.cpp:2192:0:m_nCurrentUserDirMode",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 2171,
+      "line": 2192,
       "function": "OnTreeOptsCtrlNotify",
       "access": "read",
       "ownerExpression": "m_nCurrentUserDirMode",
@@ -25536,10 +25605,10 @@
       ]
     },
     {
-      "id": "PPgTweaks.cpp:970:0:GetEnableVerboseOptions",
+      "id": "PPgTweaks.cpp:984:0:GetEnableVerboseOptions",
       "page": "PPgTweaks.cpp",
       "dialogId": "IDD_PPG_TWEAKS",
-      "line": 970,
+      "line": 984,
       "function": "DoDataExchange",
       "access": "read",
       "ownerExpression": "GetEnableVerboseOptions",
