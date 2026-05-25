@@ -251,6 +251,24 @@ TEST_CASE("Part-file persistence seam keeps the non-shutdown flush path intact")
 	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true));
 }
 
+TEST_CASE("Part-file persistence seam defers delete while async writes still own file state")
+{
+	using PartFilePersistenceSeams::PartFileDeleteAsyncWriteAction;
+
+	CHECK_FALSE(PartFilePersistenceSeams::HasPartFileAsyncWriteReferences(0, false));
+	CHECK(PartFilePersistenceSeams::HasPartFileAsyncWriteReferences(1, false));
+	CHECK(PartFilePersistenceSeams::HasPartFileAsyncWriteReferences(0, true));
+
+	CHECK(PartFilePersistenceSeams::ClassifyPartFileDeleteAsyncWriteAction(false, false, false)
+		== PartFileDeleteAsyncWriteAction::DeleteNow);
+	CHECK(PartFilePersistenceSeams::ClassifyPartFileDeleteAsyncWriteAction(true, true, true)
+		== PartFileDeleteAsyncWriteAction::WaitForWriteRelease);
+	CHECK(PartFilePersistenceSeams::ClassifyPartFileDeleteAsyncWriteAction(true, false, false)
+		== PartFileDeleteAsyncWriteAction::DeferUntilWriteRelease);
+	CHECK(PartFilePersistenceSeams::ClassifyPartFileDeleteAsyncWriteAction(true, true, false)
+		== PartFileDeleteAsyncWriteAction::DeferUntilWriteRelease);
+}
+
 TEST_CASE("Part-file persistence seam resolves completed size and percent defensively")
 {
 	PartFilePersistenceSeams::CompletedInfo info = PartFilePersistenceSeams::ResolveCompletedInfo(1000u, 250u, true);
