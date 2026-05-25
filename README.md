@@ -25,6 +25,14 @@ It owns:
 
 The project is built against the canonical app checkout resolved from the invoking workspace manifest. It is intentionally not a runtime dependency like the `eMule-*` third-party dependencies, and it is no longer embedded as a `tests/` submodule inside each workspace.
 
+Test responsibility boundary:
+
+- this repo owns shared eMule profile seeds, UTF-16 INI helpers, profile materialization, preference overlays, release evidence helpers, and common Python harness utilities
+- `repos\emulebb-build` owns supported orchestration entrypoints such as `python -m emule_workspace`, not reusable test-profile logic
+- p2p-overlord repos own their scenario catalogs, Rust/Node product tests, runtime launchers, and product-specific agent or coordinator config generation
+- cross-product code should depend on this repo's shared helpers by workspace `deps.json` resolution instead of copying profile writers into product repos
+- generated eMule profiles are throw-away runtime state by default; keep them only through explicit debug or artifact-retention flags
+
 The harness also supports an explicit `-AppRoot` override when validating a cleanroom rebuild before promotion.
 
 Supported branch:
