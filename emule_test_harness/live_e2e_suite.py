@@ -132,6 +132,20 @@ STABILIZATION_REST_COLD_START_DUMP_STRESS_DOWNLOAD_REMOVE_COUNT_PER_CHURN = 20
 STABILIZATION_SEARCH_UI_SEARCH_ROUNDS = 3
 STABILIZATION_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 2
 CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE = "handoff"
+TEST_NETWORKS = ("default", "offline", "lan", "vpn", "all")
+TEST_NETWORK_SCOPES = ("offline", "lan", "vpn")
+TEST_NETWORK_ALLOWED_SCOPES = {
+    "default": {"offline", "lan"},
+    "offline": {"offline"},
+    "lan": {"lan"},
+    "vpn": {"vpn"},
+    "all": set(TEST_NETWORK_SCOPES),
+}
+LAN_INTERFACE_ENV = "EMULEBB_TEST_LAN_INTERFACE"
+LAN_IP_RESOLVED_ENV = "EMULEBB_TEST_LAN_IP_RESOLVED"
+VPN_INTERFACE_ENV = "EMULEBB_TEST_VPN_INTERFACE"
+VPN_IP_RESOLVED_ENV = "EMULEBB_TEST_VPN_IP_RESOLVED"
+NETWORK_CONTEXT_JSON_ENV = "EMULEBB_TEST_NETWORK_CONTEXT_JSON"
 
 
 @dataclass(frozen=True)
@@ -141,6 +155,7 @@ class SuiteSpec:
     name: str
     script_name: str
     category: str
+    network_scope: str = "offline"
     scenarios: tuple[str, ...] = ()
     accepts_startup_trace_mode: bool = False
     accepts_shared_root: bool = False
@@ -195,6 +210,7 @@ SUITE_SPECS = (
         name="search-ui-live",
         script_name="search-ui-live.py",
         category="ui",
+        network_scope="vpn",
         uses_live_seed_refresh=True,
         is_search_ui_live=True,
         default_enabled=False,
@@ -203,18 +219,21 @@ SUITE_SPECS = (
         name="deterministic-two-client-transfer",
         script_name="deterministic-two-client-transfer.py",
         category="protocol",
+        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
         name="multi-client-p2p-matrix",
         script_name="multi-client-p2p-matrix.py",
         category="protocol",
+        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
         name="godzilla-local-swarm",
         script_name="godzilla-local-swarm.py",
         category="protocol",
+        network_scope="lan",
         default_enabled=False,
         requires_admin_volume_fixtures=True,
     ),
@@ -222,12 +241,14 @@ SUITE_SPECS = (
         name="local-ed2k-search-soak",
         script_name="local-ed2k-search-soak.py",
         category="protocol",
+        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
         name="local-ed2k-chaos-mode",
         script_name="local-ed2k-chaos-mode.py",
         category="protocol",
+        network_scope="lan",
         accepts_admin_volume_fixtures=True,
         default_enabled=False,
     ),
@@ -235,24 +256,28 @@ SUITE_SPECS = (
         name="local-ed2k-protocol-combinations",
         script_name="local-ed2k-protocol-combinations.py",
         category="protocol",
+        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
         name="local-kad-swarm",
         script_name="local-kad-swarm.py",
         category="protocol",
+        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
         name="local-kad-mixed-client-swarm",
         script_name="local-kad-mixed-client-swarm.py",
         category="protocol",
+        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
         name="amutorrent-local-ed2k-ui-live",
         script_name="amutorrent-local-ed2k-ui-live.py",
         category="ui",
+        network_scope="lan",
         default_enabled=False,
     ),
     SuiteSpec(
@@ -308,6 +333,7 @@ SUITE_SPECS = (
         name="rest-api",
         script_name="rest-api-smoke.py",
         category="rest",
+        network_scope="vpn",
         uses_live_seed_refresh=True,
         is_rest_api=True,
     ),
@@ -357,6 +383,7 @@ SUITE_SPECS = (
         name="rest-cold-start-dump-stress",
         script_name="rest-cold-start-dump-stress.py",
         category="rest",
+        network_scope="vpn",
         uses_live_seed_refresh=True,
         is_rest_cold_start_dump_stress=True,
         default_enabled=False,
@@ -365,18 +392,21 @@ SUITE_SPECS = (
         name="local-dumps-crash-smoke",
         script_name="local-dumps-crash-smoke.py",
         category="rest",
+        network_scope="vpn",
         default_enabled=False,
     ),
     SuiteSpec(
         name="live-process-monitor",
         script_name="live-process-monitor.py",
         category="diagnostics",
+        network_scope="vpn",
         default_enabled=False,
     ),
     SuiteSpec(
         name="amutorrent-browser-smoke",
         script_name="amutorrent-browser-smoke.py",
         category="rest",
+        network_scope="vpn",
         is_amutorrent_browser=True,
         accepts_admin_volume_fixtures=True,
     ),
@@ -384,6 +414,7 @@ SUITE_SPECS = (
         name="prowlarr-emulebb",
         script_name="prowlarr-emulebb-live.py",
         category="rest",
+        network_scope="vpn",
         uses_live_seed_refresh=True,
         is_prowlarr_emulebb=True,
     ),
@@ -391,6 +422,7 @@ SUITE_SPECS = (
         name="radarr-emulebb",
         script_name="radarr-emulebb-live.py",
         category="live-wire",
+        network_scope="vpn",
         uses_live_seed_refresh=True,
         is_arr_emulebb=True,
         accepts_admin_volume_fixtures=True,
@@ -399,6 +431,7 @@ SUITE_SPECS = (
         name="sonarr-emulebb",
         script_name="sonarr-emulebb-live.py",
         category="live-wire",
+        network_scope="vpn",
         uses_live_seed_refresh=True,
         is_arr_emulebb=True,
         accepts_admin_volume_fixtures=True,
@@ -407,6 +440,7 @@ SUITE_SPECS = (
         name="radarr-emulebb-local",
         script_name="radarr-emulebb-local.py",
         category="live-wire",
+        network_scope="lan",
         default_enabled=False,
         is_arr_emulebb=True,
         accepts_admin_volume_fixtures=True,
@@ -415,6 +449,7 @@ SUITE_SPECS = (
         name="sonarr-emulebb-local",
         script_name="sonarr-emulebb-local.py",
         category="live-wire",
+        network_scope="lan",
         default_enabled=False,
         is_arr_emulebb=True,
         accepts_admin_volume_fixtures=True,
@@ -423,6 +458,7 @@ SUITE_SPECS = (
         name="auto-browse-live",
         script_name="auto-browse-live.py",
         category="live-wire",
+        network_scope="vpn",
         uses_live_seed_refresh=True,
         is_auto_browse=True,
     ),
@@ -564,6 +600,35 @@ def resolve_suite_specs(selected_names: list[str] | None) -> tuple[SuiteSpec, ..
 
     requested = set(selected_names)
     return tuple(spec for spec in SUITE_SPECS if spec.name in requested)
+
+
+def normalize_test_network(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in TEST_NETWORK_ALLOWED_SCOPES:
+        raise ValueError(f"Unsupported test network: {value}")
+    return normalized
+
+
+def filter_suite_specs_for_network(
+    specs: tuple[SuiteSpec, ...],
+    test_network: str,
+) -> tuple[tuple[SuiteSpec, ...], list[dict[str, str]]]:
+    """Filters aggregate child suites by the selected workspace network scope."""
+
+    normalized = normalize_test_network(test_network)
+    allowed_scopes = TEST_NETWORK_ALLOWED_SCOPES[normalized]
+    included = tuple(spec for spec in specs if spec.network_scope in allowed_scopes)
+    skipped = [
+        {
+            "name": spec.name,
+            "category": spec.category,
+            "network_scope": spec.network_scope,
+            "reason": f"excluded by test_network={normalized}",
+        }
+        for spec in specs
+        if spec.network_scope not in allowed_scopes
+    ]
+    return included, skipped
 
 
 def apply_profile_defaults(args: argparse.Namespace) -> None:
@@ -839,6 +904,7 @@ def build_suite_command(
     rest_leak_churn_cycles: int | None = None,
     rest_stop_start_after_churn: bool = False,
     p2p_bind_interface_name: str = "hide.me",
+    p2p_bind_interface_address: str | None = None,
     godzilla_visible_ui: bool = False,
     godzilla_p2p_bind_interface_address: str | None = None,
     godzilla_cpu_profile: bool = False,
@@ -1009,6 +1075,23 @@ def build_suite_command(
         and p2p_bind_interface_name != "hide.me"
     ):
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if (
+        spec.name
+        in {
+            "deterministic-two-client-transfer",
+            "multi-client-p2p-matrix",
+            "godzilla-local-swarm",
+            "local-ed2k-search-soak",
+            "local-ed2k-chaos-mode",
+            "local-ed2k-protocol-combinations",
+            "local-kad-swarm",
+            "local-kad-mixed-client-swarm",
+            "amutorrent-local-ed2k-ui-live",
+        }
+        and p2p_bind_interface_address
+        and not (spec.name == "godzilla-local-swarm" and godzilla_p2p_bind_interface_address)
+    ):
+        command.extend(["--p2p-bind-interface-address", p2p_bind_interface_address])
     if spec.name == "godzilla-local-swarm":
         if godzilla_visible_ui:
             command.append("--visible-ui")
@@ -1052,6 +1135,8 @@ def build_suite_command(
         command.append("--enable-upnp")
         if p2p_bind_interface_name and spec.name not in {"radarr-emulebb-local", "sonarr-emulebb-local"}:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+        if p2p_bind_interface_address and spec.name in {"radarr-emulebb-local", "sonarr-emulebb-local"}:
+            command.extend(["--p2p-bind-interface-address", p2p_bind_interface_address])
     if spec.is_rest_cold_start_dump_stress:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
@@ -1324,6 +1409,22 @@ def extract_child_resource_diagnostics(child_result: dict[str, object] | None) -
     return extracted or None
 
 
+def suite_p2p_bind_interface_name(spec: SuiteSpec, default_interface_name: str, lan_interface_name: str) -> str:
+    """Returns the interface alias to pass to one child suite."""
+
+    if spec.network_scope == "lan" and lan_interface_name:
+        return lan_interface_name
+    return default_interface_name
+
+
+def suite_p2p_bind_interface_address(spec: SuiteSpec, lan_interface_address: str) -> str | None:
+    """Returns the resolved LAN IPv4 to pass to deterministic local child suites."""
+
+    if spec.network_scope == "lan" and lan_interface_address:
+        return lan_interface_address
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the aggregate live E2E argument parser."""
 
@@ -1378,6 +1479,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--profile", choices=LIVE_E2E_PROFILES, default="default")
+    parser.add_argument("--test-network", choices=TEST_NETWORKS, default="default")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--resource-ui-language-timeout-seconds", type=float, default=DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
@@ -1643,7 +1745,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
     )
-    selected_specs = resolve_suite_specs(args.suite)
+    requested_specs = resolve_suite_specs(args.suite)
+    selected_specs, skipped_suites = filter_suite_specs_for_network(requested_specs, args.test_network)
     if any(spec.requires_admin_volume_fixtures for spec in selected_specs) and not args.admin_volume_fixtures:
         raise ValueError("Selected admin storage live suites require --admin-volume-fixtures.")
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
@@ -1655,6 +1758,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     mounted_shared_root = Path(args.mounted_shared_root) if args.mounted_shared_root else None
     mount_root = Path(args.mount_root) if args.mount_root else None
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
+    lan_bind_interface_name = os.environ.get(LAN_INTERFACE_ENV, "").strip()
+    lan_bind_interface_address = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
+    vpn_bind_interface_name = os.environ.get(VPN_INTERFACE_ENV, "").strip()
+    vpn_bind_interface_address = os.environ.get(VPN_IP_RESOLVED_ENV, "").strip()
+    network_context_json = os.environ.get(NETWORK_CONTEXT_JSON_ENV, "").strip()
     resolved_shared_files_ui_scenarios = list(
         shared_files_ui_scenarios
         or next(
@@ -1678,6 +1786,20 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "status": "passed",
         "suite": "live-e2e-suite",
         "profile": args.profile,
+        "test_network": normalize_test_network(args.test_network),
+        "network_scopes": sorted({spec.network_scope for spec in selected_specs}),
+        "skipped_suites": skipped_suites,
+        "network_context": {
+            "json_path": network_context_json,
+            "lan": {
+                "interface_name": lan_bind_interface_name,
+                "ip_address": lan_bind_interface_address,
+            },
+            "vpn": {
+                "interface_name": vpn_bind_interface_name,
+                "ip_address": vpn_bind_interface_address,
+            },
+        },
         "profile_suite_selection_applied": args.profile != "default" and not explicit_suite_names,
         "explicit_suite_names": list(explicit_suite_names),
         "configuration": args.configuration,
@@ -1853,6 +1975,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
 
     for spec in selected_specs:
         child_artifacts_dir = paths.source_artifacts_dir / spec.name
+        child_p2p_bind_interface_name = suite_p2p_bind_interface_name(
+            spec,
+            args.p2p_bind_interface_name,
+            lan_bind_interface_name,
+        )
+        child_p2p_bind_interface_address = suite_p2p_bind_interface_address(spec, lan_bind_interface_address)
         command = build_suite_command(
             spec=spec,
             scripts_dir=scripts_dir,
@@ -1885,7 +2013,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_leak_churn_budget=args.rest_leak_churn_budget,
             rest_leak_churn_cycles=args.rest_leak_churn_cycles,
             rest_stop_start_after_churn=args.rest_stop_start_after_churn,
-            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_interface_name=child_p2p_bind_interface_name,
+            p2p_bind_interface_address=child_p2p_bind_interface_address,
             godzilla_visible_ui=args.godzilla_visible_ui,
             godzilla_p2p_bind_interface_address=args.godzilla_p2p_bind_interface_address,
             godzilla_cpu_profile=args.godzilla_cpu_profile,
@@ -1953,6 +2082,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         result = {
             "name": spec.name,
             "category": spec.category,
+            "network_scope": spec.network_scope,
             "status": suite_status,
             "return_code": return_code,
             "timed_out": return_code == SUITE_TIMEOUT_RETURN_CODE,
@@ -1960,6 +2090,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "duration_seconds": round(time.monotonic() - started, 3),
             "artifacts_dir": str(child_artifacts_dir.resolve()),
             "command": command,
+            "p2p_bind_interface_name": child_p2p_bind_interface_name,
+            "p2p_bind_interface_address": child_p2p_bind_interface_address or "",
             "scenario_names": (
                 list(shared_files_ui_scenarios)
                 if spec.name == "shared-files-ui" and shared_files_ui_scenarios

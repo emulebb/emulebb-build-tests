@@ -54,7 +54,10 @@ class FakeHarnessCliCommon:
 
 
 def parse_args(*argv: str):
-    return live_e2e_suite.build_parser().parse_args(list(argv))
+    args = list(argv)
+    if "--test-network" not in args:
+        args.extend(["--test-network", "all"])
+    return live_e2e_suite.build_parser().parse_args(args)
 
 
 def script_name(command: list[str]) -> str:
@@ -89,6 +92,41 @@ def install_profiled_command_capture(monkeypatch, commands: list[list[str]]) -> 
 
 def suite_spec(name: str) -> live_e2e_suite.SuiteSpec:
     return next(spec for spec in live_e2e_suite.SUITE_SPECS if spec.name == name)
+
+
+def test_test_network_default_keeps_offline_and_lan_scopes() -> None:
+    selected, skipped = live_e2e_suite.filter_suite_specs_for_network(
+        (
+            suite_spec("preference-ui"),
+            suite_spec("deterministic-two-client-transfer"),
+            suite_spec("rest-api"),
+        ),
+        "default",
+    )
+
+    assert [spec.name for spec in selected] == ["preference-ui", "deterministic-two-client-transfer"]
+    assert skipped == [
+        {
+            "name": "rest-api",
+            "category": "rest",
+            "network_scope": "vpn",
+            "reason": "excluded by test_network=default",
+        }
+    ]
+
+
+def test_test_network_vpn_keeps_only_public_network_scope() -> None:
+    selected, skipped = live_e2e_suite.filter_suite_specs_for_network(
+        (
+            suite_spec("preference-ui"),
+            suite_spec("deterministic-two-client-transfer"),
+            suite_spec("rest-api"),
+        ),
+        "vpn",
+    )
+
+    assert [spec.name for spec in selected] == ["rest-api"]
+    assert [row["name"] for row in skipped] == ["preference-ui", "deterministic-two-client-transfer"]
 
 
 def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Path, monkeypatch) -> None:
@@ -395,6 +433,39 @@ def test_arr_emulebb_suites_forward_http_and_https_rest_scheme(tmp_path: Path) -
         assert option_values(sonarr_command, "--rest-webserver-scheme") == [scheme]
 
 
+def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setenv("EMULEBB_TEST_LAN_INTERFACE", "Wi-Fi")
+    monkeypatch.setenv("EMULEBB_TEST_LAN_IP_RESOLVED", "192.168.1.44")
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "deterministic-two-client-transfer",
+            "--suite",
+            "radarr-emulebb-local",
+            "--test-network",
+            "lan",
+            "--admin-volume-fixtures",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["test_network"] == "lan"
+    assert summary["network_context"]["lan"] == {"interface_name": "Wi-Fi", "ip_address": "192.168.1.44"}
+    assert [suite["network_scope"] for suite in summary["suites"]] == ["lan", "lan"]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == ["Wi-Fi"]
+    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.44"]
+    assert option_values(commands[1], "--p2p-bind-interface-address") == ["192.168.1.44"]
+
+
 def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
     shared_root = tmp_path / "shared"
@@ -413,6 +484,52 @@ def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path,
 
     assert "--directories-tree-stress" in command
     assert option_values(command, "--shared-root") == [str(shared_root.resolve())]
+
+
+def test_default_network_run_skips_public_vpn_default_suites(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--test-network",
+            "default",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["test_network"] == "default"
+    assert summary["network_scopes"] == ["offline"]
+    assert [suite["name"] for suite in summary["suites"]] == [
+        "preference-ui",
+        "shared-files-ui",
+        "config-stability-ui",
+        "shared-hash-ui",
+        "startup-profile",
+        "shared-directories-rest",
+    ]
+    assert [row["name"] for row in summary["skipped_suites"]] == [
+        "rest-api",
+        "amutorrent-browser-smoke",
+        "prowlarr-emulebb",
+        "radarr-emulebb",
+        "sonarr-emulebb",
+        "auto-browse-live",
+    ]
+    assert [script_name(command) for command in commands] == [
+        "preference-ui-e2e.py",
+        "shared-files-ui-e2e.py",
+        "config-stability-ui-e2e.py",
+        "shared-hash-ui-e2e.py",
+        "startup-profile-scenarios.py",
+        "shared-directories-rest-e2e.py",
+    ]
 
 
 def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monkeypatch) -> None:
@@ -1929,6 +2046,7 @@ def test_operator_script_help_loads_hyphenated_helpers() -> None:
     assert "--profile-cpu-stack" in completed.stdout
     assert "--profile-memory" in completed.stdout
     assert "--profile-resource-interval-seconds" in completed.stdout
+    assert "--test-network" in completed.stdout
     assert "--admin-volume-fixtures" in completed.stdout
     assert "--vhd-size-mb" in completed.stdout
     assert "--mount-root" in completed.stdout
