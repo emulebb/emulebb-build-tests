@@ -1,5 +1,7 @@
 #include "../third_party/doctest/doctest.h"
 
+#include <memory>
+
 #include "PartFileHashLaunchSeams.h"
 #include "ReleaseUpdateCheckSeams.h"
 #include "VersionCheckLaunchSeams.h"
@@ -14,6 +16,7 @@ using ReleaseUpdateCheckSeams::TryParseReleaseTag;
 using VersionCheckLaunchSeams::ClearQueued;
 using VersionCheckLaunchSeams::IsQueued;
 using VersionCheckLaunchSeams::PostCompletion;
+using VersionCheckLaunchSeams::SQueuedState;
 using VersionCheckLaunchSeams::TryMarkQueued;
 
 namespace
@@ -113,27 +116,40 @@ TEST_SUITE_BEGIN("version_check_launch");
 
 TEST_CASE("version check launch gate allows only one in-flight worker")
 {
-	volatile LONG lQueued = 0;
+	SQueuedState state;
 
-	CHECK_FALSE(IsQueued(lQueued));
-	CHECK(TryMarkQueued(lQueued));
-	CHECK(IsQueued(lQueued));
-	CHECK_FALSE(TryMarkQueued(lQueued));
+	CHECK_FALSE(IsQueued(state));
+	CHECK(TryMarkQueued(state));
+	CHECK(IsQueued(state));
+	CHECK_FALSE(TryMarkQueued(state));
 
-	ClearQueued(lQueued);
-	CHECK_FALSE(IsQueued(lQueued));
-	CHECK(TryMarkQueued(lQueued));
+	ClearQueued(state);
+	CHECK_FALSE(IsQueued(state));
+	CHECK(TryMarkQueued(state));
 }
 
 TEST_CASE("version check completion post failure releases launch gate")
 {
-	volatile LONG lQueued = 0;
-	REQUIRE(TryMarkQueued(lQueued));
+	std::shared_ptr<SQueuedState> state(std::make_shared<SQueuedState>());
+	REQUIRE(TryMarkQueued(*state));
 
-	const auto result = PostCompletion(NULL, WM_APP + 1, 0, &lQueued);
+	const auto result = PostCompletion(NULL, WM_APP + 1, 0, state);
 
 	CHECK_FALSE(result.bDelivered);
-	CHECK_FALSE(IsQueued(lQueued));
+	CHECK_FALSE(IsQueued(*state));
+}
+
+TEST_CASE("version check queued state can outlive dialog owner")
+{
+	std::shared_ptr<SQueuedState> ownerState(std::make_shared<SQueuedState>());
+	REQUIRE(TryMarkQueued(*ownerState));
+	std::shared_ptr<SQueuedState> workerState(ownerState);
+
+	ownerState.reset();
+	const auto result = PostCompletion(NULL, WM_APP + 2, 0, workerState);
+
+	CHECK_FALSE(result.bDelivered);
+	CHECK_FALSE(IsQueued(*workerState));
 }
 
 TEST_SUITE_END;
