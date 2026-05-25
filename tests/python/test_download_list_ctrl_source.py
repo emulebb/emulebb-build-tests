@@ -20,3 +20,9 @@ def test_add_source_rejects_stale_owner_before_parent_lookup() -> None:
     assert "if (owner == NULL || theApp.downloadqueue == NULL || !theApp.downloadqueue->IsPartFile(owner) || !IsLiveDownloadClient(source))\n\t\treturn;" in source
     assert "if (cur_item == NULL)\n\t\t\tcontinue;" in source
     assert "ASSERT(ownerIt != m_ListItems.end());\n\tif (ownerIt == m_ListItems.end() || ownerIt->second == NULL || ownerIt->second->type != FILE_TYPE || ownerIt->second->value != owner)\n\t\treturn;" in source
+
+
+def test_draw_item_checks_next_row_before_tree_line_deref() -> None:
+    source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    assert "const CtrlItem_Struct *nextContent = notLast ? reinterpret_cast<CtrlItem_Struct*>(GetItemData(lpDrawItemStruct->itemID + 1)) : NULL;\n\t\tbool hasNext = nextContent != NULL && nextContent->type != FILE_TYPE;" in source
