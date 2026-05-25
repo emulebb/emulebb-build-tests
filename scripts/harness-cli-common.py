@@ -36,6 +36,33 @@ APP_VARIANT_WORKTREE_NAMES = {
     "tracing-harness": "emulebb-community-tracing-harness",
 }
 REPORT_EXCLUDED_DIRECTORY_NAMES = frozenset(("shared-hash-root",))
+LATEST_REPORT_EXCLUDED_DIRECTORY_NAMES = REPORT_EXCLUDED_DIRECTORY_NAMES | frozenset(
+    (
+        "crash-dumps",
+        "dumps",
+        "incoming",
+        "profiles",
+        "procdump",
+        "radarr_movies_cat",
+        "sonarr_series_cat",
+        "temp",
+    )
+)
+LATEST_REPORT_MEDIA_SUFFIXES = frozenset(
+    (
+        ".avi",
+        ".m2ts",
+        ".m4v",
+        ".mkv",
+        ".mov",
+        ".mp4",
+        ".mpeg",
+        ".mpg",
+        ".ts",
+        ".wmv",
+    )
+)
+LATEST_REPORT_HEAVY_SUFFIXES = LATEST_REPORT_MEDIA_SUFFIXES | frozenset((".dmp", ".etl", ".part", ".zip"))
 WER_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting"
 LOCAL_DUMPS_BASE_SUBKEY = r"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps"
 LOCAL_DUMPS_DUMP_TYPE_FULL = 2
@@ -690,7 +717,17 @@ def resolve_profile_seed_dir(paths: HarnessRunPaths, profile_seed_dir: str | Pat
     return Path(profile_seed_dir).resolve() if profile_seed_dir else paths.seed_config_dir
 
 
-def publish_directory_snapshot(source_directory: Path, destination_directory: Path) -> None:
+def should_skip_report_snapshot_entry(name: str, *, is_directory: bool, lightweight_latest: bool) -> bool:
+    """Returns whether a generated report entry should be left out of a copied snapshot."""
+
+    normalized_name = name.lower()
+    if is_directory:
+        excluded_directories = LATEST_REPORT_EXCLUDED_DIRECTORY_NAMES if lightweight_latest else REPORT_EXCLUDED_DIRECTORY_NAMES
+        return normalized_name in excluded_directories
+    return lightweight_latest and Path(normalized_name).suffix in LATEST_REPORT_HEAVY_SUFFIXES
+
+
+def publish_directory_snapshot(source_directory: Path, destination_directory: Path, *, lightweight_latest: bool = False) -> None:
     """Refreshes one report directory from another directory snapshot."""
 
     if exact_path_exists(destination_directory):
@@ -699,11 +736,12 @@ def publish_directory_snapshot(source_directory: Path, destination_directory: Pa
     with os.scandir(to_windows_extended_path(source_directory)) as entries:
         for entry in entries:
             source_path = source_directory / entry.name
-            if entry.is_dir(follow_symlinks=False) and entry.name in REPORT_EXCLUDED_DIRECTORY_NAMES:
+            is_directory = entry.is_dir(follow_symlinks=False)
+            if should_skip_report_snapshot_entry(entry.name, is_directory=is_directory, lightweight_latest=lightweight_latest):
                 continue
             target_path = destination_directory / entry.name
-            if entry.is_dir(follow_symlinks=False):
-                publish_directory_snapshot(source_path, target_path)
+            if is_directory:
+                publish_directory_snapshot(source_path, target_path, lightweight_latest=lightweight_latest)
             else:
                 exact_copy2(source_path, target_path)
 
@@ -745,7 +783,7 @@ def publish_run_artifacts(paths: HarnessRunPaths) -> None:
 def publish_latest_report(paths: HarnessRunPaths) -> None:
     """Refreshes the suite-level latest snapshot from one run report."""
 
-    publish_directory_snapshot(paths.run_report_dir, paths.latest_report_dir)
+    publish_directory_snapshot(paths.run_report_dir, paths.latest_report_dir, lightweight_latest=True)
 
 
 def rewrite_published_json_paths(paths: HarnessRunPaths) -> None:

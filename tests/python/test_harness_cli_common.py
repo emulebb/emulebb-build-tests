@@ -40,6 +40,52 @@ def test_publish_directory_snapshot_skips_generated_shared_hash_payloads(tmp_pat
     assert not (destination / "scenario" / "shared-hash-root").exists()
 
 
+def test_publish_latest_report_skips_heavy_payloads(tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    run_report_dir = tmp_path / "state" / "test-reports" / "suite" / "run"
+    latest_report_dir = tmp_path / "state" / "test-reports" / "suite" / "latest"
+    run_report_dir.mkdir(parents=True)
+    (run_report_dir / "suite-result.json").write_text("{}", encoding="utf-8")
+    (run_report_dir / "suite-summary.json").write_text("{}", encoding="utf-8")
+    (run_report_dir / "analysis").mkdir()
+    (run_report_dir / "analysis" / "summary.txt").write_text("summary", encoding="utf-8")
+    (run_report_dir / "analysis" / "cpu-profile.etl").write_bytes(b"heavy")
+    (run_report_dir / "dumps").mkdir()
+    (run_report_dir / "dumps" / "peak.dmp").write_bytes(b"dump")
+    (run_report_dir / "incoming").mkdir()
+    (run_report_dir / "incoming" / "movie.mkv").write_bytes(b"media")
+    (run_report_dir / "profiles").mkdir()
+    (run_report_dir / "profiles" / "profile-base" / "config").mkdir(parents=True)
+    (run_report_dir / "profiles" / "profile-base" / "config" / "preferences.ini").write_text("", encoding="utf-8")
+    (run_report_dir / "loose.zip").write_bytes(b"zip")
+
+    paths = module.HarnessRunPaths(
+        repo_root=tmp_path,
+        workspace_root=tmp_path / "workspaces" / "workspace",
+        app_root=tmp_path / "app",
+        app_exe=tmp_path / "app" / "emulebb.exe",
+        seed_config_dir=tmp_path / "seed",
+        configuration="Release",
+        suite_name="suite",
+        source_artifacts_dir=tmp_path / "state" / "test-artifacts" / "suite" / "run",
+        run_report_dir=run_report_dir,
+        latest_report_dir=latest_report_dir,
+        keep_source_artifacts=False,
+        local_dumps={},
+    )
+
+    module.publish_latest_report(paths)
+
+    assert (latest_report_dir / "suite-result.json").is_file()
+    assert (latest_report_dir / "suite-summary.json").is_file()
+    assert (latest_report_dir / "analysis" / "summary.txt").is_file()
+    assert not (latest_report_dir / "analysis" / "cpu-profile.etl").exists()
+    assert not (latest_report_dir / "dumps").exists()
+    assert not (latest_report_dir / "incoming").exists()
+    assert not (latest_report_dir / "profiles").exists()
+    assert not (latest_report_dir / "loose.zip").exists()
+
+
 def test_write_json_file_recreates_parent_directory(tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     result_path = tmp_path / "missing" / "suite-result.json"
