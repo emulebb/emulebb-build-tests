@@ -250,6 +250,22 @@ TEST_CASE("Shared hash drain continuation cannot strand deferred results after p
 		SharedFileListSeams::SharedHashDrainContinuationAction::Complete);
 }
 
+TEST_CASE("Part-file hash worker drops results during shutdown or missing UI")
+{
+	CHECK_EQ(
+		SharedFileListSeams::GetPartFileHashWorkerPostAction({ false, true }),
+		SharedFileListSeams::PartFileHashWorkerPostAction::PostToUi);
+	CHECK_EQ(
+		SharedFileListSeams::GetPartFileHashWorkerPostAction({ true, true }),
+		SharedFileListSeams::PartFileHashWorkerPostAction::DropResult);
+	CHECK_EQ(
+		SharedFileListSeams::GetPartFileHashWorkerPostAction({ false, false }),
+		SharedFileListSeams::PartFileHashWorkerPostAction::DropResult);
+	CHECK(SharedFileListSeams::CanPartFileHashWorkerTouchPartFile(false, true));
+	CHECK_FALSE(SharedFileListSeams::CanPartFileHashWorkerTouchPartFile(true, true));
+	CHECK_FALSE(SharedFileListSeams::CanPartFileHashWorkerTouchPartFile(false, false));
+}
+
 TEST_CASE("Shared hash shutdown invalidates warm caches only when hashing work was interrupted")
 {
 	CHECK_FALSE(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, false }));
