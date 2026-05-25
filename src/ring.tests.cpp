@@ -27,12 +27,6 @@ static std::vector<uint64> GetDataLengths(const CRing<TransferredData> &ring)
 
 TEST_SUITE_BEGIN("parity");
 
-TEST_CASE("CRing is a single-owner heap container")
-{
-	CHECK_FALSE(std::is_copy_constructible<CRing<TransferredData>>::value);
-	CHECK_FALSE(std::is_copy_assignable<CRing<TransferredData>>::value);
-}
-
 TEST_CASE("CRing stores the first element after construction")
 {
 	CRing<TransferredData> ring(4, 4);
@@ -104,6 +98,12 @@ TEST_CASE("CRing preserves order when capacity grows from a wrapped state")
 TEST_SUITE_END;
 
 TEST_SUITE_BEGIN("divergence");
+
+TEST_CASE("CRing is a single-owner heap container")
+{
+	CHECK_FALSE(std::is_copy_constructible<CRing<TransferredData>>::value);
+	CHECK_FALSE(std::is_copy_assignable<CRing<TransferredData>>::value);
+}
 
 TEST_CASE("CRing restarts cleanly after removing the last element")
 {
