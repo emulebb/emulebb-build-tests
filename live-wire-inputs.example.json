@@ -39,5 +39,16 @@
     "video_roots": [
       "C:\\example\\public-video-corpus"
     ]
+  },
+  "local_package_install": {
+    "target_path": "C:\\tools\\emulebb",
+    "profile_dir": "F:\\example\\emulebb-profile",
+    "amutorrent_port": 4000,
+    "amutorrent_bind_address": "0.0.0.0",
+    "emulebb_id": "emulebb-local",
+    "emulebb_name": "eMuleBB local",
+    "procdump_path": "C:\\bin\\sysin\\procdump.exe",
+    "enable_rest": true,
+    "enable_crash_dumps": true
   }
 }
