@@ -31,6 +31,15 @@ TEST_CASE("AICH sync seam validates only non-negative UI progress counts")
 	CHECK_FALSE(HasValidAICHSyncProgressCount(-1));
 }
 
+TEST_CASE("AICH sync seam classifies owned-thread shutdown waits")
+{
+	CHECK_EQ(kAICHSyncThreadShutdownWaitMs, 5000u);
+	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_OBJECT_0) == EAICHSyncThreadShutdownWaitAction::Finished);
+	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_TIMEOUT) == EAICHSyncThreadShutdownWaitAction::TimedOut);
+	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_FAILED) == EAICHSyncThreadShutdownWaitAction::Failed);
+	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_ABANDONED) == EAICHSyncThreadShutdownWaitAction::Failed);
+}
+
 #if defined(EMULE_TEST_HAVE_AICH_SYNC_PROGRESS_DELIVERY_ACTION) && defined(EMULE_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
 TEST_CASE("AICH sync seam classifies UI progress delivery outcomes")
 {
