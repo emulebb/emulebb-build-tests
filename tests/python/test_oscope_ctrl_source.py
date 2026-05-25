@@ -43,3 +43,12 @@ def test_oscope_public_trend_api_checks_indices_in_release() -> None:
     assert "if (dNewPoint == NULL || m_PlotData == NULL)\n\t\treturn;" in source
     assert "reinterpret_cast<HMENU>(static_cast<UINT_PTR>(nID))" in source
     assert "static_cast<float>(shownsecs) / static_cast<float>(plotRect.Width())" in source
+
+
+def test_oscope_invalidate_does_not_require_parent_window() -> None:
+    source = (_app_source_root() / "OScopeCtrl.cpp").read_text(
+        encoding="utf-8",
+        errors="ignore",
+    )
+
+    assert "CWnd *pParentWnd = GetParent();\n\t\tHBRUSH hbr = pParentWnd != NULL ? (HBRUSH)pParentWnd->SendMessage(WM_CTLCOLORSTATIC, (WPARAM)dc.m_hDC, (LPARAM)m_hWnd) : NULL;" in source
