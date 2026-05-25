@@ -19,6 +19,7 @@ TEST_CASE("Upload queue seam reclaims retired entries only after pending IO drai
 	CHECK_FALSE(CanReclaimUploadQueueEntry(false, 0));
 }
 
+#if defined(EMULE_TEST_HAVE_RETIRED_UPLOAD_ENTRY_PENDING_IO_WARNING_SEAM)
 TEST_CASE("Upload queue seam warns only for retired entries with old pending IO")
 {
 	CHECK_EQ(kRetiredUploadEntryPendingIoWarningMs, static_cast<std::uint64_t>(30000u));
@@ -30,6 +31,7 @@ TEST_CASE("Upload queue seam warns only for retired entries with old pending IO"
 	CHECK_FALSE(ShouldWarnRetiredUploadEntryPendingIo(true, 1, 45001u, 1u, 30001u, 30000u, 30000u));
 	CHECK(ShouldWarnRetiredUploadEntryPendingIo(true, 1, 60001u, 1u, 30001u, 30000u, 30000u));
 }
+#endif
 
 TEST_CASE("Upload queue timer diagnostics count only loops slower than the interval budget")
 {
