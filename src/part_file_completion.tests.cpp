@@ -18,6 +18,17 @@ TEST_CASE("Part-file completion seam classifies worker launch results")
 	CHECK_FALSE(PartFileCompletionSeams::DidStartCompletionThread(nullptr));
 }
 
+TEST_CASE("Part-file completion seam waits before deleting worker-owned files")
+{
+	CHECK_EQ(PartFileCompletionSeams::kCompletionOwnerShutdownWaitMs, 5000u);
+	CHECK(
+		PartFileCompletionSeams::GetCompletionOwnerShutdownWaitAction(true)
+		== PartFileCompletionSeams::ECompletionOwnerShutdownWaitAction::DeleteNow);
+	CHECK(
+		PartFileCompletionSeams::GetCompletionOwnerShutdownWaitAction(false)
+		== PartFileCompletionSeams::ECompletionOwnerShutdownWaitAction::WaitForWorker);
+}
+
 TEST_CASE("Part-file completion seam classifies worker result delivery")
 {
 	CHECK(PartFileCompletionSeams::ClassifyWorkerCompletionPostResult(false, true)
