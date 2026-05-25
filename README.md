@@ -173,6 +173,7 @@ Deterministic live-profile seed:
 - `preferences.ini` is an initialized UTF-16LE-with-BOM profile seed; it must already carry the startup-silencing keys needed to avoid first-run UI such as the language prompt and runtime wizard
 - `preferences.dat` carries the deterministic maximized main-window placement used by the live UI and startup-profile harnesses
 - importable profile generation lives in `emule_test_harness.live_profiles`; scenario scripts should use that module's typed profile and WebServer specs instead of open-coded `preferences.ini` patch loops
+- product-family private/local eMule harness profiles should also use `emule_test_harness.live_profiles`; the shared builder owns UTF-16 `preferences.ini` writing, identity-file preservation, transient cleanup, and private harness defaults
 - the builder injects only runtime-specific transport, logging, bind, temp, working-folder, WebServer, and shared-directory settings per run
 - runtime working folders are copied from that seed and then expanded with per-run logs, temp files, and other mutable state
 - use `--profile-seed-dir <path>` on live harness entrypoints when diagnosing against an alternate seed

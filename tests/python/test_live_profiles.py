@@ -164,6 +164,121 @@ def test_apply_emule_preferences_updates_only_emule_section_duplicates(tmp_path:
     assert "Nick=web" in webserver_section
 
 
+def test_materialize_private_harness_profile_writes_local_preferences(tmp_path: Path) -> None:
+    seed_config_dir = write_valid_seed(tmp_path)
+    profile_root = tmp_path / "private-profile"
+
+    profile = live_profiles.materialize_private_harness_profile(
+        live_profiles.PrivateHarnessProfileSpec(
+            seed_config_dir=seed_config_dir,
+            profile_root=profile_root,
+            bind_addr="127.0.0.1",
+            tcp_port=33111,
+            udp_port=33112,
+            server_udp_port=33113,
+            web_port=33114,
+            enable_kademlia=True,
+            enable_ed2k=False,
+            shared_dirs=("C:\\share\\",),
+        )
+    )
+
+    config_dir = Path(profile["config_dir"])
+    preferences_path = config_dir / "preferences.ini"
+    assert preferences_path.read_bytes().startswith(UTF16_LE_BOM)
+    text = live_profiles.read_ini_text(preferences_path)
+    emule_section = section_text(text, "eMule")
+    webserver_section = section_text(text, "WebServer")
+    upnp_section = section_text(text, "UPnP")
+    assert profile["profile_root"] == profile_root
+    assert profile["preferences_path"] == preferences_path
+    assert "BindAddr=127.0.0.1" in emule_section
+    assert "BindInterface=" not in emule_section
+    assert "Port=33111" in emule_section
+    assert "UDPPort=33112" in emule_section
+    assert "ServerUDPPort=33113" in emule_section
+    assert "NetworkKademlia=1" in emule_section
+    assert "NetworkED2K=0" in emule_section
+    assert f"MaxDownload={live_profiles.PRIVATE_HARNESS_RATE_LIMIT_KIB_PER_SEC}" in emule_section
+    assert f"MaxUpload={live_profiles.PRIVATE_HARNESS_RATE_LIMIT_KIB_PER_SEC}" in emule_section
+    assert "Port=33114" in webserver_section
+    assert "Enabled=0" in webserver_section
+    assert "EnableUPnP=0" in upnp_section
+    assert not (config_dir / "server.met").exists()
+    assert not (config_dir / "nodes.dat").exists()
+    assert live_profiles.read_ini_text(config_dir / "shareddir.dat") == "C:\\share\\\r\n"
+
+
+def test_materialize_private_harness_profile_preserves_identity_files_on_reset(tmp_path: Path) -> None:
+    seed_config_dir = write_valid_seed(tmp_path)
+    profile_root = tmp_path / "private-profile"
+    config_dir = profile_root / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "preferences.dat").write_bytes(b"existing-preferences")
+    (config_dir / "preferencesKad.dat").write_bytes(b"existing-kad")
+    (config_dir / "cryptkey.dat").write_bytes(b"existing-crypt")
+    (config_dir / "collectioncryptkey.dat").write_bytes(b"existing-collection")
+    (config_dir / "server.met").write_bytes(b"stale-server")
+    (config_dir / "nodes.dat").write_bytes(b"stale-nodes")
+    (config_dir / "transient.tmp").write_bytes(b"stale")
+    for transient_dir_name in ("logs", "Incoming", "Temp"):
+        transient_dir = profile_root / transient_dir_name
+        transient_dir.mkdir(parents=True)
+        (transient_dir / "stale.txt").write_text("stale", encoding="utf-8")
+    for marker_name in ("harness.ready", "status.log", "seed.ed2k"):
+        (profile_root / marker_name).write_text("stale", encoding="utf-8")
+
+    live_profiles.materialize_private_harness_profile(
+        live_profiles.PrivateHarnessProfileSpec(
+            seed_config_dir=seed_config_dir,
+            profile_root=profile_root,
+            bind_addr="127.0.0.1",
+            tcp_port=33111,
+            udp_port=33112,
+        )
+    )
+
+    assert (config_dir / "preferences.dat").read_bytes() == b"existing-preferences"
+    assert (config_dir / "preferencesKad.dat").read_bytes() == b"existing-kad"
+    assert (config_dir / "cryptkey.dat").read_bytes() == b"existing-crypt"
+    assert (config_dir / "collectioncryptkey.dat").read_bytes() == b"existing-collection"
+    assert not (config_dir / "server.met").exists()
+    assert not (config_dir / "nodes.dat").exists()
+    assert not (config_dir / "transient.tmp").exists()
+    for transient_dir_name in ("logs", "Incoming", "Temp"):
+        assert list((profile_root / transient_dir_name).iterdir()) == []
+    for marker_name in ("harness.ready", "status.log", "seed.ed2k"):
+        assert not (profile_root / marker_name).exists()
+
+
+def test_apply_private_harness_obfuscation_updates_crypto_flags(tmp_path: Path) -> None:
+    seed_config_dir = write_valid_seed(tmp_path)
+    profile = live_profiles.materialize_private_harness_profile(
+        live_profiles.PrivateHarnessProfileSpec(
+            seed_config_dir=seed_config_dir,
+            profile_root=tmp_path / "private-profile",
+            bind_addr="127.0.0.1",
+            tcp_port=33111,
+            udp_port=33112,
+        )
+    )
+    config_dir = Path(profile["config_dir"])
+
+    live_profiles.apply_private_harness_obfuscation(config_dir, obfuscated_preferred=True)
+    text = live_profiles.read_ini_text(config_dir / "preferences.ini")
+    emule_section = section_text(text, "eMule")
+    assert emule_section.count("CryptLayerRequested=1") == 1
+    assert emule_section.count("CryptLayerRequired=0") == 1
+    assert emule_section.count("CryptLayerSupported=1") == 1
+
+    live_profiles.apply_private_harness_obfuscation(config_dir, obfuscated_preferred=False)
+    text = live_profiles.read_ini_text(config_dir / "preferences.ini")
+    emule_section = section_text(text, "eMule")
+    assert emule_section.count("CryptLayerRequested=0") == 1
+    assert emule_section.count("CryptLayerRequired=0") == 1
+    assert emule_section.count("CryptLayerSupported=0") == 1
+
+
 def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

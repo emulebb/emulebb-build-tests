@@ -25,6 +25,16 @@ DEFAULT_P2P_BIND_INTERFACE_NAME = "hide.me"
 DEFAULT_PROFILE_SCENARIO_ID = "default"
 PROFILE_ARTIFACTS_DIR_NAME = "profiles"
 SCENARIO_ID_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+PRIVATE_HARNESS_RATE_LIMIT_BITS_PER_SEC = 10_000_000_000
+PRIVATE_HARNESS_RATE_LIMIT_KIB_PER_SEC = PRIVATE_HARNESS_RATE_LIMIT_BITS_PER_SEC // 8 // 1024
+PRIVATE_HARNESS_PROTECTED_CONFIG_FILES = frozenset(
+    {
+        "preferences.dat",
+        "preferenceskad.dat",
+        "cryptkey.dat",
+        "collectioncryptkey.dat",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +75,28 @@ class ProfileBuildSpec:
     scenario_id: str = DEFAULT_PROFILE_SCENARIO_ID
     incoming_dir: Path | None = None
     temp_dir: Path | None = None
+
+
+@dataclass(frozen=True)
+class PrivateHarnessProfileSpec:
+    """Inputs for one deterministic private/local eMule test profile."""
+
+    seed_config_dir: Path
+    profile_root: Path
+    bind_addr: str
+    tcp_port: int
+    udp_port: int
+    server_udp_port: int = 0
+    web_port: int = 47101
+    kad_udp_key: int = 4_206_201
+    enable_kademlia: bool = False
+    enable_ed2k: bool = True
+    enable_upnp: bool = False
+    reset_transient_state: bool = True
+    max_download_kib_per_sec: int = PRIVATE_HARNESS_RATE_LIMIT_KIB_PER_SEC
+    max_upload_kib_per_sec: int = PRIVATE_HARNESS_RATE_LIMIT_KIB_PER_SEC
+    nick: str = "eMule harness"
+    shared_dirs: tuple[str, ...] = field(default_factory=tuple)
 
 
 def win_path(path: Path, trailing_slash: bool = False) -> str:
@@ -211,6 +243,147 @@ def write_shared_directories_file(path: Path, shared_dirs: list[str]) -> None:
 
     contents = "".join(f"{entry}\r\n" for entry in shared_dirs)
     path.write_text(contents, encoding="utf-16", newline="")
+
+
+def _remove_path(path: Path) -> None:
+    """Removes one file or directory without following directory symlinks."""
+
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def _copy_seed_config_files(seed_config_dir: Path, config_dir: Path) -> None:
+    """Copies deterministic seed files into a profile config directory when missing."""
+
+    for seed_file in seed_config_dir.iterdir():
+        target = config_dir / seed_file.name
+        if seed_file.is_file() and not target.exists():
+            shutil.copy2(seed_file, target)
+
+
+def _reset_private_harness_config(config_dir: Path) -> None:
+    """Drops transient network config while preserving long-lived client identity files."""
+
+    for entry in config_dir.iterdir():
+        if entry.name.lower() in PRIVATE_HARNESS_PROTECTED_CONFIG_FILES:
+            continue
+        _remove_path(entry)
+
+
+def _private_harness_preferences_text(spec: PrivateHarnessProfileSpec) -> str:
+    """Builds the deterministic preferences.ini payload for private/local harness runs."""
+
+    enabled_kad = "1" if spec.enable_kademlia else "0"
+    enabled_ed2k = "1" if spec.enable_ed2k else "0"
+    enabled_upnp = "1" if spec.enable_upnp else "0"
+    return (
+        "[eMule]\n"
+        "AppVersion=0.72a\n"
+        f"Port={spec.tcp_port}\n"
+        f"UDPPort={spec.udp_port}\n"
+        f"ServerUDPPort={spec.server_udp_port}\n"
+        f"BindAddr={spec.bind_addr}\n"
+        "AllowLocalHostIP=1\n"
+        "FilterBadIPs=0\n"
+        "Autoconnect=1\n"
+        "StartupMinimized=1\n"
+        "MinToTray=1\n"
+        "BringToFront=0\n"
+        "Splashscreen=0\n"
+        "SaveLogToDisk=1\n"
+        "SaveDebugToDisk=1\n"
+        "Verbose=1\n"
+        "OnlineSignature=0\n"
+        "AutoTakeED2KLinks=0\n"
+        "AutoConnectStaticOnly=0\n"
+        "Serverlist=0\n"
+        "AddServersFromServer=0\n"
+        "AddServersFromClient=0\n"
+        f"NetworkKademlia={enabled_kad}\n"
+        f"NetworkED2K={enabled_ed2k}\n"
+        f"OpenPortsOnStartUp={enabled_upnp}\n"
+        "EnableScheduler=0\n"
+        f"KadUDPKey={spec.kad_udp_key}\n"
+        f"MaxDownload={spec.max_download_kib_per_sec}\n"
+        f"MaxUpload={spec.max_upload_kib_per_sec}\n"
+        "CreateCrashDump=0\n"
+        f"Nick={spec.nick}\n"
+        "CryptLayerRequested=0\n"
+        "CryptLayerRequired=0\n"
+        "CryptLayerSupported=0\n"
+        "\n"
+        "[WebServer]\n"
+        "Enabled=0\n"
+        f"Port={spec.web_port}\n"
+        f"WebUseUPnP={enabled_upnp}\n"
+        "\n"
+        "[UPnP]\n"
+        f"EnableUPnP={enabled_upnp}\n"
+        f"CloseUPnPOnExit={enabled_upnp}\n"
+    )
+
+
+def materialize_private_harness_profile(spec: PrivateHarnessProfileSpec) -> dict[str, object]:
+    """Builds or refreshes a deterministic private/local profile for p2p harness tests."""
+
+    validate_seed_config_dir(spec.seed_config_dir)
+    profile_root = spec.profile_root
+    config_dir = profile_root / "config"
+    log_dir = profile_root / "logs"
+    incoming_dir = profile_root / "Incoming"
+    temp_dir = profile_root / "Temp"
+
+    profile_root.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _copy_seed_config_files(spec.seed_config_dir, config_dir)
+
+    if spec.reset_transient_state:
+        _reset_private_harness_config(config_dir)
+        for transient_dir in (log_dir, incoming_dir, temp_dir):
+            if transient_dir.exists():
+                _remove_path(transient_dir)
+        for marker_name in ("harness.ready", "status.log", "seed.ed2k"):
+            marker_path = profile_root / marker_name
+            if marker_path.exists() or marker_path.is_symlink():
+                marker_path.unlink()
+
+    for required_dir in (log_dir, incoming_dir, temp_dir):
+        required_dir.mkdir(parents=True, exist_ok=True)
+
+    preferences_path = config_dir / "preferences.ini"
+    write_utf16_ini_text(preferences_path, _private_harness_preferences_text(spec))
+    if not (config_dir / "preferences.dat").exists():
+        write_preferences_dat(config_dir / "preferences.dat")
+    write_shared_directories_file(config_dir / "shareddir.dat", list(spec.shared_dirs))
+
+    return {
+        "profile_root": profile_root,
+        "config_dir": config_dir,
+        "preferences_path": preferences_path,
+        "log_dir": log_dir,
+        "logs_root": log_dir,
+        "incoming_dir": incoming_dir,
+        "incoming_root": incoming_dir,
+        "temp_dir": temp_dir,
+        "temp_root": temp_dir,
+    }
+
+
+def apply_private_harness_obfuscation(config_dir: Path, obfuscated_preferred: bool) -> None:
+    """Updates private harness crypto preference flags through the shared INI helper."""
+
+    enabled = "1" if obfuscated_preferred else "0"
+    preferences_path = config_dir / "preferences.ini"
+    text = read_ini_text(preferences_path)
+    for key, value in (
+        ("CryptLayerRequested", enabled),
+        ("CryptLayerRequired", "0"),
+        ("CryptLayerSupported", enabled),
+    ):
+        text = upsert_ini_section_value(text, "eMule", key, value)
+    write_utf16_ini_text(preferences_path, text)
 
 
 def sanitize_profile_scenario_id(scenario_id: str) -> str:
