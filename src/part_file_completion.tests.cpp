@@ -43,6 +43,14 @@ TEST_CASE("Part-file completion seam skips posting during shutdown and rejects m
 	CHECK(missingTargetResult.dwLastError == ERROR_INVALID_WINDOW_HANDLE);
 }
 
+TEST_CASE("Part-file completion seam rejects missing completed-name buffers")
+{
+	int completedNameBuffer = 0;
+
+	CHECK(PartFileCompletionSeams::IsMissingCompletedNameBuffer(nullptr));
+	CHECK_FALSE(PartFileCompletionSeams::IsMissingCompletedNameBuffer(&completedNameBuffer));
+}
+
 TEST_CASE("Part-file completion seam only warns about disabled long-path support for plausible move failures")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
