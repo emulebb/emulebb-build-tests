@@ -215,7 +215,6 @@
     <ClCompile Include="src\web_services.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServicesSeams.h')" />
     <ClCompile Include="src\web_server_legacy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WebServerLegacySeams.h')" />
     <ClCompile Include="src\windows_firewall_repair.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WindowsFirewallRepairSeams.h')" />
-    <ClCompile Include="src\windows_maintenance_actions.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\WindowsMaintenanceActionsSeams.h')" />
     <ClCompile Include="src\part_file_completion.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileCompletionSeams.h')" />
     <ClCompile Include="src\part_file_endgame.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileEndgameSeams.h')" />
     <ClCompile Include="src\part_file_majority_name.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileMajorityNameSeams.h')" />
