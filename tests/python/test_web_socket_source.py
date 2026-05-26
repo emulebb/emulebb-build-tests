@@ -24,3 +24,12 @@ def test_web_socket_shutdown_waits_without_timeout_before_teardown() -> None:
     assert "DebugLogError(_T(\"Web Interface accepted-client thread(s) are still using WebServer state; waiting without a timeout before teardown.\"));" in source
     assert "(void)WaitForAcceptedThreadHandles(INFINITE);" in source
     assert "Web Interface termination handle kept open because socket threads are still running" not in source
+
+
+def test_web_socket_wait_failures_log_error_messages() -> None:
+    source = (app_source_root() / "WebSocket.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    assert source.count("const DWORD dwWaitError = ::GetLastError();") >= 4
+    assert 'DebugLogWarning(_T("Web Interface accepted-client thread wait failed while reaping finished threads: %s"), (LPCTSTR)GetErrorMessage(dwWaitError, 1));' in source
+    assert 'DebugLogWarning(_T("Web Interface accepted-client thread wait failed during shutdown: %s"), (LPCTSTR)GetErrorMessage(dwWaitError, 1));' in source
+    assert 'DebugLogError(_T("Web Interface listener thread wait failed: %s"), (LPCTSTR)GetErrorMessage(dwWaitError, 1));' in source
