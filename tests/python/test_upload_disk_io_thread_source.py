@@ -17,6 +17,9 @@ def test_pending_upload_io_removes_by_pointer_not_stored_position() -> None:
     assert "m_listPendingIO.RemoveAt(pOvRead->pos);" not in source
     assert "DrainPendingReads();" in source
     assert "::CancelIoEx(pKnownFile->m_hRead" in source
+    assert "throw _T(\"ReadFile Error: \") + GetErrorMessage(dwError, 1);" in source
+    assert "throw _T(\"ReadFile Error: \") + GetErrorMessage(::GetLastError())" not in source
+    assert "const DWORD dwEffectiveError = dwCompletionError != ERROR_SUCCESS ? dwCompletionError : ERROR_READ_FAULT;" in source
     assert "ReadCompletionRoutine(0, m_listPendingIO.RemoveHead(), ERROR_OPERATION_ABORTED);" not in source
     assert "Improper termination of asynchronous I/O follows" not in source
     assert "POSITION posPending = m_listPendingIO.Find(const_cast<OverlappedRead_Struct*>(pOvRead));" in source

@@ -15,6 +15,8 @@ def test_pending_part_file_writes_are_cancelled_and_drained_before_shutdown_clea
     assert "void\tDrainPendingWrites();" in header
     assert "DrainPendingWrites();" in source
     assert "::CancelIoEx(pFile->m_hWrite" in source
+    assert "WriteBuffers error: %s" in source
+    assert "const DWORD dwEffectiveError = dwCompletionError != ERROR_SUCCESS ? dwCompletionError : ERROR_WRITE_FAULT;" in source
     assert "WriteCompletionRoutine(0, m_listPendingIO.RemoveHead(), ERROR_OPERATION_ABORTED);" not in source
     assert "Improper termination of asynchronous I/O follows" not in source
     assert "const BOOL bCompletionReceived = ::GetQueuedCompletionStatus(m_hPort, &dwBytesWritten, &completionKey, (LPOVERLAPPED*)&pCurIO, INFINITE);" in source
