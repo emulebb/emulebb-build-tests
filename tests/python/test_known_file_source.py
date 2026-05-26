@@ -26,3 +26,13 @@ def test_known_file_hash_wrappers_log_exception_details() -> None:
 
     assert 'DebugLogWarning(_T("CreateHash failed while reading stdio-backed data%s"), (LPCTSTR)CExceptionStrDash(*ex));' in source
     assert 'DebugLogWarning(_T("CreateHash failed while reading memory-backed data%s"), (LPCTSTR)CExceptionStrDash(*ex));' in source
+
+
+def test_known_file_metadata_extractors_log_exception_details() -> None:
+    source = (app_source_root() / "KnownFile.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    assert 'DebugLogWarning(_T("Unhandled exception while extracting file meta data through MediaInfo.dll from \\"%s\\"%s"), (LPCTSTR)strFullPath, (LPCTSTR)CExceptionStrDash(*ex));' in source
+    assert 'DebugLogWarning(_T("Unhandled exception while extracting built-in file meta data from \\"%s\\"%s"), (LPCTSTR)strFullPath, (LPCTSTR)CExceptionStrDash(*ex));' in source
+    assert 'DebugLogWarning(_T("Unhandled exception while extracting fallback media metadata from \\"%s\\"%s"), (LPCTSTR)strFullPath, (LPCTSTR)CExceptionStrDash(*ex));' in source
+    assert 'DebugLogWarning(_T("Unhandled exception while extracting MP3 file meta data from \\"%s\\"%s"), (LPCTSTR)strFullPath, (LPCTSTR)CExceptionStrDash(*ex));' in source
+    assert 'DebugLogWarning(_T("Unhandled exception while extracting file meta data through MediaInfo.dll from \\"%s\\" - unexpected exception"), (LPCTSTR)strFullPath);' in source

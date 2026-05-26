@@ -33,3 +33,34 @@ def test_part_file_delete_defers_while_preview_worker_holds_reference() -> None:
     assert 'DebugLogWarning(_T("Deferring part-file deletion for \\"%s\\" until preview generation releases the file object.")' in block
     assert "m_bDelayDelete = true;" in block
     assert "return;\n\t}\n\n\tif (GetFileOp() != PFOP_NONE)" in block
+
+
+def test_part_file_completion_worker_posts_result_object_for_ui_thread_state_transition() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "PartFile.h").read_text(encoding="utf-8", errors="ignore")
+    dialog = (app_source_root() / "emuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    worker = source[source.index("BOOL CPartFile::PerformFileComplete()") : source.index("// 'End' of file completion")]
+    ui_end = source[source.index("void CPartFile::PerformFileCompleteEnd(void *pCompletionResult)") : source.index("void  CPartFile::RemoveAllSources")]
+
+    assert "struct SPartFileCompletionThreadResult" in source
+    assert "PostWorkerCompletion(theApp.IsClosing(), hNotifyWnd, TM_FILECOMPLETED, dwResult, reinterpret_cast<LPARAM>(pResult))" in source
+    assert "std::unique_ptr<SPartFileCompletionThreadResult> pResult(new SPartFileCompletionThreadResult);" in worker
+    assert "m_fullname = strNewname;" not in worker
+    assert "_SetStatus(PS_COMPLETE);" not in worker
+    assert "m_CorruptionBlackBox.Free();" not in worker
+    assert "m_fullname = pResult->strCompletedPath;" in ui_end
+    assert "SetStatus(PS_ERROR);" in ui_end
+    assert "bNoNewReads = false;" in ui_end
+    assert "static CPartFile* GetCompletionResultFile(void *pCompletionResult);" in header
+    assert "static void\tDiscardCompletionResult(void *pCompletionResult);" in header
+    assert "CPartFile *partfile = CPartFile::GetCompletionResultFile(pCompletionResult);" in dialog
+    assert "partfile->PerformFileCompleteEnd(pCompletionResult);" in dialog
+
+
+def test_zone_identifier_failures_are_logged_with_hresult() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("void SetZoneIdentifier") : source.index("DWORD CALLBACK CopyProgressRoutine")]
+
+    assert "VERIFY(SUCCEEDED(pPersistFile->Save" not in block
+    assert 'DebugLogWarning(_T("Failed to create Zone.Identifier writer for \\"%s\\" (HRESULT 0x%08lX)")' in block
+    assert 'DebugLogWarning(_T("Failed to save Zone.Identifier for \\"%s\\" (HRESULT 0x%08lX)")' in block
