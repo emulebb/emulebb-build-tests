@@ -54,10 +54,13 @@ def test_out_of_part_reqs_guard_thresholds_are_balanced_and_client_global() -> N
     assert "constexpr UINT kOutOfPartReqsCooldownThreshold = 3;" in download_client
     assert "constexpr ULONGLONG kOutOfPartReqsShortWindowMs = SEC2MS(30);" in download_client
     assert "constexpr ULONGLONG kOutOfPartReqsCooldownMs = MIN2MS(2);" in download_client
+    assert "constexpr UINT kOutOfPartReqsCooldownBurstQuarantineThreshold = 2;" in download_client
     assert "constexpr UINT kOutOfPartReqsQuarantineThreshold = 10;" in download_client
     assert "constexpr ULONGLONG kOutOfPartReqsLongWindowMs = MIN2MS(5);" in download_client
     assert "m_bOutOfPartReqsQuarantined = true;" in download_client
     assert "m_ullOutOfPartReqsCooldownUntil = 0;" in download_client
+    assert "m_uOutOfPartReqsCooldownBurstCount = 0;" in download_client
+    assert "++m_uOutOfPartReqsCooldownBurstCount;" in download_client
     assert "void CUpDownClient::NoteOutOfPartReqsLoopSuppression()" in download_client
     assert "NoteOutOfPartReqsLoopSuppression();" in download_client
     assert "ResetOutOfPartReqsLoopGuard();" in read_app_source("BaseClient.cpp")
@@ -68,6 +71,7 @@ def test_out_of_part_reqs_guard_logs_transitions_and_suppression_with_context() 
 
     assert "DebugLogWarning(_T(\"Cooling down download source after repeated OP_OutOfPartReqs loops." in download_client
     assert "DebugLogWarning(_T(\"Quarantined download source after repeated OP_OutOfPartReqs loops." in download_client
+    assert "DebugLogWarning(_T(\"Quarantined download source after repeated OP_OutOfPartReqs cooldown bursts." in download_client
     assert "DebugLogWarning(_T(\"Quarantined download source after repeated suppressed OP_AcceptUploadReq during OP_OutOfPartReqs cooldown." in download_client
     assert "DebugLog(_T(\"Suppressed OP_AcceptUploadReq after repeated OP_OutOfPartReqs loops." in download_client
     assert "constexpr ULONGLONG kOutOfPartReqsSuppressionLogMs = SEC2MS(30);" in download_client
