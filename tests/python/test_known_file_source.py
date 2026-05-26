@@ -21,6 +21,17 @@ def test_known_file_hash_creation_rejects_missing_inputs() -> None:
     assert "ASSERT(uSize == 0 || pucData != NULL);\n\tif (uSize != 0 && pucData == NULL)\n\t\treturn false;" in source
 
 
+def test_known_file_hash_creation_checks_short_reads_in_release_builds() -> None:
+    source = (app_source_root() / "KnownFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("bool CKnownFile::CreateHash(CFile *pFile") : source.index("bool CKnownFile::CreateHash(FILE *fp")]
+
+    assert "VERIFY(pFile->Read(X, uRead) == uRead);" not in block
+    assert "std::unique_ptr<CAICHHashAlgo> pHashAlg" in block
+    assert "const UINT uActualRead = pFile->Read(X, uRead);" in block
+    assert "if (uActualRead != uRead)\n\t\t\tAfxThrowFileException(CFileException::endOfFile, 0, pFile->GetFilePath());" in block
+    assert "pShaHashOut->SetBlockHash(EMBLOCKSIZE, posCurrentEMBlock, pHashAlg.get());" in block
+
+
 def test_known_file_hash_wrappers_log_exception_details() -> None:
     source = (app_source_root() / "KnownFile.cpp").read_text(encoding="utf-8", errors="ignore")
 
