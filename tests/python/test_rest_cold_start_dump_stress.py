@@ -1351,6 +1351,31 @@ def test_stress_cleanup_completeness_requires_absent_transfers() -> None:
     assert module.stress_cleanup_is_complete(report) is False
 
 
+def test_synthetic_queue_fill_completeness_requires_requested_pressure() -> None:
+    module = load_script_module()
+
+    assert module.synthetic_queue_fill_is_complete({}) is True
+    assert module.synthetic_queue_fill_is_complete({"synthetic_queue_fill": {"requested_count": 0}}) is True
+    assert (
+        module.synthetic_queue_fill_is_complete(
+            {"synthetic_queue_fill": {"ok": True, "queued_count": 8000, "requested_count": 8000}}
+        )
+        is True
+    )
+    assert (
+        module.synthetic_queue_fill_is_complete(
+            {"synthetic_queue_fill": {"ok": True, "queued_count": 2500, "requested_count": 8000}}
+        )
+        is False
+    )
+    assert (
+        module.synthetic_queue_fill_is_complete(
+            {"synthetic_queue_fill": {"ok": False, "queued_count": 8000, "requested_count": 8000}}
+        )
+        is False
+    )
+
+
 def test_post_drain_umdh_delta_budget_uses_positive_bytes() -> None:
     module = load_script_module()
     report = {

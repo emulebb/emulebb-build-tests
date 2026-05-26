@@ -2825,6 +2825,19 @@ def stress_cleanup_is_complete(report: dict[str, object]) -> bool:
     )
 
 
+def synthetic_queue_fill_is_complete(stress_summary: dict[str, object]) -> bool:
+    """Returns true when explicit synthetic queue pressure reached the requested count."""
+
+    fill = stress_summary.get("synthetic_queue_fill")
+    if not isinstance(fill, dict):
+        return True
+    requested_count = int(fill.get("requested_count", 0))
+    if requested_count <= 0:
+        return True
+    queued_count = int(fill.get("queued_count", 0))
+    return bool(fill.get("ok")) and queued_count >= requested_count
+
+
 def diagnostics_are_complete(report: dict[str, object], *, skip_dumps: bool) -> bool:
     """Returns true when mandatory dump artifacts exist for the completed labels."""
 
@@ -3414,6 +3427,15 @@ def main(argv: list[str] | None = None) -> int:
         elif not args.skip_transfer_cleanup and not stress_cleanup_is_complete(report):
             report["status"] = "failed"
             report["failure_reason"] = "stress transfer cleanup did not settle before post-drain diagnostics"
+        elif not synthetic_queue_fill_is_complete(stress_summary):
+            synthetic_fill = stress_summary.get("synthetic_queue_fill", {})
+            assert isinstance(synthetic_fill, dict)
+            report["status"] = "failed"
+            report["failure_reason"] = (
+                "synthetic queue fill did not reach requested pressure: "
+                f"{int(synthetic_fill.get('queued_count', 0))}/"
+                f"{int(synthetic_fill.get('requested_count', 0))} transfers queued"
+            )
         elif int(stress_summary.get("video_download_trigger_count", 0)) > 0:
             report["status"] = "failed"
             report["failure_reason"] = "video downloads were triggered during dump stress"
