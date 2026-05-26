@@ -757,6 +757,10 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert [suite["name"] for suite in summary["suites"]] == ["godzilla-local-swarm"]
     assert "--admin-volume-fixtures" in commands[0]
     assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
+    assert option_values(commands[0], "--total-client-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT)]
+    assert option_values(commands[0], "--peer-transfer-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_PEER_TRANSFER_COUNT)]
+    assert option_values(commands[0], "--harness-transfer-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT)]
+    assert option_values(commands[0], "--adverse-kill-cycles") == [str(live_e2e_suite.DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES)]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
 
 
@@ -796,6 +800,18 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
             "--admin-volume-fixtures",
             "--vhd-size-mb",
             "8192",
+            "--godzilla-total-client-count",
+            "12",
+            "--godzilla-peer-transfer-count",
+            "444",
+            "--godzilla-harness-transfer-count",
+            "222",
+            "--godzilla-adverse-kill-cycles",
+            "3",
+            "--godzilla-adverse-kill-warmup-seconds",
+            "0.5",
+            "--godzilla-adverse-recovery-timeout-seconds",
+            "45",
         ),
         FakeHarnessCliCommon(tmp_path),
     )
@@ -804,15 +820,27 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert "--visible-ui" in commands[0]
     assert "--cpu-profile" in commands[0]
     assert "--admin-volume-fixtures" in commands[0]
-    assert option_values(commands[0], "--vhd-size-mb") == ["8192"]
+    assert option_values(commands[0], "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_GODZILLA_VHD_SIZE_MB)]
     assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["Ethernet"]
     assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.210"]
+    assert option_values(commands[0], "--total-client-count") == ["12"]
+    assert option_values(commands[0], "--peer-transfer-count") == ["444"]
+    assert option_values(commands[0], "--harness-transfer-count") == ["222"]
+    assert option_values(commands[0], "--adverse-kill-cycles") == ["3"]
+    assert option_values(commands[0], "--adverse-kill-warmup-seconds") == ["0.5"]
+    assert option_values(commands[0], "--adverse-recovery-timeout-seconds") == ["45.0"]
     assert summary["godzilla_local_swarm"] == {
         "visible_ui": True,
         "p2p_bind_interface_address": "192.168.1.210",
         "cpu_profile": True,
         "vhd_runtime_root": "drive-letter",
+        "total_client_count": 12,
+        "peer_transfer_count": 444,
+        "harness_transfer_count": 222,
+        "adverse_kill_cycles": 3,
+        "adverse_kill_warmup_seconds": 0.5,
+        "adverse_recovery_timeout_seconds": 45.0,
     }
 
 

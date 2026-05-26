@@ -6,6 +6,7 @@ import argparse
 from contextlib import contextmanager
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import random
@@ -30,6 +31,7 @@ from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     build_storage_topology,
     create_admin_volume_fixture,
 )
+from emule_test_harness.ini import read_ini_text, upsert_ini_section_value, write_utf16_ini_text  # noqa: E402
 from emule_test_harness import live_process_monitor  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, long_path_capability_report, resolve_amule_client  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
@@ -63,28 +65,37 @@ CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
 CLIENT04 = CLIENT_IDENTITIES["amule"]
 DEFAULT_EMULEBB_FILES = 10_000
-DEFAULT_EXTRA_EMULEBB_CLIENTS = 3
+MAX_GODZILLA_CLIENT_COUNT = 30
+BASE_GODZILLA_CLIENT_COUNT = 3
+DEFAULT_TOTAL_CLIENT_COUNT = MAX_GODZILLA_CLIENT_COUNT
+DEFAULT_EXTRA_EMULEBB_CLIENTS = DEFAULT_TOTAL_CLIENT_COUNT - BASE_GODZILLA_CLIENT_COUNT
 DEFAULT_EXTRA_EMULEBB_FILES = 1_000
 DEFAULT_HARNESS_FILES = 1_000
 DEFAULT_AMULE_FILES = 1_000
 DEFAULT_TRANSFER_COUNT = 300
+DEFAULT_PEER_TRANSFER_COUNT = 300
+DEFAULT_HARNESS_TRANSFER_COUNT = 300
 DEFAULT_OBSERVATION_SECONDS = 600.0
 DEFAULT_PUBLISH_TIMEOUT_SECONDS = 1800.0
 DEFAULT_CLIENT_ROTATION_CYCLES = 8
 DEFAULT_CLIENT_ROTATION_INTERVAL_SECONDS = 45.0
 DEFAULT_UI_CYCLE_CYCLES = 16
 DEFAULT_UI_CYCLE_INTERVAL_SECONDS = 0.75
-DEFAULT_FILE_BASE_SIZE_BYTES = 4096
-DEFAULT_FILE_MEDIUM_SIZE_BYTES = 64 * 1024
-DEFAULT_FILE_LARGE_SIZE_BYTES = 1024 * 1024
+DEFAULT_FILE_BASE_SIZE_BYTES = 2 * 1024 * 1024
+DEFAULT_FILE_MEDIUM_SIZE_BYTES = 8 * 1024 * 1024
+DEFAULT_FILE_LARGE_SIZE_BYTES = 32 * 1024 * 1024
 DEFAULT_PROTOCOL_CASE = "obfuscated-preferred"
-DEFAULT_VHD_SIZE_MB = 8192
+DEFAULT_VHD_SIZE_MB = 128 * 1024
 DEFAULT_REST_SEARCH_ROUNDS = 12
 DEFAULT_AMULE_COMMAND_ROUNDS = 12
 DEFAULT_AMUTORRENT_API_ROUNDS = 8
 DEFAULT_MIN_PUBLISHED_FILES_TO_START = 1
 DEFAULT_HAMMER_WAVES = 6
 DEFAULT_HAMMER_WAVE_SLEEP_SECONDS = 1.0
+DEFAULT_ADVERSE_KILL_CYCLES = 2
+DEFAULT_ADVERSE_KILL_WARMUP_SECONDS = 45.0
+DEFAULT_ADVERSE_RECOVERY_TIMEOUT_SECONDS = 300.0
+X_LOCAL_IP_ENV = "X_LOCAL_IP"
 SHARED_FILES_ROUTE = "/api/v1/shared-files"
 OWNER_SEEDS = {
     "emulebb": 0xE001,
@@ -122,6 +133,15 @@ class GeneratedFile:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parses the standalone Godzilla local swarm arguments."""
 
+    argv_tokens = list(sys.argv[1:] if argv is None else argv)
+    total_client_count_explicit = any(
+        token == "--total-client-count" or token.startswith("--total-client-count=")
+        for token in argv_tokens
+    )
+    extra_emulebb_clients_explicit = any(
+        token == "--extra-emulebb-clients" or token.startswith("--extra-emulebb-clients=")
+        for token in argv_tokens
+    )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
@@ -154,6 +174,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-mode", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--lan-address-env", default=X_LOCAL_IP_ENV)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=90.0)
@@ -174,10 +196,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--hammer-wave-sleep-seconds", type=float, default=DEFAULT_HAMMER_WAVE_SLEEP_SECONDS)
     parser.add_argument("--emulebb-files", type=int, default=DEFAULT_EMULEBB_FILES)
     parser.add_argument("--extra-emulebb-clients", type=int, default=DEFAULT_EXTRA_EMULEBB_CLIENTS)
+    parser.add_argument("--total-client-count", type=int, default=DEFAULT_TOTAL_CLIENT_COUNT)
     parser.add_argument("--extra-emulebb-files", type=int, default=DEFAULT_EXTRA_EMULEBB_FILES)
     parser.add_argument("--harness-files", type=int, default=DEFAULT_HARNESS_FILES)
     parser.add_argument("--amule-files", type=int, default=DEFAULT_AMULE_FILES)
     parser.add_argument("--transfer-count", type=int, default=DEFAULT_TRANSFER_COUNT)
+    parser.add_argument("--peer-transfer-count", type=int, default=DEFAULT_PEER_TRANSFER_COUNT)
+    parser.add_argument("--harness-transfer-count", type=int, default=DEFAULT_HARNESS_TRANSFER_COUNT)
+    parser.add_argument("--adverse-kill-cycles", type=int, default=DEFAULT_ADVERSE_KILL_CYCLES)
+    parser.add_argument("--adverse-kill-warmup-seconds", type=float, default=DEFAULT_ADVERSE_KILL_WARMUP_SECONDS)
+    parser.add_argument("--adverse-recovery-timeout-seconds", type=float, default=DEFAULT_ADVERSE_RECOVERY_TIMEOUT_SECONDS)
     parser.add_argument("--file-base-size-bytes", type=int, default=DEFAULT_FILE_BASE_SIZE_BYTES)
     parser.add_argument("--file-medium-size-bytes", type=int, default=DEFAULT_FILE_MEDIUM_SIZE_BYTES)
     parser.add_argument("--file-large-size-bytes", type=int, default=DEFAULT_FILE_LARGE_SIZE_BYTES)
@@ -186,19 +214,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--amule-daemon-exe")
     parser.add_argument("--amule-control-exe")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv_tokens)
+    args.total_client_count_explicit = total_client_count_explicit
+    args.extra_emulebb_clients_explicit = extra_emulebb_clients_explicit
+    return args
 
 
 def validate_args(args: argparse.Namespace) -> None:
     """Rejects impossible or too-ambiguous stress arguments early."""
 
+    if bool(getattr(args, "total_client_count_explicit", False)) and bool(getattr(args, "extra_emulebb_clients_explicit", False)):
+        raise ValueError("Use either --total-client-count or --extra-emulebb-clients, not both.")
+    if bool(getattr(args, "extra_emulebb_clients_explicit", False)):
+        args.total_client_count = int(args.extra_emulebb_clients) + BASE_GODZILLA_CLIENT_COUNT
+    else:
+        args.extra_emulebb_clients = max(0, int(args.total_client_count) - BASE_GODZILLA_CLIENT_COUNT)
     for name in (
         "emulebb_files",
         "extra_emulebb_clients",
+        "total_client_count",
         "extra_emulebb_files",
         "harness_files",
         "amule_files",
         "transfer_count",
+        "peer_transfer_count",
+        "harness_transfer_count",
+        "adverse_kill_cycles",
         "client_rotation_cycles",
         "ui_cycle_cycles",
         "rest_search_rounds",
@@ -209,10 +250,16 @@ def validate_args(args: argparse.Namespace) -> None:
     ):
         if int(getattr(args, name)) < 0:
             raise ValueError(f"{name.replace('_', '-')} must not be negative.")
+    if args.total_client_count < BASE_GODZILLA_CLIENT_COUNT:
+        raise ValueError(f"total-client-count must be at least {BASE_GODZILLA_CLIENT_COUNT}.")
+    if args.total_client_count > MAX_GODZILLA_CLIENT_COUNT:
+        raise ValueError(f"total-client-count must not exceed {MAX_GODZILLA_CLIENT_COUNT}.")
     if args.harness_files <= 0 or args.amule_files <= 0:
         raise ValueError("harness-files and amule-files must be greater than zero.")
     if args.transfer_count <= 0:
         raise ValueError("transfer-count must be greater than zero.")
+    if args.peer_transfer_count <= 0 or args.harness_transfer_count <= 0:
+        raise ValueError("peer-transfer-count and harness-transfer-count must be greater than zero.")
     if min(args.file_base_size_bytes, args.file_medium_size_bytes, args.file_large_size_bytes) <= 0:
         raise ValueError("file sizes must be greater than zero.")
     if args.resource_sample_interval_seconds <= 0:
@@ -227,10 +274,38 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("VHD size must be greater than zero.")
     if args.hammer_wave_sleep_seconds < 0:
         raise ValueError("Hammer wave sleep seconds must not be negative.")
+    if args.adverse_kill_warmup_seconds < 0:
+        raise ValueError("Adverse kill warmup seconds must not be negative.")
+    if args.adverse_recovery_timeout_seconds <= 0:
+        raise ValueError("Adverse recovery timeout seconds must be greater than zero.")
     if args.cpu_profile_max_file_mb <= 0:
         raise ValueError("CPU profile max file MB must be greater than zero.")
     if args.cpu_profile_stack_min_hits <= 0:
         raise ValueError("CPU profile stack min hits must be greater than zero.")
+    validate_vhd_capacity(args)
+
+
+def estimate_library_bytes(count: int, args: argparse.Namespace) -> int:
+    """Estimates generated bytes without creating the deterministic library."""
+
+    return sum(generated_size(index, args) for index in range(max(0, count)))
+
+
+def validate_vhd_capacity(args: argparse.Namespace) -> None:
+    """Rejects VHD sizes that are too small for the generated swarm payload."""
+
+    total_bytes = (
+        estimate_library_bytes(args.emulebb_files, args)
+        + estimate_library_bytes(args.harness_files, args)
+        + estimate_library_bytes(args.amule_files, args)
+        + (args.extra_emulebb_clients * estimate_library_bytes(args.extra_emulebb_files, args))
+    )
+    required_mb = int((total_bytes * 13) // (10 * 1024 * 1024)) + 4096
+    if args.vhd_size_mb < required_mb:
+        raise ValueError(
+            f"vhd-size-mb is too small for the requested generated libraries; "
+            f"need at least {required_mb} MB, got {args.vhd_size_mb} MB."
+        )
 
 
 def write_generated_file(path: Path, *, size_bytes: int, seed: int) -> str:
@@ -384,11 +459,46 @@ def discover_local_lan_ipv4() -> str:
 def resolve_local_p2p_address(args: argparse.Namespace) -> str:
     """Resolves the advertised local P2P address for the Godzilla local stack."""
 
+    def validate_lan_ipv4(value: str, *, source: str) -> str:
+        try:
+            address = ipaddress.IPv4Address(value.strip())
+        except ipaddress.AddressValueError as exc:
+            raise RuntimeError(f"{source} did not contain a valid IPv4 address: {value!r}") from exc
+        if bool(args.lan_mode) and (address.is_loopback or address.is_link_local or address.is_unspecified):
+            raise RuntimeError(f"{source} must be a usable LAN IPv4 address in Godzilla LAN mode, got {value!r}.")
+        return str(address)
+
     if args.p2p_bind_interface_address:
-        return str(args.p2p_bind_interface_address)
+        return validate_lan_ipv4(str(args.p2p_bind_interface_address), source="--p2p-bind-interface-address")
     if args.p2p_bind_interface_name.strip():
-        return dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
+        return validate_lan_ipv4(dtt.discover_interface_ipv4(args.p2p_bind_interface_name), source="--p2p-bind-interface-name")
+    if bool(args.lan_mode):
+        env_name = str(args.lan_address_env or X_LOCAL_IP_ENV)
+        env_value = os.environ.get(env_name, "").strip()
+        if not env_value:
+            raise RuntimeError(
+                f"Godzilla LAN mode requires {env_name} or --p2p-bind-interface-address. "
+                "Use --no-lan-mode only for local loopback debugging."
+            )
+        return validate_lan_ipv4(env_value, source=env_name)
     return discover_local_lan_ipv4()
+
+
+def resolve_rest_bind_addr(args: argparse.Namespace, p2p_address: str) -> str:
+    """Returns the REST bind address, promoting loopback defaults to LAN mode."""
+
+    candidate = str(args.bind_addr or "").strip()
+    if not bool(args.lan_mode):
+        return candidate or "127.0.0.1"
+    if not candidate or candidate.lower() == "localhost":
+        return p2p_address
+    try:
+        address = ipaddress.IPv4Address(candidate)
+    except ipaddress.AddressValueError as exc:
+        raise RuntimeError(f"--bind-addr must be an IPv4 address in Godzilla LAN mode, got {candidate!r}.") from exc
+    if address.is_loopback or address.is_link_local or address.is_unspecified:
+        return p2p_address
+    return str(address)
 
 
 def resolve_required_amule(paths, args: argparse.Namespace):
@@ -1387,6 +1497,109 @@ def restart_primary_emulebb_client(
     return restarted, event
 
 
+def query_process_command_line(process_id: int) -> str:
+    """Returns a process command line through CIM for kill-safety checks."""
+
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        f"(Get-CimInstance Win32_Process -Filter \"ProcessId={process_id}\").CommandLine",
+    ]
+    completed = subprocess.run(command, text=True, capture_output=True, timeout=15.0, check=False)
+    return completed.stdout.strip()
+
+
+def hard_kill_app_process(
+    *,
+    label: str,
+    app,
+    profile_base: Path,
+    runtime_root: Path,
+) -> dict[str, object]:
+    """Force-kills a Godzilla child after verifying it belongs to the throwaway profile."""
+
+    require_throwaway_profile(profile_base, runtime_root, label)
+    process_id = app_process_id(app)
+    command_line = query_process_command_line(process_id)
+    if command_line and str(profile_base).lower() not in command_line.lower():
+        raise RuntimeError(f"Refusing to kill {label} pid {process_id}; command line does not reference {profile_base}.")
+    started = time.monotonic()
+    completed = subprocess.run(
+        ["taskkill", "/F", "/T", "/PID", str(process_id)],
+        text=True,
+        capture_output=True,
+        timeout=30.0,
+        check=False,
+    )
+    return {
+        "client": label,
+        "pid": process_id,
+        "command_line": command_line,
+        "return_code": completed.returncode,
+        "stdout_tail": completed.stdout[-1000:],
+        "stderr_tail": completed.stderr[-1000:],
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+
+
+def fetch_transfer_rows(base_url: str, api_key: str) -> list[dict[str, object]]:
+    """Fetches the current eMuleBB transfer rows from REST."""
+
+    result = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=api_key, request_timeout_seconds=20.0)
+    return [row for row in rest_smoke.require_json_array(result, 200) if isinstance(row, dict)]
+
+
+def summarize_transfer_rows(rows: list[dict[str, object]]) -> dict[str, object]:
+    """Builds a compact state histogram for transfer pressure evidence."""
+
+    states: dict[str, int] = {}
+    samples: list[dict[str, object]] = []
+    for row in rows:
+        state = str(row.get("state") or row.get("status") or row.get("phase") or "unknown")
+        states[state] = states.get(state, 0) + 1
+        if len(samples) < 10:
+            samples.append(
+                {
+                    "hash": row.get("hash") or row.get("fileHash") or row.get("id"),
+                    "name": row.get("name") or row.get("fileName"),
+                    "state": state,
+                    "size": row.get("size") or row.get("fileSize"),
+                    "completed": row.get("completed") or row.get("completedSize"),
+                }
+            )
+    return {"count": len(rows), "states": states, "samples": samples}
+
+
+def sample_transfer_state(base_url: str, api_key: str, label: str) -> dict[str, object]:
+    """Captures a transfer-list snapshot without storing the full list."""
+
+    rows = fetch_transfer_rows(base_url, api_key)
+    summary = summarize_transfer_rows(rows)
+    summary["label"] = label
+    summary["observed_at"] = round(time.time(), 3)
+    return summary
+
+
+def wait_for_transfer_pressure(
+    *,
+    base_url: str,
+    api_key: str,
+    minimum_count: int,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until the primary client has a meaningful transfer list."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        snapshot = sample_transfer_state(base_url, api_key, "pressure")
+        observations.append(snapshot)
+        return {"minimum": minimum_count, "observations": observations} if int(snapshot["count"]) >= minimum_count else None
+
+    return live_common.wait_for(resolve, timeout_seconds, 2.0, f"transfer pressure >= {minimum_count}")
+
+
 def restart_amule_client(
     *,
     process: subprocess.Popen | None,
@@ -1501,6 +1714,101 @@ def rotate_source_clients(
     return client2_app, amule_process, events
 
 
+def run_adverse_kill_recovery(
+    *,
+    args: argparse.Namespace,
+    runtime_root: Path,
+    client1_app,
+    client1_app_exe: Path,
+    client1_profile_base: Path,
+    client2_app,
+    client2_app_exe: Path,
+    client2_profile_base: Path,
+    harness_dir: Path,
+    harness_links: list[str],
+    base_url: str,
+    admin_base_url: str,
+    api_key: str,
+    p2p_address: str,
+    ed2k_port: int,
+    procdump_path: Path | None,
+    procdump_dump_dir: Path,
+    procdump_process: subprocess.Popen | None,
+) -> tuple[object, object, subprocess.Popen | None, list[dict[str, object]]]:
+    """Hard-kills and relaunches primary/harness clients while transfers are active."""
+
+    if args.adverse_kill_cycles <= 0:
+        return client1_app, client2_app, procdump_process, []
+    events: list[dict[str, object]] = []
+    pressure_minimum = min(max(1, args.peer_transfer_count // 2), 200)
+    try:
+        pressure = wait_for_transfer_pressure(
+            base_url=base_url,
+            api_key=api_key,
+            minimum_count=pressure_minimum,
+            timeout_seconds=min(args.adverse_recovery_timeout_seconds, 120.0),
+        )
+    except Exception as exc:
+        pressure = {"ok": False, "type": type(exc).__name__, "message": str(exc) or repr(exc)}
+    for cycle in range(args.adverse_kill_cycles):
+        if args.adverse_kill_warmup_seconds:
+            time.sleep(args.adverse_kill_warmup_seconds)
+        event: dict[str, object] = {
+            "cycle": cycle + 1,
+            "pressure_gate": pressure,
+            "started_at": round(time.time(), 3),
+            "before": sample_transfer_state(base_url, api_key, f"adverse-cycle-{cycle + 1}-before"),
+        }
+        event["kill_primary"] = hard_kill_app_process(
+            label=CLIENT01.profile_id,
+            app=client1_app,
+            profile_base=client1_profile_base,
+            runtime_root=runtime_root,
+        )
+        event["kill_harness"] = hard_kill_app_process(
+            label=CLIENT02.profile_id,
+            app=client2_app,
+            profile_base=client2_profile_base,
+            runtime_root=runtime_root,
+        )
+        event["crash_monitor_before_relaunch"] = finish_procdump_crash_monitor(procdump_process, 5.0)
+        procdump_process = None
+        client1_app, event["primary_relaunch"] = restart_primary_emulebb_client(
+            app=None,
+            app_exe=client1_app_exe,
+            profile_base=client1_profile_base,
+            base_url=base_url,
+            admin_base_url=admin_base_url,
+            api_key=api_key,
+            p2p_address=p2p_address,
+            ed2k_port=ed2k_port,
+            timeout_seconds=args.adverse_recovery_timeout_seconds,
+            visible_ui=args.visible_ui,
+        )
+        event["crash_monitor_after_relaunch"], procdump_process = start_procdump_crash_monitor(
+            procdump_path=procdump_path,
+            process_id=app_process_id(client1_app),
+            dump_dir=procdump_dump_dir,
+        )
+        cycle_links_path = harness_dir / f"downloads-cycle-{cycle + 1:02d}.ed2k.txt"
+        cycle_report_path = harness_dir / f"download-report-cycle-{cycle + 1:02d}.json"
+        event["harness_download_links"] = write_download_link_file(cycle_links_path, harness_links)
+        client2_app, event["harness_relaunch"] = restart_tracing_harness_client(
+            app=None,
+            app_exe=client2_app_exe,
+            profile_base=client2_profile_base,
+            extra_args=build_harness_args(cycle_links_path, cycle_report_path),
+            admin_base_url=admin_base_url,
+            api_key=api_key,
+            timeout_seconds=args.adverse_recovery_timeout_seconds,
+            visible_ui=args.visible_ui,
+        )
+        event["after"] = sample_transfer_state(base_url, api_key, f"adverse-cycle-{cycle + 1}-after")
+        event["finished_at"] = round(time.time(), 3)
+        events.append(event)
+    return client1_app, client2_app, procdump_process, events
+
+
 def write_reports(paths, report: dict[str, object]) -> None:
     """Writes suite-specific JSON evidence."""
 
@@ -1519,6 +1827,70 @@ def json_safe(value):
     if isinstance(value, (list, tuple)):
         return [json_safe(item) for item in value]
     return value
+
+
+def path_is_under(path: Path, root: Path) -> bool:
+    """Returns whether path resolves under root."""
+
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def reject_tools_runtime_path(path: Path, label: str) -> None:
+    """Keeps destructive Godzilla phases away from the operator's live tools tree."""
+
+    tools_root = Path("C:/tools")
+    if path_is_under(path, tools_root):
+        raise RuntimeError(f"{label} must be throwaway test storage, not under {tools_root}: {path}")
+
+
+def require_throwaway_profile(profile_base: Path, runtime_root: Path, label: str) -> None:
+    """Requires a client profile to live inside the Godzilla runtime root."""
+
+    if not path_is_under(profile_base, runtime_root):
+        raise RuntimeError(f"{label} profile must live under Godzilla runtime root {runtime_root}: {profile_base}")
+    reject_tools_runtime_path(profile_base, f"{label} profile")
+
+
+def enable_crash_dump_preferences(config_dir: Path, *, full_memory: bool) -> dict[str, object]:
+    """Enables unattended crash dumps in one throwaway eMule-family profile."""
+
+    preferences_path = config_dir / "preferences.ini"
+    text = read_ini_text(preferences_path)
+    text = upsert_ini_section_value(text, "eMule", "CreateCrashDump", "2")
+    if full_memory:
+        text = upsert_ini_section_value(text, "eMule", "CaptureFullCrashDump", "1")
+    write_utf16_ini_text(preferences_path, text)
+    return {
+        "preferences": str(preferences_path),
+        "create_crash_dump": 2,
+        "capture_full_crash_dump": bool(full_memory),
+    }
+
+
+def merge_local_dumps_config(primary: dict[str, object], extra: dict[str, object]) -> dict[str, object]:
+    """Merges an additional WER LocalDumps image registration into the run record."""
+
+    if not isinstance(primary, dict) or not isinstance(extra, dict):
+        return primary
+    if primary.get("dump_folder") != extra.get("dump_folder"):
+        primary.setdefault("additional_local_dumps", []).append(extra)
+        return primary
+    image_names = list(primary.get("image_names") or [])
+    for image_name in extra.get("image_names") or []:
+        if image_name not in image_names:
+            image_names.append(image_name)
+    primary["image_names"] = image_names
+    entries = list(primary.get("entries") or [])
+    seen = {str(entry.get("image_name")) for entry in entries if isinstance(entry, dict)}
+    for entry in extra.get("entries") or []:
+        if isinstance(entry, dict) and str(entry.get("image_name")) not in seen:
+            entries.append(entry)
+    primary["entries"] = entries
+    return primary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1656,9 +2028,20 @@ def main(argv: list[str] | None = None) -> int:
         amule_daemon_exe = amule_client.executable
         amule_control_exe = amule_client.control_executable
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
+        reject_tools_runtime_path(runtime_root, "Godzilla runtime root")
+        reject_tools_runtime_path(paths.source_artifacts_dir, "Godzilla artifact directory")
+        if client2_app_exe.name not in set(paths.local_dumps.get("image_names") or []):
+            harness_local_dumps = harness_cli_common.configure_local_dumps(
+                artifact_dir=paths.source_artifacts_dir,
+                app_exe=client2_app_exe,
+                tool_image_names=(),
+            )
+            merge_local_dumps_config(paths.local_dumps, harness_local_dumps)
+            harness_cli_common.write_json_file(paths.source_artifacts_dir / "local-dumps.json", paths.local_dumps)
         protocol_case = protocol_matrix.PROTOCOL_CASE_MAP[args.protocol_case]
         client_protocol_preferences = protocol_preferences(protocol_case)
         p2p_address = resolve_local_p2p_address(args)
+        args.bind_addr = resolve_rest_bind_addr(args, p2p_address)
         ports = choose_ports(args.extra_emulebb_clients)
         if args.amutorrent_controller:
             ports["amutorrent"] = allocate_free_tcp_port(set(ports.values()))
@@ -1692,7 +2075,13 @@ def main(argv: list[str] | None = None) -> int:
                 for client in extra_emulebb_clients
             ],
         }
-        report["network"] = {"p2p_bind_interface_address": p2p_address, "ports": ports}
+        report["network"] = {
+            "lan_mode": bool(args.lan_mode),
+            "lan_address_env": args.lan_address_env,
+            "rest_bind_addr": args.bind_addr,
+            "p2p_bind_interface_address": p2p_address,
+            "ports": ports,
+        }
         report["protocol_case"] = {
             "name": protocol_case.name,
             "server_protocol_obfuscation": protocol_case.server_protocol_obfuscation,
@@ -1826,6 +2215,20 @@ def main(argv: list[str] | None = None) -> int:
                 p2p_bind_addr=p2p_address,
                 **client_protocol_preferences,
             )
+        require_throwaway_profile(Path(client1["profile_base"]), runtime_root, CLIENT01.profile_id)
+        require_throwaway_profile(Path(client2["profile_base"]), runtime_root, CLIENT02.profile_id)
+        crash_preferences: dict[str, object] = {
+            CLIENT01.profile_id: enable_crash_dump_preferences(Path(client1["config_dir"]), full_memory=True),
+            CLIENT02.profile_id: enable_crash_dump_preferences(Path(client2["config_dir"]), full_memory=False),
+            "extra_emulebb": {},
+        }
+        for client in extra_emulebb_clients:
+            require_throwaway_profile(Path(str(client["profile_base"])), runtime_root, str(client["profile_id"]))
+            crash_preferences["extra_emulebb"][str(client["profile_id"])] = enable_crash_dump_preferences(
+                Path(str(client["config_dir"])),
+                full_memory=True,
+            )
+        report["checks"]["crash_dump_preferences"] = crash_preferences
         for config_dir in (
             Path(client1["config_dir"]),
             Path(client2["config_dir"]),
@@ -1980,6 +2383,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             primary_republish = {"skipped": True}
+        diagnostics = report.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            crash_report = diagnostics.get("crash_monitor")
+            if isinstance(crash_report, dict) and crash_report.get("enabled") and args.emulebb_files:
+                crash_report.setdefault("primary_restarts", []).append(
+                    {
+                        "reason": "post_hash_publication",
+                        "finish_old": finish_procdump_crash_monitor(procdump_crash_monitor_process, 5.0),
+                    }
+                )
+                crash_report["restart_after_post_hash"], procdump_crash_monitor_process = start_procdump_crash_monitor(
+                    procdump_path=procdump_path,
+                    process_id=app_process_id(client1_app),
+                    dump_dir=procdump_crash_dump_dir,
+                )
         report["checks"]["post_hash_publication"] = {
             CLIENT01.profile_id: {
                 "known_met": primary_known_met,
@@ -2060,15 +2478,16 @@ def main(argv: list[str] | None = None) -> int:
                 }
 
         current_phase = "queue_transfer_waves"
-        harness_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT02.key}-godzilla-", limit=max(args.transfer_count, 1))
-        amule_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT04.key}-godzilla-", limit=max(args.transfer_count, 1))
-        emulebb_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT01.key}-godzilla-", limit=max(args.transfer_count, 1))
+        server_collect_limit = max(args.transfer_count, args.peer_transfer_count, args.harness_transfer_count, 1)
+        harness_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT02.key}-godzilla-", limit=server_collect_limit)
+        amule_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT04.key}-godzilla-", limit=server_collect_limit)
+        emulebb_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT01.key}-godzilla-", limit=server_collect_limit)
         extra_rows_by_profile = {
             str(client["profile_id"]): collect_server_files(
                 admin_base_url,
                 args.api_key,
                 search=f"{client['key']}-godzilla-",
-                limit=max(args.transfer_count, 1),
+                limit=server_collect_limit,
             )
             for client in extra_emulebb_clients
         }
@@ -2077,18 +2496,24 @@ def main(argv: list[str] | None = None) -> int:
             CLIENT04.key: ports["amule_tcp"],
             **{str(client["key"]): int(client["tcp_port"]) for client in extra_emulebb_clients},
         }
-        emulebb_source_rows = interleave_rows([harness_rows, amule_rows, *extra_rows_by_profile.values()], args.transfer_count)
+        peer_harness_rows = harness_rows[: args.peer_transfer_count]
+        mixed_rows = interleave_rows(
+            [harness_rows[args.peer_transfer_count :], amule_rows, *extra_rows_by_profile.values()],
+            max(0, args.transfer_count - len(peer_harness_rows)),
+        )
+        emulebb_source_rows = (peer_harness_rows + mixed_rows)[: args.transfer_count]
         emulebb_links = [
             build_file_link(row, source_ip=p2p_address, source_port=source_port_by_key[row.owner_key])
             for row in emulebb_source_rows
         ]
+        harness_download_rows = emulebb_rows[: args.harness_transfer_count]
         amule_links = [
             build_file_link(row, source_ip=p2p_address, source_port=ports["client1_tcp"])
-            for row in emulebb_rows[: max(1, min(50, args.transfer_count // 4))]
+            for row in emulebb_rows[args.harness_transfer_count : args.harness_transfer_count + max(1, min(50, args.transfer_count // 4))]
         ]
         harness_links = [
             build_file_link(row, source_ip=p2p_address, source_port=ports["client1_tcp"])
-            for row in emulebb_rows[max(1, min(50, args.transfer_count // 4)) : max(2, min(100, args.transfer_count // 2))]
+            for row in harness_download_rows
         ]
         report["checks"]["emulebb_download_add"] = queue_emulebb_downloads(base_url, args.api_key, emulebb_links)
         report["checks"]["amule_download_add"] = queue_amule_downloads(amule_control_exe, amule_profile, amule_links)
@@ -2105,10 +2530,33 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["extra_emulebb_download_add"] = extra_download_checks
         report["queued_transfer_counts"] = {
             "emulebb": len(emulebb_links),
+            "peer_harness_to_emulebb": len(peer_harness_rows),
             "amule": len(amule_links),
             "harness": len(harness_links),
+            "peer_emulebb_to_harness": len(harness_links),
             "extra_emulebb": extra_download_counts,
         }
+        current_phase = "adverse_kill_recovery"
+        client1_app, client2_app, procdump_crash_monitor_process, report["checks"]["adverse_kill_recovery"] = run_adverse_kill_recovery(
+            args=args,
+            runtime_root=runtime_root,
+            client1_app=client1_app,
+            client1_app_exe=paths.app_exe,
+            client1_profile_base=Path(client1["profile_base"]),
+            client2_app=client2_app,
+            client2_app_exe=client2_app_exe,
+            client2_profile_base=Path(client2["profile_base"]),
+            harness_dir=harness_dir,
+            harness_links=harness_links,
+            base_url=base_url,
+            admin_base_url=admin_base_url,
+            api_key=args.api_key,
+            p2p_address=p2p_address,
+            ed2k_port=ports["ed2k_tcp"],
+            procdump_path=procdump_path if args.crash_monitor else None,
+            procdump_dump_dir=procdump_crash_dump_dir,
+            procdump_process=procdump_crash_monitor_process,
+        )
         local_search_queries = [
             f"{CLIENT01.key}-godzilla-",
             f"{CLIENT02.key}-godzilla-",

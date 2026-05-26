@@ -84,6 +84,13 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS = 30.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 60.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
+DEFAULT_GODZILLA_VHD_SIZE_MB = 128 * 1024
+DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT = 30
+DEFAULT_GODZILLA_PEER_TRANSFER_COUNT = 300
+DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT = 300
+DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES = 2
+DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS = 45.0
+DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS = 300.0
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_PROFILE_CPU_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
@@ -909,6 +916,12 @@ def build_suite_command(
     godzilla_p2p_bind_interface_address: str | None = None,
     godzilla_cpu_profile: bool = False,
     godzilla_vhd_runtime_root: str = "drive-letter",
+    godzilla_total_client_count: int = DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT,
+    godzilla_peer_transfer_count: int = DEFAULT_GODZILLA_PEER_TRANSFER_COUNT,
+    godzilla_harness_transfer_count: int = DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT,
+    godzilla_adverse_kill_cycles: int = DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES,
+    godzilla_adverse_kill_warmup_seconds: float = DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS,
+    godzilla_adverse_recovery_timeout_seconds: float = DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS,
     live_wire_inputs_file: Path | None = None,
     search_ui_search_rounds: int = DEFAULT_SEARCH_UI_SEARCH_ROUNDS,
     search_ui_download_lifecycle_count: int = DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT,
@@ -992,6 +1005,8 @@ def build_suite_command(
             suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB)
         elif spec.is_amutorrent_browser:
             suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB)
+        elif spec.name == "godzilla-local-swarm":
+            suite_vhd_size_mb = max(vhd_size_mb, DEFAULT_GODZILLA_VHD_SIZE_MB)
         else:
             suite_vhd_size_mb = vhd_size_mb
         command.extend(["--vhd-size-mb", str(suite_vhd_size_mb)])
@@ -1100,6 +1115,12 @@ def build_suite_command(
         if godzilla_cpu_profile:
             command.append("--cpu-profile")
         command.extend(["--vhd-runtime-root", godzilla_vhd_runtime_root])
+        command.extend(["--total-client-count", str(godzilla_total_client_count)])
+        command.extend(["--peer-transfer-count", str(godzilla_peer_transfer_count)])
+        command.extend(["--harness-transfer-count", str(godzilla_harness_transfer_count)])
+        command.extend(["--adverse-kill-cycles", str(godzilla_adverse_kill_cycles)])
+        command.extend(["--adverse-kill-warmup-seconds", str(godzilla_adverse_kill_warmup_seconds)])
+        command.extend(["--adverse-recovery-timeout-seconds", str(godzilla_adverse_recovery_timeout_seconds)])
     if spec.name == "local-kad-swarm":
         command.extend(["--bootstrap-mode", local_kad_bootstrap_mode])
         command.extend(["--nodes-dat-fixture-mode", local_kad_nodes_dat_fixture_mode])
@@ -1633,6 +1654,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--godzilla-p2p-bind-interface-address")
     parser.add_argument("--godzilla-cpu-profile", action="store_true")
     parser.add_argument("--godzilla-vhd-runtime-root", choices=["drive-letter"], default="drive-letter")
+    parser.add_argument("--godzilla-total-client-count", type=int, default=DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT)
+    parser.add_argument("--godzilla-peer-transfer-count", type=int, default=DEFAULT_GODZILLA_PEER_TRANSFER_COUNT)
+    parser.add_argument("--godzilla-harness-transfer-count", type=int, default=DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT)
+    parser.add_argument("--godzilla-adverse-kill-cycles", type=int, default=DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES)
+    parser.add_argument("--godzilla-adverse-kill-warmup-seconds", type=float, default=DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS)
+    parser.add_argument("--godzilla-adverse-recovery-timeout-seconds", type=float, default=DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS)
     return parser
 
 
@@ -1653,6 +1680,16 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("REST stress request timeout must be greater than zero.")
     if args.rest_stop_start_after_churn and args.rest_leak_churn_budget == "off":
         raise ValueError("REST stop/start after churn requires --rest-leak-churn-budget.")
+    if args.godzilla_total_client_count < 3 or args.godzilla_total_client_count > DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT:
+        raise ValueError(f"Godzilla total client count must be between 3 and {DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT}.")
+    if args.godzilla_peer_transfer_count <= 0 or args.godzilla_harness_transfer_count <= 0:
+        raise ValueError("Godzilla transfer counts must be greater than zero.")
+    if args.godzilla_adverse_kill_cycles < 0:
+        raise ValueError("Godzilla adverse kill cycles must be zero or greater.")
+    if args.godzilla_adverse_kill_warmup_seconds < 0:
+        raise ValueError("Godzilla adverse kill warmup seconds must be zero or greater.")
+    if args.godzilla_adverse_recovery_timeout_seconds <= 0:
+        raise ValueError("Godzilla adverse recovery timeout must be greater than zero.")
     if args.arr_direct_search_stress_count <= 0:
         raise ValueError("Arr direct search stress count must be greater than zero.")
     if args.arr_prowlarr_search_stress_count <= 0:
@@ -1931,6 +1968,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "p2p_bind_interface_address": args.godzilla_p2p_bind_interface_address,
             "cpu_profile": bool(args.godzilla_cpu_profile),
             "vhd_runtime_root": args.godzilla_vhd_runtime_root,
+            "total_client_count": args.godzilla_total_client_count,
+            "peer_transfer_count": args.godzilla_peer_transfer_count,
+            "harness_transfer_count": args.godzilla_harness_transfer_count,
+            "adverse_kill_cycles": args.godzilla_adverse_kill_cycles,
+            "adverse_kill_warmup_seconds": args.godzilla_adverse_kill_warmup_seconds,
+            "adverse_recovery_timeout_seconds": args.godzilla_adverse_recovery_timeout_seconds,
         },
         "rest_cold_start_dump_stress": {
             "waves": args.rest_cold_start_dump_stress_waves,
@@ -2019,6 +2062,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             godzilla_p2p_bind_interface_address=args.godzilla_p2p_bind_interface_address,
             godzilla_cpu_profile=args.godzilla_cpu_profile,
             godzilla_vhd_runtime_root=args.godzilla_vhd_runtime_root,
+            godzilla_total_client_count=args.godzilla_total_client_count,
+            godzilla_peer_transfer_count=args.godzilla_peer_transfer_count,
+            godzilla_harness_transfer_count=args.godzilla_harness_transfer_count,
+            godzilla_adverse_kill_cycles=args.godzilla_adverse_kill_cycles,
+            godzilla_adverse_kill_warmup_seconds=args.godzilla_adverse_kill_warmup_seconds,
+            godzilla_adverse_recovery_timeout_seconds=args.godzilla_adverse_recovery_timeout_seconds,
             live_wire_inputs_file=live_wire_inputs_file,
             search_ui_search_rounds=args.search_ui_search_rounds,
             search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,

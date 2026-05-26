@@ -280,6 +280,42 @@ def test_godzilla_runtime_root_is_drive_letter_only() -> None:
         godzilla.parse_args(["--vhd-runtime-root", "folder-mount"])
 
 
+def test_godzilla_lan_mode_uses_x_local_ip(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_env_test")
+    monkeypatch.setenv("X_LOCAL_IP", "192.168.1.210")
+
+    args = godzilla.parse_args([])
+    godzilla.validate_args(args)
+
+    assert args.total_client_count == 30
+    assert args.extra_emulebb_clients == 27
+    assert godzilla.resolve_local_p2p_address(args) == "192.168.1.210"
+    assert godzilla.resolve_rest_bind_addr(args, "192.168.1.210") == "192.168.1.210"
+
+
+def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_loopback_test")
+    monkeypatch.setenv("X_LOCAL_IP", "127.0.0.1")
+    args = godzilla.parse_args(
+        [
+            "--total-client-count",
+            "3",
+            "--emulebb-files",
+            "1",
+            "--harness-files",
+            "1",
+            "--amule-files",
+            "1",
+            "--vhd-size-mb",
+            "4103",
+        ]
+    )
+    godzilla.validate_args(args)
+
+    with pytest.raises(RuntimeError):
+        godzilla.resolve_local_p2p_address(args)
+
+
 def test_default_fixture_size_is_132_mib() -> None:
     module = load_suite_module()
     args = module.parse_args([])
