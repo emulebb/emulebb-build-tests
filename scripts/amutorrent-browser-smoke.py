@@ -371,6 +371,33 @@ def assert_snapshot_items_are_display_safe(checks: dict[str, Any]) -> None:
             raise RuntimeError(f"aMuTorrent browser workflow '{item_name}' has incomplete shared-file progress: {progress!r}")
 
 
+def assert_snapshot_stats_are_host_usable(checks: dict[str, Any]) -> None:
+    """Rejects host stats payloads that silently degrade on Windows/package hosts."""
+
+    for check_name in ("snapshot_after_add", "snapshot_after_delete"):
+        result = checks.get(check_name)
+        if not isinstance(result, dict) or int(result.get("status", 0)) >= 300:
+            continue
+        payload = result.get("payload")
+        data = payload.get("data") if isinstance(payload, dict) else None
+        stats = data.get("stats") if isinstance(data, dict) else None
+        if not isinstance(stats, dict):
+            continue
+        disk_space = stats.get("diskSpace")
+        if isinstance(disk_space, dict):
+            if disk_space.get("error"):
+                raise RuntimeError(f"aMuTorrent browser workflow '{check_name}' reported disk stats error: {disk_space!r}")
+            if not isinstance(disk_space.get("total"), int) or disk_space.get("total", 0) <= 0:
+                raise RuntimeError(f"aMuTorrent browser workflow '{check_name}' reported unusable disk stats: {disk_space!r}")
+        cpu_usage = stats.get("cpuUsage")
+        if isinstance(cpu_usage, dict):
+            if cpu_usage.get("error"):
+                raise RuntimeError(f"aMuTorrent browser workflow '{check_name}' reported CPU stats error: {cpu_usage!r}")
+            percent = cpu_usage.get("percent")
+            if not isinstance(percent, (int, float)) or isinstance(percent, bool) or percent < 0 or percent > 100:
+                raise RuntimeError(f"aMuTorrent browser workflow '{check_name}' reported unusable CPU stats: {cpu_usage!r}")
+
+
 def assert_browser_delete_removed_added_download(checks: dict[str, Any]) -> None:
     """Verifies the browser delete workflow removed the synthetic eD2K transfer."""
 
@@ -514,6 +541,7 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
         if isinstance(payload, dict) and payload.get("type") == "error":
             raise RuntimeError(f"aMuTorrent browser workflow '{name}' returned an error payload: {result}")
     assert_snapshot_items_are_display_safe(checks)
+    assert_snapshot_stats_are_host_usable(checks)
     assert_browser_category_lifecycle(checks)
     assert_browser_search_workflows(checks)
     assert_emulebb_detail_hydration(checks)

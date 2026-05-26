@@ -118,6 +118,9 @@ def test_ui_live_script_uses_runtime_live_inputs_and_stable_ui_hooks() -> None:
     assert '"ubuntu"' not in script_text
     assert '"debian"' not in script_text
     assert "emulebb-search-submit" in script_text
+    assert "inputs.document_terms" in script_text
+    assert "emulebb-search-type-server" in script_text
+    assert "download_actions_covered_by" in script_text
     assert "emulebb-add-download-submit" in script_text
     assert "client-card-emulebb" in script_text
     assert "dismiss_first_run_version_modal" in script_text

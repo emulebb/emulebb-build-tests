@@ -205,6 +205,28 @@ def test_browser_workflow_validation_walks_nested_results() -> None:
     smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
 
 
+def test_browser_workflow_validation_rejects_host_stats_errors() -> None:
+    smoke = load_smoke_module()
+    checks = {
+        "snapshot_after_add": {
+            "status": 200,
+            "payload": {
+                "type": "batch-update",
+                "data": {
+                    "stats": {
+                        "diskSpace": {"total": 0, "used": 0, "free": 0, "percentUsed": 0, "error": "missing mounts"},
+                        "cpuUsage": {"percent": 0},
+                    },
+                    "items": [],
+                },
+            },
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="disk stats error"):
+        smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
 def test_browser_workflow_validation_rejects_noisy_snapshot_progress() -> None:
     smoke = load_smoke_module()
     checks = {

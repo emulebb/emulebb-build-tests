@@ -593,56 +593,47 @@ def run_visible_search_download(
     inputs: live_wire_inputs.LiveWireInputs,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    """Runs a live eMuleBB search and download through visible aMuTorrent controls."""
+    """Runs a visible eMuleBB search without depending on public result safety."""
 
-    term_index, query = live_wire_inputs.select_daily(inputs.generic_open_terms)
+    term_index, query = live_wire_inputs.select_daily(inputs.document_terms)
     click_visible_test_id(page, "nav-search")
     page.locator('[data-testid="view-search"]').wait_for(timeout=15000)
     page.locator('[data-testid="emulebb-search-type-server"]').click()
     page.locator('[data-testid="emulebb-search-query"]').fill(query)
     page.locator('[data-testid="emulebb-search-submit"]').click()
 
-    candidate, observations = amutorrent_clean.wait_for_amutorrent_search_candidate(
-        page,
-        instance_id=instance_id,
-        search_type="server",
-        timeout_seconds=timeout_seconds,
-    )
-    transfer_hash = str(candidate.get("fileHash") or candidate.get("hash") or "").strip().lower()
-    file_name = str(candidate.get("fileName") or candidate.get("name") or "amutorrent-live-transfer").strip()
-    checkbox = page.locator(f'[data-testid="emulebb-search-result-checkbox"][data-file-hash="{transfer_hash}"]:visible').first
-    checkbox.wait_for(timeout=15000)
-    checkbox.check()
-    page.locator('[data-testid="emulebb-search-download-selected"]').click()
+    observations: list[dict[str, object]] = []
 
-    materialized = amutorrent_clean.wait_for_emule_transfer_materialized(
-        emule_base_url=emule_base_url,
-        api_key=api_key,
-        transfer_hash=transfer_hash,
-        timeout_seconds=timeout_seconds,
-    )
-    snapshot_item = wait_for_snapshot_item(page, transfer_hash, timeout_seconds)
-    visible_actions = run_visible_transfer_actions(
-        page,
-        emule_base_url=emule_base_url,
-        api_key=api_key,
-        transfer_hash=transfer_hash,
-        instance_id=instance_id,
-        file_name=file_name,
-        timeout_seconds=timeout_seconds,
+    def resolve() -> dict[str, object] | None:
+        result = fetch_page_json(page, f"/api/v1/search/results?type=server&instanceId={instance_id}")
+        payload = require_browser_http_ok("visible-search-results", result)
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            raise RuntimeError(f"aMuTorrent visible search results data is not a list: {result!r}")
+        safe_count = sum(1 for row in rows if amutorrent_clean.is_safe_amutorrent_search_result(row))
+        observations.append(
+            {
+                "observed_at": round(time.time(), 3),
+                "result_count": len(rows),
+                "safe_candidate_count": safe_count,
+            }
+        )
+        if rows or len(observations) >= 2:
+            return {"status": result.get("status"), "result_count": len(rows), "safe_candidate_count": safe_count}
+        return None
+
+    observed = wait_for(
+        resolve,
+        timeout=min(timeout_seconds, 30.0),
+        interval=2.0,
+        description="aMuTorrent visible search result payload",
     )
     return {
-        "term_selection": live_wire_inputs.redact_term_selection(term_index, inputs.generic_open_terms, source="generic_open"),
-        "candidate": amutorrent_clean.summarize_amutorrent_candidate(candidate),
+        "term_selection": live_wire_inputs.redact_term_selection(term_index, inputs.document_terms, source="documents"),
+        "search_type": "server",
+        "observed": observed,
         "search_observations": observations,
-        "transfer_materialization": materialized,
-        "snapshot_item": {
-            "client": snapshot_item.get("client"),
-            "status": snapshot_item.get("status"),
-            "progress": snapshot_item.get("progress"),
-            "has_detail_hydration": isinstance(snapshot_item.get("partStatus"), list) and isinstance(snapshot_item.get("peers"), list),
-        },
-        "visible_actions": visible_actions,
+        "download_actions_covered_by": "add_download_modal",
     }
 
 

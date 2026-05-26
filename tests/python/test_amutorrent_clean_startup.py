@@ -102,6 +102,27 @@ def test_safe_amutorrent_search_result_rejects_programs_and_unsourced_rows() -> 
     )
 
 
+def test_safe_amutorrent_search_result_rejects_public_search_noise() -> None:
+    clean = load_clean_module()
+
+    assert not clean.is_safe_amutorrent_search_result(
+        {
+            "fileHash": "abcdef0123456789abcdef0123456789",
+            "fileName": "linux adult sample.avi",
+            "fileSize": 1024,
+            "sourceCount": 2,
+        }
+    )
+    assert not clean.is_safe_amutorrent_search_result(
+        {
+            "fileHash": "abcdef0123456789abcdef0123456789",
+            "fileName": "linux documentary.mp4",
+            "fileSize": 1024,
+            "sourceCount": 2,
+        }
+    )
+
+
 def test_clean_startup_script_does_not_hardcode_runtime_live_terms() -> None:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-clean-startup.py"
     script_text = script_path.read_text(encoding="utf-8")

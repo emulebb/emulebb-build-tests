@@ -168,9 +168,14 @@ def is_safe_amutorrent_search_result(row: Any) -> bool:
         return False
     transfer_hash = str(row.get("fileHash") or row.get("hash") or "").strip().lower()
     name = str(row.get("fileName") or row.get("name") or "").strip().lower()
+    file_type = str(row.get("fileType") or row.get("type") or "").strip().lower()
     size = row.get("fileSize", row.get("sizeBytes", row.get("size")))
     sources = row.get("sourceCount", row.get("sources"))
     if not name or name.endswith(rest_api_smoke.UNSAFE_LIVE_DOWNLOAD_SUFFIXES):
+        return False
+    if file_type in {"arc", "archive", "program", "pro", "video"}:
+        return False
+    if rest_api_smoke.has_unsafe_live_download_name_token(name):
         return False
     return (
         rest_api_smoke.is_lowercase_md4_hash(transfer_hash)

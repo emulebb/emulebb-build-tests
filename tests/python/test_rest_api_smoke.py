@@ -512,6 +512,18 @@ def test_rest_tls_handshake_adversity_requires_https() -> None:
         )
 
 
+def test_rest_adversity_config_rejects_incompatible_transports() -> None:
+    module = load_rest_api_smoke_module()
+
+    with pytest.raises(ValueError, match="socket adversity"):
+        module.validate_rest_adversity_config(webserver_scheme="https", socket_budget="smoke", tls_budget="off")
+    with pytest.raises(ValueError, match="TLS handshake adversity"):
+        module.validate_rest_adversity_config(webserver_scheme="http", socket_budget="off", tls_budget="smoke")
+
+    module.validate_rest_adversity_config(webserver_scheme="http", socket_budget="smoke", tls_budget="off")
+    module.validate_rest_adversity_config(webserver_scheme="https", socket_budget="off", tls_budget="smoke")
+
+
 def test_rest_tls_handshake_adversity_records_smoke_probes(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     observed: list[dict[str, object]] = []
@@ -2823,8 +2835,10 @@ def test_live_download_candidate_filter_rejects_unsafe_rows() -> None:
     assert module.is_safe_live_download_result(safe) is True
     assert module.is_safe_live_download_result({**safe, "name": "setup.exe"}) is False
     assert module.is_safe_live_download_result({**safe, "name": "installer.msi"}) is False
+    assert module.is_safe_live_download_result({**safe, "name": "clip.mp4"}) is False
     assert module.is_safe_live_download_result({**safe, "name": "bundle.rar", "fileType": "Arc"}) is False
     assert module.is_safe_live_download_result({**safe, "fileType": "Pro"}) is False
+    assert module.is_safe_live_download_result({**safe, "name": "linux xxx sample.iso"}) is False
     assert module.is_safe_live_download_result({**safe, "hash": "0123456789ABCDEF0123456789ABCDEF"}) is False
     assert module.is_safe_live_download_result({**safe, "sizeBytes": 0}) is False
     assert module.is_safe_live_download_result({**safe, "sizeBytes": module.MAX_SAFE_LIVE_DOWNLOAD_BYTES + 1}) is False

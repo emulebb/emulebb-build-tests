@@ -140,20 +140,42 @@ MIN_SAFE_LIVE_DOWNLOAD_SOURCES = 2
 UNSAFE_LIVE_DOWNLOAD_SUFFIXES = (
     ".7z",
     ".ace",
+    ".avi",
     ".bat",
     ".bz2",
     ".cmd",
     ".com",
     ".exe",
     ".gz",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
     ".msi",
     ".ps1",
     ".rar",
     ".scr",
     ".tar",
     ".vbs",
+    ".wmv",
     ".xz",
     ".zip",
+)
+UNSAFE_LIVE_DOWNLOAD_NAME_TOKENS = (
+    "adult",
+    "amateur",
+    "erotic",
+    "fetish",
+    "naked",
+    "nude",
+    "nuda",
+    "porn",
+    "porno",
+    "sex",
+    "sexy",
+    "xxx",
 )
 NAT_BACKEND_ATTEMPT_PREFIX = "Attempting NAT mapping backend "
 UPNP_IGD_BACKEND_NAME = "UPnP IGD (MiniUPnP)"
@@ -2476,6 +2498,16 @@ def validate_rest_stress_config(
         raise ValueError("REST stress max failures must be zero or greater.")
     if request_timeout_seconds <= 0:
         raise ValueError("REST stress request timeout must be greater than zero.")
+
+
+def validate_rest_adversity_config(*, webserver_scheme: str, socket_budget: str, tls_budget: str) -> None:
+    """Validates raw REST adversity knobs before the live app is launched."""
+
+    scheme = str(webserver_scheme or "").lower()
+    if socket_budget != "off" and scheme != "http":
+        raise ValueError("REST socket adversity requires --webserver-scheme http.")
+    if tls_budget != "off" and scheme != "https":
+        raise ValueError("REST TLS handshake adversity requires --webserver-scheme https.")
 
 
 def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
@@ -5702,6 +5734,16 @@ def is_lowercase_md4_hash(value: object) -> bool:
     return all(("0" <= ch <= "9") or ("a" <= ch <= "f") for ch in value)
 
 
+def has_unsafe_live_download_name_token(file_name: str) -> bool:
+    """Returns true when a public search filename is not suitable for automated download."""
+
+    normalized = f" {file_name.lower()} "
+    separators = "'\"`~!@#$%^&*()[]{};:,.<>?/\\|_-+="
+    for separator in separators:
+        normalized = normalized.replace(separator, " ")
+    return any(f" {token} " in normalized for token in UNSAFE_LIVE_DOWNLOAD_NAME_TOKENS)
+
+
 def is_safe_live_download_result(result_row: object) -> bool:
     """Rejects unsafe or incomplete live search rows before triggering a paused download."""
 
@@ -5712,6 +5754,8 @@ def is_safe_live_download_result(result_row: object) -> bool:
     size_bytes = result_row.get("sizeBytes", result_row.get("size"))
     sources = result_row.get("sources")
     if not file_name or file_name.endswith(UNSAFE_LIVE_DOWNLOAD_SUFFIXES) or file_type in {"arc", "archive", "program", "pro"}:
+        return False
+    if has_unsafe_live_download_name_token(file_name):
         return False
     if not isinstance(sources, int) or isinstance(sources, bool) or sources < MIN_SAFE_LIVE_DOWNLOAD_SOURCES:
         return False
@@ -6156,6 +6200,11 @@ def main() -> int:
         concurrency=args.rest_stress_concurrency,
         max_failures=args.rest_stress_max_failures,
         request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+    )
+    validate_rest_adversity_config(
+        webserver_scheme=args.webserver_scheme,
+        socket_budget=args.rest_socket_adversity_budget,
+        tls_budget=args.rest_tls_handshake_adversity_budget,
     )
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
