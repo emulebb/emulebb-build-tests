@@ -76,3 +76,17 @@ def test_part_file_load_does_not_use_file_status_after_get_status_exception() ->
     assert "DebugLogWarning(_T(\"Failed to get file date of \\\"%s\\\" while loading part file \\\"%s\\\"%s\")" in block
     assert "time_t fdate = bHavePartFileStatus ? (time_t)filestatus.m_mtime.GetTime() : (time_t)-1;" in block
     assert "filestatus.m_szFullName" not in block
+
+
+def test_downloading_source_add_rejects_invalid_owner_and_tolerates_missing_ui() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CPartFile::AddDownloadingSource(CUpDownClient *client)") :
+        source.index("bool CPartFile::DetachDownloadingSource")
+    ]
+
+    assert "if (client == NULL)\n\t\treturn;" in block
+    assert "if (client->GetRequestFile() != this)" in block
+    assert 'DebugLogWarning(_T("Rejected downloading source with mismatched request file for \\"%s\\" - %s")' in block
+    assert "m_downloadingSourceList.AddTail(client);" in block
+    assert "if (theApp.emuledlg != NULL && theApp.emuledlg->transferwnd != NULL)" in block
