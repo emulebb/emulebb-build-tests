@@ -19,3 +19,18 @@ def test_startup_initialization_logs_mfc_exception_details() -> None:
     assert 'LogError(LOG_STATUSBAR, _T("Failed to initialize download queue%s"), (LPCTSTR)CExceptionStrDash(*ex));' in download_block
     assert "ex->Delete();" in download_block
     assert "bError = true;" in download_block
+
+
+def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
+    source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    start_block = source[source.index("void CemuleDlg::StartUPnP") : source.index("void CemuleDlg::RefreshUPnP")]
+    refresh_block = source[source.index("void CemuleDlg::RefreshUPnP") : source.index("void CemuleDlg::OnTimer")]
+
+    assert 'CString strImplementationName(_T("<unknown>"));' in start_block
+    assert "strImplementationName = impl->GetImplementationName();" in start_block
+    assert "DebugLogWarning(_T(\"NAT mapping startup failed in backend '%s'\"), (LPCTSTR)strImplementationName);" in start_block
+    assert "DebugLogWarning(_T(\"NAT mapping startup failed in backend '%s'%s\"), (LPCTSTR)strImplementationName, (LPCTSTR)CExceptionStrDash(*ex));" in start_block
+    assert 'CString strImplementationName(_T("<unknown>"));' in refresh_block
+    assert "strImplementationName = impl->GetImplementationName();" in refresh_block
+    assert "DebugLogWarning(_T(\"NAT mapping refresh failed in backend '%s'\"), (LPCTSTR)strImplementationName);" in refresh_block
+    assert "DebugLogWarning(_T(\"NAT mapping refresh failed in backend '%s'%s\"), (LPCTSTR)strImplementationName, (LPCTSTR)CExceptionStrDash(*ex));" in refresh_block
