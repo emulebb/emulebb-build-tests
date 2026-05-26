@@ -64,3 +64,15 @@ def test_zone_identifier_failures_are_logged_with_hresult() -> None:
     assert "VERIFY(SUCCEEDED(pPersistFile->Save" not in block
     assert 'DebugLogWarning(_T("Failed to create Zone.Identifier writer for \\"%s\\" (HRESULT 0x%08lX)")' in block
     assert 'DebugLogWarning(_T("Failed to save Zone.Identifier for \\"%s\\" (HRESULT 0x%08lX)")' in block
+
+
+def test_part_file_load_does_not_use_file_status_after_get_status_exception() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("if (!isnewstyle) { // not for importing") : source.index("if (m_tUtcLastModified != fdate)")]
+
+    assert "CFileStatus filestatus = {};" in block
+    assert "bool bHavePartFileStatus = false;" in block
+    assert "bHavePartFileStatus = true;" in block
+    assert "DebugLogWarning(_T(\"Failed to get file date of \\\"%s\\\" while loading part file \\\"%s\\\"%s\")" in block
+    assert "time_t fdate = bHavePartFileStatus ? (time_t)filestatus.m_mtime.GetTime() : (time_t)-1;" in block
+    assert "filestatus.m_szFullName" not in block
