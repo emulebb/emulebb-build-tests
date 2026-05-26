@@ -90,3 +90,34 @@ def test_downloading_source_add_rejects_invalid_owner_and_tolerates_missing_ui()
     assert 'DebugLogWarning(_T("Rejected downloading source with mismatched request file for \\"%s\\" - %s")' in block
     assert "m_downloadingSourceList.AddTail(client);" in block
     assert "if (theApp.emuledlg != NULL && theApp.emuledlg->transferwnd != NULL)" in block
+
+
+def test_downloading_source_add_recovers_corrupt_list_before_mfc_mutation() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "PartFile.h").read_text(encoding="utf-8", errors="ignore")
+    add_block = source[
+        source.index("void CPartFile::AddDownloadingSource(CUpDownClient *client)") :
+        source.index("bool CPartFile::DetachDownloadingSource")
+    ]
+    valid_block = source[
+        source.index("bool CPartFile::IsDownloadingSourceListStructurallyValid() const") :
+        source.index("void CPartFile::RecoverDownloadingSourceList")
+    ]
+    recover_block = source[
+        source.index("void CPartFile::RecoverDownloadingSourceList(LPCTSTR pszContext)") :
+        source.index("void CPartFile::RemoveStaleSource")
+    ]
+
+    assert "bool\tIsDownloadingSourceListStructurallyValid() const;" in header
+    assert "void\tRecoverDownloadingSourceList(LPCTSTR pszContext);" in header
+    assert "if (!IsDownloadingSourceListStructurallyValid())\n\t\tRecoverDownloadingSourceList(_T(\"add downloading source\"));" in add_block
+    assert add_block.index("RecoverDownloadingSourceList") < add_block.index("m_downloadingSourceList.Find(client)")
+    assert "const INT_PTR nCount = m_downloadingSourceList.GetCount();" in valid_block
+    assert "const POSITION posHead = m_downloadingSourceList.GetHeadPosition();" in valid_block
+    assert "const POSITION posTail = m_downloadingSourceList.GetTailPosition();" in valid_block
+    assert "if (nCount < 0)\n\t\treturn false;" in valid_block
+    assert "return posHead == NULL && posTail == NULL;" in valid_block
+    assert "return posHead != NULL && posTail != NULL;" in valid_block
+    assert 'DebugLogError(_T("Recovering corrupt downloading-source list for \\"%s\\"' in recover_block
+    assert "(LPCTSTR)m_partmetfilename" in recover_block
+    assert "m_downloadingSourceList.RemoveAll();" in recover_block
