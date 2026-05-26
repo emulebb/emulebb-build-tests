@@ -35,3 +35,12 @@ def test_aich_sync_worker_guards_shared_and_known_file_globals() -> None:
     assert "CSingleLock hashingLock(&theApp.hashing_mut, TRUE); // only one file hash at a time\n\t\t\tif (theApp.IsClosing())\n\t\t\t\treturn 0;" in source
     assert "theApp.sharedfiles->m_mutWriteList" not in source
     assert "theApp.sharedfiles->GetHashingCount()" not in source
+
+
+def test_known2_met_recovery_truncate_failure_logs_exception_details() -> None:
+    source = (app_source_root() / "AICHSyncThread.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("LogError(LOG_STATUSBAR, GetResString(IDS_ERR_MET_BAD), KNOWN2_MET_FILENAME);") : source.index("ex->Delete();")]
+
+    assert '#include "OtherFunctions.h"' in source
+    assert 'DebugLogError(_T("Failed to truncate corrupt %s to byte %u%s"), KNOWN2_MET_FILENAME, nLastVerifiedPos, (LPCTSTR)CExceptionStrDash(*ex2));' in block
+    assert block.index("CExceptionStrDash(*ex2)") < block.index("ex2->Delete();")
