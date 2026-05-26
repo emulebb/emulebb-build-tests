@@ -27,8 +27,8 @@
     "kad_search_count": 6,
     "download_trigger_count": 1,
     "search_type": "any",
-    "contract_route_count": 88,
-    "safe_contract_route_count": 85,
+    "contract_route_count": 90,
+    "safe_contract_route_count": 87,
     "unsafe_contract_operations": [
       "shutdownApp",
       "captureDiagnosticDump",
@@ -39,8 +39,8 @@
       "diagnostics": 2,
       "status": 3,
       "categories": 5,
-      "transfers": 21,
-      "shared": 8,
+      "transfers": 22,
+      "shared": 9,
       "shared-directories": 3,
       "uploads": 16,
       "servers": 9,
@@ -64,7 +64,7 @@
       },
       {
         "method": "DELETE",
-        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef"
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/files?confirm=false"
       },
       {
         "method": "POST",
@@ -130,8 +130,8 @@
       },
       {
         "method": "DELETE",
-        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef",
-        "scenario": "transfer_delete_requires_delete_files",
+        "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/files?confirm=false",
+        "scenario": "transfer_file_delete_requires_confirm",
         "expected_statuses": [
           400
         ]
