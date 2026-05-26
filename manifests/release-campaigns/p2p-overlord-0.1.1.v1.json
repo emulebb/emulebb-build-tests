@@ -2,10 +2,10 @@
   "schemaVersion": "emulebb-build-tests.release-campaign.v1",
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
-  "campaignId": "p2p-overlord-post-0.7.3",
-  "releaseVersion": "post-0.7.3",
-  "title": "p2p-overlord product-family campaign",
-  "description": "Future shared campaign instance for the eMuleBB-owned p2p-overlord agents and backend.",
+  "campaignId": "p2p-overlord-0.1.1",
+  "releaseVersion": "0.1.1-rc.1",
+  "title": "p2p-overlord 0.1.1-rc.1 product-family campaign",
+  "description": "Shared RC campaign instance for the eMuleBB-owned p2p-overlord agents, backend, and tooling. It remains a future campaign until release mode is explicitly confirmed.",
   "proofTier": "future",
   "phases": [
     {
@@ -40,7 +40,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Run from p2p-overlord-agents and p2p-overlord-be after a concrete integration slice exists."
+              "description": "Run from p2p-overlord-agents, p2p-overlord-be, and p2p-overlord-tooling before 0.1.1-rc.1 release proof."
             }
           ]
         }
@@ -62,7 +62,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Future Rust agent parity evidence must compare against stock eMuleBB/eMule behavior and use goed2k-server for deterministic ED2K server scenarios."
+              "description": "0.1.1-rc.1 Rust agent parity evidence must compare against stock eMuleBB/eMule behavior and use goed2k-server for deterministic ED2K server scenarios."
             }
           ]
         }
@@ -84,7 +84,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Future conformance runner must load repos.emulebb-tooling/docs/rest/REST-API-OPENAPI.yaml and fail drift in any claimed p2p-overlord /api/v1 route."
+              "description": "0.1.1-rc.1 conformance must load repos/emulebb-tooling/docs/rest/REST-API-OPENAPI.yaml and fail drift in any claimed p2p-overlord /api/v1 route."
             }
           ]
         }
@@ -136,7 +136,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Future resource runs should collect CPU, memory, handles, and REST counters separately from UMDH memory runs."
+              "description": "0.1.1-rc.1 resource runs should collect CPU, memory, handles, and REST counters separately from UMDH memory runs."
             }
           ]
         }

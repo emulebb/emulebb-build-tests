@@ -87,9 +87,10 @@ def test_073_overnight_campaign_validates_and_covers_all_release_gates() -> None
 def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
-    campaign = release_campaigns.load_release_campaign(root, "p2p-overlord-post-0.7.3")
+    campaign = release_campaigns.load_release_campaign(root, "p2p-overlord-0.1.1")
 
     assert release_campaigns.validate_release_campaign(campaign, template) == []
+    assert campaign["releaseVersion"] == "0.1.1-rc.1"
     scenario_ids = {
         scenario["id"]
         for phase in campaign["phases"]
