@@ -22,3 +22,14 @@ def test_part_file_preview_copy_logs_file_exception_details() -> None:
     assert "(LPCTSTR)CExceptionStrDash(*ex)" in source
     assert 'DebugLogError(_T("Failed to copy part-file data from \\"%s\\" to \\"%s\\" - unexpected exception")' in source
     assert block.count("m_bPreviewing = false;") >= 4
+
+
+def test_part_file_delete_defers_while_preview_worker_holds_reference() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("void CPartFile::DeletePartFile()") : source.index("void CPartFile::SetDownPriority")]
+
+    assert "ASSERT(!m_bPreviewing);" in block
+    assert block.index("StopFile(true);") < block.index("if (m_bPreviewing)")
+    assert 'DebugLogWarning(_T("Deferring part-file deletion for \\"%s\\" until preview generation releases the file object.")' in block
+    assert "m_bDelayDelete = true;" in block
+    assert "return;\n\t}\n\n\tif (GetFileOp() != PFOP_NONE)" in block

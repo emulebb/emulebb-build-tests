@@ -2239,10 +2239,7 @@ def test_completed_transfer_delete_preserves_shared_file_registration() -> None:
         )
     ]
     row_only_branch = completed_delete_branch[
-        completed_delete_branch.index("if (!bDeleteFiles)") : completed_delete_branch.index(
-            "} else if (!ShellDeleteFile",
-            completed_delete_branch.index("if (!bDeleteFiles)"),
-        )
+        completed_delete_branch.index("if (!bDeleteFiles)") : completed_delete_branch.index("SShellDeleteFileResult deleteResult;")
     ]
 
     assert "GetDownloadList()->RemoveFile(pPartFile)" in row_only_branch

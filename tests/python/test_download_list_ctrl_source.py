@@ -26,3 +26,12 @@ def test_draw_item_checks_next_row_before_tree_line_deref() -> None:
     source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
 
     assert "const CtrlItem_Struct *nextContent = notLast ? reinterpret_cast<CtrlItem_Struct*>(GetItemData(lpDrawItemStruct->itemID + 1)) : NULL;\n\t\tbool hasNext = nextContent != NULL && nextContent->type != FILE_TYPE;" in source
+
+
+def test_thumbnail_completion_resumes_deferred_part_file_delete_after_preview_release() -> None:
+    source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("LRESULT CDownloadListCtrl::OnVideoThumbnailFinished") : source.index("void CDownloadListCtrl::SetAllIcons")]
+
+    assert "CPartFile *pFileToDelete = bFileStillTracked && pResult->pPartFile->IsDeleting() ? pResult->pPartFile : NULL;" in block
+    assert block.index("pResult->pPartFile->m_bPreviewing = false;") < block.index("pFileToDelete->DeletePartFile();")
+    assert "delete pResult;\n\tif (pFileToDelete != NULL)\n\t\tpFileToDelete->DeletePartFile();\n\tStartNextVideoThumbnailWorker();" in block
