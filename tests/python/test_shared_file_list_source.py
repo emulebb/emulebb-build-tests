@@ -49,3 +49,28 @@ def test_startup_cache_loader_rejects_short_fixed_payload_reads() -> None:
     assert "file.Read(record.identity.fileId.data(), static_cast<UINT>(record.identity.fileId.size()));" not in source
     assert "file.Read(record.directoryFileReference.identifier.data(), static_cast<UINT>(record.directoryFileReference.identifier.size()));" not in source
     assert "file.Read(record.canonicalFileHash.data(), static_cast<UINT>(record.canonicalFileHash.size()));" not in source
+
+
+def test_startup_cache_completion_uses_worker_payload_registry() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    dialog = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    worker_block = source[
+        source.index("UINT AFX_CDECL CSharedFileList::StartupCacheSaveThreadProc") :
+        source.index("void CSharedFileList::HandleStartupCacheSaveCompletion")
+    ]
+
+    assert "ULONG_PTR nCompletionOwnerKey = 0;" in header
+    assert "~StartupCacheSaveThreadCompletion();" in header
+    assert "void DiscardPendingResult();" in header
+    assert "static void\t*TakeStartupCacheSaveCompletion(WPARAM wParam);" in header
+    assert "pRequest->nCompletionOwnerKey = GetWorkerUiPayloadOwnerKey(this);" in source
+    assert "DiscardPostedWorkerUiPayloadsForOwner(GetWorkerUiPayloadOwnerKey(this));" in source
+    assert "bPosted = TryPostWorkerUiPayloadMessage(hNotifyWnd, NULL, nCompletionOwnerKey, UM_STARTUP_CACHE_SAVE_COMPLETE, std::move(pCompletion));" in worker_block
+    assert "::PostMessage(hNotifyWnd, UM_STARTUP_CACHE_SAVE_COMPLETE" not in worker_block
+    assert "CSharedFileList::StartupCacheSaveThreadCompletion::~StartupCacheSaveThreadCompletion()" in source
+    assert "void CSharedFileList::StartupCacheSaveThreadCompletion::DiscardPendingResult()" in source
+    assert "void *CSharedFileList::TakeStartupCacheSaveCompletion(WPARAM wParam)" in source
+    assert "TakePostedWorkerUiPayload<StartupCacheSaveThreadCompletion>(wParam)" in source
+    assert "void *pCompletion = CSharedFileList::TakeStartupCacheSaveCompletion(wParam);" in dialog
+    assert "if (pCompletion == NULL && lParam != 0)" in dialog
