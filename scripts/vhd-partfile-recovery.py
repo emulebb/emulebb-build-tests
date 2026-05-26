@@ -141,7 +141,7 @@ def is_missing_temp_directory_dialog(title: str, body: str) -> bool:
 def startup_error_log_path(profile_base: Path) -> Path:
     """Returns the durable startup error log path for one isolated profile."""
 
-    return profile_base / "logs" / "eMule-startup-errors.log"
+    return profile_base / "logs" / "emulebb-startup-errors.log"
 
 
 def read_startup_error_log(profile_base: Path) -> str:

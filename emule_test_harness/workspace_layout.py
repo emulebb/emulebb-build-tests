@@ -88,8 +88,6 @@ def resolve_workspace_app_root(
     resolved_workspace_root = workspace_root.resolve()
     manifest = load_workspace_manifest(resolved_workspace_root)
     candidates: list[Path] = []
-    if manifest.seed_repo_path is not None:
-        candidates.append(resolved_workspace_root / manifest.seed_repo_path)
 
     variants_by_name: dict[str, list[AppVariant]] = {}
     for variant in manifest.variants:
@@ -101,6 +99,9 @@ def resolve_workspace_app_root(
 
     for variant in manifest.variants:
         candidates.append(resolved_workspace_root / variant.path)
+
+    if manifest.seed_repo_path is not None:
+        candidates.append(resolved_workspace_root / manifest.seed_repo_path)
 
     # Fast hosted CI checks out only the app worktree, not the generated
     # workspace manifest. Keep that minimal layout usable for source-only tests.

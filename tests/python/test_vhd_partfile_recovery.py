@@ -62,7 +62,7 @@ def test_missing_temp_directory_dialog_matcher_requires_specific_error() -> None
 
 def test_missing_temp_startup_log_helpers_use_profile_log_dir(tmp_path: Path) -> None:
     module = load_script_module()
-    log_path = tmp_path / "logs" / "eMule-startup-errors.log"
+    log_path = tmp_path / "logs" / "emulebb-startup-errors.log"
     log_path.parent.mkdir()
     log_path.write_text(
         '2026-05-23 16:25:38 Failed to create Temporary Files directory "Z:\\vhd-partfile-recovery\\temp\\" - The system cannot find the path specified.\n',

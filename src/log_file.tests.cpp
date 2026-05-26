@@ -59,6 +59,7 @@ TEST_CASE("Log artifact names use strict lowercase kebab policy")
 	CHECK(CString(LogArtifactNames::MainLogFileName()) == CString(_T("emulebb.log")));
 	CHECK(CString(LogArtifactNames::VerboseLogFileName()) == CString(_T("emulebb-verbose.log")));
 	CHECK(CString(LogArtifactNames::CrtDebugLogFileName()) == CString(_T("emulebb-crt-debug.log")));
+	CHECK(CString(LogArtifactNames::StartupErrorLogFileName()) == CString(_T("emulebb-startup-errors.log")));
 	CHECK(LogArtifactNames::BuildManualDumpFileName(time, 1234, false, 0) == CString(_T("emulebb-dump-20260523-185455-pid1234-mini.dmp")));
 	CHECK(LogArtifactNames::BuildManualDumpFileName(time, 1234, true, 2) == CString(_T("emulebb-dump-20260523-185455-pid1234-full-02.dmp")));
 	CHECK(LogArtifactNames::BuildCrashDumpFileName(time, 1234) == CString(_T("emulebb-crash-20260523-185455-pid1234.dmp")));

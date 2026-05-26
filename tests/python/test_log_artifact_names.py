@@ -9,6 +9,7 @@ OLD_APP_LOG_TOKENS = (
     "eMule.log",
     "eMule_Verbose.log",
     "eMule CRT Debug Log.log",
+    "eMule-startup-errors.log",
     "perflog.csv",
     "perflog.mrtg",
     "_data.mrtg",
