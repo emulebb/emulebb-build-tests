@@ -74,3 +74,22 @@ def test_startup_cache_completion_uses_worker_payload_registry() -> None:
     assert "TakePostedWorkerUiPayload<StartupCacheSaveThreadCompletion>(wParam)" in source
     assert "void *pCompletion = CSharedFileList::TakeStartupCacheSaveCompletion(wParam);" in dialog
     assert "if (pCompletion == NULL && lParam != 0)" in dialog
+
+
+def test_hash_workers_use_priority_gate_before_global_hash_mutex() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    add_thread_run = source[source.index("int CAddFileThread::Run()") : source.index("///////////////////////////////////////////////////////////////////////////////\n// CSharedFileHashThread")]
+    shared_hash_run = source[source.index("void CSharedFileList::RunSharedHashJob") : source.index("void CSharedFileList::MoveActiveSharedHashToPendingCompletion")]
+
+    assert "enum EFileHashJobPriority" in header
+    assert "FHJP_PART_FILE_COMPLETION = 2" in header
+    assert "std::vector<SFileHashJobGateEntry> s_fileHashJobGateQueue;" in source
+    assert "bool ShouldFileHashJobWaitLocked(const SFileHashJobGateEntry &rJob)" in source
+    assert "if (s_bPartFileHashStartupScheduling || s_bFileHashJobRunning)\n\t\treturn true;" in source
+    assert "if (iQueuedPriority > iOwnPriority)\n\t\t\treturn true;" in source
+    assert "if (iQueuedPriority == iOwnPriority && rQueuedJob.uSequence < rJob.uSequence)\n\t\t\treturn true;" in source
+    assert "CScopedFileHashJobGate fileHashJobGate(m_eHashJobPriority);" in add_thread_run
+    assert add_thread_run.index("CScopedFileHashJobGate fileHashJobGate(m_eHashJobPriority);") < add_thread_run.index("CSingleLock hashingLock(&theApp.hashing_mut, TRUE);")
+    assert "CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);" in shared_hash_run
+    assert shared_hash_run.index("CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);") < shared_hash_run.index("CSingleLock hashingLock(&theApp.hashing_mut, TRUE);")

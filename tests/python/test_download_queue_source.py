@@ -48,3 +48,16 @@ def test_search_result_source_addition_logs_file_exception_details() -> None:
     assert 'DebugLogWarning(_T("Failed to add global UDP search-result source %u:%u for \\"%s\\"%s"), aClients[i].m_nIP, aClients[i].m_nPort, (LPCTSTR)newfile->GetFileName(), (LPCTSTR)CExceptionStrDash(*ex));' in block
     assert block.count("CExceptionStrDash(*ex)") == 2
     assert block.count("ASSERT(0);") == 2
+
+
+def test_startup_part_file_hash_jobs_are_released_after_part_scan() -> None:
+    source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    scoped_block = source[source.index("class CScopedPartFileHashStartupScheduling") : source.index("enum ProtectedDiskRoleMask")]
+    init_block = source[source.index("void CDownloadQueue::Init()") : source.index("CDownloadQueue::~CDownloadQueue()")]
+
+    assert "BeginPartFileHashStartupScheduling();" in scoped_block
+    assert "EndPartFileHashStartupScheduling();" in scoped_block
+    assert "CScopedPartFileHashStartupScheduling startupHashScheduling;" in init_block
+    assert init_block.index("CScopedPartFileHashStartupScheduling startupHashScheduling;") < init_block.index("PathHelpers::ForEachMatchingEntry(PathHelpers::AppendPathComponent(strTempDir, _T(\"*.part.met\"))")
+    assert "EndPartFileHashStartupScheduling();" not in init_block
+    assert init_block.index("CScopedPartFileHashStartupScheduling startupHashScheduling;") < init_block.index("SortByPriority();")

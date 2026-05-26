@@ -167,3 +167,13 @@ def test_downloading_source_list_recovery_rebuilds_from_live_sources() -> None:
     assert "m_downloadingSourceList.AddTail(pSource);" in recover_block
     assert "++uRecoveredSources;" in recover_block
     assert 'DebugLogWarning(_T("Rebuilt downloading-source list for \\"%s\\" from live sources (recovered=%u)")' in recover_block
+
+
+def test_completed_part_files_use_completion_hash_priority() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    completion_block = source[source.index("void CPartFile::CompleteFile(bool bIsHashingDone)") : source.index("BOOL CPartFile::PerformFileComplete()")]
+    load_rehash_block = source[source.index("if (m_tUtcLastModified != fdate)") : source.index("UpdateCompletedInfos();")]
+
+    assert "CreateSuspendedPartFileHashThread(mytemppath, RemoveFileExtension(m_partmetfilename), this, FHJP_PART_FILE_COMPLETION);" in completion_block
+    assert "CreateSuspendedPartFileHashThread(GetPath(), m_hpartfile.GetFileName(), this);" in load_rehash_block
+    assert "FHJP_PART_FILE_COMPLETION" not in load_rehash_block
