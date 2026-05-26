@@ -1,5 +1,7 @@
 #include "../third_party/doctest/doctest.h"
 
+#include <windows.h>
+
 #include "TransferWndSeams.h"
 
 TEST_SUITE_BEGIN("parity");
