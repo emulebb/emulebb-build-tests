@@ -264,6 +264,7 @@ def build_server_config(
     admin_port: int,
     catalog_path: Path,
     token: str,
+    admin_address: str = "127.0.0.1",
     protocol_obfuscation: bool = True,
     server_udp: bool = True,
 ) -> dict[str, object]:
@@ -271,7 +272,7 @@ def build_server_config(
 
     config = {
         "listen_address": f"0.0.0.0:{ed2k_port}",
-        "admin_listen_address": f"127.0.0.1:{admin_port}",
+        "admin_listen_address": f"{admin_address}:{admin_port}",
         "admin_token": token,
         "server_name": "emulebb-local-e2e",
         "server_description": "Workspace deterministic eMuleBB live E2E server",

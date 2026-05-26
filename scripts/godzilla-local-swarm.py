@@ -2046,7 +2046,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.amutorrent_controller:
             ports["amutorrent"] = allocate_free_tcp_port(set(ports.values()))
         base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
-        admin_base_url = f"http://127.0.0.1:{ports['ed2k_admin']}"
+        ed2k_admin_address = p2p_address if bool(args.lan_mode) else "127.0.0.1"
+        admin_base_url = f"http://{ed2k_admin_address}:{ports['ed2k_admin']}"
         for index in range(args.extra_emulebb_clients):
             identity = extra_emulebb_identity(index)
             extra_emulebb_clients.append(
@@ -2079,6 +2080,7 @@ def main(argv: list[str] | None = None) -> int:
             "lan_mode": bool(args.lan_mode),
             "lan_address_env": args.lan_address_env,
             "rest_bind_addr": args.bind_addr,
+            "ed2k_admin_bind_addr": ed2k_admin_address,
             "p2p_bind_interface_address": p2p_address,
             "ports": ports,
         }
@@ -2106,6 +2108,7 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             catalog_path=catalog_path,
             token=args.api_key,
+            admin_address=ed2k_admin_address,
             protocol_obfuscation=protocol_case.server_protocol_obfuscation,
             server_udp=protocol_case.server_udp,
         )

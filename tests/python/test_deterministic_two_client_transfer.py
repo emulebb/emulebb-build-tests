@@ -136,7 +136,24 @@ def test_build_server_config_allows_protocol_overrides(tmp_path: Path) -> None:
 
     assert config["protocol_obfuscation"] is False
     assert config["server_udp"] is False
-    assert json.loads(config_path.read_text(encoding="utf-8"))["protocol_obfuscation"] is False
+
+
+def test_build_server_config_allows_admin_bind_override(tmp_path: Path) -> None:
+    module = load_suite_module()
+    config_path = tmp_path / "server" / "config.json"
+    catalog_path = tmp_path / "server" / "catalog.json"
+
+    config = module.build_server_config(
+        config_path,
+        ed2k_port=4661,
+        admin_port=8080,
+        catalog_path=catalog_path,
+        token="secret",
+        admin_address="192.168.1.210",
+    )
+
+    assert config["admin_listen_address"] == "192.168.1.210:8080"
+    assert json.loads(config_path.read_text(encoding="utf-8"))["admin_listen_address"] == "192.168.1.210:8080"
 
 
 def test_parse_exported_ed2k_file_link() -> None:
