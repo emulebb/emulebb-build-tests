@@ -231,7 +231,7 @@ def test_synthetic_queue_fill_posts_deterministic_ed2k_links(monkeypatch) -> Non
 
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
     monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: result["json"])
-    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"], "json": dict(result["json"])})
     monkeypatch.setattr(
         module.rest_smoke,
         "wait_for_triggered_transfer",
@@ -259,6 +259,8 @@ def test_synthetic_queue_fill_posts_deterministic_ed2k_links(monkeypatch) -> Non
     assert len(posted[0]["links"]) == 2
     assert posted[0]["paused"] is False
     assert posted[0]["categoryId"] == 0
+    assert result["batch_responses"][0]["json"] == {"item_count": 2, "ok_count": 2}
+    assert [row["download"] for row in result["triggers"]] == [{"status": 200, "batch_index": 1}, {"status": 200, "batch_index": 1}]
     assert [row["transfer"] for row in result["triggers"]] == [{"accepted_by_post": True}, {"accepted_by_post": True}]
     assert registry.counts()["triggered_stress_transfer_count"] == 2
 

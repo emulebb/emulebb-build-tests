@@ -1818,10 +1818,16 @@ def queue_synthetic_stress_transfers(
             )
             payload = rest_smoke.require_json_object(response, 200)
             compact_response = rest_smoke.compact_http_result(response)
-            compact_batch_responses.append(compact_response)
             response_items = payload.get("items")
             if not isinstance(response_items, list):
                 response_items = []
+            response_json = compact_response.get("json")
+            if isinstance(response_json, dict):
+                response_json.pop("items", None)
+                response_json["item_count"] = len(response_items)
+                response_json["ok_count"] = sum(1 for item in response_items if isinstance(item, dict) and bool(item.get("ok")))
+            compact_batch_responses.append(compact_response)
+            batch_index = len(compact_batch_responses)
             for row_index, row in enumerate(batch_rows):
                 transfer_hash = str(row["hash"])
                 response_item = response_items[row_index] if row_index < len(response_items) else None
@@ -1852,7 +1858,10 @@ def queue_synthetic_stress_transfers(
                             "sources": 0,
                             "completeSources": 0,
                         },
-                        "download": compact_response,
+                        "download": {
+                            "status": compact_response.get("status"),
+                            "batch_index": batch_index,
+                        },
                         "transfer": {"accepted_by_post": True},
                     }
                 )
