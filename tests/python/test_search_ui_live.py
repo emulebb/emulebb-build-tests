@@ -211,11 +211,10 @@ def test_delete_transfer_uses_native_partial_file_cleanup(monkeypatch) -> None:
     assert calls == [
         (
             "http://127.0.0.1:1",
-            "/api/v1/transfers/abc",
+            "/api/v1/transfers/abc/files?confirm=true",
             {
                 "method": "DELETE",
                 "api_key": "key",
-                "json_body": {"deleteFiles": True},
                 "request_timeout_seconds": 30.0,
             },
         )

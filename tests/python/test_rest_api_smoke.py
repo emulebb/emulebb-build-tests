@@ -1048,7 +1048,7 @@ def test_openapi_error_envelope_documents_stable_error_codes() -> None:
     error_schema = text[text.index("    ErrorEnvelope:\n") : text.index("    Collection:\n")]
 
     assert "required: [error]" in error_schema
-    assert "required: [code, message]" in error_schema
+    assert "required: [code, message, details]" in error_schema
     for code in (
         "INVALID_ARGUMENT",
         "UNAUTHORIZED",
@@ -1287,13 +1287,24 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert parameters["CategoryId"]["schema"]["maximum"] == 4294967295
     assert parameters["SearchId"]["schema"] == {"type": "integer", "minimum": 0, "maximum": 4294967295}
     assert parameters["Offset"]["schema"]["maximum"] == 2147483647
+    assert parameters["Confirm"]["schema"] == {"type": "boolean", "enum": [True]}
+    assert parameters["ServerId"]["schema"]["pattern"].startswith("^[^/]+:")
+    assert parameters["ClientId"]["schema"]["pattern"].startswith("^([0-9a-f]{32}|[^/]+:")
 
     responses = document["components"]["responses"]
     assert document["paths"]["/transfers"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
+    assert "requestBody" not in document["paths"]["/transfers/{hash}"]["delete"]
+    assert document["paths"]["/transfers/{hash}/files"]["delete"]["parameters"][0]["$ref"].endswith("/Confirm")
+    assert document["paths"]["/transfers/{hash}/files"]["delete"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
     assert document["paths"]["/transfers/{hash}/operations/pause"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
     assert document["paths"]["/transfers/{hash}/operations/resume"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
     assert document["paths"]["/transfers/{hash}/operations/stop"]["post"]["responses"]["200"]["$ref"].endswith("/BulkOperationResponse")
     assert document["paths"]["/shared-files"]["post"]["responses"]["200"]["$ref"].endswith("/SharedFileCreateResponse")
+    assert "requestBody" not in document["paths"]["/shared-files/{hash}"]["delete"]
+    assert document["paths"]["/shared-files/{hash}/file"]["delete"]["parameters"][0]["$ref"].endswith("/Confirm")
+    assert document["paths"]["/shared-files/{hash}/file"]["delete"]["responses"]["200"]["$ref"].endswith("/SharedFileDeleteResponse")
+    assert "requestBody" not in document["paths"]["/searches"]["delete"]
+    assert document["paths"]["/searches"]["delete"]["parameters"][0]["$ref"].endswith("/Confirm")
     assert document["paths"]["/searches/{searchId}/results/{hash}/operations/download"]["post"]["responses"]["200"]["$ref"].endswith("/SearchResultDownloadResponse")
     assert document["paths"]["/transfers/{hash}/sources/{clientId}/operations/browse"]["post"]["responses"]["200"]["$ref"].endswith("/TransferSourceBrowseResponse")
     assert document["paths"]["/servers/{serverId}/operations/connect"]["post"]["responses"]["200"]["$ref"].endswith("/ServerStatusResponse")
@@ -1310,6 +1321,15 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
         "UrlImportResponse",
     ):
         assert response_name in responses
+
+    assert schemas["ErrorEnvelope"]["properties"]["error"]["required"] == ["code", "message", "details"]
+    for path_item in document["paths"].values():
+        for method, operation in path_item.items():
+            if method == "parameters":
+                continue
+            if method == "delete":
+                assert "requestBody" not in operation
+            assert operation["responses"]["default"]["$ref"].endswith("/ErrorResponse")
 
     source_properties = schemas["TransferSource"]["properties"]
     assert "state" not in source_properties
@@ -2160,15 +2180,19 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
         ("POST", "/app/shutdown"): {"confirmShutdown"},
         ("POST", "/diagnostics/dumps"): {"confirmDump"},
         ("POST", "/transfers/operations/clear-completed"): {"confirmClearCompleted"},
-        ("DELETE", "/transfers/{hash}"): {"deleteFiles"},
-        ("DELETE", "/shared-files/{hash}"): {"deleteFiles"},
         ("PATCH", "/shared-directories"): {"confirmReplaceRoots"},
-        ("DELETE", "/searches"): {"confirmDeleteAllSearches"},
         ("POST", "/logs/operations/clear"): {"confirmClearLogs"},
         ("POST", "/diagnostics/crash-tests"): {"confirmCrash"},
     }
+    required_query_fields = {
+        ("DELETE", "/transfers/{hash}/files"): {"confirm"},
+        ("DELETE", "/shared-files/{hash}/file"): {"confirm"},
+        ("DELETE", "/searches"): {"confirm"},
+    }
     id_targeted_delete_routes = {
         ("DELETE", "/categories/{categoryId}"),
+        ("DELETE", "/transfers/{hash}"),
+        ("DELETE", "/shared-files/{hash}"),
         ("DELETE", "/servers/{serverId}"),
         ("DELETE", "/searches/{searchId}"),
         ("DELETE", "/friends/{userHash}"),
@@ -2177,11 +2201,16 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
     for route_key, required_fields in required_body_fields.items():
         assert required_fields <= native_contracts[route_key]["body"]
 
+    for route_key, required_fields in required_query_fields.items():
+        assert required_fields <= native_contracts[route_key]["query"]
+        assert native_contracts[route_key]["body"] == set()
+
     for route_key in id_targeted_delete_routes:
         assert route_key in native_contracts
+        assert native_contracts[route_key]["body"] == set()
 
     audited_delete_routes = {
-        route_key for route_key in required_body_fields if route_key[0] == "DELETE"
+        route_key for route_key in required_query_fields
     } | id_targeted_delete_routes
     delete_routes = {route_key for route_key in native_contracts if route_key[0] == "DELETE"}
     assert delete_routes == audited_delete_routes
@@ -2666,10 +2695,9 @@ def test_delete_all_searches_uses_confirmation_payload(monkeypatch) -> None:
     assert result["status"] == 200
     assert requests == [
         {
-            "path": "/api/v1/searches",
+            "path": "/api/v1/searches?confirm=true",
             "method": "DELETE",
             "api_key": "key",
-            "json_body": {"confirmDeleteAllSearches": True},
         }
     ]
 
@@ -3036,13 +3064,14 @@ def test_rest_stress_operations_include_safe_mutation_routes() -> None:
     assert ("PATCH", "/api/v1/app/preferences") in method_path_pairs
     assert ("POST", "/api/v1/transfers") in method_path_pairs
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/operations/pause") in method_path_pairs
-    assert ("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}") in method_path_pairs
-    assert operations_by_pair[("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}")][
+    transfer_files_delete_path = f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/files?confirm=false"
+    assert ("DELETE", transfer_files_delete_path) in method_path_pairs
+    assert operations_by_pair[("DELETE", transfer_files_delete_path)][
         "expected_statuses"
     ] == (400,)
-    assert operations_by_pair[("DELETE", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}")][
+    assert operations_by_pair[("DELETE", transfer_files_delete_path)][
         "scenario"
-    ] == "transfer_delete_requires_delete_files"
+    ] == "transfer_file_delete_requires_confirm"
     assert ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse") in method_path_pairs
     assert operations_by_pair[
         ("POST", f"/api/v1/transfers/{module.REST_SURFACE_MISSING_HASH}/sources/{module.REST_SURFACE_MISSING_HASH}/operations/browse")

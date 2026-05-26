@@ -834,10 +834,9 @@ def delete_all_emule_searches(base_url: str, api_key: str) -> dict[str, object]:
 
     result = rest_smoke.http_request(
         base_url,
-        "/api/v1/searches",
+        "/api/v1/searches?confirm=true",
         method="DELETE",
         api_key=api_key,
-        json_body={"confirmDeleteAllSearches": True},
         request_timeout_seconds=20.0,
     )
     payload = rest_smoke.require_json_object(result, 200)
@@ -3140,10 +3139,9 @@ def delete_transfer(base_url: str, emule_api_key: str, transfer_hash: str) -> di
 
     result = rest_smoke.http_request(
         base_url,
-        f"/api/v1/transfers/{transfer_hash}",
+        f"/api/v1/transfers/{transfer_hash}/files?confirm=true",
         method="DELETE",
         api_key=emule_api_key,
-        json_body={"deleteFiles": True},
         request_timeout_seconds=20.0,
     )
     return rest_smoke.compact_http_result(result)

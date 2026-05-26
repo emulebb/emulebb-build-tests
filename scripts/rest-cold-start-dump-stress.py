@@ -2750,10 +2750,9 @@ def delete_stress_transfers(base_url: str, api_key: str, transfer_hashes: list[s
     for transfer_hash in transfer_hashes:
         result = rest_smoke.http_request(
             base_url,
-            f"/api/v1/transfers/{transfer_hash}",
+            f"/api/v1/transfers/{transfer_hash}/files?confirm=true",
             method="DELETE",
             api_key=api_key,
-            json_body={"deleteFiles": True},
             request_timeout_seconds=30.0,
         )
         deletes.append(

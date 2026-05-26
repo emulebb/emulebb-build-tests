@@ -2079,13 +2079,13 @@ TEST_CASE("Web API requires explicit confirmation for broad native operations")
 
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/searches", R"({})", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/searches", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "confirmDeleteAllSearches must be true");
+	CHECK_EQ(errorMessage, "confirm must be true");
 
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/searches", R"({"confirmDeleteAllSearches":true})", route, errorCode, errorMessage));
+	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/searches?confirm=true", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "search/clear");
 
 	errorCode.clear();
@@ -2131,17 +2131,29 @@ TEST_CASE("Web API requires explicit confirmation for destructive native routes"
 
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "deleteFiles must be an explicit boolean");
+	CHECK_EQ(errorMessage, "DELETE request bodies are not supported");
 
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":false})", route, errorCode, errorMessage));
+	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "transfers/delete");
+	CHECK_FALSE(route.params["deleteFiles"].get<bool>());
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef/files", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "deleteFiles must be true for transfer deletes");
+	CHECK_EQ(errorMessage, "confirm must be true");
 
 	errorCode.clear();
 	errorMessage.clear();
-	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":true})", route, errorCode, errorMessage));
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef/files?confirm=false", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "confirm must be true");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK(WebServerJsonSeams::TryBuildRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef/files?confirm=true", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "transfers/delete");
 	CHECK(route.params["deleteFiles"].get<bool>());
 
@@ -2324,8 +2336,12 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/transfers/0123456789abcdef0123456789abcdef/operations/stop", R"({})", "transfers/stop");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
-	assertRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", R"({"deleteFiles":true})", "transfers/delete");
+	assertRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", "transfers/delete");
 	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	CHECK_FALSE(route.params["deleteFiles"].get<bool>());
+	assertRoute("DELETE", "/api/v1/transfers/0123456789abcdef0123456789abcdef/files?confirm=true", "", "transfers/delete");
+	CHECK_EQ(route.params["hashes"][0].get<std::string>(), pszHash);
+	CHECK(route.params["deleteFiles"].get<bool>());
 	assertRoute("GET", "/api/v1/transfers/0123456789abcdef0123456789abcdef", "", "transfers/get");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	assertRoute("POST", "/api/v1/transfers/operations/clear-completed", R"({"confirmClearCompleted":true})", "transfers/clear_completed");
@@ -2460,7 +2476,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("GET", "/api/v1/servers/1.2.3.4:4661", "", "servers/get");
 	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
-	assertRoute("DELETE", "/api/v1/servers/1.2.3.4:4661", R"({})", "servers/remove");
+	assertRoute("DELETE", "/api/v1/servers/1.2.3.4:4661", "", "servers/remove");
 	CHECK_EQ(route.params["addr"].get<std::string>(), "1.2.3.4");
 	CHECK_EQ(route.params["port"].get<unsigned>(), 4661u);
 
@@ -2512,8 +2528,12 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	assertRoute("GET", "/api/v1/shared-files/0123456789abcdef0123456789abcdef/comments", "", "shared/comments");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK(route.params["_items_envelope"].get<bool>());
-	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", R"({"deleteFiles":false})", "shared/remove");
+	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef", "", "shared/remove");
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK_FALSE(route.params["deleteFiles"].get<bool>());
+	assertRoute("DELETE", "/api/v1/shared-files/0123456789abcdef0123456789abcdef/file?confirm=true", "", "shared/remove");
+	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
+	CHECK(route.params["deleteFiles"].get<bool>());
 
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"pro"})", "search/start");
 	assertRoute("POST", "/api/v1/searches", R"({"query":"ubuntu","method":"automatic","type":"","minAvailability":5})", "search/start");
@@ -2555,9 +2575,9 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_EQ(route.params["hash"].get<std::string>(), pszHash);
 	CHECK(route.params["paused"].get<bool>());
 	CHECK_EQ(route.params["categoryId"].get<int>(), 0);
-	assertRoute("DELETE", "/api/v1/searches/123", R"({})", "search/stop");
+	assertRoute("DELETE", "/api/v1/searches/123", "", "search/stop");
 	CHECK_EQ(route.params["searchId"].get<std::string>(), "123");
-	assertRoute("DELETE", "/api/v1/searches", R"({"confirmDeleteAllSearches":true})", "search/clear");
+	assertRoute("DELETE", "/api/v1/searches?confirm=true", "", "search/clear");
 	assertRoute("GET", "/api/v1/friends", "", "friends/list");
 	CHECK(route.params["_items_envelope"].get<bool>());
 	assertRoute("POST", "/api/v1/friends", R"({"userHash":"0123456789abcdef0123456789abcdef","name":"peer"})", "friends/add");
@@ -2573,7 +2593,7 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("POST", "/api/v1/friends", R"({"userHash":"0123456789abcdef0123456789abcdef","name":7})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "name must be a string");
-	assertRoute("DELETE", "/api/v1/friends/0123456789abcdef0123456789abcdef", R"({})", "friends/remove");
+	assertRoute("DELETE", "/api/v1/friends/0123456789abcdef0123456789abcdef", "", "friends/remove");
 	CHECK_EQ(route.params["userHash"].get<std::string>(), pszHash);
 	assertRoute("GET", "/api/v1/logs?limit=9", "", "log/get");
 	CHECK_EQ(route.params["limit"].get<int>(), 9);
@@ -2622,7 +2642,7 @@ TEST_CASE("Web API carries server and search payloads into live-capable routes")
 	CHECK(WebServerJsonSeams::TryBuildRoute(
 		"DELETE",
 		"/api/v1/searches/123",
-		R"({})",
+		"",
 		route,
 		errorCode,
 		errorMessage));

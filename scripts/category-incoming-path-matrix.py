@@ -303,10 +303,9 @@ def delete_transfer(base_url: str, api_key: str, transfer_hash: str) -> dict[str
 
     result = rest_smoke.http_request(
         base_url,
-        f"/api/v1/transfers/{transfer_hash.lower()}",
+        f"/api/v1/transfers/{transfer_hash.lower()}/files?confirm=true",
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": True},
         request_timeout_seconds=10.0,
     )
     return compact_result(result) or {}

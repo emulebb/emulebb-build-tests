@@ -308,6 +308,7 @@ REST_CONTRACT_EXPECTED_ERROR_STATUSES: dict[str, tuple[int, ...]] = {
     "getSharedFile": (404,),
     "patchSharedFile": (404,),
     "deleteSharedFile": (404,),
+    "deleteSharedFileContent": (404,),
     "getSharedFileEd2kLink": (404,),
     "listSharedFileComments": (404,),
     "replaceSharedDirectories": (400,),
@@ -574,6 +575,8 @@ def concrete_contract_path(openapi_path: str, operation_id: str) -> str:
         path += "?limit=7"
     elif operation_id == "listLogs":
         path += "?limit=9"
+    elif operation_id in {"deleteTransferFiles", "deleteSharedFileContent", "deleteSearches"}:
+        path += "?confirm=true"
     return path
 
 
@@ -713,10 +716,10 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     },
     {
         "method": "DELETE",
-        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
-        "json_body": {"deleteFiles": False},
+        "path": f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/files?confirm=false",
+        "json_body": None,
         "family": "transfers",
-        "scenario": "transfer_delete_requires_delete_files",
+        "scenario": "transfer_file_delete_requires_confirm",
         "expected_statuses": (400,),
     },
     {
@@ -760,7 +763,7 @@ REST_STRESS_SAFE_MUTATION_OPERATIONS: tuple[dict[str, object], ...] = (
     {
         "method": "DELETE",
         "path": "/api/v1/searches/123",
-        "json_body": {},
+        "json_body": None,
         "family": "searches",
         "scenario": "safe_mutation",
     },
@@ -2924,8 +2927,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {"confirmClearCompleted": True}
     if route_name in {"logs_clear", "clearLogs"}:
         return {"confirmClearLogs": True}
-    if route_name in {"transfers_delete", "deleteTransfer"}:
-        return {"deleteFiles": True}
+    if route_name in {"transfers_delete", "deleteTransfer", "deleteTransferFiles"}:
+        return None
     if route_name.startswith("transfers_source_") or route_name in {
         "browseTransferSource",
         "addTransferSourceFriend",
@@ -2940,8 +2943,8 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
         return {}
     if route_name in {"shared_files_patch", "patchSharedFile"}:
         return {"comment": "rest contract", "rating": 4}
-    if route_name in {"shared_files_delete", "deleteSharedFile"}:
-        return {"deleteFiles": False}
+    if route_name in {"shared_files_delete", "deleteSharedFile", "deleteSharedFileContent"}:
+        return None
     if route_name in {"replaceSharedDirectories"}:
         return {"confirmReplaceRoots": True, "roots": []}
     if route_name in {"shared_files_reload", "reloadSharedFiles", "reloadSharedDirectories"}:
@@ -2970,7 +2973,7 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name in {"servers_import_met_url", "createServerMetUrlImport", "kad_import_nodes_url", "createKadNodesUrlImport"}:
         return {}
     if route_name in {"servers_delete", "deleteServer"}:
-        return {}
+        return None
     if route_name in {"kad_start", "kad_patch", "kad_stop", "kad_bootstrap", "startKad", "recheckKadFirewall", "stopKad", "bootstrapKad"}:
         return {}
     if route_name in {"searches_start", "createSearch"}:
@@ -2978,13 +2981,13 @@ def get_contract_route_body(route_name: str) -> dict[str, object] | None:
     if route_name in {"searches_download_result", "downloadSearchResult"}:
         return {"paused": True, "categoryId": 0}
     if route_name in {"searches_delete_all", "deleteSearches"}:
-        return {"confirmDeleteAllSearches": True}
+        return None
     if route_name in {"searches_delete", "deleteSearch"}:
-        return {}
+        return None
     if route_name in {"friends_create", "createFriend"}:
         return {"userHash": REST_SURFACE_MISSING_HASH, "name": "REST contract"}
     if route_name in {"friends_delete", "deleteFriend"}:
-        return {}
+        return None
     return None
 
 
@@ -3443,7 +3446,6 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "/api/v1/categories/0",
         method="DELETE",
         api_key=api_key,
-        json_body={},
     )
     missing_transfer = http_request(base_url, f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}", api_key=api_key)
     missing_transfer_sources = http_request(
@@ -3486,17 +3488,15 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     transfer_delete_missing = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/files?confirm=true",
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": True},
     )
     transfer_delete_bad = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/files?confirm=false",
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": False},
     )
     transfer_add_bad = http_request(
         base_url,
@@ -3656,26 +3656,23 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     assert transfer_added_reserved_payload.get("name") == reserved_transfer_expected_name, compact_http_result(transfer_added_reserved)
     transfer_delete_added = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}",
+        f"/api/v1/transfers/{REST_SURFACE_VALID_DOWNLOAD_HASH}/files?confirm=true",
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": True},
         request_timeout_seconds=30.0,
     )
     transfer_delete_reserved = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_RESERVED_DOWNLOAD_HASH}",
+        f"/api/v1/transfers/{REST_SURFACE_RESERVED_DOWNLOAD_HASH}/files?confirm=true",
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": True},
         request_timeout_seconds=30.0,
     )
     transfer_delete_unicode = http_request(
         base_url,
-        f"/api/v1/transfers/{REST_SURFACE_UNICODE_DOWNLOAD_HASH}",
+        f"/api/v1/transfers/{REST_SURFACE_UNICODE_DOWNLOAD_HASH}/files?confirm=true",
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": True},
         request_timeout_seconds=30.0,
     )
     transfer_recheck_missing = http_request(
@@ -3739,11 +3736,11 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "resume_missing_item": require_missing_transfer_bulk_result(transfer_resume),
         "stop_missing_item": require_missing_transfer_bulk_result(transfer_stop),
         "delete_missing_item": require_missing_transfer_bulk_result(transfer_delete_missing),
-        "delete_without_files": require_error_response(
+        "delete_files_without_confirm": require_error_response(
             transfer_delete_bad,
             400,
             "INVALID_ARGUMENT",
-            message_contains="deleteFiles must be true for transfer deletes",
+            message_contains="confirm must be true",
         ),
         "add_bad_payload": require_error_response(
             transfer_add_bad,
@@ -4014,10 +4011,9 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     shared_delete_bad = http_request(
         base_url,
-        f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}",
+        f"/api/v1/shared-files/{REST_SURFACE_MISSING_HASH}/file?confirm=wat",
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": "yes"},
     )
     shared_reload = http_request(
         base_url,
@@ -4070,11 +4066,11 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             "INVALID_ARGUMENT",
             message_contains="path must point to a file inside a shareable directory",
         ),
-        "delete_bad_payload": require_error_response(
+        "delete_bad_confirm": require_error_response(
             shared_delete_bad,
             400,
             "INVALID_ARGUMENT",
-            message_contains="deleteFiles must be an explicit boolean",
+            message_contains="confirm must be true or false",
         ),
         "reload": compact_http_result(shared_reload),
     }
@@ -4129,6 +4125,12 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
     )
     missing_delete_confirmation = http_request(
         base_url,
+        f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}/files",
+        method="DELETE",
+        api_key=api_key,
+    )
+    delete_body_rejected = http_request(
+        base_url,
         f"/api/v1/transfers/{REST_SURFACE_MISSING_HASH}",
         method="DELETE",
         api_key=api_key,
@@ -4153,7 +4155,6 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         "/api/v1/searches",
         method="DELETE",
         api_key=api_key,
-        json_body={},
     )
     missing_clear_logs_confirmation = http_request(
         base_url,
@@ -4252,7 +4253,13 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             missing_delete_confirmation,
             400,
             "INVALID_ARGUMENT",
-            message_contains="deleteFiles must be an explicit boolean",
+            message_contains="confirm must be true",
+        ),
+        "delete_body_rejected": require_error_response(
+            delete_body_rejected,
+            400,
+            "INVALID_ARGUMENT",
+            message_contains="DELETE request bodies are not supported",
         ),
         "missing_clear_completed_confirmation": require_error_response(
             missing_clear_completed_confirmation,
@@ -4270,7 +4277,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             missing_delete_all_searches_confirmation,
             400,
             "INVALID_ARGUMENT",
-            message_contains="confirmDeleteAllSearches must be true",
+            message_contains="confirm must be true",
         ),
         "missing_clear_logs_confirmation": require_error_response(
             missing_clear_logs_confirmation,
@@ -4362,7 +4369,6 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
         f"/api/v1/servers/{REST_SURFACE_TEST_SERVER['address']}:{REST_SURFACE_TEST_SERVER['port']}",
         method="DELETE",
         api_key=api_key,
-        json_body={},
     )
     server_remove_payload = require_json_object(server_remove, 200)
     surface["servers_mutation"] = {
@@ -5898,7 +5904,6 @@ def stop_live_search(base_url: str, api_key: str, search_id: str) -> dict[str, o
         f"/api/v1/searches/{search_id}",
         method="DELETE",
         api_key=api_key,
-        json_body={},
     )
 
 
@@ -5907,10 +5912,9 @@ def delete_all_searches(base_url: str, api_key: str) -> dict[str, object]:
 
     return http_request(
         base_url,
-        "/api/v1/searches",
+        "/api/v1/searches?confirm=true",
         method="DELETE",
         api_key=api_key,
-        json_body={"confirmDeleteAllSearches": True},
     )
 
 

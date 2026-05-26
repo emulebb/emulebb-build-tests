@@ -281,12 +281,12 @@ def get_shared_file_row_by_name(base_url: str, api_key: str, name: str) -> dict[
 def delete_shared_file_by_hash(base_url: str, api_key: str, file_hash: str, *, delete_files: bool) -> dict[str, object]:
     """Deletes one shared file through native REST and validates the response."""
 
+    route = f"{SHARED_FILES_ROUTE}/{file_hash}/file?confirm=true" if delete_files else f"{SHARED_FILES_ROUTE}/{file_hash}"
     result = http_request(
         base_url,
-        f"{SHARED_FILES_ROUTE}/{file_hash}",
+        route,
         method="DELETE",
         api_key=api_key,
-        json_body={"deleteFiles": delete_files},
     )
     body = require_json_object(result, 200)
     assert body.get("ok") is True, compact_http_result(result)

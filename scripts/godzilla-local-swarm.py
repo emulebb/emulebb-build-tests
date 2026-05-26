@@ -872,7 +872,6 @@ def churn_emulebb_transfers(base_url: str, api_key: str, hashes: list[str]) -> l
                 f"/api/v1/transfers/{transfer_hash}",
                 method="DELETE",
                 api_key=api_key,
-                json_body={"deleteFiles": False},
                 request_timeout_seconds=10.0,
             )
             rows.append({"hash": transfer_hash, "operation": "delete", **rest_smoke.compact_http_result(result)})

@@ -182,7 +182,7 @@ def test_cleanup_case_records_deletes_transfer_then_category(monkeypatch: pytest
             if transfer_present:
                 return {"status": 200, "content_type": "application/json", "json": {"hash": "abcd"}, "body_text": "{}"}
             return not_found_response()
-        if path == "/api/v1/transfers/abcd" and method == "DELETE":
+        if path == "/api/v1/transfers/abcd/files?confirm=true" and method == "DELETE":
             transfer_present = False
             return {"status": 200, "content_type": "application/json", "json": {"ok": True}, "body_text": "{}"}
         raise AssertionError(f"{method} {path}")
@@ -199,7 +199,7 @@ def test_cleanup_case_records_deletes_transfer_then_category(monkeypatch: pytest
     )
 
     assert cleanup["clean"] is True
-    assert calls[2] == ("DELETE", "/api/v1/transfers/abcd", {"deleteFiles": True})
+    assert calls[2] == ("DELETE", "/api/v1/transfers/abcd/files?confirm=true", None)
     assert calls[3] == ("DELETE", "/api/v1/categories/7", None)
     assert cleanup["after"]["clean"] is True
 

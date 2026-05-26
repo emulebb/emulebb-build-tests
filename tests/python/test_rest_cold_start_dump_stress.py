@@ -1192,10 +1192,9 @@ def test_delete_stress_transfers_uses_explicit_delete_files(monkeypatch) -> None
     assert result["deleted_count"] == 1
     assert calls == [
         {
-            "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef",
+            "path": "/api/v1/transfers/0123456789abcdef0123456789abcdef/files?confirm=true",
             "method": "DELETE",
             "api_key": "key",
-            "json_body": {"deleteFiles": True},
             "request_timeout_seconds": 30.0,
         }
     ]
@@ -1310,7 +1309,7 @@ def test_delete_non_completed_stress_transfers_avoids_completed_rows(monkeypatch
 
     assert result["requested_count"] == 1
     assert result["deleted_count"] == 1
-    assert deletes == [f"/api/v1/transfers/{active_hash}"]
+    assert deletes == [f"/api/v1/transfers/{active_hash}/files?confirm=true"]
     assert registry.counts()["deleted_stress_transfer_count"] == 1
 
 
