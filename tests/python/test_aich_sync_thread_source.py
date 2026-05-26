@@ -44,3 +44,21 @@ def test_known2_met_recovery_truncate_failure_logs_exception_details() -> None:
     assert '#include "OtherFunctions.h"' in source
     assert 'DebugLogError(_T("Failed to truncate corrupt %s to byte %u%s"), KNOWN2_MET_FILENAME, nLastVerifiedPos, (LPCTSTR)CExceptionStrDash(*ex2));' in block
     assert block.index("CExceptionStrDash(*ex2)") < block.index("ex2->Delete();")
+
+
+def test_aich_known2_rewrite_uses_exact_reads_and_owned_buffers() -> None:
+    source = (app_source_root() / "AICHSyncThread.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    assert "#include <limits>" in source
+    assert "#include <vector>" in source
+    assert "UINT GetAICHHashsetPayloadByteCount(CFile &file, const uint32 nHashCount)" in source
+    assert "(std::numeric_limits<UINT>::max)()" in source
+    assert "void ReadAICHHashsetPayloadExact(CFile &file, std::vector<BYTE> &rBuffer, const UINT uBytes)" in source
+    assert "const UINT uActualRead = file.Read(rBuffer.data(), uBytes);" in source
+    assert "if (uActualRead != uBytes)\n\t\t\tAfxThrowFileException(CFileException::endOfFile, 0, file.GetFilePath());" in source
+    assert source.count("std::vector<BYTE> buffer;") == 2
+    assert source.count("ReadAICHHashsetPayloadExact(") == 3
+    assert "BYTE *buffer = new BYTE[nHashCount * (size_t)CAICHHash::GetHashSize()];" not in source
+    assert "delete[] buffer;" not in source
+    assert "file.Read(buffer, nHashCount * CAICHHash::GetHashSize());" not in source
+    assert "oldfile.Read(buffer, nHashCount * CAICHHash::GetHashSize());" not in source
