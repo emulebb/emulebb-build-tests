@@ -35,3 +35,16 @@ def test_download_queue_waits_for_completion_worker_before_deleting_part_files()
     assert "lock.Lock(INFINITE)" in part_file
     assert "Hold the owner mutex until after the result is queued; shutdown waits on" in part_file
     assert "sLock.Unlock();\n\n\tif (!PostPartFileCompletionThreadResult(this, FILE_COMPLETION_THREAD_SUCCESS" not in part_file
+
+
+def test_search_result_source_addition_logs_file_exception_details() -> None:
+    source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CDownloadQueue::AddSearchToDownload(CSearchFile *toadd") :
+        source.index("void CDownloadQueue::AddSearchToDownload(const CString &link")
+    ]
+
+    assert 'DebugLogWarning(_T("Failed to add search-result source %u:%u for \\"%s\\"%s"), toadd->GetClientID(), toadd->GetClientPort(), (LPCTSTR)newfile->GetFileName(), (LPCTSTR)CExceptionStrDash(*ex));' in block
+    assert 'DebugLogWarning(_T("Failed to add global UDP search-result source %u:%u for \\"%s\\"%s"), aClients[i].m_nIP, aClients[i].m_nPort, (LPCTSTR)newfile->GetFileName(), (LPCTSTR)CExceptionStrDash(*ex));' in block
+    assert block.count("CExceptionStrDash(*ex)") == 2
+    assert block.count("ASSERT(0);") == 2
