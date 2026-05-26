@@ -51,6 +51,12 @@ TEST_CASE("file-list sort shortcuts follow total-commander key ownership")
 	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F4, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Type);
 	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F5, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Date);
 	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F6, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Size);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F7, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Status);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F8, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Progress);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F9, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Sources);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F10, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Speed);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F11, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Priority);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F12, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::Category);
 }
 
 TEST_CASE("file-list sort shortcuts leave existing function-key behavior alone")
@@ -60,7 +66,7 @@ TEST_CASE("file-list sort shortcuts leave existing function-key behavior alone")
 	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F3, true, true, false) == FileListKeyboardShortcutsSeams::ESortRole::None);
 	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F3, true, false, true) == FileListKeyboardShortcutsSeams::ESortRole::None);
 	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYUP, VK_F3, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::None);
-	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F7, true, false, false) == FileListKeyboardShortcutsSeams::ESortRole::None);
+	CHECK(FileListKeyboardShortcutsSeams::ClassifySortKeyMessage(WM_KEYDOWN, VK_F7, false, false, false) == FileListKeyboardShortcutsSeams::ESortRole::None);
 }
 
 TEST_CASE("file-list sort shortcut roles map only to supported columns")
@@ -69,16 +75,27 @@ TEST_CASE("file-list sort shortcut roles map only to supported columns")
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Type) == -1);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Date) == 14);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Size) == 1);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Status) == 8);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Progress) == 5);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Sources) == 6);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Speed) == 4);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Priority) == 7);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::Downloads, FileListKeyboardShortcutsSeams::ESortRole::Category) == 13);
 
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Name) == 0);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Type) == 4);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Date) == -1);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Size) == 1);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Status) == 2);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Progress) == 3);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Sources) == 1);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SearchResults, FileListKeyboardShortcutsSeams::ESortRole::Speed) == -1);
 
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SharedFiles, FileListKeyboardShortcutsSeams::ESortRole::Name) == 0);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SharedFiles, FileListKeyboardShortcutsSeams::ESortRole::Type) == 2);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SharedFiles, FileListKeyboardShortcutsSeams::ESortRole::Date) == 6);
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SharedFiles, FileListKeyboardShortcutsSeams::ESortRole::Size) == 1);
+	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SharedFiles, FileListKeyboardShortcutsSeams::ESortRole::Priority) == 3);
 
 	CHECK(FileListKeyboardShortcutsSeams::GetSortShortcutColumn(FileListKeyboardShortcutsSeams::EContext::SharedDirs, FileListKeyboardShortcutsSeams::ESortRole::Name) == -1);
 }

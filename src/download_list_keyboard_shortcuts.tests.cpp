@@ -26,6 +26,14 @@ TEST_CASE("download list shortcut seam maps qBittorrent-style priority shortcuts
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, VK_OEM_MINUS, true, false, true) == MP_PRIOLOW);
 }
 
+TEST_CASE("download list shortcut seam owns category menu shortcut")
+{
+	CHECK(DownloadListKeyboardShortcutsSeams::IsCategoryMenuShortcut(WM_KEYDOWN, 'M', true, false, false));
+	CHECK_FALSE(DownloadListKeyboardShortcutsSeams::IsCategoryMenuShortcut(WM_KEYDOWN, 'M', true, false, true));
+	CHECK_FALSE(DownloadListKeyboardShortcutsSeams::IsCategoryMenuShortcut(WM_KEYDOWN, 'M', true, true, false));
+	CHECK_FALSE(DownloadListKeyboardShortcutsSeams::IsCategoryMenuShortcut(WM_KEYUP, 'M', true, false, false));
+}
+
 TEST_CASE("download list shortcut seam leaves unrelated and modified keys alone")
 {
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYUP, 'P', true, false, false) == 0);
