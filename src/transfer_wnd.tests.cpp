@@ -70,4 +70,16 @@ TEST_CASE("Transfer window seam cancels category drag when the left button is go
 	CHECK(TransferWndSeams::ShouldCancelCategoryDragOnMouseMove(true, false));
 }
 
+TEST_CASE("Transfer window seam maps Ctrl+number category shortcuts")
+{
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '0', true, false, false), 0);
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '1', true, false, false), 1);
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '9', true, false, false), 9);
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '1', false, false, false), -1);
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '1', true, true, false), -1);
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '1', true, false, true), -1);
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYUP, '1', true, false, false), -1);
+	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, 'A', true, false, false), -1);
+}
+
 TEST_SUITE_END();
