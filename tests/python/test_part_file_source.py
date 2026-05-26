@@ -121,3 +121,33 @@ def test_downloading_source_add_recovers_corrupt_list_before_mfc_mutation() -> N
     assert 'DebugLogError(_T("Recovering corrupt downloading-source list for \\"%s\\"' in recover_block
     assert "(LPCTSTR)m_partmetfilename" in recover_block
     assert "m_downloadingSourceList.RemoveAll();" in recover_block
+
+
+def test_downloading_source_list_recovery_covers_remove_and_scan_entrypoints() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    detach_block = source[
+        source.index("bool CPartFile::DetachDownloadingSource(CUpDownClient *client)") :
+        source.index("void CPartFile::RemoveDownloadingSource")
+    ]
+    process_block = source[
+        source.index("uint32 CPartFile::Process(uint32 reducedownload") :
+        source.index("bool CPartFile::CanAddSource")
+    ]
+    endgame_block = source[
+        source.index("bool CPartFile::TryStealEndgameBlockForFastPeer") :
+        source.index("bool CPartFile::GetNextRequestedBlock")
+    ]
+    request_block = source[
+        source.index("bool CPartFile::GetNextRequestedBlock") :
+        source.index("CString CPartFile::GetInfoSummary")
+    ]
+
+    assert "RecoverDownloadingSourceList(_T(\"detach downloading source\"));" in detach_block
+    assert detach_block.index("RecoverDownloadingSourceList") < detach_block.index("m_downloadingSourceList.Find(client)")
+    assert "RecoverDownloadingSourceList(_T(\"download-rate pass\"));" in process_block
+    assert process_block.index("RecoverDownloadingSourceList(_T(\"download-rate pass\"));") < process_block.index("m_downloadingSourceList.GetHeadPosition()")
+    assert "RecoverDownloadingSourceList(_T(\"endgame steal pass\"));" in endgame_block
+    assert endgame_block.index("RecoverDownloadingSourceList(_T(\"endgame steal pass\"));") < endgame_block.index("m_downloadingSourceList.GetHeadPosition()")
+    assert "RecoverDownloadingSourceList(_T(\"faster-peer reservation pass\"));" in request_block
+    assert "RecoverDownloadingSourceList(_T(\"chunk selection pass\"));" in request_block
+    assert request_block.index("RecoverDownloadingSourceList(_T(\"chunk selection pass\"));") < request_block.index("uint16 transferringClientsScore = (uint16)m_downloadingSourceList.GetCount();")
