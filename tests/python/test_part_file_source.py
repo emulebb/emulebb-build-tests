@@ -151,3 +151,19 @@ def test_downloading_source_list_recovery_covers_remove_and_scan_entrypoints() -
     assert "RecoverDownloadingSourceList(_T(\"faster-peer reservation pass\"));" in request_block
     assert "RecoverDownloadingSourceList(_T(\"chunk selection pass\"));" in request_block
     assert request_block.index("RecoverDownloadingSourceList(_T(\"chunk selection pass\"));") < request_block.index("uint16 transferringClientsScore = (uint16)m_downloadingSourceList.GetCount();")
+
+
+def test_downloading_source_list_recovery_rebuilds_from_live_sources() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    recover_block = source[
+        source.index("void CPartFile::RecoverDownloadingSourceList(LPCTSTR pszContext)") :
+        source.index("void CPartFile::RemoveStaleSource")
+    ]
+
+    assert "m_downloadingSourceList.RemoveAll();" in recover_block
+    assert "UINT uRecoveredSources = 0;" in recover_block
+    assert "for (POSITION pos = srclist.GetHeadPosition(); pos != NULL;)" in recover_block
+    assert "pSource != NULL && pSource->GetRequestFile() == this && pSource->GetDownloadState() == DS_DOWNLOADING" in recover_block
+    assert "m_downloadingSourceList.AddTail(pSource);" in recover_block
+    assert "++uRecoveredSources;" in recover_block
+    assert 'DebugLogWarning(_T("Rebuilt downloading-source list for \\"%s\\" from live sources (recovered=%u)")' in recover_block
