@@ -235,7 +235,7 @@ def test_synthetic_queue_fill_posts_deterministic_ed2k_links(monkeypatch) -> Non
     monkeypatch.setattr(
         module.rest_smoke,
         "wait_for_triggered_transfer",
-        lambda _base_url, _api_key, transfer_hash, _timeout: {"json": {"hash": transfer_hash}},
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("synthetic fill should not poll every hash")),
     )
 
     registry = module.StressTransferRegistry()
@@ -259,7 +259,39 @@ def test_synthetic_queue_fill_posts_deterministic_ed2k_links(monkeypatch) -> Non
     assert len(posted[0]["links"]) == 2
     assert posted[0]["paused"] is False
     assert posted[0]["categoryId"] == 0
+    assert [row["transfer"] for row in result["triggers"]] == [{"accepted_by_post": True}, {"accepted_by_post": True}]
     assert registry.counts()["triggered_stress_transfer_count"] == 2
+
+
+def test_synthetic_queue_fill_records_rejected_post_items(monkeypatch) -> None:
+    module = load_script_module()
+
+    def fake_http_request(_base_url, path, **kwargs):
+        assert path == "/api/v1/transfers"
+        return {"status": 200, "json": {"items": [{"ok": True}, {"ok": False}]}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: result["json"])
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+
+    registry = module.StressTransferRegistry()
+    result = module.queue_synthetic_stress_transfers(
+        "http://127.0.0.1:1",
+        "key",
+        2,
+        4096,
+        module.DownloadTriggerCoordinator(),
+        registry,
+        10,
+        5.0,
+        2,
+    )
+
+    assert result["ok"] is False
+    assert result["queued_count"] == 1
+    assert len(result["failures"]) == 1
+    assert result["failures"][0]["error"]["type"] == "SyntheticQueueItemRejected"
+    assert registry.counts()["triggered_stress_transfer_count"] == 1
 
 
 def test_summarize_incoming_completed_files_redacts_names(tmp_path: Path) -> None:

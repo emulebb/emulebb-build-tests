@@ -1816,17 +1816,29 @@ def queue_synthetic_stress_transfers(
                 },
                 request_timeout_seconds=timeout_seconds,
             )
-            rest_smoke.require_json_object(response, 200)
+            payload = rest_smoke.require_json_object(response, 200)
             compact_response = rest_smoke.compact_http_result(response)
             compact_batch_responses.append(compact_response)
-            for row in batch_rows:
+            response_items = payload.get("items")
+            if not isinstance(response_items, list):
+                response_items = []
+            for row_index, row in enumerate(batch_rows):
                 transfer_hash = str(row["hash"])
-                transfer = rest_smoke.wait_for_triggered_transfer(
-                    base_url,
-                    api_key,
-                    transfer_hash,
-                    timeout_seconds,
-                )
+                response_item = response_items[row_index] if row_index < len(response_items) else None
+                item_ok = isinstance(response_item, dict) and bool(response_item.get("ok"))
+                if not item_ok:
+                    failures.append(
+                        {
+                            "hash_present": True,
+                            "error": {
+                                "type": "SyntheticQueueItemRejected",
+                                "message": "synthetic transfer POST response item was missing or not ok",
+                            },
+                        }
+                    )
+                    continue
+                # Bulk synthetic queue pressure can exceed the visible transfer-list window.
+                # The batch POST acceptance is the durable signal; polling every hash would cap the stress.
                 transfer_registry.record_triggered(transfer_hash)
                 triggers.append(
                     {
@@ -1841,7 +1853,7 @@ def queue_synthetic_stress_transfers(
                             "completeSources": 0,
                         },
                         "download": compact_response,
-                        "transfer": transfer,
+                        "transfer": {"accepted_by_post": True},
                     }
                 )
         except Exception as exc:
