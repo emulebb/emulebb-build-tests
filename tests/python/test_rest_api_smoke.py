@@ -1055,6 +1055,7 @@ def test_openapi_error_envelope_documents_stable_error_codes() -> None:
         "METHOD_NOT_ALLOWED",
         "NOT_FOUND",
         "INVALID_STATE",
+        "SERVICE_BUSY",
         "EMULE_UNAVAILABLE",
         "EMULE_ERROR",
     ):
@@ -1323,12 +1324,16 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
         assert response_name in responses
 
     assert schemas["ErrorEnvelope"]["properties"]["error"]["required"] == ["code", "message", "details"]
+    expected_error_statuses = {"400", "401", "404", "405", "409", "500", "503"}
     for path_item in document["paths"].values():
         for method, operation in path_item.items():
             if method == "parameters":
                 continue
             if method == "delete":
                 assert "requestBody" not in operation
+            assert expected_error_statuses <= set(operation["responses"])
+            for status in expected_error_statuses:
+                assert operation["responses"][status]["$ref"].endswith("/ErrorResponse")
             assert operation["responses"]["default"]["$ref"].endswith("/ErrorResponse")
 
     source_properties = schemas["TransferSource"]["properties"]
@@ -2214,6 +2219,34 @@ def test_destructive_native_routes_require_explicit_confirmation_or_intent() -> 
     } | id_targeted_delete_routes
     delete_routes = {route_key for route_key in native_contracts if route_key[0] == "DELETE"}
     assert delete_routes == audited_delete_routes
+
+
+def test_completed_transfer_delete_preserves_shared_file_registration() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source = (
+        workspace_root
+        / "workspaces"
+        / "workspace"
+        / "app"
+        / "emulebb-main"
+        / "srchybrid"
+        / "WebServerJson.cpp"
+    ).read_text(encoding="utf-8")
+    completed_delete_branch = source[
+        source.index("if (pPartFile->GetStatus() == PS_COMPLETE)") : source.index(
+            "} else if (!bDeleteFiles)",
+            source.index("if (pPartFile->GetStatus() == PS_COMPLETE)"),
+        )
+    ]
+    row_only_branch = completed_delete_branch[
+        completed_delete_branch.index("if (!bDeleteFiles)") : completed_delete_branch.index(
+            "} else if (!ShellDeleteFile",
+            completed_delete_branch.index("if (!bDeleteFiles)"),
+        )
+    ]
+
+    assert "GetDownloadList()->RemoveFile(pPartFile)" in row_only_branch
+    assert "theApp.sharedfiles->RemoveFile" not in row_only_branch
 
 
 def test_openapi_contract_routes_are_the_live_completeness_source() -> None:
