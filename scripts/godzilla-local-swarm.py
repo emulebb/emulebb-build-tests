@@ -442,6 +442,19 @@ def discover_local_lan_ipv4() -> str:
     """Finds a LAN IPv4 address for local multi-client tests, preferring 192.* over VPNs."""
 
     candidates: set[ipaddress.IPv4Address] = set()
+    if os.name == "nt":
+        try:
+            import win32com.client  # type: ignore[import-not-found]
+
+            service = win32com.client.GetObject("winmgmts:")
+            for adapter in service.ExecQuery("SELECT IPAddress, IPEnabled FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled = True"):
+                for value in adapter.IPAddress or []:
+                    try:
+                        candidates.add(ipaddress.IPv4Address(str(value)))
+                    except ipaddress.AddressValueError:
+                        continue
+        except Exception:
+            pass
     for host in {socket.gethostname(), socket.getfqdn()}:
         try:
             for family, _, _, _, sockaddr in socket.getaddrinfo(host, None, socket.AF_INET):
@@ -449,15 +462,6 @@ def discover_local_lan_ipv4() -> str:
                     candidates.add(ipaddress.IPv4Address(str(sockaddr[0])))
         except OSError:
             continue
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            probe.connect(("8.8.8.8", 80))
-            candidates.add(ipaddress.IPv4Address(probe.getsockname()[0]))
-        finally:
-            probe.close()
-    except OSError:
-        pass
     usable = [address for address in candidates if not (address.is_loopback or address.is_link_local or address.is_unspecified)]
     if not usable:
         raise RuntimeError("Could not discover a local LAN IPv4 address. Pass --p2p-bind-interface-address explicitly.")
