@@ -62,7 +62,7 @@ def test_selects_workspace_test_runner_tree_and_orphaned_helpers() -> None:
 
     assert selected == {10, 11, 12, 30, 40}
     assert reasons[10] == "workspace test runner command line"
-    assert reasons[12] == "descendant of workspace test runner 10"
+    assert reasons[12] == "scoped descendant of workspace test runner 10"
     assert reasons[30] == "orphaned workspace test helper command line"
     assert module.termination_roots(selected, processes) == [10, 30, 40]
 
@@ -133,3 +133,43 @@ def test_does_not_select_helper_itself_or_unscoped_python() -> None:
 
     assert selected == set()
     assert reasons == {}
+
+
+def test_stop_targets_are_revalidated_against_current_processes(monkeypatch) -> None:
+    module = load_module()
+    workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")
+    processes = [
+        module.ProcessInfo(
+            10,
+            1,
+            "python.exe",
+            rf"C:\Python313\python.exe -m emule_workspace test live-e2e --workspace {workspace_root}",
+        ),
+        module.ProcessInfo(
+            11,
+            10,
+            "emulebb.exe",
+            rf"emulebb.exe -c {workspace_root}\workspaces\workspace\state\test-reports\run\profile-base",
+        ),
+        module.ProcessInfo(20, 10, "notepad.exe", r"C:\Windows\notepad.exe"),
+    ]
+    monkeypatch.setattr(module, "collect_windows_processes", lambda: processes)
+
+    targets, reason = module.current_stop_targets(10, workspace_root, current_pid=999)
+
+    assert reason == "workspace test runner command line"
+    assert [process.pid for process in targets] == [10, 11]
+
+
+def test_stop_process_tree_refuses_reused_unscoped_root(monkeypatch) -> None:
+    module = load_module()
+    workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")
+    processes = [module.ProcessInfo(10, 1, "python.exe", r"C:\Python313\python.exe C:\tools\unrelated.py")]
+    terminated: list[int] = []
+    monkeypatch.setattr(module, "collect_windows_processes", lambda: processes)
+    monkeypatch.setattr(module, "terminate_windows_process", lambda pid: terminated.append(pid) or {"pid": pid})
+
+    result = module.stop_process_tree(10, workspace_root=workspace_root, current_pid=999, timeout_seconds=0)
+
+    assert result["refused"] is True
+    assert terminated == []

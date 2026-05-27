@@ -1,0 +1,133 @@
+"""Windows process helpers for live harness cleanup and adverse tests."""
+
+from __future__ import annotations
+
+import os
+import time
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class WindowsProcessInfo:
+    """One current Windows process row returned by WMI."""
+
+    pid: int
+    parent_pid: int
+    name: str
+    command_line: str
+
+
+def process_service():
+    """Returns a WMI process service without shelling out to PowerShell."""
+
+    if os.name != "nt":
+        raise RuntimeError("Windows process helpers are only available on Windows.")
+    import win32com.client  # type: ignore[import-not-found]
+
+    return win32com.client.GetObject("winmgmts:")
+
+
+def collect_processes() -> list[WindowsProcessInfo]:
+    """Returns current Windows process rows through WMI."""
+
+    service = process_service()
+    return [
+        WindowsProcessInfo(
+            pid=int(item.ProcessId),
+            parent_pid=int(item.ParentProcessId or 0),
+            name=str(item.Name or ""),
+            command_line=str(item.CommandLine or ""),
+        )
+        for item in service.InstancesOf("Win32_Process")
+        if item.ProcessId
+    ]
+
+
+def process_command_line(process_id: int) -> str:
+    """Returns the current command line for one process id."""
+
+    for process in collect_processes():
+        if process.pid == process_id:
+            return process.command_line
+    return ""
+
+
+def children_by_parent(processes: list[WindowsProcessInfo]) -> dict[int, list[WindowsProcessInfo]]:
+    """Indexes process rows by parent pid."""
+
+    children: dict[int, list[WindowsProcessInfo]] = {}
+    for process in processes:
+        children.setdefault(process.parent_pid, []).append(process)
+    return children
+
+
+def collect_process_tree(process_id: int, processes: list[WindowsProcessInfo] | None = None) -> list[WindowsProcessInfo]:
+    """Returns one current process tree rooted at process_id."""
+
+    processes = collect_processes() if processes is None else processes
+    by_pid = {process.pid: process for process in processes}
+    if process_id not in by_pid:
+        return []
+    children = children_by_parent(processes)
+    selected: set[int] = set()
+    stack = [process_id]
+    while stack:
+        pid = stack.pop()
+        if pid in selected:
+            continue
+        selected.add(pid)
+        stack.extend(child.pid for child in children.get(pid, []))
+    return [process for process in processes if process.pid in selected]
+
+
+def terminate_process(process_id: int, exit_code: int = 1) -> dict[str, object]:
+    """Terminates one Windows process through WMI."""
+
+    service = process_service()
+    matches = list(service.ExecQuery(f"SELECT * FROM Win32_Process WHERE ProcessId = {int(process_id)}"))
+    if not matches:
+        return {"pid": process_id, "terminated": False, "reason": "process no longer exists"}
+    result = int(matches[0].Terminate(exit_code))
+    return {"pid": process_id, "terminated": result == 0, "return_code": result}
+
+
+def terminate_process_tree(process_id: int, timeout_seconds: float = 15.0) -> dict[str, object]:
+    """Terminates one current process tree, children first, through WMI."""
+
+    targets = collect_process_tree(process_id)
+    if not targets:
+        return {
+            "command": "wmi-terminate",
+            "pid": process_id,
+            "return_code": 1,
+            "targets": [],
+            "reason": "root process no longer exists",
+        }
+    target_pids = {process.pid for process in targets}
+    children = children_by_parent(targets)
+    depths: dict[int, int] = {}
+
+    def depth(pid: int) -> int:
+        if pid in depths:
+            return depths[pid]
+        child_depths = [depth(child.pid) for child in children.get(pid, []) if child.pid in target_pids]
+        depths[pid] = 1 + max(child_depths, default=0)
+        return depths[pid]
+
+    ordered_targets = sorted(targets, key=lambda item: depth(item.pid), reverse=True)
+    terminated = [terminate_process(process.pid) for process in ordered_targets]
+    deadline = time.monotonic() + timeout_seconds
+    remaining = set(target_pids)
+    while remaining and time.monotonic() < deadline:
+        live_pids = {process.pid for process in collect_processes()}
+        remaining = target_pids & live_pids
+        if remaining:
+            time.sleep(0.2)
+    return {
+        "command": "wmi-terminate",
+        "pid": process_id,
+        "return_code": 0 if not remaining else 1,
+        "targets": [process.__dict__ for process in ordered_targets],
+        "terminated": terminated,
+        "remaining_pids": sorted(remaining),
+    }

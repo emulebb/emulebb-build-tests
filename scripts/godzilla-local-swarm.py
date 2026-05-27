@@ -26,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import amule as amule_harness  # noqa: E402
 from emule_test_harness import cpu_profile  # noqa: E402
+from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     AdminVolumeFixtureConfig,
     build_storage_topology,
@@ -1576,16 +1577,9 @@ def restart_primary_emulebb_client(
 
 
 def query_process_command_line(process_id: int) -> str:
-    """Returns a process command line through CIM for kill-safety checks."""
+    """Returns a process command line through Python WMI for kill-safety checks."""
 
-    command = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        f"(Get-CimInstance Win32_Process -Filter \"ProcessId={process_id}\").CommandLine",
-    ]
-    completed = subprocess.run(command, text=True, capture_output=True, timeout=15.0, check=False)
-    return completed.stdout.strip()
+    return windows_processes.process_command_line(process_id)
 
 
 def hard_kill_app_process(
@@ -1600,23 +1594,21 @@ def hard_kill_app_process(
     require_throwaway_profile(profile_base, runtime_root, label)
     process_id = app_process_id(app)
     command_line = query_process_command_line(process_id)
-    if command_line and str(profile_base).lower() not in command_line.lower():
+    if not command_line:
+        raise RuntimeError(f"Refusing to kill {label} pid {process_id}; command line could not be verified.")
+    if str(profile_base).lower() not in command_line.lower():
         raise RuntimeError(f"Refusing to kill {label} pid {process_id}; command line does not reference {profile_base}.")
     started = time.monotonic()
-    completed = subprocess.run(
-        ["taskkill", "/F", "/T", "/PID", str(process_id)],
-        text=True,
-        capture_output=True,
-        timeout=30.0,
-        check=False,
-    )
+    termination = windows_processes.terminate_process_tree(process_id, timeout_seconds=30.0)
     return {
         "client": label,
         "pid": process_id,
         "command_line": command_line,
-        "return_code": completed.returncode,
-        "stdout_tail": completed.stdout[-1000:],
-        "stderr_tail": completed.stderr[-1000:],
+        "return_code": termination.get("return_code"),
+        "command": termination.get("command"),
+        "targets": termination.get("targets"),
+        "terminated": termination.get("terminated"),
+        "remaining_pids": termination.get("remaining_pids"),
         "duration_seconds": round(time.monotonic() - started, 3),
     }
 

@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+import time
 
 
 TEST_SCRIPT_NAME = "stop-running-tests.py"
@@ -92,6 +92,16 @@ def is_orphaned_test_helper_process(process: ProcessInfo, workspace_root: Path, 
     return any(marker in command for marker in TEST_HELPER_MARKERS)
 
 
+def is_workspace_test_descendant(process: ProcessInfo, workspace_root: Path, current_pid: int) -> bool:
+    """Returns true when a child process has its own workspace test evidence."""
+
+    return is_test_runner_process(process, workspace_root, current_pid) or is_orphaned_test_helper_process(
+        process,
+        workspace_root,
+        current_pid,
+    )
+
+
 def build_children_by_parent(processes: list[ProcessInfo]) -> dict[int, list[ProcessInfo]]:
     children: dict[int, list[ProcessInfo]] = {}
     for process in processes:
@@ -128,8 +138,10 @@ def select_test_processes(
             selected.add(process.pid)
             reasons[process.pid] = "workspace test runner command line"
             for child_pid in collect_descendant_pids(process.pid, children_by_parent):
-                selected.add(child_pid)
-                reasons.setdefault(child_pid, f"descendant of workspace test runner {process.pid}")
+                child = next((item for item in processes if item.pid == child_pid), None)
+                if child is not None and is_workspace_test_descendant(child, workspace_root, current_pid):
+                    selected.add(child_pid)
+                    reasons.setdefault(child_pid, f"scoped descendant of workspace test runner {process.pid}")
         elif process.pid not in selected and is_orphaned_test_helper_process(process, workspace_root, current_pid):
             selected.add(process.pid)
             reasons[process.pid] = "orphaned workspace test helper command line"
@@ -150,44 +162,106 @@ def termination_roots(selected_pids: set[int], processes: list[ProcessInfo]) -> 
 
 
 def collect_windows_processes() -> list[ProcessInfo]:
-    command = (
-        "$ErrorActionPreference='Stop'; "
-        "Get-CimInstance Win32_Process | "
-        "Select-Object ProcessId,ParentProcessId,Name,CommandLine | "
-        "ConvertTo-Json -Compress"
-    )
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", command],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    payload = json.loads(result.stdout or "[]")
-    if isinstance(payload, dict):
-        payload = [payload]
+    service = windows_process_service()
     return [
         ProcessInfo(
-            pid=int(item.get("ProcessId") or 0),
-            parent_pid=int(item.get("ParentProcessId") or 0),
-            name=str(item.get("Name") or ""),
-            command_line=str(item.get("CommandLine") or ""),
+            pid=int(item.ProcessId),
+            parent_pid=int(item.ParentProcessId or 0),
+            name=str(item.Name or ""),
+            command_line=str(item.CommandLine or ""),
         )
-        for item in payload
-        if item.get("ProcessId")
+        for item in service.InstancesOf("Win32_Process")
+        if item.ProcessId
     ]
 
 
-def stop_process_tree(root_pid: int) -> dict[str, object]:
-    result = subprocess.run(
-        ["taskkill", "/PID", str(root_pid), "/T", "/F"],
-        capture_output=True,
-        text=True,
-    )
+def windows_process_service():
+    """Returns a WMI process service without shelling out to PowerShell."""
+
+    import win32com.client  # type: ignore[import-not-found]
+
+    return win32com.client.GetObject("winmgmts:")
+
+
+def current_stop_targets(root_pid: int, workspace_root: Path, current_pid: int) -> tuple[list[ProcessInfo], str]:
+    """Returns the currently verified process tree to stop for one selected root."""
+
+    processes = collect_windows_processes()
+    selected_pids, reasons = select_test_processes(processes, workspace_root, current_pid=current_pid)
+    if root_pid not in selected_pids:
+        return [], "root is no longer a selected workspace test process"
+    children_by_parent = build_children_by_parent(processes)
+    tree_pids = {root_pid, *collect_descendant_pids(root_pid, children_by_parent)}
+    targets = [process for process in processes if process.pid in selected_pids and process.pid in tree_pids]
+    return targets, reasons.get(root_pid, "selected")
+
+
+def terminate_windows_process(pid: int, exit_code: int = 1) -> dict[str, object]:
+    """Terminates one Windows process through WMI."""
+
+    service = windows_process_service()
+    matches = list(service.ExecQuery(f"SELECT * FROM Win32_Process WHERE ProcessId = {int(pid)}"))
+    if not matches:
+        return {"pid": pid, "terminated": False, "reason": "process no longer exists"}
+    result = int(matches[0].Terminate(exit_code))
+    return {"pid": pid, "terminated": result == 0, "return_code": result}
+
+
+def stop_process_tree(
+    root_pid: int,
+    *,
+    workspace_root: Path | None = None,
+    current_pid: int | None = None,
+    timeout_seconds: float = 15.0,
+) -> dict[str, object]:
+    workspace_root = default_workspace_root().resolve() if workspace_root is None else workspace_root.resolve()
+    current_pid = os.getpid() if current_pid is None else current_pid
+    targets, root_reason = current_stop_targets(root_pid, workspace_root, current_pid)
+    if not targets:
+        return {
+            "pid": root_pid,
+            "return_code": 1,
+            "command": "wmi-terminate",
+            "refused": True,
+            "reason": root_reason,
+            "targets": [],
+        }
+    target_pids = {item.pid for item in targets}
+    children_by_parent = build_children_by_parent(targets)
+    depths: dict[int, int] = {}
+
+    def depth(pid: int) -> int:
+        if pid in depths:
+            return depths[pid]
+        child_depths = [depth(child.pid) for child in children_by_parent.get(pid, []) if child.pid in target_pids]
+        depths[pid] = 1 + max(child_depths, default=0)
+        return depths[pid]
+
+    ordered_targets = sorted(targets, key=lambda item: depth(item.pid), reverse=True)
+    terminated = [terminate_windows_process(process.pid) for process in ordered_targets]
+    deadline = time.monotonic() + timeout_seconds
+    remaining: set[int] = target_pids
+    while remaining and time.monotonic() < deadline:
+        live_pids = {process.pid for process in collect_windows_processes()}
+        remaining = target_pids & live_pids
+        if remaining:
+            time.sleep(0.2)
     return {
         "pid": root_pid,
-        "return_code": result.returncode,
-        "stdout": result.stdout.strip(),
-        "stderr": result.stderr.strip(),
+        "return_code": 0 if not remaining else 1,
+        "command": "wmi-terminate",
+        "root_reason": root_reason,
+        "targets": [
+            {
+                "pid": process.pid,
+                "parent_pid": process.parent_pid,
+                "name": process.name,
+                "command_line": process.command_line,
+            }
+            for process in ordered_targets
+        ],
+        "terminated": terminated,
+        "remaining_pids": sorted(remaining),
     }
 
 
@@ -239,7 +313,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         report["stopped"] = []
     else:
-        report["stopped"] = [stop_process_tree(pid) for pid in report["termination_roots"]]
+        report["stopped"] = [
+            stop_process_tree(pid, workspace_root=workspace_root, current_pid=os.getpid())
+            for pid in report["termination_roots"]
+        ]
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -251,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {item['command_line']}")
         if not args.dry_run:
             for item in report["stopped"]:
-                print(f"taskkill root pid={item['pid']} rc={item['return_code']}")
+                print(f"wmi terminate root pid={item['pid']} rc={item['return_code']}")
     return 0 if report["selected_count"] == 0 or args.dry_run else max(
         [0, *(int(item["return_code"]) for item in report["stopped"])]
     )
