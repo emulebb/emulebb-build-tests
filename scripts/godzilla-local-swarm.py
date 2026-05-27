@@ -966,6 +966,33 @@ def read_text_tail(path: Path, *, limit: int = 4000) -> str:
         return f"<unavailable: {exc}>"
 
 
+def scan_log_markers(logs: dict[str, Path], markers: list[str], *, sample_limit: int = 20) -> dict[str, object]:
+    """Builds compact evidence for notable runtime log markers."""
+
+    report: dict[str, object] = {}
+    for label, path in logs.items():
+        marker_counts = {marker: 0 for marker in markers}
+        samples: list[dict[str, object]] = []
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    stripped = line.rstrip()
+                    for marker in markers:
+                        if marker in stripped:
+                            marker_counts[marker] += 1
+                            if len(samples) < sample_limit:
+                                samples.append({"line": line_number, "marker": marker, "text": stripped})
+        except OSError as exc:
+            report[label] = {"path": str(path), "error": str(exc)}
+            continue
+        report[label] = {
+            "path": str(path),
+            "counts": {marker: count for marker, count in marker_counts.items() if count},
+            "samples": samples,
+        }
+    return report
+
+
 def amule_daemon_diagnostics(process: subprocess.Popen | None, profile: amule_harness.AmuleRuntimeProfile | None) -> dict[str, object]:
     """Returns bounded aMule daemon diagnostics for optional-client failures."""
 
@@ -2762,6 +2789,21 @@ def main(argv: list[str] | None = None) -> int:
             duration_seconds=args.observation_seconds,
             interval_seconds=args.resource_sample_interval_seconds,
             output_csv=paths.source_artifacts_dir / "resource-samples.csv",
+        )
+        report["checks"]["log_marker_scan"] = scan_log_markers(
+            {
+                "primary": Path(client1["profile_base"]) / "logs" / "emulebb-verbose.log",
+                "harness": Path(client2["profile_base"]) / "logs" / "emule.log",
+                "server": server_log_path,
+            },
+            [
+                "Banned:",
+                "Ban reason:",
+                "Userhash changed",
+                "Remote client cancelled transfer",
+                "In buffer: 16777216.00 TB",
+                "connection closed",
+            ],
         )
         final_transfers = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=args.api_key, request_timeout_seconds=20.0)
         final_rows = rest_smoke.require_json_array(final_transfers, 200)

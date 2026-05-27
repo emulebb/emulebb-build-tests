@@ -391,6 +391,36 @@ def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
     assert godzilla.transfer_row_hashes(rows) == ["aaa", "bbb", "123"]
 
 
+def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_log_marker_scan_test")
+    log_path = tmp_path / "emulebb-verbose.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "normal line",
+                "Banned: Aggressive behaviour",
+                "Clients: peer, Ban reason: Userhash changed (Found in TrackedClientsList)",
+                "Removing client from upload list: Remote client cancelled transfer. In buffer: 16777216.00 TB",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = godzilla.scan_log_markers(
+        {"primary": log_path},
+        ["Banned:", "Ban reason:", "Userhash changed", "Remote client cancelled transfer", "In buffer: 16777216.00 TB"],
+    )
+
+    assert report["primary"]["counts"] == {
+        "Banned:": 1,
+        "Ban reason:": 1,
+        "Userhash changed": 1,
+        "Remote client cancelled transfer": 1,
+        "In buffer: 16777216.00 TB": 1,
+    }
+    assert len(report["primary"]["samples"]) == 5
+
+
 def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_loopback_test")
     monkeypatch.setenv("X_LOCAL_IP", "127.0.0.1")
