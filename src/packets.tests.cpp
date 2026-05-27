@@ -39,6 +39,17 @@ TEST_CASE("Packet length seam rejects payloads that cannot include the opcode by
 	CHECK_FALSE(PacketsSeams::TryGetTcpPacketLengthField(UINT32_MAX, &packetLength));
 }
 
+TEST_CASE("Packet constructor span seam rejects values before narrowing")
+{
+	uint32_t payloadSize = 0;
+
+	CHECK(PacketsSeams::TryGetTcpPacketPayloadSizeFromSpan(42u, &payloadSize));
+	CHECK_EQ(payloadSize, static_cast<uint32_t>(42u));
+	CHECK_FALSE(PacketsSeams::TryGetTcpPacketPayloadSizeFromSpan(UINT32_MAX, &payloadSize));
+	CHECK_FALSE(PacketsSeams::TryGetTcpPacketPayloadSizeFromSpan(static_cast<uint64_t>(UINT32_MAX) + 1u, &payloadSize));
+	CHECK_FALSE(PacketsSeams::TryGetTcpPacketPayloadSizeFromSpan(42u, NULL));
+}
+
 TEST_CASE("Packet payload addition seam preserves the 32-bit wire limit")
 {
 	uint32_t combinedSize = 0;
@@ -56,6 +67,28 @@ TEST_CASE("Packet blob seam rejects local blob producers that would truncate")
 	CHECK(PacketsSeams::TryGetBlobPayloadSize(16u, &blobSize));
 	CHECK_EQ(blobSize, static_cast<uint32_t>(16u));
 	CHECK_FALSE(PacketsSeams::TryGetBlobPayloadSize(static_cast<size_t>(UINT32_MAX) + 1u, &blobSize));
+}
+
+TEST_CASE("Raw packet span seam accepts the full raw 32-bit payload range")
+{
+	uint32_t payloadSize = 0;
+
+	CHECK(PacketsSeams::TryGetRawPacketPayloadSizeFromSpan(UINT32_MAX, &payloadSize));
+	CHECK_EQ(payloadSize, UINT32_MAX);
+	CHECK_FALSE(PacketsSeams::TryGetRawPacketPayloadSizeFromSpan(static_cast<uint64_t>(UINT32_MAX) + 1u, &payloadSize));
+	CHECK_FALSE(PacketsSeams::TryGetRawPacketPayloadSizeFromSpan(1u, NULL));
+}
+
+TEST_CASE("Packet compression work seam rejects wrapped scratch spans")
+{
+	size_t workSize = 0;
+
+	CHECK(PacketsSeams::TryGetPacketCompressionWorkSize(42u, &workSize));
+	CHECK_EQ(workSize, static_cast<size_t>(342u));
+	CHECK(PacketsSeams::TryGetPacketCompressionWorkSize(UINT32_MAX - 300u, &workSize));
+	CHECK_EQ(workSize, static_cast<size_t>(UINT32_MAX));
+	CHECK_FALSE(PacketsSeams::TryGetPacketCompressionWorkSize(UINT32_MAX - 299u, &workSize));
+	CHECK_FALSE(PacketsSeams::TryGetPacketCompressionWorkSize(1u, NULL));
 }
 
 TEST_SUITE_END();
