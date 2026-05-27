@@ -29,6 +29,7 @@ def test_known_file_hash_creation_checks_short_reads_in_release_builds() -> None
     assert "std::unique_ptr<CAICHHashAlgo> pHashAlg" in block
     assert "const UINT uActualRead = pFile->Read(X, uRead);" in block
     assert "if (uActualRead != uRead)\n\t\t\tAfxThrowFileException(CFileException::endOfFile, 0, pFile->GetFilePath());" in block
+    assert "static_assert(kHashReadBufferBytes < EMBLOCKSIZE" in block
     assert "pShaHashOut->SetBlockHash(EMBLOCKSIZE, posCurrentEMBlock, pHashAlg.get());" in block
 
 
