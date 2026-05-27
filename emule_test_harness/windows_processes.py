@@ -16,6 +16,7 @@ class WindowsProcessInfo:
     parent_pid: int
     name: str
     command_line: str
+    creation_date: str = ""
 
 
 def process_service():
@@ -38,6 +39,7 @@ def collect_processes() -> list[WindowsProcessInfo]:
             parent_pid=int(item.ParentProcessId or 0),
             name=str(item.Name or ""),
             command_line=str(item.CommandLine or ""),
+            creation_date=str(getattr(item, "CreationDate", "") or ""),
         )
         for item in service.InstancesOf("Win32_Process")
         if item.ProcessId
@@ -125,13 +127,23 @@ def command_line_contains_markers(command_line: str, markers: list[str] | tuple[
     return all(marker.strip().lower() in normalized for marker in markers if marker.strip())
 
 
-def terminate_process(process_id: int, exit_code: int = 1) -> dict[str, object]:
+def terminate_process(process_id: int, exit_code: int = 1, expected_creation_date: str = "") -> dict[str, object]:
     """Terminates one Windows process through WMI."""
 
     service = process_service()
     matches = list(service.ExecQuery(f"SELECT * FROM Win32_Process WHERE ProcessId = {int(process_id)}"))
     if not matches:
         return {"pid": process_id, "terminated": False, "reason": "process no longer exists"}
+    current_creation_date = str(getattr(matches[0], "CreationDate", "") or "")
+    if expected_creation_date and current_creation_date != expected_creation_date:
+        return {
+            "pid": process_id,
+            "terminated": False,
+            "refused": True,
+            "reason": "process creation date changed",
+            "expected_creation_date": expected_creation_date,
+            "current_creation_date": current_creation_date,
+        }
     result = int(matches[0].Terminate(exit_code))
     return {"pid": process_id, "terminated": result == 0, "return_code": result}
 
@@ -177,7 +189,7 @@ def terminate_process_tree(
         return depths[pid]
 
     ordered_targets = sorted(targets, key=lambda item: depth(item.pid), reverse=True)
-    terminated = [terminate_process(process.pid) for process in ordered_targets]
+    terminated = [terminate_process(process.pid, expected_creation_date=process.creation_date) for process in ordered_targets]
     deadline = time.monotonic() + timeout_seconds
     remaining = set(target_pids)
     while remaining and time.monotonic() < deadline:
