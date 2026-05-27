@@ -378,6 +378,19 @@ def test_godzilla_amule_command_hammer_skips_missing_optional_amule() -> None:
     }
 
 
+def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_transfer_row_hash_test")
+
+    rows = [
+        {"hash": "aaa"},
+        {"fileHash": "bbb"},
+        {"id": 123},
+        {"name": "missing-hash"},
+    ]
+
+    assert godzilla.transfer_row_hashes(rows) == ["aaa", "bbb", "123"]
+
+
 def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_loopback_test")
     monkeypatch.setenv("X_LOCAL_IP", "127.0.0.1")

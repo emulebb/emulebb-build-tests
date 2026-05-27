@@ -1622,6 +1622,17 @@ def summarize_transfer_rows(rows: list[dict[str, object]]) -> dict[str, object]:
     return {"count": len(rows), "states": states, "samples": samples}
 
 
+def transfer_row_hashes(rows: list[dict[str, object]]) -> list[str]:
+    """Returns stable REST transfer identifiers for live transfer operations."""
+
+    hashes: list[str] = []
+    for row in rows:
+        value = row.get("hash") or row.get("fileHash") or row.get("id")
+        if value:
+            hashes.append(str(value))
+    return hashes
+
+
 def sample_transfer_state(base_url: str, api_key: str, label: str) -> dict[str, object]:
     """Captures a transfer-list snapshot without storing the full list."""
 
@@ -2703,7 +2714,9 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         current_phase = "transfer_churn"
-        queued_hashes = [str(row.ed2k_hash) for row in emulebb_source_rows if row.ed2k_hash]
+        pre_churn_rows = fetch_transfer_rows(base_url, args.api_key)
+        report["checks"]["pre_churn_transfer_snapshot"] = summarize_transfer_rows(pre_churn_rows)
+        queued_hashes = transfer_row_hashes(pre_churn_rows)
         report["checks"]["emulebb_transfer_churn"] = churn_emulebb_transfers(base_url, args.api_key, queued_hashes)
         report["checks"]["transfer_list_after_churn"] = rest_smoke.compact_http_result(
             rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=args.api_key, request_timeout_seconds=20.0)
