@@ -55,6 +55,21 @@ def test_publish_directory_snapshot_skips_admin_fixture_mounts(tmp_path: Path) -
     assert not (destination / "admin-mounts").exists()
 
 
+def test_publish_directory_snapshot_skips_admin_fixture_vhd_images(tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    admin_volumes = source / "admin-volumes"
+    admin_volumes.mkdir(parents=True)
+    (admin_volumes / "godzilla-local-swarm.vhdx").write_bytes(b"vhd")
+    (source / "godzilla-local-swarm-result.json").write_text("{}", encoding="utf-8")
+
+    module.publish_directory_snapshot(source, destination)
+
+    assert (destination / "godzilla-local-swarm-result.json").is_file()
+    assert not (destination / "admin-volumes").exists()
+
+
 def test_publish_directory_snapshot_skips_windows_volume_metadata(tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     source = tmp_path / "source"
