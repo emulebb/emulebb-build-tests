@@ -40,6 +40,42 @@ def test_publish_directory_snapshot_skips_generated_shared_hash_payloads(tmp_pat
     assert not (destination / "scenario" / "shared-hash-root").exists()
 
 
+def test_publish_directory_snapshot_skips_admin_fixture_mounts(tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    mount_payload_dir = source / "admin-mounts" / "godzilla-local-swarm"
+    mount_payload_dir.mkdir(parents=True)
+    (mount_payload_dir / "generated-media.bin").write_bytes(b"x" * 1024)
+    (source / "godzilla-local-swarm-result.json").write_text("{}", encoding="utf-8")
+
+    module.publish_directory_snapshot(source, destination)
+
+    assert (destination / "godzilla-local-swarm-result.json").is_file()
+    assert not (destination / "admin-mounts").exists()
+
+
+def test_publish_directory_snapshot_skips_windows_volume_metadata(tmp_path: Path) -> None:
+    module = load_harness_cli_common_module()
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    protected_dirs = (
+        source / "System Volume Information",
+        source / "$RECYCLE.BIN",
+    )
+    for protected_dir in protected_dirs:
+        protected_dir.mkdir(parents=True)
+        (protected_dir / "metadata.bin").write_bytes(b"metadata")
+    (source / "normal").mkdir()
+    (source / "normal" / "keep.txt").write_text("keep", encoding="utf-8")
+
+    module.publish_directory_snapshot(source, destination)
+
+    assert (destination / "normal" / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert not (destination / "System Volume Information").exists()
+    assert not (destination / "$RECYCLE.BIN").exists()
+
+
 def test_publish_latest_report_skips_heavy_payloads(tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     run_report_dir = tmp_path / "state" / "test-reports" / "suite" / "run"

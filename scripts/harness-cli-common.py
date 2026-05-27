@@ -35,7 +35,9 @@ APP_VARIANT_WORKTREE_NAMES = {
     "community": "emulebb-community-baseline",
     "tracing-harness": "emulebb-community-tracing-harness",
 }
-REPORT_EXCLUDED_DIRECTORY_NAMES = frozenset(("shared-hash-root",))
+PROTECTED_VOLUME_DIRECTORY_NAMES = frozenset(("system volume information", "$recycle.bin"))
+# Admin fixture mounts are live VHD contents; reports keep harness artifacts, not mounted volume trees.
+REPORT_EXCLUDED_DIRECTORY_NAMES = frozenset(("admin-mounts", "shared-hash-root")) | PROTECTED_VOLUME_DIRECTORY_NAMES
 LATEST_REPORT_EXCLUDED_DIRECTORY_NAMES = REPORT_EXCLUDED_DIRECTORY_NAMES | frozenset(
     (
         "crash-dumps",
