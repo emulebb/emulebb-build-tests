@@ -36,6 +36,7 @@ def test_prepare_amule_profile_writes_isolated_config(request: pytest.FixtureReq
     config_text = (profile.config_dir / "amule.conf").read_text(encoding="utf-8")
 
     assert profile.root_dir == profile_root.resolve()
+    assert profile.ec_address == "127.0.0.1"
     assert profile.incoming_dir.is_dir()
     assert profile.temp_dir.is_dir()
     assert profile.logs_dir.is_dir()
@@ -103,6 +104,26 @@ def test_amule_commands_pin_config_dir_and_ec_endpoint(tmp_path: Path, request: 
         "--password=cl-amule-004-ec-password",
         "--command=Status",
     ]
+
+
+def test_amule_profile_can_bind_ec_to_lan_address(request: pytest.FixtureRequest) -> None:
+    root = workspace_unit_root("lan-ec", request)
+    profile = amule.prepare_amule_profile(
+        root_dir=root / "run" / "cl-amule-004",
+        profile_id="cl-amule-004",
+        nick="cl-amule-004",
+        tcp_port=42010,
+        udp_port=42011,
+        ec_port=42012,
+        advertised_address="10.55.0.8",
+        ec_address="10.55.0.8",
+    )
+    control = root / "bin" / "amulecmd.exe"
+
+    config_text = (profile.config_dir / "amule.conf").read_text(encoding="utf-8")
+
+    assert "ECAddress=10.55.0.8" in config_text
+    assert amule.build_amulecmd_command(control, profile, "Status")[1] == "--host=10.55.0.8"
 
 
 def test_wait_for_shared_file_hash_parses_amulecmd_output(

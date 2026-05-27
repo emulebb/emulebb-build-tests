@@ -51,6 +51,68 @@ CLIENT04 = CLIENT_IDENTITIES["amule"]
 AMUTORRENT_EMULEBB_ID = CLIENT01.profile_id
 AMUTORRENT_AMULE_ID = CLIENT04.profile_id
 
+ED2K_INSTANCE_MATRIX = [
+    {
+        "instance_id": AMUTORRENT_EMULEBB_ID,
+        "client_type": "emulebb",
+        "display_name": CLIENT01.profile_id,
+        "search_type": "server",
+        "search_requires_fixture_match": True,
+    },
+    {
+        "instance_id": AMUTORRENT_AMULE_ID,
+        "client_type": "amule",
+        "display_name": CLIENT04.profile_id,
+        "search_type": "global",
+        "search_requires_fixture_match": False,
+    },
+]
+
+AMUTORRENT_CAPABILITY_MATRIX = {
+    "global_read": [
+        "health",
+        "config_status",
+        "config_current",
+        "config_defaults",
+        "config_interfaces",
+        "data_snapshot",
+        "categories",
+        "history",
+        "history_all",
+        "history_stats",
+        "metrics_dashboard",
+        "metrics_history",
+        "metrics_speed_history",
+        "metrics_stats",
+        "app_logs",
+    ],
+    "ed2k_instance_read": [
+        "servers",
+        "server_info",
+        "stats_tree",
+        "ed2k_logs",
+        "shared_dirs",
+        "search_results_cache",
+    ],
+    "ed2k_instance_mutation": [
+        "add_ed2k_link",
+        "server_search",
+        "pause",
+        "resume",
+        "stop",
+        "resume_after_stop",
+        "delete_permission_preflight",
+        "category_assignment",
+        "refresh_shared",
+    ],
+    "coexistence_invariants": [
+        "both_instances_connected",
+        "same_hash_is_instance_scoped",
+        "single_instance_operations_preserve_other_instance",
+        "completed_files_match_fixture_for_both_clients",
+    ],
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Builds the standalone local ED2K aMuTorrent UI parser."""
@@ -108,6 +170,7 @@ def build_local_amutorrent_environment(
     *,
     base_env: dict[str, str],
     amutorrent_port: int,
+    bind_addr: str,
     node_path: Path,
     data_dir: Path,
     emulebb_rest_port: int,
@@ -123,19 +186,19 @@ def build_local_amutorrent_environment(
     env.update(
         {
             "PORT": str(amutorrent_port),
-            "BIND_ADDRESS": "127.0.0.1",
+            "BIND_ADDRESS": bind_addr,
             "AMUTORRENT_DATA_DIR": str(data_dir.resolve()),
             "WEB_AUTH_ENABLED": "false",
             "SKIP_SETUP_WIZARD": "true",
             "EMULEBB_ENABLED": "true",
-            "EMULEBB_HOST": "127.0.0.1",
+            "EMULEBB_HOST": bind_addr,
             "EMULEBB_PORT": str(emulebb_rest_port),
             "EMULEBB_API_KEY": emulebb_api_key,
             "EMULEBB_USE_SSL": "false",
             "EMULEBB_ID": AMUTORRENT_EMULEBB_ID,
             "EMULEBB_NAME": CLIENT01.profile_id,
             "AMULE_ENABLED": "true",
-            "AMULE_HOST": "127.0.0.1",
+            "AMULE_HOST": bind_addr,
             "AMULE_PORT": str(amule_ec_port),
             "AMULE_PASSWORD": amule_password,
             "AMULE_ID": AMUTORRENT_AMULE_ID,
@@ -235,6 +298,366 @@ def wait_for_snapshot_item(
         interval=1.0,
         description=f"aMuTorrent snapshot item {expected_hash} on {instance_id}",
     )
+
+
+def build_transfer_operation_item(
+    *,
+    transfer_hash: str,
+    instance_id: str,
+    client_type: str,
+    file_name: str,
+) -> dict[str, Any]:
+    """Builds the instance-scoped item shape expected by aMuTorrent batch operations."""
+
+    normalized_hash = transfer_hash.lower()
+    return {
+        "fileHash": normalized_hash,
+        "hash": normalized_hash,
+        "instanceId": instance_id,
+        "clientType": client_type,
+        "fileName": file_name,
+        "name": file_name,
+    }
+
+
+def summarize_browser_http_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Returns a compact, report-safe summary for one browser HTTP result."""
+
+    payload = result.get("payload")
+    summary: dict[str, Any] = {"status": result.get("status")}
+    if isinstance(payload, dict):
+        for key in ("type", "success", "message", "error", "instanceId"):
+            if key in payload:
+                summary[key] = payload.get(key)
+        data = payload.get("data")
+        if isinstance(data, list):
+            summary["data_count"] = len(data)
+        elif isinstance(data, dict):
+            summary["data_keys"] = sorted(str(key) for key in data.keys())[:12]
+        if isinstance(payload.get("results"), list):
+            summary["result_count"] = len(payload["results"])
+            summary["successful_results"] = sum(
+                1 for row in payload["results"] if isinstance(row, dict) and row.get("success")
+            )
+    elif isinstance(payload, list):
+        summary["payload_type"] = "list"
+        summary["item_count"] = len(payload)
+    else:
+        summary["payload_type"] = type(payload).__name__
+    return summary
+
+
+def require_browser_http_payload(name: str, result: dict[str, Any], *, allow_list: bool = False) -> Any:
+    """Requires an HTTP 2xx payload, allowing list-shaped endpoints when declared."""
+
+    status = int(result.get("status", 0))
+    payload = result.get("payload")
+    if status >= 400:
+        raise RuntimeError(f"aMuTorrent browser HTTP check {name!r} failed: {result!r}")
+    if isinstance(payload, dict):
+        if payload.get("type") == "error" or payload.get("success") is False:
+            raise RuntimeError(f"aMuTorrent browser HTTP check {name!r} returned an error payload: {result!r}")
+        return payload
+    if allow_list and isinstance(payload, list):
+        return payload
+    raise RuntimeError(f"aMuTorrent browser HTTP check {name!r} did not return an object: {result!r}")
+
+
+def require_successful_batch_result(name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Requires a REST batch result to have at least one successful item-level result."""
+
+    payload = require_browser_http_ok(name, result)
+    rows = payload.get("results")
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError(f"aMuTorrent batch check {name!r} did not return item results: {result!r}")
+    failures = [row for row in rows if not isinstance(row, dict) or row.get("success") is not True]
+    if failures:
+        raise RuntimeError(f"aMuTorrent batch check {name!r} had failed item results: {failures!r}")
+    return payload
+
+
+def require_snapshot_has_instances(
+    page: Any,
+    *,
+    transfer_hash: str,
+    expected: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Asserts one transfer hash is represented independently for every expected instance."""
+
+    payload = require_browser_http_ok("coexistence-snapshot", fetch_page_json(page, "/api/v1/data/snapshot"))
+    data = payload.get("data")
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise RuntimeError(f"aMuTorrent snapshot did not contain an item list: {payload!r}")
+
+    expected_hash = transfer_hash.lower()
+    matches: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_hash = str(item.get("hash") or item.get("fileHash") or "").lower()
+        instance_id = str(item.get("instanceId") or "")
+        if item_hash == expected_hash and instance_id:
+            matches[instance_id] = item
+
+    missing = [row["instance_id"] for row in expected if row["instance_id"] not in matches]
+    if missing:
+        raise RuntimeError(
+            f"aMuTorrent snapshot is missing instance-scoped rows for {expected_hash}: "
+            f"missing={missing!r} observed={sorted(matches)!r}"
+        )
+
+    for row in expected:
+        item = matches[row["instance_id"]]
+        observed_client = str(item.get("client") or item.get("clientType") or "")
+        if observed_client and observed_client != row["client_type"]:
+            raise RuntimeError(
+                f"aMuTorrent snapshot row for {row['instance_id']} has client {observed_client!r}, "
+                f"expected {row['client_type']!r}: {item!r}"
+            )
+
+    return {
+        "hash": expected_hash,
+        "instances": {
+            instance_id: {
+                "client": item.get("client") or item.get("clientType"),
+                "status": item.get("status"),
+                "progress": item.get("progress"),
+                "name": item.get("name") or item.get("fileName"),
+            }
+            for instance_id, item in sorted(matches.items())
+            if instance_id in {row["instance_id"] for row in expected}
+        },
+    }
+
+
+def run_global_capability_checks(page: Any) -> dict[str, Any]:
+    """Exercises aMuTorrent global read-only REST surfaces in the throwaway profile."""
+
+    requests = {
+        "health": ("GET", "/health", None),
+        "config_status": ("GET", "/api/config/status", None),
+        "config_current": ("GET", "/api/config/current", None),
+        "config_defaults": ("GET", "/api/config/defaults", None),
+        "config_interfaces": ("GET", "/api/config/interfaces", None),
+        "data_snapshot": ("GET", "/api/v1/data/snapshot", None),
+        "categories": ("GET", "/api/v1/categories", None),
+        "history": ("GET", "/api/history?limit=20", None),
+        "history_all": ("GET", "/api/history/all?limit=20", None),
+        "history_stats": ("GET", "/api/history/stats", None),
+        "metrics_dashboard": ("GET", "/api/metrics/dashboard?range=24h", None),
+        "metrics_history": ("GET", "/api/metrics/history?range=24h", None),
+        "metrics_speed_history": ("GET", "/api/metrics/speed-history?range=24h", None),
+        "metrics_stats": ("GET", "/api/metrics/stats?range=24h", None),
+        "app_logs": ("GET", "/api/v1/logs/app?limit=200", None),
+    }
+    checks: dict[str, Any] = {}
+    for name, (method, path, body) in requests.items():
+        result = fetch_page_json(page, path, method, body)
+        require_browser_http_payload(name, result, allow_list=name == "config_interfaces")
+        checks[name] = summarize_browser_http_result(result)
+    return checks
+
+
+def run_instance_capability_checks(
+    page: Any,
+    *,
+    transfer_hash: str,
+    file_name: str,
+    instance: dict[str, str],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Exercises aMuTorrent ED2K read/control surfaces for one configured instance."""
+
+    instance_id = instance["instance_id"]
+    client_type = instance["client_type"]
+    search_type = instance.get("search_type", "server")
+    search_requires_fixture_match = instance.get("search_requires_fixture_match", True)
+    item = build_transfer_operation_item(
+        transfer_hash=transfer_hash,
+        instance_id=instance_id,
+        client_type=client_type,
+        file_name=file_name,
+    )
+    checks: dict[str, Any] = {"instance_id": instance_id, "client_type": client_type}
+    current_item = wait_for_snapshot_item(
+        page,
+        transfer_hash=transfer_hash,
+        instance_id=instance_id,
+        timeout_seconds=min(timeout_seconds, 10.0),
+    )
+
+    delete_permission = fetch_page_json(
+        page,
+        "/api/v1/permissions/delete",
+        "POST",
+        {"items": [item], "source": "downloads"},
+    )
+    require_browser_http_ok(f"{instance_id}-delete-permission", delete_permission)
+    checks["delete_permission_preflight"] = summarize_browser_http_result(delete_permission)
+
+    progress = current_item.get("progress")
+    status = str(current_item.get("status") or current_item.get("statusText") or "").lower()
+    transfer_complete = (
+        status in {"complete", "completed", "shared", "seeding"}
+        or current_item.get("complete") is True
+        or (isinstance(progress, (int, float)) and progress >= 100)
+        or (current_item.get("shared") is True and current_item.get("downloading") is not True)
+    )
+    controls: dict[str, Any]
+    if transfer_complete:
+        controls = {
+            "skipped": True,
+            "reason": "transfer_already_complete",
+            "snapshot": {
+                "status": current_item.get("status"),
+                "progress": current_item.get("progress"),
+                "shared": current_item.get("shared"),
+                "downloading": current_item.get("downloading"),
+            },
+        }
+    else:
+        controls = {}
+        for name, path in [
+            ("pause", "/api/v1/downloads/pause"),
+            ("resume", "/api/v1/downloads/resume"),
+            ("stop", "/api/v1/downloads/stop"),
+            ("resume_after_stop", "/api/v1/downloads/resume"),
+        ]:
+            result = fetch_page_json(page, path, "POST", {"items": [item]})
+            require_successful_batch_result(f"{instance_id}-{name}", result)
+            controls[name] = summarize_browser_http_result(result)
+    checks["controls"] = controls
+
+    read_requests = {
+        "servers": ("GET", f"/api/v1/ed2k/servers?instanceId={instance_id}", None),
+        "server_info": ("GET", f"/api/v1/ed2k/server-info?instanceId={instance_id}", None),
+        "stats_tree": ("GET", f"/api/v1/ed2k/stats-tree?instanceId={instance_id}", None),
+        "ed2k_logs": ("GET", f"/api/v1/logs/ed2k?instanceId={instance_id}", None),
+        "shared_dirs": ("GET", f"/api/v1/ed2k/shared-dirs?instanceId={instance_id}", None),
+        "search_results_cache": ("GET", f"/api/v1/search/results?instanceId={instance_id}", None),
+    }
+    checks["read"] = {}
+    for name, (method, path, body) in read_requests.items():
+        result = fetch_page_json(page, path, method, body)
+        require_browser_http_ok(f"{instance_id}-{name}", result)
+        checks["read"][name] = summarize_browser_http_result(result)
+
+    search_start = fetch_page_json(
+        page,
+        "/api/v1/search?wait=false",
+        "POST",
+        {"query": file_name, "type": search_type, "instanceId": instance_id},
+    )
+    require_browser_http_ok(f"{instance_id}-server-search-start", search_start)
+    search_observations: list[dict[str, Any]] = []
+    expected_hash = transfer_hash.lower()
+
+    def observe_search() -> dict[str, Any] | None:
+        result = fetch_page_json(page, f"/api/v1/search/results?type={search_type}&instanceId={instance_id}")
+        payload = require_browser_http_ok(f"{instance_id}-server-search-results", result)
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            raise RuntimeError(f"aMuTorrent search results for {instance_id} did not contain a list: {result!r}")
+        matching = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("hash") or row.get("fileHash") or "").lower() == expected_hash
+        ]
+        observation = {
+            "observed_at": round(time.time(), 3),
+            "result_count": len(rows),
+            "matching_hash_count": len(matching),
+        }
+        search_observations.append(observation)
+        if matching:
+            return {
+                "start": summarize_browser_http_result(search_start),
+                "search_type": search_type,
+                "matching_hash_required": search_requires_fixture_match,
+                "observed": observation,
+            }
+        if not search_requires_fixture_match and len(search_observations) >= 2:
+            return {
+                "start": summarize_browser_http_result(search_start),
+                "search_type": search_type,
+                "matching_hash_required": False,
+                "observed": observation,
+            }
+        return None
+
+    checks["server_search"] = live_common.wait_for(
+        observe_search,
+        timeout=min(timeout_seconds, 60.0),
+        interval=2.0,
+        description=f"aMuTorrent local server search on {instance_id}",
+    )
+    checks["server_search"]["observations"] = search_observations[-10:]
+
+    category_name = "Default"
+    category_result = fetch_page_json(
+        page,
+        "/api/v1/downloads/category",
+        "POST",
+        {"items": [item], "categoryName": category_name, "moveFiles": False},
+    )
+    require_successful_batch_result(f"{instance_id}-category", category_result)
+    checks["category_assignment"] = {
+        "category": category_name,
+        **summarize_browser_http_result(category_result),
+    }
+
+    refresh_shared = fetch_page_json(
+        page,
+        "/api/v1/ed2k/refresh-shared",
+        "POST",
+        {"instanceId": instance_id},
+    )
+    require_browser_http_ok(f"{instance_id}-refresh-shared", refresh_shared)
+    checks["refresh_shared"] = summarize_browser_http_result(refresh_shared)
+
+    return checks
+
+
+def run_coexistence_capability_matrix(
+    page: Any,
+    *,
+    transfer_hash: str,
+    file_name: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Runs the local aMuTorrent capability matrix with both ED2K clients configured."""
+
+    checks: dict[str, Any] = {
+        "manifest": AMUTORRENT_CAPABILITY_MATRIX,
+        "initial_snapshot": require_snapshot_has_instances(
+            page,
+            transfer_hash=transfer_hash,
+            expected=ED2K_INSTANCE_MATRIX,
+        ),
+        "instances": {},
+    }
+    for instance in ED2K_INSTANCE_MATRIX:
+        checks["instances"][instance["instance_id"]] = run_instance_capability_checks(
+            page,
+            transfer_hash=transfer_hash,
+            file_name=file_name,
+            instance=instance,
+            timeout_seconds=timeout_seconds,
+        )
+        checks[f"snapshot_after_{instance['instance_id']}"] = require_snapshot_has_instances(
+            page,
+            transfer_hash=transfer_hash,
+            expected=ED2K_INSTANCE_MATRIX,
+        )
+    checks["final_snapshot"] = require_snapshot_has_instances(
+        page,
+        transfer_hash=transfer_hash,
+        expected=ED2K_INSTANCE_MATRIX,
+    )
+    checks["global"] = run_global_capability_checks(page)
+    return checks
 
 
 def click_ed2k_instance_button(page: Any, instance_id: str) -> None:
@@ -349,6 +772,15 @@ def run_browser_download_matrix(
                     timeout_seconds=timeout_seconds,
                 ),
             ]
+            file_name = str(
+                checks["add_downloads"][0]["snapshot_item"].get("name") or "amutorrent-local-ed2k-ui.bin"
+            )
+            checks["coexistence_capability_matrix"] = run_coexistence_capability_matrix(
+                page,
+                transfer_hash=transfer_hash,
+                file_name=file_name,
+                timeout_seconds=timeout_seconds,
+            )
             screenshot = artifacts_dir / "amutorrent-local-ed2k-ui-final.png"
             page.screenshot(path=str(screenshot), full_page=True)
             checks["screenshots"] = {"final": str(screenshot)}
@@ -452,10 +884,11 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             catalog_path=catalog_path,
             token=args.api_key,
+            admin_address=args.bind_addr,
         )
         current_phase = "start_ed2k_server"
         server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        admin_base_url = f"http://127.0.0.1:{ports['ed2k_admin']}"
+        admin_base_url = f"http://{args.bind_addr}:{ports['ed2k_admin']}"
         report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
 
         fixture_dir = paths.source_artifacts_dir / "seed-shared"
@@ -489,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["amule_udp"],
             ec_port=ports["amule_ec"],
             advertised_address=p2p_address,
+            ec_address=args.bind_addr,
         )
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
         dtt.configure_client_profile(
@@ -628,6 +1062,7 @@ def main(argv: list[str] | None = None) -> int:
         env = build_local_amutorrent_environment(
             base_env=os.environ,
             amutorrent_port=ports["amutorrent"],
+            bind_addr=args.bind_addr,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
             emulebb_rest_port=ports["client1_rest"],
@@ -644,7 +1079,7 @@ def main(argv: list[str] | None = None) -> int:
             stderr=subprocess.STDOUT,
             text=True,
         )
-        amutorrent_base_url = f"http://127.0.0.1:{ports['amutorrent']}"
+        amutorrent_base_url = f"http://{args.bind_addr}:{ports['amutorrent']}"
         amutorrent_smoke.wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.rest_ready_timeout_seconds)
         report["amutorrent"] = {
             "base_url": amutorrent_base_url,

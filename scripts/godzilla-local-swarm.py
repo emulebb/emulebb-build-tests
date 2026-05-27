@@ -2425,6 +2425,7 @@ def main(argv: list[str] | None = None) -> int:
             env = amutorrent_local.build_local_amutorrent_environment(
                 base_env=os.environ,
                 amutorrent_port=ports["amutorrent"],
+                bind_addr=args.bind_addr,
                 node_path=node_path,
                 data_dir=amutorrent_data_dir,
                 emulebb_rest_port=ports["client1_rest"],
@@ -2441,7 +2442,7 @@ def main(argv: list[str] | None = None) -> int:
                 stderr=subprocess.STDOUT,
                 text=True,
             )
-            amutorrent_base_url = f"http://127.0.0.1:{ports['amutorrent']}"
+            amutorrent_base_url = f"http://{args.bind_addr}:{ports['amutorrent']}"
             amutorrent_smoke.wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.rest_ready_timeout_seconds)
             report["amutorrent"] = {
                 "base_url": amutorrent_base_url,

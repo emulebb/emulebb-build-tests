@@ -255,13 +255,17 @@ def resolve_amule_client(
     daemon_candidates = [Path(override_daemon)] if override_daemon else [
         workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amuled.exe",
         root / "packaging" / "windows" / "dist" / "bin" / "amuled.exe",
+        root / "amule-portable-x64" / "bin" / "amuled.exe",
         root / "build" / "bin" / "amuled.exe",
+        root / "build-windows-x64" / "src" / "amuled.exe",
         root / "bin" / "amuled.exe",
     ]
     control_candidates = [Path(override_control)] if override_control else [
         workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amulecmd.exe",
         root / "packaging" / "windows" / "dist" / "bin" / "amulecmd.exe",
+        root / "amule-portable-x64" / "bin" / "amulecmd.exe",
         root / "build" / "bin" / "amulecmd.exe",
+        root / "build-windows-x64" / "src" / "amulecmd.exe",
         root / "bin" / "amulecmd.exe",
     ]
     daemon = first_existing_file(daemon_candidates)

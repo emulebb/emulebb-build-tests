@@ -31,6 +31,7 @@ class AmuleRuntimeProfile:
     tcp_port: int
     udp_port: int
     ec_port: int
+    ec_address: str
     ec_password: str
     ec_password_hash: str
     advertised_address: str
@@ -49,6 +50,7 @@ class AmuleRuntimeProfile:
             "tcp_port": self.tcp_port,
             "udp_port": self.udp_port,
             "ec_port": self.ec_port,
+            "ec_address": self.ec_address,
             "ec_password_hash": self.ec_password_hash,
             "advertised_address": self.advertised_address,
         }
@@ -112,7 +114,7 @@ def build_amule_conf(
             "",
             "[ExternalConnect]",
             "AcceptExternalConnections=1",
-            "ECAddress=127.0.0.1",
+            f"ECAddress={profile.ec_address}",
             f"ECPort={profile.ec_port}",
             f"ECPassword={profile.ec_password_hash}",
             "UPnPECEnabled=0",
@@ -143,6 +145,7 @@ def prepare_amule_profile(
     udp_port: int,
     ec_port: int,
     advertised_address: str,
+    ec_address: str = "127.0.0.1",
     connect_to_kad: bool = False,
     connect_to_ed2k: bool = True,
 ) -> AmuleRuntimeProfile:
@@ -160,6 +163,7 @@ def prepare_amule_profile(
         tcp_port=tcp_port,
         udp_port=udp_port,
         ec_port=ec_port,
+        ec_address=ec_address,
         ec_password=f"{profile_id}-ec-password",
         ec_password_hash=md5_hex(f"{profile_id}-ec-password"),
         advertised_address=advertised_address,
@@ -190,7 +194,7 @@ def build_amulecmd_command(control_exe: Path, profile: AmuleRuntimeProfile, comm
 
     return [
         str(control_exe.resolve()),
-        "--host=127.0.0.1",
+        f"--host={profile.ec_address}",
         f"--port={profile.ec_port}",
         f"--password={profile.ec_password}",
         f"--command={command}",

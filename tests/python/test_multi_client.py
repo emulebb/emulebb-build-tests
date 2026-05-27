@@ -102,6 +102,23 @@ def test_resolve_optional_clients_accepts_workspace_state_artifacts(tmp_path: Pa
     assert amule.deterministic_transfer_adapter is True
 
 
+def test_resolve_amule_client_accepts_portable_workspace_build(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    workspace = tmp_path / "workspaces" / "workspace"
+    write_workspace_manifest(workspace, tmp_path)
+    daemon = tmp_path / "repos" / "amule" / "amule-portable-x64" / "bin" / "amuled.exe"
+    control = tmp_path / "repos" / "amule" / "amule-portable-x64" / "bin" / "amulecmd.exe"
+    for executable in (daemon, control):
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"")
+
+    amule = multi_client.resolve_amule_client(workspace)
+
+    assert amule.available is True
+    assert amule.executable == daemon.resolve()
+    assert amule.control_executable == control.resolve()
+
+
 def test_optional_clients_report_unavailable_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"

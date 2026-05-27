@@ -38,6 +38,7 @@ def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkey
     env = module.build_local_amutorrent_environment(
         base_env={"PATH": "base-path", "UNRELATED": "kept"},
         amutorrent_port=19001,
+        bind_addr="10.55.0.10",
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
         emulebb_rest_port=19002,
@@ -47,18 +48,18 @@ def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkey
     )
 
     assert env["PORT"] == "19001"
-    assert env["BIND_ADDRESS"] == "127.0.0.1"
+    assert env["BIND_ADDRESS"] == "10.55.0.10"
     assert env["AMUTORRENT_DATA_DIR"].endswith("amutorrent-data")
     assert env["WEB_AUTH_ENABLED"] == "false"
     assert env["SKIP_SETUP_WIZARD"] == "true"
     assert env["EMULEBB_ENABLED"] == "true"
-    assert env["EMULEBB_HOST"] == "127.0.0.1"
+    assert env["EMULEBB_HOST"] == "10.55.0.10"
     assert env["EMULEBB_PORT"] == "19002"
     assert env["EMULEBB_API_KEY"] == "api-key"
     assert env["EMULEBB_ID"] == module.CLIENT01.profile_id
     assert env["EMULEBB_NAME"] == module.CLIENT01.profile_id
     assert env["AMULE_ENABLED"] == "true"
-    assert env["AMULE_HOST"] == "127.0.0.1"
+    assert env["AMULE_HOST"] == "10.55.0.10"
     assert env["AMULE_PORT"] == "19003"
     assert env["AMULE_PASSWORD"] == "amule-password"
     assert env["AMULE_ID"] == module.CLIENT04.profile_id
@@ -96,6 +97,99 @@ def test_snapshot_wait_is_instance_scoped(monkeypatch) -> None:
     assert item["instanceId"] == module.CLIENT04.profile_id
     assert item["status"] == "complete"
     assert calls == ["/api/v1/data/snapshot"]
+
+
+def test_coexistence_snapshot_requires_both_clients(monkeypatch) -> None:
+    module = load_suite_module()
+
+    def fake_fetch(_page, _path, _method="GET", _body=None):
+        return {
+            "status": 200,
+            "payload": {
+                "data": {
+                    "items": [
+                        {"hash": "abc123", "instanceId": module.CLIENT01.profile_id, "client": "emulebb"},
+                        {"hash": "abc123", "instanceId": module.CLIENT04.profile_id, "client": "amule"},
+                    ]
+                }
+            },
+        }
+
+    monkeypatch.setattr(module, "fetch_page_json", fake_fetch)
+
+    snapshot = module.require_snapshot_has_instances(
+        object(),
+        transfer_hash="ABC123",
+        expected=module.ED2K_INSTANCE_MATRIX,
+    )
+
+    assert snapshot["hash"] == "abc123"
+    assert snapshot["instances"][module.CLIENT01.profile_id]["client"] == "emulebb"
+    assert snapshot["instances"][module.CLIENT04.profile_id]["client"] == "amule"
+
+
+def test_transfer_operation_item_is_instance_scoped() -> None:
+    module = load_suite_module()
+
+    item = module.build_transfer_operation_item(
+        transfer_hash="ABCDEF",
+        instance_id=module.CLIENT04.profile_id,
+        client_type="amule",
+        file_name="fixture.bin",
+    )
+
+    assert item["fileHash"] == "abcdef"
+    assert item["hash"] == "abcdef"
+    assert item["instanceId"] == module.CLIENT04.profile_id
+    assert item["clientType"] == "amule"
+    assert item["fileName"] == "fixture.bin"
+
+
+def test_browser_payload_helper_accepts_declared_list_endpoints() -> None:
+    module = load_suite_module()
+
+    payload = module.require_browser_http_payload(
+        "interfaces",
+        {"status": 200, "payload": [{"value": "192.168.1.210"}]},
+        allow_list=True,
+    )
+    summary = module.summarize_browser_http_result({"status": 200, "payload": payload})
+
+    assert payload == [{"value": "192.168.1.210"}]
+    assert summary == {"status": 200, "payload_type": "list", "item_count": 1}
+
+
+def test_capability_matrix_covers_both_ed2k_clients_and_core_surfaces() -> None:
+    module = load_suite_module()
+
+    assert {row["client_type"] for row in module.ED2K_INSTANCE_MATRIX} == {"emulebb", "amule"}
+    assert {row["client_type"]: row["search_type"] for row in module.ED2K_INSTANCE_MATRIX} == {
+        "emulebb": "server",
+        "amule": "global",
+    }
+    assert {row["client_type"]: row["search_requires_fixture_match"] for row in module.ED2K_INSTANCE_MATRIX} == {
+        "emulebb": True,
+        "amule": False,
+    }
+    assert {row["instance_id"] for row in module.ED2K_INSTANCE_MATRIX} == {
+        module.CLIENT01.profile_id,
+        module.CLIENT04.profile_id,
+    }
+    manifest = module.AMUTORRENT_CAPABILITY_MATRIX
+    assert {"health", "data_snapshot", "categories", "history", "metrics_dashboard"} <= set(manifest["global_read"])
+    assert {"servers", "server_info", "stats_tree", "ed2k_logs", "shared_dirs"} <= set(
+        manifest["ed2k_instance_read"]
+    )
+    assert {
+        "add_ed2k_link",
+        "server_search",
+        "pause",
+        "resume",
+        "stop",
+        "category_assignment",
+        "refresh_shared",
+    } <= set(manifest["ed2k_instance_mutation"])
+    assert "same_hash_is_instance_scoped" in manifest["coexistence_invariants"]
 
 
 def test_ed2k_instance_button_click_uses_stable_instance_hook() -> None:

@@ -118,6 +118,7 @@ Script inventory:
 | `scripts\rest-cold-start-dump-stress.py` | operator-facing Python diagnostic E2E | maintained | cold-start REST search/download stress with Sysinternals dump evidence |
 | `scripts\live-process-monitor.py` | operator-facing Python diagnostic E2E | maintained | long real-profile CPU/memory monitor with ProcDump, CDB, and optional UMDH evidence |
 | `scripts\auto-browse-live.py` | operator-facing Python E2E | maintained | isolated live auto-browse validation with `hide.me` bind and P2P UPnP |
+| `scripts\amutorrent-local-ed2k-ui-live.py` | operator-facing local aMuTorrent coexistence E2E | maintained | throwaway local ED2K server, eMuleBB profile, aMule profile, aMuTorrent profile, browser profile, and capability matrix for both ED2K clients |
 | `scripts\preference-ui-e2e.py` | operator-facing Python E2E | maintained | real Preferences dialog coverage for WebServer fields and Tweaks tree controls |
 | `scripts\config-stability-ui-e2e.py` | operator-facing Python E2E | maintained | long `-c` config path, settings save, relaunch, and stability regression |
 | `scripts\shared-files-ui-e2e.py` | operator-facing Python E2E | maintained | real Win32 Shared Files regression |
@@ -293,6 +294,12 @@ Aggregate live E2E lane:
   Preferences with directory-tree stress, Shared Files, shared-hash shutdown,
   Search UI, shared-directories REST, REST API adversity, cold-start telemetry,
   local dump/crash smoke, and aMuTorrent browser smoke
+- `--profile multi-client-p2p` includes the local aMuTorrent coexistence lane:
+  one throwaway run launches eMuleBB and aMule behind aMuTorrent, adds the same
+  local ED2K fixture through both configured clients, exercises snapshot,
+  config, history, metrics, logs, server, shared-directory, pause/resume/stop,
+  category, delete-preflight, and refresh surfaces, then verifies both completed
+  files against the fixture hash
 - `--profile release-expanded-quick`, `--profile stabilization-stress-quick`,
   and `--profile cpu-heavy-quick` are the first-pass failure triage gates; they
   keep the same fixture classes and live-profile isolation but reduce REST
