@@ -1899,6 +1899,21 @@ def test_timeout_command_markers_include_launcher_and_script() -> None:
     ) == ["python.exe", "godzilla-local-swarm.py"]
 
 
+def test_terminate_process_tree_reports_windows_cleanup_exception(monkeypatch) -> None:
+    monkeypatch.setattr(live_e2e_suite.os, "name", "nt")
+    monkeypatch.setattr(
+        live_e2e_suite.windows_processes,
+        "terminate_process_tree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("wmi unavailable")),
+    )
+
+    result = live_e2e_suite.terminate_process_tree(4321, ["python.exe", "godzilla-local-swarm.py"])
+
+    assert result["return_code"] == 1
+    assert result["type"] == "RuntimeError"
+    assert "wmi unavailable" in result["error"]
+
+
 def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

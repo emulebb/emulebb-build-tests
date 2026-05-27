@@ -1258,10 +1258,18 @@ def terminate_process_tree(process_id: int, command: list[str] | None = None) ->
     """Terminates one child process tree after a suite-level timeout."""
 
     if os.name == "nt":
-        return windows_processes.terminate_process_tree(
-            process_id,
-            expected_command_line_markers=timeout_command_markers(command or []),
-        )
+        try:
+            return windows_processes.terminate_process_tree(
+                process_id,
+                expected_command_line_markers=timeout_command_markers(command or []),
+            )
+        except Exception as exc:
+            return {
+                "command": "wmi-terminate",
+                "return_code": 1,
+                "error": str(exc) or repr(exc),
+                "type": type(exc).__name__,
+            }
     try:
         os.kill(process_id, 9)
         return {"command": "kill", "return_code": 0}
