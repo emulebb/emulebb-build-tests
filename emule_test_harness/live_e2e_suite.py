@@ -12,7 +12,7 @@ from pathlib import Path
 
 from emule_test_harness.artifact_names import result_file_name
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
-from emule_test_harness import cpu_profile, live_wire_inputs
+from emule_test_harness import cpu_profile, live_wire_inputs, windows_processes
 
 SHARED_FILES_UI_CORE_SCENARIOS = (
     "fixture-three-files",
@@ -1246,19 +1246,7 @@ def terminate_process_tree(process_id: int) -> dict[str, object]:
     """Terminates one child process tree after a suite-level timeout."""
 
     if os.name == "nt":
-        completed = subprocess.run(
-            ["taskkill", "/PID", str(process_id), "/T", "/F"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        return {
-            "command": "taskkill",
-            "return_code": completed.returncode,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
-        }
+        return windows_processes.terminate_process_tree(process_id)
     try:
         os.kill(process_id, 9)
         return {"command": "kill", "return_code": 0}
