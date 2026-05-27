@@ -310,6 +310,38 @@ def test_godzilla_lan_mode_uses_x_local_ip(monkeypatch) -> None:
     assert godzilla.resolve_rest_bind_addr(args, "192.168.1.210") == "192.168.1.210"
 
 
+def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Path) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_generate_library_error_test")
+    args = godzilla.parse_args(
+        [
+            "--total-client-count",
+            "3",
+            "--emulebb-files",
+            "1",
+            "--harness-files",
+            "1",
+            "--amule-files",
+            "1",
+            "--vhd-size-mb",
+            "4103",
+        ]
+    )
+    godzilla.validate_args(args)
+
+    def fail_write(_path: Path, *, size_bytes: int, seed: int) -> str:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(godzilla, "write_generated_file", fail_write)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        godzilla.generate_library(tmp_path / "library", owner_key="emulebb", count=1, args=args)
+
+    message = str(exc_info.value)
+    assert "owner='emulebb'" in message
+    assert "index=0" in message
+    assert "emulebb-godzilla-00000" in message
+
+
 def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_loopback_test")
     monkeypatch.setenv("X_LOCAL_IP", "127.0.0.1")

@@ -344,7 +344,13 @@ def generate_library(root: Path, *, owner_key: str, count: int, args: argparse.N
         size = generated_size(index, args)
         name = f"{owner_key}-godzilla-{index:05d}-{size}.bin"
         path = root / f"{bucket:03d}" / name
-        sha256 = write_generated_file(path, size_bytes=size, seed=owner_seed * 1_000_003 + index)
+        try:
+            sha256 = write_generated_file(path, size_bytes=size, seed=owner_seed * 1_000_003 + index)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Failed to generate Godzilla library file owner={owner_key!r} "
+                f"index={index} size={size} path='{path}'"
+            ) from exc
         rows.append(GeneratedFile(owner_key=owner_key, path=path, name=name, size=size, sha256=sha256))
     return rows
 
