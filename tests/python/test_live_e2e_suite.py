@@ -762,6 +762,7 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert option_values(commands[0], "--harness-transfer-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT)]
     assert option_values(commands[0], "--adverse-kill-cycles") == [str(live_e2e_suite.DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES)]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
+    assert summary["suites"][0]["timeout_seconds"] == live_e2e_suite.DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
 
 
 def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:
@@ -1830,6 +1831,7 @@ def test_fail_fast_stops_after_first_failed_suite(tmp_path: Path, monkeypatch) -
 
 def test_run_suite_command_times_out_and_terminates_process_tree(monkeypatch) -> None:
     killed: list[int] = []
+    observed_timeouts: list[float] = []
 
     class FakeProcess:
         pid = 4321
@@ -1839,6 +1841,7 @@ def test_run_suite_command_times_out_and_terminates_process_tree(monkeypatch) ->
 
         def wait(self, timeout=None):
             self.calls += 1
+            observed_timeouts.append(timeout)
             raise subprocess.TimeoutExpired(cmd=["child-suite"], timeout=timeout or 0.0)
 
     monkeypatch.setattr(live_e2e_suite.subprocess, "Popen", lambda _command: FakeProcess())
@@ -1846,6 +1849,24 @@ def test_run_suite_command_times_out_and_terminates_process_tree(monkeypatch) ->
 
     assert live_e2e_suite.run_suite_command(["child-suite"]) == live_e2e_suite.SUITE_TIMEOUT_RETURN_CODE
     assert killed == [4321]
+    assert observed_timeouts[0] == live_e2e_suite.DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS
+
+
+def test_run_suite_command_uses_extended_godzilla_timeout(monkeypatch) -> None:
+    observed_timeouts: list[float] = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def wait(self, timeout=None):
+            observed_timeouts.append(timeout)
+            raise subprocess.TimeoutExpired(cmd=["python", "godzilla-local-swarm.py"], timeout=timeout or 0.0)
+
+    monkeypatch.setattr(live_e2e_suite.subprocess, "Popen", lambda _command: FakeProcess())
+    monkeypatch.setattr(live_e2e_suite, "terminate_process_tree", lambda _process_id: {"return_code": 0})
+
+    assert live_e2e_suite.run_suite_command(["python", r"C:\tests\godzilla-local-swarm.py"]) == live_e2e_suite.SUITE_TIMEOUT_RETURN_CODE
+    assert observed_timeouts[0] == live_e2e_suite.DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
 
 
 def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch) -> None:

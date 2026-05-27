@@ -100,6 +100,7 @@ DEFAULT_SEARCH_UI_SEARCH_ROUNDS = 1
 DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT = 1
 DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS = 120.0
 DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS = 2.0 * 60.0 * 60.0
+DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS = 8.0 * 60.0 * 60.0
 DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB = 6144
 DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB = 32768
 SUITE_TIMEOUT_RETURN_CODE = 124
@@ -1205,12 +1206,21 @@ def build_suite_command(
     return command
 
 
+def resolve_child_suite_timeout_seconds(command: list[str]) -> float:
+    """Returns the wall-clock timeout for one child suite command."""
+
+    if any(Path(argument).name == "godzilla-local-swarm.py" for argument in command):
+        return DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
+    return DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS
+
+
 def run_suite_command(command: list[str]) -> int:
     """Runs one child suite command with a hard wall-clock timeout."""
 
+    timeout_seconds = resolve_child_suite_timeout_seconds(command)
     process = subprocess.Popen(command)
     try:
-        return process.wait(timeout=DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS)
+        return process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         terminate_process_tree(process.pid)
         try:
@@ -2135,7 +2145,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "status": suite_status,
             "return_code": return_code,
             "timed_out": return_code == SUITE_TIMEOUT_RETURN_CODE,
-            "timeout_seconds": DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS,
+            "timeout_seconds": resolve_child_suite_timeout_seconds(command),
             "duration_seconds": round(time.monotonic() - started, 3),
             "artifacts_dir": str(child_artifacts_dir.resolve()),
             "command": command,
