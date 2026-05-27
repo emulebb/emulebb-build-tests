@@ -443,18 +443,8 @@ def discover_local_lan_ipv4() -> str:
 
     candidates: set[ipaddress.IPv4Address] = set()
     if os.name == "nt":
-        try:
-            import win32com.client  # type: ignore[import-not-found]
-
-            service = win32com.client.GetObject("winmgmts:")
-            for adapter in service.ExecQuery("SELECT IPAddress, IPEnabled FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled = True"):
-                for value in adapter.IPAddress or []:
-                    try:
-                        candidates.add(ipaddress.IPv4Address(str(value)))
-                    except ipaddress.AddressValueError:
-                        continue
-        except Exception:
-            pass
+        for value in windows_processes.collect_adapter_ipv4_addresses():
+            candidates.add(ipaddress.IPv4Address(value))
     for host in {socket.gethostname(), socket.getfqdn()}:
         try:
             for family, _, _, _, sockaddr in socket.getaddrinfo(host, None, socket.AF_INET):

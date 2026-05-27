@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.ini import read_ini_text  # noqa: E402
+from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
@@ -556,35 +557,27 @@ def wait_for_completed_file(
 def discover_interface_ipv4(interface_name: str) -> str:
     """Finds an IPv4 address for a named interface or the first usable LAN interface."""
 
-    interface_filter = ""
-    if interface_name.strip():
-        interface_filter = f"-InterfaceAlias {json.dumps(interface_name.strip())} "
-    command = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        (
-            f"Get-NetIPAddress -AddressFamily IPv4 {interface_filter}"
-            "| Where-Object { "
-            "$_.IPAddress -and $_.IPAddress -ne '127.0.0.1' "
-            "-and $_.IPAddress -notlike '169.254.*' "
-            "-and $_.PrefixOrigin -ne 'WellKnown' "
-            "} "
-            "| Sort-Object @{Expression={if ($_.InterfaceAlias -like '*Loopback*') { 1 } else { 0 }}}, InterfaceMetric "
-            "| Select-Object -First 1 -ExpandProperty IPAddress"
-        ),
-    ]
-    completed = subprocess.run(command, text=True, capture_output=True, timeout=15, check=False)
-    candidate = completed.stdout.strip().splitlines()[0].strip() if completed.stdout.strip() else ""
-    try:
-        ipaddress.IPv4Address(candidate)
-    except ipaddress.AddressValueError as exc:
+    candidates: set[ipaddress.IPv4Address] = set()
+    if os.name == "nt":
+        for value in windows_processes.collect_adapter_ipv4_addresses(interface_name):
+            candidates.add(ipaddress.IPv4Address(value))
+    if not interface_name.strip():
+        for host in {socket.gethostname(), socket.getfqdn()}:
+            try:
+                for family, _, _, _, sockaddr in socket.getaddrinfo(host, None, socket.AF_INET):
+                    if family == socket.AF_INET and sockaddr:
+                        candidates.add(ipaddress.IPv4Address(str(sockaddr[0])))
+            except OSError:
+                continue
+    usable = [address for address in candidates if not (address.is_loopback or address.is_link_local or address.is_unspecified)]
+    if not usable:
         target = f"interface {interface_name!r}" if interface_name.strip() else "a usable non-loopback LAN interface"
         raise RuntimeError(
             f"Could not discover IPv4 address for {target}. "
             "Pass --p2p-bind-interface-address to the suite if automatic discovery is unsuitable."
-        ) from exc
-    return candidate
+        )
+    usable.sort(key=lambda address: (0 if str(address).startswith("192.") else 1, 0 if address.is_private else 1, str(address)))
+    return str(usable[0])
 
 
 def configure_client_profile(

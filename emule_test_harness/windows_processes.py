@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import ipaddress
 import time
 from dataclasses import dataclass
 
@@ -41,6 +42,43 @@ def collect_processes() -> list[WindowsProcessInfo]:
         for item in service.InstancesOf("Win32_Process")
         if item.ProcessId
     ]
+
+
+def collect_adapter_ipv4_addresses(interface_name: str = "") -> list[str]:
+    """Returns IPv4 addresses from enabled Windows adapters, optionally matching one interface name."""
+
+    service = process_service()
+    wanted_name = interface_name.strip().lower()
+    wanted_indexes: set[int] = set()
+    if wanted_name:
+        for adapter in service.ExecQuery("SELECT InterfaceIndex, NetConnectionID, Name, Description FROM Win32_NetworkAdapter"):
+            names = {
+                str(getattr(adapter, "NetConnectionID", "") or "").strip().lower(),
+                str(getattr(adapter, "Name", "") or "").strip().lower(),
+                str(getattr(adapter, "Description", "") or "").strip().lower(),
+            }
+            if wanted_name in names:
+                try:
+                    wanted_indexes.add(int(adapter.InterfaceIndex))
+                except (TypeError, ValueError):
+                    continue
+        if not wanted_indexes:
+            return []
+
+    addresses: set[str] = set()
+    for adapter in service.ExecQuery("SELECT InterfaceIndex, IPAddress, IPEnabled FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled = True"):
+        try:
+            interface_index = int(adapter.InterfaceIndex)
+        except (TypeError, ValueError):
+            continue
+        if wanted_indexes and interface_index not in wanted_indexes:
+            continue
+        for value in adapter.IPAddress or []:
+            try:
+                addresses.add(str(ipaddress.IPv4Address(str(value))))
+            except ipaddress.AddressValueError:
+                continue
+    return sorted(addresses)
 
 
 def process_command_line(process_id: int) -> str:
