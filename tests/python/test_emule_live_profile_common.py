@@ -77,10 +77,14 @@ def test_launch_app_appends_extra_arguments(monkeypatch, tmp_path: Path) -> None
             commands.append(command_line)
             return self
 
+        def process(self) -> int:
+            return 2468
+
     monkeypatch.setattr(module, "require_pywinauto", lambda: None)
     monkeypatch.setattr(module, "Application", FakeApplication)
+    monkeypatch.setattr(module.windows_processes, "process_creation_date", lambda process_id: f"created-{process_id}")
 
-    module.launch_app(
+    app = module.launch_app(
         tmp_path / "emulebb.exe",
         tmp_path / "profile-base",
         minimized_to_tray=False,
@@ -89,6 +93,48 @@ def test_launch_app_appends_extra_arguments(monkeypatch, tmp_path: Path) -> None
 
     assert "--sharefile" in commands[0]
     assert str(tmp_path / "shared.bin") in commands[0]
+    assert app._emulebb_profile_base == str(tmp_path / "profile-base")
+    assert app._emulebb_command_line == commands[0]
+    assert app._emulebb_process_creation_date == "created-2468"
+
+
+def test_close_app_cleanly_uses_guarded_termination_for_profile_app(monkeypatch, tmp_path: Path) -> None:
+    module = load_live_common_module()
+    profile_base = tmp_path / "profile-base"
+    calls: list[object] = []
+
+    class FakeApp:
+        _emulebb_profile_base = str(profile_base)
+        _emulebb_process_creation_date = "20260527040201.000000+000"
+
+        def process(self) -> int:
+            return 1234
+
+        def top_window(self):
+            raise RuntimeError("No windows for that process could be found")
+
+        def kill(self, *, soft: bool) -> None:
+            raise AssertionError("guarded profile cleanup must not use pywinauto kill")
+
+    def terminate_tree(process_id: int, **kwargs):
+        calls.append((process_id, kwargs))
+        return {"return_code": 0}
+
+    monkeypatch.setattr(module, "_is_process_exited", lambda process_id: False)
+    monkeypatch.setattr(module.windows_processes, "terminate_process_tree", terminate_tree)
+
+    module.close_app_cleanly(FakeApp(), process_timeout=0.1)
+
+    assert calls == [
+        (
+            1234,
+            {
+                "timeout_seconds": 0.1,
+                "expected_command_line_markers": (str(profile_base),),
+                "expected_root_creation_date": "20260527040201.000000+000",
+            },
+        )
+    ]
 
 
 def test_main_window_detection_accepts_runtime_speed_prefix(monkeypatch) -> None:

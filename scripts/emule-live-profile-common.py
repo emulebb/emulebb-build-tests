@@ -25,6 +25,7 @@ from emule_test_harness.ini import (
     upsert_ini_section_value,
     write_utf16_ini_text,
 )
+from emule_test_harness import windows_processes
 from emule_test_harness.live_profiles import (
     DEFAULT_P2P_BIND_INTERFACE_NAME,
     DEFAULT_WINDOW_RECT,
@@ -254,7 +255,16 @@ def launch_app(
     command_line = subprocess.list2cmdline(
         [str(app_exe), "-ignoreinstances", "-c", str(profile_base), *extra_args]
     )
-    return Application(backend="win32").start(command_line, wait_for_idle=False)
+    app = Application(backend="win32").start(command_line, wait_for_idle=False)
+    setattr(app, "_emulebb_profile_base", str(profile_base))
+    setattr(app, "_emulebb_command_line", command_line)
+    try:
+        process_id = resolve_app_process_id(app)
+        creation_date = windows_processes.process_creation_date(process_id) if process_id is not None else ""
+        setattr(app, "_emulebb_process_creation_date", creation_date)
+    except Exception:
+        setattr(app, "_emulebb_process_creation_date", "")
+    return app
 
 
 def is_main_emule_window(hwnd: int) -> bool:
@@ -443,12 +453,7 @@ def dump_window_tree(main_hwnd: int, output_path: Path) -> None:
 def close_app_cleanly(app: Application, window_timeout: float = 30.0, process_timeout: float = 30.0) -> None:
     """Closes the app, rejects blocking shutdown dialogs, and waits for process exit."""
 
-    process_id = getattr(app, "process", None)
-    if callable(process_id):
-        try:
-            process_id = process_id()
-        except TypeError:
-            process_id = None
+    process_id = resolve_app_process_id(app)
     try:
         main_window = app.top_window()
     except Exception:
@@ -503,8 +508,35 @@ def _is_process_exited(process_id: int) -> bool:
         win32api.CloseHandle(process_handle)
 
 
+def resolve_app_process_id(app: Application) -> int | None:
+    """Returns the process id tracked by one pywinauto application object."""
+
+    process_id = getattr(app, "process", None)
+    if callable(process_id):
+        try:
+            process_id = process_id()
+        except TypeError:
+            return None
+    if process_id is None:
+        return None
+    return int(process_id)
+
+
 def _terminate_process_without_window(app: Application, process_id: int, process_timeout: float) -> None:
     """Stops a test-launched process when no UI window exists to receive WM_CLOSE."""
+
+    profile_base = str(getattr(app, "_emulebb_profile_base", "") or "")
+    creation_date = str(getattr(app, "_emulebb_process_creation_date", "") or "")
+    if os.name == "nt" and profile_base:
+        result = windows_processes.terminate_process_tree(
+            process_id,
+            timeout_seconds=process_timeout,
+            expected_command_line_markers=(profile_base,),
+            expected_root_creation_date=creation_date,
+        )
+        if int(result.get("return_code", 1)) != 0:
+            raise RuntimeError(f"Guarded process termination failed for pid {process_id}: {result!r}")
+        return
 
     try:
         app.kill(soft=False)

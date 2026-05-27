@@ -92,6 +92,15 @@ def process_command_line(process_id: int) -> str:
     return ""
 
 
+def process_creation_date(process_id: int) -> str:
+    """Returns the current WMI creation date for one process id."""
+
+    for process in collect_processes():
+        if process.pid == process_id:
+            return process.creation_date
+    return ""
+
+
 def children_by_parent(processes: list[WindowsProcessInfo]) -> dict[int, list[WindowsProcessInfo]]:
     """Indexes process rows by parent pid."""
 
@@ -167,6 +176,7 @@ def terminate_process_tree(
     process_id: int,
     timeout_seconds: float = 15.0,
     expected_command_line_markers: list[str] | tuple[str, ...] | None = None,
+    expected_root_creation_date: str = "",
 ) -> dict[str, object]:
     """Terminates one current process tree, children first, after optional root verification."""
 
@@ -181,15 +191,20 @@ def terminate_process_tree(
         }
     root = next((process for process in targets if process.pid == process_id), None)
     markers = tuple(expected_command_line_markers or ())
-    if root is None or (markers and not command_line_contains_markers(root.command_line, markers)):
+    root_creation_mismatch = bool(
+        root is not None and expected_root_creation_date and root.creation_date != expected_root_creation_date
+    )
+    if root is None or root_creation_mismatch or (markers and not command_line_contains_markers(root.command_line, markers)):
         return {
             "command": "wmi-terminate",
             "pid": process_id,
             "return_code": 1,
             "refused": True,
-            "reason": "root command line did not match expected markers",
+            "reason": "root creation date changed" if root_creation_mismatch else "root command line did not match expected markers",
             "expected_command_line_markers": list(markers),
+            "expected_root_creation_date": expected_root_creation_date,
             "root_command_line": root.command_line if root is not None else "",
+            "root_creation_date": root.creation_date if root is not None else "",
             "targets": [process.__dict__ for process in targets],
         }
     target_pids = {process.pid for process in targets}

@@ -44,6 +44,36 @@ def test_terminate_process_tree_refuses_unmatched_root_markers(monkeypatch) -> N
     assert terminated == []
 
 
+def test_terminate_process_tree_refuses_changed_root_creation_date(monkeypatch) -> None:
+    processes = [
+        windows_processes.WindowsProcessInfo(
+            pid=10,
+            parent_pid=1,
+            name="python.exe",
+            command_line=r"C:\Python313\python.exe C:\tests\godzilla-local-swarm.py",
+            creation_date="20260527040102.000000+000",
+        )
+    ]
+    terminated: list[int] = []
+    monkeypatch.setattr(windows_processes, "collect_process_tree", lambda _pid: processes)
+    monkeypatch.setattr(
+        windows_processes,
+        "terminate_process",
+        lambda pid, **_kwargs: terminated.append(pid) or {"pid": pid, "terminated": True},
+    )
+
+    result = windows_processes.terminate_process_tree(
+        10,
+        expected_command_line_markers=["godzilla-local-swarm.py"],
+        expected_root_creation_date="20260527040101.000000+000",
+    )
+
+    assert result["refused"] is True
+    assert result["reason"] == "root creation date changed"
+    assert result["return_code"] == 1
+    assert terminated == []
+
+
 def test_terminate_process_tree_verifies_process_instance_before_termination(monkeypatch) -> None:
     processes = [
         windows_processes.WindowsProcessInfo(
