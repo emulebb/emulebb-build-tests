@@ -1598,7 +1598,11 @@ def hard_kill_app_process(
     if str(profile_base).lower() not in command_line.lower():
         raise RuntimeError(f"Refusing to kill {label} pid {process_id}; command line does not reference {profile_base}.")
     started = time.monotonic()
-    termination = windows_processes.terminate_process_tree(process_id, timeout_seconds=30.0)
+    termination = windows_processes.terminate_process_tree(
+        process_id,
+        timeout_seconds=30.0,
+        expected_command_line_markers=(str(profile_base),),
+    )
     return {
         "client": label,
         "pid": process_id,
