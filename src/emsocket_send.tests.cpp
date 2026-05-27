@@ -60,4 +60,21 @@ TEST_CASE("EMSocket send queue budget helpers bound packet counts and bytes")
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, 0u, static_cast<uint32>(kMaxEMSocketQueuedStandardBytes + 1u)));
 }
 
+TEST_CASE("EMSocket overlapped send helper recognizes borrowed sendbuffer slices")
+{
+	char buffer[16] = {};
+
+	CHECK(CanBorrowOverlappedSendBufferSlice(0u, 16u, 16u));
+	CHECK(CanBorrowOverlappedSendBufferSlice(8u, 8u, 16u));
+	CHECK_FALSE(CanBorrowOverlappedSendBufferSlice(8u, 9u, 16u));
+	CHECK_FALSE(CanBorrowOverlappedSendBufferSlice(17u, 1u, 16u));
+	CHECK_FALSE(CanBorrowOverlappedSendBufferSlice(0u, 0u, 16u));
+
+	CHECK(IsBorrowedOverlappedSendBufferSlice(buffer, buffer, sizeof buffer));
+	CHECK(IsBorrowedOverlappedSendBufferSlice(buffer + 15, buffer, sizeof buffer));
+	CHECK_FALSE(IsBorrowedOverlappedSendBufferSlice(buffer + 16, buffer, sizeof buffer));
+	CHECK_FALSE(IsBorrowedOverlappedSendBufferSlice(NULL, buffer, sizeof buffer));
+	CHECK_FALSE(IsBorrowedOverlappedSendBufferSlice(buffer, NULL, sizeof buffer));
+}
+
 TEST_SUITE_END;
