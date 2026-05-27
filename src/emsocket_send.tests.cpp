@@ -60,6 +60,18 @@ TEST_CASE("EMSocket send queue budget helpers bound packet counts and bytes")
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, 0u, static_cast<uint32>(kMaxEMSocketQueuedStandardBytes + 1u)));
 }
 
+TEST_CASE("EMSocket receive allocation helper preserves trailing slack and max payload")
+{
+	size_t allocationBytes = 0;
+
+	CHECK(TryGetIncomingPacketAllocationSize(0u, 2000000u, &allocationBytes));
+	CHECK_EQ(allocationBytes, static_cast<size_t>(1u));
+	CHECK(TryGetIncomingPacketAllocationSize(2000000u, 2000000u, &allocationBytes));
+	CHECK_EQ(allocationBytes, static_cast<size_t>(2000001u));
+	CHECK_FALSE(TryGetIncomingPacketAllocationSize(2000001u, 2000000u, &allocationBytes));
+	CHECK_FALSE(TryGetIncomingPacketAllocationSize(1u, 2000000u, NULL));
+}
+
 TEST_CASE("EMSocket overlapped send helper recognizes borrowed sendbuffer slices")
 {
 	char buffer[16] = {};
