@@ -31,4 +31,12 @@ TEST_CASE("Server UDP DNS completion dispatches only known successful IPv4 resul
 	CHECK(UDPSocketSeams::ClassifyDnsCompletion(true, true, true, 0x01020304u) == UDPSocketSeams::EServerUdpDnsCompletion::Resolved);
 }
 
+TEST_CASE("Server UDP seam bounds queued outgoing control packets")
+{
+	CHECK(UDPSocketSeams::CanQueueOutgoingServerUdpControlPacket(0u));
+	CHECK(UDPSocketSeams::CanQueueOutgoingServerUdpControlPacket(UDPSocketSeams::kMaxOutgoingServerUdpControlQueuePackets - 1u));
+	CHECK_FALSE(UDPSocketSeams::CanQueueOutgoingServerUdpControlPacket(UDPSocketSeams::kMaxOutgoingServerUdpControlQueuePackets));
+	CHECK_FALSE(UDPSocketSeams::CanQueueOutgoingServerUdpControlPacket(UDPSocketSeams::kMaxOutgoingServerUdpControlQueuePackets + 1u));
+}
+
 TEST_SUITE_END();

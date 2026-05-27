@@ -55,4 +55,12 @@ TEST_CASE("Client UDP seam gates outgoing encryption on the global crypt prefere
 	CHECK_FALSE(ClientUDPSocketSeams::ShouldApplyOutgoingClientUdpEncryptionOverhead(true, true, false, false));
 }
 
+TEST_CASE("Client UDP seam bounds queued outgoing control packets")
+{
+	CHECK(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(0u));
+	CHECK(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets - 1u));
+	CHECK_FALSE(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets));
+	CHECK_FALSE(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets + 1u));
+}
+
 TEST_SUITE_END();
