@@ -1,5 +1,6 @@
 #include "../third_party/doctest/doctest.h"
 
+#include "UploadDiskIOThreadSeams.h"
 #include "UploadQueueSeams.h"
 
 TEST_SUITE_BEGIN("parity");
@@ -48,6 +49,21 @@ TEST_CASE("Upload queue presentation cadence is owned by the transfer display ti
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(2000u) == 2000u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(10000u) == 10000u);
 	CHECK(GetTransferDisplayRefreshTimerDelayMs(750u) == 2000u);
+}
+
+TEST_CASE("Upload disk IO seam bounds pending overlapped reads before Windows quota failure")
+{
+	CHECK(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(0, 0));
+	CHECK(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(
+		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerClient - 1,
+		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerThread - 1));
+	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(
+		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerClient,
+		0));
+	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(
+		0,
+		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerThread));
+	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(-1, 0));
 }
 
 TEST_SUITE_END;
