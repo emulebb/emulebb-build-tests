@@ -218,10 +218,10 @@ def terminate_process_tree(
         depths[pid] = 1 + max(child_depths, default=0)
         return depths[pid]
 
-    ordered_targets = sorted(targets, key=lambda item: depth(item.pid), reverse=True)
+    ordered_targets = sorted(targets, key=lambda item: depth(item.pid))
     terminated = [terminate_process(process.pid, expected_creation_date=process.creation_date) for process in ordered_targets]
     deadline = time.monotonic() + timeout_seconds
-    remaining = set(target_pids)
+    remaining = target_pids & remaining_target_pids(targets)
     while remaining and time.monotonic() < deadline:
         remaining = target_pids & remaining_target_pids(targets)
         if remaining:
