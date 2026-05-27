@@ -18,3 +18,41 @@ TEST_CASE("Non-delayed send states do not complete through the delayed-flush hel
 	CHECK_FALSE(EncryptedStreamSocketSeams::ShouldCompleteDelayedServerSendAfterFlush(false, false));
 	CHECK_FALSE(EncryptedStreamSocketSeams::ShouldCompleteDelayedServerSendAfterFlush(false, true));
 }
+
+TEST_CASE("Encrypted stream seam validates negotiation send spans before pointer arithmetic")
+{
+	CHECK(EncryptedStreamSocketSeams::IsNegotiationSendSpanValid(0, 0));
+	CHECK(EncryptedStreamSocketSeams::IsNegotiationSendSpanValid(1024, 512));
+	CHECK_FALSE(EncryptedStreamSocketSeams::IsNegotiationSendSpanValid(-1, 0));
+	CHECK_FALSE(EncryptedStreamSocketSeams::IsNegotiationSendSpanValid(1, -1));
+	CHECK_FALSE(EncryptedStreamSocketSeams::IsNegotiationSendSpanValid(1, 2));
+	CHECK_FALSE(EncryptedStreamSocketSeams::IsNegotiationSendSpanValid(
+		static_cast<int>(EncryptedStreamSocketSeams::kMaxNegotiationSendBufferBytes + 1u),
+		0));
+}
+
+TEST_CASE("Encrypted stream seam bounds delayed negotiation buffer appends")
+{
+	CHECK(EncryptedStreamSocketSeams::CanAppendNegotiationSendBuffer(0u, 1024u));
+	CHECK(EncryptedStreamSocketSeams::CanAppendNegotiationSendBuffer(
+		EncryptedStreamSocketSeams::kMaxNegotiationSendBufferBytes - 1024u,
+		1024u));
+	CHECK_FALSE(EncryptedStreamSocketSeams::CanAppendNegotiationSendBuffer(
+		EncryptedStreamSocketSeams::kMaxNegotiationSendBufferBytes,
+		1u));
+	CHECK_FALSE(EncryptedStreamSocketSeams::CanAppendNegotiationSendBuffer(
+		0u,
+		static_cast<uint32_t>(EncryptedStreamSocketSeams::kMaxNegotiationSendBufferBytes + 1u)));
+}
+
+TEST_CASE("Encrypted stream seam narrows buffered negotiation lengths explicitly")
+{
+	uint32_t bufferBytes = 0;
+
+	CHECK(EncryptedStreamSocketSeams::TryGetNegotiationSendBufferLength(1024u, &bufferBytes));
+	CHECK_EQ(bufferBytes, static_cast<uint32_t>(1024u));
+	CHECK_FALSE(EncryptedStreamSocketSeams::TryGetNegotiationSendBufferLength(
+		EncryptedStreamSocketSeams::kMaxNegotiationSendBufferBytes + 1u,
+		&bufferBytes));
+	CHECK_FALSE(EncryptedStreamSocketSeams::TryGetNegotiationSendBufferLength(1024u, NULL));
+}
