@@ -215,3 +215,24 @@ def test_stop_process_tree_verifies_process_instance_before_termination(monkeypa
         (10, "20260527020101.000000+000"),
     ]
     assert result["targets"][0]["creation_date"] == "20260527020102.000000+000"
+
+
+def test_remaining_target_pids_ignores_reused_pid(monkeypatch) -> None:
+    module = load_module()
+    target = module.ProcessInfo(
+        10,
+        1,
+        "python.exe",
+        r"C:\Python313\python.exe C:\tests\godzilla-local-swarm.py",
+        creation_date="20260527030101.000000+000",
+    )
+    reused = module.ProcessInfo(
+        10,
+        1,
+        "python.exe",
+        r"C:\Python313\python.exe C:\tools\unrelated.py",
+        creation_date="20260527030102.000000+000",
+    )
+    monkeypatch.setattr(module, "collect_windows_processes", lambda: [reused])
+
+    assert module.remaining_target_pids([target]) == set()

@@ -98,3 +98,23 @@ def test_terminate_process_refuses_reused_pid(monkeypatch) -> None:
     assert result["refused"] is True
     assert result["terminated"] is False
     assert result["reason"] == "process creation date changed"
+
+
+def test_remaining_target_pids_ignores_reused_pid(monkeypatch) -> None:
+    target = windows_processes.WindowsProcessInfo(
+        pid=10,
+        parent_pid=1,
+        name="python.exe",
+        command_line=r"C:\Python313\python.exe C:\tests\godzilla-local-swarm.py",
+        creation_date="20260527030101.000000+000",
+    )
+    reused = windows_processes.WindowsProcessInfo(
+        pid=10,
+        parent_pid=1,
+        name="python.exe",
+        command_line=r"C:\Python313\python.exe C:\tools\unrelated.py",
+        creation_date="20260527030102.000000+000",
+    )
+    monkeypatch.setattr(windows_processes, "collect_processes", lambda: [reused])
+
+    assert windows_processes.remaining_target_pids([target]) == set()

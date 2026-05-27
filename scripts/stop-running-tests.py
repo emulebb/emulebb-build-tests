@@ -194,6 +194,21 @@ def current_stop_targets(root_pid: int, workspace_root: Path, current_pid: int) 
     return targets, reasons.get(root_pid, "selected")
 
 
+def remaining_target_pids(targets: list[ProcessInfo]) -> set[int]:
+    """Returns pids whose selected process instances are still live."""
+
+    target_by_pid = {process.pid: process for process in targets}
+    remaining: set[int] = set()
+    for process in collect_windows_processes():
+        target = target_by_pid.get(process.pid)
+        if target is None:
+            continue
+        if target.creation_date and process.creation_date != target.creation_date:
+            continue
+        remaining.add(process.pid)
+    return remaining
+
+
 def terminate_windows_process(pid: int, exit_code: int = 1, expected_creation_date: str = "") -> dict[str, object]:
     """Terminates one Windows process through WMI."""
 
@@ -237,8 +252,7 @@ def stop_process_tree(
     deadline = time.monotonic() + timeout_seconds
     remaining: set[int] = target_pids
     while remaining and time.monotonic() < deadline:
-        live_pids = {process.pid for process in collect_windows_processes()}
-        remaining = target_pids & live_pids
+        remaining = target_pids & remaining_target_pids(targets)
         if remaining:
             time.sleep(0.2)
     return {

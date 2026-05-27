@@ -120,6 +120,21 @@ def collect_process_tree(process_id: int, processes: list[WindowsProcessInfo] | 
     return [process for process in processes if process.pid in selected]
 
 
+def remaining_target_pids(targets: list[WindowsProcessInfo]) -> set[int]:
+    """Returns pids whose original process instances are still live."""
+
+    target_by_pid = {process.pid: process for process in targets}
+    remaining: set[int] = set()
+    for process in collect_processes():
+        target = target_by_pid.get(process.pid)
+        if target is None:
+            continue
+        if target.creation_date and process.creation_date != target.creation_date:
+            continue
+        remaining.add(process.pid)
+    return remaining
+
+
 def command_line_contains_markers(command_line: str, markers: list[str] | tuple[str, ...]) -> bool:
     """Returns whether a process command line contains every expected marker."""
 
@@ -193,8 +208,7 @@ def terminate_process_tree(
     deadline = time.monotonic() + timeout_seconds
     remaining = set(target_pids)
     while remaining and time.monotonic() < deadline:
-        live_pids = {process.pid for process in collect_processes()}
-        remaining = target_pids & live_pids
+        remaining = target_pids & remaining_target_pids(targets)
         if remaining:
             time.sleep(0.2)
     return {
