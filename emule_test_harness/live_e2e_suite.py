@@ -1234,7 +1234,7 @@ def run_suite_command(command: list[str]) -> int:
     try:
         return process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        terminate_process_tree(process.pid)
+        terminate_process_tree(process.pid, command)
         try:
             process.wait(timeout=10.0)
         except subprocess.TimeoutExpired:
@@ -1242,11 +1242,26 @@ def run_suite_command(command: list[str]) -> int:
         return SUITE_TIMEOUT_RETURN_CODE
 
 
-def terminate_process_tree(process_id: int) -> dict[str, object]:
+def timeout_command_markers(command: list[str]) -> list[str]:
+    """Returns command-line markers that identify one live-suite child root."""
+
+    markers = [Path(command[0]).name] if command else []
+    for argument in command[1:]:
+        path_name = Path(argument).name
+        if path_name.endswith(".py"):
+            markers.append(path_name)
+            break
+    return markers
+
+
+def terminate_process_tree(process_id: int, command: list[str] | None = None) -> dict[str, object]:
     """Terminates one child process tree after a suite-level timeout."""
 
     if os.name == "nt":
-        return windows_processes.terminate_process_tree(process_id)
+        return windows_processes.terminate_process_tree(
+            process_id,
+            expected_command_line_markers=timeout_command_markers(command or []),
+        )
     try:
         os.kill(process_id, 9)
         return {"command": "kill", "return_code": 0}

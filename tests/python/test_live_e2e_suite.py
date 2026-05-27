@@ -1850,7 +1850,7 @@ def test_fail_fast_stops_after_first_failed_suite(tmp_path: Path, monkeypatch) -
 
 
 def test_run_suite_command_times_out_and_terminates_process_tree(monkeypatch) -> None:
-    killed: list[int] = []
+    killed: list[tuple[int, list[str]]] = []
     observed_timeouts: list[float] = []
 
     class FakeProcess:
@@ -1865,10 +1865,14 @@ def test_run_suite_command_times_out_and_terminates_process_tree(monkeypatch) ->
             raise subprocess.TimeoutExpired(cmd=["child-suite"], timeout=timeout or 0.0)
 
     monkeypatch.setattr(live_e2e_suite.subprocess, "Popen", lambda _command: FakeProcess())
-    monkeypatch.setattr(live_e2e_suite, "terminate_process_tree", lambda process_id: killed.append(process_id) or {"return_code": 0})
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "terminate_process_tree",
+        lambda process_id, command=None: killed.append((process_id, command or [])) or {"return_code": 0},
+    )
 
     assert live_e2e_suite.run_suite_command(["child-suite"]) == live_e2e_suite.SUITE_TIMEOUT_RETURN_CODE
-    assert killed == [4321]
+    assert killed == [(4321, ["child-suite"])]
     assert observed_timeouts[0] == live_e2e_suite.DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS
 
 
@@ -1883,10 +1887,16 @@ def test_run_suite_command_uses_extended_godzilla_timeout(monkeypatch) -> None:
             raise subprocess.TimeoutExpired(cmd=["python", "godzilla-local-swarm.py"], timeout=timeout or 0.0)
 
     monkeypatch.setattr(live_e2e_suite.subprocess, "Popen", lambda _command: FakeProcess())
-    monkeypatch.setattr(live_e2e_suite, "terminate_process_tree", lambda _process_id: {"return_code": 0})
+    monkeypatch.setattr(live_e2e_suite, "terminate_process_tree", lambda _process_id, command=None: {"return_code": 0})
 
     assert live_e2e_suite.run_suite_command(["python", r"C:\tests\godzilla-local-swarm.py"]) == live_e2e_suite.SUITE_TIMEOUT_RETURN_CODE
     assert observed_timeouts[0] == live_e2e_suite.DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
+
+
+def test_timeout_command_markers_include_launcher_and_script() -> None:
+    assert live_e2e_suite.timeout_command_markers(
+        [r"C:\Python313\python.exe", r"C:\tests\godzilla-local-swarm.py", "--flag"]
+    ) == ["python.exe", "godzilla-local-swarm.py"]
 
 
 def test_rest_profile_flags_are_passed_to_rest_child(tmp_path: Path, monkeypatch) -> None:

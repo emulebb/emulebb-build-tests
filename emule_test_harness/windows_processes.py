@@ -118,6 +118,13 @@ def collect_process_tree(process_id: int, processes: list[WindowsProcessInfo] | 
     return [process for process in processes if process.pid in selected]
 
 
+def command_line_contains_markers(command_line: str, markers: list[str] | tuple[str, ...]) -> bool:
+    """Returns whether a process command line contains every expected marker."""
+
+    normalized = command_line.lower()
+    return all(marker.strip().lower() in normalized for marker in markers if marker.strip())
+
+
 def terminate_process(process_id: int, exit_code: int = 1) -> dict[str, object]:
     """Terminates one Windows process through WMI."""
 
@@ -129,8 +136,12 @@ def terminate_process(process_id: int, exit_code: int = 1) -> dict[str, object]:
     return {"pid": process_id, "terminated": result == 0, "return_code": result}
 
 
-def terminate_process_tree(process_id: int, timeout_seconds: float = 15.0) -> dict[str, object]:
-    """Terminates one current process tree, children first, through WMI."""
+def terminate_process_tree(
+    process_id: int,
+    timeout_seconds: float = 15.0,
+    expected_command_line_markers: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    """Terminates one current process tree, children first, after optional root verification."""
 
     targets = collect_process_tree(process_id)
     if not targets:
@@ -140,6 +151,19 @@ def terminate_process_tree(process_id: int, timeout_seconds: float = 15.0) -> di
             "return_code": 1,
             "targets": [],
             "reason": "root process no longer exists",
+        }
+    root = next((process for process in targets if process.pid == process_id), None)
+    markers = tuple(expected_command_line_markers or ())
+    if root is None or (markers and not command_line_contains_markers(root.command_line, markers)):
+        return {
+            "command": "wmi-terminate",
+            "pid": process_id,
+            "return_code": 1,
+            "refused": True,
+            "reason": "root command line did not match expected markers",
+            "expected_command_line_markers": list(markers),
+            "root_command_line": root.command_line if root is not None else "",
+            "targets": [process.__dict__ for process in targets],
         }
     target_pids = {process.pid for process in targets}
     children = children_by_parent(targets)
