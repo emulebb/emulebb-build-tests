@@ -71,6 +71,8 @@ ED2K_INSTANCE_MATRIX = [
 AMUTORRENT_CAPABILITY_MATRIX = {
     "global_read": [
         "health",
+        "version",
+        "auth_status",
         "config_status",
         "config_current",
         "config_defaults",
@@ -86,12 +88,25 @@ AMUTORRENT_CAPABILITY_MATRIX = {
         "metrics_stats",
         "app_logs",
     ],
+    "qbittorrent_compat": [
+        "auth_login",
+        "auth_logout",
+        "app_version",
+        "webapi_version",
+        "preferences",
+        "torrents_info",
+        "torrents_categories",
+        "create_category",
+        "pause",
+        "resume",
+    ],
     "ed2k_instance_read": [
         "servers",
         "server_info",
         "stats_tree",
         "ed2k_logs",
         "shared_dirs",
+        "shared_dirs_reload",
         "search_results_cache",
     ],
     "ed2k_instance_mutation": [
@@ -102,6 +117,8 @@ AMUTORRENT_CAPABILITY_MATRIX = {
         "stop",
         "resume_after_stop",
         "delete_permission_preflight",
+        "move_permission_preflight",
+        "move_to_permission_preflight",
         "category_assignment",
         "refresh_shared",
     ],
@@ -363,6 +380,28 @@ def require_browser_http_payload(name: str, result: dict[str, Any], *, allow_lis
     raise RuntimeError(f"aMuTorrent browser HTTP check {name!r} did not return an object: {result!r}")
 
 
+def require_browser_http_text(
+    name: str,
+    result: dict[str, Any],
+    *,
+    expected_text: str | None = None,
+) -> str:
+    """Requires a 2xx text response from endpoints that intentionally do not return JSON."""
+
+    status = int(result.get("status", 0))
+    payload = result.get("payload")
+    if status >= 400:
+        raise RuntimeError(f"aMuTorrent browser text check {name!r} failed: {result!r}")
+    if not isinstance(payload, dict) or "text" not in payload:
+        raise RuntimeError(f"aMuTorrent browser text check {name!r} did not return captured text: {result!r}")
+    text = str(payload.get("text") or "")
+    if expected_text is not None and text != expected_text:
+        raise RuntimeError(
+            f"aMuTorrent browser text check {name!r} returned {text!r}, expected {expected_text!r}: {result!r}"
+        )
+    return text
+
+
 def require_successful_batch_result(name: str, result: dict[str, Any]) -> dict[str, Any]:
     """Requires a REST batch result to have at least one successful item-level result."""
 
@@ -436,6 +475,8 @@ def run_global_capability_checks(page: Any) -> dict[str, Any]:
 
     requests = {
         "health": ("GET", "/health", None),
+        "version": ("GET", "/api/version", None),
+        "auth_status": ("GET", "/api/auth/status", None),
         "config_status": ("GET", "/api/config/status", None),
         "config_current": ("GET", "/api/config/current", None),
         "config_defaults": ("GET", "/api/config/defaults", None),
@@ -456,6 +497,56 @@ def run_global_capability_checks(page: Any) -> dict[str, Any]:
         result = fetch_page_json(page, path, method, body)
         require_browser_http_payload(name, result, allow_list=name == "config_interfaces")
         checks[name] = summarize_browser_http_result(result)
+    return checks
+
+
+def run_qbittorrent_compat_checks(page: Any, *, transfer_hash: str) -> dict[str, Any]:
+    """Exercises the qBittorrent-compatible API facade backed by the configured aMule instance."""
+
+    normalized_hash = transfer_hash.lower()
+    category_name = f"e2e-{normalized_hash[:8]}"
+    text_requests = {
+        "auth_login": ("POST", "/api/v2/auth/login", {"username": "admin", "password": "unused"}, "Ok."),
+        "auth_logout": ("POST", "/api/v2/auth/logout", None, "Ok."),
+        "app_version": ("GET", "/api/v2/app/version", None, None),
+        "webapi_version": ("GET", "/api/v2/app/webapiVersion", None, None),
+    }
+    checks: dict[str, Any] = {}
+    for name, (method, path, body, expected_text) in text_requests.items():
+        result = fetch_page_json(page, path, method, body)
+        text = require_browser_http_text(name, result, expected_text=expected_text)
+        checks[name] = {**summarize_browser_http_result(result), "text": text}
+
+    json_requests = {
+        "preferences": ("GET", "/api/v2/app/preferences", None, False),
+        "torrents_info": ("GET", "/api/v2/torrents/info", None, True),
+        "torrents_categories": ("GET", "/api/v2/torrents/categories", None, False),
+    }
+    for name, (method, path, body, allow_list) in json_requests.items():
+        result = fetch_page_json(page, path, method, body)
+        require_browser_http_payload(name, result, allow_list=allow_list)
+        checks[name] = summarize_browser_http_result(result)
+
+    create_category = fetch_page_json(
+        page,
+        "/api/v2/torrents/createCategory",
+        "POST",
+        {"category": category_name, "savePath": ""},
+    )
+    require_browser_http_text("qbittorrent-create-category", create_category, expected_text="Ok.")
+    checks["create_category"] = {
+        "category": category_name,
+        **summarize_browser_http_result(create_category),
+    }
+
+    for name, path in [
+        ("pause", "/api/v2/torrents/pause"),
+        ("resume", "/api/v2/torrents/resume"),
+    ]:
+        result = fetch_page_json(page, path, "POST", {"hashes": normalized_hash})
+        require_browser_http_text(f"qbittorrent-{name}", result, expected_text="Ok.")
+        checks[name] = summarize_browser_http_result(result)
+
     return checks
 
 
@@ -496,6 +587,24 @@ def run_instance_capability_checks(
     require_browser_http_ok(f"{instance_id}-delete-permission", delete_permission)
     checks["delete_permission_preflight"] = summarize_browser_http_result(delete_permission)
 
+    move_permission = fetch_page_json(
+        page,
+        "/api/v1/permissions/move",
+        "POST",
+        {"items": [item], "categoryName": "Default"},
+    )
+    require_browser_http_ok(f"{instance_id}-move-permission", move_permission)
+    checks["move_permission_preflight"] = summarize_browser_http_result(move_permission)
+
+    move_to_permission = fetch_page_json(
+        page,
+        "/api/v1/permissions/move-to",
+        "POST",
+        {"items": [item], "destPath": str(current_item.get("directory") or "")},
+    )
+    require_browser_http_ok(f"{instance_id}-move-to-permission", move_to_permission)
+    checks["move_to_permission_preflight"] = summarize_browser_http_result(move_to_permission)
+
     progress = current_item.get("progress")
     status = str(current_item.get("status") or current_item.get("statusText") or "").lower()
     transfer_complete = (
@@ -535,6 +644,7 @@ def run_instance_capability_checks(
         "stats_tree": ("GET", f"/api/v1/ed2k/stats-tree?instanceId={instance_id}", None),
         "ed2k_logs": ("GET", f"/api/v1/logs/ed2k?instanceId={instance_id}", None),
         "shared_dirs": ("GET", f"/api/v1/ed2k/shared-dirs?instanceId={instance_id}", None),
+        "shared_dirs_reload": ("POST", f"/api/v1/ed2k/shared-dirs/reload?instanceId={instance_id}", {}),
         "search_results_cache": ("GET", f"/api/v1/search/results?instanceId={instance_id}", None),
     }
     checks["read"] = {}
@@ -657,6 +767,7 @@ def run_coexistence_capability_matrix(
         expected=ED2K_INSTANCE_MATRIX,
     )
     checks["global"] = run_global_capability_checks(page)
+    checks["qbittorrent_compat"] = run_qbittorrent_compat_checks(page, transfer_hash=transfer_hash)
     return checks
 
 

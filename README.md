@@ -298,8 +298,9 @@ Aggregate live E2E lane:
   one throwaway run launches eMuleBB and aMule behind aMuTorrent, adds the same
   local ED2K fixture through both configured clients, exercises snapshot,
   config, history, metrics, logs, server, shared-directory, pause/resume/stop,
-  category, delete-preflight, and refresh surfaces, then verifies both completed
-  files against the fixture hash
+  category, delete/move preflight, qBittorrent-compatible app/torrent/category
+  facade, and refresh surfaces, then verifies both completed files against the
+  fixture hash
 - `--profile release-expanded-quick`, `--profile stabilization-stress-quick`,
   and `--profile cpu-heavy-quick` are the first-pass failure triage gates; they
   keep the same fixture classes and live-profile isolation but reduce REST

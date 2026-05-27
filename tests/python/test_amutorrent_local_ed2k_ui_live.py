@@ -159,6 +159,14 @@ def test_browser_payload_helper_accepts_declared_list_endpoints() -> None:
     assert summary == {"status": 200, "payload_type": "list", "item_count": 1}
 
 
+def test_browser_text_helper_accepts_qbittorrent_compat_text_endpoints() -> None:
+    module = load_suite_module()
+
+    result = {"status": 200, "payload": {"parseError": "SyntaxError", "text": "Ok."}}
+
+    assert module.require_browser_http_text("qb-login", result, expected_text="Ok.") == "Ok."
+
+
 def test_capability_matrix_covers_both_ed2k_clients_and_core_surfaces() -> None:
     module = load_suite_module()
 
@@ -176,7 +184,20 @@ def test_capability_matrix_covers_both_ed2k_clients_and_core_surfaces() -> None:
         module.CLIENT04.profile_id,
     }
     manifest = module.AMUTORRENT_CAPABILITY_MATRIX
-    assert {"health", "data_snapshot", "categories", "history", "metrics_dashboard"} <= set(manifest["global_read"])
+    assert {"health", "version", "data_snapshot", "categories", "history", "metrics_dashboard"} <= set(
+        manifest["global_read"]
+    )
+    assert {
+        "auth_login",
+        "app_version",
+        "webapi_version",
+        "preferences",
+        "torrents_info",
+        "torrents_categories",
+        "create_category",
+        "pause",
+        "resume",
+    } <= set(manifest["qbittorrent_compat"])
     assert {"servers", "server_info", "stats_tree", "ed2k_logs", "shared_dirs"} <= set(
         manifest["ed2k_instance_read"]
     )
@@ -186,10 +207,43 @@ def test_capability_matrix_covers_both_ed2k_clients_and_core_surfaces() -> None:
         "pause",
         "resume",
         "stop",
+        "delete_permission_preflight",
+        "move_permission_preflight",
+        "move_to_permission_preflight",
         "category_assignment",
         "refresh_shared",
     } <= set(manifest["ed2k_instance_mutation"])
     assert "same_hash_is_instance_scoped" in manifest["coexistence_invariants"]
+
+
+def test_qbittorrent_compat_checks_cover_text_and_json_facade(monkeypatch) -> None:
+    module = load_suite_module()
+    calls = []
+
+    def fake_fetch(_page, path, method="GET", body=None):
+        calls.append((method, path, body))
+        if path in {
+            "/api/v2/auth/login",
+            "/api/v2/auth/logout",
+            "/api/v2/torrents/createCategory",
+            "/api/v2/torrents/pause",
+            "/api/v2/torrents/resume",
+        }:
+            return {"status": 200, "payload": {"parseError": "text", "text": "Ok."}}
+        if path in {"/api/v2/app/version", "/api/v2/app/webapiVersion"}:
+            return {"status": 200, "payload": {"parseError": "text", "text": "v1"}}
+        if path == "/api/v2/torrents/info":
+            return {"status": 200, "payload": [{"hash": "abc123"}]}
+        return {"status": 200, "payload": {"ok": True}}
+
+    monkeypatch.setattr(module, "fetch_page_json", fake_fetch)
+
+    checks = module.run_qbittorrent_compat_checks(object(), transfer_hash="ABC123DEF456")
+
+    assert checks["create_category"]["category"] == "e2e-abc123de"
+    assert ("GET", "/api/v2/torrents/info", None) in calls
+    assert ("POST", "/api/v2/torrents/pause", {"hashes": "abc123def456"}) in calls
+    assert ("POST", "/api/v2/torrents/resume", {"hashes": "abc123def456"}) in calls
 
 
 def test_ed2k_instance_button_click_uses_stable_instance_hook() -> None:
