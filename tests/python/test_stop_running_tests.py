@@ -167,9 +167,51 @@ def test_stop_process_tree_refuses_reused_unscoped_root(monkeypatch) -> None:
     processes = [module.ProcessInfo(10, 1, "python.exe", r"C:\Python313\python.exe C:\tools\unrelated.py")]
     terminated: list[int] = []
     monkeypatch.setattr(module, "collect_windows_processes", lambda: processes)
-    monkeypatch.setattr(module, "terminate_windows_process", lambda pid: terminated.append(pid) or {"pid": pid})
+    monkeypatch.setattr(
+        module,
+        "terminate_windows_process",
+        lambda pid, **_kwargs: terminated.append(pid) or {"pid": pid},
+    )
 
     result = module.stop_process_tree(10, workspace_root=workspace_root, current_pid=999, timeout_seconds=0)
 
     assert result["refused"] is True
     assert terminated == []
+
+
+def test_stop_process_tree_verifies_process_instance_before_termination(monkeypatch) -> None:
+    module = load_module()
+    workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")
+    processes = [
+        module.ProcessInfo(
+            10,
+            1,
+            "python.exe",
+            rf"C:\Python313\python.exe -m emule_workspace test live-e2e --workspace {workspace_root}",
+            creation_date="20260527020101.000000+000",
+        ),
+        module.ProcessInfo(
+            11,
+            10,
+            "emulebb.exe",
+            rf"emulebb.exe -c {workspace_root}\workspaces\workspace\state\test-reports\run\profile-base",
+            creation_date="20260527020102.000000+000",
+        ),
+    ]
+    terminated: list[tuple[int, str]] = []
+
+    def terminate(pid: int, exit_code: int = 1, expected_creation_date: str = "") -> dict[str, object]:
+        terminated.append((pid, expected_creation_date))
+        return {"pid": pid, "terminated": True, "return_code": 0}
+
+    monkeypatch.setattr(module, "collect_windows_processes", lambda: processes if not terminated else [])
+    monkeypatch.setattr(module, "terminate_windows_process", terminate)
+
+    result = module.stop_process_tree(10, workspace_root=workspace_root, current_pid=999, timeout_seconds=0)
+
+    assert result["return_code"] == 0
+    assert terminated == [
+        (11, "20260527020102.000000+000"),
+        (10, "20260527020101.000000+000"),
+    ]
+    assert result["targets"][0]["creation_date"] == "20260527020102.000000+000"

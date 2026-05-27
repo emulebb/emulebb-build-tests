@@ -54,6 +54,7 @@ class ProcessInfo:
     parent_pid: int
     name: str
     command_line: str
+    creation_date: str = ""
 
 
 def default_workspace_root() -> Path:
@@ -174,6 +175,7 @@ def collect_windows_processes() -> list[ProcessInfo]:
             parent_pid=process.parent_pid,
             name=process.name,
             command_line=process.command_line,
+            creation_date=process.creation_date,
         )
         for process in windows_processes.collect_processes()
     ]
@@ -192,10 +194,10 @@ def current_stop_targets(root_pid: int, workspace_root: Path, current_pid: int) 
     return targets, reasons.get(root_pid, "selected")
 
 
-def terminate_windows_process(pid: int, exit_code: int = 1) -> dict[str, object]:
+def terminate_windows_process(pid: int, exit_code: int = 1, expected_creation_date: str = "") -> dict[str, object]:
     """Terminates one Windows process through WMI."""
 
-    return windows_processes.terminate_process(pid, exit_code)
+    return windows_processes.terminate_process(pid, exit_code, expected_creation_date=expected_creation_date)
 
 
 def stop_process_tree(
@@ -229,7 +231,9 @@ def stop_process_tree(
         return depths[pid]
 
     ordered_targets = sorted(targets, key=lambda item: depth(item.pid), reverse=True)
-    terminated = [terminate_windows_process(process.pid) for process in ordered_targets]
+    terminated = [
+        terminate_windows_process(process.pid, expected_creation_date=process.creation_date) for process in ordered_targets
+    ]
     deadline = time.monotonic() + timeout_seconds
     remaining: set[int] = target_pids
     while remaining and time.monotonic() < deadline:
@@ -248,6 +252,7 @@ def stop_process_tree(
                 "parent_pid": process.parent_pid,
                 "name": process.name,
                 "command_line": process.command_line,
+                "creation_date": process.creation_date,
             }
             for process in ordered_targets
         ],
