@@ -2,6 +2,8 @@
 
 #include "ClientUDPSocketSeams.h"
 
+#include <climits>
+
 TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("Client UDP seam keeps normal packet failures verbose-only")
@@ -61,6 +63,28 @@ TEST_CASE("Client UDP seam bounds queued outgoing control packets")
 	CHECK(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets - 1u));
 	CHECK_FALSE(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets));
 	CHECK_FALSE(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets + 1u));
+}
+
+TEST_CASE("Client UDP seam checks datagram allocation and socket lengths together")
+{
+	uint32_t plainPacketSize = 0;
+	size_t allocationSize = 0;
+	int socketSendSize = 0;
+
+	CHECK(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(
+		42u,
+		16u,
+		&plainPacketSize,
+		&allocationSize,
+		&socketSendSize));
+	CHECK_EQ(plainPacketSize, static_cast<uint32_t>(44u));
+	CHECK_EQ(allocationSize, static_cast<size_t>(60u));
+	CHECK_EQ(socketSendSize, 44);
+
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(UINT32_MAX - 1u, 0u, &plainPacketSize, &allocationSize, &socketSendSize));
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(static_cast<uint32_t>(INT_MAX), 0u, &plainPacketSize, &allocationSize, &socketSendSize));
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(1u, static_cast<size_t>(INT_MAX), &plainPacketSize, &allocationSize, &socketSendSize));
+	CHECK_FALSE(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(1u, 0u, NULL, &allocationSize, &socketSendSize));
 }
 
 TEST_SUITE_END();
