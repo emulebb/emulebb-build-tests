@@ -29,7 +29,10 @@ Required initialized `preferences.ini` keys are enforced by
 `emule_test_harness.live_profile_seed` so first-run UI prompts do not leak into
 live automation.
 
-The seeded `preferences.dat` carries the deterministic maximized main-window placement used by the live UI and startup-profile harnesses.
+The seeded `preferences.dat` carries the deterministic maximized main-window
+placement used by the live UI and startup-profile harnesses. Profile builders
+rewrite it per scenario with a stable deterministic client hash so forced
+restart tests keep the same eMule identity across kill/relaunch cycles.
 
 Mutable runtime state such as logs, temp files, downloads, and rolling history files must not be committed here.
 

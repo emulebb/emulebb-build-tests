@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,12 @@ def write_valid_seed(root: Path) -> Path:
     (config_dir / "server.met").write_bytes(b"servers")
     (config_dir / "nodes.dat").write_bytes(b"nodes")
     return config_dir
+
+
+def read_preferences_dat_user_hash(path: Path) -> bytes:
+    """Returns the stored eMule userhash from a harness preferences.dat file."""
+
+    return struct.unpack("<B16s", path.read_bytes()[:17])[1]
 
 
 def test_build_profile_base_creates_fresh_isolated_profile(tmp_path: Path) -> None:
@@ -62,8 +69,44 @@ def test_build_profile_base_creates_fresh_isolated_profile(tmp_path: Path) -> No
     assert "BlockNetworkWhenBindUnavailableAtStartup=1" in emule_section
     assert "EnableUPnP=1" in upnp_section
     assert (config_dir / "preferences.dat").read_bytes() != b"prefs"
+    user_hash = read_preferences_dat_user_hash(config_dir / "preferences.dat")
+    assert user_hash == live_profiles.deterministic_user_hash("fixture-three-files")
+    assert user_hash[5] == 14
+    assert user_hash[14] == 111
     assert live_profiles.read_ini_text(config_dir / "shareddir.dat") == shared_dir + "\r\n"
     assert profile["startup_profile_path"] == config_dir / live_profiles.STARTUP_PROFILE_TRACE_FILE_NAME
+
+
+def test_build_profile_base_uses_distinct_stable_client_hashes(tmp_path: Path) -> None:
+    seed_config_dir = write_valid_seed(tmp_path)
+
+    first = live_profiles.build_profile_base(
+        live_profiles.ProfileBuildSpec(
+            seed_config_dir=seed_config_dir,
+            artifacts_dir=tmp_path / "artifacts",
+            shared_dirs=[],
+            scenario_id="cl-emulebb-001",
+        )
+    )
+    second = live_profiles.build_profile_base(
+        live_profiles.ProfileBuildSpec(
+            seed_config_dir=seed_config_dir,
+            artifacts_dir=tmp_path / "artifacts",
+            shared_dirs=[],
+            scenario_id="cl-emulebb-extra-001",
+        )
+    )
+
+    first_hash = read_preferences_dat_user_hash(Path(first["config_dir"]) / "preferences.dat")
+    second_hash = read_preferences_dat_user_hash(Path(second["config_dir"]) / "preferences.dat")
+    assert first_hash == live_profiles.deterministic_user_hash("cl-emulebb-001")
+    assert second_hash == live_profiles.deterministic_user_hash("cl-emulebb-extra-001")
+    assert first_hash != second_hash
+
+
+def test_write_preferences_dat_rejects_wrong_sized_user_hash(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="16 bytes"):
+        live_profiles.write_preferences_dat(tmp_path / "preferences.dat", user_hash=b"short")
 
 
 def test_scenario_id_is_sanitized_for_profile_paths(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import struct
@@ -35,6 +36,15 @@ PRIVATE_HARNESS_PROTECTED_CONFIG_FILES = frozenset(
         "collectioncryptkey.dat",
     }
 )
+
+
+def deterministic_user_hash(identity: str) -> bytes:
+    """Returns one stable eMule client hash for a deterministic live profile identity."""
+
+    digest = bytearray(hashlib.sha256(f"emulebb-live-profile:{identity}".encode("utf-8")).digest()[:16])
+    digest[5] = 14
+    digest[14] = 111
+    return bytes(digest)
 
 
 @dataclass(frozen=True)
@@ -216,13 +226,19 @@ def write_preferences_dat(
     path: Path,
     show_cmd: int = WINDOW_SHOW_MAXIMIZED,
     normal_rect: tuple[int, int, int, int] = DEFAULT_WINDOW_RECT,
+    user_hash: bytes | None = None,
 ) -> None:
-    """Writes a deterministic preferences.dat carrying the requested main-window placement."""
+    """Writes a deterministic preferences.dat carrying client identity and window placement."""
+
+    if user_hash is None:
+        user_hash = deterministic_user_hash("default")
+    if len(user_hash) != 16:
+        raise ValueError("preferences.dat user hash must be exactly 16 bytes")
 
     data = struct.pack(
         "<B16sIIIiiiiiiii",
         PREFERENCES_DAT_VERSION,
-        b"\0" * 16,
+        user_hash,
         WINDOW_PLACEMENT_LENGTH,
         0,
         show_cmd,
@@ -355,7 +371,7 @@ def materialize_private_harness_profile(spec: PrivateHarnessProfileSpec) -> dict
     preferences_path = config_dir / "preferences.ini"
     write_utf16_ini_text(preferences_path, _private_harness_preferences_text(spec))
     if not (config_dir / "preferences.dat").exists():
-        write_preferences_dat(config_dir / "preferences.dat")
+        write_preferences_dat(config_dir / "preferences.dat", user_hash=deterministic_user_hash(spec.profile_root.name))
     write_shared_directories_file(config_dir / "shareddir.dat", list(spec.shared_dirs))
 
     return {
@@ -473,7 +489,7 @@ def build_profile_base(spec: ProfileBuildSpec) -> dict[str, object]:
         preferences_text = patch_ini_value(preferences_text, key, value)
     write_utf16_ini_text(preferences_path, preferences_text)
 
-    write_preferences_dat(config_dir / "preferences.dat")
+    write_preferences_dat(config_dir / "preferences.dat", user_hash=deterministic_user_hash(scenario_id))
     write_shared_directories_file(config_dir / "shareddir.dat", spec.shared_dirs)
     apply_live_network_profile(config_dir, LiveNetworkProfileSpec())
 
