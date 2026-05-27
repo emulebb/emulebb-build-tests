@@ -258,6 +258,20 @@ TEST_CASE("WebSocket HTTP seams keep draining accepts after remote IP rejection"
 #endif
 }
 
+TEST_CASE("WebSocket HTTP seams bound queued response bytes")
+{
+	CHECK(WebSocketHttpSeams::CanQueueResponseBytes(0u, 1024u));
+	CHECK(WebSocketHttpSeams::CanQueueResponseBytes(
+		WebSocketHttpSeams::kMaxQueuedResponseBytes - 1024u,
+		1024u));
+	CHECK_FALSE(WebSocketHttpSeams::CanQueueResponseBytes(WebSocketHttpSeams::kMaxQueuedResponseBytes, 1u));
+	CHECK_FALSE(WebSocketHttpSeams::CanQueueResponseBytes(0u, static_cast<uint32_t>(WebSocketHttpSeams::kMaxQueuedResponseBytes + 1u)));
+
+	CHECK_EQ(WebSocketHttpSeams::ConsumeQueuedResponseBytes(1024u, 512u), static_cast<uint64_t>(512u));
+	CHECK_EQ(WebSocketHttpSeams::ConsumeQueuedResponseBytes(1024u, 1024u), static_cast<uint64_t>(0u));
+	CHECK_EQ(WebSocketHttpSeams::ConsumeQueuedResponseBytes(1024u, 2048u), static_cast<uint64_t>(0u));
+}
+
 TEST_CASE("WebServer static file seam contains requests under the web root")
 {
 	CString path;
