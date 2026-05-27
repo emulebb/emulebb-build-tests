@@ -190,6 +190,18 @@ TEST_CASE("WebSocket HTTP seams wait for complete declared bodies")
 		UINT32_MAX));
 }
 
+TEST_CASE("WebSocket HTTP seams reject receive-buffer DWORD growth overflow")
+{
+	uint32_t bufferSize = 0;
+
+	CHECK(WebSocketHttpSeams::TryCalculateReceiveBufferSize(100u, 50u, 4096u, bufferSize));
+	CHECK_EQ(bufferSize, static_cast<uint32_t>(4246u));
+	CHECK(WebSocketHttpSeams::TryCalculateReceiveBufferSize(UINT32_MAX - 10u, 10u, 0u, bufferSize));
+	CHECK_EQ(bufferSize, UINT32_MAX);
+	CHECK_FALSE(WebSocketHttpSeams::TryCalculateReceiveBufferSize(UINT32_MAX - 10u, 11u, 0u, bufferSize));
+	CHECK_FALSE(WebSocketHttpSeams::TryCalculateReceiveBufferSize(UINT32_MAX - 10u, 10u, 1u, bufferSize));
+}
+
 TEST_CASE("WebSocket HTTP seams parse request methods exactly")
 {
 	std::string method;
