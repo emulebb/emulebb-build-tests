@@ -342,6 +342,42 @@ def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Pa
     assert "emulebb-godzilla-00000" in message
 
 
+def test_godzilla_spiral_hammer_skips_missing_optional_amule(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_optional_amule_spiral_test")
+
+    monkeypatch.setattr(godzilla, "server_telemetry_snapshot", lambda *_args: {"stats": {"clients": 2}})
+    monkeypatch.setattr(godzilla.time, "sleep", lambda *_args: None)
+    monkeypatch.setattr(godzilla.rest_smoke, "http_request", lambda *_args, **_kwargs: {"status": 200, "json": []})
+    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+
+    report = godzilla.run_spiral_hammer(
+        base_url="http://127.0.0.1:1",
+        api_key="secret",
+        admin_base_url="http://127.0.0.1:2",
+        amule_control_exe=None,
+        amule_profile=None,
+        links=["ed2k://|file|a.bin|1|0123456789ABCDEF0123456789ABCDEF|/"],
+        queries=["emulebb-godzilla-"],
+        waves=1,
+        sleep_seconds=0.0,
+    )
+
+    assert report["waves"][0]["actions"][-1] == {
+        "kind": "amulecmd",
+        "skipped": True,
+        "reason": "optional aMule client unavailable",
+    }
+
+
+def test_godzilla_amule_command_hammer_skips_missing_optional_amule() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_optional_amule_command_test")
+
+    assert godzilla.run_amule_command_hammer(None, None, links=[], queries=["linux"], rounds=3) == {
+        "skipped": True,
+        "reason": "optional aMule client unavailable",
+    }
+
+
 def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_loopback_test")
     monkeypatch.setenv("X_LOCAL_IP", "127.0.0.1")

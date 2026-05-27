@@ -728,8 +728,8 @@ def run_emulebb_search_hammer(base_url: str, api_key: str, *, queries: list[str]
 
 
 def run_amule_command_hammer(
-    control_exe: Path,
-    profile: amule_harness.AmuleRuntimeProfile,
+    control_exe: Path | None,
+    profile: amule_harness.AmuleRuntimeProfile | None,
     *,
     links: list[str],
     queries: list[str],
@@ -737,6 +737,8 @@ def run_amule_command_hammer(
 ) -> dict[str, object]:
     """Runs non-fatal aMule external-control commands to stress EC and ED2K paths."""
 
+    if control_exe is None or profile is None:
+        return {"skipped": True, "reason": "optional aMule client unavailable"}
     if rounds <= 0:
         return {"skipped": True, "reason": "rounds disabled"}
     command_templates = [
@@ -775,13 +777,15 @@ def amutorrent_http_json(base_url: str, path: str, *, method: str = "GET", body:
         return {"status": response.status, "payload": payload}
 
 
-def run_amutorrent_api_hammer(base_url: str, *, links: list[str], rounds: int) -> dict[str, object]:
+def run_amutorrent_api_hammer(base_url: str, *, links: list[str], rounds: int, amule_enabled: bool) -> dict[str, object]:
     """Runs optional aMuTorrent controller API traffic against eMuleBB and aMule."""
 
     if rounds <= 0:
         return {"skipped": True, "reason": "rounds disabled"}
     rows: list[dict[str, object]] = []
-    instance_cycle = [CLIENT01.profile_id, CLIENT04.profile_id]
+    instance_cycle = [CLIENT01.profile_id]
+    if amule_enabled:
+        instance_cycle.append(CLIENT04.profile_id)
     for index in range(rounds):
         instance_id = instance_cycle[index % len(instance_cycle)]
         row: dict[str, object] = {
@@ -833,8 +837,8 @@ def run_spiral_hammer(
     base_url: str,
     api_key: str,
     admin_base_url: str,
-    amule_control_exe: Path,
-    amule_profile: amule_harness.AmuleRuntimeProfile,
+    amule_control_exe: Path | None,
+    amule_profile: amule_harness.AmuleRuntimeProfile | None,
     links: list[str],
     queries: list[str],
     waves: int,
@@ -895,26 +899,29 @@ def run_spiral_hammer(
                             "response": rest_smoke.compact_http_result(result),
                         }
                     )
-        amule_commands = [
-            "Status",
-            "Show DL",
-            "Show UL",
-            "Show Shared",
-            "Reload Shared",
-            "Connect ed2k",
-            f"Search global {queries[wave % len(queries)]}",
-            f"Search local {queries[(wave + 1) % len(queries)]}",
-        ][: 2 + wave]
-        for command in amule_commands:
-            actions.append(
-                {
-                    "kind": "amulecmd",
-                    "command": command,
-                    "response": amule_command_summary(
-                        amule_harness.run_amulecmd(amule_control_exe, amule_profile, command, timeout_seconds=30.0, check=False)
-                    ),
-                }
-            )
+        if amule_control_exe is not None and amule_profile is not None:
+            amule_commands = [
+                "Status",
+                "Show DL",
+                "Show UL",
+                "Show Shared",
+                "Reload Shared",
+                "Connect ed2k",
+                f"Search global {queries[wave % len(queries)]}",
+                f"Search local {queries[(wave + 1) % len(queries)]}",
+            ][: 2 + wave]
+            for command in amule_commands:
+                actions.append(
+                    {
+                        "kind": "amulecmd",
+                        "command": command,
+                        "response": amule_command_summary(
+                            amule_harness.run_amulecmd(amule_control_exe, amule_profile, command, timeout_seconds=30.0, check=False)
+                        ),
+                    }
+                )
+        else:
+            actions.append({"kind": "amulecmd", "skipped": True, "reason": "optional aMule client unavailable"})
         wave_row["server_after"] = server_telemetry_snapshot(admin_base_url, api_key)
         wave_row["finished_at"] = round(time.time(), 3)
         rows.append(wave_row)
@@ -948,6 +955,44 @@ def amule_command_summary(completed: subprocess.CompletedProcess) -> dict[str, o
         "stdout_tail": completed.stdout[-2000:],
         "stderr_tail": completed.stderr[-1000:],
     }
+
+
+def read_text_tail(path: Path, *, limit: int = 4000) -> str:
+    """Reads the tail of a diagnostic text file without failing the run."""
+
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError as exc:
+        return f"<unavailable: {exc}>"
+
+
+def amule_daemon_diagnostics(process: subprocess.Popen | None, profile: amule_harness.AmuleRuntimeProfile | None) -> dict[str, object]:
+    """Returns bounded aMule daemon diagnostics for optional-client failures."""
+
+    diagnostics: dict[str, object] = {
+        "pid": process.pid if process is not None else None,
+        "return_code": process.poll() if process is not None else None,
+    }
+    if profile is not None:
+        log_path = profile.logs_dir / "amuled.log"
+        diagnostics["log_path"] = str(log_path)
+        diagnostics["log_tail"] = read_text_tail(log_path)
+    return diagnostics
+
+
+def terminate_amule_process(process: subprocess.Popen | None) -> dict[str, object]:
+    """Terminates an optional aMule daemon after it fails readiness."""
+
+    if process is None:
+        return {"skipped": True, "reason": "not started"}
+    if process.poll() is not None:
+        return {"already_exited": True, "return_code": process.returncode}
+    try:
+        process.terminate()
+        process.wait(timeout=30.0)
+        return {"terminated": True, "return_code": process.returncode}
+    except Exception as exc:  # pragma: no cover - cleanup diagnostics only
+        return {"error": str(exc) or repr(exc), "return_code": process.poll()}
 
 
 def queue_emulebb_downloads(base_url: str, api_key: str, links: list[str]) -> list[dict[str, object]]:
@@ -1658,6 +1703,7 @@ def rotate_source_clients(
     amule_daemon_exe: Path,
     amule_control_exe: Path,
     amule_profile: amule_harness.AmuleRuntimeProfile,
+    amule_enabled: bool,
     admin_base_url: str,
     api_key: str,
     p2p_address: str,
@@ -1671,7 +1717,9 @@ def rotate_source_clients(
         return client2_app, amule_process, []
 
     events: list[dict[str, object]] = []
-    targets: list[str] = ["harness", "amule"]
+    targets: list[str] = ["harness"]
+    if amule_enabled:
+        targets.append("amule")
     targets.extend(str(client["profile_id"]) for client in extra_emulebb_clients)
     for cycle in range(args.client_rotation_cycles):
         time.sleep(args.client_rotation_interval_seconds)
@@ -1930,6 +1978,7 @@ def main(argv: list[str] | None = None) -> int:
     amule_process: subprocess.Popen | None = None
     amule_profile: amule_harness.AmuleRuntimeProfile | None = None
     amule_control_exe: Path | None = None
+    amule_enabled = False
     amutorrent_process: subprocess.Popen[str] | None = None
     amutorrent_output = None
     amutorrent_log_path: Path | None = None
@@ -2248,16 +2297,29 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "launch_amule"
         amule_process = amule_harness.start_amuled(amule_daemon_exe, amule_profile)
-        report["checks"]["amule_ec_ready"] = amule_harness.wait_for_ec_ready(amule_control_exe, amule_profile, args.rest_ready_timeout_seconds)
-        report["checks"]["amule_reload_shared"] = amule_command_summary(
-            amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Reload Shared", timeout_seconds=60.0, check=False)
-        )
-        report["checks"]["amule_add_server"] = amule_command_summary(
-            amule_harness.run_amulecmd(amule_control_exe, amule_profile, f"Add {amule_harness.build_server_link(p2p_address, ports['ed2k_tcp'])}", timeout_seconds=30.0, check=False)
-        )
-        report["checks"]["amule_connect_server"] = amule_command_summary(
-            amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Connect ed2k", timeout_seconds=30.0, check=False)
-        )
+        report["checks"]["amule_launch"] = amule_daemon_diagnostics(amule_process, amule_profile)
+        try:
+            report["checks"]["amule_ec_ready"] = amule_harness.wait_for_ec_ready(amule_control_exe, amule_profile, args.rest_ready_timeout_seconds)
+            report["checks"]["amule_reload_shared"] = amule_command_summary(
+                amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Reload Shared", timeout_seconds=60.0, check=False)
+            )
+            report["checks"]["amule_add_server"] = amule_command_summary(
+                amule_harness.run_amulecmd(amule_control_exe, amule_profile, f"Add {amule_harness.build_server_link(p2p_address, ports['ed2k_tcp'])}", timeout_seconds=30.0, check=False)
+            )
+            report["checks"]["amule_connect_server"] = amule_command_summary(
+                amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Connect ed2k", timeout_seconds=30.0, check=False)
+            )
+            amule_enabled = True
+        except Exception as exc:
+            report["checks"]["amule_optional_skip"] = {
+                "skipped": True,
+                "reason": "aMule EC did not become ready; continuing eMuleBB/tracing-harness swarm without optional aMule peer.",
+                "type": type(exc).__name__,
+                "message": str(exc) or repr(exc),
+                "daemon": amule_daemon_diagnostics(amule_process, amule_profile),
+                "terminate": terminate_amule_process(amule_process),
+            }
+            amule_process = None
 
         current_phase = "launch_extra_emulebb_sources"
         report["checks"]["extra_emulebb_sources"] = {}
@@ -2356,7 +2418,10 @@ def main(argv: list[str] | None = None) -> int:
             }
             report["checks"]["amutorrent_clients_connected"] = amutorrent_local.wait_for_amutorrent_clients(
                 base_url=amutorrent_base_url,
-                expected={CLIENT01.profile_id: "emulebb", CLIENT04.profile_id: "amule"},
+                expected={
+                    CLIENT01.profile_id: "emulebb",
+                    **({CLIENT04.profile_id: "amule"} if amule_enabled else {}),
+                },
                 timeout_seconds=args.rest_ready_timeout_seconds,
             )
 
@@ -2364,7 +2429,6 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["server_clients"] = {
             CLIENT01.profile_id: dtt.wait_for_server_client(admin_base_url, args.api_key, CLIENT01.nick, args.server_connect_timeout_seconds),
             CLIENT02.profile_id: dtt.wait_for_server_client(admin_base_url, args.api_key, CLIENT02.nick, args.server_connect_timeout_seconds),
-            CLIENT04.profile_id: dtt.wait_for_server_client(admin_base_url, args.api_key, CLIENT04.nick, args.server_connect_timeout_seconds),
             **{
                 str(client["profile_id"]): dtt.wait_for_server_client(
                     admin_base_url,
@@ -2375,6 +2439,13 @@ def main(argv: list[str] | None = None) -> int:
                 for client in extra_emulebb_clients
             },
         }
+        if amule_enabled:
+            report["checks"]["server_clients"][CLIENT04.profile_id] = dtt.wait_for_server_client(
+                admin_base_url,
+                args.api_key,
+                CLIENT04.nick,
+                args.server_connect_timeout_seconds,
+            )
         current_phase = "force_publish_after_hash"
         primary_known_met = try_wait_for_known_met_size(Path(client1["config_dir"]), args.emulebb_files, args.publish_timeout_seconds)
         if args.emulebb_files:
@@ -2412,16 +2483,17 @@ def main(argv: list[str] | None = None) -> int:
                 "known_met": primary_known_met,
                 "restart": primary_republish,
             },
-            CLIENT04.profile_id: {
+            "extra_emulebb": {},
+        }
+        if amule_enabled:
+            report["checks"]["post_hash_publication"][CLIENT04.profile_id] = {
                 "reload_shared": amule_command_summary(
                     amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Reload Shared", timeout_seconds=60.0, check=False)
                 ),
                 "connect_server": amule_command_summary(
                     amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Connect ed2k", timeout_seconds=30.0, check=False)
                 ),
-            },
-            "extra_emulebb": {},
-        }
+            }
         for client in extra_emulebb_clients:
             report["checks"]["post_hash_publication"]["extra_emulebb"][str(client["profile_id"])] = {
                 "known_met": try_wait_for_known_met_size(Path(str(client["config_dir"])), args.extra_emulebb_files, args.publish_timeout_seconds),
@@ -2452,9 +2524,10 @@ def main(argv: list[str] | None = None) -> int:
         owner_keys = [
             CLIENT01.key,
             CLIENT02.key,
-            CLIENT04.key,
             *(str(client["key"]) for client in extra_emulebb_clients),
         ]
+        if amule_enabled:
+            owner_keys.append(CLIENT04.key)
         report["checks"]["first_publication_gate"] = wait_for_server_min_file_count(
             admin_base_url,
             args.api_key,
@@ -2489,7 +2562,11 @@ def main(argv: list[str] | None = None) -> int:
         current_phase = "queue_transfer_waves"
         server_collect_limit = max(args.transfer_count, args.peer_transfer_count, args.harness_transfer_count, 1)
         harness_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT02.key}-godzilla-", limit=server_collect_limit)
-        amule_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT04.key}-godzilla-", limit=server_collect_limit)
+        amule_rows = (
+            collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT04.key}-godzilla-", limit=server_collect_limit)
+            if amule_enabled
+            else []
+        )
         emulebb_rows = collect_server_files(admin_base_url, args.api_key, search=f"{CLIENT01.key}-godzilla-", limit=server_collect_limit)
         extra_rows_by_profile = {
             str(client["profile_id"]): collect_server_files(
@@ -2502,9 +2579,10 @@ def main(argv: list[str] | None = None) -> int:
         }
         source_port_by_key = {
             CLIENT02.key: ports["client2_tcp"],
-            CLIENT04.key: ports["amule_tcp"],
             **{str(client["key"]): int(client["tcp_port"]) for client in extra_emulebb_clients},
         }
+        if amule_enabled:
+            source_port_by_key[CLIENT04.key] = ports["amule_tcp"]
         peer_harness_rows = harness_rows[: args.peer_transfer_count]
         mixed_rows = interleave_rows(
             [harness_rows[args.peer_transfer_count :], amule_rows, *extra_rows_by_profile.values()],
@@ -2516,16 +2594,24 @@ def main(argv: list[str] | None = None) -> int:
             for row in emulebb_source_rows
         ]
         harness_download_rows = emulebb_rows[: args.harness_transfer_count]
-        amule_links = [
-            build_file_link(row, source_ip=p2p_address, source_port=ports["client1_tcp"])
-            for row in emulebb_rows[args.harness_transfer_count : args.harness_transfer_count + max(1, min(50, args.transfer_count // 4))]
-        ]
+        amule_links = (
+            [
+                build_file_link(row, source_ip=p2p_address, source_port=ports["client1_tcp"])
+                for row in emulebb_rows[args.harness_transfer_count : args.harness_transfer_count + max(1, min(50, args.transfer_count // 4))]
+            ]
+            if amule_enabled
+            else []
+        )
         harness_links = [
             build_file_link(row, source_ip=p2p_address, source_port=ports["client1_tcp"])
             for row in harness_download_rows
         ]
         report["checks"]["emulebb_download_add"] = queue_emulebb_downloads(base_url, args.api_key, emulebb_links)
-        report["checks"]["amule_download_add"] = queue_amule_downloads(amule_control_exe, amule_profile, amule_links)
+        report["checks"]["amule_download_add"] = (
+            queue_amule_downloads(amule_control_exe, amule_profile, amule_links)
+            if amule_enabled
+            else {"skipped": True, "reason": "optional aMule client unavailable"}
+        )
         report["checks"]["harness_download_links"] = write_download_link_file(harness_download_links_path, harness_links)
         extra_download_counts: dict[str, int] = {}
         extra_download_checks: dict[str, list[dict[str, object]]] = {}
@@ -2569,20 +2655,21 @@ def main(argv: list[str] | None = None) -> int:
         local_search_queries = [
             f"{CLIENT01.key}-godzilla-",
             f"{CLIENT02.key}-godzilla-",
-            f"{CLIENT04.key}-godzilla-",
             *(f"{client['key']}-godzilla-" for client in extra_emulebb_clients),
             "linux",
             "debian",
             "ubuntu",
         ]
+        if amule_enabled:
+            local_search_queries.insert(2, f"{CLIENT04.key}-godzilla-")
         current_phase = "spiral_hammer"
         spiral_links = emulebb_links or amule_links or harness_links
         report["checks"]["spiral_hammer"] = run_spiral_hammer(
             base_url=base_url,
             api_key=args.api_key,
             admin_base_url=admin_base_url,
-            amule_control_exe=amule_control_exe,
-            amule_profile=amule_profile,
+            amule_control_exe=amule_control_exe if amule_enabled else None,
+            amule_profile=amule_profile if amule_enabled else None,
             links=spiral_links,
             queries=local_search_queries,
             waves=args.hammer_waves,
@@ -2601,8 +2688,8 @@ def main(argv: list[str] | None = None) -> int:
             rounds=args.rest_search_rounds,
         )
         report["checks"]["amule_command_hammer"] = run_amule_command_hammer(
-            amule_control_exe,
-            amule_profile,
+            amule_control_exe if amule_enabled else None,
+            amule_profile if amule_enabled else None,
             links=amule_links,
             queries=local_search_queries,
             rounds=args.amule_command_rounds,
@@ -2612,6 +2699,7 @@ def main(argv: list[str] | None = None) -> int:
                 str(report["amutorrent"]["base_url"]),
                 links=(emulebb_links[: max(1, min(len(emulebb_links), 20))] if emulebb_links else amule_links),
                 rounds=args.amutorrent_api_rounds,
+                amule_enabled=amule_enabled,
             )
 
         current_phase = "transfer_churn"
@@ -2634,6 +2722,7 @@ def main(argv: list[str] | None = None) -> int:
             amule_daemon_exe=amule_daemon_exe,
             amule_control_exe=amule_control_exe,
             amule_profile=amule_profile,
+            amule_enabled=amule_enabled,
             admin_base_url=admin_base_url,
             api_key=args.api_key,
             p2p_address=p2p_address,
