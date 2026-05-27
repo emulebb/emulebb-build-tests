@@ -281,9 +281,8 @@ def is_main_emule_window(hwnd: int) -> bool:
 def find_process_main_window(app: Application, *, require_visible: bool = False):
     """Finds the launched eMule main window by enumerating process top-level windows."""
 
-    try:
-        process_id = int(app.process())
-    except Exception:
+    process_id = resolve_app_process_id(app)
+    if process_id is None:
         return None
 
     matches: list[int] = []
@@ -454,28 +453,30 @@ def close_app_cleanly(app: Application, window_timeout: float = 30.0, process_ti
     """Closes the app, rejects blocking shutdown dialogs, and waits for process exit."""
 
     process_id = resolve_app_process_id(app)
-    try:
-        main_window = app.top_window()
-    except Exception:
+    main_window = find_process_main_window(app)
+    if main_window is None:
         if not process_id or _is_process_exited(int(process_id)):
             return
         _terminate_process_without_window(app, int(process_id), process_timeout)
         return
-    win32gui.PostMessage(main_window.handle, win32con.WM_CLOSE, 0, 0)
+    # WHY: some pywinauto Application instances expose `process` as an integer
+    # property rather than a callable. Calling app.top_window() can then fail
+    # inside pywinauto with "'int' object is not callable" during cleanup even
+    # though the process is healthy. We already know the process id, so close the
+    # enumerated eMule main window directly and keep dialog detection handle-based.
+    win32gui.PostMessage(int(main_window.handle), win32con.WM_CLOSE, 0, 0)
 
     def resolve() -> bool:
-        try:
-            window = app.top_window()
-        except Exception:
+        window = find_process_main_window(app)
+        if window is None:
             return True
-        if not window.handle:
-            return True
-        if is_main_emule_window(window.handle):
+        hwnd = int(window.handle)
+        if is_main_emule_window(hwnd):
             return False
-        if is_expected_shutdown_progress_dialog(window.handle):
+        if is_expected_shutdown_progress_dialog(hwnd):
             return False
-        if win32gui.GetClassName(window.handle) == "#32770":
-            raise RuntimeError(f"Unexpected shutdown dialog: {describe_startup_dialog(window.handle)!r}")
+        if win32gui.GetClassName(hwnd) == "#32770":
+            raise RuntimeError(f"Unexpected shutdown dialog: {describe_startup_dialog(hwnd)!r}")
         return False
 
     wait_for(resolve, timeout=window_timeout, interval=0.2, description="clean app shutdown")
