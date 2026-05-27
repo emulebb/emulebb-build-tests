@@ -11,6 +11,7 @@ import json
 import os
 import random
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -440,27 +441,28 @@ def godzilla_runtime_storage(paths, args: argparse.Namespace):
 def discover_local_lan_ipv4() -> str:
     """Finds a LAN IPv4 address for local multi-client tests, preferring 192.* over VPNs."""
 
-    command = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        (
-            "Get-NetIPAddress -AddressFamily IPv4 "
-            "| Where-Object { "
-            "$_.IPAddress -and $_.IPAddress -ne '127.0.0.1' "
-            "-and $_.IPAddress -notlike '169.254.*' "
-            "-and $_.PrefixOrigin -ne 'WellKnown' "
-            "} "
-            "| Sort-Object @{Expression={if ($_.IPAddress -like '192.*') { 0 } else { 1 }}}, "
-            "@{Expression={if ($_.IPAddress -like '10.*') { 1 } else { 0 }}}, InterfaceMetric "
-            "| Select-Object -First 1 -ExpandProperty IPAddress"
-        ),
-    ]
-    completed = subprocess.run(command, text=True, capture_output=True, timeout=15, check=False)
-    candidate = completed.stdout.strip().splitlines()[0].strip() if completed.stdout.strip() else ""
-    if not candidate:
+    candidates: set[ipaddress.IPv4Address] = set()
+    for host in {socket.gethostname(), socket.getfqdn()}:
+        try:
+            for family, _, _, _, sockaddr in socket.getaddrinfo(host, None, socket.AF_INET):
+                if family == socket.AF_INET and sockaddr:
+                    candidates.add(ipaddress.IPv4Address(str(sockaddr[0])))
+        except OSError:
+            continue
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            candidates.add(ipaddress.IPv4Address(probe.getsockname()[0]))
+        finally:
+            probe.close()
+    except OSError:
+        pass
+    usable = [address for address in candidates if not (address.is_loopback or address.is_link_local or address.is_unspecified)]
+    if not usable:
         raise RuntimeError("Could not discover a local LAN IPv4 address. Pass --p2p-bind-interface-address explicitly.")
-    return candidate
+    usable.sort(key=lambda address: (0 if str(address).startswith("192.") else 1, 0 if address.is_private else 1, str(address)))
+    return str(usable[0])
 
 
 def resolve_local_p2p_address(args: argparse.Namespace) -> str:
