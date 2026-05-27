@@ -45,6 +45,19 @@ TEST_CASE("Part file numeric seam preserves the rounded-up completion percentage
 	CHECK_EQ(PartFileNumericSeams::CalculateChunkCompletionPercent(1u, 0u), static_cast<uint16>(0u));
 }
 
+TEST_CASE("Part file numeric seam preflights buffered writes without overflowing the flush threshold")
+{
+	CHECK_EQ(PartFileNumericSeams::GetBufferedDataFlushThreshold(1024u), static_cast<uint64>(2048u));
+	CHECK_FALSE(PartFileNumericSeams::ShouldFlushBeforeBufferedWrite(0u, 4096u, 1024u));
+	CHECK_FALSE(PartFileNumericSeams::ShouldFlushBeforeBufferedWrite(1024u, 1024u, 1024u));
+	CHECK(PartFileNumericSeams::ShouldFlushBeforeBufferedWrite(1024u, 1025u, 1024u));
+	CHECK(PartFileNumericSeams::ShouldFlushBufferedData(2049u, 1024u));
+
+	const uint64 nearMax = (std::numeric_limits<uint64>::max)() - 5u;
+	CHECK_EQ(PartFileNumericSeams::GetBufferedDataFlushThreshold(nearMax), (std::numeric_limits<uint64>::max)());
+	CHECK_FALSE(PartFileNumericSeams::ShouldFlushBeforeBufferedWrite(nearMax - 1u, 1u, nearMax));
+}
+
 TEST_CASE("Part file numeric seam clamps list counts and 32-bit scores before narrowing to uint16")
 {
 	CHECK_EQ(PartFileNumericSeams::ClampCountToUInt16(0), static_cast<uint16>(0u));

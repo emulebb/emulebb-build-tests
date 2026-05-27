@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <vector>
 
 #include "CompressionBufferSeams.h"
@@ -53,6 +54,19 @@ TEST_CASE("Compression buffer seam rejects zero-byte ownership handoff")
 	const std::vector<unsigned char> payload{0x11u, 0x22u};
 
 	CHECK_FALSE(MakeOwnedByteBufferCopy(payload, 0u));
+}
+
+TEST_CASE("Compression buffer seam grows legacy-owned buffers without losing inflated bytes")
+{
+	std::unique_ptr<unsigned char[]> buffer(new unsigned char[2]);
+	buffer[0] = 0x11u;
+	buffer[1] = 0x22u;
+
+	CHECK(TryGrowOwnedByteBuffer(buffer, 2u, 4u));
+	REQUIRE(buffer != nullptr);
+	CHECK_EQ(buffer[0], static_cast<unsigned char>(0x11u));
+	CHECK_EQ(buffer[1], static_cast<unsigned char>(0x22u));
+	CHECK_FALSE(TryGrowOwnedByteBuffer(buffer, 5u, 4u));
 }
 
 TEST_SUITE_END;
