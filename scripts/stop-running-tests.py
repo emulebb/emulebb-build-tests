@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import time
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness import windows_processes  # noqa: E402
+
 
 TEST_SCRIPT_NAME = "stop-running-tests.py"
 TEST_PROCESS_NAMES = {"python.exe", "python", "py.exe", "py"}
@@ -162,25 +168,15 @@ def termination_roots(selected_pids: set[int], processes: list[ProcessInfo]) -> 
 
 
 def collect_windows_processes() -> list[ProcessInfo]:
-    service = windows_process_service()
     return [
         ProcessInfo(
-            pid=int(item.ProcessId),
-            parent_pid=int(item.ParentProcessId or 0),
-            name=str(item.Name or ""),
-            command_line=str(item.CommandLine or ""),
+            pid=process.pid,
+            parent_pid=process.parent_pid,
+            name=process.name,
+            command_line=process.command_line,
         )
-        for item in service.InstancesOf("Win32_Process")
-        if item.ProcessId
+        for process in windows_processes.collect_processes()
     ]
-
-
-def windows_process_service():
-    """Returns a WMI process service without shelling out to PowerShell."""
-
-    import win32com.client  # type: ignore[import-not-found]
-
-    return win32com.client.GetObject("winmgmts:")
 
 
 def current_stop_targets(root_pid: int, workspace_root: Path, current_pid: int) -> tuple[list[ProcessInfo], str]:
@@ -199,12 +195,7 @@ def current_stop_targets(root_pid: int, workspace_root: Path, current_pid: int) 
 def terminate_windows_process(pid: int, exit_code: int = 1) -> dict[str, object]:
     """Terminates one Windows process through WMI."""
 
-    service = windows_process_service()
-    matches = list(service.ExecQuery(f"SELECT * FROM Win32_Process WHERE ProcessId = {int(pid)}"))
-    if not matches:
-        return {"pid": pid, "terminated": False, "reason": "process no longer exists"}
-    result = int(matches[0].Terminate(exit_code))
-    return {"pid": pid, "terminated": result == 0, "return_code": result}
+    return windows_processes.terminate_process(pid, exit_code)
 
 
 def stop_process_tree(
