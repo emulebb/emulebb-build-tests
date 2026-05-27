@@ -88,6 +88,10 @@ DEFAULT_GODZILLA_VHD_SIZE_MB = 128 * 1024
 DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT = 30
 DEFAULT_GODZILLA_PEER_TRANSFER_COUNT = 300
 DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT = 300
+DEFAULT_GODZILLA_EMULEBB_FILES = 600
+DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES = 50
+DEFAULT_GODZILLA_HARNESS_FILES = 400
+DEFAULT_GODZILLA_AMULE_FILES = 100
 DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES = 2
 DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS = 45.0
 DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS = 300.0
@@ -920,6 +924,10 @@ def build_suite_command(
     godzilla_total_client_count: int = DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT,
     godzilla_peer_transfer_count: int = DEFAULT_GODZILLA_PEER_TRANSFER_COUNT,
     godzilla_harness_transfer_count: int = DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT,
+    godzilla_emulebb_files: int = DEFAULT_GODZILLA_EMULEBB_FILES,
+    godzilla_extra_emulebb_files: int = DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES,
+    godzilla_harness_files: int = DEFAULT_GODZILLA_HARNESS_FILES,
+    godzilla_amule_files: int = DEFAULT_GODZILLA_AMULE_FILES,
     godzilla_adverse_kill_cycles: int = DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES,
     godzilla_adverse_kill_warmup_seconds: float = DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS,
     godzilla_adverse_recovery_timeout_seconds: float = DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS,
@@ -1119,6 +1127,10 @@ def build_suite_command(
         command.extend(["--total-client-count", str(godzilla_total_client_count)])
         command.extend(["--peer-transfer-count", str(godzilla_peer_transfer_count)])
         command.extend(["--harness-transfer-count", str(godzilla_harness_transfer_count)])
+        command.extend(["--emulebb-files", str(godzilla_emulebb_files)])
+        command.extend(["--extra-emulebb-files", str(godzilla_extra_emulebb_files)])
+        command.extend(["--harness-files", str(godzilla_harness_files)])
+        command.extend(["--amule-files", str(godzilla_amule_files)])
         command.extend(["--adverse-kill-cycles", str(godzilla_adverse_kill_cycles)])
         command.extend(["--adverse-kill-warmup-seconds", str(godzilla_adverse_kill_warmup_seconds)])
         command.extend(["--adverse-recovery-timeout-seconds", str(godzilla_adverse_recovery_timeout_seconds)])
@@ -1667,6 +1679,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--godzilla-total-client-count", type=int, default=DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT)
     parser.add_argument("--godzilla-peer-transfer-count", type=int, default=DEFAULT_GODZILLA_PEER_TRANSFER_COUNT)
     parser.add_argument("--godzilla-harness-transfer-count", type=int, default=DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT)
+    parser.add_argument("--godzilla-emulebb-files", type=int, default=DEFAULT_GODZILLA_EMULEBB_FILES)
+    parser.add_argument("--godzilla-extra-emulebb-files", type=int, default=DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES)
+    parser.add_argument("--godzilla-harness-files", type=int, default=DEFAULT_GODZILLA_HARNESS_FILES)
+    parser.add_argument("--godzilla-amule-files", type=int, default=DEFAULT_GODZILLA_AMULE_FILES)
     parser.add_argument("--godzilla-adverse-kill-cycles", type=int, default=DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES)
     parser.add_argument("--godzilla-adverse-kill-warmup-seconds", type=float, default=DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS)
     parser.add_argument("--godzilla-adverse-recovery-timeout-seconds", type=float, default=DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS)
@@ -1694,6 +1710,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"Godzilla total client count must be between 3 and {DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT}.")
     if args.godzilla_peer_transfer_count <= 0 or args.godzilla_harness_transfer_count <= 0:
         raise ValueError("Godzilla transfer counts must be greater than zero.")
+    if min(args.godzilla_emulebb_files, args.godzilla_extra_emulebb_files, args.godzilla_harness_files, args.godzilla_amule_files) <= 0:
+        raise ValueError("Godzilla generated library file counts must be greater than zero.")
     if args.godzilla_adverse_kill_cycles < 0:
         raise ValueError("Godzilla adverse kill cycles must be zero or greater.")
     if args.godzilla_adverse_kill_warmup_seconds < 0:
@@ -1981,6 +1999,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "total_client_count": args.godzilla_total_client_count,
             "peer_transfer_count": args.godzilla_peer_transfer_count,
             "harness_transfer_count": args.godzilla_harness_transfer_count,
+            "emulebb_files": args.godzilla_emulebb_files,
+            "extra_emulebb_files": args.godzilla_extra_emulebb_files,
+            "harness_files": args.godzilla_harness_files,
+            "amule_files": args.godzilla_amule_files,
             "adverse_kill_cycles": args.godzilla_adverse_kill_cycles,
             "adverse_kill_warmup_seconds": args.godzilla_adverse_kill_warmup_seconds,
             "adverse_recovery_timeout_seconds": args.godzilla_adverse_recovery_timeout_seconds,
@@ -2075,6 +2097,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             godzilla_total_client_count=args.godzilla_total_client_count,
             godzilla_peer_transfer_count=args.godzilla_peer_transfer_count,
             godzilla_harness_transfer_count=args.godzilla_harness_transfer_count,
+            godzilla_emulebb_files=args.godzilla_emulebb_files,
+            godzilla_extra_emulebb_files=args.godzilla_extra_emulebb_files,
+            godzilla_harness_files=args.godzilla_harness_files,
+            godzilla_amule_files=args.godzilla_amule_files,
             godzilla_adverse_kill_cycles=args.godzilla_adverse_kill_cycles,
             godzilla_adverse_kill_warmup_seconds=args.godzilla_adverse_kill_warmup_seconds,
             godzilla_adverse_recovery_timeout_seconds=args.godzilla_adverse_recovery_timeout_seconds,

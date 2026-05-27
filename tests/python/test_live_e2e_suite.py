@@ -760,6 +760,10 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert option_values(commands[0], "--total-client-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT)]
     assert option_values(commands[0], "--peer-transfer-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_PEER_TRANSFER_COUNT)]
     assert option_values(commands[0], "--harness-transfer-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT)]
+    assert option_values(commands[0], "--emulebb-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_EMULEBB_FILES)]
+    assert option_values(commands[0], "--extra-emulebb-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_EXTRA_EMULEBB_FILES)]
+    assert option_values(commands[0], "--harness-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_HARNESS_FILES)]
+    assert option_values(commands[0], "--amule-files") == [str(live_e2e_suite.DEFAULT_GODZILLA_AMULE_FILES)]
     assert option_values(commands[0], "--adverse-kill-cycles") == [str(live_e2e_suite.DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES)]
     assert option_values(commands[0], "--p2p-bind-interface-name") == []
     assert summary["suites"][0]["timeout_seconds"] == live_e2e_suite.DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
@@ -807,6 +811,14 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
             "444",
             "--godzilla-harness-transfer-count",
             "222",
+            "--godzilla-emulebb-files",
+            "700",
+            "--godzilla-extra-emulebb-files",
+            "70",
+            "--godzilla-harness-files",
+            "500",
+            "--godzilla-amule-files",
+            "120",
             "--godzilla-adverse-kill-cycles",
             "3",
             "--godzilla-adverse-kill-warmup-seconds",
@@ -828,6 +840,10 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert option_values(commands[0], "--total-client-count") == ["12"]
     assert option_values(commands[0], "--peer-transfer-count") == ["444"]
     assert option_values(commands[0], "--harness-transfer-count") == ["222"]
+    assert option_values(commands[0], "--emulebb-files") == ["700"]
+    assert option_values(commands[0], "--extra-emulebb-files") == ["70"]
+    assert option_values(commands[0], "--harness-files") == ["500"]
+    assert option_values(commands[0], "--amule-files") == ["120"]
     assert option_values(commands[0], "--adverse-kill-cycles") == ["3"]
     assert option_values(commands[0], "--adverse-kill-warmup-seconds") == ["0.5"]
     assert option_values(commands[0], "--adverse-recovery-timeout-seconds") == ["45.0"]
@@ -839,6 +855,10 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
         "total_client_count": 12,
         "peer_transfer_count": 444,
         "harness_transfer_count": 222,
+        "emulebb_files": 700,
+        "extra_emulebb_files": 70,
+        "harness_files": 500,
+        "amule_files": 120,
         "adverse_kill_cycles": 3,
         "adverse_kill_warmup_seconds": 0.5,
         "adverse_recovery_timeout_seconds": 45.0,
