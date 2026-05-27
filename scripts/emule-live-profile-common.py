@@ -519,6 +519,9 @@ def resolve_app_process_id(app: Application) -> int | None:
             return None
     if process_id is None:
         return None
+    object_pid = getattr(process_id, "pid", None)
+    if object_pid is not None:
+        process_id = object_pid
     return int(process_id)
 
 

@@ -98,6 +98,18 @@ def test_launch_app_appends_extra_arguments(monkeypatch, tmp_path: Path) -> None
     assert app._emulebb_process_creation_date == "created-2468"
 
 
+def test_resolve_app_process_id_accepts_process_object() -> None:
+    module = load_live_common_module()
+
+    class FakeProcess:
+        pid = 2468
+
+    class FakeApp:
+        process = FakeProcess()
+
+    assert module.resolve_app_process_id(FakeApp()) == 2468
+
+
 def test_close_app_cleanly_uses_guarded_termination_for_profile_app(monkeypatch, tmp_path: Path) -> None:
     module = load_live_common_module()
     profile_base = tmp_path / "profile-base"
