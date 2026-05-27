@@ -45,4 +45,19 @@ TEST_CASE("EMSocket overlapped cleanup retry helper retries only for incomplete 
 	CHECK_FALSE(ShouldRetryOverlappedCleanupProbe(ERROR_OPERATION_ABORTED, 1));
 }
 
+TEST_CASE("EMSocket send queue budget helpers bound packet counts and bytes")
+{
+	CHECK(CanQueueEMSocketControlPacket(0u, 0u, 128u));
+	CHECK(CanQueueEMSocketControlPacket(kMaxEMSocketQueuedControlPackets - 1u, kMaxEMSocketQueuedControlBytes - 128u, 128u));
+	CHECK_FALSE(CanQueueEMSocketControlPacket(kMaxEMSocketQueuedControlPackets, 0u, 128u));
+	CHECK_FALSE(CanQueueEMSocketControlPacket(0u, kMaxEMSocketQueuedControlBytes, 1u));
+	CHECK_FALSE(CanQueueEMSocketControlPacket(0u, 0u, static_cast<uint32>(kMaxEMSocketQueuedControlBytes + 1u)));
+
+	CHECK(CanQueueEMSocketStandardPacket(0u, 0u, 1024u));
+	CHECK(CanQueueEMSocketStandardPacket(kMaxEMSocketQueuedStandardPackets - 1u, kMaxEMSocketQueuedStandardBytes - 1024u, 1024u));
+	CHECK_FALSE(CanQueueEMSocketStandardPacket(kMaxEMSocketQueuedStandardPackets, 0u, 1024u));
+	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, kMaxEMSocketQueuedStandardBytes, 1u));
+	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, 0u, static_cast<uint32>(kMaxEMSocketQueuedStandardBytes + 1u)));
+}
+
 TEST_SUITE_END;
