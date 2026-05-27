@@ -559,8 +559,15 @@ def discover_interface_ipv4(interface_name: str) -> str:
 
     candidates: set[ipaddress.IPv4Address] = set()
     if os.name == "nt":
-        for value in windows_processes.collect_adapter_ipv4_addresses(interface_name):
-            candidates.add(ipaddress.IPv4Address(value))
+        try:
+            for value in windows_processes.collect_adapter_ipv4_addresses(interface_name):
+                candidates.add(ipaddress.IPv4Address(value))
+        except Exception as exc:
+            if interface_name.strip():
+                raise RuntimeError(
+                    f"Could not query Windows adapter IPv4 addresses for interface {interface_name!r}. "
+                    "Pass --p2p-bind-interface-address to the suite if automatic discovery is unsuitable."
+                ) from exc
     if not interface_name.strip():
         for host in {socket.gethostname(), socket.getfqdn()}:
             try:

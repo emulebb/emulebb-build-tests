@@ -81,6 +81,38 @@ def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
     assert module.resolve_client2_app_exe(tmp_path / "workspace", "Release", str(override)) == override.resolve()
 
 
+def test_discover_interface_ipv4_falls_back_to_hostname_when_windows_adapter_query_fails(monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(
+        module.windows_processes,
+        "collect_adapter_ipv4_addresses",
+        lambda _interface_name="": (_ for _ in ()).throw(RuntimeError("wmi unavailable")),
+    )
+    monkeypatch.setattr(module.socket, "gethostname", lambda: "host")
+    monkeypatch.setattr(module.socket, "getfqdn", lambda: "host.local")
+    monkeypatch.setattr(
+        module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(module.socket.AF_INET, None, None, None, ("192.168.1.210", 0))],
+    )
+
+    assert module.discover_interface_ipv4("") == "192.168.1.210"
+
+
+def test_discover_interface_ipv4_reports_named_interface_adapter_query_failure(monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(
+        module.windows_processes,
+        "collect_adapter_ipv4_addresses",
+        lambda _interface_name="": (_ for _ in ()).throw(RuntimeError("wmi unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="Ethernet"):
+        module.discover_interface_ipv4("Ethernet")
+
+
 def test_write_server_met_creates_dynamic_ip_single_server(tmp_path: Path) -> None:
     module = load_suite_module()
     server_met = tmp_path / "profile" / "config" / "server.met"

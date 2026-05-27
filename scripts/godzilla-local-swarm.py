@@ -443,8 +443,11 @@ def discover_local_lan_ipv4() -> str:
 
     candidates: set[ipaddress.IPv4Address] = set()
     if os.name == "nt":
-        for value in windows_processes.collect_adapter_ipv4_addresses():
-            candidates.add(ipaddress.IPv4Address(value))
+        try:
+            for value in windows_processes.collect_adapter_ipv4_addresses():
+                candidates.add(ipaddress.IPv4Address(value))
+        except Exception:
+            pass
     for host in {socket.gethostname(), socket.getfqdn()}:
         try:
             for family, _, _, _, sockaddr in socket.getaddrinfo(host, None, socket.AF_INET):
