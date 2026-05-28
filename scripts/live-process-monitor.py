@@ -349,12 +349,18 @@ def main() -> int:
                 launch_events.append({"event": "assertion_window", **event})
                 if config.procdump_path is not None and not args.skip_spike_dumps:
                     dump_path = diagnostics_dir / f"assertion-{launch_index:02d}.dmp"
-                    event["dump"] = live_process_monitor.capture_procdump(
+                    assertion_dump = live_process_monitor.capture_procdump(
                         config.procdump_path,
                         process.pid,
                         dump_path,
                         analysis_dir / f"procdump-assertion-{launch_index:02d}.txt",
                     )
+                    if isinstance(assertion_dump, dict) and assertion_dump.get("dump_exists"):
+                        assertion_dump["cdb_analysis"] = live_process_monitor.analyze_dump_with_cdb(
+                            dump_path,
+                            analysis_dir / f"cdb-assertion-{launch_index:02d}.txt",
+                        )
+                    event["dump"] = assertion_dump
                 live_process_monitor.close_process_gracefully(process, process_handle, timeout_seconds=5.0)
                 close_current_handle()
                 if config.restart_on_failure and time.monotonic() < deadline:
