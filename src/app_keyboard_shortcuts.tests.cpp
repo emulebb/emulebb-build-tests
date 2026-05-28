@@ -6,14 +6,32 @@ TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("App keyboard shortcut seam reserves native Alt-key commands")
 {
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'x', false) == AppKeyboardShortcutsSeams::ECommand::ExitApp);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'X', false) == AppKeyboardShortcutsSeams::ECommand::ExitApp);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'u', false) == AppKeyboardShortcutsSeams::ECommand::ShowHotMenu);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'U', false) == AppKeyboardShortcutsSeams::ECommand::ShowHotMenu);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 't', false) == AppKeyboardShortcutsSeams::ECommand::ShowToolsMenu);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'T', false) == AppKeyboardShortcutsSeams::ECommand::ShowToolsMenu);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'o', false) == AppKeyboardShortcutsSeams::ECommand::ShowOptions);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'O', false) == AppKeyboardShortcutsSeams::ECommand::ShowOptions);
+	struct SExpectedShortcut
+	{
+		char ch;
+		AppKeyboardShortcutsSeams::ECommand eCommand;
+	};
+	const SExpectedShortcut aShortcuts[] = {
+		{ 'c', AppKeyboardShortcutsSeams::ECommand::ShowConnect },
+		{ 'k', AppKeyboardShortcutsSeams::ECommand::ShowKad },
+		{ 'v', AppKeyboardShortcutsSeams::ECommand::ShowServer },
+		{ 't', AppKeyboardShortcutsSeams::ECommand::ShowTransfers },
+		{ 's', AppKeyboardShortcutsSeams::ECommand::ShowSearch },
+		{ 'f', AppKeyboardShortcutsSeams::ECommand::ShowSharedFiles },
+		{ 'm', AppKeyboardShortcutsSeams::ECommand::ShowMessages },
+		{ 'i', AppKeyboardShortcutsSeams::ECommand::ShowIrc },
+		{ 'a', AppKeyboardShortcutsSeams::ECommand::ShowStatistics },
+		{ 'o', AppKeyboardShortcutsSeams::ECommand::ShowOptions },
+		{ 'h', AppKeyboardShortcutsSeams::ECommand::ShowHelp },
+		{ 'x', AppKeyboardShortcutsSeams::ECommand::ExitApp },
+		{ 'u', AppKeyboardShortcutsSeams::ECommand::ShowHotMenu },
+		{ 'w', AppKeyboardShortcutsSeams::ECommand::ShowToolsMenu },
+	};
+	for (const SExpectedShortcut &shortcut : aShortcuts) {
+		CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, shortcut.ch, false) == shortcut.eCommand);
+		CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, shortcut.ch - 'a' + 'A', false) == shortcut.eCommand);
+		CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, shortcut.ch, true) == AppKeyboardShortcutsSeams::ECommand::None);
+	}
 }
 
 TEST_CASE("App keyboard shortcut seam leaves ordinary navigation and modal contexts alone")
@@ -24,11 +42,6 @@ TEST_CASE("App keyboard shortcut seam leaves ordinary navigation and modal conte
 	CHECK(AppKeyboardShortcutsSeams::ClassifyMainKeyMessage(WM_SYSKEYDOWN, 'X', false, true, false) == AppKeyboardShortcutsSeams::ECommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifyMainKeyMessage(WM_SYSKEYDOWN, 'U', false, true, false) == AppKeyboardShortcutsSeams::ECommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifyMainKeyMessage(WM_KEYDOWN, 'Q', true, false, true) == AppKeyboardShortcutsSeams::ECommand::None);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'x', true) == AppKeyboardShortcutsSeams::ECommand::None);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'u', true) == AppKeyboardShortcutsSeams::ECommand::None);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 't', true) == AppKeyboardShortcutsSeams::ECommand::None);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'o', true) == AppKeyboardShortcutsSeams::ECommand::None);
-	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'm', false) == AppKeyboardShortcutsSeams::ECommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, 'q', false) == AppKeyboardShortcutsSeams::ECommand::None);
 }
 
@@ -60,6 +73,7 @@ TEST_CASE("Search keyboard shortcut seam leaves main-shell reserved mnemonics al
 	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMenu(SC_KEYMENU, 's', false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMenu(SC_KEYMENU, 'm', false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMenu(SC_KEYMENU, 'o', false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMenu(SC_KEYMENU, 'w', false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
 	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMenu(SC_KEYMENU, 'n', true) == AppKeyboardShortcutsSeams::ESearchCommand::None);
 }
 
