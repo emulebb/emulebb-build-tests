@@ -1893,6 +1893,23 @@ def test_run_suite_command_uses_extended_godzilla_timeout(monkeypatch) -> None:
     assert observed_timeouts[0] == live_e2e_suite.DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
 
 
+def test_run_suite_command_uses_extended_live_process_monitor_timeout(monkeypatch) -> None:
+    observed_timeouts: list[float] = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def wait(self, timeout=None):
+            observed_timeouts.append(timeout)
+            raise subprocess.TimeoutExpired(cmd=["python", "live-process-monitor.py"], timeout=timeout or 0.0)
+
+    monkeypatch.setattr(live_e2e_suite.subprocess, "Popen", lambda _command: FakeProcess())
+    monkeypatch.setattr(live_e2e_suite, "terminate_process_tree", lambda _process_id, command=None: {"return_code": 0})
+
+    assert live_e2e_suite.run_suite_command(["python", r"C:\tests\live-process-monitor.py"]) == live_e2e_suite.SUITE_TIMEOUT_RETURN_CODE
+    assert observed_timeouts[0] == live_e2e_suite.DEFAULT_LIVE_PROCESS_MONITOR_TIMEOUT_SECONDS
+
+
 def test_timeout_command_markers_include_launcher_and_script() -> None:
     assert live_e2e_suite.timeout_command_markers(
         [r"C:\Python313\python.exe", r"C:\tests\godzilla-local-swarm.py", "--flag"]
