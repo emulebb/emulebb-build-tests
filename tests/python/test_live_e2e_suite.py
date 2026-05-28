@@ -2125,6 +2125,59 @@ def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Pat
     assert removed_flag_name not in commands[0]
 
 
+def test_package_helper_profile_forwards_dependency_options(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    cache_root = tmp_path / "arr-cache"
+    prowlarr_exe = tmp_path / "tools" / "Prowlarr.exe"
+    radarr_exe = tmp_path / "tools" / "Radarr.exe"
+    sonarr_exe = tmp_path / "tools" / "Sonarr.exe"
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "package-helpers",
+            "--dependency-mode",
+            "auto-download",
+            "--dependency-channel",
+            "latest",
+            "--dependency-cache-root",
+            str(cache_root),
+            "--refresh-dependencies",
+            "--prowlarr-exe",
+            str(prowlarr_exe),
+            "--radarr-exe",
+            str(radarr_exe),
+            "--sonarr-exe",
+            str(sonarr_exe),
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["dependency_resolution"] == {
+        "mode": "auto-download",
+        "channel": "latest",
+        "cache_root": str(cache_root),
+        "refresh": True,
+    }
+    assert [script_name(command) for command in commands] == ["package-helper-integration.py"]
+    command = commands[0]
+    assert option_values(command, "--dependency-mode") == ["auto-download"]
+    assert option_values(command, "--dependency-channel") == ["latest"]
+    assert option_values(command, "--dependency-cache-root") == [str(cache_root.resolve())]
+    assert "--refresh-dependencies" in command
+    assert option_values(command, "--prowlarr-exe") == [str(prowlarr_exe.resolve())]
+    assert option_values(command, "--radarr-exe") == [str(radarr_exe.resolve())]
+    assert option_values(command, "--sonarr-exe") == [str(sonarr_exe.resolve())]
+
+
 def test_operator_script_help_loads_hyphenated_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     completed = subprocess.run(
@@ -2145,6 +2198,13 @@ def test_operator_script_help_loads_hyphenated_helpers() -> None:
     assert "--vhd-size-mb" in completed.stdout
     assert "--mount-root" in completed.stdout
     assert "--keep-admin-fixtures" in completed.stdout
+    assert "--dependency-mode" in completed.stdout
+    assert "--dependency-channel" in completed.stdout
+    assert "--dependency-cache-root" in completed.stdout
+    assert "--refresh-dependencies" in completed.stdout
+    assert "--prowlarr-exe" in completed.stdout
+    assert "--radarr-exe" in completed.stdout
+    assert "--sonarr-exe" in completed.stdout
     assert "--skip-live-seed-refresh" in completed.stdout
     assert "--profile-seed-dir" in completed.stdout
     assert "--seed" + "-config-dir" not in completed.stdout

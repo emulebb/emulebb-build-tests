@@ -180,6 +180,7 @@ class SuiteSpec:
     is_rest_cold_start_dump_stress: bool = False
     is_search_ui_live: bool = False
     is_resource_ui_smoke: bool = False
+    is_package_helper_integration: bool = False
     accepts_mounted_shared_root: bool = False
     requires_admin_volume_fixtures: bool = False
     accepts_admin_volume_fixtures: bool = False
@@ -423,6 +424,14 @@ SUITE_SPECS = (
         accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
+        name="package-helper-integration",
+        script_name="package-helper-integration.py",
+        category="rest",
+        network_scope="offline",
+        is_package_helper_integration=True,
+        default_enabled=False,
+    ),
+    SuiteSpec(
         name="prowlarr-emulebb",
         script_name="prowlarr-emulebb-live.py",
         category="rest",
@@ -502,6 +511,9 @@ PROFILE_SUITE_NAMES = {
         "radarr-emulebb",
         "sonarr-emulebb",
         "amutorrent-browser-smoke",
+    ),
+    "package-helpers": (
+        "package-helper-integration",
     ),
     "beta-release": (
         "command-line-smoke",
@@ -979,6 +991,13 @@ def build_suite_command(
     vhd_size_mb: int = 256,
     mount_root: Path | None = None,
     keep_admin_fixtures: bool = False,
+    dependency_mode: str = "cache-only",
+    dependency_channel: str = "pinned",
+    dependency_cache_root: Path | None = None,
+    refresh_dependencies: bool = False,
+    prowlarr_exe: Path | None = None,
+    radarr_exe: Path | None = None,
+    sonarr_exe: Path | None = None,
     fail_fast: bool = False,
 ) -> list[str]:
     """Builds one child suite command line."""
@@ -1075,6 +1094,19 @@ def build_suite_command(
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_amutorrent_browser and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.is_package_helper_integration:
+        command.extend(["--dependency-mode", dependency_mode])
+        command.extend(["--dependency-channel", dependency_channel])
+        if dependency_cache_root is not None:
+            command.extend(["--dependency-cache-root", str(dependency_cache_root.resolve())])
+        if refresh_dependencies:
+            command.append("--refresh-dependencies")
+        if prowlarr_exe is not None:
+            command.extend(["--prowlarr-exe", str(prowlarr_exe.resolve())])
+        if radarr_exe is not None:
+            command.extend(["--radarr-exe", str(radarr_exe.resolve())])
+        if sonarr_exe is not None:
+            command.extend(["--sonarr-exe", str(sonarr_exe.resolve())])
     if spec.is_search_ui_live:
         if live_wire_inputs_file is not None:
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
@@ -1500,6 +1532,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vhd-size-mb", type=int, default=256)
     parser.add_argument("--mount-root")
     parser.add_argument("--keep-admin-fixtures", action="store_true")
+    parser.add_argument("--dependency-mode", choices=["cache-only", "auto-download", "off"], default="cache-only")
+    parser.add_argument("--dependency-channel", choices=["pinned", "latest"], default="pinned")
+    parser.add_argument("--dependency-cache-root")
+    parser.add_argument("--refresh-dependencies", action="store_true")
+    parser.add_argument("--prowlarr-exe")
+    parser.add_argument("--radarr-exe")
+    parser.add_argument("--sonarr-exe")
     parser.add_argument("--preference-ui-directories-tree-stress", action="store_true")
     parser.add_argument("--shared-files-ui-scenario", action="append", choices=SHARED_FILES_UI_SCENARIOS)
     parser.add_argument("--shared-files-tree-stress-churn-cycles", type=int)
@@ -2049,6 +2088,12 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "skip_dumps": bool(args.rest_cold_start_dump_stress_skip_dumps),
         },
         "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",
+        "dependency_resolution": {
+            "mode": args.dependency_mode,
+            "channel": args.dependency_channel,
+            "cache_root": args.dependency_cache_root,
+            "refresh": bool(args.refresh_dependencies),
+        },
         "arr_live_wire_suites": [
             spec.name
             for spec in selected_specs
@@ -2163,6 +2208,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             vhd_size_mb=args.vhd_size_mb,
             mount_root=mount_root,
             keep_admin_fixtures=args.keep_admin_fixtures,
+            dependency_mode=args.dependency_mode,
+            dependency_channel=args.dependency_channel,
+            dependency_cache_root=Path(args.dependency_cache_root) if args.dependency_cache_root else None,
+            refresh_dependencies=args.refresh_dependencies,
+            prowlarr_exe=Path(args.prowlarr_exe) if args.prowlarr_exe else None,
+            radarr_exe=Path(args.radarr_exe) if args.radarr_exe else None,
+            sonarr_exe=Path(args.sonarr_exe) if args.sonarr_exe else None,
             fail_fast=args.fail_fast,
         )
         started = time.monotonic()
