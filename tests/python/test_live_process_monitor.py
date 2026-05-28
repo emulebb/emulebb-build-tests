@@ -20,6 +20,9 @@ def test_parse_config_payload_normalizes_local_inputs() -> None:
             "cpuSpikeThresholdOneCore": 120,
             "maxSpikeDumps": 3,
             "spikeDumpDelaySeconds": 600,
+            "restartOnFailure": True,
+            "assertionWindowCheck": True,
+            "scanLogs": True,
         }
     )
 
@@ -31,6 +34,9 @@ def test_parse_config_payload_normalizes_local_inputs() -> None:
     assert config.cpu_spike_threshold_one_core == 120
     assert config.max_spike_dumps == 3
     assert config.spike_dump_delay_seconds == 600
+    assert config.restart_on_failure is True
+    assert config.assertion_window_check is True
+    assert config.scan_logs is True
 
 
 def test_parse_config_payload_uses_less_intrusive_dump_defaults() -> None:
@@ -64,6 +70,55 @@ def test_build_launch_command_uses_real_profile_override() -> None:
         r"X:\M\profile",
         "-foo",
     ]
+
+
+def test_runtime_log_paths_include_profile_config_logs(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    config = profile / "config"
+    config.mkdir(parents=True)
+    log_path = config / "emulebb.log"
+    log_path.write_text("hello\n", encoding="utf-8")
+
+    assert live_process_monitor.runtime_log_paths(profile) == [log_path]
+
+
+def test_scan_log_markers_reads_only_appended_text(tmp_path: Path) -> None:
+    log_path = tmp_path / "emulebb.log"
+    log_path.write_text("startup ok\n", encoding="utf-8")
+    offsets: dict[str, int] = {}
+    patterns = [live_process_monitor.re.compile(r"\bexception\b", live_process_monitor.re.IGNORECASE)]
+
+    assert live_process_monitor.scan_log_markers([log_path], offsets, patterns) == []
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write("handled exception marker\n")
+
+    matches = live_process_monitor.scan_log_markers([log_path], offsets, patterns)
+
+    assert len(matches) == 1
+    assert matches[0]["line"] == "handled exception marker"
+    assert live_process_monitor.scan_log_markers([log_path], offsets, patterns) == []
+
+
+def test_collect_new_profile_dumps_tracks_only_new_files(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    config = profile / "config"
+    config.mkdir(parents=True)
+    old_dump = config / "old.dmp"
+    old_dump.write_bytes(b"old")
+    known = {str(old_dump.resolve())}
+    new_dump = config / "emulebb-crash-test.dmp"
+    new_dump.write_bytes(b"new")
+
+    rows = live_process_monitor.collect_new_profile_dumps(profile, known)
+
+    assert [Path(str(row["path"])).name for row in rows] == ["emulebb-crash-test.dmp"]
+    assert live_process_monitor.collect_new_profile_dumps(profile, known) == []
+
+
+def test_assertion_window_title_matches_debug_assert_dialog() -> None:
+    assert live_process_monitor.assertion_window_title("Microsoft Visual C++ Runtime Library")
+    assert live_process_monitor.assertion_window_title("Debug Assertion Failed!")
+    assert not live_process_monitor.assertion_window_title("eMuleBB")
 
 
 def test_validate_capture_mode_separates_umdh_from_cpu_and_full_dumps() -> None:

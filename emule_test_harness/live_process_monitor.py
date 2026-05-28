@@ -6,6 +6,7 @@ import csv
 import ctypes
 import json
 import os
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 import shutil
@@ -46,6 +47,9 @@ class LiveProcessMonitorConfig:
     cpu_spike_threshold_one_core: float = DEFAULT_CPU_SPIKE_THRESHOLD_ONE_CORE
     max_spike_dumps: int = DEFAULT_MAX_SPIKE_DUMPS
     spike_dump_delay_seconds: float = DEFAULT_SPIKE_DUMP_DELAY_SECONDS
+    restart_on_failure: bool = False
+    assertion_window_check: bool = True
+    scan_logs: bool = True
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,8 @@ kernel32.WaitForSingleObject.restype = ctypes.c_uint32
 
 user32.EnumWindows.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 user32.EnumWindows.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+user32.GetWindowTextW.restype = ctypes.c_int
 user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
 user32.GetWindowThreadProcessId.restype = ctypes.c_uint32
 user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
@@ -144,6 +150,9 @@ def parse_config_payload(payload: dict[str, object], *, path: Path | None = None
         cpu_spike_threshold_one_core=float(payload.get("cpuSpikeThresholdOneCore", DEFAULT_CPU_SPIKE_THRESHOLD_ONE_CORE)),
         max_spike_dumps=int(payload.get("maxSpikeDumps", DEFAULT_MAX_SPIKE_DUMPS)),
         spike_dump_delay_seconds=float(payload.get("spikeDumpDelaySeconds", DEFAULT_SPIKE_DUMP_DELAY_SECONDS)),
+        restart_on_failure=bool(payload.get("restartOnFailure", False)),
+        assertion_window_check=bool(payload.get("assertionWindowCheck", True)),
+        scan_logs=bool(payload.get("scanLogs", True)),
     )
 
 
@@ -219,6 +228,138 @@ def build_launch_command(app_exe: Path, profile_dir: Path, extra_args: tuple[str
     """Builds the real-profile eMule launch command."""
 
     return [str(app_exe), "-ignoreinstances", "-c", str(profile_dir), *extra_args]
+
+
+def runtime_log_paths(profile_dir: Path) -> list[Path]:
+    """Returns current eMuleBB runtime logs for a real-profile launch."""
+
+    candidates = [profile_dir, profile_dir / "config", profile_dir / "logs"]
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for root in candidates:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.glob("emulebb*.log")):
+            resolved = path.resolve()
+            if resolved not in seen and path.is_file():
+                paths.append(path)
+                seen.add(resolved)
+    return paths
+
+
+def scan_log_markers(
+    log_paths: list[Path],
+    offsets: dict[str, int],
+    patterns: list[re.Pattern[str]],
+    *,
+    max_matches: int = 100,
+) -> list[dict[str, object]]:
+    """Scans appended log text for failure markers without rereading old lines."""
+
+    matches: list[dict[str, object]] = []
+    for path in log_paths:
+        key = str(path.resolve())
+        previous_offset = int(offsets.get(key, 0))
+        try:
+            current_size = path.stat().st_size
+        except OSError:
+            continue
+        if current_size < previous_offset:
+            previous_offset = 0
+        if current_size == previous_offset:
+            continue
+        try:
+            with path.open("rb") as handle:
+                handle.seek(previous_offset)
+                data = handle.read()
+                offsets[key] = handle.tell()
+        except OSError:
+            continue
+        text = data.decode("utf-8", errors="replace")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            for pattern in patterns:
+                if pattern.search(line):
+                    matches.append(
+                        {
+                            "path": key,
+                            "line_number_after_offset": line_number,
+                            "pattern": pattern.pattern,
+                            "line": line,
+                        }
+                    )
+                    break
+            if len(matches) >= max_matches:
+                return matches
+    return matches
+
+
+def current_profile_dumps(profile_dir: Path) -> list[Path]:
+    """Returns dump files currently present in the live profile."""
+
+    candidates = [profile_dir, profile_dir / "config"]
+    dumps: list[Path] = []
+    seen: set[Path] = set()
+    for root in candidates:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.glob("*.dmp")):
+            resolved = path.resolve()
+            if resolved not in seen and path.is_file():
+                dumps.append(path)
+                seen.add(resolved)
+    return dumps
+
+
+def collect_new_profile_dumps(profile_dir: Path, known_paths: set[str]) -> list[dict[str, object]]:
+    """Records profile dump files created after monitoring started."""
+
+    rows: list[dict[str, object]] = []
+    for path in current_profile_dumps(profile_dir):
+        key = str(path.resolve())
+        if key in known_paths:
+            continue
+        known_paths.add(key)
+        try:
+            stat = path.stat()
+            rows.append(
+                {
+                    "path": key,
+                    "size_bytes": stat.st_size,
+                    "mtime_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+                }
+            )
+        except OSError:
+            rows.append({"path": key, "stat_error": True})
+    return rows
+
+
+def assertion_window_title(title: str) -> bool:
+    """Returns whether a top-level window title looks like a debug assertion."""
+
+    return bool(re.search(r"Microsoft Visual C\+\+ Runtime Library|Debug Assertion Failed", title, re.IGNORECASE))
+
+
+def find_assertion_windows(process_id: int) -> list[dict[str, object]]:
+    """Finds visible debug assertion/runtime-library windows owned by a process."""
+
+    windows: list[dict[str, object]] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+    def enum_callback(hwnd: int, _lparam: int) -> int:
+        owner = ctypes.c_uint32()
+        user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(owner))
+        if int(owner.value) != int(process_id) or not user32.IsWindowVisible(ctypes.c_void_p(hwnd)):
+            return 1
+        buffer = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(ctypes.c_void_p(hwnd), buffer, len(buffer))
+        title = buffer.value
+        if assertion_window_title(title):
+            windows.append({"hwnd": int(hwnd), "title": title})
+        return 1
+
+    if not user32.EnumWindows(enum_callback, None):
+        raise OSError(ctypes.get_last_error(), "EnumWindows failed")
+    return windows
 
 
 def filetime_to_seconds(value: FILETIME) -> float:

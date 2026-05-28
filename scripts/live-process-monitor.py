@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -67,6 +68,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enable-umdh", action="store_true")
     parser.add_argument("--require-umdh", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
+    parser.add_argument("--restart-on-failure", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--assertion-window-check", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--scan-logs", action=argparse.BooleanOptionalAction)
+    parser.add_argument(
+        "--log-marker-pattern",
+        action="append",
+        default=[],
+        help="Regex marker to flag in appended eMuleBB logs. Defaults cover assertions, exceptions, fatal errors, and crashes.",
+    )
     return parser
 
 
@@ -115,6 +125,9 @@ def main() -> int:
         cpu_spike_threshold_one_core=args.cpu_spike_threshold_one_core,
         max_spike_dumps=args.max_spike_dumps,
         spike_dump_delay_seconds=args.spike_dump_delay_seconds,
+        restart_on_failure=args.restart_on_failure,
+        assertion_window_check=args.assertion_window_check,
+        scan_logs=args.scan_logs,
     )
     app_exe = config.app_exe or paths.app_exe
     live_process_monitor.validate_config(config, app_exe=app_exe)
@@ -137,6 +150,9 @@ def main() -> int:
         "cpu_profile": bool(args.cpu_profile),
         "capture_final_dump": bool(args.capture_final_dump),
         "enable_umdh": bool(args.enable_umdh),
+        "restart_on_failure": config.restart_on_failure,
+        "assertion_window_check": config.assertion_window_check,
+        "scan_logs": config.scan_logs,
         "artifacts_dir": str(artifacts_dir),
         "checks": {},
         "diagnostics": {},
@@ -162,6 +178,9 @@ def main() -> int:
     metric_rows: list[dict[str, object]] = []
     runtime_counter_rows: list[dict[str, object]] = []
     spike_dumps: list[dict[str, object]] = []
+    launch_events: list[dict[str, object]] = []
+    log_marker_matches: list[dict[str, object]] = []
+    profile_dumps: list[dict[str, object]] = []
     exit_code = 1
 
     try:
@@ -213,14 +232,57 @@ def main() -> int:
                 if not cpu_profile_active:
                     cpu_profile_report["status"] = "failed"
 
-        command = live_process_monitor.build_launch_command(app_exe, config.profile_dir)
-        report["launch"] = {"command": command}
-        write_json(artifacts_dir / "live-process-monitor-result.json", report)
-        process = subprocess.Popen(command)
-        report["pid"] = process.pid
-        process_handle = live_process_monitor.open_process(process.pid)
+        started = time.monotonic()
+        deadline = started + config.duration_seconds
+        last_sample_monotonic: float | None = None
+        last_cpu_seconds: float | None = None
+        final_dump: dict[str, object] | None = None
+        known_profile_dumps = {str(path.resolve()) for path in live_process_monitor.current_profile_dumps(config.profile_dir)}
+        log_offsets: dict[str, int] = {}
+        log_patterns = [
+            re.compile(pattern, re.IGNORECASE)
+            for pattern in (
+                args.log_marker_pattern
+                or [
+                    r"\bassert(?:ion)?\b",
+                    r"\bexception\b",
+                    r"\baccess violation\b",
+                    r"\bfatal\b",
+                    r"\bcrash(?:ed)?\b",
+                    r"\bruntime error\b",
+                ]
+            )
+        ]
+        launch_index = 0
 
-        if args.enable_umdh and tools["umdh"]:
+        def launch_process() -> None:
+            nonlocal launch_index, process, process_handle, last_sample_monotonic, last_cpu_seconds
+            launch_index += 1
+            command = live_process_monitor.build_launch_command(app_exe, config.profile_dir)
+            event = {
+                "launch": launch_index,
+                "utc_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "command": command,
+            }
+            process = subprocess.Popen(command)
+            process_handle = live_process_monitor.open_process(process.pid)
+            event["pid"] = process.pid
+            launch_events.append(event)
+            report["pid"] = process.pid
+            report["launches"] = launch_events
+            write_json(artifacts_dir / "live-process-monitor-result.json", report)
+            last_sample_monotonic = None
+            last_cpu_seconds = None
+
+        def close_current_handle() -> None:
+            nonlocal process_handle
+            if process_handle is not None:
+                live_process_monitor.close_handle(process_handle)
+                process_handle = None
+
+        launch_process()
+
+        if args.enable_umdh and tools["umdh"] and process is not None:
             time.sleep(min(15.0, max(1.0, config.sample_interval_seconds)))
             report["diagnostics"]["umdh_baseline"] = live_process_monitor.capture_umdh_snapshot(
                 str(tools["umdh"]),
@@ -228,19 +290,17 @@ def main() -> int:
                 analysis_dir / "umdh-baseline.txt",
             )
 
-        started = time.monotonic()
-        deadline = started + config.duration_seconds
-        last_sample_monotonic: float | None = None
-        last_cpu_seconds: float | None = None
-        final_dump: dict[str, object] | None = None
-
         while time.monotonic() < deadline:
+            if process is None or process_handle is None:
+                raise RuntimeError("live process monitor lost the process handle")
             row = live_process_monitor.sample_process_metrics(
                 handle=process_handle,
                 started_monotonic=started,
                 last_sample_monotonic=last_sample_monotonic,
                 last_cpu_seconds=last_cpu_seconds,
             )
+            row["launch"] = launch_index
+            row["pid"] = process.pid
             metric_rows.append(row)
             last_sample_monotonic = time.monotonic()
             last_cpu_seconds = float(row["cpu_seconds"])
@@ -249,7 +309,75 @@ def main() -> int:
             counters["elapsed_seconds"] = row["elapsed_seconds"]
             runtime_counter_rows.append(counters)
 
+            new_dumps = live_process_monitor.collect_new_profile_dumps(config.profile_dir, known_profile_dumps)
+            if new_dumps:
+                for dump in new_dumps:
+                    dump_path = Path(str(dump.get("path", "")))
+                    if dump_path.is_file():
+                        dump["cdb_analysis"] = live_process_monitor.analyze_dump_with_cdb(
+                            dump_path,
+                            analysis_dir / f"cdb-profile-dump-{len(profile_dumps) + 1:02d}.txt",
+                        )
+                profile_dumps.extend(new_dumps)
+                report["diagnostics"]["profile_dumps"] = profile_dumps
+
+            if config.scan_logs:
+                matches = live_process_monitor.scan_log_markers(
+                    live_process_monitor.runtime_log_paths(config.profile_dir),
+                    log_offsets,
+                    log_patterns,
+                )
+                if matches:
+                    for match in matches:
+                        match["elapsed_seconds"] = row["elapsed_seconds"]
+                        match["launch"] = launch_index
+                    log_marker_matches.extend(matches)
+                    report["diagnostics"]["log_marker_matches"] = log_marker_matches[-200:]
+
+            assertion_windows = (
+                live_process_monitor.find_assertion_windows(process.pid)
+                if config.assertion_window_check and int(row["exit_code"]) == live_process_monitor.STILL_ACTIVE
+                else []
+            )
+            if assertion_windows:
+                event = {
+                    "launch": launch_index,
+                    "pid": process.pid,
+                    "elapsed_seconds": row["elapsed_seconds"],
+                    "assertion_windows": assertion_windows,
+                }
+                launch_events.append({"event": "assertion_window", **event})
+                if config.procdump_path is not None and not args.skip_spike_dumps:
+                    dump_path = diagnostics_dir / f"assertion-{launch_index:02d}.dmp"
+                    event["dump"] = live_process_monitor.capture_procdump(
+                        config.procdump_path,
+                        process.pid,
+                        dump_path,
+                        analysis_dir / f"procdump-assertion-{launch_index:02d}.txt",
+                    )
+                live_process_monitor.close_process_gracefully(process, process_handle, timeout_seconds=5.0)
+                close_current_handle()
+                if config.restart_on_failure and time.monotonic() < deadline:
+                    launch_process()
+                    time.sleep(config.sample_interval_seconds)
+                    continue
+                report["failure_reason"] = "debug assertion window detected"
+                break
+
             if int(row["exit_code"]) != live_process_monitor.STILL_ACTIVE:
+                event = {
+                    "event": "process_exit",
+                    "launch": launch_index,
+                    "pid": process.pid,
+                    "exit_code": row["exit_code"],
+                    "elapsed_seconds": row["elapsed_seconds"],
+                }
+                launch_events.append(event)
+                close_current_handle()
+                if config.restart_on_failure and time.monotonic() < deadline:
+                    launch_process()
+                    time.sleep(config.sample_interval_seconds)
+                    continue
                 report["failure_reason"] = f"process exited early with code {row['exit_code']}"
                 break
 
@@ -347,6 +475,9 @@ def main() -> int:
         report["diagnostics"]["process_metrics_csv"] = str(analysis_dir / "process-metrics.csv")
         report["diagnostics"]["runtime_counters_jsonl"] = str(analysis_dir / "runtime-counters.jsonl")
         report["diagnostics"]["spike_dumps"] = spike_dumps
+        report["diagnostics"]["profile_dumps"] = profile_dumps
+        report["diagnostics"]["log_marker_matches"] = log_marker_matches[-200:]
+        report["launches"] = launch_events
         report["summary"] = live_process_monitor.summarize_metric_rows(metric_rows)
 
         if report.get("failure_reason"):
