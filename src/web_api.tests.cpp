@@ -1390,6 +1390,19 @@ TEST_CASE("Web API validates qBittorrent session cookies by exact pair")
 	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123; SID=wrong", "SID", "abc123"));
 }
 
+TEST_CASE("Web API preserves native transfer meaning in qBittorrent states")
+{
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("completed", false)), "pausedUP");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("checking", false)), "checkingDL");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("completing", false)), "checkingDL");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("error", false)), "error");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("missingfiles", false)), "missingFiles");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("paused", false)), "pausedDL");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("queued", false)), "queuedDL");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("downloading", false)), "downloading");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("downloading", true)), "pausedDL");
+}
+
 TEST_CASE("Web API validates qBittorrent login form credentials exactly")
 {
 	std::map<std::string, std::string> form;
