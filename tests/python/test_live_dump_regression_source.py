@@ -50,11 +50,26 @@ def test_disconnect_deletes_only_after_request_file_detach() -> None:
     source = (app_source_root() / "BaseClient.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[source.index("bool CUpDownClient::Disconnected") : source.index("// Returned bool is not about whether the connect attempt succeeded.")]
 
+    assert "while the same CUpDownClient is still the upload slot owner" in block
+    assert "upload queue will keep using" in block
+    assert "bDelete = false;" in block
+    assert "a client can be banned after it entered the waiting queue" in block
+    assert "theApp.uploadqueue->RemoveFromWaitingQueue(this, true);" in block
     assert "live disconnect dumps showed a client in DS_NONE/US_NONE" in block
     assert "return \"delete me\" with that pointer still set" in block
     assert "RemoveSource is the central mirror cleanup" in block
     assert "if (bDelete && m_reqfile != NULL)" in block
     assert "theApp.downloadqueue->RemoveSource(this);" in block
+
+
+def test_banned_waiting_upload_client_is_detached_before_banned_state() -> None:
+    source = (app_source_root() / "UploadClient.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("void CUpDownClient::Ban") : source.index("ULONGLONG CUpDownClient::GetWaitStartTime")]
+
+    assert "the waiting queue stores raw CUpDownClient pointers" in block
+    assert "Drop the waiting-list edge before setting US_BANNED" in block
+    assert "theApp.uploadqueue->RemoveFromWaitingQueue(this, true);" in block
+    assert block.index("RemoveFromWaitingQueue(this, true);") < block.index("SetUploadState(US_BANNED);")
 
 
 def test_duplicate_temp_source_detaches_request_file_before_attach_delete() -> None:
