@@ -464,6 +464,18 @@ def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
     assert godzilla.transfer_row_hashes(rows) == ["aaa", "bbb", "123"]
 
 
+def test_godzilla_app_process_id_uses_live_common_resolver(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_app_process_id_test")
+
+    class AppWithBrokenProcessMethod:
+        def process(self):
+            raise TypeError("'int' object is not callable")
+
+    monkeypatch.setattr(godzilla.live_common, "resolve_app_process_id", lambda _app: 4242)
+
+    assert godzilla.app_process_id(AppWithBrokenProcessMethod()) == 4242
+
+
 def test_godzilla_queue_downloads_uses_retry_rest_request(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_retry_queue_test")
     calls: list[tuple[str, str]] = []

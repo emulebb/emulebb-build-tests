@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1428,9 +1429,15 @@ def shutdown_amule(control_exe: Path | None, profile: amule_harness.AmuleRuntime
 def app_process_id(app) -> int:
     """Returns the process id for a pywinauto Application object."""
 
+    resolved = live_common.resolve_app_process_id(app)
+    if resolved is not None:
+        return int(resolved)
     process_attr = getattr(app, "process", None)
     if callable(process_attr):
-        process_attr = process_attr()
+        try:
+            process_attr = process_attr()
+        except TypeError as exc:
+            raise RuntimeError(f"Could not resolve pywinauto application process id from {app!r}.") from exc
     if isinstance(process_attr, int):
         return process_attr
     pid = getattr(process_attr, "pid", None)
@@ -2932,7 +2939,11 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         report["status"] = "failed"
         report["current_phase"] = current_phase
-        report["error"] = {"type": type(exc).__name__, "message": str(exc) or repr(exc)}
+        report["error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc) or repr(exc),
+            "traceback": traceback.format_exc(),
+        }
         return 1
     finally:
         cleanup: dict[str, object] = {}
