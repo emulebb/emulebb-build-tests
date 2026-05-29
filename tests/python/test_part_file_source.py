@@ -43,8 +43,8 @@ def test_part_file_completion_worker_posts_result_object_for_ui_thread_state_tra
     ui_end = source[source.index("void CPartFile::PerformFileCompleteEnd(void *pCompletionResult)") : source.index("void  CPartFile::RemoveAllSources")]
 
     assert "struct SPartFileCompletionThreadResult" in source
-    assert "PostWorkerCompletion(theApp.IsClosing(), hNotifyWnd, TM_FILECOMPLETED, dwResult, reinterpret_cast<LPARAM>(pResult))" in source
-    assert "std::unique_ptr<SPartFileCompletionThreadResult> pResult(new SPartFileCompletionThreadResult);" in worker
+    assert "PostWorkerCompletion(theApp.IsClosing() && !bSuccessResult, hNotifyWnd, TM_FILECOMPLETED, dwResult, reinterpret_cast<LPARAM>(pResult))" in source
+    assert "std::unique_ptr<SPartFileCompletionThreadResult> pSuccessResult(new SPartFileCompletionThreadResult);" in worker
     assert "m_fullname = strNewname;" not in worker
     assert "_SetStatus(PS_COMPLETE);" not in worker
     assert "m_CorruptionBlackBox.Free();" not in worker

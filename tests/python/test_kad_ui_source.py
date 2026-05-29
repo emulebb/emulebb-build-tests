@@ -33,4 +33,4 @@ def test_kad_search_list_rejects_null_searches_before_lparam_lookup() -> None:
     source = read_source("KadSearchListCtrl.cpp")
 
     assert source.count("ASSERT(search != NULL);\n\t\tif (search == NULL)\n\t\t\treturn;") >= 3
-    assert "find.lParam = (LPARAM)search;" in source
+    assert "find.lParam = reinterpret_cast<LPARAM>(search);" in source

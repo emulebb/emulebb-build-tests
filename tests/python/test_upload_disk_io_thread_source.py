@@ -24,5 +24,6 @@ def test_pending_upload_io_removes_by_pointer_not_stored_position() -> None:
     assert "Improper termination of asynchronous I/O follows" not in source
     assert "POSITION posPending = m_listPendingIO.Find(const_cast<OverlappedRead_Struct*>(pOvRead));" in source
     assert "if (posPending != NULL)\n\t\tm_listPendingIO.RemoveAt(posPending);" in source
-    assert "if (pKnownFile != NULL)\n\t\t--pKnownFile->nInUse;" in source
+    assert "if (pKnownFile != NULL) {\n\t\t// Keep nInUse raised until every completion-path access to pKnownFile is done." in source
+    assert "pKnownFile->ReleaseUploadReadReference();" in source
     assert "if (pStruct != NULL)\n\t\tpStruct->m_nPendingIOBlocks.fetch_sub(1);" in source

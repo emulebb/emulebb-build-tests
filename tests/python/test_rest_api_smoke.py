@@ -2143,7 +2143,6 @@ def test_rest_v1_paging_surface_is_intentionally_narrow() -> None:
 
     unpaged_routes = {
         ("GET", "/categories"),
-        ("GET", "/transfers"),
         ("GET", "/transfers/{hash}/sources"),
         ("GET", "/transfers/{hash}/sources/{clientId}"),
         ("GET", "/shared-files/{hash}/comments"),
@@ -2153,7 +2152,6 @@ def test_rest_v1_paging_surface_is_intentionally_narrow() -> None:
         ("GET", "/servers"),
         ("GET", "/friends"),
         ("GET", "/searches"),
-        ("GET", "/searches/{searchId}"),
     }
     for route_key in unpaged_routes:
         assert "limit" not in contracts[route_key]["query"]
@@ -2432,7 +2430,7 @@ def test_qbit_compat_torrent_list_uses_native_transfer_command() -> None:
     source_path = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerQBitCompat.cpp"
     source = source_path.read_text(encoding="utf-8")
 
-    assert 'BuildInternalCommand("transfers/list"' in source
+    assert 'BuildInternalCommand("qbit/transfers/info"' in source
     assert "theApp.downloadqueue" not in source
     assert "CPartFile" not in source
 
@@ -2448,7 +2446,7 @@ def test_arr_compat_uses_shared_native_validation_and_search_commands() -> None:
 
     assert 'BuildInternalCommand("search/start"' in source
     assert 'BuildInternalCommand("search/results"' in source
-    assert 'BuildInternalCommand("search/stop"' in source
+    assert 'BuildInternalCommand("search/delete"' in source
     assert '"method", rMethod' in source
     assert '"type", rSearchType' in source
     assert 'BuildInternalCommand("status/get"' in source

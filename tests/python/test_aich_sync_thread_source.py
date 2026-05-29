@@ -32,7 +32,9 @@ def test_aich_sync_worker_guards_shared_and_known_file_globals() -> None:
     assert "CSingleLock sharelock(&pSharedFiles->m_mutWriteList, TRUE);" in source
     assert "theApp.knownfiles != NULL && theApp.knownfiles->ShouldPurgeAICHHashset(aichHash)" in source
     assert "if (theApp.IsClosing() || pSharedFiles == NULL)\n\t\t\t\t\treturn 0;" in source
-    assert "CSingleLock hashingLock(&theApp.hashing_mut, TRUE); // only one file hash at a time\n\t\t\tif (theApp.IsClosing())\n\t\t\t\treturn 0;" in source
+    assert "CSingleLock hashingLock(&theApp.hashing_mut); // only one file hash at a time" in source
+    assert "while (!hashingLock.Lock(kAICHSyncHashingLockPollMs))" in source
+    assert "if (theApp.IsClosing())\n\t\t\t\t\treturn 0;" in source
     assert "theApp.sharedfiles->m_mutWriteList" not in source
     assert "theApp.sharedfiles->GetHashingCount()" not in source
 
@@ -42,7 +44,7 @@ def test_known2_met_recovery_truncate_failure_logs_exception_details() -> None:
     block = source[source.index("LogError(LOG_STATUSBAR, GetResString(IDS_ERR_MET_BAD), KNOWN2_MET_FILENAME);") : source.index("ex->Delete();")]
 
     assert '#include "OtherFunctions.h"' in source
-    assert 'DebugLogError(_T("Failed to truncate corrupt %s to byte %u%s"), KNOWN2_MET_FILENAME, nLastVerifiedPos, (LPCTSTR)CExceptionStrDash(*ex2));' in block
+    assert 'DebugLogError(_T("Failed to truncate corrupt %s to byte %I64u%s"), KNOWN2_MET_FILENAME, ullLastVerifiedPos, (LPCTSTR)CExceptionStrDash(*ex2));' in block
     assert block.index("CExceptionStrDash(*ex2)") < block.index("ex2->Delete();")
 
 
