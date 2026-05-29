@@ -135,7 +135,10 @@ def classify_profile_stages(spec: live_e2e_suite.SuiteSpec) -> dict[str, str]:
     """Returns profile-specific child-stage defaults for suites that are staged."""
 
     if spec.name == "godzilla-local-swarm":
-        return {"release-expanded": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE}
+        return {
+            "release-expanded": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE,
+            "stabilization-stress": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE,
+        }
     return {}
 
 
@@ -242,7 +245,10 @@ def summarize_matrix_gaps(suites: list[dict[str, Any]]) -> list[dict[str, str]]:
                     "gap": "large local swarm hammer is not RC-profile-visible",
                 }
             )
-        if suite["optionalClientPolicy"] == "mixed-clients-optional-with-required-control":
+        if (
+            suite["optionalClientPolicy"] == "mixed-clients-optional-with-required-control"
+            and "multi-client-p2p-required" not in suite["profiles"]
+        ):
             gaps.append(
                 {
                     "suite": suite["name"],

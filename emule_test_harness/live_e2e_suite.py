@@ -504,6 +504,15 @@ PROFILE_SUITE_NAMES = {
         "local-kad-mixed-client-swarm",
         "amutorrent-local-ed2k-ui-live",
     ),
+    "multi-client-p2p-required": (
+        "multi-client-p2p-matrix",
+        "local-ed2k-search-soak",
+        "local-ed2k-chaos-mode",
+        "local-ed2k-protocol-combinations",
+        "local-kad-swarm",
+        "local-kad-mixed-client-swarm",
+        "amutorrent-local-ed2k-ui-live",
+    ),
     "beta-green": (
         "shared-directories-rest",
         "rest-api",
@@ -515,6 +524,10 @@ PROFILE_SUITE_NAMES = {
         "radarr-emulebb",
         "sonarr-emulebb",
         "amutorrent-browser-smoke",
+    ),
+    "controller-local": (
+        "radarr-emulebb-local",
+        "sonarr-emulebb-local",
     ),
     "package-helpers": (
         "package-helper-integration",
@@ -532,7 +545,9 @@ PROFILE_SUITE_NAMES = {
         "command-line-smoke",
         "preference-ui",
         "shared-files-ui",
+        "config-stability-ui",
         "shared-hash-ui",
+        "startup-profile",
         "search-ui-live",
         "deterministic-two-client-transfer",
         "godzilla-local-swarm",
@@ -551,12 +566,15 @@ PROFILE_SUITE_NAMES = {
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
         "amutorrent-browser-smoke",
+        "auto-browse-live",
     ),
     "release-expanded-quick": (
         "command-line-smoke",
         "preference-ui",
         "shared-files-ui",
+        "config-stability-ui",
         "shared-hash-ui",
+        "startup-profile",
         "search-ui-live",
         "shared-directories-rest",
         "shared-cache-invalidation",
@@ -572,6 +590,7 @@ PROFILE_SUITE_NAMES = {
         "shared-files-ui",
         "search-ui-live",
         "deterministic-two-client-transfer",
+        "godzilla-local-swarm",
         "shared-directories-rest",
         "rest-api",
         "rest-cold-start-dump-stress",
@@ -595,9 +614,12 @@ PROFILE_SUITE_NAMES = {
         "resource-ui-smoke",
         "preference-ui",
     ),
+    "diagnostics-soak": (
+        "live-process-monitor",
+    ),
 }
 LIVE_E2E_PROFILES = ("default", *PROFILE_SUITE_NAMES.keys())
-BROAD_DIAGNOSTIC_PROFILE_NAMES = {"release-expanded", "stabilization-stress", "cpu-heavy"}
+BROAD_DIAGNOSTIC_PROFILE_NAMES = {"release-expanded", "stabilization-stress", "cpu-heavy", "diagnostics-soak"}
 CPU_PROFILED_SUITE_NAMES = {
     "preference-ui",
     "shared-files-ui",
@@ -738,6 +760,9 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
             args.rest_cold_start_dump_stress_post_drain_seconds = 5.0
 
+    if args.profile in {"multi-client-p2p-required"}:
+        args.multi_client_require_optional_clients = True
+
     if args.profile == "release-expanded":
         args.admin_volume_fixtures = True
         if "godzilla-local-swarm" in (args.suite or ()) and args.godzilla_stage is None:
@@ -783,6 +808,9 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.search_ui_download_lifecycle_count = RELEASE_EXPANDED_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT
 
     if args.profile == "stabilization-stress":
+        args.admin_volume_fixtures = True
+        if "godzilla-local-swarm" in (args.suite or ()) and args.godzilla_stage is None:
+            args.godzilla_stage = RELEASE_EXPANDED_GODZILLA_STAGE
         if "shared-files-ui" in (args.suite or ()) and not args.shared_files_ui_scenario:
             args.shared_files_ui_scenario = list(SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
         if args.rest_coverage_budget == "contract":

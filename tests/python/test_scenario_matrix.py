@@ -33,12 +33,14 @@ def test_live_e2e_scenario_matrix_classifies_swarm_and_hammer_lanes() -> None:
     assert by_name["godzilla-local-swarm"]["topology"] == "large-local-swarm"
     assert by_name["godzilla-local-swarm"]["stressClass"] == "hammer"
     assert by_name["godzilla-local-swarm"]["adminVolumePolicy"] == "required"
-    assert by_name["godzilla-local-swarm"]["profiles"] == ("release-expanded",)
+    assert by_name["godzilla-local-swarm"]["profiles"] == ("release-expanded", "stabilization-stress")
     assert by_name["godzilla-local-swarm"]["profileStages"] == {
         "release-expanded": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE,
+        "stabilization-stress": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE,
     }
     assert by_name["multi-client-p2p-matrix"]["topology"] == "local-swarm"
     assert by_name["multi-client-p2p-matrix"]["optionalClientPolicy"] == "mixed-clients-optional-with-required-control"
+    assert "multi-client-p2p-required" in by_name["multi-client-p2p-matrix"]["profiles"]
     assert by_name["local-kad-mixed-client-swarm"]["optionalClientPolicy"] == "mixed-clients-required"
     assert by_name["local-ed2k-chaos-mode"]["stressClass"] == "chaos"
     assert by_name["rest-cold-start-dump-stress"]["stressClass"] == "stress"
@@ -55,13 +57,14 @@ def test_live_e2e_scenario_matrix_surfaces_known_policy_gaps() -> None:
     assert (
         "godzilla-local-swarm",
         "large local swarm hammer is release-expanded only, not stabilization-stress visible",
-    ) in gaps
-    assert any(suite == "multi-client-p2p-matrix" for suite, _gap in gaps)
+    ) not in gaps
+    assert not any(suite == "multi-client-p2p-matrix" for suite, _gap in gaps)
     assert not any(suite == "local-kad-mixed-client-swarm" for suite, _gap in gaps)
     assert (
         "live-process-monitor",
         "suite is neither default-enabled nor profile-visible",
-    ) in gaps
+    ) not in gaps
+    assert not any(gap == "default aggregate only; no named profile owns this suite" for _suite, gap in gaps)
 
 
 def test_live_e2e_scenario_matrix_reports_rollups_and_repetitions() -> None:
@@ -72,3 +75,5 @@ def test_live_e2e_scenario_matrix_reports_rollups_and_repetitions() -> None:
     assert matrix["rollups"]["byTopology"]["local-swarm"] >= 3
     assert repetitions["rest-api"]["classification"] == "quick-and-full-release-overlap"
     assert repetitions["shared-directories-rest"]["profileCount"] >= 4
+    assert "controller-local" in matrix["profiles"]
+    assert "diagnostics-soak" in matrix["profiles"]
