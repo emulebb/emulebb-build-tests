@@ -55,3 +55,14 @@ def test_disconnect_deletes_only_after_request_file_detach() -> None:
     assert "RemoveSource is the central mirror cleanup" in block
     assert "if (bDelete && m_reqfile != NULL)" in block
     assert "theApp.downloadqueue->RemoveSource(this);" in block
+
+
+def test_duplicate_temp_source_detaches_request_file_before_attach_delete() -> None:
+    source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("bool CDownloadQueue::CheckAndAddSource") : source.index("bool CDownloadQueue::RemoveSource")]
+
+    assert "server/source-exchange probes are constructed with sender as their" in block
+    assert "AttachToAlreadyKnown" in block
+    assert "deletes the temporary probe immediately" in block
+    assert "source->SetRequestFile(NULL);" in block
+    assert "const bool bAttachedKnownClient = theApp.clientlist->AttachToAlreadyKnown(&source, NULL);" in block
