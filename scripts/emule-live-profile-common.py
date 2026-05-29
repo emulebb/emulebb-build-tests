@@ -251,7 +251,7 @@ def launch_app(
     require_pywinauto()
     if minimized_to_tray:
         apply_minimized_to_tray_startup(profile_base / "config")
-    os.environ["EMULE_STARTUP_PROFILE"] = "1"
+    os.environ["EMULEBB_STARTUP_PROFILE"] = "1"
     command_line = subprocess.list2cmdline(
         [str(app_exe), "-ignoreinstances", "-c", str(profile_base), *extra_args]
     )

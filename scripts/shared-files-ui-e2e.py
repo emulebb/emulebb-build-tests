@@ -1266,7 +1266,7 @@ def set_list_row_selected(process_handle: int, list_hwnd: int, row_index: int) -
 def launch_app(app_exe: Path, profile_base: Path) -> Application:
     """Starts the real app with the isolated `-c` override."""
 
-    os.environ["EMULE_STARTUP_PROFILE"] = "1"
+    os.environ["EMULEBB_STARTUP_PROFILE"] = "1"
     command_line = subprocess.list2cmdline(
         [str(app_exe), "-ignoreinstances", "-c", str(profile_base)]
     )
