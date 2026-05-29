@@ -20,6 +20,7 @@ def build_live_e2e_scenario_matrix() -> dict[str, Any]:
             "category": spec.category,
             "networkScope": spec.network_scope,
             "profiles": profile_membership.get(spec.name, ()),
+            "profileStages": classify_profile_stages(spec),
             "defaultEnabled": spec.default_enabled,
             "topology": classify_topology(spec),
             "stressClass": classify_stress(spec),
@@ -115,13 +116,25 @@ def classify_admin_volume_policy(spec: live_e2e_suite.SuiteSpec) -> str:
 def classify_optional_client_policy(spec: live_e2e_suite.SuiteSpec) -> str:
     """Classifies whether optional third-party clients affect evidence strength."""
 
-    if spec.name in {"multi-client-p2p-matrix", "local-kad-mixed-client-swarm", "godzilla-local-swarm"}:
-        return "mixed-clients-optional-unless-required"
+    if spec.name == "multi-client-p2p-matrix":
+        return "mixed-clients-optional-with-required-control"
+    if spec.name == "godzilla-local-swarm":
+        return "mixed-clients-runtime-optional"
+    if spec.name == "local-kad-mixed-client-swarm":
+        return "mixed-clients-required"
     if spec.name in {"deterministic-two-client-transfer", "local-ed2k-search-soak", "local-ed2k-chaos-mode", "local-ed2k-protocol-combinations", "local-kad-swarm"}:
         return "emulebb-and-harness-required"
     if spec.is_arr_emulebb or spec.is_prowlarr_emulebb or spec.is_amutorrent_browser or spec.name.startswith("amutorrent-"):
         return "controller-dependencies-required"
     return "none"
+
+
+def classify_profile_stages(spec: live_e2e_suite.SuiteSpec) -> dict[str, str]:
+    """Returns profile-specific child-stage defaults for suites that are staged."""
+
+    if spec.name == "godzilla-local-swarm":
+        return {"release-expanded": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE}
+    return {}
 
 
 def classify_diagnostics(spec: live_e2e_suite.SuiteSpec) -> tuple[str, ...]:
@@ -149,11 +162,18 @@ def summarize_matrix_gaps(suites: list[dict[str, Any]]) -> list[dict[str, str]]:
                     "gap": "large local swarm hammer is not RC-profile-visible",
                 }
             )
-        if suite["optionalClientPolicy"] == "mixed-clients-optional-unless-required":
+        if suite["optionalClientPolicy"] == "mixed-clients-optional-with-required-control":
             gaps.append(
                 {
                     "suite": suite["name"],
-                    "gap": "mixed-client optional policy weakens evidence unless the caller opts into required clients",
+                    "gap": "mixed-client optional policy weakens evidence unless --multi-client-require-optional-clients is enabled",
+                }
+            )
+        if suite["optionalClientPolicy"] == "mixed-clients-runtime-optional":
+            gaps.append(
+                {
+                    "suite": suite["name"],
+                    "gap": "mixed-client runtime readiness can downgrade aMule evidence inside the hammer",
                 }
             )
     return gaps

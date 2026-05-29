@@ -731,6 +731,31 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[6], "--p2p-bind-interface-name") == []
 
 
+def test_multi_client_optional_clients_can_be_required_from_aggregate_runner(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "multi-client-p2p-matrix",
+            "--multi-client-require-optional-clients",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["multi_client_p2p_matrix"]["require_optional_clients"] is True
+    assert [script_name(command) for command in commands] == ["multi-client-p2p-matrix.py"]
+    assert "--require-optional-clients" in commands[0]
+
+
 def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(
@@ -1179,6 +1204,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "shared-files-ui-e2e.py",
         "search-ui-live.py",
         "deterministic-two-client-transfer.py",
+        "godzilla-local-swarm.py",
         "shared-hash-ui-e2e.py",
         "shared-directories-rest-e2e.py",
         "shared-cache-volume-identity.py",
@@ -1214,6 +1240,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     assert summary["admin_volume_fixtures"]["enabled"] is True
     assert summary["admin_volume_fixtures"]["suite_names"] == [
         "shared-files-ui",
+        "godzilla-local-swarm",
         "shared-directories-rest",
         "shared-cache-volume-identity",
         "shared-cache-invalidation",
@@ -1260,23 +1287,28 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     deterministic_command = commands[4]
     assert option_values(deterministic_command, "--p2p-bind-interface-name") == []
 
-    cache_volume_command = commands[7]
+    godzilla_command = commands[5]
+    assert "--admin-volume-fixtures" in godzilla_command
+    assert option_values(godzilla_command, "--stage") == [live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE]
+    assert option_values(godzilla_command, "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_GODZILLA_VHD_SIZE_MB)]
+
+    cache_volume_command = commands[8]
     assert option_values(cache_volume_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cache_volume_command
 
-    cache_invalidation_command = commands[8]
+    cache_invalidation_command = commands[9]
     assert option_values(cache_invalidation_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cache_invalidation_command
 
-    unc_mapped_command = commands[9]
+    unc_mapped_command = commands[10]
     assert option_values(unc_mapped_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in unc_mapped_command
 
-    long_path_command = commands[10]
+    long_path_command = commands[11]
     assert option_values(long_path_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in long_path_command
 
-    rest_command = commands[11]
+    rest_command = commands[12]
     assert option_values(rest_command, "--server-search-count") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_SEARCH_COUNT_PER_NETWORK)
     ]
@@ -1305,31 +1337,31 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    disk_space_command = commands[12]
+    disk_space_command = commands[13]
     assert option_values(disk_space_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in disk_space_command
 
-    profile_isolation_command = commands[13]
+    profile_isolation_command = commands[14]
     assert option_values(profile_isolation_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_isolation_command
 
-    profile_durability_command = commands[14]
+    profile_durability_command = commands[15]
     assert option_values(profile_durability_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in profile_durability_command
 
-    category_matrix_command = commands[15]
+    category_matrix_command = commands[16]
     assert option_values(category_matrix_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in category_matrix_command
 
-    partfile_recovery_command = commands[16]
+    partfile_recovery_command = commands[17]
     assert option_values(partfile_recovery_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in partfile_recovery_command
 
-    cleanup_audit_command = commands[17]
+    cleanup_audit_command = commands[18]
     assert option_values(cleanup_audit_command, "--vhd-size-mb") == ["256"]
     assert "--admin-volume-fixtures" in cleanup_audit_command
 
-    cold_start_command = commands[18]
+    cold_start_command = commands[19]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.RELEASE_EXPANDED_REST_COLD_START_DUMP_STRESS_WAVES)
     ]

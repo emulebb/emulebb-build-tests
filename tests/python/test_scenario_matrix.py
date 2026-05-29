@@ -30,7 +30,13 @@ def test_live_e2e_scenario_matrix_classifies_swarm_and_hammer_lanes() -> None:
     assert by_name["godzilla-local-swarm"]["topology"] == "large-local-swarm"
     assert by_name["godzilla-local-swarm"]["stressClass"] == "hammer"
     assert by_name["godzilla-local-swarm"]["adminVolumePolicy"] == "required"
+    assert by_name["godzilla-local-swarm"]["profiles"] == ("release-expanded",)
+    assert by_name["godzilla-local-swarm"]["profileStages"] == {
+        "release-expanded": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE,
+    }
     assert by_name["multi-client-p2p-matrix"]["topology"] == "local-swarm"
+    assert by_name["multi-client-p2p-matrix"]["optionalClientPolicy"] == "mixed-clients-optional-with-required-control"
+    assert by_name["local-kad-mixed-client-swarm"]["optionalClientPolicy"] == "mixed-clients-required"
     assert by_name["local-ed2k-chaos-mode"]["stressClass"] == "chaos"
     assert by_name["rest-cold-start-dump-stress"]["stressClass"] == "stress"
 
@@ -42,5 +48,6 @@ def test_live_e2e_scenario_matrix_surfaces_known_policy_gaps() -> None:
     assert (
         "godzilla-local-swarm",
         "large local swarm hammer is not RC-profile-visible",
-    ) in gaps
+    ) not in gaps
     assert any(suite == "multi-client-p2p-matrix" for suite, _gap in gaps)
+    assert not any(suite == "local-kad-mixed-client-swarm" for suite, _gap in gaps)

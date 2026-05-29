@@ -87,6 +87,7 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_GODZILLA_VHD_SIZE_MB = 128 * 1024
 GODZILLA_STAGES = ("full", "launch-scale")
 DEFAULT_GODZILLA_STAGE = "full"
+RELEASE_EXPANDED_GODZILLA_STAGE = "launch-scale"
 DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT = 30
 DEFAULT_GODZILLA_PEER_TRANSFER_COUNT = 300
 DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT = 300
@@ -534,6 +535,7 @@ PROFILE_SUITE_NAMES = {
         "shared-hash-ui",
         "search-ui-live",
         "deterministic-two-client-transfer",
+        "godzilla-local-swarm",
         "shared-directories-rest",
         "shared-cache-volume-identity",
         "shared-cache-invalidation",
@@ -662,6 +664,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
     """Applies named live E2E profile defaults before validation and command building."""
 
     if args.profile == "default":
+        apply_godzilla_stage_default(args)
         return
 
     if not args.suite:
@@ -737,6 +740,8 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
 
     if args.profile == "release-expanded":
         args.admin_volume_fixtures = True
+        if "godzilla-local-swarm" in (args.suite or ()) and args.godzilla_stage is None:
+            args.godzilla_stage = RELEASE_EXPANDED_GODZILLA_STAGE
         if not args.preference_ui_directories_tree_stress:
             args.preference_ui_directories_tree_stress = True
         if args.rest_server_search_count == DEFAULT_REST_SEARCH_COUNT:
@@ -886,6 +891,14 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
             args.rest_cold_start_dump_stress_downloads_per_wave = BETA_RELEASE_REST_COLD_START_DUMP_STRESS_DOWNLOADS_PER_WAVE
         if args.rest_cold_start_dump_stress_post_drain_seconds == DEFAULT_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS:
             args.rest_cold_start_dump_stress_post_drain_seconds = BETA_RELEASE_REST_COLD_START_DUMP_STRESS_POST_DRAIN_SECONDS
+    apply_godzilla_stage_default(args)
+
+
+def apply_godzilla_stage_default(args: argparse.Namespace) -> None:
+    """Fills the Godzilla stage only after profile-specific staged defaults can apply."""
+
+    if args.godzilla_stage is None:
+        args.godzilla_stage = DEFAULT_GODZILLA_STAGE
 
 
 def build_python_command(python_executable: str) -> list[str]:
@@ -930,6 +943,7 @@ def build_suite_command(
     rest_leak_churn_budget: str = "off",
     rest_leak_churn_cycles: int | None = None,
     rest_stop_start_after_churn: bool = False,
+    multi_client_require_optional_clients: bool = False,
     p2p_bind_interface_name: str = "hide.me",
     p2p_bind_interface_address: str | None = None,
     godzilla_visible_ui: bool = False,
@@ -1118,6 +1132,8 @@ def build_suite_command(
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
         command.extend(["--ui-search-rounds", str(search_ui_search_rounds)])
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
+    if spec.name == "multi-client-p2p-matrix" and multi_client_require_optional_clients:
+        command.append("--require-optional-clients")
     if (
         spec.name
         in {
@@ -1601,6 +1617,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-leak-churn-budget", choices=["off", "smoke", "soak"], default="off")
     parser.add_argument("--rest-leak-churn-cycles", type=int)
     parser.add_argument("--rest-stop-start-after-churn", action="store_true")
+    parser.add_argument("--multi-client-require-optional-clients", action="store_true")
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     parser.add_argument("--emule-connection-timeout-seconds", type=float, default=DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS)
@@ -1732,7 +1749,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--godzilla-visible-ui", action="store_true")
     parser.add_argument("--godzilla-p2p-bind-interface-address")
     parser.add_argument("--godzilla-cpu-profile", action="store_true")
-    parser.add_argument("--godzilla-stage", choices=GODZILLA_STAGES, default=DEFAULT_GODZILLA_STAGE)
+    parser.add_argument("--godzilla-stage", choices=GODZILLA_STAGES)
     parser.add_argument("--godzilla-vhd-runtime-root", choices=["drive-letter"], default="drive-letter")
     parser.add_argument("--godzilla-total-client-count", type=int, default=DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT)
     parser.add_argument("--godzilla-peer-transfer-count", type=int, default=DEFAULT_GODZILLA_PEER_TRANSFER_COUNT)
@@ -1975,6 +1992,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_leak_churn_budget": args.rest_leak_churn_budget,
         "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
         "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
+        "multi_client_p2p_matrix": {
+            "require_optional_clients": bool(args.multi_client_require_optional_clients),
+        },
         "rest_download_trigger_count": args.rest_download_trigger_count,
         "rest_search_method_override": args.rest_search_method_override,
         "local_kad_bootstrap_mode": args.local_kad_bootstrap_mode,
@@ -2153,6 +2173,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_leak_churn_budget=args.rest_leak_churn_budget,
             rest_leak_churn_cycles=args.rest_leak_churn_cycles,
             rest_stop_start_after_churn=args.rest_stop_start_after_churn,
+            multi_client_require_optional_clients=args.multi_client_require_optional_clients,
             p2p_bind_interface_name=child_p2p_bind_interface_name,
             p2p_bind_interface_address=child_p2p_bind_interface_address,
             godzilla_visible_ui=args.godzilla_visible_ui,
