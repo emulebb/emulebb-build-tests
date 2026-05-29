@@ -39,8 +39,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     workspace_root = args.workspace_root
-    if workspace_root is None and os.environ.get("EMULE_WORKSPACE_ROOT"):
-        workspace_root = Path(os.environ["EMULE_WORKSPACE_ROOT"])
+    if workspace_root is None and os.environ.get("EMULEBB_WORKSPACE_ROOT"):
+        workspace_root = Path(os.environ["EMULEBB_WORKSPACE_ROOT"])
 
     report = build_release_campaign_report(
         ReleaseCampaignPaths(

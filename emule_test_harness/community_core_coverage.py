@@ -201,7 +201,7 @@ def run_live_rest_e2e_for_community_summary(
         config.rest_stress_budget,
     ]
     env = os.environ.copy()
-    env["EMULE_WORKSPACE_ROOT"] = str(config.workspace_root.parent.parent)
+    env["EMULEBB_WORKSPACE_ROOT"] = str(config.workspace_root.parent.parent)
     completed = subprocess.run(command, check=False, env=env)
     return {
         "status": "passed" if completed.returncode == 0 else "failed",

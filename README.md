@@ -1,15 +1,15 @@
 # eMule Shared Tests
 
-This repository is the shared test harness for the canonical eMuleBB workspace rooted at `EMULE_WORKSPACE_ROOT`.
+This repository is the shared test harness for the canonical eMuleBB workspace rooted at `EMULEBB_WORKSPACE_ROOT`.
 
 This repo assumes the canonical workspace created by
 `python -m emule_workspace materialize` from `repos\emulebb-build`.
 
 Minimum expected roots:
 
-- `EMULE_WORKSPACE_ROOT\repos\emulebb-build`
-- `EMULE_WORKSPACE_ROOT\repos\emulebb-build-tests`
-- `EMULE_WORKSPACE_ROOT\workspaces\workspace`
+- `EMULEBB_WORKSPACE_ROOT\repos\emulebb-build`
+- `EMULEBB_WORKSPACE_ROOT\repos\emulebb-build-tests`
+- `EMULEBB_WORKSPACE_ROOT\workspaces\workspace`
 
 Use `repos\emulebb-build\README.md` for the full workspace topology and
 materialization contract.
@@ -40,7 +40,7 @@ Supported branch:
 - `main`
 
 Workspace branch roles are owned by
-`EMULE_WORKSPACE_ROOT\repos\emulebb-tooling\docs\WORKSPACE-POLICY.md`. Do not
+`EMULEBB_WORKSPACE_ROOT\repos\emulebb-tooling\docs\WORKSPACE-POLICY.md`. Do not
 infer release status from branch names. Baseline workspaces may be edited only
 when the change is strictly to enable tests, seams, logging, tracing, or
 debugging; they are not feature-development branches.
@@ -59,7 +59,7 @@ Community core comparison workflow:
 - it runs native coverage for `app\emulebb-community-baseline` with `parity`
 - it runs `scripts\run-live-diff.py` against those two app roots and keeps the suite-level pass/fail split explicit
 - the wrapper writes a combined summary under
-  `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-reports\community-core-coverage`
+  `EMULEBB_WORKSPACE_ROOT\workspaces\workspace\state\test-reports\community-core-coverage`
 
 Current critical comparison slices:
 
@@ -130,7 +130,7 @@ Script inventory:
 
 Workspace quick reference:
 
-- default canonical workspace: `EMULE_WORKSPACE_ROOT\workspaces\workspace`
+- default canonical workspace: `EMULEBB_WORKSPACE_ROOT\workspaces\workspace`
 - canonical target app paths are `app\emulebb-main`, `app\emulebb-community-baseline`, and `app\emulebb-community-tracing-harness`
 - workspace orchestration commands use variant keys, not folder names:
   `main` maps to `app\emulebb-main`, `community` maps to
@@ -142,7 +142,7 @@ Workspace quick reference:
 Harness output roots:
 
 - published reports live under
-  `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-reports`
+  `EMULEBB_WORKSPACE_ROOT\workspaces\workspace\state\test-reports`
 - each suite publishes timestamped UTC `YYYYMMDDTHHMMSSZ` run folders plus a
   stable `<suite>\latest` snapshot
 - suite result leaves use `<suite>-result.json`; partial result leaves use
@@ -150,7 +150,7 @@ Harness output roots:
   `<suite>-summary.json`
 - scratch artifacts, live profiles, VHD images, admin mount working folders,
   CPU/heap traces, browser data directories, dumps, and child-suite scratch live
-  under `EMULE_WORKSPACE_ROOT\workspaces\workspace\state\test-artifacts`
+  under `EMULEBB_WORKSPACE_ROOT\workspaces\workspace\state\test-artifacts`
 - explicit artifact, profile, mount, or report paths below `%TEMP%`, `%TMP%`,
   or `%LOCALAPPDATA%\Temp` are rejected; test outcomes must be predictable and
   workspace-owned

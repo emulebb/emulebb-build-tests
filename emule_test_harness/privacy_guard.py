@@ -10,7 +10,7 @@ from pathlib import Path
 def tooling_ci_root() -> Path:
     """Returns the canonical tooling CI module directory."""
 
-    env_root = os.environ.get("EMULE_WORKSPACE_ROOT")
+    env_root = os.environ.get("EMULEBB_WORKSPACE_ROOT")
     candidates: list[Path] = []
     if env_root:
         candidates.append(Path(env_root).resolve() / "repos" / "emulebb-tooling" / "ci")

@@ -714,7 +714,7 @@ def main() -> int:
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument(
         "--mounted-shared-root",
-        default=os.environ.get("EMULE_MOUNTED_SHARED_ROOT"),
+        default=os.environ.get("EMULEBB_TEST_MOUNTED_SHARED_ROOT"),
         help=(
             "Optional existing dedicated Windows mounted-folder path. When set, "
             "the suite recursively shares its parent and verifies monitor/persistence "
@@ -1096,7 +1096,7 @@ def main() -> int:
         if mounted_fixture is None:
             checks["mounted_shared_root"] = {
                 "status": "skipped",
-                "reason": "--mounted-shared-root/EMULE_MOUNTED_SHARED_ROOT not configured",
+                "reason": "--mounted-shared-root/EMULEBB_TEST_MOUNTED_SHARED_ROOT not configured",
             }
         else:
             mounted_expectations = build_mounted_root_expectations(mounted_fixture)

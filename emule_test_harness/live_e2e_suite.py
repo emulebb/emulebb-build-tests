@@ -1441,9 +1441,9 @@ def run_suite_command_with_optional_cpu_profile(
 
 
 def env_workspace_root_matches(workspace_root: Path) -> bool:
-    """Returns whether EMULE_WORKSPACE_ROOT already covers a workspace child root."""
+    """Returns whether EMULEBB_WORKSPACE_ROOT already covers a workspace child root."""
 
-    env_root = os.environ.get("EMULE_WORKSPACE_ROOT")
+    env_root = os.environ.get("EMULEBB_WORKSPACE_ROOT")
     if not env_root:
         return False
     return (Path(env_root).resolve() / "workspaces" / workspace_root.name).resolve() == workspace_root.resolve()

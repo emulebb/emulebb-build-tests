@@ -1740,11 +1740,11 @@ def main() -> int:
     env_values = live_env.load_env_values(
         ("PROWLARR_URL", "PROWLARR_API_KEY"),
         env_file=Path(args.env_file).resolve(),
-        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "eMuleBB Local"},
+        defaults={"EMULEBB_TEST_PROWLARR_INDEXER_NAME": "eMuleBB Local"},
     )
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
-    indexer_name = env_values["PROWLARR_EMULEBB_INDEXER_NAME"]
+    indexer_name = env_values["EMULEBB_TEST_PROWLARR_INDEXER_NAME"]
 
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,

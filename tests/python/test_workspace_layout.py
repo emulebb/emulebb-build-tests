@@ -11,7 +11,7 @@ from emule_test_harness.workspace_layout import (
 
 
 def test_default_roots_use_canonical_repo_layout(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
 
     assert get_default_workspace_root(test_repo_root) == tmp_path / "workspaces" / "workspace"

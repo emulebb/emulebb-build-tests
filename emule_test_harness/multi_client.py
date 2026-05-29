@@ -117,7 +117,7 @@ def long_path_capability_report(client_keys: tuple[str, ...] | list[str]) -> dic
 def workspace_parent_root(workspace_root: Path) -> Path:
     """Returns the root that owns `repos`, `workspaces`, `analysis`, and `state`."""
 
-    override = os.environ.get("EMULE_WORKSPACE_ROOT")
+    override = os.environ.get("EMULEBB_WORKSPACE_ROOT")
     if override:
         return Path(override).resolve()
     resolved = workspace_root.resolve()

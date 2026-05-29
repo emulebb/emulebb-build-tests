@@ -38,8 +38,8 @@ def get_build_tag(workspace_root: Path, app_root: Path | None = None) -> str:
 def get_emule_workspace_root(test_repo_root: Path) -> Path:
     """Returns the canonical root that owns `repos/` and `workspaces/`."""
 
-    if os.environ.get("EMULE_WORKSPACE_ROOT"):
-        return Path(os.environ["EMULE_WORKSPACE_ROOT"]).resolve()
+    if os.environ.get("EMULEBB_WORKSPACE_ROOT"):
+        return Path(os.environ["EMULEBB_WORKSPACE_ROOT"]).resolve()
     return test_repo_root.resolve().parent.parent
 
 

@@ -131,7 +131,7 @@ def test_test_network_vpn_keeps_only_public_network_scope() -> None:
 
 def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
-    monkeypatch.setenv("EMULE_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
 
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("preference-ui"),
@@ -147,7 +147,7 @@ def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Pat
 
 def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
 
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("preference-ui"),
@@ -469,7 +469,7 @@ def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypa
 def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
     shared_root = tmp_path / "shared"
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
 
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("preference-ui"),

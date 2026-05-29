@@ -31,7 +31,7 @@ class WorkspaceManifest:
 def get_emule_workspace_root(test_repo_root: Path) -> Path:
     """Returns the canonical eMule workspace root that owns `repos` and `workspaces`."""
 
-    override = os.environ.get("EMULE_WORKSPACE_ROOT")
+    override = os.environ.get("EMULEBB_WORKSPACE_ROOT")
     if override:
         return Path(override).resolve()
     return (test_repo_root.resolve() / ".." / "..").resolve()

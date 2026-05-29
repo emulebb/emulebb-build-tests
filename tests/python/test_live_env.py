@@ -13,7 +13,7 @@ def clear_live_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "PROWLARR_URL",
         "PROWLARR_API_KEY",
-        "PROWLARR_EMULEBB_INDEXER_NAME",
+        "EMULEBB_TEST_PROWLARR_INDEXER_NAME",
         "RADARR_URL",
         "RADARR_API_KEY",
         "SONARR_URL",
@@ -30,7 +30,7 @@ def test_load_env_values_uses_process_env_before_dotenv_fallback(tmp_path: Path,
             [
                 "PROWLARR_URL=http://from-file",
                 "PROWLARR_API_KEY=file-secret",
-                "PROWLARR_EMULEBB_INDEXER_NAME=File Name",
+                "EMULEBB_TEST_PROWLARR_INDEXER_NAME=File Name",
             ]
         ),
         encoding="utf-8",
@@ -41,12 +41,12 @@ def test_load_env_values_uses_process_env_before_dotenv_fallback(tmp_path: Path,
     values = live_env.load_env_values(
         ("PROWLARR_URL", "PROWLARR_API_KEY"),
         env_file=env_file,
-        defaults={"PROWLARR_EMULEBB_INDEXER_NAME": "Default Name"},
+        defaults={"EMULEBB_TEST_PROWLARR_INDEXER_NAME": "Default Name"},
     )
 
     assert values["PROWLARR_URL"] == "http://from-file"
     assert values["PROWLARR_API_KEY"] == "process-secret"
-    assert values["PROWLARR_EMULEBB_INDEXER_NAME"] == "File Name"
+    assert values["EMULEBB_TEST_PROWLARR_INDEXER_NAME"] == "File Name"
 
 
 def test_load_env_values_allows_process_only_configuration(monkeypatch: pytest.MonkeyPatch) -> None:

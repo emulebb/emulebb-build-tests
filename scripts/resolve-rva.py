@@ -49,7 +49,7 @@ class IMAGEHLP_LINE64(ctypes.Structure):
 def default_workspace_root() -> Path:
     script_dir = Path(__file__).resolve().parent
     test_repo_root = script_dir.parent
-    return Path(os.environ.get("EMULE_WORKSPACE_ROOT", test_repo_root.parent.parent)).resolve()
+    return Path(os.environ.get("EMULEBB_WORKSPACE_ROOT", test_repo_root.parent.parent)).resolve()
 
 
 def default_exe_path(workspace_root: Path) -> Path:

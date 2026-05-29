@@ -95,6 +95,6 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     assert "smoke" in command
     env = captured["env"]
     assert isinstance(env, dict)
-    assert env["EMULE_WORKSPACE_ROOT"] == str(tmp_path)
+    assert env["EMULEBB_WORKSPACE_ROOT"] == str(tmp_path)
     assert summary["rest_coverage_budget"] == "contract"
     assert summary["rest_stress_budget"] == "smoke"

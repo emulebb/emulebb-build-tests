@@ -562,8 +562,8 @@ def get_repo_root(script_file: str | Path) -> Path:
 def get_emule_workspace_root(repo_root: Path) -> Path:
     """Returns the canonical eMule workspace root that owns `repos/` and `workspaces/`."""
 
-    if os.environ.get("EMULE_WORKSPACE_ROOT"):
-        return Path(os.environ["EMULE_WORKSPACE_ROOT"]).resolve()
+    if os.environ.get("EMULEBB_WORKSPACE_ROOT"):
+        return Path(os.environ["EMULEBB_WORKSPACE_ROOT"]).resolve()
     return (repo_root / ".." / "..").resolve()
 
 

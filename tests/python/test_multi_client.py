@@ -25,7 +25,7 @@ def test_client_long_path_capabilities_are_explicit() -> None:
 
 
 def test_workspace_parent_root_derives_canonical_root(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"
 
     assert multi_client.workspace_parent_root(workspace) == tmp_path
@@ -33,13 +33,13 @@ def test_workspace_parent_root_derives_canonical_root(tmp_path: Path, monkeypatc
 
 def test_workspace_parent_root_honors_env_override(tmp_path: Path, monkeypatch) -> None:
     override = tmp_path / "custom-root"
-    monkeypatch.setenv("EMULE_WORKSPACE_ROOT", str(override))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(override))
 
     assert multi_client.workspace_parent_root(tmp_path / "workspaces" / "workspace") == override.resolve()
 
 
 def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"
     app_exe = workspace / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
     harness_exe = workspace / "app" / "emulebb-community-tracing-harness" / "srchybrid" / "x64" / "Release" / "emule.exe"
@@ -81,7 +81,7 @@ def test_resolve_harness_client_accepts_current_and_renamed_executable_names(tmp
 
 
 def test_resolve_optional_clients_accepts_workspace_state_artifacts(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"
     write_workspace_manifest(workspace, tmp_path)
     emuleai_exe = tmp_path / "repos" / "eMuleAI" / "_Build" / "eMuleAI" / "Release" / "x64" / "eMuleAI.exe"
@@ -103,7 +103,7 @@ def test_resolve_optional_clients_accepts_workspace_state_artifacts(tmp_path: Pa
 
 
 def test_resolve_amule_client_accepts_portable_workspace_build(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"
     write_workspace_manifest(workspace, tmp_path)
     daemon = tmp_path / "repos" / "amule" / "amule-portable-x64" / "bin" / "amuled.exe"
@@ -120,7 +120,7 @@ def test_resolve_amule_client_accepts_portable_workspace_build(tmp_path: Path, m
 
 
 def test_optional_clients_report_unavailable_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("EMULE_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"
 
     emuleai = multi_client.resolve_emuleai_client(workspace, "Release")
