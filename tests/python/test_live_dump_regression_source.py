@@ -44,3 +44,14 @@ def test_corruption_blackbox_recomputes_merge_target_after_record_mutation() -> 
     assert "VERIFY(m_aaRecords[nPart][posMerge].Merge" not in block
     assert "ndbgRewritten += nRelEndPos - cbbRec.m_nStartPos + 1;" in block
     assert "ndbgRewritten += cbbRec.m_nEndPos - nRelStartPos + 1;" in block
+
+
+def test_disconnect_deletes_only_after_request_file_detach() -> None:
+    source = (app_source_root() / "BaseClient.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("bool CUpDownClient::Disconnected") : source.index("// Returned bool is not about whether the connect attempt succeeded.")]
+
+    assert "live disconnect dumps showed a client in DS_NONE/US_NONE" in block
+    assert "return \"delete me\" with that pointer still set" in block
+    assert "RemoveSource is the central mirror cleanup" in block
+    assert "if (bDelete && m_reqfile != NULL)" in block
+    assert "theApp.downloadqueue->RemoveSource(this);" in block
