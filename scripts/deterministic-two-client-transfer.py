@@ -705,11 +705,58 @@ def stop_process(process: subprocess.Popen | None, *, timeout_seconds: float = 1
         process.wait(timeout=timeout_seconds)
 
 
+def retry_rest_request(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str,
+    timeout_seconds: float,
+    request_timeout_seconds: float = 30.0,
+    **kwargs,
+) -> dict[str, object]:
+    """Retries transient REST socket failures during live client startup."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        try:
+            result = rest_smoke.http_request(
+                base_url,
+                path,
+                api_key=api_key,
+                request_timeout_seconds=request_timeout_seconds,
+                **kwargs,
+            )
+        except (OSError, TimeoutError, urllib.error.URLError) as exc:
+            observations.append(
+                {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            return None
+        if observations:
+            result = dict(result)
+            result["transient_errors"] = observations[-5:]
+        return result
+
+    try:
+        return live_common.wait_for(resolve, timeout_seconds, 0.5, f"REST request {path}")
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc}. REST transient observations: {observations[-5:]}") from exc
+
+
 def add_and_connect_server(base_url: str, api_key: str, *, address: str, port: int, timeout_seconds: float) -> dict[str, object]:
     """Ensures the local ED2K server exists and waits until eMule connects to it."""
 
     server = {"address": address, "port": port, "name": "emulebb-local-e2e"}
-    servers_result = rest_smoke.http_request(base_url, "/api/v1/servers", api_key=api_key, request_timeout_seconds=30.0)
+    servers_result = retry_rest_request(
+        base_url,
+        "/api/v1/servers",
+        api_key=api_key,
+        timeout_seconds=timeout_seconds,
+    )
     server_rows = rest_smoke.require_json_array(servers_result, 200)
     matching_rows = [
         row
@@ -722,26 +769,26 @@ def add_and_connect_server(base_url: str, api_key: str, *, address: str, port: i
     if matching_rows:
         add_summary = {"preloaded": True, "server": dict(matching_rows[0])}
     else:
-        add_result = rest_smoke.http_request(
+        add_result = retry_rest_request(
             base_url,
             "/api/v1/servers",
             method="POST",
             api_key=api_key,
             json_body=server,
-            request_timeout_seconds=30.0,
+            timeout_seconds=timeout_seconds,
         )
         if int(add_result.get("status", 0)) != 200:
             raise RuntimeError(f"Adding local ED2K server failed: {rest_smoke.compact_http_result(add_result)!r}")
         rest_smoke.require_json_object(add_result, 200)
         add_summary = rest_smoke.compact_http_result(add_result)
 
-    connect_result = rest_smoke.http_request(
+    connect_result = retry_rest_request(
         base_url,
         f"/api/v1/servers/{address}:{port}/operations/connect",
         method="POST",
         api_key=api_key,
         json_body={},
-        request_timeout_seconds=30.0,
+        timeout_seconds=timeout_seconds,
     )
     if int(connect_result.get("status", 0)) != 200:
         raise RuntimeError(f"Connecting local ED2K server failed: {rest_smoke.compact_http_result(connect_result)!r}")

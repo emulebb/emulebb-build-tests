@@ -563,6 +563,40 @@ def test_add_and_connect_server_reuses_preloaded_server(monkeypatch) -> None:
     assert ("POST", "/api/v1/servers/10.1.2.3:4661/operations/connect") in calls
 
 
+def test_add_and_connect_server_retries_transient_rest_socket_abort(monkeypatch) -> None:
+    module = load_suite_module()
+    calls: list[tuple[str, str]] = []
+    first_call = True
+
+    def fake_http_request(_base_url, path, *, method="GET", **_kwargs):
+        nonlocal first_call
+        calls.append((method, path))
+        if first_call:
+            first_call = False
+            raise ConnectionAbortedError(10053, "socket aborted")
+        if path == "/api/v1/servers":
+            return {"status": 200, "json": [{"address": "10.1.2.3", "port": 4661, "name": "local"}]}
+        return {"status": 200, "json": {"connected": True}}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_array", lambda result, _status: list(result["json"]))
+    monkeypatch.setattr(module.rest_smoke, "require_json_object", lambda result, _status: dict(result["json"]))
+    monkeypatch.setattr(module.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(module.rest_smoke, "wait_for_server_connected", lambda *_args, **_kwargs: {"connected": True})
+
+    result = module.add_and_connect_server(
+        "http://127.0.0.1:4711",
+        "key",
+        address="10.1.2.3",
+        port=4661,
+        timeout_seconds=2.0,
+    )
+
+    assert result["add"]["preloaded"] is True
+    assert calls.count(("GET", "/api/v1/servers")) == 2
+    assert ("POST", "/api/v1/servers/10.1.2.3:4661/operations/connect") in calls
+
+
 def test_wait_for_completed_file_timeout_carries_diagnostic_observations(tmp_path: Path) -> None:
     module = load_suite_module()
     snapshots = [{"transfer": {"status": 200, "json": {"state": "downloading"}}}]
