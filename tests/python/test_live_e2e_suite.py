@@ -2179,6 +2179,32 @@ def test_profile_seed_dir_flag_is_forwarded_with_hard_renamed_name(tmp_path: Pat
     assert removed_flag_name not in commands[0]
 
 
+def test_live_process_monitor_uses_materialized_profile_root(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    profile_seed_dir = tmp_path / "install" / "profiles" / "emulebb" / "config"
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "live-process-monitor",
+            "--profile-seed-dir",
+            str(profile_seed_dir),
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert script_name(commands[0]) == "live-process-monitor.py"
+    assert option_values(commands[0], "--profile-seed-dir") == [str(profile_seed_dir.resolve())]
+    assert option_values(commands[0], "--profile-dir") == [str(profile_seed_dir.parent.resolve())]
+
+
 def test_package_helper_profile_forwards_dependency_options(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     cache_root = tmp_path / "arr-cache"

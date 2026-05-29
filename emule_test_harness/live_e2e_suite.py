@@ -1038,6 +1038,8 @@ def build_suite_command(
         command.extend(["--app-exe", str(app_exe.resolve())])
     if seed_config_dir is not None:
         command.extend(["--profile-seed-dir", str(seed_config_dir.resolve())])
+        if spec.name == "live-process-monitor":
+            command.extend(["--profile-dir", str(seed_config_dir.parent.resolve())])
     if spec.accepts_startup_trace_mode:
         command.extend(["--startup-trace-mode", startup_trace_mode])
     if spec.accepts_shared_root and shared_root is not None:

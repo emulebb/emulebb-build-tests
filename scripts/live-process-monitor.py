@@ -114,9 +114,14 @@ def main() -> int:
             "to live-process-monitor.local.json and set profileDir."
         )
     config = live_process_monitor.load_config(config_path)
+    profile_seed_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
     config = live_process_monitor.merge_config(
         config,
-        profile_dir=Path(args.profile_dir).resolve() if args.profile_dir else None,
+        profile_dir=(
+            Path(args.profile_dir).resolve()
+            if args.profile_dir
+            else (profile_seed_dir.parent if profile_seed_dir else None)
+        ),
         base_url=args.base_url.rstrip("/") if args.base_url else None,
         api_key=args.api_key,
         duration_seconds=args.duration_seconds,
