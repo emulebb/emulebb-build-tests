@@ -76,7 +76,7 @@ TEST_CASE("Part file numeric seam clamps list counts and 32-bit scores before na
 
 TEST_CASE("Part-file hash seam rejects worker results whose theoretical hash layout drifted")
 {
-#ifdef EMULE_TESTS_HAS_PART_FILE_HASH_LAYOUT_GENERATION
+#ifdef EMULEBB_TESTS_HAS_PART_FILE_HASH_LAYOUT_GENERATION
 	CHECK(HasMatchingPartFileHashLayout(0u, 0u, 0u, 0u, 0u, 0u));
 	CHECK(HasMatchingPartFileHashLayout(7u, 7u, 12u, 12u, 11u, 11u));
 	CHECK(HasMatchingPartFileHashLayout(static_cast<uint32_t>(65535u), static_cast<uint32_t>(65535u), static_cast<uint16_t>(65535u), static_cast<uint16_t>(65535u), 0u, 0u));

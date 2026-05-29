@@ -3,7 +3,7 @@
 
 #if __has_include("AsyncSocketExRuntimeSeams.h")
 #include "AsyncSocketExRuntimeSeams.h"
-#define EMULE_TEST_HAVE_ASYNC_SOCKET_RUNTIME_SEAMS 1
+#define EMULEBB_TEST_HAVE_ASYNC_SOCKET_RUNTIME_SEAMS 1
 #endif
 
 TEST_SUITE_BEGIN("parity");
@@ -49,7 +49,7 @@ TEST_CASE("Async socket seam recognizes terminal close signals without conflatin
 	CHECK_FALSE(HasAsyncSocketCloseSignal(POLLOUT));
 }
 
-#if defined(EMULE_TEST_HAVE_ASYNC_SOCKET_CONNECT_TARGET_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_ASYNC_SOCKET_CONNECT_TARGET_SEAMS)
 TEST_CASE("Async socket seam snapshots connect targets before the addrinfo list can be released")
 {
 	SOCKADDR_IN sockAddr = {};
@@ -103,7 +103,7 @@ TEST_CASE("Async socket seam only yields callback-drain polling while callbacks 
 	CHECK_FALSE(ShouldYieldForAsyncSocketCallbackDrain(-1));
 }
 
-#if defined(EMULE_TEST_HAVE_ASYNC_SOCKET_HOSTNAME_RESOLVE_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_ASYNC_SOCKET_HOSTNAME_RESOLVE_SEAMS)
 TEST_CASE("Async socket hostname seam ignores stale worker results")
 {
 	CHECK(ClassifyAsyncSocketHostnameCompletion(false, true, 0) == AsyncSocketExHostnameCompletion::UnknownSocket);
@@ -113,7 +113,7 @@ TEST_CASE("Async socket hostname seam ignores stale worker results")
 }
 #endif
 
-#if defined(EMULE_TEST_HAVE_ASYNC_SOCKET_RUNTIME_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_ASYNC_SOCKET_RUNTIME_SEAMS)
 TEST_CASE("Async socket seam makes helper initialization failures release-visible")
 {
 	CHECK(AsyncSocketExRuntimeSeams::ShouldLogThreadDataInitFailure());

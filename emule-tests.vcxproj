@@ -87,7 +87,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <Optimization>Disabled</Optimization>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CONSOLE;EMULE_TESTS_HAS_MAPPED_FILE_READER=$(HasMappedFileReader);EMULE_TESTS_HAS_UPLOAD_SCORE_SEAMS=$(HasUploadScoreSeams);EMULE_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS=$(HasPartFilePersistenceSeams);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_CONSOLE;EMULEBB_TESTS_HAS_MAPPED_FILE_READER=$(HasMappedFileReader);EMULEBB_TESTS_HAS_UPLOAD_SCORE_SEAMS=$(HasUploadScoreSeams);EMULEBB_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS=$(HasPartFilePersistenceSeams);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <WarningLevel>Level4</WarningLevel>
     </ClCompile>
@@ -111,7 +111,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <Optimization>MaxSpeed</Optimization>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;NDEBUG;_CONSOLE;EMULE_TESTS_HAS_MAPPED_FILE_READER=$(HasMappedFileReader);EMULE_TESTS_HAS_UPLOAD_SCORE_SEAMS=$(HasUploadScoreSeams);EMULE_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS=$(HasPartFilePersistenceSeams);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;NDEBUG;_CONSOLE;EMULEBB_TESTS_HAS_MAPPED_FILE_READER=$(HasMappedFileReader);EMULEBB_TESTS_HAS_UPLOAD_SCORE_SEAMS=$(HasUploadScoreSeams);EMULEBB_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS=$(HasPartFilePersistenceSeams);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <WarningLevel>Level4</WarningLevel>
     </ClCompile>

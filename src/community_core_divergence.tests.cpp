@@ -9,17 +9,17 @@
 
 #include "UploadQueueSeams.h"
 
-#if EMULE_TESTS_HAS_UPLOAD_SCORE_SEAMS
+#if EMULEBB_TESTS_HAS_UPLOAD_SCORE_SEAMS
 #include "UploadScoreSeams.h"
 #endif
 
-#if EMULE_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS
+#if EMULEBB_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS
 #include "PartFilePersistenceSeams.h"
 #endif
 
 namespace
 {
-#if EMULE_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS
+#if EMULEBB_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS
 	void WriteTextFileLongPath(const std::wstring &path, const char *pszText)
 	{
 		const BYTE *pBegin = reinterpret_cast<const BYTE *>(pszText);
@@ -40,8 +40,8 @@ TEST_SUITE_BEGIN("community-core-divergence");
 
 TEST_CASE("Main-only upload score seam restores FEAT-023 low-ratio ordering")
 {
-	CHECK(EMULE_TESTS_HAS_UPLOAD_SCORE_SEAMS != 0);
-#if EMULE_TESTS_HAS_UPLOAD_SCORE_SEAMS
+	CHECK(EMULEBB_TESTS_HAS_UPLOAD_SCORE_SEAMS != 0);
+#if EMULEBB_TESTS_HAS_UPLOAD_SCORE_SEAMS
 	UploadScoreSeams::UploadScoreInputs inputs = {};
 	inputs.uBaseValueMs = 100000u;
 	inputs.fCreditRatio = 1.0f;
@@ -69,8 +69,8 @@ TEST_CASE("Main-only upload score seam restores FEAT-023 low-ratio ordering")
 
 TEST_CASE("Main-only upload queue score helpers expose FEAT-023 consumer semantics")
 {
-	CHECK(EMULE_TESTS_HAS_UPLOAD_SCORE_SEAMS != 0);
-#if EMULE_TESTS_HAS_UPLOAD_SCORE_SEAMS
+	CHECK(EMULEBB_TESTS_HAS_UPLOAD_SCORE_SEAMS != 0);
+#if EMULEBB_TESTS_HAS_UPLOAD_SCORE_SEAMS
 	CHECK(PreferHigherUploadQueueScore(11u, 10u));
 	CHECK_FALSE(PreferHigherUploadQueueScore(10u, 10u));
 
@@ -84,8 +84,8 @@ TEST_CASE("Main-only upload queue score helpers expose FEAT-023 consumer semanti
 
 TEST_CASE("Main-only part-file persistence seam replaces overlong metadata temp files")
 {
-	CHECK(EMULE_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS != 0);
-#if EMULE_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS
+	CHECK(EMULEBB_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS != 0);
+#if EMULEBB_TESTS_HAS_PART_FILE_PERSISTENCE_SEAMS
 	LongPathTestSupport::ScopedLongPathFixture fixture;
 	INFO(fixture.LastError());
 	REQUIRE(fixture.Initialize(true, 0u, 0x50445247u));

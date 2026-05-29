@@ -87,7 +87,7 @@ TEST_CASE("Display refresh helper respects force and the randomized throttle win
 	CHECK(ShouldRunDisplayRefresh(true, 101u, 100u, 100u, 50u));
 }
 
-#if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
+#if defined(EMULEBB_TEST_HAVE_DISPLAY_REFRESH_OWNED_POST)
 TEST_CASE("Desktop UI refresh intervals use the supported System Informer values")
 {
 	CHECK(NormalizeDesktopUiRefreshIntervalMs(0u) == 0u);
@@ -267,7 +267,7 @@ TEST_CASE("Display refresh post helper consumes payloads when delivery is unavai
 
 TEST_CASE("Display refresh post helper transfers and discards registered payloads")
 {
-#if defined(EMULE_TEST_HAVE_DISPLAY_REFRESH_POST_REGISTRY)
+#if defined(EMULEBB_TEST_HAVE_DISPLAY_REFRESH_POST_REGISTRY)
 	CScopedDisplayRefreshMessageWindow window;
 	const HWND hWnd = window.GetHwnd();
 	if (hWnd == NULL)

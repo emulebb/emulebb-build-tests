@@ -72,7 +72,7 @@ TEST_CASE("Worker/UI seam posts only while the target window is still alive and 
 
 TEST_CASE("Worker/UI seam classifies direct UI message delivery")
 {
-#if defined(EMULE_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
+#if defined(EMULEBB_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
 	CHECK(ClassifyWorkerUiMessageDelivery(true, true) == EWorkerUiMessageDelivery::Delivered);
 	CHECK(ClassifyWorkerUiMessageDelivery(true, false) == EWorkerUiMessageDelivery::Failed);
 	CHECK(ClassifyWorkerUiMessageDelivery(false, true) == EWorkerUiMessageDelivery::InvalidWindow);
@@ -90,7 +90,7 @@ TEST_CASE("Worker/UI seam classifies direct UI message delivery")
 
 TEST_CASE("Worker/UI seam transfers queued payload ownership to the UI thread")
 {
-#if defined(EMULE_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
+#if defined(EMULEBB_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
 	CScopedMessageOnlyWindow window;
 	const HWND hWnd = window.GetHwnd();
 	if (hWnd == NULL)
@@ -114,7 +114,7 @@ TEST_CASE("Worker/UI seam transfers queued payload ownership to the UI thread")
 
 TEST_CASE("Worker/UI seam drops queued payloads once the owning window tears down")
 {
-#if defined(EMULE_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
+#if defined(EMULEBB_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)
 	CScopedMessageOnlyWindow window;
 	const HWND hWnd = window.GetHwnd();
 	if (hWnd == NULL)

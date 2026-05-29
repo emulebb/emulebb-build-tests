@@ -4,7 +4,7 @@
 
 TEST_SUITE_BEGIN("parity");
 
-#if defined(EMULE_TEST_HAVE_UPNP_DISCOVERY_THREAD_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_UPNP_DISCOVERY_THREAD_SEAMS)
 TEST_CASE("Shared UPnP discovery seam classifies nonblocking reap waits")
 {
 	CHECK(UPnPDiscoveryThreadSeams::ClassifyNonblockingWait(WAIT_OBJECT_0) == UPnPDiscoveryThreadSeams::ENonblockingWaitAction::ReleaseFinished);

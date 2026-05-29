@@ -12,7 +12,7 @@ namespace
 {
 	CString FormatNetworkAddressPaneTextForTest(const CString &strBindAddress, uint32 dwPublicIp)
 	{
-#ifdef EMULE_STATUS_BAR_INFO_USES_EXTERNAL_TEXT
+#ifdef EMULEBB_STATUS_BAR_INFO_USES_EXTERNAL_TEXT
 		return StatusBarInfo::FormatNetworkAddressPaneText(strBindAddress
 			, dwPublicIp
 			, CString(_T("B"))
@@ -27,7 +27,7 @@ namespace
 
 	CString FormatNetworkAddressPaneToolTipForTest(const CString &strBindAddress, uint32 dwPublicIp)
 	{
-#ifdef EMULE_STATUS_BAR_INFO_USES_EXTERNAL_TEXT
+#ifdef EMULEBB_STATUS_BAR_INFO_USES_EXTERNAL_TEXT
 		return StatusBarInfo::FormatNetworkAddressPaneToolTip(strBindAddress
 			, dwPublicIp
 			, CString(_T("Bind IP"))

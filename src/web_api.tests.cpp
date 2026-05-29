@@ -15,7 +15,7 @@
 
 TEST_SUITE_BEGIN("web_api");
 
-#ifdef EMULE_BB_SEARCH_NETWORK_DEFAULTS
+#ifdef EMULEBB_SEARCH_NETWORK_DEFAULTS
 TEST_CASE("Automatic search method uses connected network defaults")
 {
 	CHECK_EQ(SearchParamsPolicy::ResolveAutomaticSearchType(false, false), SearchParamsPolicy::kAutomaticSearchType);
@@ -250,7 +250,7 @@ TEST_CASE("WebSocket HTTP seams bound accepted-client thread fanout")
 
 TEST_CASE("WebSocket HTTP seams keep draining accepts after remote IP rejection")
 {
-#ifdef EMULE_WEBSOCKET_HTTP_SEAMS_HAS_REJECTED_IP_ACTION
+#ifdef EMULEBB_WEBSOCKET_HTTP_SEAMS_HAS_REJECTED_IP_ACTION
 	CHECK(WebSocketHttpSeams::GetRejectedRemoteAccessIpAction() ==
 		WebSocketHttpSeams::ERejectedRemoteAccessIpAction::ContinueAcceptDrain);
 #else

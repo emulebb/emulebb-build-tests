@@ -10,7 +10,7 @@ TEST_SUITE_BEGIN("parity");
 
 namespace
 {
-#ifdef EMULE_BIND_STARTUP_POLICY_USES_EXTERNAL_TEXT
+#ifdef EMULEBB_BIND_STARTUP_POLICY_USES_EXTERNAL_TEXT
 	BindStartupPolicy::CBindStartupPolicyText GetBindStartupPolicyTextForTest()
 	{
 		BindStartupPolicy::CBindStartupPolicyText text;
@@ -29,7 +29,7 @@ namespace
 		, const CString &strConfiguredAddress
 		, EBindAddressResolveResult eResult)
 	{
-#ifdef EMULE_BIND_STARTUP_POLICY_USES_EXTERNAL_TEXT
+#ifdef EMULEBB_BIND_STARTUP_POLICY_USES_EXTERNAL_TEXT
 		return BindStartupPolicy::FormatStartupBlockReason(strInterfaceName, strInterfaceId, strConfiguredAddress, eResult, GetBindStartupPolicyTextForTest());
 #else
 		return BindStartupPolicy::FormatStartupBlockReason(strInterfaceName, strInterfaceId, strConfiguredAddress, eResult);

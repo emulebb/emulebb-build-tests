@@ -17,12 +17,12 @@
 #if defined(__has_include)
 #if __has_include("MappedFileReader.h")
 #include "MappedFileReader.h"
-#define EMULE_TEST_HAVE_MAPPED_FILE_READER 1
+#define EMULEBB_TEST_HAVE_MAPPED_FILE_READER 1
 #else
-#define EMULE_TEST_HAVE_MAPPED_FILE_READER 0
+#define EMULEBB_TEST_HAVE_MAPPED_FILE_READER 0
 #endif
 #else
-#define EMULE_TEST_HAVE_MAPPED_FILE_READER 0
+#define EMULEBB_TEST_HAVE_MAPPED_FILE_READER 0
 #endif
 
 namespace
@@ -89,7 +89,7 @@ namespace
 		unsigned long long m_nValue = 1469598103934665603ull;
 	};
 
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	class CFnvMappedVisitor : public IMappedFileRangeVisitor
 	{
 	public:
@@ -285,7 +285,7 @@ namespace
 		return hash.GetValue();
 	}
 
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	/**
 	 * @brief Reads a whole file through the workspace mapped reader implementation.
 	 */
@@ -351,7 +351,7 @@ namespace
 	 */
 	EReaderMode GetWorkspacePreferredReaderMode()
 	{
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 		return EReaderMode::Mapped;
 #else
 		return EReaderMode::Win32;
@@ -477,7 +477,7 @@ namespace
 		::CloseHandle(hFile);
 	}
 
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	/**
 	 * @brief Adapts a lambda visitor to the production mapped reader interface.
 	 */
@@ -506,7 +506,7 @@ namespace
 	template <typename TVisitor>
 	void VisitFileRangeMapped(const std::wstring &rstrPath, unsigned long long nOffset, unsigned long long nLength, TVisitor &&Visitor)
 	{
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 		HANDLE hFile = ::CreateFileW(rstrPath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 		REQUIRE(hFile != INVALID_HANDLE_VALUE);
 
@@ -745,7 +745,7 @@ TEST_CASE("Actual temp-file buffered and Win32 digests match on sampled files")
 
 TEST_CASE("Mapped file reader returns the exact requested slice across allocation boundaries")
 {
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	const std::vector<BYTE> fixture = CreateMappedReaderFixture(1024 * 1024 + 257);
 	const std::wstring tempPath = CreateMappedReaderTempPath();
 	WriteMappedReaderFixture(tempPath, fixture);
@@ -774,7 +774,7 @@ TEST_CASE("Mapped file reader returns the exact requested slice across allocatio
 
 TEST_CASE("Mapped file reader spans multiple mapping windows without dropping bytes")
 {
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	const std::vector<BYTE> fixture = CreateMappedReaderFixture(9 * 1024 * 1024 + 123);
 	const std::wstring tempPath = CreateMappedReaderTempPath();
 	WriteMappedReaderFixture(tempPath, fixture);
@@ -803,7 +803,7 @@ TEST_CASE("Mapped file reader spans multiple mapping windows without dropping by
 
 TEST_CASE("Mapped file reader accepts zero-length ranges without touching the visitor")
 {
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	const std::vector<BYTE> fixture = CreateMappedReaderFixture(128);
 	const std::wstring tempPath = CreateMappedReaderTempPath();
 	WriteMappedReaderFixture(tempPath, fixture);
@@ -826,7 +826,7 @@ TEST_CASE("Mapped file reader accepts zero-length ranges without touching the vi
 
 TEST_CASE("Mapped file reader reports invalid handles")
 {
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	class CNoopVisitor : public IMappedFileRangeVisitor
 	{
 	public:
@@ -845,7 +845,7 @@ TEST_CASE("Mapped file reader reports invalid handles")
 
 TEST_CASE("Mapped file reader matches buffered digest on sampled actual temp files")
 {
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	const std::vector<CSampledFile> sample = EnsureDeterministicSampleFiles();
 	REQUIRE_FALSE(sample.empty());
 
@@ -858,7 +858,7 @@ TEST_CASE("Mapped file reader matches buffered digest on sampled actual temp fil
 
 TEST_CASE("Mapped file reader accepts a null error output pointer on successful reads")
 {
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	const std::vector<BYTE> fixture = CreateMappedReaderFixture(8192 + 17);
 	const std::wstring tempPath = CreateMappedReaderTempPath();
 	WriteMappedReaderFixture(tempPath, fixture);
@@ -882,7 +882,7 @@ TEST_CASE("Mapped file reader accepts a null error output pointer on successful 
 
 TEST_CASE("Mapped file reader returns exact tail slices at the end of the file")
 {
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	const std::vector<BYTE> fixture = CreateMappedReaderFixture(4096 + 33);
 	const std::wstring tempPath = CreateMappedReaderTempPath();
 	WriteMappedReaderFixture(tempPath, fixture);
@@ -934,7 +934,7 @@ TEST_CASE("File reader benchmark reports sampled temp-file throughput")
 		, dBufferedMs > 0.0 ? (static_cast<double>(nTotalBytes) / (1024.0 * 1024.0)) / (dBufferedMs / 1000.0) : 0.0
 		, dWin32Ms > 0.0 ? (static_cast<double>(nTotalBytes) / (1024.0 * 1024.0)) / (dWin32Ms / 1000.0) : 0.0);
 
-#if EMULE_TEST_HAVE_MAPPED_FILE_READER
+#if EMULEBB_TEST_HAVE_MAPPED_FILE_READER
 	unsigned long long nMappedDigest = 0;
 	const double dMappedMs = MeasureDigestPassMs(sample, ComputeMappedDigest, &nMappedDigest);
 	CHECK_EQ(nBufferedDigest, nMappedDigest);

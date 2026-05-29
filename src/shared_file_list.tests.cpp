@@ -3,32 +3,32 @@
 #if defined(__has_include)
 #if __has_include("SharedDirectoryOps.h")
 #include "SharedDirectoryOps.h"
-#define EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS 1
+#define EMULEBB_TESTS_HAS_SHARED_DIRECTORY_OPS 1
 #endif
 #if __has_include("SharedFileIntakePolicy.h")
 #include "SharedFileIntakePolicy.h"
-#define EMULE_TESTS_HAS_SHARED_FILE_INTAKE_POLICY 1
+#define EMULEBB_TESTS_HAS_SHARED_FILE_INTAKE_POLICY 1
 #endif
 #if __has_include("SharedStartupCachePolicy.h")
 #include "SharedStartupCachePolicy.h"
-#define EMULE_TESTS_HAS_SHARED_STARTUP_CACHE_POLICY 1
+#define EMULEBB_TESTS_HAS_SHARED_STARTUP_CACHE_POLICY 1
 #endif
 #if __has_include("LongPathSeams.h")
 #include "LongPathSeams.h"
-#define EMULE_TESTS_HAS_LONG_PATH_SEAMS 1
+#define EMULEBB_TESTS_HAS_LONG_PATH_SEAMS 1
 #endif
 #if __has_include("SharedFilesWndSeams.h")
 #include "SharedFilesWndSeams.h"
-#define EMULE_TESTS_HAS_SHARED_FILES_WND_SEAMS 1
+#define EMULEBB_TESTS_HAS_SHARED_FILES_WND_SEAMS 1
 #endif
 #if __has_include("SharedFilesCtrlSeams.h")
 #include "SharedFilesCtrlSeams.h"
-#define EMULE_TESTS_HAS_SHARED_FILES_CTRL_SEAMS 1
+#define EMULEBB_TESTS_HAS_SHARED_FILES_CTRL_SEAMS 1
 #endif
 #if __has_include("SharedDirectoryMonitorSeams.h")
 #include "SharedDirectoryMonitorSeams.h"
-#ifndef EMULE_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS
-#define EMULE_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS 1
+#ifndef EMULEBB_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS
+#define EMULEBB_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS 1
 #endif
 #endif
 #endif
@@ -36,7 +36,7 @@
 
 TEST_SUITE_BEGIN("parity");
 
-#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS
+#ifdef EMULEBB_TESTS_HAS_SHARED_DIRECTORY_OPS
 bool EqualPaths(const CString &rstrDir1, const CString &rstrDir2)
 {
 	return PathHelpers::ArePathsEquivalent(rstrDir1, rstrDir2);
@@ -45,7 +45,7 @@ bool EqualPaths(const CString &rstrDir1, const CString &rstrDir2)
 
 namespace
 {
-#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS
+#ifdef EMULEBB_TESTS_HAS_SHARED_DIRECTORY_OPS
 int CountEquivalentPaths(const CStringList &rList, const CString &rstrPath)
 {
 	int nMatches = 0;
@@ -81,7 +81,7 @@ TEST_CASE("Shared file list accepts part files outside shared directories")
 	CHECK(SharedFileListSeams::CanAddSharedFile(true, false, false));
 }
 
-#ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_PUBLISH_BATCH_SEAMS
+#ifdef EMULEBB_TESTS_HAS_SHARED_FILE_LIST_PUBLISH_BATCH_SEAMS
 TEST_CASE("Shared file list batches eD2K publish UI refreshes only for multiple changed rows")
 {
 	CHECK_FALSE(SharedFileListSeams::ShouldBatchPublishedED2KUiRefresh(0u));
@@ -91,7 +91,7 @@ TEST_CASE("Shared file list batches eD2K publish UI refreshes only for multiple 
 }
 #endif
 
-#ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_ASYNC_HASH_SEAMS
+#ifdef EMULEBB_TESTS_HAS_SHARED_FILE_LIST_ASYNC_HASH_SEAMS
 TEST_CASE("Shared file hash worker allows only a bounded UI completion backlog")
 {
 	CHECK(SharedFileListSeams::ShouldStartSharedHashJob({ true, true, 0u }));
@@ -275,7 +275,7 @@ TEST_CASE("Shared hash shutdown invalidates warm caches only when hashing work w
 }
 #endif
 
-#ifdef EMULE_TESTS_HAS_SHARED_FILES_CTRL_SEAMS
+#ifdef EMULEBB_TESTS_HAS_SHARED_FILES_CTRL_SEAMS
 TEST_CASE("Shared files moved-index range covers only rotated rows")
 {
 	SharedFilesCtrlSeams::VisibleIndexRange range = SharedFilesCtrlSeams::GetMovedVisibleIndexRange(10, 40, 100);
@@ -299,7 +299,7 @@ TEST_CASE("Shared files moved-index range rejects no-op and out-of-bounds moves"
 }
 #endif
 
-#ifdef EMULE_TESTS_HAS_SHARED_FILES_WND_SEAMS
+#ifdef EMULEBB_TESTS_HAS_SHARED_FILES_WND_SEAMS
 TEST_CASE("Shared files splitter range scales with dialog width instead of capping at the legacy maximum")
 {
 	CHECK_EQ(SharedFilesWndSeams::ClampSplitterPosition(50, 900), SharedFilesWndSeams::kMinTreeWidth);
@@ -348,7 +348,7 @@ TEST_CASE("Shared files deferred reload coalesces shared-only work and lets full
 }
 #endif
 
-#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS
+#ifdef EMULEBB_TESTS_HAS_SHARED_DIRECTORY_MONITOR_SEAMS
 TEST_CASE("Shared-directory monitor falls back to full reconciliation without a trusted journal")
 {
 	using SharedDirectoryMonitorSeams::EMonitoredRootCatchupMode;
@@ -368,7 +368,7 @@ TEST_CASE("Shared-directory monitor persists only trusted NTFS journal checkpoin
 }
 #endif
 
-#ifdef EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS
+#ifdef EMULEBB_TESTS_HAS_SHARED_DIRECTORY_OPS
 TEST_CASE("Shared directory recursion dedupes non-recursive junction aliases by filesystem identity")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
@@ -594,7 +594,7 @@ TEST_CASE("Shared directory lookup key vector supports repeated monitored-root c
 	CHECK_FALSE(SharedDirectoryOps::IsDirectoryKeySameOrDescendantOfAny(rootKeys, SharedDirectoryOps::MakeSharedDirectoryLookupKey(_T("D:\\media\\"))));
 }
 
-#if defined(EMULE_TESTS_HAS_SHARED_DIRECTORY_OPS) && defined(EMULE_TESTS_HAS_SHARED_FILE_INTAKE_POLICY)
+#if defined(EMULEBB_TESTS_HAS_SHARED_DIRECTORY_OPS) && defined(EMULEBB_TESTS_HAS_SHARED_FILE_INTAKE_POLICY)
 TEST_CASE("Shared directory recursion skips built-in and configured ignored directory names")
 {
 	SharedFileIntakePolicy::ScopedUserRuleOverride restoreRules;
@@ -633,7 +633,7 @@ TEST_CASE("Shared directory recursion skips built-in and configured ignored dire
 #endif
 #endif
 
-#ifdef EMULE_TESTS_HAS_SHARED_FILE_LIST_PATH_SEAMS
+#ifdef EMULEBB_TESTS_HAS_SHARED_FILE_LIST_PATH_SEAMS
 TEST_CASE("Shared file list matches explicit shared files across prefixed and DOS 8.3 spellings")
 {
 	LongPathTestSupport::ScopedLongPathFixture fixture;
@@ -733,7 +733,7 @@ TEST_CASE("Shared file import yield only applies to active full-part imports")
 	CHECK(SharedFileListSeams::kImportPartProgressYieldMs == 100);
 }
 
-#ifdef EMULE_TESTS_HAS_SHARED_STARTUP_CACHE_POLICY
+#ifdef EMULEBB_TESTS_HAS_SHARED_STARTUP_CACHE_POLICY
 TEST_CASE("Shared startup cache policy rejects malformed blocks and lookup misses wholesale")
 {
 	CHECK(SharedStartupCachePolicy::ShouldRejectWholeCacheOnMalformedBlock());
@@ -766,7 +766,7 @@ TEST_CASE("Shared startup cache verification requires structural validity and ma
 	CHECK_FALSE(SharedStartupCachePolicy::MatchesVerifiedDirectoryState(record, true, true, 1234));
 }
 
-#ifdef EMULE_SHARED_STARTUP_CACHE_POLICY_HAS_NTFS_FAST_PATH
+#ifdef EMULEBB_SHARED_STARTUP_CACHE_POLICY_HAS_NTFS_FAST_PATH
 TEST_CASE("Shared startup cache trusted NTFS mode requires a volume guard and directory reference")
 {
 	SharedStartupCachePolicy::DirectoryRecord record = {};
@@ -848,7 +848,7 @@ TEST_CASE("Shared startup cache generic inventory validation requires an exact f
 }
 #endif
 
-#if defined(EMULE_TESTS_HAS_LONG_PATH_SEAMS) && defined(EMULE_LONG_PATH_SEAMS_HAS_NTFS_JOURNAL_HELPERS)
+#if defined(EMULEBB_TESTS_HAS_LONG_PATH_SEAMS) && defined(EMULEBB_LONG_PATH_SEAMS_HAS_NTFS_JOURNAL_HELPERS)
 TEST_CASE("Long path seams parse V2 V3 and V4 USN record identities")
 {
 	{

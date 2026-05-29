@@ -90,7 +90,7 @@ namespace
 
 TEST_SUITE_BEGIN("parity");
 
-#if defined(EMULE_TEST_HAVE_PART_FILE_PERSISTENCE_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_PART_FILE_PERSISTENCE_SEAMS)
 TEST_CASE("Part-file persistence seams expose the fixed disk-space minimums")
 {
 	CHECK_EQ(PartFilePersistenceSeams::NormalizeDownloadFreeSpaceFloor(0u), PartFilePersistenceSeams::kMinDownloadFreeBytes);
@@ -189,7 +189,7 @@ TEST_CASE("Part-file persistence seam exposes overlong .part.met existence on re
 	REQUIRE(LongPathTestSupport::ScopedLongPathFixture::DeleteFilePath(rawPartMetPath));
 }
 
-#if defined(EMULE_TEST_HAVE_PART_FILE_DELETE_PLAN_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_PART_FILE_DELETE_PLAN_SEAMS)
 TEST_CASE("Part-file persistence seam models metadata cleanup companion paths")
 {
 	const PartFilePersistenceSeams::PartFilePathString partMetPath(_T("C:\\Temp\\001.part.met"));
@@ -465,7 +465,7 @@ TEST_SUITE_END;
 
 TEST_SUITE_BEGIN("divergence");
 
-#if defined(EMULE_TEST_HAVE_PART_FILE_PERSISTENCE_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_PART_FILE_PERSISTENCE_SEAMS)
 TEST_CASE("Part-file persistence seam blocks metadata writes when the free-space floor is not met")
 {
 	CHECK_FALSE(PartFilePersistenceSeams::CanWritePartMetWithFreeSpace(0u));

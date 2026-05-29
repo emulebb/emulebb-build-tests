@@ -4,7 +4,7 @@
 
 TEST_SUITE_BEGIN("parity");
 
-#if defined(EMULE_TEST_HAVE_UPNP_WRAPPER_SEAMS)
+#if defined(EMULEBB_TEST_HAVE_UPNP_WRAPPER_SEAMS)
 TEST_CASE("UPnP wrapper automatic mode tries UPnP IGD before PCP NAT-PMP")
 {
 	const NatMappingBackendOrder order = BuildNatMappingBackendOrder(NAT_MAPPING_BACKEND_MODE_AUTOMATIC);

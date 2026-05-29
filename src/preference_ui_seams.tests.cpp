@@ -5,9 +5,9 @@
 
 #if __has_include("PreferenceIniMap.h")
 #include "PreferenceIniMap.h"
-#define EMULE_TESTS_HAS_PREFERENCE_INI_MAP 1
+#define EMULEBB_TESTS_HAS_PREFERENCE_INI_MAP 1
 #else
-#define EMULE_TESTS_HAS_PREFERENCE_INI_MAP 0
+#define EMULEBB_TESTS_HAS_PREFERENCE_INI_MAP 0
 #endif
 
 #include <climits>
@@ -126,7 +126,7 @@ TEST_CASE("Preference UI seam normalizes upload-policy session transfer limits")
 	CHECK(PreferenceUiSeams::NormalizeSessionTransferLimitValue(PreferenceUiSeams::kSessionTransferModeDisabled, 5000) == PreferenceUiSeams::kMaxSessionTransferMiB);
 }
 
-#if EMULE_TESTS_HAS_PREFERENCE_INI_MAP
+#if EMULEBB_TESTS_HAS_PREFERENCE_INI_MAP
 TEST_CASE("Preference INI map uses dedicated upload-policy sections without legacy BB key names")
 {
 	CHECK(CString(PreferenceIniMap::Sections::FileCompletion) == CString(_T("FileCompletion")));

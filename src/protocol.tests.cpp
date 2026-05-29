@@ -12,7 +12,7 @@
  */
 #if defined(__has_include)
 #if __has_include("MappedFileReader.h")
-#define EMULE_HAS_EXTENDED_PROTOCOL_GUARDS 1
+#define EMULEBB_HAS_EXTENDED_PROTOCOL_GUARDS 1
 #endif
 #endif
 
@@ -120,7 +120,7 @@ TEST_CASE("Protocol guard accepts compressed UDP payloads that include at least 
 
 TEST_CASE("Protocol guard accepts exact-fit packet spans and bounded size arithmetic")
 {
-#if defined(EMULE_HAS_EXTENDED_PROTOCOL_GUARDS)
+#if defined(EMULEBB_HAS_EXTENDED_PROTOCOL_GUARDS)
 	size_t nCombinedSize = 0;
 	size_t nExpandedSize = 0;
 	CHECK(CanReadPacketSpan(24, 16, 8));
@@ -135,7 +135,7 @@ TEST_CASE("Protocol guard accepts exact-fit packet spans and bounded size arithm
 
 TEST_CASE("Protocol guard accepts restorable TCP header fragments and minimal callback or block packet headers")
 {
-#if defined(EMULE_HAS_EXTENDED_PROTOCOL_GUARDS)
+#if defined(EMULEBB_HAS_EXTENDED_PROTOCOL_GUARDS)
 	CHECK(CanRestoreTcpPendingHeader(PROTOCOL_PACKET_HEADER_SIZE - 1, PROTOCOL_PACKET_HEADER_SIZE, TCP_READ_BUFFER_SIZE));
 	CHECK(CanStoreTcpPendingHeader(PROTOCOL_PACKET_HEADER_SIZE - 1, PROTOCOL_PACKET_HEADER_SIZE));
 	CHECK(CanContinuePacketAssembly(100, 100));
@@ -396,7 +396,7 @@ TEST_CASE("Protocol guard rejects compressed UDP payloads that have no compresse
 
 TEST_CASE("Protocol guard rejects truncated packet spans and impossible TCP partial-header states")
 {
-#if defined(EMULE_HAS_EXTENDED_PROTOCOL_GUARDS)
+#if defined(EMULEBB_HAS_EXTENDED_PROTOCOL_GUARDS)
 	CHECK_FALSE(CanReadPacketSpan(23, 16, 8));
 	CHECK_FALSE(CanRestoreTcpPendingHeader(PROTOCOL_PACKET_HEADER_SIZE + 1, PROTOCOL_PACKET_HEADER_SIZE, TCP_READ_BUFFER_SIZE));
 	CHECK_FALSE(CanStoreTcpPendingHeader(PROTOCOL_PACKET_HEADER_SIZE, PROTOCOL_PACKET_HEADER_SIZE));
@@ -408,7 +408,7 @@ TEST_CASE("Protocol guard rejects truncated packet spans and impossible TCP part
 
 TEST_CASE("Protocol guard rejects overflowed size arithmetic and truncated callback or block packet headers")
 {
-#if defined(EMULE_HAS_EXTENDED_PROTOCOL_GUARDS)
+#if defined(EMULEBB_HAS_EXTENDED_PROTOCOL_GUARDS)
 	size_t nIgnoredSize = 0;
 	CHECK_FALSE(TryAddSize(std::numeric_limits<size_t>::max(), 1, &nIgnoredSize));
 	CHECK_FALSE(TryMultiplyAddSize(std::numeric_limits<size_t>::max(), 2, 1, &nIgnoredSize));

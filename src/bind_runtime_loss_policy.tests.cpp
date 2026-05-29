@@ -10,7 +10,7 @@ TEST_SUITE_BEGIN("parity");
 
 namespace
 {
-#ifdef EMULE_BIND_RUNTIME_LOSS_POLICY_USES_EXTERNAL_TEXT
+#ifdef EMULEBB_BIND_RUNTIME_LOSS_POLICY_USES_EXTERNAL_TEXT
 	BindRuntimeLossPolicy::CBindRuntimeLossPolicyText GetBindRuntimeLossPolicyTextForTest()
 	{
 		BindRuntimeLossPolicy::CBindRuntimeLossPolicyText text;
@@ -36,7 +36,7 @@ namespace
 		, const CString &strResolvedAddress
 		, const CString &strActiveBindAddress)
 	{
-#ifdef EMULE_BIND_RUNTIME_LOSS_POLICY_USES_EXTERNAL_TEXT
+#ifdef EMULEBB_BIND_RUNTIME_LOSS_POLICY_USES_EXTERNAL_TEXT
 		return BindRuntimeLossPolicy::FormatRuntimeBindLossReason(strResolvedInterfaceName
 			, strActiveInterfaceName
 			, strActiveInterfaceId

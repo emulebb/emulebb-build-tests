@@ -4,7 +4,7 @@
 #if defined(__has_include)
 #if __has_include("KnownFileLookupIndex.h")
 #include "KnownFileLookupIndex.h"
-#define EMULE_TESTS_HAS_KNOWN_FILE_LOOKUP_INDEX 1
+#define EMULEBB_TESTS_HAS_KNOWN_FILE_LOOKUP_INDEX 1
 #endif
 #endif
 
@@ -30,7 +30,7 @@ TEST_CASE("Known-file AICH purge seam drops orphaned partially purged hashsets t
 	CHECK(ShouldPurgeKnownAICHHashset(false, true));
 }
 
-#ifdef EMULE_TESTS_HAS_KNOWN_FILE_COLLISION_SEAMS
+#ifdef EMULEBB_TESTS_HAS_KNOWN_FILE_COLLISION_SEAMS
 TEST_CASE("Known-file collision seam keeps existing shared entries")
 {
 	CHECK_EQ(
@@ -77,7 +77,7 @@ TEST_CASE("Known-file collision seam keeps existing live entries even when incom
 }
 #endif
 
-#ifdef EMULE_TESTS_HAS_KNOWN_FILE_PUBLISH_SEAMS
+#ifdef EMULEBB_TESTS_HAS_KNOWN_FILE_PUBLISH_SEAMS
 TEST_CASE("Known-file publish seam suppresses redundant shared-files UI updates")
 {
 	CHECK_FALSE(ShouldNotifyPublishedED2KChange(false, false));
@@ -101,7 +101,7 @@ TEST_CASE("Known-file progress seam accepts zero-length owners and rejects stale
 	CHECK_FALSE(IsCompatibleKnownFileProgressOwner(true, 0u, 1u));
 }
 
-#ifdef EMULE_TESTS_HAS_KNOWN_FILE_LOOKUP_INDEX
+#ifdef EMULEBB_TESTS_HAS_KNOWN_FILE_LOOKUP_INDEX
 TEST_CASE("Known-file lookup index returns the stored value for an exact filename/date/size triple")
 {
 	TKnownFileLookupIndex<int> index;

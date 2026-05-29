@@ -5,11 +5,11 @@
 #include "../include/HashProbe.h"
 #include "../include/TimerResolutionProbe.h"
 
-#ifndef EMULE_TESTS_HAS_MAPPED_FILE_READER
-#define EMULE_TESTS_HAS_MAPPED_FILE_READER 0
+#ifndef EMULEBB_TESTS_HAS_MAPPED_FILE_READER
+#define EMULEBB_TESTS_HAS_MAPPED_FILE_READER 0
 #endif
 
-#if !EMULE_TESTS_HAS_MAPPED_FILE_READER
+#if !EMULEBB_TESTS_HAS_MAPPED_FILE_READER
 /**
  * @brief Returns the standard "not requested" sentinel when the real full hash probe is not compiled for this workspace.
  */

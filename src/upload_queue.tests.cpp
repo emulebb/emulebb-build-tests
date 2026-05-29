@@ -20,7 +20,7 @@ TEST_CASE("Upload queue seam reclaims retired entries only after pending IO drai
 	CHECK_FALSE(CanReclaimUploadQueueEntry(false, 0));
 }
 
-#if defined(EMULE_TEST_HAVE_RETIRED_UPLOAD_ENTRY_PENDING_IO_WARNING_SEAM)
+#if defined(EMULEBB_TEST_HAVE_RETIRED_UPLOAD_ENTRY_PENDING_IO_WARNING_SEAM)
 TEST_CASE("Upload queue seam warns only for retired entries with old pending IO")
 {
 	CHECK_EQ(kRetiredUploadEntryPendingIoWarningMs, static_cast<std::uint64_t>(30000u));
