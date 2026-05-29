@@ -168,8 +168,19 @@ def terminate_process(process_id: int, exit_code: int = 1, expected_creation_dat
             "expected_creation_date": expected_creation_date,
             "current_creation_date": current_creation_date,
         }
-    terminate_result = matches[0].Terminate
-    result = int(terminate_result(exit_code) if callable(terminate_result) else terminate_result)
+    try:
+        terminate_result = matches[0].Terminate
+        result = int(terminate_result(exit_code) if callable(terminate_result) else terminate_result)
+    except TypeError:
+        remaining = list(service.ExecQuery(f"SELECT * FROM Win32_Process WHERE ProcessId = {int(process_id)}"))
+        if not remaining:
+            result = 0
+        else:
+            remaining_creation_date = str(getattr(remaining[0], "CreationDate", "") or "")
+            if current_creation_date and remaining_creation_date != current_creation_date:
+                result = 0
+            else:
+                raise
     return {"pid": process_id, "terminated": result == 0, "return_code": result}
 
 

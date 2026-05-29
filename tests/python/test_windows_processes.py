@@ -146,6 +146,30 @@ def test_terminate_process_accepts_wmi_terminate_result_property(monkeypatch) ->
     assert result == {"pid": 10, "terminated": True, "return_code": 0}
 
 
+def test_terminate_process_treats_wmi_dispatch_type_error_as_success_when_process_exited(monkeypatch) -> None:
+    class FakeProcess:
+        CreationDate = "20260527010101.000000+000"
+
+        @property
+        def Terminate(self):
+            raise TypeError("'int' object is not callable")
+
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def ExecQuery(self, _query: str):
+            self.calls += 1
+            return [FakeProcess()] if self.calls == 1 else []
+
+    service = FakeService()
+    monkeypatch.setattr(windows_processes, "process_service", lambda: service)
+
+    result = windows_processes.terminate_process(10, expected_creation_date="20260527010101.000000+000")
+
+    assert result == {"pid": 10, "terminated": True, "return_code": 0}
+
+
 def test_remaining_target_pids_ignores_reused_pid(monkeypatch) -> None:
     target = windows_processes.WindowsProcessInfo(
         pid=10,
