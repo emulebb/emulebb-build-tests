@@ -38,6 +38,7 @@ def test_live_e2e_scenario_matrix_classifies_swarm_and_hammer_lanes() -> None:
         "release-expanded": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE,
         "stabilization-stress": live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE,
     }
+    assert "mixed-client-readiness-evidence" in by_name["godzilla-local-swarm"]["diagnostics"]
     assert by_name["multi-client-p2p-matrix"]["topology"] == "local-swarm"
     assert by_name["multi-client-p2p-matrix"]["optionalClientPolicy"] == "mixed-clients-optional-with-required-control"
     assert "multi-client-p2p-required" in by_name["multi-client-p2p-matrix"]["profiles"]
@@ -59,6 +60,7 @@ def test_live_e2e_scenario_matrix_surfaces_known_policy_gaps() -> None:
         "large local swarm hammer is release-expanded only, not stabilization-stress visible",
     ) not in gaps
     assert not any(suite == "multi-client-p2p-matrix" for suite, _gap in gaps)
+    assert not any(suite == "godzilla-local-swarm" for suite, _gap in gaps)
     assert not any(suite == "local-kad-mixed-client-swarm" for suite, _gap in gaps)
     assert (
         "live-process-monitor",

@@ -419,6 +419,38 @@ def test_godzilla_amule_command_hammer_skips_missing_optional_amule() -> None:
     }
 
 
+def test_godzilla_mixed_client_evidence_reports_full_amule_readiness() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_full_mixed_evidence_test")
+
+    evidence = godzilla.classify_godzilla_mixed_client_evidence(
+        amule_available={"available": True, "executable": "amuled.exe"},
+        amule_enabled=True,
+        queued_transfer_counts={"amule": 7},
+    )
+
+    assert evidence["classification"] == "full-mixed-client"
+    assert evidence["evidence_strength"] == "full"
+    assert evidence["amule"]["readiness"] == "ready"
+    assert evidence["amule"]["queued_transfer_count"] == 7
+
+
+def test_godzilla_mixed_client_evidence_reports_degraded_amule_skip() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_degraded_mixed_evidence_test")
+
+    evidence = godzilla.classify_godzilla_mixed_client_evidence(
+        amule_available={"available": True, "executable": "amuled.exe"},
+        amule_enabled=False,
+        amule_skip={"skipped": True, "reason": "EC not ready"},
+        queued_transfer_counts={"amule": 0},
+    )
+
+    assert evidence["classification"] == "emulebb-harness-only"
+    assert evidence["evidence_strength"] == "degraded"
+    assert evidence["amule"]["available"] is True
+    assert evidence["amule"]["readiness"] == "skipped"
+    assert evidence["amule"]["skip"] == {"skipped": True, "reason": "EC not ready"}
+
+
 def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_transfer_row_hash_test")
 

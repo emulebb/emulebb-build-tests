@@ -150,6 +150,8 @@ def classify_diagnostics(spec: live_e2e_suite.SuiteSpec) -> tuple[str, ...]:
         diagnostics.append("cpu-profile-optional")
     if spec.is_rest_cold_start_dump_stress or spec.name in {"local-dumps-crash-smoke", "live-process-monitor", "godzilla-local-swarm"}:
         diagnostics.append("dump-or-resource-evidence")
+    if spec.name == "godzilla-local-swarm":
+        diagnostics.append("mixed-client-readiness-evidence")
     if spec.accepts_startup_trace_mode:
         diagnostics.append("startup-trace")
     return tuple(diagnostics)
@@ -255,7 +257,10 @@ def summarize_matrix_gaps(suites: list[dict[str, Any]]) -> list[dict[str, str]]:
                     "gap": "mixed-client optional policy weakens evidence unless --multi-client-require-optional-clients is enabled",
                 }
             )
-        if suite["optionalClientPolicy"] == "mixed-clients-runtime-optional":
+        if (
+            suite["optionalClientPolicy"] == "mixed-clients-runtime-optional"
+            and "mixed-client-readiness-evidence" not in suite["diagnostics"]
+        ):
             gaps.append(
                 {
                     "suite": suite["name"],

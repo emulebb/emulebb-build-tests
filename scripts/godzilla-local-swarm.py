@@ -1015,6 +1015,44 @@ def amule_daemon_diagnostics(process: subprocess.Popen | None, profile: amule_ha
     return diagnostics
 
 
+def classify_godzilla_mixed_client_evidence(
+    *,
+    amule_available: dict[str, object] | None,
+    amule_enabled: bool,
+    amule_skip: dict[str, object] | None = None,
+    queued_transfer_counts: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Returns the explicit mixed-client evidence strength for a Godzilla run."""
+
+    amule_transfer_count = 0
+    if isinstance(queued_transfer_counts, dict):
+        amule_transfer_count = int(queued_transfer_counts.get("amule") or 0)
+    if amule_enabled:
+        classification = "full-mixed-client"
+        evidence_strength = "full"
+        reason = "aMule daemon/control client reached EC readiness and participated in the hammer."
+    else:
+        classification = "emulebb-harness-only"
+        evidence_strength = "degraded"
+        reason = "aMule daemon/control client did not reach runtime readiness; Godzilla continued with eMuleBB and tracing-harness peers."
+    return {
+        "classification": classification,
+        "evidence_strength": evidence_strength,
+        "required_clients": [CLIENT01.profile_id, CLIENT02.profile_id],
+        "optional_clients": [CLIENT04.profile_id],
+        "amule": {
+            "available": bool((amule_available or {}).get("available")),
+            "readiness": "ready" if amule_enabled else "skipped",
+            "profile_id": CLIENT04.profile_id,
+            "product": CLIENT04.product,
+            "availability": amule_available or {},
+            "skip": amule_skip or None,
+            "queued_transfer_count": amule_transfer_count,
+        },
+        "reason": reason,
+    }
+
+
 def terminate_amule_process(process: subprocess.Popen | None) -> dict[str, object]:
     """Terminates an optional aMule daemon after it fails readiness."""
 
@@ -2173,6 +2211,10 @@ def main(argv: list[str] | None = None) -> int:
                 for client in extra_emulebb_clients
             ],
         }
+        report["mixed_client_evidence"] = classify_godzilla_mixed_client_evidence(
+            amule_available=amule_client.as_report(),
+            amule_enabled=False,
+        )
         report["network"] = {
             "lan_mode": bool(args.lan_mode),
             "lan_address_env": args.lan_address_env,
@@ -2352,8 +2394,12 @@ def main(argv: list[str] | None = None) -> int:
                 amule_harness.run_amulecmd(amule_control_exe, amule_profile, "Connect ed2k", timeout_seconds=30.0, check=False)
             )
             amule_enabled = True
+            report["mixed_client_evidence"] = classify_godzilla_mixed_client_evidence(
+                amule_available=amule_client.as_report(),
+                amule_enabled=True,
+            )
         except Exception as exc:
-            report["checks"]["amule_optional_skip"] = {
+            amule_skip = {
                 "skipped": True,
                 "reason": "aMule EC did not become ready; continuing eMuleBB/tracing-harness swarm without optional aMule peer.",
                 "type": type(exc).__name__,
@@ -2361,6 +2407,12 @@ def main(argv: list[str] | None = None) -> int:
                 "daemon": amule_daemon_diagnostics(amule_process, amule_profile),
                 "terminate": terminate_amule_process(amule_process),
             }
+            report["checks"]["amule_optional_skip"] = amule_skip
+            report["mixed_client_evidence"] = classify_godzilla_mixed_client_evidence(
+                amule_available=amule_client.as_report(),
+                amule_enabled=False,
+                amule_skip=amule_skip,
+            )
             amule_process = None
 
         current_phase = "launch_extra_emulebb_sources"
@@ -2687,6 +2739,12 @@ def main(argv: list[str] | None = None) -> int:
             "peer_emulebb_to_harness": len(harness_links),
             "extra_emulebb": extra_download_counts,
         }
+        report["mixed_client_evidence"] = classify_godzilla_mixed_client_evidence(
+            amule_available=amule_client.as_report(),
+            amule_enabled=amule_enabled,
+            amule_skip=report["checks"].get("amule_optional_skip") if isinstance(report.get("checks"), dict) else None,
+            queued_transfer_counts=report["queued_transfer_counts"],
+        )
         current_phase = "adverse_kill_recovery"
         client1_app, client2_app, procdump_crash_monitor_process, report["checks"]["adverse_kill_recovery"] = run_adverse_kill_recovery(
             args=args,
