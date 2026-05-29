@@ -2195,6 +2195,16 @@ def test_package_helper_profile_forwards_dependency_options(tmp_path: Path, monk
     assert option_values(command, "--sonarr-exe") == [str(sonarr_exe.resolve())]
 
 
+def test_package_helper_integration_uses_emulebb_release_asset_scripts() -> None:
+    script_text = (Path(__file__).resolve().parents[2] / "scripts" / "package-helper-integration.py").read_text(encoding="utf-8")
+
+    assert "workspace_layout.resolve_workspace_repo(paths.workspace_root, \"build\")" in script_text
+    assert "workspace_layout.resolve_workspace_repo(paths.workspace_root, \"amutorrent\")" in script_text
+    assert '"release_assets" / "emulebb" / "scripts"' in script_text
+    assert '"release_assets" / "emule" / "scripts"' not in script_text
+    assert '"repos" / "emulebb-build"' not in script_text
+
+
 def test_operator_script_help_loads_hyphenated_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     completed = subprocess.run(

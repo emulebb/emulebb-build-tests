@@ -42,12 +42,13 @@
   },
   "local_package_install": {
     "target_path": "C:\\tools\\emulebb",
-    "profile_dir": "F:\\example\\emulebb-profile",
+    "import_profile_dir": "F:\\M\\H06T01\\dldz\\EMULE_BIN",
+    "control_bind_address": "127.0.0.1",
+    "emulebb_port": 4711,
     "amutorrent_port": 4000,
-    "amutorrent_bind_address": "0.0.0.0",
-    "emulebb_id": "emulebb-local",
-    "emulebb_name": "eMuleBB local",
-    "procdump_path": "C:\\bin\\sysin\\procdump.exe",
+    "amutorrent_bind_address": "127.0.0.1",
+    "p2p_bind_interface": "hide.me",
+    "dependency_manifest": "C:\\example\\emulebb-suite-dependencies.json",
     "enable_rest": true,
     "enable_crash_dumps": true
   }

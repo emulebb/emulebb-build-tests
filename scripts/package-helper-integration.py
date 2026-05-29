@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import live_dependencies  # noqa: E402
+from emule_test_harness import live_dependencies, workspace_layout  # noqa: E402
 
 SUITE_NAME = "package-helper-integration"
 INCONCLUSIVE_EXIT_CODE = 2
@@ -45,14 +45,6 @@ amutorrent_smoke = load_local_module("package_helper_amutorrent_smoke", "amutorr
 
 class InconclusiveSuite(RuntimeError):
     """Raised when external runtime dependencies are unavailable."""
-
-
-def find_workspace_repo_root(workspace_root: Path) -> Path:
-    current = workspace_root.resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / "repos" / "emulebb-build").is_dir():
-            return candidate
-    raise RuntimeError(f"Could not find workspace repo root above {workspace_root}.")
 
 
 def read_json_url(base_url: str, path: str, *, api_key: str | None = None, timeout_seconds: float = 15.0) -> Any:
@@ -196,8 +188,8 @@ def run_helper(script_path: Path, args: list[str], report: dict[str, Any], key: 
         raise RuntimeError(f"{script_path.name} unexpectedly succeeded for {key}")
 
 
-def helper_scripts_root(workspace_repo_root: Path) -> Path:
-    root = workspace_repo_root / "repos" / "emulebb-build" / "emule_workspace" / "release_assets" / "emule" / "scripts"
+def helper_scripts_root(build_repo_root: Path) -> Path:
+    root = build_repo_root / "emule_workspace" / "release_assets" / "emulebb" / "scripts"
     if not root.is_dir():
         raise RuntimeError(f"Package helper scripts root not found: {root}")
     return root
@@ -253,7 +245,8 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     )
     artifacts_dir = paths.source_artifacts_dir
     result_path = artifacts_dir / f"{SUITE_NAME}-result.json"
-    workspace_repo_root = find_workspace_repo_root(paths.workspace_root)
+    build_repo_root = workspace_layout.resolve_workspace_repo(paths.workspace_root, "build")
+    amutorrent_root = workspace_layout.resolve_workspace_repo(paths.workspace_root, "amutorrent")
     report: dict[str, Any] = {
         "suite": SUITE_NAME,
         "status": "failed",
@@ -283,7 +276,6 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         report["dependencies"] = {name: dependency.to_report() for name, dependency in arr.items()}
 
         node_info = amutorrent_smoke.resolve_amutorrent_node()
-        amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
         amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
         report["dependencies"]["amutorrent_node"] = node_info
 
@@ -349,7 +341,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         wait_for_http(amutorrent_base_url, "/api/config/status", timeout_seconds=args.ready_timeout_seconds)
         report["checks"]["amutorrent_ready"] = {"port": amutorrent_port, "pid": amutorrent_process.pid}
 
-        scripts_root = helper_scripts_root(workspace_repo_root)
+        scripts_root = helper_scripts_root(build_repo_root)
         run_helper(
             scripts_root / "register-amutorrent.ps1",
             [
