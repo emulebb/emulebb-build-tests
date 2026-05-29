@@ -85,6 +85,8 @@ DEFAULT_REST_COLD_START_DUMP_STRESS_TOOL_TIMEOUT_SECONDS = 60.0
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_REST_COLD_START_DUMP_STRESS_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_GODZILLA_VHD_SIZE_MB = 128 * 1024
+GODZILLA_STAGES = ("full", "launch-scale")
+DEFAULT_GODZILLA_STAGE = "full"
 DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT = 30
 DEFAULT_GODZILLA_PEER_TRANSFER_COUNT = 300
 DEFAULT_GODZILLA_HARNESS_TRANSFER_COUNT = 300
@@ -933,6 +935,7 @@ def build_suite_command(
     godzilla_visible_ui: bool = False,
     godzilla_p2p_bind_interface_address: str | None = None,
     godzilla_cpu_profile: bool = False,
+    godzilla_stage: str = DEFAULT_GODZILLA_STAGE,
     godzilla_vhd_runtime_root: str = "drive-letter",
     godzilla_total_client_count: int = DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT,
     godzilla_peer_transfer_count: int = DEFAULT_GODZILLA_PEER_TRANSFER_COUNT,
@@ -1156,6 +1159,7 @@ def build_suite_command(
             command.extend(["--p2p-bind-interface-address", godzilla_p2p_bind_interface_address])
         if godzilla_cpu_profile:
             command.append("--cpu-profile")
+        command.extend(["--stage", godzilla_stage])
         command.extend(["--vhd-runtime-root", godzilla_vhd_runtime_root])
         command.extend(["--total-client-count", str(godzilla_total_client_count)])
         command.extend(["--peer-transfer-count", str(godzilla_peer_transfer_count)])
@@ -1728,6 +1732,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--godzilla-visible-ui", action="store_true")
     parser.add_argument("--godzilla-p2p-bind-interface-address")
     parser.add_argument("--godzilla-cpu-profile", action="store_true")
+    parser.add_argument("--godzilla-stage", choices=GODZILLA_STAGES, default=DEFAULT_GODZILLA_STAGE)
     parser.add_argument("--godzilla-vhd-runtime-root", choices=["drive-letter"], default="drive-letter")
     parser.add_argument("--godzilla-total-client-count", type=int, default=DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT)
     parser.add_argument("--godzilla-peer-transfer-count", type=int, default=DEFAULT_GODZILLA_PEER_TRANSFER_COUNT)
@@ -2048,6 +2053,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "visible_ui": bool(args.godzilla_visible_ui),
             "p2p_bind_interface_address": args.godzilla_p2p_bind_interface_address,
             "cpu_profile": bool(args.godzilla_cpu_profile),
+            "stage": args.godzilla_stage,
             "vhd_runtime_root": args.godzilla_vhd_runtime_root,
             "total_client_count": args.godzilla_total_client_count,
             "peer_transfer_count": args.godzilla_peer_transfer_count,
@@ -2152,6 +2158,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             godzilla_visible_ui=args.godzilla_visible_ui,
             godzilla_p2p_bind_interface_address=args.godzilla_p2p_bind_interface_address,
             godzilla_cpu_profile=args.godzilla_cpu_profile,
+            godzilla_stage=args.godzilla_stage,
             godzilla_vhd_runtime_root=args.godzilla_vhd_runtime_root,
             godzilla_total_client_count=args.godzilla_total_client_count,
             godzilla_peer_transfer_count=args.godzilla_peer_transfer_count,

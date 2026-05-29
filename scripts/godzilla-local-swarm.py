@@ -71,6 +71,8 @@ MAX_GODZILLA_CLIENT_COUNT = 30
 BASE_GODZILLA_CLIENT_COUNT = 3
 DEFAULT_TOTAL_CLIENT_COUNT = MAX_GODZILLA_CLIENT_COUNT
 DEFAULT_EXTRA_EMULEBB_CLIENTS = DEFAULT_TOTAL_CLIENT_COUNT - BASE_GODZILLA_CLIENT_COUNT
+GODZILLA_STAGES = ("full", "launch-scale")
+DEFAULT_GODZILLA_STAGE = "full"
 DEFAULT_EXTRA_EMULEBB_FILES = 1_000
 DEFAULT_HARNESS_FILES = 1_000
 DEFAULT_AMULE_FILES = 1_000
@@ -153,6 +155,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--visible-ui", action="store_true")
+    parser.add_argument(
+        "--stage",
+        choices=GODZILLA_STAGES,
+        default=DEFAULT_GODZILLA_STAGE,
+        help="Stops after a named campaign boundary; full runs the complete hammer campaign.",
+    )
     parser.add_argument("--admin-volume-fixtures", action="store_true")
     parser.add_argument("--vhd-size-mb", type=int, default=DEFAULT_VHD_SIZE_MB)
     parser.add_argument("--mount-root")
@@ -2000,6 +2008,7 @@ def main(argv: list[str] | None = None) -> int:
         "suite": SUITE_NAME,
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "stage": args.stage,
         "parameters": vars(args),
         "client_path_capabilities": long_path_capability_report([CLIENT01.key, CLIENT02.key, CLIENT04.key]),
         "checks": {},
@@ -2371,6 +2380,19 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_seconds=args.server_connect_timeout_seconds,
                 ),
             }
+        if args.stage == "launch-scale":
+            report["checks"]["stage_completion"] = {
+                "stage": args.stage,
+                "completed_phase": current_phase,
+                "extra_emulebb_clients_requested": args.extra_emulebb_clients,
+                "extra_emulebb_clients_launched": len(
+                    [client for client in extra_emulebb_clients if client.get("app") is not None]
+                ),
+                "next_phase": "launch_harness",
+            }
+            report["current_phase"] = current_phase
+            report["status"] = "passed"
+            return 0
 
         current_phase = "launch_harness"
         harness_dir = paths.source_artifacts_dir / "harness-control"

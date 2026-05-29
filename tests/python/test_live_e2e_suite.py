@@ -756,6 +756,7 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert [script_name(command) for command in commands] == ["godzilla-local-swarm.py"]
     assert [suite["name"] for suite in summary["suites"]] == ["godzilla-local-swarm"]
     assert "--admin-volume-fixtures" in commands[0]
+    assert option_values(commands[0], "--stage") == [live_e2e_suite.DEFAULT_GODZILLA_STAGE]
     assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
     assert option_values(commands[0], "--total-client-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_TOTAL_CLIENT_COUNT)]
     assert option_values(commands[0], "--peer-transfer-count") == [str(live_e2e_suite.DEFAULT_GODZILLA_PEER_TRANSFER_COUNT)]
@@ -800,6 +801,8 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
             "192.168.1.210",
             "--godzilla-visible-ui",
             "--godzilla-cpu-profile",
+            "--godzilla-stage",
+            "launch-scale",
             "--godzilla-vhd-runtime-root",
             "drive-letter",
             "--admin-volume-fixtures",
@@ -834,6 +837,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert "--cpu-profile" in commands[0]
     assert "--admin-volume-fixtures" in commands[0]
     assert option_values(commands[0], "--vhd-size-mb") == [str(live_e2e_suite.DEFAULT_GODZILLA_VHD_SIZE_MB)]
+    assert option_values(commands[0], "--stage") == ["launch-scale"]
     assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["Ethernet"]
     assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.210"]
@@ -851,6 +855,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
         "visible_ui": True,
         "p2p_bind_interface_address": "192.168.1.210",
         "cpu_profile": True,
+        "stage": "launch-scale",
         "vhd_runtime_root": "drive-letter",
         "total_client_count": 12,
         "peer_transfer_count": 444,

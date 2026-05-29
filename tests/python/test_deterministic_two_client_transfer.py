@@ -329,6 +329,15 @@ def test_godzilla_runtime_root_is_drive_letter_only() -> None:
         godzilla.parse_args(["--vhd-runtime-root", "folder-mount"])
 
 
+def test_godzilla_stage_defaults_to_full_and_accepts_launch_scale() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_stage_test")
+
+    assert godzilla.parse_args([]).stage == "full"
+    assert godzilla.parse_args(["--stage", "launch-scale"]).stage == "launch-scale"
+    with pytest.raises(SystemExit):
+        godzilla.parse_args(["--stage", "unknown"])
+
+
 def test_godzilla_lan_mode_uses_x_local_ip(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_env_test")
     monkeypatch.setenv("X_LOCAL_IP", "192.168.1.210")
