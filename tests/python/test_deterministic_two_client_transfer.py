@@ -464,6 +464,23 @@ def test_godzilla_transfer_row_hashes_use_live_rest_identifiers() -> None:
     assert godzilla.transfer_row_hashes(rows) == ["aaa", "bbb", "123"]
 
 
+def test_godzilla_queue_downloads_uses_retry_rest_request(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_retry_queue_test")
+    calls: list[tuple[str, str]] = []
+
+    def fake_retry(_base_url, path, *, method="GET", **_kwargs):
+        calls.append((method, path))
+        return {"status": 200, "json": {"queued": True}, "transient_errors": [{"type": "ConnectionResetError"}]}
+
+    monkeypatch.setattr(godzilla.dtt, "retry_rest_request", fake_retry)
+    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+
+    rows = godzilla.queue_emulebb_downloads("http://127.0.0.1:4711", "key", ["ed2k://|file|a|1|0|/"])
+
+    assert rows == [{"status": 200}]
+    assert calls == [("POST", "/api/v1/transfers")]
+
+
 def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_log_marker_scan_test")
     log_path = tmp_path / "emulebb-verbose.log"

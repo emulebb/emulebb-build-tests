@@ -891,12 +891,13 @@ def run_spiral_hammer(
             for transfer_hash in hashes:
                 operations = ("pause", "resume", "stop", "resume")[: 1 + (wave % 4)]
                 for operation in operations:
-                    result = rest_smoke.http_request(
+                    result = dtt.retry_rest_request(
                         base_url,
                         f"/api/v1/transfers/{transfer_hash}/operations/{operation}",
                         method="POST",
                         api_key=api_key,
                         json_body={},
+                        timeout_seconds=30.0,
                         request_timeout_seconds=10.0,
                     )
                     actions.append(
@@ -1073,12 +1074,13 @@ def queue_emulebb_downloads(base_url: str, api_key: str, links: list[str]) -> li
 
     rows: list[dict[str, object]] = []
     for link in links:
-        result = rest_smoke.http_request(
+        result = dtt.retry_rest_request(
             base_url,
             "/api/v1/transfers",
             method="POST",
             api_key=api_key,
             json_body={"link": link},
+            timeout_seconds=60.0,
             request_timeout_seconds=20.0,
         )
         rows.append(rest_smoke.compact_http_result(result))
@@ -1101,22 +1103,24 @@ def churn_emulebb_transfers(base_url: str, api_key: str, hashes: list[str]) -> l
     rows: list[dict[str, object]] = []
     for index, transfer_hash in enumerate(hashes[: min(len(hashes), 80)]):
         if index % 10 == 9:
-            result = rest_smoke.http_request(
+            result = dtt.retry_rest_request(
                 base_url,
                 f"/api/v1/transfers/{transfer_hash}",
                 method="DELETE",
                 api_key=api_key,
+                timeout_seconds=30.0,
                 request_timeout_seconds=10.0,
             )
             rows.append({"hash": transfer_hash, "operation": "delete", **rest_smoke.compact_http_result(result)})
             continue
         operation = operations[index % len(operations)]
-        result = rest_smoke.http_request(
+        result = dtt.retry_rest_request(
             base_url,
             f"/api/v1/transfers/{transfer_hash}/operations/{operation}",
             method="POST",
             api_key=api_key,
             json_body={},
+            timeout_seconds=30.0,
             request_timeout_seconds=10.0,
         )
         rows.append({"hash": transfer_hash, "operation": operation, **rest_smoke.compact_http_result(result)})
@@ -1665,7 +1669,13 @@ def hard_kill_app_process(
 def fetch_transfer_rows(base_url: str, api_key: str) -> list[dict[str, object]]:
     """Fetches the current eMuleBB transfer rows from REST."""
 
-    result = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=api_key, request_timeout_seconds=20.0)
+    result = dtt.retry_rest_request(
+        base_url,
+        "/api/v1/transfers",
+        api_key=api_key,
+        timeout_seconds=30.0,
+        request_timeout_seconds=20.0,
+    )
     return [row for row in rest_smoke.require_json_array(result, 200) if isinstance(row, dict)]
 
 
@@ -2822,7 +2832,13 @@ def main(argv: list[str] | None = None) -> int:
         queued_hashes = transfer_row_hashes(pre_churn_rows)
         report["checks"]["emulebb_transfer_churn"] = churn_emulebb_transfers(base_url, args.api_key, queued_hashes)
         report["checks"]["transfer_list_after_churn"] = rest_smoke.compact_http_result(
-            rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=args.api_key, request_timeout_seconds=20.0)
+            dtt.retry_rest_request(
+                base_url,
+                "/api/v1/transfers",
+                api_key=args.api_key,
+                timeout_seconds=30.0,
+                request_timeout_seconds=20.0,
+            )
         )
 
         current_phase = "client_rotation"
