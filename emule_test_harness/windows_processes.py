@@ -168,7 +168,8 @@ def terminate_process(process_id: int, exit_code: int = 1, expected_creation_dat
             "expected_creation_date": expected_creation_date,
             "current_creation_date": current_creation_date,
         }
-    result = int(matches[0].Terminate(exit_code))
+    terminate_result = matches[0].Terminate
+    result = int(terminate_result(exit_code) if callable(terminate_result) else terminate_result)
     return {"pid": process_id, "terminated": result == 0, "return_code": result}
 
 

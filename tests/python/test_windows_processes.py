@@ -130,6 +130,22 @@ def test_terminate_process_refuses_reused_pid(monkeypatch) -> None:
     assert result["reason"] == "process creation date changed"
 
 
+def test_terminate_process_accepts_wmi_terminate_result_property(monkeypatch) -> None:
+    class FakeProcess:
+        CreationDate = "20260527010101.000000+000"
+        Terminate = 0
+
+    class FakeService:
+        def ExecQuery(self, _query: str):
+            return [FakeProcess()]
+
+    monkeypatch.setattr(windows_processes, "process_service", lambda: FakeService())
+
+    result = windows_processes.terminate_process(10, expected_creation_date="20260527010101.000000+000")
+
+    assert result == {"pid": 10, "terminated": True, "return_code": 0}
+
+
 def test_remaining_target_pids_ignores_reused_pid(monkeypatch) -> None:
     target = windows_processes.WindowsProcessInfo(
         pid=10,
