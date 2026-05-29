@@ -80,12 +80,14 @@ def test_hash_workers_use_priority_gate_before_global_hash_mutex() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
     add_thread_run = source[source.index("int CAddFileThread::Run()") : source.index("///////////////////////////////////////////////////////////////////////////////\n// CSharedFileHashThread")]
-    shared_hash_run = source[source.index("void CSharedFileList::RunSharedHashJob") : source.index("void CSharedFileList::MoveActiveSharedHashToPendingCompletion")]
+    shared_hash_run = source[source.index("void CSharedFileList::RunSharedHashJob") : source.index("bool CSharedFileList::MoveActiveSharedHashToPendingCompletion")]
 
     assert "enum EFileHashJobPriority" in header
     assert "FHJP_PART_FILE_COMPLETION = 2" in header
     assert "std::vector<SFileHashJobGateEntry> s_fileHashJobGateQueue;" in source
     assert "bool ShouldFileHashJobWaitLocked(const SFileHashJobGateEntry &rJob)" in source
+    assert "bool IsFileHashJobGateBusy()" in source
+    assert "s_bFileHashJobRunning || !s_fileHashJobGateQueue.empty() || s_bPartFileHashStartupScheduling" in source
     assert "if (s_bPartFileHashStartupScheduling || s_bFileHashJobRunning)\n\t\treturn true;" in source
     assert "if (iQueuedPriority > iOwnPriority)\n\t\t\treturn true;" in source
     assert "if (iQueuedPriority == iOwnPriority && rQueuedJob.uSequence < rJob.uSequence)\n\t\t\treturn true;" in source
@@ -93,3 +95,15 @@ def test_hash_workers_use_priority_gate_before_global_hash_mutex() -> None:
     assert add_thread_run.index("CScopedFileHashJobGate fileHashJobGate(m_eHashJobPriority);") < add_thread_run.index("CSingleLock hashingLock(&theApp.hashing_mut, TRUE);")
     assert "CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);" in shared_hash_run
     assert shared_hash_run.index("CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);") < shared_hash_run.index("CSingleLock hashingLock(&theApp.hashing_mut, TRUE);")
+
+
+def test_startup_cache_save_waits_for_file_hash_gate_to_go_idle() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("bool CSharedFileList::ShouldStartStartupCacheSaveNow") :
+        source.index("void CSharedFileList::FindSharedFiles")
+    ]
+
+    assert "startup-cache snapshot walks all shared directories and known" in block
+    assert "const bool bDeferredHashingActive = m_bStartupDeferredHashingActive || IsFileHashJobGateBusy();" in block
+    assert "bDeferredHashingActive," in block
