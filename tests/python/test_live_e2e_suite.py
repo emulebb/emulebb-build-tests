@@ -2205,6 +2205,33 @@ def test_live_process_monitor_uses_materialized_profile_root(tmp_path: Path, mon
     assert option_values(commands[0], "--profile-dir") == [str(profile_seed_dir.parent.resolve())]
 
 
+def test_live_process_monitor_profile_dir_is_separate_from_synthetic_seed(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    profile_dir = tmp_path / "install" / "profiles" / "emulebb"
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "live-process-monitor",
+            "--live-process-monitor-profile-dir",
+            str(profile_dir),
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert script_name(commands[0]) == "live-process-monitor.py"
+    assert "--profile-seed-dir" not in commands[0]
+    assert option_values(commands[0], "--profile-dir") == [str(profile_dir.resolve())]
+    assert summary["live_process_monitor_profile_dir"] == str(profile_dir.resolve())
+
+
 def test_package_helper_profile_forwards_dependency_options(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     cache_root = tmp_path / "arr-cache"

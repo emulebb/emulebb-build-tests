@@ -921,6 +921,7 @@ def build_suite_command(
     app_root: Path | None = None,
     app_exe: Path | None = None,
     seed_config_dir: Path | None = None,
+    live_process_monitor_profile_dir: Path | None = None,
     startup_trace_mode: str = "required",
     shared_root: Path | None = None,
     preference_ui_directories_tree_stress: bool = False,
@@ -1038,8 +1039,10 @@ def build_suite_command(
         command.extend(["--app-exe", str(app_exe.resolve())])
     if seed_config_dir is not None:
         command.extend(["--profile-seed-dir", str(seed_config_dir.resolve())])
-        if spec.name == "live-process-monitor":
+        if spec.name == "live-process-monitor" and live_process_monitor_profile_dir is None:
             command.extend(["--profile-dir", str(seed_config_dir.parent.resolve())])
+    if spec.name == "live-process-monitor" and live_process_monitor_profile_dir is not None:
+        command.extend(["--profile-dir", str(live_process_monitor_profile_dir.resolve())])
     if spec.accepts_startup_trace_mode:
         command.extend(["--startup-trace-mode", startup_trace_mode])
     if spec.accepts_shared_root and shared_root is not None:
@@ -1544,6 +1547,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
+    parser.add_argument("--live-process-monitor-profile-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
@@ -1894,6 +1898,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
     python_executable = harness_cli_common.find_python_executable()
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else None
+    live_process_monitor_profile_dir = (
+        Path(args.live_process_monitor_profile_dir).resolve()
+        if args.live_process_monitor_profile_dir
+        else None
+    )
     shared_root = Path(args.shared_root).resolve() if args.shared_root else None
     radarr_movie_root = args.radarr_movie_root.strip() if args.radarr_movie_root else None
     sonarr_series_root = args.sonarr_series_root.strip() if args.sonarr_series_root else None
@@ -1948,6 +1957,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "app_exe": str(paths.app_exe),
         "workspace_root": str(paths.workspace_root),
         "app_root": str(paths.app_root),
+        "live_process_monitor_profile_dir": (
+            str(live_process_monitor_profile_dir)
+            if live_process_monitor_profile_dir is not None
+            else None
+        ),
         "artifact_dir": str(paths.run_report_dir),
         "latest_report_dir": str(paths.latest_report_dir),
         "source_artifact_dir": str(paths.source_artifacts_dir),
@@ -2153,6 +2167,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             app_root=paths.app_root,
             app_exe=paths.app_exe,
             seed_config_dir=seed_config_dir,
+            live_process_monitor_profile_dir=live_process_monitor_profile_dir,
             startup_trace_mode=args.startup_trace_mode,
             shared_root=shared_root,
             preference_ui_directories_tree_stress=args.preference_ui_directories_tree_stress,
