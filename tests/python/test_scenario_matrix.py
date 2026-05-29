@@ -11,6 +11,9 @@ def test_live_e2e_scenario_matrix_covers_every_registered_suite_once() -> None:
     assert matrix["schema"] == scenario_matrix.SCHEMA
     assert matrix["suiteCount"] == len(live_e2e_suite.SUITE_SPECS)
     assert [suite["name"] for suite in matrix["suites"]] == list(live_e2e_suite.SUITE_NAMES)
+    assert matrix["rollups"]["profileVisibleCount"] == sum(
+        1 for suite in matrix["suites"] if suite["profiles"]
+    )
     json.dumps(matrix)
 
 
@@ -49,5 +52,23 @@ def test_live_e2e_scenario_matrix_surfaces_known_policy_gaps() -> None:
         "godzilla-local-swarm",
         "large local swarm hammer is not RC-profile-visible",
     ) not in gaps
+    assert (
+        "godzilla-local-swarm",
+        "large local swarm hammer is release-expanded only, not stabilization-stress visible",
+    ) in gaps
     assert any(suite == "multi-client-p2p-matrix" for suite, _gap in gaps)
     assert not any(suite == "local-kad-mixed-client-swarm" for suite, _gap in gaps)
+    assert (
+        "live-process-monitor",
+        "suite is neither default-enabled nor profile-visible",
+    ) in gaps
+
+
+def test_live_e2e_scenario_matrix_reports_rollups_and_repetitions() -> None:
+    matrix = scenario_matrix.build_live_e2e_scenario_matrix()
+    repetitions = {row["suite"]: row for row in matrix["repetitions"]}
+
+    assert matrix["rollups"]["byStressClass"]["hammer"] == 1
+    assert matrix["rollups"]["byTopology"]["local-swarm"] >= 3
+    assert repetitions["rest-api"]["classification"] == "quick-and-full-release-overlap"
+    assert repetitions["shared-directories-rest"]["profileCount"] >= 4

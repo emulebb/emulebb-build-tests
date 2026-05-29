@@ -6,7 +6,7 @@ from typing import Any
 
 from emule_test_harness import live_e2e_suite
 
-SCHEMA = "emulebb-build-tests.live-e2e-scenario-matrix.v1"
+SCHEMA = "emulebb-build-tests.live-e2e-scenario-matrix.v2"
 
 
 def build_live_e2e_scenario_matrix() -> dict[str, Any]:
@@ -35,7 +35,9 @@ def build_live_e2e_scenario_matrix() -> dict[str, Any]:
         "schema": SCHEMA,
         "suiteCount": len(suites),
         "profiles": {name: list(suites) for name, suites in live_e2e_suite.PROFILE_SUITE_NAMES.items()},
+        "rollups": summarize_rollups(suites),
         "suites": suites,
+        "repetitions": summarize_profile_repetitions(suites),
         "gaps": summarize_matrix_gaps(suites),
     }
 
@@ -150,11 +152,89 @@ def classify_diagnostics(spec: live_e2e_suite.SuiteSpec) -> tuple[str, ...]:
     return tuple(diagnostics)
 
 
+def summarize_rollups(suites: list[dict[str, Any]]) -> dict[str, Any]:
+    """Builds count summaries for the major matrix axes."""
+
+    return {
+        "byCategory": count_by(suites, "category"),
+        "byNetworkScope": count_by(suites, "networkScope"),
+        "byTopology": count_by(suites, "topology"),
+        "byStressClass": count_by(suites, "stressClass"),
+        "profileSuiteCounts": {
+            profile: len(suite_names)
+            for profile, suite_names in live_e2e_suite.PROFILE_SUITE_NAMES.items()
+        },
+        "defaultEnabledCount": sum(1 for suite in suites if suite["defaultEnabled"]),
+        "profileVisibleCount": sum(1 for suite in suites if suite["profiles"]),
+    }
+
+
+def count_by(suites: list[dict[str, Any]], key: str) -> dict[str, int]:
+    """Counts suites by one stable matrix key in suite registration order."""
+
+    counts: dict[str, int] = {}
+    for suite in suites:
+        value = str(suite[key])
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def summarize_profile_repetitions(suites: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Returns suites intentionally or suspiciously repeated across profiles."""
+
+    repetitions: list[dict[str, Any]] = []
+    for suite in suites:
+        profiles = tuple(suite["profiles"])
+        if len(profiles) <= 1:
+            continue
+        repetitions.append(
+            {
+                "suite": suite["name"],
+                "profileCount": len(profiles),
+                "profiles": profiles,
+                "classification": classify_profile_repetition(suite, profiles),
+            }
+        )
+    return repetitions
+
+
+def classify_profile_repetition(suite: dict[str, Any], profiles: tuple[str, ...]) -> str:
+    """Classifies whether repeated profile membership looks intentional."""
+
+    profile_set = set(profiles)
+    if "release-expanded" in profile_set and "release-expanded-quick" in profile_set:
+        return "quick-and-full-release-overlap"
+    if suite["stressClass"] in {"stress", "hammer"}:
+        return "staged-stress-overlap"
+    if suite["name"] in {"rest-api", "shared-directories-rest"}:
+        return "controller-contract-overlap"
+    return "review-for-profile-overlap"
+
+
 def summarize_matrix_gaps(suites: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Identifies consistency gaps that should be resolved by later scenario work."""
 
     gaps: list[dict[str, str]] = []
     for suite in suites:
+        if not suite["profiles"]:
+            gap = (
+                "default aggregate only; no named profile owns this suite"
+                if suite["defaultEnabled"]
+                else "suite is neither default-enabled nor profile-visible"
+            )
+            gaps.append(
+                {
+                    "suite": suite["name"],
+                    "gap": gap,
+                }
+            )
+        if suite["name"] == "godzilla-local-swarm" and "stabilization-stress" not in suite["profiles"]:
+            gaps.append(
+                {
+                    "suite": suite["name"],
+                    "gap": "large local swarm hammer is release-expanded only, not stabilization-stress visible",
+                }
+            )
         if suite["name"] == "godzilla-local-swarm" and "release-expanded" not in suite["profiles"]:
             gaps.append(
                 {

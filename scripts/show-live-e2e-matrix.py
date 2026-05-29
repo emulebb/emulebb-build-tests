@@ -39,6 +39,17 @@ def main(argv: list[str] | None = None) -> int:
             f"{suite['name']:<33}  {suite['networkScope']:<7}  "
             f"{suite['topology']:<20}  {suite['stressClass']:<7}  {profiles}"
         )
+    print("")
+    print("Rollups")
+    for axis in ("byNetworkScope", "byTopology", "byStressClass"):
+        values = ", ".join(f"{name}={count}" for name, count in matrix["rollups"][axis].items())
+        print(f"- {axis}: {values}")
+    if matrix["repetitions"]:
+        print("")
+        print("Repeated profile coverage")
+        for repetition in matrix["repetitions"]:
+            profiles = ",".join(repetition["profiles"])
+            print(f"- {repetition['suite']}: {repetition['classification']} ({profiles})")
     if matrix["gaps"]:
         print("")
         print("Gaps")
