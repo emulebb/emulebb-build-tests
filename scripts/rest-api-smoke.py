@@ -3763,7 +3763,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             transfer_add_bad,
             400,
             "INVALID_ARGUMENT",
-            message_contains="Not an eD2K server or file link",
+            message_contains="link must start with ed2k://",
         ),
         "add_missing_link": require_error_response(
             transfer_add_missing_link,
