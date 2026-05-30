@@ -1183,6 +1183,35 @@ def parse_torznab_item_summaries(body_text: str) -> list[dict[str, object]]:
     return items
 
 
+def parse_torznab_item_releases(body_text: str) -> list[dict[str, Any]]:
+    """Parses direct Torznab RSS items into acquisition candidates."""
+
+    if not body_text:
+        return []
+    root = ET.fromstring(body_text)
+    rows: list[dict[str, Any]] = []
+    for item in root.findall("./channel/item"):
+        enclosure = item.find("enclosure")
+        enclosure_url = enclosure.attrib.get("url", "") if enclosure is not None else ""
+        size = 0
+        for child in list(item):
+            if child.tag.endswith("attr") and child.attrib.get("name") == "size":
+                try:
+                    size = int(child.attrib.get("value") or 0)
+                except ValueError:
+                    size = 0
+                break
+        rows.append(
+            {
+                "title": item.findtext("title") or "",
+                "guid": item.findtext("guid") or "",
+                "downloadUrl": item.findtext("link") or enclosure_url,
+                "size": size,
+            }
+        )
+    return rows
+
+
 def direct_torznab_term_diagnostic(base_url: str, emule_api_key: str, query: str, category_id: int | None) -> dict[str, object]:
     """Runs one direct Torznab diagnostic search for a live-wire term."""
 
@@ -1846,6 +1875,78 @@ def select_grabbable_release(rows: list[Any], indexer_id: int, query: str) -> di
     raise RuntimeError("Prowlarr search returned rows but none were grabbable for the eMuleBB indexer.")
 
 
+def select_native_transfer_release(rows: list[Any], query: str, *, indexer_id: int | None = None) -> dict[str, Any]:
+    """Selects the best row that exposes a native ED2K transfer link."""
+
+    candidates: list[tuple[int, int, int, dict[str, Any]]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if indexer_id is not None and int(row.get("indexerId") or 0) != int(indexer_id):
+            continue
+        try:
+            get_release_native_transfer_link(row)
+        except RuntimeError:
+            continue
+        candidates.append(
+            (
+                release_title_match_score(row, query),
+                release_source_count(row),
+                -len(candidates),
+                json.loads(json.dumps(row)),
+            )
+        )
+    if candidates:
+        candidates.sort(reverse=True)
+        return candidates[0][3]
+    raise RuntimeError("No selected release exposed a native eD2K transfer link.")
+
+
+def select_direct_torznab_native_release(
+    base_url: str,
+    emule_api_key: str,
+    query: str,
+    category_id: int,
+    timeout_seconds: float,
+) -> tuple[dict[str, Any], dict[str, object]]:
+    """Finds one direct Torznab row with a native ED2K link for acquisition."""
+
+    attempts: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        request_timeout = min(TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS, max(1.0, deadline - time.monotonic()))
+        result = retry_emule_rest_request(
+            base_url,
+            build_direct_torznab_search_path(emule_api_key, query, category_id),
+            api_key=emule_api_key,
+            timeout_seconds=request_timeout,
+            request_timeout_seconds=request_timeout,
+        )
+        status = int(result.get("status") or 0)
+        rows = parse_torznab_item_releases(str(result.get("body_text") or "")) if status == 200 else []
+        native_count = 0
+        for row in rows:
+            try:
+                get_release_native_transfer_link(row)
+                native_count += 1
+            except RuntimeError:
+                continue
+        attempts.append({"status": status, "count": len(rows), "native_link_count": native_count, "query_present": bool(query)})
+        if native_count:
+            selected = select_native_transfer_release(rows, query)
+            return selected, {
+                "status": status,
+                "count": len(rows),
+                "native_link_count": native_count,
+                "attempt_count": len(attempts),
+                "query_present": bool(query),
+            }
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
+    raise RuntimeError(f"Direct Torznab fallback found no native eD2K release rows. Attempts: {attempts!r}")
+
+
 def summarize_grabbed_release(release: dict[str, Any], query: str) -> dict[str, object]:
     """Builds a report-safe summary of the selected Prowlarr release."""
 
@@ -1906,14 +2007,27 @@ def prowlarr_download_client_grab_roundtrip(
                 continue
 
             release = select_grabbable_release(rows, indexer_id, query)
-            download_link = get_release_native_transfer_link(release)
+            direct_fallback: dict[str, object] | None = None
+            handoff = "prowlarr-search-native-emulebb-rest-add"
+            try:
+                download_link = get_release_native_transfer_link(release)
+            except RuntimeError:
+                release, direct_fallback = select_direct_torznab_native_release(
+                    emule_base_url,
+                    emule_api_key,
+                    query,
+                    category_id,
+                    min(60.0, max(1.0, deadline - time.monotonic())),
+                )
+                download_link = get_release_native_transfer_link(release)
+                handoff = "prowlarr-search-direct-torznab-native-emulebb-rest-add"
             added = native_rest_transfer_add(emule_base_url, emule_api_key, download_link, download_category)
-            return {
+            proof: dict[str, object] = {
                 "status": "passed",
                 "category": int(category_id),
                 "download_client_id": int(download_client_id),
                 "download_category": download_category,
-                "handoff": "prowlarr-search-native-emulebb-rest-add",
+                "handoff": handoff,
                 "release": summarize_grabbed_release(release, query),
                 "grab_status": int(added.get("add_status") or 0),
                 "download_link_hash_present": bool(added.get("hash")),
@@ -1927,6 +2041,9 @@ def prowlarr_download_client_grab_roundtrip(
                 ),
                 "attempt_count": len(attempts),
             }
+            if direct_fallback is not None:
+                proof["direct_torznab_fallback"] = direct_fallback
+            return proof
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(5.0, remaining))

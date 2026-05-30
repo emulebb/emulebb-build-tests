@@ -749,6 +749,54 @@ def test_select_grabbable_release_requires_matching_indexer_and_guid() -> None:
     assert result["guid"] == "right"
 
 
+def test_select_native_transfer_release_skips_internal_prowlarr_guid() -> None:
+    module = load_prowlarr_module()
+
+    result = module.select_native_transfer_release(
+        [
+            {"indexerId": 40, "guid": "prowlarr://release/1", "title": "Linux ISO"},
+            {
+                "indexerId": 40,
+                "guid": "ed2k:fedcba9876543210fedcba9876543210",
+                "downloadUrl": "ed2k://|file|Linux.iso|1024|fedcba9876543210fedcba9876543210|/",
+                "title": "Linux ISO",
+            },
+        ],
+        "linux iso",
+        indexer_id=40,
+    )
+
+    assert result["downloadUrl"].startswith("ed2k://")
+
+
+def test_parse_torznab_item_releases_extracts_native_download_link() -> None:
+    module = load_prowlarr_module()
+    body = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Linux ISO</title>
+      <guid isPermaLink="false">ed2k:fedcba9876543210fedcba9876543210</guid>
+      <link>ed2k://|file|Linux.iso|1024|fedcba9876543210fedcba9876543210|/</link>
+      <enclosure url="ed2k://|file|Linux.iso|1024|fedcba9876543210fedcba9876543210|/" length="1024" type="application/x-ed2k-link" />
+      <torznab:attr name="size" value="1024" />
+    </item>
+  </channel>
+</rss>
+"""
+
+    rows = module.parse_torznab_item_releases(body)
+
+    assert rows == [
+        {
+            "title": "Linux ISO",
+            "guid": "ed2k:fedcba9876543210fedcba9876543210",
+            "downloadUrl": "ed2k://|file|Linux.iso|1024|fedcba9876543210fedcba9876543210|/",
+            "size": 1024,
+        }
+    ]
+
+
 def test_select_grabbable_release_prefers_title_match_then_sources() -> None:
     module = load_prowlarr_module()
 
