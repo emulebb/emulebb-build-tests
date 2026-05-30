@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
+import shutil
 import socket
+import ssl
+import subprocess
 import sys
 import time
 import urllib.error
@@ -208,6 +212,62 @@ def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:
     """Returns a provider payload without harness-only report metadata."""
 
     return {key: value for key, value in provider.items() if not str(key).startswith("_emulebb")}
+
+
+def certificate_thumbprint_sha1(certificate_path: str) -> str:
+    """Returns the uppercase SHA-1 thumbprint for a PEM certificate."""
+
+    certificate_text = Path(certificate_path).read_text(encoding="ascii")
+    return hashlib.sha1(ssl.PEM_cert_to_DER_cert(certificate_text)).hexdigest().upper()
+
+
+def install_certificate_in_current_user_root(certificate_path: str) -> dict[str, object]:
+    """Installs one disposable local certificate into CurrentUser Root for .NET clients."""
+
+    if not certificate_path:
+        return {"installed": False}
+    certutil = shutil.which("certutil.exe") or shutil.which("certutil")
+    if not certutil:
+        raise RuntimeError("certutil.exe is required to trust disposable HTTPS certificates for Prowlarr live tests.")
+    thumbprint = certificate_thumbprint_sha1(certificate_path)
+    result = subprocess.run(
+        [certutil, "-user", "-addstore", "-f", "Root", certificate_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to add disposable HTTPS certificate to CurrentUser Root: exit {result.returncode}.")
+    return {"installed": True, "store": "CurrentUser\\Root", "thumbprint": thumbprint}
+
+
+def remove_certificate_from_current_user_root(trust_record: dict[str, object]) -> dict[str, object]:
+    """Removes a disposable local certificate installed by this harness run."""
+
+    if not bool(trust_record.get("installed")):
+        return {"removed": False, "reason": "not_installed"}
+    thumbprint = str(trust_record.get("thumbprint") or "").strip()
+    if not thumbprint:
+        return {"removed": False, "error": "missing_thumbprint"}
+    certutil = shutil.which("certutil.exe") or shutil.which("certutil")
+    if not certutil:
+        return {"removed": False, "thumbprint": thumbprint, "error": "certutil_missing"}
+    result = subprocess.run(
+        [certutil, "-user", "-delstore", "Root", thumbprint],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return {
+        "removed": result.returncode == 0,
+        "store": "CurrentUser\\Root",
+        "thumbprint": thumbprint,
+        "returncode": result.returncode,
+    }
 
 
 def build_indexer_payload(
@@ -1772,6 +1832,11 @@ def main() -> int:
         else {"certificate": "", "key": "", "generator": ""}
     )
     rest_smoke.configure_https_trust(https_material["certificate"])
+    https_trust_store = (
+        install_certificate_in_current_user_root(https_material["certificate"])
+        if use_https
+        else {"installed": False}
+    )
 
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="prowlarr-emulebb-live")
     seed_refresh = None
@@ -1807,6 +1872,7 @@ def main() -> int:
         "torznab_base_url": torznab_base_url,
         "rest_webserver_scheme": args.rest_webserver_scheme,
         "https_material": https_material if use_https else None,
+        "https_trust_store": https_trust_store if use_https else None,
         "api_key_length": len(args.emule_api_key),
         "prowlarr_api_key_length": len(prowlarr_api_key),
         "seed_refresh": seed_refresh,
@@ -2017,6 +2083,11 @@ def main() -> int:
                 report["cleanup"] = {"closed_app": False, "error": str(exc)}
                 if report.get("status") == "passed":
                     report["status"] = "failed"
+        if use_https:
+            trust_cleanup = remove_certificate_from_current_user_root(https_trust_store)
+            report["https_trust_store_cleanup"] = trust_cleanup
+            if not bool(trust_cleanup.get("removed")) and bool(https_trust_store.get("installed")) and report.get("status") == "passed":
+                report["status"] = "failed"
         live_common.write_json(result_path, report)
         paths.run_report_dir.parent.mkdir(parents=True, exist_ok=True)
         harness_cli_common.publish_run_artifacts(paths)
