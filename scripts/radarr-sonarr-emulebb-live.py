@@ -56,8 +56,9 @@ DEFAULT_LOCAL_ARR_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
 MIN_ARR_RELEASE_SOURCES = 10
 MIN_ARR_RELEASE_TITLE_MATCH_SCORE = 150
 ARR_LOCAL_CERTIFICATE_VALIDATION = "disabledForLocalAddresses"
-QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS = 3
+QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS = 10
 QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS = 2.0
+QBIT_ENDPOINT_READY_TIMEOUT_SECONDS = 60.0
 QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
     "unable to connect to qbittorrent",
     "ssl connection could not be established",
@@ -1003,6 +1004,48 @@ def build_qbit_client_payload(
     return payload
 
 
+def build_qbit_base_url(host: str, port: int, *, use_ssl: bool) -> str:
+    """Builds the eMuleBB qBittorrent-compatible base URL used by Arr."""
+
+    scheme = "https" if use_ssl else "http"
+    return f"{scheme}://{host}:{int(port)}"
+
+
+def wait_for_qbit_endpoint_ready(
+    base_url: str,
+    emule_api_key: str,
+    *,
+    timeout_seconds: float = QBIT_ENDPOINT_READY_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Waits for eMuleBB's qBit-compatible endpoint to accept a direct login."""
+
+    observations: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            _cookie, login = qbit_login(base_url, emule_api_key)
+            return {
+                "ready": True,
+                "attempt_count": attempt,
+                "login_status": int(login.get("status") or 0),
+                "transient_errors": observations[-5:],
+            }
+        except (RuntimeError, OSError, TimeoutError, urllib.error.URLError) as exc:
+            observations.append(
+                {
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:300],
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"eMuleBB qBittorrent endpoint did not become ready. Transient observations: {observations[-5:]!r}") from exc
+            time.sleep(min(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS, remaining))
+
+
 def create_temp_qbit_client(
     arr_url: str,
     api_key: str,
@@ -1034,6 +1077,11 @@ def create_temp_qbit_client(
         category_field=category_field,
         category=category,
         use_ssl=use_ssl,
+    )
+    endpoint_ready = wait_for_qbit_endpoint_ready(
+        build_qbit_base_url(host, port, use_ssl=use_ssl),
+        emule_api_key,
+        timeout_seconds=QBIT_ENDPOINT_READY_TIMEOUT_SECONDS,
     )
     try:
         transient_errors: list[str] = []
@@ -1068,6 +1116,7 @@ def create_temp_qbit_client(
             created["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
             created["_emulebbHostCertificateValidation"] = host_certificate_validation
             created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
+            created["_emulebbEndpointReady"] = endpoint_ready
             created["_emulebbTransientRetries"] = transient_errors
             return created
         raise RuntimeError("Arr eMuleBB qBittorrent client create exhausted transient retry attempts.")
@@ -1113,6 +1162,7 @@ def summarize_arr_download_client(client: dict[str, Any], *, category: str) -> d
         "test_status": client.get("_emulebbTestStatus"),
         "certificate_policy": client.get("_emulebbCertificatePolicy"),
         "host_certificate_validation": client.get("_emulebbHostCertificateValidation"),
+        "endpoint_ready": client.get("_emulebbEndpointReady"),
     }
 
 

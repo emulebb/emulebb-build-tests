@@ -1785,6 +1785,7 @@ def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.M
     schema = arr_qbit_schema()
 
     monkeypatch.setattr(module, "get_qbit_schema", lambda _arr_url, _api_key: schema)
+    monkeypatch.setattr(module, "wait_for_qbit_endpoint_ready", lambda *_args, **_kwargs: {"ready": True, "attempt_count": 1})
 
     def fake_arr_request(_arr_url, _api_key, path, **kwargs):
         method = str(kwargs.get("method") or "GET")
@@ -1826,6 +1827,7 @@ def test_temp_qbit_client_retries_transient_https_abort(monkeypatch: pytest.Monk
     schema = arr_qbit_schema(certificate_validation=True)
 
     monkeypatch.setattr(module, "get_qbit_schema", lambda _arr_url, _api_key: schema)
+    monkeypatch.setattr(module, "wait_for_qbit_endpoint_ready", lambda *_args, **_kwargs: {"ready": True, "attempt_count": 1})
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
 
     def fake_arr_request(_arr_url, _api_key, path, **kwargs):
@@ -1865,6 +1867,27 @@ def test_temp_qbit_client_retries_transient_https_abort(monkeypatch: pytest.Monk
     assert created["_emulebbTestStatus"] == 200
     assert len(created["_emulebbTransientRetries"]) == 1
     assert calls.count(("POST", "/api/v3/downloadclient?forceSave=true")) == 2
+
+
+def test_wait_for_qbit_endpoint_ready_retries_busy_web_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls = 0
+
+    def fake_qbit_login(_base_url, _api_key):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("Web Interface rejected connection because 1 accepted-client thread is already active")
+        return "SID=ok", {"status": 200, "body_text": "Ok."}
+
+    monkeypatch.setattr(module, "qbit_login", fake_qbit_login)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.wait_for_qbit_endpoint_ready("https://127.0.0.1:4711", "secret", timeout_seconds=10.0)
+
+    assert result["ready"] is True
+    assert result["attempt_count"] == 2
+    assert len(result["transient_errors"]) == 1
 
 
 def test_arr_readiness_summaries_are_compact() -> None:
