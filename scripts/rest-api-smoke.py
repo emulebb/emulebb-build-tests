@@ -1241,6 +1241,7 @@ def exercise_https_certificate_validation(
     certificate_path: str,
     *,
     request_timeout_seconds: float,
+    post_validation_ready_timeout_seconds: float = 0.0,
 ) -> dict[str, object]:
     """Requires HTTPS REST to pass with the generated cert and fail under the wrong trust/host."""
 
@@ -1287,6 +1288,12 @@ def exercise_https_certificate_validation(
     if not wrong_host_rejected:
         raise AssertionError("HTTPS certificate hostname validation unexpectedly accepted the wrong host.")
 
+    post_validation_ready = None
+    if post_validation_ready_timeout_seconds > 0.0:
+        post_validation_ready = compact_http_result(
+            wait_for_rest_ready(base_url, api_key, post_validation_ready_timeout_seconds)
+        )
+
     return {
         "enabled": True,
         "ok": True,
@@ -1295,6 +1302,7 @@ def exercise_https_certificate_validation(
         "untrusted_error": untrusted_error,
         "wrong_host_rejected": wrong_host_rejected,
         "wrong_host_error": wrong_host_error,
+        "post_validation_ready": post_validation_ready,
         "certificate": certificate_path,
     }
 
@@ -6364,6 +6372,7 @@ def main() -> int:
                 args.api_key,
                 https_material["certificate"],
                 request_timeout_seconds=args.rest_stress_request_timeout_seconds,
+                post_validation_ready_timeout_seconds=max(10.0, args.rest_stress_request_timeout_seconds * 2.0),
             )
 
         current_phase = set_phase(report, "nat_backend_order")

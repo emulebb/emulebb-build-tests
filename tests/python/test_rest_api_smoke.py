@@ -414,11 +414,16 @@ def test_rest_ready_timeout_reports_https_pem_context(monkeypatch: pytest.Monkey
 def test_https_certificate_validation_requires_trust_anchor_and_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     request_ca_files: list[object] = []
+    ready_calls: list[float] = []
 
     def fake_http_request(_base_url, _path, **kwargs):
         request_ca_files.append(kwargs.get("tls_ca_file"))
         if kwargs.get("tls_ca_file") is None:
             raise module.urllib.error.URLError(ssl.SSLError("self-signed certificate"))
+        return {"status": 200, "content_type": "application/json", "body_text": "{}", "json": {}, "raw_json": {}}
+
+    def fake_wait_for_rest_ready(_base_url, _api_key, timeout_seconds, **_kwargs):
+        ready_calls.append(timeout_seconds)
         return {"status": 200, "content_type": "application/json", "body_text": "{}", "json": {}, "raw_json": {}}
 
     class FakeSocket:
@@ -434,6 +439,7 @@ def test_https_certificate_validation_requires_trust_anchor_and_hostname(monkeyp
             raise ssl.SSLError("hostname mismatch")
 
     monkeypatch.setattr(module, "http_request", fake_http_request)
+    monkeypatch.setattr(module, "wait_for_rest_ready", fake_wait_for_rest_ready)
     monkeypatch.setattr(module.socket, "create_connection", lambda *_args, **_kwargs: FakeSocket())
     monkeypatch.setattr(module.ssl, "create_default_context", lambda *, cafile=None: FakeContext())
 
@@ -442,12 +448,15 @@ def test_https_certificate_validation_requires_trust_anchor_and_hostname(monkeyp
         "api-key",
         "webserver-cert.pem",
         request_timeout_seconds=1.0,
+        post_validation_ready_timeout_seconds=3.0,
     )
 
     assert summary["ok"] is True
     assert summary["untrusted_rejected"] is True
     assert summary["wrong_host_rejected"] is True
+    assert summary["post_validation_ready"]["status"] == 200
     assert request_ca_files == ["webserver-cert.pem", None]
+    assert ready_calls == [3.0]
 
 
 def test_rest_socket_probe_outcome_rejects_timeouts() -> None:
