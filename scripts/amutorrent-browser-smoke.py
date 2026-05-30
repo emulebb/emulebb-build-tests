@@ -181,12 +181,10 @@ def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dic
         )
 
 
-def amutorrent_bind_address_for_browser(p2p_bind_interface_name: str) -> str:
-    """Returns the aMuTorrent bind address needed for browser control."""
+def normalize_controller_bind_address(value: str | None) -> str:
+    """Returns the explicit controller bind address for local HTTP surfaces."""
 
-    if p2p_bind_interface_name.strip().casefold() == "hide.me":
-        return "0.0.0.0"
-    return "127.0.0.1"
+    return (value or "").strip() or "127.0.0.1"
 
 
 def _browser_host_sort_key(value: str) -> tuple[int, str]:
@@ -212,8 +210,9 @@ def _browser_host_sort_key(value: str) -> tuple[int, str]:
 def resolve_browser_controller_host(controller_bind_address: str) -> str:
     """Returns a browser-reachable host for the aMuTorrent controller."""
 
-    if controller_bind_address.strip() != "0.0.0.0":
-        return "127.0.0.1"
+    bind_address = normalize_controller_bind_address(controller_bind_address)
+    if bind_address not in {"0.0.0.0", "::"}:
+        return bind_address
 
     candidates: list[str] = []
     configured = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
@@ -934,12 +933,14 @@ def main() -> int:
     amutorrent_port = choose_listen_port()
     if emule_port == amutorrent_port:
         amutorrent_port = choose_listen_port()
-    amutorrent_bind_addr = amutorrent_bind_address_for_browser(args.p2p_bind_interface_name)
+    controller_bind_addr = normalize_controller_bind_address(args.bind_addr)
+    controller_host = resolve_browser_controller_host(controller_bind_addr)
+    amutorrent_bind_addr = controller_bind_addr
     amutorrent_browser_host = resolve_browser_controller_host(amutorrent_bind_addr)
-    emule_base_url = f"http://127.0.0.1:{emule_port}"
-    amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
+    emule_base_url = f"http://{controller_host}:{emule_port}"
+    amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"
     amutorrent_browser_base_url = f"http://{amutorrent_browser_host}:{amutorrent_port}"
-    instance_id = f"emulebb-127.0.0.1-{emule_port}"
+    instance_id = f"emulebb-{controller_host}-{emule_port}"
 
     profile = prepare_profile_base(
         seed_config_dir,
@@ -949,7 +950,7 @@ def main() -> int:
         incoming_dir=incoming_dir,
         temp_dir=temp_dir,
     )
-    configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, args.bind_addr)
+    configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, controller_bind_addr)
     rest_api_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
 
     report: dict[str, Any] = {
@@ -968,7 +969,8 @@ def main() -> int:
         "enable_upnp": True,
         "launch_inputs": {
             "app_exe": str(paths.app_exe),
-            "bind_addr": args.bind_addr,
+            "bind_addr": controller_bind_addr,
+            "controller_host": controller_host,
             "config_dir": str(profile["config_dir"]),
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "enable_upnp": True,
@@ -1011,7 +1013,7 @@ def main() -> int:
                 "WEB_AUTH_ENABLED": "false",
                 "SKIP_SETUP_WIZARD": "true",
                 "EMULEBB_ENABLED": "true",
-                "EMULEBB_HOST": "127.0.0.1",
+                "EMULEBB_HOST": controller_host,
                 "EMULEBB_PORT": str(emule_port),
                 "EMULEBB_API_KEY": args.api_key,
                 "EMULEBB_USE_SSL": "false",

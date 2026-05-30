@@ -435,6 +435,7 @@ def test_arr_emulebb_suites_forward_http_and_https_rest_scheme(tmp_path: Path) -
 
 def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
     monkeypatch.setenv("EMULEBB_TEST_LAN_INTERFACE", "Wi-Fi")
     monkeypatch.setenv("EMULEBB_TEST_LAN_IP_RESOLVED", "192.168.1.44")
     monkeypatch.setattr(
@@ -460,9 +461,12 @@ def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypa
 
     assert summary["test_network"] == "lan"
     assert summary["network_context"]["lan"] == {"interface_name": "Wi-Fi", "ip_address": "192.168.1.44"}
+    assert summary["network_context"]["controller_bind_address"] == "192.168.1.44"
     assert [suite["network_scope"] for suite in summary["suites"]] == ["lan", "lan"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["Wi-Fi"]
     assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.44"]
+    assert option_values(commands[0], "--bind-addr") == ["192.168.1.44"]
+    assert option_values(commands[1], "--bind-addr") == ["192.168.1.44"]
     assert option_values(commands[1], "--p2p-bind-interface-address") == ["192.168.1.44"]
 
 
