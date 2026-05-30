@@ -34,10 +34,12 @@ def test_clean_environment_keeps_wizard_enabled_and_removes_emulebb_env(tmp_path
         amutorrent_port=4002,
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
+        bind_addr="192.168.1.44",
         extra_ca_cert=str(tmp_path / "webserver-cert.pem"),
     )
 
     assert env["PORT"] == "4002"
+    assert env["BIND_ADDRESS"] == "192.168.1.44"
     assert env["AMUTORRENT_DATA_DIR"] == str(tmp_path / "amutorrent-data")
     assert env["WEB_AUTH_ENABLED"] == "false"
     assert "SKIP_SETUP_WIZARD" not in env
@@ -133,3 +135,13 @@ def test_clean_startup_script_does_not_hardcode_runtime_live_terms() -> None:
     assert '"SKIP_SETUP_WIZARD": "true"' not in script_text
     assert '"linux"' not in script_text
     assert '"ubuntu"' not in script_text
+
+
+def test_clean_startup_uses_controller_bind_for_runtime_urls() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-clean-startup.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "controller_host = rest_api_smoke.rest_base_host_for_bind_addr(args.bind_addr)" in script_text
+    assert 'emule_base_url = f"{rest_scheme}://{controller_host}:{emule_port}"' in script_text
+    assert 'amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"' in script_text
+    assert "emule_host=controller_host" in script_text

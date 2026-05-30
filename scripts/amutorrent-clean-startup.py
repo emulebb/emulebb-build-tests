@@ -58,6 +58,7 @@ def build_clean_amutorrent_environment(
     amutorrent_port: int,
     node_path: Path,
     data_dir: Path,
+    bind_addr: str = "127.0.0.1",
     extra_ca_cert: str = "",
 ) -> dict[str, str]:
     """Builds the environment for first-run aMuTorrent without pre-seeding eMuleBB."""
@@ -66,7 +67,7 @@ def build_clean_amutorrent_environment(
     env.update(
         {
             "PORT": str(amutorrent_port),
-            "BIND_ADDRESS": "127.0.0.1",
+            "BIND_ADDRESS": bind_addr,
             "AMUTORRENT_DATA_DIR": str(data_dir),
             "WEB_AUTH_ENABLED": "false",
         }
@@ -91,7 +92,7 @@ def normalize_rest_scheme(raw_scheme: str) -> str:
     return scheme
 
 
-def prepare_rest_transport(*, scheme: str, app_exe: Path, artifacts_dir: Path) -> dict[str, Any]:
+def prepare_rest_transport(*, scheme: str, app_exe: Path, artifacts_dir: Path, hosts: tuple[str, ...] = ()) -> dict[str, Any]:
     """Prepares disposable REST transport material for one live run."""
 
     rest_scheme = normalize_rest_scheme(scheme)
@@ -104,7 +105,7 @@ def prepare_rest_transport(*, scheme: str, app_exe: Path, artifacts_dir: Path) -
             "node_extra_ca_cert": "",
         }
 
-    https_material = rest_api_smoke.create_https_certificate_pair(app_exe, artifacts_dir)
+    https_material = rest_api_smoke.create_https_certificate_pair(app_exe, artifacts_dir, hosts=hosts)
     certificate = str(https_material["certificate"])
     rest_api_smoke.configure_https_trust(certificate)
     return {
@@ -483,14 +484,15 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = amutorrent_smoke.resolve_amutorrent_node()
 
-    emule_port = choose_listen_port()
-    amutorrent_port = choose_listen_port()
+    controller_host = rest_api_smoke.rest_base_host_for_bind_addr(args.bind_addr)
+    emule_port = choose_listen_port(args.bind_addr)
+    amutorrent_port = choose_listen_port(args.bind_addr)
     if emule_port == amutorrent_port:
-        amutorrent_port = choose_listen_port()
+        amutorrent_port = choose_listen_port(args.bind_addr)
     rest_scheme = normalize_rest_scheme(args.rest_webserver_scheme)
-    emule_base_url = f"{rest_scheme}://127.0.0.1:{emule_port}"
-    amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
-    instance_id = f"emulebb-127.0.0.1-{emule_port}"
+    emule_base_url = f"{rest_scheme}://{controller_host}:{emule_port}"
+    amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"
+    instance_id = f"emulebb-{controller_host}-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-clean-data"
@@ -498,6 +500,7 @@ def main() -> int:
         scheme=rest_scheme,
         app_exe=paths.app_exe,
         artifacts_dir=artifacts_dir,
+        hosts=(controller_host,),
     )
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-clean-startup")
@@ -520,6 +523,8 @@ def main() -> int:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "configuration": args.configuration,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
+        "controller_bind_address": args.bind_addr,
+        "controller_host": controller_host,
         "enable_upnp": True,
         "rest_webserver_scheme": rest_transport["scheme"],
         "emule_base_url": emule_base_url,
@@ -564,6 +569,7 @@ def main() -> int:
             amutorrent_port=amutorrent_port,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
+            bind_addr=args.bind_addr,
             extra_ca_cert=str(rest_transport["node_extra_ca_cert"]),
         )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
@@ -578,7 +584,7 @@ def main() -> int:
         report["amutorrent_process_id"] = amutorrent.pid
         report["checks"]["wizard"] = drive_first_run_wizard(
             base_url=amutorrent_base_url,
-            emule_host="127.0.0.1",
+            emule_host=controller_host,
             emule_port=emule_port,
             api_key=args.api_key,
             use_ssl=bool(rest_transport["use_https"]),

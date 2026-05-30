@@ -134,3 +134,13 @@ def test_ui_live_script_uses_runtime_live_inputs_and_stable_ui_hooks() -> None:
     assert ".first()" not in script_text
     assert "emulebb-search-result-checkbox" in script_text
     assert ":visible" in script_text
+
+
+def test_ui_live_uses_controller_bind_for_runtime_urls() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-emulebb-ui-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "controller_host = rest_api_smoke.rest_base_host_for_bind_addr(args.bind_addr)" in script_text
+    assert 'emule_base_url = f"{rest_scheme}://{controller_host}:{emule_port}"' in script_text
+    assert 'amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"' in script_text
+    assert "emule_host=controller_host" in script_text

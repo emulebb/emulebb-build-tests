@@ -374,6 +374,7 @@ def run_browser_resilience_workflows(
     *,
     base_url: str,
     emule_base_url: str,
+    emule_host: str,
     api_key: str,
     instance_id: str,
     use_ssl: bool,
@@ -405,7 +406,7 @@ def run_browser_resilience_workflows(
             require_browser_http_ok("initial-snapshot", checks["initial_snapshot"])
             checks["bad_credential_recovery"] = run_bad_credential_recovery(
                 page,
-                emule_host="127.0.0.1",
+                emule_host=emule_host,
                 emule_port=int(emule_base_url.rsplit(":", 1)[1]),
                 api_key=api_key,
                 use_ssl=use_ssl,
@@ -516,14 +517,15 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = amutorrent_smoke.resolve_amutorrent_node()
 
-    emule_port = choose_listen_port()
-    amutorrent_port = choose_listen_port()
+    controller_host = rest_api_smoke.rest_base_host_for_bind_addr(args.bind_addr)
+    emule_port = choose_listen_port(args.bind_addr)
+    amutorrent_port = choose_listen_port(args.bind_addr)
     if emule_port == amutorrent_port:
-        amutorrent_port = choose_listen_port()
+        amutorrent_port = choose_listen_port(args.bind_addr)
     rest_scheme = amutorrent_clean.normalize_rest_scheme(args.rest_webserver_scheme)
-    emule_base_url = f"{rest_scheme}://127.0.0.1:{emule_port}"
-    amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
-    instance_id = f"emulebb-127.0.0.1-{emule_port}"
+    emule_base_url = f"{rest_scheme}://{controller_host}:{emule_port}"
+    amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"
+    instance_id = f"emulebb-{controller_host}-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-resilience-data"
@@ -531,6 +533,7 @@ def main() -> int:
         scheme=rest_scheme,
         app_exe=paths.app_exe,
         artifacts_dir=artifacts_dir,
+        hosts=(controller_host,),
     )
     rest_api_smoke.configure_https_trust(str(rest_transport["node_extra_ca_cert"]) or None)
 
@@ -554,6 +557,8 @@ def main() -> int:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "configuration": args.configuration,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
+        "controller_bind_address": args.bind_addr,
+        "controller_host": controller_host,
         "enable_upnp": True,
         "rest_webserver_scheme": rest_transport["scheme"],
         "emule_base_url": emule_base_url,
@@ -599,6 +604,7 @@ def main() -> int:
             amutorrent_port=amutorrent_port,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
+            bind_addr=args.bind_addr,
             extra_ca_cert=str(rest_transport["node_extra_ca_cert"]),
         )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
@@ -613,7 +619,7 @@ def main() -> int:
         report["amutorrent_process_id"] = amutorrent.pid
         report["checks"]["wizard"] = amutorrent_clean.drive_first_run_wizard(
             base_url=amutorrent_base_url,
-            emule_host="127.0.0.1",
+            emule_host=controller_host,
             emule_port=emule_port,
             api_key=args.api_key,
             use_ssl=bool(rest_transport["use_https"]),
@@ -638,6 +644,7 @@ def main() -> int:
         report["checks"]["browser_resilience_workflows"] = run_browser_resilience_workflows(
             base_url=amutorrent_base_url,
             emule_base_url=emule_base_url,
+            emule_host=controller_host,
             api_key=args.api_key,
             instance_id=instance_id,
             use_ssl=bool(rest_transport["use_https"]),
