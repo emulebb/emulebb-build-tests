@@ -2545,6 +2545,34 @@ def grab_first_arr_release_via_prowlarr(
                     )
                 except RuntimeError as exc:
                     attempts[-1]["direct_torznab_grab_error"] = str(exc)[:500]
+        if status >= 400:
+            selected, direct_summary = select_direct_torznab_release_for_grab(
+                kind=kind,
+                emule_base_url=emule_base_url,
+                emule_api_key=emule_api_key,
+                title=title,
+                category_id=category_id,
+                timeout_seconds=max(1.0, deadline - time.monotonic()),
+                min_sources=required_sources,
+            )
+            attempts[-1]["direct_torznab_search_error_fallback"] = direct_summary
+            attempts[-1]["body_preview"] = str(result.get("body_text") or "")[:160]
+            if selected is not None:
+                try:
+                    return add_selected_release_through_qbit(
+                        emule_base_url=emule_base_url,
+                        emule_api_key=emule_api_key,
+                        selected=selected,
+                        title=title,
+                        arr_indexer_name=arr_indexer_name,
+                        download_category=download_category,
+                        before_hashes=before_hashes,
+                        timeout_seconds=deadline - time.monotonic(),
+                        attempt_count=len(attempts),
+                        search_source="direct_torznab_after_prowlarr_search_error",
+                    )
+                except RuntimeError as exc:
+                    attempts[-1]["direct_torznab_grab_error"] = str(exc)[:500]
         if status >= 200 and status < 300 and matches:
             require_episode_like = kind == "sonarr"
             prefer_sources = kind == "sonarr"
