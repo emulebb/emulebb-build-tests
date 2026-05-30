@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import importlib.util
+import ipaddress
 import os
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     create_admin_volume_fixture,
 )
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
+from emule_test_harness.windows_processes import collect_adapter_ipv4_addresses  # noqa: E402
 
 AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
 SUPPORTED_NODE_MIN_MAJOR = 20
@@ -33,6 +35,7 @@ DEFAULT_SEARCH_ROUNDS = 2
 DEFAULT_CONTROLLER_VHD_SIZE_MB = 6144
 AMUTORRENT_BROWSER_SMOKE_HASH = "0123456789abcdef0123456789abcdef"
 SUITE_NAME = "amutorrent-browser-smoke"
+LAN_IP_RESOLVED_ENV = "EMULEBB_TEST_LAN_IP_RESOLVED"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -176,6 +179,39 @@ def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dic
             f"Missing: {missing_display}. "
             f"Run from {amutorrent_root}: {node_info['install_command']}"
         )
+
+
+def amutorrent_bind_address_for_browser(p2p_bind_interface_name: str) -> str:
+    """Returns the aMuTorrent bind address needed for browser control."""
+
+    if p2p_bind_interface_name.strip().casefold() == "hide.me":
+        return "0.0.0.0"
+    return "127.0.0.1"
+
+
+def resolve_browser_controller_host(controller_bind_address: str) -> str:
+    """Returns a browser-reachable host for the aMuTorrent controller."""
+
+    if controller_bind_address.strip() != "0.0.0.0":
+        return "127.0.0.1"
+
+    configured = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
+    if configured:
+        return configured
+
+    try:
+        candidates = collect_adapter_ipv4_addresses()
+    except Exception:
+        return "127.0.0.1"
+
+    for value in candidates:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        if address.version == 4 and not address.is_loopback and not address.is_link_local:
+            return value
+    return "127.0.0.1"
 
 
 def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
@@ -874,8 +910,11 @@ def main() -> int:
     amutorrent_port = choose_listen_port()
     if emule_port == amutorrent_port:
         amutorrent_port = choose_listen_port()
+    amutorrent_bind_addr = amutorrent_bind_address_for_browser(args.p2p_bind_interface_name)
+    amutorrent_browser_host = resolve_browser_controller_host(amutorrent_bind_addr)
     emule_base_url = f"http://127.0.0.1:{emule_port}"
     amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
+    amutorrent_browser_base_url = f"http://{amutorrent_browser_host}:{amutorrent_port}"
     instance_id = f"emulebb-127.0.0.1-{emule_port}"
 
     profile = prepare_profile_base(
@@ -894,6 +933,8 @@ def main() -> int:
         "status": "failed",
         "emule_base_url": emule_base_url,
         "amutorrent_base_url": amutorrent_base_url,
+        "amutorrent_browser_base_url": amutorrent_browser_base_url,
+        "amutorrent_bind_addr": amutorrent_bind_addr,
         "profile_base": str(profile["profile_base"]),
         "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
@@ -941,7 +982,7 @@ def main() -> int:
         env.update(
             {
                 "PORT": str(amutorrent_port),
-                "BIND_ADDRESS": "127.0.0.1",
+                "BIND_ADDRESS": amutorrent_bind_addr,
                 "AMUTORRENT_DATA_DIR": str(amutorrent_data_dir),
                 "WEB_AUTH_ENABLED": "false",
                 "SKIP_SETUP_WIZARD": "true",
@@ -969,7 +1010,7 @@ def main() -> int:
         report["amutorrent_process_id"] = amutorrent.pid
         category_path = live_common.win_path(Path(profile["incoming_dir"]), trailing_slash=True)
         report["checks"]["browser_workflows"] = run_browser_workflows(
-            amutorrent_base_url,
+            amutorrent_browser_base_url,
             instance_id,
             category_path,
             search_rounds=args.search_rounds,

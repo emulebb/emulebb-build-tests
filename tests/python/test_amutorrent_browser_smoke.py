@@ -91,6 +91,19 @@ def test_require_server_dependencies_passes_when_runtime_modules_exist(tmp_path:
     smoke.require_amutorrent_server_dependencies(root, {"install_command": "npm ci --prefix server --omit=dev"})
 
 
+def test_browser_controller_uses_lan_host_for_hide_me(monkeypatch: pytest.MonkeyPatch) -> None:
+    smoke = load_smoke_module()
+
+    monkeypatch.setenv(smoke.LAN_IP_RESOLVED_ENV, "192.168.1.210")
+
+    bind_address = smoke.amutorrent_bind_address_for_browser("hide.me")
+
+    assert bind_address == "0.0.0.0"
+    assert smoke.resolve_browser_controller_host(bind_address) == "192.168.1.210"
+    assert smoke.amutorrent_bind_address_for_browser("Ethernet") == "127.0.0.1"
+    assert smoke.resolve_browser_controller_host("127.0.0.1") == "127.0.0.1"
+
+
 def test_build_search_mode_specs_repeats_all_modes_with_unicode() -> None:
     smoke = load_smoke_module()
 
