@@ -188,6 +188,20 @@ def main() -> int:
     profile_dumps: list[dict[str, object]] = []
     exit_code = 1
 
+    def persist_runtime_artifacts() -> None:
+        live_process_monitor.write_metric_csv(analysis_dir / "process-metrics.csv", metric_rows)
+        (analysis_dir / "runtime-counters.jsonl").write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in runtime_counter_rows),
+            encoding="utf-8",
+        )
+        report["diagnostics"]["process_metrics_csv"] = str(analysis_dir / "process-metrics.csv")
+        report["diagnostics"]["runtime_counters_jsonl"] = str(analysis_dir / "runtime-counters.jsonl")
+        report["diagnostics"]["spike_dumps"] = spike_dumps
+        report["diagnostics"]["profile_dumps"] = profile_dumps
+        report["diagnostics"]["log_marker_matches"] = log_marker_matches[-200:]
+        report["launches"] = launch_events
+        report["summary"] = live_process_monitor.summarize_metric_rows(metric_rows)
+
     try:
         if args.enable_umdh:
             if not tools["gflags"] or not tools["umdh"]:
@@ -478,18 +492,7 @@ def main() -> int:
                 analysis_dir / "umdh-diff-baseline-final.txt",
             )
 
-        live_process_monitor.write_metric_csv(analysis_dir / "process-metrics.csv", metric_rows)
-        (analysis_dir / "runtime-counters.jsonl").write_text(
-            "".join(json.dumps(row, sort_keys=True) + "\n" for row in runtime_counter_rows),
-            encoding="utf-8",
-        )
-        report["diagnostics"]["process_metrics_csv"] = str(analysis_dir / "process-metrics.csv")
-        report["diagnostics"]["runtime_counters_jsonl"] = str(analysis_dir / "runtime-counters.jsonl")
-        report["diagnostics"]["spike_dumps"] = spike_dumps
-        report["diagnostics"]["profile_dumps"] = profile_dumps
-        report["diagnostics"]["log_marker_matches"] = log_marker_matches[-200:]
-        report["launches"] = launch_events
-        report["summary"] = live_process_monitor.summarize_metric_rows(metric_rows)
+        persist_runtime_artifacts()
 
         if report.get("failure_reason"):
             report["status"] = "failed"
@@ -497,7 +500,16 @@ def main() -> int:
         else:
             report["status"] = "passed"
             exit_code = 0
+    except KeyboardInterrupt:
+        report["status"] = "interrupted"
+        report["failure_reason"] = "interrupted by caller"
+        exit_code = 130
+    except Exception as exc:  # noqa: BLE001 - publish diagnostics before returning failure
+        report["status"] = "failed"
+        report["failure_reason"] = f"{type(exc).__name__}: {exc}"
+        exit_code = 1
     finally:
+        persist_runtime_artifacts()
         if cpu_profile_active and not cpu_profile_stopped:
             try:
                 report["diagnostics"]["cpu_profile"]["stop"] = cpu_profile.stop_cpu_profile(

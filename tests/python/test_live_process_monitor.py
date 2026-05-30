@@ -213,3 +213,12 @@ def test_summarize_metric_rows_reports_deltas() -> None:
     assert summary["working_set_mb"] == {"min": 100.0, "max": 140.0, "delta": 40.0}
     assert summary["private_mb"] == {"min": 90.0, "max": 120.0, "delta": 30.0}
     assert summary["handles"] == {"min": 10.0, "max": 14.0, "delta": 4.0}
+
+
+def test_live_process_monitor_script_publishes_interrupted_reports() -> None:
+    script = Path(__file__).resolve().parents[2] / "scripts" / "live-process-monitor.py"
+    source = script.read_text(encoding="utf-8")
+
+    assert "except KeyboardInterrupt:" in source
+    assert 'report["status"] = "interrupted"' in source
+    assert "persist_runtime_artifacts()" in source[source.index("finally:") :]
