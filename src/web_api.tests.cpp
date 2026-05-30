@@ -1661,7 +1661,15 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK_EQ(route.params["state"].get<std::string>(), "downloading");
 	CHECK_EQ(route.params["categoryId"].get<uint64_t>(), 3u);
 	CHECK(route.params["_items_envelope"].get<bool>());
-	CHECK_FALSE(route.params.contains("_paged_items_envelope"));
+	CHECK(route.params["_paged_items_envelope"].get<bool>());
+	CHECK_EQ(route.params["_offset"].get<int>(), 0);
+	CHECK_EQ(route.params["_limit"].get<int>(), 100);
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?offset=2&limit=25", "", route, errorCode, errorMessage));
+	CHECK_EQ(route.strCommand, "transfers/list");
+	CHECK_EQ(route.params["_offset"].get<int>(), 2);
+	CHECK_EQ(route.params["_limit"].get<int>(), 25);
+	CHECK(route.params["_items_envelope"].get<bool>());
+	CHECK(route.params["_paged_items_envelope"].get<bool>());
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?state=Downloading", "", route, errorCode, errorMessage));
@@ -1955,12 +1963,6 @@ TEST_CASE("Web API rejects unknown body fields and malformed query parameters be
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?categoryId=4294967296", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "categoryId is out of range");
-
-	errorCode.clear();
-	errorMessage.clear();
-	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/transfers?limit=10", "", route, errorCode, errorMessage));
-	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "unknown query parameter: limit");
 
 	errorCode.clear();
 	errorMessage.clear();
