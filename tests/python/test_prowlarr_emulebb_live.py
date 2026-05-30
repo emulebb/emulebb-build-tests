@@ -297,6 +297,30 @@ def test_indexer_payload_covers_http_and_https_certificate_policy() -> None:
     assert https_payload["_emulebbCertificatePolicy"] == {"certificateValidation": True}
 
 
+def test_indexer_payload_uses_system_trust_store_when_schema_omits_certificate_policy() -> None:
+    module = load_prowlarr_module()
+    schema = {
+        "name": "Generic Torznab",
+        "implementation": "Torznab",
+        "fields": [
+            {"name": "baseUrl", "value": ""},
+            {"name": "apiPath", "value": ""},
+            {"name": "apiKey", "value": ""},
+            {"name": "torrentBaseSettings.preferMagnetUrl", "value": False},
+        ],
+    }
+
+    payload = module.build_indexer_payload(
+        schema,
+        name="eMuleBB Local",
+        torznab_base_url="https://127.0.0.1:61920/indexer/emulebb",
+        emule_api_key="emule-key",
+    )
+
+    assert field_value(payload, "baseUrl") == "https://127.0.0.1:61920/indexer/emulebb"
+    assert payload["_emulebbCertificatePolicy"] == {"certificateValidation": False, "systemTrustStore": True}
+
+
 def test_qbit_download_client_payload_covers_http_and_https_transport() -> None:
     module = load_prowlarr_module()
 

@@ -242,7 +242,10 @@ def build_indexer_payload(
         else {"certificateValidation": False}
     )
     if uses_https and not any(payload["_emulebbCertificatePolicy"].values()):
-        raise RuntimeError("Prowlarr Torznab schema does not expose disposable HTTPS certificate validation policy.")
+        # WHY: Current Prowlarr Torznab schemas omit per-indexer certificate
+        # validation knobs, so trusted disposable local certs must be proven
+        # through the Windows trust store and Prowlarr's own provider test.
+        payload["_emulebbCertificatePolicy"]["systemTrustStore"] = True
     return payload
 
 
