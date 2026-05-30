@@ -59,12 +59,15 @@ ARR_LOCAL_CERTIFICATE_VALIDATION = "disabledForLocalAddresses"
 QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS = 10
 QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS = 2.0
 QBIT_ENDPOINT_READY_TIMEOUT_SECONDS = 60.0
+QBIT_DIRECT_ADD_TRANSIENT_RETRY_ATTEMPTS = 5
 QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
     "unable to connect to qbittorrent",
     "ssl connection could not be established",
     "connection was aborted",
     "forcibly closed",
     "software in your host machine",
+    "accepted-client",
+    "web interface rejected",
 )
 PROWLARR_INDEXER_TRANSIENT_ERROR_FRAGMENTS = (
     "too many requests",
@@ -286,6 +289,13 @@ def is_transient_qbit_client_result(result: dict[str, Any]) -> bool:
         return False
     body = str(result.get("body_text") or "").lower()
     return any(fragment in body for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
+
+
+def is_transient_qbit_exception(exc: BaseException) -> bool:
+    """Returns true for retryable local qBit socket failures from eMuleBB."""
+
+    message = str(exc).lower()
+    return any(fragment in message for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
 
 
 def is_transient_prowlarr_indexer_result(result: dict[str, Any]) -> bool:
@@ -2376,6 +2386,7 @@ def add_selected_release_through_qbit(
         "hash_present": bool(transfer_hash),
         "grab_status": int(added.get("add_status") or 0),
         "download_link_hash_present": bool(added.get("hash")),
+        "transient_errors": added.get("transient_errors", []),
         "category_transfer": {key: value for key, value in new_transfer.items() if key != "hash"},
     }
 
@@ -2772,31 +2783,49 @@ def qbit_direct_add(
 ) -> dict[str, object]:
     """Exercises the qBittorrent add endpoint directly against eMuleBB."""
 
-    login_status: int | None = None
-    if cookie is None:
-        cookie, login = qbit_login(base_url, emule_api_key)
-        login_status = int(login.get("status") or 0)
+    observations: list[dict[str, object]] = []
+    for attempt in range(1, QBIT_DIRECT_ADD_TRANSIENT_RETRY_ATTEMPTS + 1):
+        try:
+            login_status: int | None = None
+            attempt_cookie = cookie
+            if attempt_cookie is None:
+                attempt_cookie, login = qbit_login(base_url, emule_api_key)
+                login_status = int(login.get("status") or 0)
 
-    add = qbit_request(
-        base_url,
-        "/api/v2/torrents/add",
-        cookie=cookie,
-        form={
-            "urls": download_link,
-            "category": category,
-            "stopped": "true",
-            "ratioLimit": "-1",
-            "seedingTimeLimit": "-1",
-            "inactiveSeedingTimeLimit": "-1",
-        },
-        method="POST",
-        timeout_seconds=45.0,
-    )
-    require_qbit_ok(add, "qBit add")
-    result: dict[str, object] = {"add_status": int(add.get("status") or 0), "hash": hash_from_download_link(download_link)}
-    if login_status is not None:
-        result["login_status"] = login_status
-    return result
+            add = qbit_request(
+                base_url,
+                "/api/v2/torrents/add",
+                cookie=attempt_cookie,
+                form={
+                    "urls": download_link,
+                    "category": category,
+                    "stopped": "true",
+                    "ratioLimit": "-1",
+                    "seedingTimeLimit": "-1",
+                    "inactiveSeedingTimeLimit": "-1",
+                },
+                method="POST",
+                timeout_seconds=45.0,
+            )
+            require_qbit_ok(add, "qBit add")
+            result: dict[str, object] = {"add_status": int(add.get("status") or 0), "hash": hash_from_download_link(download_link)}
+            if login_status is not None:
+                result["login_status"] = login_status
+            if observations:
+                result["transient_errors"] = observations[-5:]
+            return result
+        except (RuntimeError, OSError, TimeoutError, urllib.error.URLError) as exc:
+            if not is_transient_qbit_exception(exc) or attempt >= QBIT_DIRECT_ADD_TRANSIENT_RETRY_ATTEMPTS:
+                raise
+            observations.append(
+                {
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:300],
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            time.sleep(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS)
+    raise RuntimeError("qBit add exhausted transient retry attempts.")
 
 
 def qbit_direct_safety_checks(base_url: str, emule_api_key: str) -> dict[str, object]:

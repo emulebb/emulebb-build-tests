@@ -2769,6 +2769,36 @@ def test_qbit_direct_add_accepts_native_ed2k_links(monkeypatch: pytest.MonkeyPat
     assert observed_form["urls"] == ed2k_link
 
 
+def test_qbit_direct_add_retries_transient_local_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls = 0
+
+    monkeypatch.setattr(module, "qbit_login", lambda _base_url, _api_key: ("opener", {"status": 200, "body_text": "Ok."}))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    def fake_qbit_request(_base_url, _path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise module.urllib.error.URLError(
+                "[WinError 10053] An established connection was aborted by the software in your host machine"
+            )
+        return {"status": 200, "body_text": "Ok."}
+
+    monkeypatch.setattr(module, "qbit_request", fake_qbit_request)
+
+    result = module.qbit_direct_add(
+        "http://127.0.0.1:4711",
+        "secret",
+        module.SYNTHETIC_TRIGGER_MAGNET,
+        module.RADARR_IMPORT_CATEGORY,
+    )
+
+    assert calls == 2
+    assert result["hash"] == module.ed2k_hash_from_magnet(module.SYNTHETIC_TRIGGER_MAGNET)
+    assert len(result["transient_errors"]) == 1
+
+
 def test_qbit_live_wire_roundtrip_cleans_up_added_transfer_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_radarr_sonarr_module()
     calls: list[str] = []
