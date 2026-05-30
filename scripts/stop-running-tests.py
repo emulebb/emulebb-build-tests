@@ -24,9 +24,12 @@ TEST_HELPER_PROCESS_NAMES = {
     "emule.exe",
     "goed2k-server.exe",
     "node.exe",
+    "prowlarr.exe",
     "xperf.exe",
     "procdump.exe",
     "procdump64.exe",
+    "radarr.exe",
+    "sonarr.exe",
     "cdb.exe",
 }
 TEST_RUNNER_MARKERS = (
@@ -41,6 +44,7 @@ TEST_RUNNER_MARKERS = (
 TEST_HELPER_MARKERS = (
     "\\state\\test-reports\\",
     "\\state\\test-artifacts\\",
+    "\\state\\test-installs\\",
     "\\profile-base",
     "\\profile-work",
     "cpu-profile",

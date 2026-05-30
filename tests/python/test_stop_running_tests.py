@@ -67,6 +67,44 @@ def test_selects_workspace_test_runner_tree_and_orphaned_helpers() -> None:
     assert module.termination_roots(selected, processes) == [10, 30, 40]
 
 
+def test_selects_stale_materialized_arr_services() -> None:
+    module = load_module()
+    workspace_root = Path(r"C:\prj\p2p\emulebb-workspace")
+    install_root = workspace_root / "workspaces" / "workspace" / "state" / "test-installs" / "run"
+    processes = [
+        module.ProcessInfo(
+            50,
+            1,
+            "Prowlarr.exe",
+            rf"{install_root}\live-e2e-suite\main\apps\prowlarr\Prowlarr\Prowlarr.exe /data={install_root}\live-e2e-suite\main\data\prowlarr /nobrowser",
+        ),
+        module.ProcessInfo(
+            51,
+            1,
+            "Radarr.exe",
+            rf"{install_root}\live-e2e-suite\main\apps\radarr\Radarr\Radarr.exe /data={install_root}\live-e2e-suite\main\data\radarr /nobrowser",
+        ),
+        module.ProcessInfo(
+            52,
+            1,
+            "Sonarr.exe",
+            rf"{install_root}\live-e2e-suite\main\apps\sonarr\Sonarr\Sonarr.exe /data={install_root}\live-e2e-suite\main\data\sonarr /nobrowser",
+        ),
+        module.ProcessInfo(
+            60,
+            1,
+            "Prowlarr.exe",
+            r"C:\ProgramData\Prowlarr\bin\Prowlarr.exe /data=c:\var\tarr\PROWLARR_DATA_ENG /nobrowser",
+        ),
+    ]
+
+    selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999)
+
+    assert selected == {50, 51, 52}
+    assert all(reasons[pid] == "orphaned workspace test helper command line" for pid in selected)
+    assert module.termination_roots(selected, processes) == [50, 51, 52]
+
+
 def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
     module = load_module()
     workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")

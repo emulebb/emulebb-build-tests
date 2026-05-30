@@ -1079,6 +1079,18 @@ def wait_for_process_id(app: object) -> int | None:
     return process_id if isinstance(process_id, int) else None
 
 
+def build_base_url(web_bind_addr: str, port: int) -> str:
+    """Returns the REST base URL that matches the configured WebServer bind."""
+
+    bind_addr = web_bind_addr.strip() if web_bind_addr else "127.0.0.1"
+    if bind_addr in {"", "0.0.0.0", "::", "[::]"}:
+        bind_addr = "127.0.0.1"
+    host = bind_addr
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace-root")
@@ -1133,7 +1145,7 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
     port = rest_smoke.choose_listen_port()
-    base_url = f"http://127.0.0.1:{port}"
+    base_url = build_base_url(args.web_bind_addr, port)
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="auto-browse-live")
     seed_refresh = None

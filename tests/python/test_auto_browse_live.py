@@ -64,6 +64,20 @@ def test_emule_rest_request_retries_transient_socket_abort(monkeypatch) -> None:
     assert result["transient_errors"]
 
 
+def test_build_base_url_uses_configured_web_bind_address() -> None:
+    module = load_auto_browse_module()
+
+    assert module.build_base_url("192.168.1.210", 4711) == "http://192.168.1.210:4711"
+    assert module.build_base_url("127.0.0.1", 4711) == "http://127.0.0.1:4711"
+
+
+def test_build_base_url_maps_wildcard_bind_to_loopback() -> None:
+    module = load_auto_browse_module()
+
+    assert module.build_base_url("0.0.0.0", 4711) == "http://127.0.0.1:4711"
+    assert module.build_base_url("::", 4711) == "http://127.0.0.1:4711"
+
+
 def make_inputs(module):
     """Returns a validated live-wire input fixture for auto-browse tests."""
 
