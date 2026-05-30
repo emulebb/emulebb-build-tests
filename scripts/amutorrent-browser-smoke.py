@@ -189,28 +189,52 @@ def amutorrent_bind_address_for_browser(p2p_bind_interface_name: str) -> str:
     return "127.0.0.1"
 
 
+def _browser_host_sort_key(value: str) -> tuple[int, str]:
+    """Ranks local adapter addresses for browser access to an all-interface server."""
+
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return (99, value)
+    if address.version != 4 or address.is_loopback or address.is_link_local:
+        return (99, value)
+    if value.startswith("192.168."):
+        return (0, value)
+    if value.startswith("172."):
+        second_octet_text = value.split(".", 2)[1]
+        if second_octet_text.isdigit() and 16 <= int(second_octet_text) <= 31:
+            return (1, value)
+    if value.startswith("10."):
+        return (2, value)
+    return (3, value)
+
+
 def resolve_browser_controller_host(controller_bind_address: str) -> str:
     """Returns a browser-reachable host for the aMuTorrent controller."""
 
     if controller_bind_address.strip() != "0.0.0.0":
         return "127.0.0.1"
 
+    candidates: list[str] = []
     configured = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
     if configured:
-        return configured
+        candidates.append(configured)
 
     try:
-        candidates = collect_adapter_ipv4_addresses()
+        candidates.extend(value for value in collect_adapter_ipv4_addresses() if value not in candidates)
     except Exception:
-        return "127.0.0.1"
+        candidates = candidates[:1]
 
-    for value in candidates:
+    reachable_candidates: list[str] = []
+    for value in sorted(candidates, key=_browser_host_sort_key):
         try:
             address = ipaddress.ip_address(value)
         except ValueError:
             continue
         if address.version == 4 and not address.is_loopback and not address.is_link_local:
-            return value
+            reachable_candidates.append(value)
+    if reachable_candidates:
+        return reachable_candidates[0]
     return "127.0.0.1"
 
 

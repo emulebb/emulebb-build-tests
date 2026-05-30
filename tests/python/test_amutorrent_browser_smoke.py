@@ -95,6 +95,7 @@ def test_browser_controller_uses_lan_host_for_hide_me(monkeypatch: pytest.Monkey
     smoke = load_smoke_module()
 
     monkeypatch.setenv(smoke.LAN_IP_RESOLVED_ENV, "192.168.1.210")
+    monkeypatch.setattr(smoke, "collect_adapter_ipv4_addresses", lambda: [])
 
     bind_address = smoke.amutorrent_bind_address_for_browser("hide.me")
 
@@ -102,6 +103,15 @@ def test_browser_controller_uses_lan_host_for_hide_me(monkeypatch: pytest.Monkey
     assert smoke.resolve_browser_controller_host(bind_address) == "192.168.1.210"
     assert smoke.amutorrent_bind_address_for_browser("Ethernet") == "127.0.0.1"
     assert smoke.resolve_browser_controller_host("127.0.0.1") == "127.0.0.1"
+
+
+def test_browser_controller_prefers_lan_host_over_vpn_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    smoke = load_smoke_module()
+
+    monkeypatch.setenv(smoke.LAN_IP_RESOLVED_ENV, "10.54.225.5")
+    monkeypatch.setattr(smoke, "collect_adapter_ipv4_addresses", lambda: ["10.54.225.5", "192.168.1.210"])
+
+    assert smoke.resolve_browser_controller_host("0.0.0.0") == "192.168.1.210"
 
 
 def test_build_search_mode_specs_repeats_all_modes_with_unicode() -> None:
