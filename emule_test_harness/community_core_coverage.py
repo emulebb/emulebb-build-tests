@@ -16,6 +16,8 @@ from .native_coverage import NativeCoverageConfig, publish_directory_snapshot, r
 from .paths import get_test_artifacts_root, get_test_reports_root
 from .workspace_layout import get_default_workspace_root
 
+CONTROLLER_BIND_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
+
 
 @dataclass(frozen=True)
 class CommunityCoreCoverageConfig:
@@ -202,6 +204,9 @@ def run_live_rest_e2e_for_community_summary(
     ]
     env = os.environ.copy()
     env["EMULEBB_WORKSPACE_ROOT"] = str(config.workspace_root.parent.parent)
+    controller_bind_addr = resolve_controller_bind_address(env)
+    if controller_bind_addr:
+        command.extend(["--bind-addr", controller_bind_addr])
     completed = subprocess.run(command, check=False, env=env)
     return {
         "status": "passed" if completed.returncode == 0 else "failed",
@@ -210,8 +215,19 @@ def run_live_rest_e2e_for_community_summary(
         "app_scope": config.rest_app_scope,
         "rest_coverage_budget": config.rest_coverage_budget,
         "rest_stress_budget": config.rest_stress_budget,
+        "controller_bind_address": controller_bind_addr or "",
         "command": command,
     }
+
+
+def resolve_controller_bind_address(env: dict[str, str]) -> str:
+    """Returns the developer-specific LAN bind address when supplied by orchestration."""
+
+    for name in CONTROLLER_BIND_ENV_NAMES:
+        value = env.get(name, "").strip()
+        if value:
+            return value
+    return ""
 
 
 def invoke_script(argv: list[str]) -> int:

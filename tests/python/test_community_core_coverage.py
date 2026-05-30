@@ -98,3 +98,38 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     assert env["EMULEBB_WORKSPACE_ROOT"] == str(tmp_path)
     assert summary["rest_coverage_budget"] == "contract"
     assert summary["rest_stress_budget"] == "smoke"
+
+
+def test_optional_live_rest_e2e_uses_lan_controller_bind_when_available(tmp_path: Path, monkeypatch) -> None:
+    test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    main_app_root = workspace_root / "app" / "emulebb-main"
+    community_app_root = workspace_root / "app" / "emulebb-community-baseline"
+    main_app_root.mkdir(parents=True)
+    community_app_root.mkdir(parents=True)
+    captured: dict[str, object] = {}
+
+    def fake_run(command, check=False, env=None):
+        captured["command"] = command
+        captured["env"] = env
+        return type("Completed", (), {"returncode": 0})()
+
+    monkeypatch.setenv("X_LOCAL_IP", "192.168.1.210")
+    monkeypatch.setattr("emule_test_harness.community_core_coverage.subprocess.run", fake_run)
+    config = build_config(
+        test_repo_root=test_repo_root,
+        workspace_root=workspace_root,
+        main_app_root=main_app_root,
+        community_app_root=community_app_root,
+        configuration="Release",
+        platform="x64",
+        preferred_coverage_root=None,
+        include_live_rest_e2e=True,
+    )
+
+    summary = run_live_rest_e2e_for_community_summary(config, tmp_path / "report")
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[command.index("--bind-addr") + 1] == "192.168.1.210"
+    assert summary["controller_bind_address"] == "192.168.1.210"

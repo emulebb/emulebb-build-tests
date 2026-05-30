@@ -6,6 +6,7 @@ import re
 import ssl
 import subprocess
 from types import SimpleNamespace
+import urllib.error
 
 import pytest
 
@@ -205,6 +206,84 @@ def test_https_urlopen_context_uses_generated_certificate_trust(monkeypatch: pyt
     assert context.cafile == str(cert_path)
     assert calls == [str(cert_path)]
     module.configure_https_trust(None)
+
+
+def test_http_request_retries_transient_rest_socket_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    calls: list[object] = []
+
+    class RetryableSocketError(OSError):
+        winerror = 10053
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"data":{"ok":true},"meta":{"apiVersion":"v1"}}'
+
+    def fake_urlopen(request, **_kwargs):
+        calls.append(request)
+        if len(calls) == 1:
+            raise urllib.error.URLError(RetryableSocketError())
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.http_request("http://192.168.1.210:4711", "/api/v1/app", api_key="key")
+
+    assert len(calls) == 2
+    assert result["status"] == 200
+    assert result["json"] == {"ok": True}
+    assert calls[0].headers["Connection"] == "close"
+
+
+def test_http_request_retries_direct_transient_rest_socket_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    calls: list[object] = []
+
+    class RetryableSocketError(OSError):
+        winerror = 10053
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"data":{"ok":true},"meta":{"apiVersion":"v1"}}'
+
+    def fake_urlopen(request, **_kwargs):
+        calls.append(request)
+        if len(calls) == 1:
+            raise RetryableSocketError()
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.http_request("http://192.168.1.210:4711", "/api/v1/app", api_key="key")
+
+    assert len(calls) == 2
+    assert result["status"] == 200
+
+
+def test_rest_stress_treats_listener_busy_close_as_retryable() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.is_retryable_rest_stress_exception(RuntimeError("Remote end closed connection without response"))
 
 
 def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

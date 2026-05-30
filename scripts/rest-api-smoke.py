@@ -225,7 +225,9 @@ REST_STRESS_RETRYABLE_ERROR_FRAGMENTS = (
     "unexpected_eof_while_reading",
     "forcibly closed",
     "connection was aborted",
+    "remote end closed connection without response",
 )
+REST_STRESS_REQUEST_MAX_ATTEMPTS = 6
 DEFAULT_HTTPS_CA_FILE = object()
 HTTPS_TRUST_CA_FILE: str | None = None
 REST_LEAK_CHURN_RESOURCE_THRESHOLDS = {
@@ -1236,6 +1238,19 @@ def build_urlopen_context(base_url: str, *, cafile: str | None | object = DEFAUL
     return ssl.create_default_context()
 
 
+def is_retryable_rest_transport_error(exc: BaseException) -> bool:
+    """Returns true for no-response socket errors seen while the single REST accept worker drains."""
+
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, BaseException):
+            return is_retryable_rest_transport_error(reason)
+        return False
+    if isinstance(exc, OSError):
+        return getattr(exc, "winerror", None) in {10053, 10054, 10061}
+    return False
+
+
 def exercise_https_certificate_validation(
     base_url: str,
     api_key: str,
@@ -1376,12 +1391,14 @@ def http_request(
 ) -> dict[str, object]:
     """Performs one HTTP request and returns a compact structured result."""
 
-    data = None
     headers: dict[str, str] = {}
     if api_key is not None:
         headers["X-API-Key"] = api_key
     if extra_headers:
         headers.update(extra_headers)
+    headers.setdefault("Connection", "close")
+
+    data = None
     if json_body is not None and raw_body is not None:
         raise ValueError("json_body and raw_body are mutually exclusive")
     if json_body is not None:
@@ -1397,36 +1414,50 @@ def http_request(
     context = build_urlopen_context(base_url, cafile=tls_ca_file)
     if context is not None:
         urlopen_kwargs["context"] = context
-    try:
-        with urllib.request.urlopen(request, **urlopen_kwargs) as response:
-            body_bytes = response.read()
-            body_text = body_bytes.decode("utf-8", errors="replace")
-            content_type = response.headers.get("Content-Type", "")
+    retry_delays = (0.2, 0.5, 1.0)
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            with urllib.request.urlopen(request, **urlopen_kwargs) as response:
+                body_bytes = response.read()
+                body_text = body_bytes.decode("utf-8", errors="replace")
+                content_type = response.headers.get("Content-Type", "")
+                payload = None
+                if "application/json" in content_type:
+                    payload = json.loads(body_text)
+                return {
+                    "status": int(response.status),
+                    "content_type": content_type,
+                    "headers": dict(response.headers.items()),
+                    "body_text": body_text,
+                    "json": unwrap_rest_payload(payload),
+                    "raw_json": payload,
+                }
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            content_type = exc.headers.get("Content-Type", "")
             payload = None
-            if "application/json" in content_type:
+            if "application/json" in content_type and body_text:
                 payload = json.loads(body_text)
             return {
-                "status": int(response.status),
+                "status": int(exc.code),
                 "content_type": content_type,
-                "headers": dict(response.headers.items()),
+                "headers": dict(exc.headers.items()),
                 "body_text": body_text,
                 "json": unwrap_rest_payload(payload),
                 "raw_json": payload,
             }
-    except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
-        content_type = exc.headers.get("Content-Type", "")
-        payload = None
-        if "application/json" in content_type and body_text:
-            payload = json.loads(body_text)
-        return {
-            "status": int(exc.code),
-            "content_type": content_type,
-            "headers": dict(exc.headers.items()),
-            "body_text": body_text,
-            "json": unwrap_rest_payload(payload),
-            "raw_json": payload,
-        }
+        except urllib.error.URLError as exc:
+            if attempt < len(retry_delays) and is_retryable_rest_transport_error(exc):
+                time.sleep(retry_delays[attempt])
+                continue
+            raise
+        except OSError as exc:
+            if attempt < len(retry_delays) and is_retryable_rest_transport_error(exc):
+                time.sleep(retry_delays[attempt])
+                continue
+            raise
+
+    raise AssertionError("unreachable REST request retry loop")
 
 
 def parse_base_url_endpoint(base_url: str) -> dict[str, object]:
@@ -3080,7 +3111,7 @@ def exercise_rest_stress(
         start = time.monotonic()
         retry_count = 0
         last_exception: Exception | None = None
-        for attempt_index in range(3):
+        for attempt_index in range(REST_STRESS_REQUEST_MAX_ATTEMPTS):
             try:
                 result = http_request(
                     base_url,
@@ -3122,10 +3153,10 @@ def exercise_rest_stress(
                 }
             except Exception as exc:
                 last_exception = exc
-                if attempt_index >= 2 or not is_retryable_rest_stress_exception(exc):
+                if attempt_index >= REST_STRESS_REQUEST_MAX_ATTEMPTS - 1 or not is_retryable_rest_stress_exception(exc):
                     break
                 retry_count += 1
-                time.sleep(0.025 * retry_count)
+                time.sleep(0.05 * retry_count)
         return {
             "operation_key": operation_key,
             "method": method,
