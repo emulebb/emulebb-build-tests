@@ -1918,6 +1918,47 @@ def test_ensure_radarr_movie_prefers_named_quality_profile(monkeypatch: pytest.M
     assert summary["quality_profile"] == {"id": 9, "name": "AnyAnyLang", "preferred_name": "AnyAnyLang"}
 
 
+def test_ensure_radarr_movie_falls_back_when_default_quality_profile_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        if path == "/api/v3/rootfolder":
+            if kwargs.get("method") == "POST":
+                return {"status": 201, "json": {"id": 5, "path": kwargs["json_body"]["path"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/qualityprofile":
+            return {"status": 200, "json": [{"id": 3, "name": "HD-1080p"}], "body_text": "[]"}
+        if path == "/api/v3/movie":
+            if kwargs.get("method") == "POST":
+                payload = kwargs["json_body"]
+                assert payload["qualityProfileId"] == 3
+                return {"status": 201, "json": {"id": 17, "title": payload["title"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path.startswith("/api/v3/movie/lookup?term="):
+            return {"status": 200, "json": [{"title": "operator configured title", "tmdbId": 123}], "body_text": "[]"}
+        raise AssertionError(f"Unexpected Radarr request: {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    summary = module.ensure_radarr_movie(
+        "http://radarr.test",
+        "key",
+        "operator configured title",
+        tmp_path,
+        quality_profile_name="AnyAnyLang",
+    )
+
+    assert summary["quality_profile"] == {
+        "id": 3,
+        "name": "HD-1080p",
+        "preferred_name": "AnyAnyLang",
+        "fallback_reason": "preferred profile 'AnyAnyLang' was not found",
+    }
+
+
 def test_ensure_radarr_movie_realigns_existing_movie_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     module = load_radarr_sonarr_module()
     target_root = str(tmp_path.resolve())

@@ -1445,11 +1445,14 @@ def first_arr_row(result: dict[str, Any], description: str) -> dict[str, Any]:
 def summarize_quality_profile(profile: dict[str, Any], preferred_name: str | None) -> dict[str, object]:
     """Returns the report-safe identity of one Arr quality profile."""
 
-    return {
+    summary = {
         "id": int(profile.get("id") or 0),
         "name": profile.get("name"),
         "preferred_name": preferred_name,
     }
+    if profile.get("_emulebbFallbackReason"):
+        summary["fallback_reason"] = profile.get("_emulebbFallbackReason")
+    return summary
 
 
 def get_quality_profile(arr_url: str, api_key: str, kind: str, preferred_name: str | None = None) -> dict[str, Any]:
@@ -1464,11 +1467,13 @@ def get_quality_profile(arr_url: str, api_key: str, kind: str, preferred_name: s
                 profile_id = int(profile.get("id") or 0)
                 if profile_id > 0:
                     return profile
-        raise RuntimeError(f"{kind} quality profile {preferred_name!r} was not found.")
     for profile in profiles:
         if isinstance(profile, dict):
             profile_id = int(profile.get("id") or 0)
             if profile_id > 0:
+                if preferred_name:
+                    profile = json.loads(json.dumps(profile))
+                    profile["_emulebbFallbackReason"] = f"preferred profile {preferred_name!r} was not found"
                 return profile
     raise RuntimeError(f"{kind} quality profiles did not include a valid id.")
 
