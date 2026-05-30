@@ -1119,6 +1119,8 @@ def build_suite_command(
         command.extend(["--server-search-count", str(rest_server_search_count)])
         command.extend(["--kad-search-count", str(rest_kad_search_count)])
         command.extend(["--live-download-trigger-count", str(rest_download_trigger_count)])
+        if p2p_bind_interface_address:
+            command.extend(["--bind-addr", p2p_bind_interface_address])
         if rest_search_method_override:
             command.extend(["--search-method-override", rest_search_method_override])
         command.extend(["--webserver-scheme", rest_webserver_scheme])
@@ -1559,11 +1561,13 @@ def suite_p2p_bind_interface_name(spec: SuiteSpec, default_interface_name: str, 
     return default_interface_name
 
 
-def suite_p2p_bind_interface_address(spec: SuiteSpec, lan_interface_address: str) -> str | None:
-    """Returns the resolved LAN IPv4 to pass to deterministic local child suites."""
+def suite_p2p_bind_interface_address(spec: SuiteSpec, lan_interface_address: str, vpn_interface_address: str = "") -> str | None:
+    """Returns the resolved interface IPv4 to pass to child suites that need it."""
 
     if spec.network_scope == "lan" and lan_interface_address:
         return lan_interface_address
+    if spec.is_rest_api and spec.network_scope == "vpn" and vpn_interface_address:
+        return vpn_interface_address
     return None
 
 
@@ -2184,7 +2188,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             args.p2p_bind_interface_name,
             lan_bind_interface_name,
         )
-        child_p2p_bind_interface_address = suite_p2p_bind_interface_address(spec, lan_bind_interface_address)
+        child_p2p_bind_interface_address = suite_p2p_bind_interface_address(
+            spec,
+            lan_bind_interface_address,
+            vpn_bind_interface_address,
+        )
         command = build_suite_command(
             spec=spec,
             scripts_dir=scripts_dir,

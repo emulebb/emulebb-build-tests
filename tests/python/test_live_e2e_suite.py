@@ -997,6 +997,27 @@ def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> Non
     assert option_values(command, "--min-contacts-per-client") == ["0"]
 
 
+def test_rest_api_vpn_bind_address_reaches_child_command(tmp_path: Path) -> None:
+    command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("rest-api"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_address="10.54.221.82",
+    )
+
+    assert script_name(command) == "rest-api-smoke.py"
+    assert option_values(command, "--bind-addr") == ["10.54.221.82"]
+
+
+def test_rest_api_vpn_address_is_resolved_from_network_context() -> None:
+    spec = suite_spec("rest-api")
+
+    assert live_e2e_suite.suite_p2p_bind_interface_address(spec, "", "10.54.221.82") == "10.54.221.82"
+
+
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

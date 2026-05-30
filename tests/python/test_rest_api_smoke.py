@@ -173,6 +173,14 @@ def test_rest_socket_adversity_base_url_parsing() -> None:
     }
 
 
+def test_rest_base_host_uses_explicit_bind_address_for_vpn() -> None:
+    module = load_rest_api_smoke_module()
+
+    assert module.rest_base_host_for_bind_addr("10.54.221.82") == "10.54.221.82"
+    assert module.rest_base_host_for_bind_addr("") == "127.0.0.1"
+    assert module.rest_base_host_for_bind_addr("0.0.0.0") == "127.0.0.1"
+
+
 def test_https_urlopen_context_is_only_used_for_https() -> None:
     module = load_rest_api_smoke_module()
 
@@ -1069,7 +1077,7 @@ def test_openapi_metadata_tracks_beta_release_contract() -> None:
     text = openapi_path.read_text(encoding="utf-8")
 
     assert "  version: 0.7.3\n" in text
-    assert "Canonical beta 0.7.3 contract" in text
+    assert "Canonical 0.7.3 RC1 contract" in text
     assert "1.0.0-pre" not in text
 
 

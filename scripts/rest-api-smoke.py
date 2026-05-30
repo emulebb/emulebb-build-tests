@@ -1011,11 +1011,20 @@ class LiveNetworkUnavailableError(RuntimeError):
     """Raised when live seed files load but no external network candidate connects."""
 
 
-def choose_listen_port() -> int:
-    """Returns one ephemeral localhost TCP port for the smoke listener."""
+def rest_base_host_for_bind_addr(bind_addr: str) -> str:
+    """Returns the host the harness should use to reach one WebServer bind address."""
+
+    bind_host = bind_addr.strip()
+    if not bind_host or bind_host in {"0.0.0.0", "::"}:
+        return "127.0.0.1"
+    return bind_host
+
+
+def choose_listen_port(bind_addr: str = "127.0.0.1") -> int:
+    """Returns one ephemeral TCP port for the smoke listener bind address."""
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
+        probe.bind((rest_base_host_for_bind_addr(bind_addr), 0))
         return int(probe.getsockname()[1])
 
 
@@ -6229,11 +6238,12 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
 
-    port = choose_listen_port()
-    base_url = f"{args.webserver_scheme}://127.0.0.1:{port}"
+    base_host = rest_base_host_for_bind_addr(args.bind_addr)
+    port = choose_listen_port(base_host)
+    base_url = f"{args.webserver_scheme}://{base_host}:{port}"
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="rest-api-smoke")
     https_material = (
-        create_https_certificate_pair(app_exe, artifacts_dir)
+        create_https_certificate_pair(app_exe, artifacts_dir, hosts=(base_host,))
         if args.webserver_scheme == "https"
         else {"certificate": "", "key": "", "generator": ""}
     )
