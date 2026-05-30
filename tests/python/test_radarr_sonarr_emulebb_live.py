@@ -1648,23 +1648,56 @@ def test_qbit_client_payload_covers_http_and_https_transport() -> None:
     assert http_payload["_emulebbCertificatePolicy"] == {"certificateValidation": False}
     assert provider_field_value(https_payload, "useSsl") is True
     assert provider_field_value(https_payload, "certificateValidation") == 1
-    assert https_payload["_emulebbCertificatePolicy"] == {"certificateValidation": True}
+    assert https_payload["_emulebbCertificatePolicy"] == {
+        "certificateValidation": True,
+        "arrHostConfig": module.ARR_LOCAL_CERTIFICATE_VALIDATION,
+    }
 
 
-def test_qbit_client_payload_rejects_https_without_certificate_policy() -> None:
+def test_qbit_client_payload_uses_host_certificate_policy_when_provider_field_is_missing() -> None:
     module = load_radarr_sonarr_module()
 
-    with pytest.raises(RuntimeError, match="does not expose disposable HTTPS certificate validation policy"):
-        module.build_qbit_client_payload(
-            arr_qbit_schema(),
-            name="eMuleBB Live radarr HTTPS",
-            host="127.0.0.1",
-            port=61921,
-            api_key="emule-key",
-            category_field="movieCategory",
-            category="radarr_movies_cat",
-            use_ssl=True,
-        )
+    payload = module.build_qbit_client_payload(
+        arr_qbit_schema(),
+        name="eMuleBB Live radarr HTTPS",
+        host="127.0.0.1",
+        port=61921,
+        api_key="emule-key",
+        category_field="movieCategory",
+        category="radarr_movies_cat",
+        use_ssl=True,
+    )
+
+    assert payload["_emulebbCertificatePolicy"] == {
+        "certificateValidation": False,
+        "arrHostConfig": module.ARR_LOCAL_CERTIFICATE_VALIDATION,
+    }
+
+
+def test_set_arr_local_certificate_validation_updates_host_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        method = str(kwargs.get("method") or "GET")
+        calls.append((method, path, kwargs.get("json_body")))
+        if path == "/api/v3/config/host" and method == "GET":
+            return {"status": 200, "json": {"id": 1, "certificateValidation": "enabled"}, "body_text": "{}"}
+        if path == "/api/v3/config/host" and method == "PUT":
+            body = dict(kwargs["json_body"])
+            return {"status": 202, "json": body, "body_text": "{}"}
+        raise AssertionError(f"Unexpected Arr request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    result = module.set_arr_local_certificate_validation("http://radarr.test", "key")
+
+    assert result == {
+        "changed": True,
+        "previous": "enabled",
+        "current": module.ARR_LOCAL_CERTIFICATE_VALIDATION,
+    }
+    assert calls[1][2]["certificateValidation"] == module.ARR_LOCAL_CERTIFICATE_VALIDATION
 
 
 def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.MonkeyPatch) -> None:

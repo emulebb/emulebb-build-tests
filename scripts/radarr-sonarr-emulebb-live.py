@@ -55,6 +55,7 @@ DEFAULT_CONTROLLER_VHD_SIZE_MB = 32768
 DEFAULT_LOCAL_ARR_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
 MIN_ARR_RELEASE_SOURCES = 10
 MIN_ARR_RELEASE_TITLE_MATCH_SCORE = 150
+ARR_LOCAL_CERTIFICATE_VALIDATION = "disabledForLocalAddresses"
 SONARR_EPISODE_TITLE_PATTERNS = (
     re.compile(r"\bs\d{1,2}e\d{1,3}\b", re.IGNORECASE),
     re.compile(r"\b\d{1,2}x\d{1,3}\b", re.IGNORECASE),
@@ -233,6 +234,26 @@ def apply_disposable_local_certificate_policy(provider: dict[str, Any]) -> dict[
     return {
         "certificateValidation": set_optional_field_value(provider, "certificateValidation", 1),
     }
+
+
+def set_arr_local_certificate_validation(arr_url: str, api_key: str) -> dict[str, object]:
+    """Allows disposable local HTTPS clients through the Arr host config."""
+
+    current = require_success(arr_request(arr_url, api_key, "/api/v3/config/host"), "Arr host config")
+    if not isinstance(current, dict):
+        raise RuntimeError("Arr host config did not return an object.")
+    previous = current.get("certificateValidation")
+    if previous == ARR_LOCAL_CERTIFICATE_VALIDATION:
+        return {"changed": False, "previous": previous, "current": previous}
+    updated = json.loads(json.dumps(current))
+    updated["certificateValidation"] = ARR_LOCAL_CERTIFICATE_VALIDATION
+    saved = require_success(
+        arr_request(arr_url, api_key, "/api/v3/config/host", method="PUT", json_body=updated),
+        "Arr host config update",
+    )
+    if not isinstance(saved, dict):
+        raise RuntimeError("Arr host config update did not return an object.")
+    return {"changed": True, "previous": previous, "current": saved.get("certificateValidation")}
 
 
 def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:
@@ -940,8 +961,8 @@ def build_qbit_client_payload(
         if use_ssl
         else {"certificateValidation": False}
     )
-    if use_ssl and not any(payload["_emulebbCertificatePolicy"].values()):
-        raise RuntimeError("Arr qBittorrent schema does not expose disposable HTTPS certificate validation policy.")
+    if use_ssl:
+        payload["_emulebbCertificatePolicy"]["arrHostConfig"] = ARR_LOCAL_CERTIFICATE_VALIDATION
     return payload
 
 
@@ -962,6 +983,11 @@ def create_temp_qbit_client(
     created_client_id: int | None = None
     schema = get_qbit_schema(arr_url, api_key)
     schema_summary = summarize_qbit_schema(schema, category_field=category_field)
+    host_certificate_validation = (
+        set_arr_local_certificate_validation(arr_url, api_key)
+        if use_ssl
+        else {"changed": False, "current": "not_applicable"}
+    )
     payload = build_qbit_client_payload(
         schema,
         name=name,
@@ -992,6 +1018,7 @@ def create_temp_qbit_client(
         require_success(test_result, "Arr eMuleBB qBittorrent client test")
         created["_emulebbSchemaSummary"] = schema_summary
         created["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
+        created["_emulebbHostCertificateValidation"] = host_certificate_validation
         created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
         return created
     except Exception as exc:
@@ -1035,6 +1062,7 @@ def summarize_arr_download_client(client: dict[str, Any], *, category: str) -> d
         "schema": client.get("_emulebbSchemaSummary"),
         "test_status": client.get("_emulebbTestStatus"),
         "certificate_policy": client.get("_emulebbCertificatePolicy"),
+        "host_certificate_validation": client.get("_emulebbHostCertificateValidation"),
     }
 
 
