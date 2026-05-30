@@ -326,6 +326,39 @@
               "statusPointer": "/status"
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.installer.controller-surface.materialized.v1",
+          "title": "Installer-backed controller surface",
+          "phase": "controller-surface",
+          "flowCategory": "installer",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
+          "liveE2eProfile": "installer-controller-surface",
+          "localInputs": [
+            "live-wire-inputs.local.json",
+            "live-process-monitor.local.json"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "installer-controller-surface"
+              }
+            },
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "path": "test-reports/live-process-monitor/latest/live-process-monitor-result.json",
+              "statusPointer": "/status"
+            }
+          ]
         }
       ]
     },
@@ -808,6 +841,7 @@
       "id": "quick-rc-live-proof",
       "coveredBy": [
         "emulebb.flow.rest.contract.controller.v1",
+        "emulebb.flow.installer.controller-surface.materialized.v1",
         "emulebb.flow.livewire.release-expanded.weak-path.v1",
         "emulebb.flow.livewire.search-ui.download.lifecycle.v1",
         "emulebb.flow.livewire.rest.download-trigger.v1",
@@ -817,6 +851,12 @@
         "emulebb.flow.amutorrent.live.clean-startup.v1",
         "emulebb.flow.amutorrent.live.emulebb-ui.v1",
         "emulebb.flow.amutorrent.live.resilience.v1"
+      ]
+    },
+    {
+      "id": "installer-backed-controller-surface",
+      "coveredBy": [
+        "emulebb.flow.installer.controller-surface.materialized.v1"
       ]
     },
     {

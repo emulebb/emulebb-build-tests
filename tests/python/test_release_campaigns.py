@@ -61,6 +61,19 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
     assert campaign["proofTier"] == "rc-blocking-quick"
+    installer_scenario = next(
+        scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if scenario["id"] == "emulebb.flow.installer.controller-surface.materialized.v1"
+    )
+    assert installer_scenario["liveE2eProfile"] == "installer-controller-surface"
+    assert "emulebb.flow.installer.controller-surface.materialized.v1" in {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        if gate["id"] == "installer-backed-controller-surface"
+        for scenario_id in gate["coveredBy"]
+    }
 
 
 def test_073_overnight_campaign_validates_and_covers_all_release_gates() -> None:
