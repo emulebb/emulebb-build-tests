@@ -815,6 +815,10 @@ TEST_CASE("Web API trims transfer add links and rejects empty payloads")
 	CHECK_EQ(link, "ed2k://|server|1.2.3.4|4661|/");
 
 	error.clear();
+	CHECK_FALSE(WebApiCommandSeams::TryParseTransferAddLink(WebApiCommandSeams::json{{"link", "https://example.test/file.bin"}}, link, error));
+	CHECK_EQ(error, "link must start with ed2k://");
+
+	error.clear();
 	CHECK_FALSE(WebApiCommandSeams::TryParseTransferAddLink(WebApiCommandSeams::json{{"link", "   "}}, link, error));
 	CHECK_EQ(error, "link must not be empty");
 
