@@ -78,4 +78,7 @@ def test_live_e2e_scenario_matrix_reports_rollups_and_repetitions() -> None:
     assert repetitions["rest-api"]["classification"] == "quick-and-full-release-overlap"
     assert repetitions["shared-directories-rest"]["profileCount"] >= 4
     assert "controller-local" in matrix["profiles"]
+    assert matrix["profiles"]["installer-controller-surface"] == list(live_e2e_suite.PROFILE_SUITE_NAMES[
+        "installer-controller-surface"
+    ])
     assert "diagnostics-soak" in matrix["profiles"]

@@ -555,6 +555,15 @@ PROFILE_SUITE_NAMES = {
         "sonarr-emulebb",
         "amutorrent-browser-smoke",
     ),
+    "installer-controller-surface": (
+        "command-line-smoke",
+        "rest-api",
+        "prowlarr-emulebb",
+        "radarr-emulebb",
+        "sonarr-emulebb",
+        "amutorrent-browser-smoke",
+        "live-process-monitor",
+    ),
     "controller-local": (
         "radarr-emulebb-local",
         "sonarr-emulebb-local",
