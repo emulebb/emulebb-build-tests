@@ -1480,6 +1480,43 @@ def wait_for_new_category_transfer(
     raise RuntimeError(f"Prowlarr grab did not create a new transfer in category {category!r}. Last: {last!r}")
 
 
+def ensure_emule_category(base_url: str, api_key: str, name: str, path: Path) -> dict[str, object]:
+    """Ensures the live eMuleBB profile has a named category for the grab proof."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    path_text = live_common.win_path(path.resolve(), trailing_slash=True)
+    categories = rest_smoke.http_request(base_url, "/api/v1/categories", api_key=api_key, request_timeout_seconds=20.0)
+    rows = rest_smoke.require_json_array(categories, 200)
+    for row in rows:
+        if not isinstance(row, dict) or row.get("name") != name:
+            continue
+        category_id = int(row.get("id") or 0)
+        current_path = str(row.get("path") or "")
+        if current_path.lower() != path_text.lower():
+            patched = rest_smoke.http_request(
+                base_url,
+                f"/api/v1/categories/{category_id}",
+                method="PATCH",
+                api_key=api_key,
+                json_body={"path": path_text},
+                request_timeout_seconds=20.0,
+            )
+            updated = rest_smoke.require_json_object(patched, 200)
+            return {"id": category_id, "name": name, "path": updated.get("path"), "created": False, "updated": True}
+        return {"id": category_id, "name": name, "path": current_path, "created": False, "updated": False}
+
+    created = rest_smoke.http_request(
+        base_url,
+        "/api/v1/categories",
+        method="POST",
+        api_key=api_key,
+        json_body={"name": name, "path": path_text},
+        request_timeout_seconds=20.0,
+    )
+    payload = rest_smoke.require_json_object(created, 200)
+    return {"id": int(payload.get("id") or 0), "name": payload.get("name"), "path": payload.get("path"), "created": True, "updated": False}
+
+
 def qbit_request(
     base_url: str,
     path: str,
@@ -1567,6 +1604,42 @@ def get_release_download_link(release: dict[str, Any]) -> str:
         if value.startswith("magnet:?") or value.startswith("ed2k://"):
             return value
     raise RuntimeError("Prowlarr release did not expose an eMule-compatible download link.")
+
+
+def get_release_native_transfer_link(release: dict[str, Any]) -> str:
+    """Returns the native ED2K transfer link from one Prowlarr row."""
+
+    for key in ("downloadUrl", "guid", "magnetUrl", "magneturl"):
+        value = str(release.get(key) or "")
+        if value.startswith("ed2k://"):
+            return value
+    raise RuntimeError("Prowlarr release did not expose a native eD2K transfer link.")
+
+
+def native_rest_transfer_add(
+    base_url: str,
+    emule_api_key: str,
+    download_link: str,
+    category: str,
+) -> dict[str, object]:
+    """Adds one Prowlarr-selected release through eMuleBB's native REST API."""
+
+    added = rest_smoke.http_request(
+        base_url,
+        "/api/v1/transfers",
+        method="POST",
+        api_key=emule_api_key,
+        json_body={"link": download_link, "categoryName": category, "paused": True},
+        request_timeout_seconds=45.0,
+    )
+    payload = rest_smoke.require_json_object(added, 200)
+    items = payload.get("items")
+    if not isinstance(items, list) or not items or not isinstance(items[0], dict) or not items[0].get("ok"):
+        raise RuntimeError(f"Native transfer add did not accept the selected release: {rest_smoke.compact_http_result(added)!r}")
+    return {
+        "add_status": int(added.get("status") or 0),
+        "hash": hash_from_download_link(download_link),
+    }
 
 
 def qbit_direct_add(
@@ -1732,13 +1805,11 @@ def select_grabbable_release(rows: list[Any], indexer_id: int, query: str) -> di
 def summarize_grabbed_release(release: dict[str, Any], query: str) -> dict[str, object]:
     """Builds a report-safe summary of the selected Prowlarr release."""
 
-    magnet = str(release.get("magnetUrl") or release.get("downloadUrl") or release.get("guid") or "")
     hash_present = False
-    if magnet.startswith("magnet:?"):
-        try:
-            hash_present = bool(ed2k_hash_from_magnet(magnet))
-        except RuntimeError:
-            hash_present = False
+    try:
+        hash_present = bool(hash_from_download_link(get_release_download_link(release)))
+    except RuntimeError:
+        hash_present = False
     return {
         "title_present": bool(release.get("title")),
         "guid_present": bool(release.get("guid")),
@@ -1791,14 +1862,14 @@ def prowlarr_download_client_grab_roundtrip(
                 continue
 
             release = select_grabbable_release(rows, indexer_id, query)
-            download_link = get_release_download_link(release)
-            added = qbit_direct_add(emule_base_url, emule_api_key, download_link, download_category)
+            download_link = get_release_native_transfer_link(release)
+            added = native_rest_transfer_add(emule_base_url, emule_api_key, download_link, download_category)
             return {
                 "status": "passed",
                 "category": int(category_id),
                 "download_client_id": int(download_client_id),
                 "download_category": download_category,
-                "handoff": "direct-emulebb-qbit-add",
+                "handoff": "prowlarr-search-native-emulebb-rest-add",
                 "release": summarize_grabbed_release(release, query),
                 "grab_status": int(added.get("add_status") or 0),
                 "download_link_hash_present": bool(added.get("hash")),
@@ -1996,6 +2067,13 @@ def main() -> int:
         record_phase("rest_ready")
         ready = rest_smoke.wait_for_rest_ready(emule_base_url, args.emule_api_key, args.rest_ready_timeout_seconds)
         report["checks"]["rest_ready"] = rest_smoke.compact_http_result(ready)
+        record_phase("emule_grab_category")
+        report["checks"]["emule_grab_category"] = ensure_emule_category(
+            emule_base_url,
+            args.emule_api_key,
+            PROWLARR_GRAB_CATEGORY,
+            Path(profile["incoming_dir"]) / PROWLARR_GRAB_CATEGORY,
+        )
         record_phase("network_ready")
         servers = rest_smoke.http_request(emule_base_url, "/api/v1/servers", api_key=args.emule_api_key)
         server_rows = rest_smoke.require_json_array(servers, 200)

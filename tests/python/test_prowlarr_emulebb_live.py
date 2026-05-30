@@ -498,10 +498,49 @@ def test_temp_qbit_download_client_cleans_up_when_test_fails(monkeypatch) -> Non
     ]
 
 
-def test_prowlarr_download_client_grab_adds_release_through_emule_qbit_endpoint(monkeypatch) -> None:
+def test_ensure_emule_category_creates_missing_category(monkeypatch, tmp_path: Path) -> None:
+    module = load_prowlarr_module()
+    calls: list[dict[str, Any]] = []
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"base_url": base_url, "path": path, **kwargs})
+        if path == "/api/v1/categories" and kwargs.get("method", "GET") == "GET":
+            rows = [{"id": 0, "name": "Default", "path": "C:\\Incoming\\"}]
+            return {
+                "status": 200,
+                "json": rows,
+                "raw_json": {"data": rows, "meta": {"apiVersion": "v1"}},
+                "body_text": "[]",
+            }
+        if path == "/api/v1/categories" and kwargs.get("method") == "POST":
+            payload = {"id": 8, "name": "prowlarr_grabs_cat", "path": kwargs["json_body"]["path"]}
+            return {
+                "status": 200,
+                "json": payload,
+                "raw_json": {"data": payload, "meta": {"apiVersion": "v1"}},
+                "body_text": "{}",
+            }
+        raise AssertionError(f"Unexpected request: {kwargs.get('method', 'GET')} {path}")
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.ensure_emule_category(
+        "http://127.0.0.1:4711",
+        "key",
+        "prowlarr_grabs_cat",
+        tmp_path / "incoming",
+    )
+
+    assert result["id"] == 8
+    assert result["created"] is True
+    assert calls[1]["json_body"]["name"] == "prowlarr_grabs_cat"
+    assert str(calls[1]["json_body"]["path"]).endswith("\\")
+
+
+def test_prowlarr_download_client_grab_adds_release_through_native_rest_endpoint(monkeypatch) -> None:
     module = load_prowlarr_module()
     prowlarr_requests: list[dict[str, Any]] = []
-    qbit_adds: list[dict[str, str]] = []
+    transfer_adds: list[dict[str, Any]] = []
     transfer_calls = 0
     release = {
         "title": "Linux ISO",
@@ -525,20 +564,43 @@ def test_prowlarr_download_client_grab_adds_release_through_emule_qbit_endpoint(
             return {"status": 200, "json": [release], "body_text": "[]"}
         raise AssertionError(f"Unexpected request: {method} {path}")
 
-    def fake_qbit_direct_add(base_url: str, emule_api_key: str, download_link: str, category: str) -> dict[str, object]:
-        qbit_adds.append(
-            {
-                "base_url": base_url,
-                "emule_api_key": emule_api_key,
-                "download_link": download_link,
-                "category": category,
-            }
-        )
-        return {"add_status": 200, "login_status": 200, "hash": "fedcba9876543210fedcba9876543210"}
-
     def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
         nonlocal transfer_calls
         assert path == "/api/v1/transfers"
+        method = str(kwargs.get("method", "GET"))
+        if method == "POST":
+            transfer_adds.append(
+                {
+                    "base_url": base_url,
+                    "emule_api_key": kwargs.get("api_key"),
+                    "json_body": kwargs.get("json_body"),
+                }
+            )
+            return {
+                "status": 200,
+                "json": {
+                    "items": [
+                        {
+                            "ok": True,
+                            "hash": "fedcba9876543210fedcba9876543210",
+                            "name": "Linux.iso",
+                        }
+                    ]
+                },
+                "raw_json": {
+                    "data": {
+                        "items": [
+                            {
+                                "ok": True,
+                                "hash": "fedcba9876543210fedcba9876543210",
+                                "name": "Linux.iso",
+                            }
+                        ]
+                    },
+                    "meta": {"apiVersion": "v1"},
+                },
+                "body_text": "{}",
+            }
         transfer_calls += 1
         if transfer_calls == 1:
             return {"status": 200, "json": [], "raw_json": {"data": [], "meta": {"apiVersion": "v1"}}, "body_text": "[]"}
@@ -567,7 +629,6 @@ def test_prowlarr_download_client_grab_adds_release_through_emule_qbit_endpoint(
         }
 
     monkeypatch.setattr(module, "prowlarr_request", fake_prowlarr_request)
-    monkeypatch.setattr(module, "qbit_direct_add", fake_qbit_direct_add)
     monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
 
     result = module.prowlarr_download_client_grab_roundtrip(
@@ -587,18 +648,21 @@ def test_prowlarr_download_client_grab_adds_release_through_emule_qbit_endpoint(
     assert result["status"] == "passed"
     assert result["release"]["title_present"] is True
     assert result["release"]["hash_present"] is True
-    assert result["handoff"] == "direct-emulebb-qbit-add"
+    assert result["handoff"] == "prowlarr-search-native-emulebb-rest-add"
     assert result["download_link_hash_present"] is True
     assert result["transfer"]["categoryName"] == "prowlarr_grabs_cat"
     assert [request["path"] for request in prowlarr_requests] == [
         "/api/v1/search?query=linux&categories=7000&indexerIds=40",
     ]
-    assert qbit_adds == [
+    assert transfer_adds == [
         {
             "base_url": "http://127.0.0.1:1",
             "emule_api_key": "emule-key",
-            "download_link": "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000",
-            "category": "prowlarr_grabs_cat",
+            "json_body": {
+                "link": "ed2k://|file|Linux.iso|1024|fedcba9876543210fedcba9876543210|/",
+                "categoryName": "prowlarr_grabs_cat",
+                "paused": True,
+            },
         }
     ]
 
