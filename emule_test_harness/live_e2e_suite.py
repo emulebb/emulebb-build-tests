@@ -1119,8 +1119,6 @@ def build_suite_command(
         command.extend(["--server-search-count", str(rest_server_search_count)])
         command.extend(["--kad-search-count", str(rest_kad_search_count)])
         command.extend(["--live-download-trigger-count", str(rest_download_trigger_count)])
-        if p2p_bind_interface_address:
-            command.extend(["--bind-addr", p2p_bind_interface_address])
         if rest_search_method_override:
             command.extend(["--search-method-override", rest_search_method_override])
         command.extend(["--webserver-scheme", rest_webserver_scheme])

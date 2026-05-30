@@ -997,7 +997,7 @@ def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> Non
     assert option_values(command, "--min-contacts-per-client") == ["0"]
 
 
-def test_rest_api_vpn_bind_address_reaches_child_command(tmp_path: Path) -> None:
+def test_rest_api_vpn_bind_address_does_not_override_webserver_loopback(tmp_path: Path) -> None:
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("rest-api"),
         scripts_dir=tmp_path / "scripts",
@@ -1009,7 +1009,8 @@ def test_rest_api_vpn_bind_address_reaches_child_command(tmp_path: Path) -> None
     )
 
     assert script_name(command) == "rest-api-smoke.py"
-    assert option_values(command, "--bind-addr") == ["10.54.221.82"]
+    assert option_values(command, "--bind-addr") == []
+    assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
 
 
 def test_rest_api_vpn_address_is_resolved_from_network_context() -> None:
