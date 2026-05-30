@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +19,26 @@ def load_auto_browse_module():
     sys.modules["auto_browse_live_for_tests"] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_auto_browse_help_runs_without_pythonpath(tmp_path: Path) -> None:
+    """Covers direct script execution from orchestration working directories."""
+
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "auto-browse-live.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "auto-browse" in result.stdout
 
 
 def make_inputs(module):

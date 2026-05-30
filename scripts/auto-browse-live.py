@@ -11,6 +11,10 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Callable
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
