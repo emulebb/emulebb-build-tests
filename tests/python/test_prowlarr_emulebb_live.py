@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import urllib.error
 from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
@@ -535,6 +536,46 @@ def test_ensure_emule_category_creates_missing_category(monkeypatch, tmp_path: P
     assert result["created"] is True
     assert calls[1]["json_body"]["name"] == "prowlarr_grabs_cat"
     assert str(calls[1]["json_body"]["path"]).endswith("\\")
+
+
+def test_native_rest_transfer_add_retries_transient_socket_abort(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[dict[str, Any]] = []
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"base_url": base_url, "path": path, **kwargs})
+        if len(calls) == 1:
+            raise urllib.error.URLError(10053)
+        payload = {
+            "items": [
+                {
+                    "ok": True,
+                    "hash": "fedcba9876543210fedcba9876543210",
+                    "name": "Linux.iso",
+                }
+            ]
+        }
+        return {
+            "status": 200,
+            "json": payload,
+            "raw_json": {"data": payload, "meta": {"apiVersion": "v1"}},
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.native_rest_transfer_add(
+        "https://127.0.0.1:4711",
+        "key",
+        "ed2k://|file|Linux.iso|1024|fedcba9876543210fedcba9876543210|/",
+        "prowlarr_grabs_cat",
+    )
+
+    assert result["add_status"] == 200
+    assert result["hash"] == "fedcba9876543210fedcba9876543210"
+    assert result["transient_errors"]
+    assert len(calls) == 2
 
 
 def test_prowlarr_download_client_grab_adds_release_through_native_rest_endpoint(monkeypatch) -> None:

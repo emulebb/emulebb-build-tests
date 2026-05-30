@@ -1517,6 +1517,46 @@ def ensure_emule_category(base_url: str, api_key: str, name: str, path: Path) ->
     return {"id": int(payload.get("id") or 0), "name": payload.get("name"), "path": payload.get("path"), "created": True, "updated": False}
 
 
+def retry_emule_rest_request(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str,
+    timeout_seconds: float,
+    request_timeout_seconds: float,
+    **kwargs: object,
+) -> dict[str, object]:
+    """Retries transient eMuleBB REST socket failures and keeps evidence."""
+
+    observations: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            result = rest_smoke.http_request(
+                base_url,
+                path,
+                api_key=api_key,
+                request_timeout_seconds=request_timeout_seconds,
+                **kwargs,
+            )
+            if observations:
+                result = dict(result)
+                result["transient_errors"] = observations[-5:]
+            return result
+        except (OSError, TimeoutError, urllib.error.URLError) as exc:
+            observations.append(
+                {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"REST request {path} did not recover. Transient observations: {observations[-5:]}") from exc
+            time.sleep(min(1.0, remaining))
+
+
 def qbit_request(
     base_url: str,
     path: str,
@@ -1624,13 +1664,14 @@ def native_rest_transfer_add(
 ) -> dict[str, object]:
     """Adds one Prowlarr-selected release through eMuleBB's native REST API."""
 
-    added = rest_smoke.http_request(
+    added = retry_emule_rest_request(
         base_url,
         "/api/v1/transfers",
-        method="POST",
         api_key=emule_api_key,
+        timeout_seconds=60.0,
+        request_timeout_seconds=15.0,
+        method="POST",
         json_body={"link": download_link, "categoryName": category, "paused": True},
-        request_timeout_seconds=45.0,
     )
     payload = rest_smoke.require_json_object(added, 200)
     items = payload.get("items")
@@ -1639,6 +1680,7 @@ def native_rest_transfer_add(
     return {
         "add_status": int(added.get("status") or 0),
         "hash": hash_from_download_link(download_link),
+        "transient_errors": added.get("transient_errors", []),
     }
 
 
@@ -1873,6 +1915,7 @@ def prowlarr_download_client_grab_roundtrip(
                 "release": summarize_grabbed_release(release, query),
                 "grab_status": int(added.get("add_status") or 0),
                 "download_link_hash_present": bool(added.get("hash")),
+                "transient_errors": added.get("transient_errors", []),
                 "transfer": wait_for_new_category_transfer(
                     emule_base_url,
                     emule_api_key,
