@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
-import hashlib
 import importlib.util
 import json
 import socket
-import ssl
 import sys
 import time
 import urllib.error
@@ -213,134 +210,39 @@ def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in provider.items() if not str(key).startswith("_emulebb")}
 
 
-def certificate_thumbprint_sha1(certificate_path: str) -> str:
-    """Returns the uppercase SHA-1 thumbprint for a PEM certificate."""
+def set_prowlarr_local_certificate_validation(
+    prowlarr_url: str,
+    api_key: str,
+    policy: str = "disabledForLocalAddresses",
+) -> dict[str, object]:
+    """Sets Prowlarr host TLS validation policy for disposable local HTTPS endpoints."""
 
-    certificate_text = Path(certificate_path).read_text(encoding="ascii")
-    return hashlib.sha1(ssl.PEM_cert_to_DER_cert(certificate_text)).hexdigest().upper()
-
-
-def install_certificate_in_current_user_root(certificate_path: str) -> dict[str, object]:
-    """Installs one disposable local certificate into CurrentUser Root for .NET clients."""
-
-    if not certificate_path:
-        return {"installed": False}
-    thumbprint = certificate_thumbprint_sha1(certificate_path)
-    _windows_add_certificate_to_current_user_root(Path(certificate_path).read_text(encoding="ascii"))
-    return {"installed": True, "store": "CurrentUser\\Root", "thumbprint": thumbprint}
-
-
-def remove_certificate_from_current_user_root(trust_record: dict[str, object]) -> dict[str, object]:
-    """Removes a disposable local certificate installed by this harness run."""
-
-    if not bool(trust_record.get("installed")):
-        return {"removed": False, "reason": "not_installed"}
-    thumbprint = str(trust_record.get("thumbprint") or "").strip()
-    if not thumbprint:
-        return {"removed": False, "error": "missing_thumbprint"}
-    removed = _windows_delete_certificate_from_current_user_root(thumbprint)
-    return {
-        "removed": removed,
-        "store": "CurrentUser\\Root",
-        "thumbprint": thumbprint,
-    }
-
-
-class _CryptoApiBlob(ctypes.Structure):
-    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
-
-
-def _open_current_user_root_store() -> int:
-    if sys.platform != "win32":
-        raise RuntimeError("Windows CurrentUser Root certificate store is required for this HTTPS Prowlarr live test.")
-
-    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
-    crypt32.CertOpenStore.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
-    crypt32.CertOpenStore.restype = ctypes.c_void_p
-
-    cert_store_prov_system_w = 10
-    cert_system_store_current_user = 0x00010000
-    store = crypt32.CertOpenStore(
-        ctypes.c_void_p(cert_store_prov_system_w),
-        0,
-        None,
-        cert_system_store_current_user,
-        ctypes.c_wchar_p("ROOT"),
+    current = require_success(
+        prowlarr_request(prowlarr_url, api_key, "/api/v1/config/host"),
+        "Prowlarr host config lookup",
     )
-    if not store:
-        raise ctypes.WinError(ctypes.get_last_error())
-    return int(store)
-
-
-def _windows_add_certificate_to_current_user_root(certificate_pem: str) -> None:
-    der_bytes = ssl.PEM_cert_to_DER_cert(certificate_pem)
-    der_buffer = (ctypes.c_ubyte * len(der_bytes)).from_buffer_copy(der_bytes)
-    store = _open_current_user_root_store()
-    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
-    crypt32.CertAddEncodedCertificateToStore.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.POINTER(ctypes.c_ubyte),
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-    ]
-    crypt32.CertAddEncodedCertificateToStore.restype = ctypes.c_bool
-    crypt32.CertCloseStore.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    crypt32.CertCloseStore.restype = ctypes.c_bool
-    try:
-        encoding = 0x00000001 | 0x00010000
-        replace_existing = 3
-        if not crypt32.CertAddEncodedCertificateToStore(
-            ctypes.c_void_p(store),
-            encoding,
-            der_buffer,
-            len(der_bytes),
-            replace_existing,
-            None,
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-    finally:
-        crypt32.CertCloseStore(ctypes.c_void_p(store), 0)
-
-
-def _windows_delete_certificate_from_current_user_root(thumbprint: str) -> bool:
-    thumbprint_bytes = bytes.fromhex(thumbprint)
-    thumbprint_buffer = (ctypes.c_ubyte * len(thumbprint_bytes)).from_buffer_copy(thumbprint_bytes)
-    blob = _CryptoApiBlob(len(thumbprint_bytes), thumbprint_buffer)
-    store = _open_current_user_root_store()
-    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
-    crypt32.CertFindCertificateInStore.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-    ]
-    crypt32.CertFindCertificateInStore.restype = ctypes.c_void_p
-    crypt32.CertDeleteCertificateFromStore.argtypes = [ctypes.c_void_p]
-    crypt32.CertDeleteCertificateFromStore.restype = ctypes.c_bool
-    crypt32.CertCloseStore.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    crypt32.CertCloseStore.restype = ctypes.c_bool
-    try:
-        encoding = 0x00000001 | 0x00010000
-        cert_find_hash = 0x00010000
-        context = crypt32.CertFindCertificateInStore(
-            ctypes.c_void_p(store),
-            encoding,
-            0,
-            cert_find_hash,
-            ctypes.byref(blob),
-            None,
-        )
-        if not context:
-            return False
-        if not crypt32.CertDeleteCertificateFromStore(context):
-            raise ctypes.WinError(ctypes.get_last_error())
-        return True
-    finally:
-        crypt32.CertCloseStore(ctypes.c_void_p(store), 0)
+    if not isinstance(current, dict):
+        raise RuntimeError("Prowlarr host config response was not an object.")
+    previous = str(current.get("certificateValidation") or "")
+    if previous == policy:
+        return {"changed": False, "previous": previous, "current": previous}
+    updated = json.loads(json.dumps(current))
+    # WHY: Prowlarr 2.3 no longer exposes per-provider certificate validation
+    # fields for Torznab/qBittorrent. The disposable controller is materialized
+    # only for this live run, so relaxing local-address cert validation belongs
+    # on that controller instance instead of mutating the Windows trust store.
+    updated["certificateValidation"] = policy
+    saved = require_success(
+        prowlarr_request(prowlarr_url, api_key, "/api/v1/config/host", method="PUT", json_body=updated),
+        "Prowlarr host config certificate validation update",
+    )
+    if not isinstance(saved, dict):
+        raise RuntimeError("Prowlarr host config update response was not an object.")
+    return {
+        "changed": True,
+        "previous": previous,
+        "current": saved.get("certificateValidation"),
+    }
 
 
 def build_indexer_payload(
@@ -375,10 +277,7 @@ def build_indexer_payload(
         else {"certificateValidation": False}
     )
     if uses_https and not any(payload["_emulebbCertificatePolicy"].values()):
-        # WHY: Current Prowlarr Torznab schemas omit per-indexer certificate
-        # validation knobs, so trusted disposable local certs must be proven
-        # through the Windows trust store and Prowlarr's own provider test.
-        payload["_emulebbCertificatePolicy"]["systemTrustStore"] = True
+        payload["_emulebbCertificatePolicy"]["prowlarrHostConfig"] = "disabledForLocalAddresses"
     return payload
 
 
@@ -465,7 +364,7 @@ def build_qbit_download_client_payload(
         else {"certificateValidation": False}
     )
     if use_ssl and not any(payload["_emulebbCertificatePolicy"].values()):
-        raise RuntimeError("Prowlarr qBittorrent schema does not expose disposable HTTPS certificate validation policy.")
+        payload["_emulebbCertificatePolicy"]["prowlarrHostConfig"] = "disabledForLocalAddresses"
     return payload
 
 
@@ -1905,11 +1804,6 @@ def main() -> int:
         else {"certificate": "", "key": "", "generator": ""}
     )
     rest_smoke.configure_https_trust(https_material["certificate"])
-    https_trust_store = (
-        install_certificate_in_current_user_root(https_material["certificate"])
-        if use_https
-        else {"installed": False}
-    )
 
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="prowlarr-emulebb-live")
     seed_refresh = None
@@ -1945,7 +1839,6 @@ def main() -> int:
         "torznab_base_url": torznab_base_url,
         "rest_webserver_scheme": args.rest_webserver_scheme,
         "https_material": https_material if use_https else None,
-        "https_trust_store": https_trust_store if use_https else None,
         "api_key_length": len(args.emule_api_key),
         "prowlarr_api_key_length": len(prowlarr_api_key),
         "seed_refresh": seed_refresh,
@@ -2052,6 +1945,11 @@ def main() -> int:
             "appName": status_payload.get("appName") if isinstance(status_payload, dict) else None,
             "version": status_payload.get("version") if isinstance(status_payload, dict) else None,
         }
+        if use_https:
+            report["checks"]["prowlarr_certificate_validation"] = set_prowlarr_local_certificate_validation(
+                prowlarr_url,
+                prowlarr_api_key,
+            )
         saved_indexer = upsert_indexer(
             prowlarr_url,
             prowlarr_api_key,
@@ -2156,11 +2054,6 @@ def main() -> int:
                 report["cleanup"] = {"closed_app": False, "error": str(exc)}
                 if report.get("status") == "passed":
                     report["status"] = "failed"
-        if use_https:
-            trust_cleanup = remove_certificate_from_current_user_root(https_trust_store)
-            report["https_trust_store_cleanup"] = trust_cleanup
-            if not bool(trust_cleanup.get("removed")) and bool(https_trust_store.get("installed")) and report.get("status") == "passed":
-                report["status"] = "failed"
         live_common.write_json(result_path, report)
         paths.run_report_dir.parent.mkdir(parents=True, exist_ok=True)
         harness_cli_common.publish_run_artifacts(paths)

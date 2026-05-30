@@ -297,7 +297,7 @@ def test_indexer_payload_covers_http_and_https_certificate_policy() -> None:
     assert https_payload["_emulebbCertificatePolicy"] == {"certificateValidation": True}
 
 
-def test_indexer_payload_uses_system_trust_store_when_schema_omits_certificate_policy() -> None:
+def test_indexer_payload_uses_host_config_when_schema_omits_certificate_policy() -> None:
     module = load_prowlarr_module()
     schema = {
         "name": "Generic Torznab",
@@ -318,28 +318,30 @@ def test_indexer_payload_uses_system_trust_store_when_schema_omits_certificate_p
     )
 
     assert field_value(payload, "baseUrl") == "https://127.0.0.1:61920/indexer/emulebb"
-    assert payload["_emulebbCertificatePolicy"] == {"certificateValidation": False, "systemTrustStore": True}
+    assert payload["_emulebbCertificatePolicy"] == {
+        "certificateValidation": False,
+        "prowlarrHostConfig": "disabledForLocalAddresses",
+    }
 
 
-def test_disposable_certificate_trust_store_uses_current_user_root(monkeypatch, tmp_path: Path) -> None:
+def test_set_prowlarr_local_certificate_validation_updates_host_config(monkeypatch) -> None:
     module = load_prowlarr_module()
-    cert_path = tmp_path / "webserver-cert.pem"
-    cert_path.write_text("certificate\n", encoding="ascii")
-    calls: list[tuple[str, str]] = []
+    calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr(module, "certificate_thumbprint_sha1", lambda _path: "ABCDEF")
-    monkeypatch.setattr(module, "_windows_add_certificate_to_current_user_root", lambda pem: calls.append(("add", pem)))
-    monkeypatch.setattr(module, "_windows_delete_certificate_from_current_user_root", lambda thumbprint: calls.append(("delete", thumbprint)) or True)
+    def fake_request(prowlarr_url, api_key, path, *, method="GET", json_body=None, timeout_seconds=30.0):
+        calls.append({"path": path, "method": method, "json_body": json_body})
+        if method == "GET":
+            return {"status": 200, "json": {"id": 1, "certificateValidation": "enabled"}, "body_text": "{}"}
+        assert method == "PUT"
+        assert json_body["certificateValidation"] == "disabledForLocalAddresses"
+        return {"status": 200, "json": dict(json_body), "body_text": "{}"}
 
-    install = module.install_certificate_in_current_user_root(str(cert_path))
-    cleanup = module.remove_certificate_from_current_user_root(install)
+    monkeypatch.setattr(module, "prowlarr_request", fake_request)
 
-    assert install == {"installed": True, "store": "CurrentUser\\Root", "thumbprint": "ABCDEF"}
-    assert cleanup == {"removed": True, "store": "CurrentUser\\Root", "thumbprint": "ABCDEF"}
-    assert calls == [
-        ("add", "certificate\n"),
-        ("delete", "ABCDEF"),
-    ]
+    result = module.set_prowlarr_local_certificate_validation("http://prowlarr", "key")
+
+    assert result == {"changed": True, "previous": "enabled", "current": "disabledForLocalAddresses"}
+    assert [call["method"] for call in calls] == ["GET", "PUT"]
 
 
 def test_qbit_download_client_payload_covers_http_and_https_transport() -> None:
@@ -372,19 +374,24 @@ def test_qbit_download_client_payload_covers_http_and_https_transport() -> None:
     assert https_payload["_emulebbCertificatePolicy"] == {"certificateValidation": True}
 
 
-def test_qbit_download_client_payload_rejects_https_without_certificate_policy() -> None:
+def test_qbit_download_client_payload_uses_host_config_when_schema_omits_certificate_policy() -> None:
     module = load_prowlarr_module()
 
-    with pytest.raises(RuntimeError, match="does not expose disposable HTTPS certificate validation policy"):
-        module.build_qbit_download_client_payload(
-            qbit_schema(),
-            name="eMuleBB Live Prowlarr HTTPS",
-            host="127.0.0.1",
-            port=61921,
-            emule_api_key="emule-key",
-            category="prowlarr_grabs_cat",
-            use_ssl=True,
-        )
+    payload = module.build_qbit_download_client_payload(
+        qbit_schema(),
+        name="eMuleBB Live Prowlarr HTTPS",
+        host="127.0.0.1",
+        port=61921,
+        emule_api_key="emule-key",
+        category="prowlarr_grabs_cat",
+        use_ssl=True,
+    )
+
+    assert field_value(payload, "useSsl") is True
+    assert payload["_emulebbCertificatePolicy"] == {
+        "certificateValidation": False,
+        "prowlarrHostConfig": "disabledForLocalAddresses",
+    }
 
 
 def test_first_live_wire_term_keeps_only_primary_operator_term() -> None:
