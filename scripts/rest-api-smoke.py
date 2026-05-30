@@ -2031,10 +2031,10 @@ def unwrap_rest_payload(payload: object) -> object:
 def require_json_object(result: dict[str, object], expected_status: int) -> dict[str, Any]:
     """Asserts one REST response is the expected JSON object payload."""
 
-    assert int(result["status"]) == expected_status
+    assert int(result["status"]) == expected_status, compact_http_result(result)
     if 200 <= expected_status < 300:
         require_success_envelope(result)
-    assert isinstance(result["json"], dict)
+    assert isinstance(result["json"], dict), compact_http_result(result)
     return result["json"]
 
 

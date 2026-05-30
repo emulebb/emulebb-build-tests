@@ -1674,6 +1674,29 @@ def test_transfer_add_response_uses_stable_bulk_items() -> None:
     assert module.require_transfer_add_result(result, expected_hash) == item
 
 
+def test_require_json_object_reports_compact_response_on_status_mismatch() -> None:
+    module = load_rest_api_smoke_module()
+    result = {
+        "status": 409,
+        "content_type": "application/json; charset=utf-8",
+        "json": {"error": "INVALID_STATE", "message": "transfer could not be queued"},
+        "raw_json": {
+            "error": {
+                "code": "INVALID_STATE",
+                "message": "transfer could not be queued",
+                "details": {},
+            }
+        },
+    }
+
+    with pytest.raises(AssertionError) as raised:
+        module.require_json_object(result, 200)
+
+    message = str(raised.value)
+    assert "INVALID_STATE" in message
+    assert "transfer could not be queued" in message
+
+
 def test_transfer_operation_response_uses_stable_bulk_items() -> None:
     module = load_rest_api_smoke_module()
     expected_hash = "fedcba98765432100123456789abcdef"
