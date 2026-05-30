@@ -1339,6 +1339,81 @@ def test_cached_direct_torznab_offset_page_requires_cached_rows(monkeypatch) -> 
     ]
 
 
+def test_cached_direct_torznab_offset_page_for_terms_uses_result_bearing_term(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls: list[str] = []
+    empty_rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel><torznab:response offset="0" total="0" /></channel>
+</rss>"""
+    populated_rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <torznab:response offset="{offset}" total="2" />
+    <item><title>Linux</title></item>
+  </channel>
+</rss>"""
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(path)
+        if "q=empty%20term" in path:
+            return {"status": 200, "body_text": empty_rss}
+        if "offset=1" in path:
+            return {"status": 200, "body_text": populated_rss.format(offset=1)}
+        return {"status": 200, "body_text": populated_rss.format(offset=0)}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.check_cached_direct_torznab_offset_page_for_terms(
+        "http://127.0.0.1:1",
+        "secret",
+        ("empty term", "movie term"),
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+        timeout_seconds=0.0,
+    )
+
+    assert result["status"] == "checked"
+    assert result["query_index"] == 1
+    assert result["term_count"] == 2
+    assert result["first_count"] == 1
+    assert result["offset_count"] == 1
+    assert [attempt["query_index"] for attempt in result["attempts"]] == [0, 1]
+    assert calls == [
+        "/indexer/emulebb/api?t=search&cat=2000&limit=1&q=empty%20term&apikey=secret",
+        "/indexer/emulebb/api?t=search&cat=2000&offset=1&limit=1&q=empty%20term&apikey=secret",
+        "/indexer/emulebb/api?t=search&cat=2000&limit=1&q=movie%20term&apikey=secret",
+        "/indexer/emulebb/api?t=search&cat=2000&offset=1&limit=1&q=movie%20term&apikey=secret",
+    ]
+
+
+def test_cached_direct_torznab_offset_page_for_terms_reports_sparse_live_results(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel><torznab:response offset="{offset}" total="0" /></channel>
+</rss>"""
+
+    def fake_http_request(base_url: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        offset = 1 if "offset=1" in path else 0
+        return {"status": 200, "body_text": rss.format(offset=offset)}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    result = module.check_cached_direct_torznab_offset_page_for_terms(
+        "http://127.0.0.1:1",
+        "secret",
+        ("first term", "second term"),
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+        timeout_seconds=0.0,
+    )
+
+    assert result["status"] == "no_pageable_live_result_set"
+    assert result["term_count"] == 2
+    assert result["max_first_count"] == 0
+    assert result["max_offset_count"] == 0
+    assert [attempt["query_index"] for attempt in result["attempts"]] == [0, 1]
+
+
 def test_prowlarr_search_attempts_capture_error_body(monkeypatch) -> None:
     module = load_prowlarr_module()
     attempts: list[str] = []

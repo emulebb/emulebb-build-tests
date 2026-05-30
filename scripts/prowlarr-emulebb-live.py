@@ -939,6 +939,69 @@ def torznab_response_attrs(body_text: str) -> dict[str, int | None]:
     return {"offset": parse_int("offset"), "total": parse_int("total")}
 
 
+def probe_cached_direct_torznab_offset_page(
+    base_url: str,
+    emule_api_key: str,
+    query: str,
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
+) -> dict[str, object]:
+    """Runs one direct Torznab first-page and offset-page probe."""
+
+    first_path = build_direct_torznab_search_path(
+        emule_api_key,
+        query,
+        category_id,
+        extra_params={"limit": 1},
+    )
+    first_result = rest_smoke.http_request(base_url, first_path, request_timeout_seconds=TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS)
+    first_status = int(first_result.get("status") or 0)
+    first_body = str(first_result.get("body_text") or "")
+    first_count = count_torznab_items(first_body) if first_status == 200 and first_body else 0
+
+    offset_path = build_direct_torznab_search_path(
+        emule_api_key,
+        query,
+        category_id,
+        extra_params={"offset": 1, "limit": 1},
+    )
+    offset_result = rest_smoke.http_request(base_url, offset_path, request_timeout_seconds=20.0)
+    offset_status = int(offset_result.get("status") or 0)
+    offset_body = str(offset_result.get("body_text") or "")
+    offset_count = count_torznab_items(offset_body) if offset_status == 200 and offset_body else 0
+    attrs = torznab_response_attrs(offset_body) if offset_status == 200 and offset_body else {"offset": None, "total": None}
+    return {
+        "first_status": first_status,
+        "first_count": first_count,
+        "offset_status": offset_status,
+        "offset_count": offset_count,
+        "offset": attrs.get("offset"),
+        "total": attrs.get("total"),
+    }
+
+
+def cached_direct_torznab_offset_probe_passed(attempt: dict[str, object]) -> bool:
+    """Returns true when a cached direct Torznab offset probe proved paging."""
+
+    return (
+        int(attempt.get("first_status") or 0) == 200
+        and int(attempt.get("first_count") or 0) > 0
+        and int(attempt.get("offset_status") or 0) == 200
+        and attempt.get("offset") == 1
+        and int(attempt.get("offset_count") or 0) > 0
+    )
+
+
+def cached_direct_torznab_offset_probe_is_live_availability_gap(attempt: dict[str, object]) -> bool:
+    """Returns true when paging was inconclusive only because live results were too sparse."""
+
+    return (
+        int(attempt.get("first_status") or 0) == 200
+        and int(attempt.get("offset_status") or 0) == 200
+        and int(attempt.get("offset_count") or 0) == 0
+    )
+
+
 def wait_for_direct_torznab_results(
     base_url: str,
     emule_api_key: str,
@@ -1008,48 +1071,77 @@ def check_cached_direct_torznab_offset_page(
     attempts: list[dict[str, object]] = []
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        first_path = build_direct_torznab_search_path(
+        attempt = probe_cached_direct_torznab_offset_page(
+            base_url,
             emule_api_key,
             query,
-            category_id,
-            extra_params={"limit": 1},
+            category_id=category_id,
         )
-        first_result = rest_smoke.http_request(base_url, first_path, request_timeout_seconds=TORZNAB_DIRECT_REQUEST_TIMEOUT_SECONDS)
-        first_status = int(first_result.get("status") or 0)
-        first_body = str(first_result.get("body_text") or "")
-        first_count = count_torznab_items(first_body) if first_status == 200 and first_body else 0
-
-        offset_path = build_direct_torznab_search_path(
-            emule_api_key,
-            query,
-            category_id,
-            extra_params={"offset": 1, "limit": 1},
-        )
-        offset_result = rest_smoke.http_request(base_url, offset_path, request_timeout_seconds=20.0)
-        offset_status = int(offset_result.get("status") or 0)
-        offset_body = str(offset_result.get("body_text") or "")
-        offset_count = count_torznab_items(offset_body) if offset_status == 200 and offset_body else 0
-        attrs = torznab_response_attrs(offset_body) if offset_status == 200 and offset_body else {"offset": None, "total": None}
-        attempt = {
-            "first_status": first_status,
-            "first_count": first_count,
-            "offset_status": offset_status,
-            "offset_count": offset_count,
-            "offset": attrs.get("offset"),
-            "total": attrs.get("total"),
-        }
         attempts.append(attempt)
-        if first_status == 200 and first_count > 0 and offset_status == 200 and attrs.get("offset") == 1 and offset_count > 0:
+        if cached_direct_torznab_offset_probe_passed(attempt):
             return {
                 "query_present": bool(query),
                 "category": int(category_id),
-                "first_count": first_count,
-                "offset_count": offset_count,
-                "offset": attrs.get("offset"),
-                "total": attrs.get("total"),
+                "first_count": attempt["first_count"],
+                "offset_count": attempt["offset_count"],
+                "offset": attempt["offset"],
+                "total": attempt["total"],
                 "attempts": attempts,
             }
         time.sleep(5.0)
+    raise RuntimeError(f"Direct Torznab cached offset page failed before timeout. Attempts: {attempts!r}")
+
+
+def check_cached_direct_torznab_offset_page_for_terms(
+    base_url: str,
+    emule_api_key: str,
+    queries: tuple[str, ...],
+    *,
+    category_id: int = TORZNAB_LIVE_CATEGORY,
+    timeout_seconds: float = PROWLARR_LIVE_SEARCH_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Proves cached offset paging across live terms, or records sparse live evidence."""
+
+    if not queries:
+        raise RuntimeError("Direct Torznab cached offset page check requires at least one query.")
+    attempts: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        for query_index, query in enumerate(queries):
+            attempt = probe_cached_direct_torznab_offset_page(
+                base_url,
+                emule_api_key,
+                query,
+                category_id=category_id,
+            )
+            attempt = {"query_index": query_index, "query_present": bool(query), **attempt}
+            attempts.append(attempt)
+            if cached_direct_torznab_offset_probe_passed(attempt):
+                return {
+                    "status": "checked",
+                    "query_index": query_index,
+                    "query_present": bool(query),
+                    "term_count": len(queries),
+                    "category": int(category_id),
+                    "first_count": attempt["first_count"],
+                    "offset_count": attempt["offset_count"],
+                    "offset": attempt["offset"],
+                    "total": attempt["total"],
+                    "attempts": attempts,
+                }
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(5.0)
+
+    if attempts and all(cached_direct_torznab_offset_probe_is_live_availability_gap(attempt) for attempt in attempts):
+        return {
+            "status": "no_pageable_live_result_set",
+            "term_count": len(queries),
+            "category": int(category_id),
+            "max_first_count": max(int(attempt.get("first_count") or 0) for attempt in attempts),
+            "max_offset_count": max(int(attempt.get("offset_count") or 0) for attempt in attempts),
+            "attempts": attempts,
+        }
     raise RuntimeError(f"Direct Torznab cached offset page failed before timeout. Attempts: {attempts!r}")
 
 
@@ -2385,10 +2477,10 @@ def main() -> int:
         )
 
         record_phase("direct_torznab_cached_offset_page")
-        report["checks"]["direct_torznab_cached_offset_page"] = check_cached_direct_torznab_offset_page(
+        report["checks"]["direct_torznab_cached_offset_page"] = check_cached_direct_torznab_offset_page_for_terms(
             emule_base_url,
             args.emule_api_key,
-            generic_terms[0],
+            generic_terms,
             category_id=TORZNAB_DOCUMENT_CATEGORY,
         )
 
