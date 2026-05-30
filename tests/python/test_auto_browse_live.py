@@ -175,6 +175,38 @@ def test_build_ed2k_link_accepts_rest_size_bytes_field() -> None:
     ) == "ed2k://|file|live%20image.iso|2048|ABCDEF0123456789ABCDEF0123456789|/"
 
 
+def test_add_transfer_from_search_result_carries_selected_hash(monkeypatch) -> None:
+    module = load_auto_browse_module()
+    requests: list[dict[str, object]] = []
+
+    def fake_http_request(base_url: str, path: str, **kwargs):
+        requests.append({"base_url": base_url, "path": path, **kwargs})
+        return {
+            "status": 200,
+            "content_type": "application/json; charset=utf-8",
+            "json": {"accepted": True},
+            "body_text": "{}",
+        }
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+
+    payload = module.add_transfer_from_search_result(
+        "http://127.0.0.1:1",
+        "key",
+        {
+            "hash": "ABCDEF0123456789ABCDEF0123456789",
+            "name": "live image.iso",
+            "sizeBytes": 2048,
+        },
+    )
+
+    assert payload["hash"] == "abcdef0123456789abcdef0123456789"
+    assert requests[0]["path"] == "/api/v1/transfers"
+    assert requests[0]["json_body"] == {
+        "link": "ed2k://|file|live%20image.iso|2048|ABCDEF0123456789ABCDEF0123456789|/"
+    }
+
+
 def test_transfer_search_result_wait_keeps_polling_running_empty_searches(monkeypatch) -> None:
     module = load_auto_browse_module()
     responses = iter(

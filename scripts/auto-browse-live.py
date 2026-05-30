@@ -777,6 +777,9 @@ def wait_for_source_browse_success(
 def add_transfer_from_search_result(base_url: str, api_key: str, result_row: dict[str, Any]) -> dict[str, Any]:
     """Adds one transfer from a REST search-result row and returns the created transfer payload."""
 
+    transfer_hash = str(result_row.get("hash") or "").strip().lower()
+    if not transfer_hash:
+        raise ValueError("Search result row is missing a file hash.")
     add_result = rest_smoke.http_request(
         base_url,
         "/api/v1/transfers",
@@ -784,7 +787,9 @@ def add_transfer_from_search_result(base_url: str, api_key: str, result_row: dic
         api_key=api_key,
         json_body={"link": build_ed2k_link(result_row)},
     )
-    return require_json_object(add_result, 200)
+    payload = dict(require_json_object(add_result, 200))
+    payload.setdefault("hash", transfer_hash)
+    return payload
 
 
 def observe_transfer_materialization(base_url: str, api_key: str, transfer_hash: str) -> dict[str, object]:
