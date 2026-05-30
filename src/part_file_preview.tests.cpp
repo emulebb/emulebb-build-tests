@@ -124,6 +124,7 @@ TEST_CASE("Part-file preview seam throttles thumbnail retries and refreshes on p
 	const std::uint64_t tenGigabytes = 10ull * 1024ull * oneMegabyte;
 
 	CHECK(PartFilePreviewSeams::kVideoThumbnailDisplayMaxWidth == 480);
+	CHECK(PartFilePreviewSeams::kVideoThumbnailDisplayMaxHeight == 270);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailDefaultIntervalSeconds == 0u);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailMinIntervalSeconds == 30u);
 	CHECK(PartFilePreviewSeams::kVideoThumbnailRecommendedIntervalSeconds == 90u);
@@ -213,7 +214,7 @@ TEST_CASE("Part-file preview seam builds quoted FFmpeg thumbnail command lines")
 	CHECK(command.Find(_T("-analyzeduration 5M -probesize 5M")) >= 0);
 	CHECK(command.Find(_T("\"C:\\Temp Files\\sample preview.mkv\"")) >= 0);
 	CHECK(command.Find(_T("-an -frames:v 1")) >= 0);
-	CHECK(command.Find(_T("\"scale=480:-2:force_original_aspect_ratio=decrease\"")) >= 0);
+	CHECK(command.Find(_T("\"scale=480:270:force_original_aspect_ratio=decrease\"")) >= 0);
 	CHECK(command.Find(_T("\"C:\\Temp Files\\thumb_sample.png\"")) >= 0);
 }
 
