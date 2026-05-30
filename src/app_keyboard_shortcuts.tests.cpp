@@ -54,6 +54,19 @@ TEST_CASE("Search keyboard shortcut seam owns F6 focus toggle locally")
 	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_F6, false, false, false, true) == AppKeyboardShortcutsSeams::ESearchCommand::None);
 }
 
+TEST_CASE("Search keyboard shortcut seam keeps Ctrl+Tab global and owns result tabs")
+{
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_TAB, true, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_TAB, true, false, true, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_PRIOR, true, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::SelectPreviousResultTab);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_NEXT, true, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::SelectNextResultTab);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, 'W', true, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::CloseSelectedResultTab);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_F4, true, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::CloseSelectedResultTab);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_NEXT, true, true, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYDOWN, VK_NEXT, true, false, true, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMessage(WM_KEYUP, VK_NEXT, true, false, false, false) == AppKeyboardShortcutsSeams::ESearchCommand::None);
+}
+
 TEST_CASE("Search keyboard shortcut seam owns local non-toolbar mnemonics")
 {
 	CHECK(AppKeyboardShortcutsSeams::ClassifySearchKeyMenu(SC_KEYMENU, 'n', false) == AppKeyboardShortcutsSeams::ESearchCommand::FocusName);

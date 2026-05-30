@@ -14,9 +14,9 @@ TEST_CASE("File-size seam preserves explicit unsigned EMFileSize boundaries")
 
 TEST_CASE("File-size seam rejects signed platform lengths outside network limits")
 {
-	CHECK(FileSizeSeams::IsSupportedNetworkFileSize(0));
+	CHECK(FileSizeSeams::IsSupportedNetworkFileSize(static_cast<sint64>(0)));
 	CHECK(FileSizeSeams::IsSupportedNetworkFileSize(static_cast<sint64>(MAX_EMULE_FILE_SIZE)));
-	CHECK_FALSE(FileSizeSeams::IsSupportedNetworkFileSize(-1));
+	CHECK_FALSE(FileSizeSeams::IsSupportedNetworkFileSize(static_cast<sint64>(-1)));
 	CHECK_FALSE(FileSizeSeams::IsSupportedNetworkFileSize(static_cast<sint64>(MAX_EMULE_FILE_SIZE) + 1));
 
 	CHECK(FileSizeSeams::ToUInt64(FileSizeSeams::FromSignedFileLength(0)) == 0u);

@@ -33,12 +33,16 @@ TEST_CASE("Win32 callback timer dispatch guards preserve shutdown and visibility
 	CHECK(Win32CallbackTimerSeams::ShouldDispatchUploadQueueTimer(false));
 	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUploadQueueTimer(true));
 
-	CHECK(Win32CallbackTimerSeams::ShouldDispatchServerRetryTimer(true));
-	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchServerRetryTimer(false));
+	CHECK(Win32CallbackTimerSeams::ShouldDispatchServerRetryTimer(true, 42, 42));
+	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchServerRetryTimer(false, 42, 42));
+	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchServerRetryTimer(true, 0, 42));
+	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchServerRetryTimer(true, 42, 43));
 
-	CHECK(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(true, false));
-	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(false, false));
-	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(true, true));
+	CHECK(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(true, false, 42, 42));
+	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(false, false, 42, 42));
+	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(true, true, 42, 42));
+	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(true, false, 0, 42));
+	CHECK_FALSE(Win32CallbackTimerSeams::ShouldDispatchUPnPTimeoutTimer(true, false, 42, 43));
 }
 
 TEST_CASE("Queue-list timer delay follows the shared transfer cadence")

@@ -180,6 +180,7 @@
     <ClCompile Include="src\encrypted_stream_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedStreamSocketSeams.h')" />
     <ClCompile Include="src\fake_file_detector.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\FakeFileDetectorSeams.h')" />
     <ClCompile Include="src\file_list_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\FileListKeyboardShortcutsSeams.h')" />
+    <ClCompile Include="src\mule_list_keyboard_shortcuts.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\MuleListKeyboardShortcutsSeams.h')" />
     <ClCompile Include="src\encrypted_datagram_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedDatagramSocketFlowSeams.h')" />
     <ClCompile Include="src\encrypted_stream_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\EncryptedStreamSocketFlowSeams.h')" />
     <ClCompile Include="src\fastkad_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\kademlia\utils\FastKad.h') and Exists('$(VCToolsInstallDir)atlmfc\include\afximpl.h')" />
@@ -341,6 +342,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\HelperThreadLaunchSeams.h" Condition="Exists('$(AppRoot)\srchybrid\HelperThreadLaunchSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\MappedFileReader.h" Condition="Exists('$(AppRoot)\srchybrid\MappedFileReader.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\MediaMetadataFallbackSeams.h" Condition="Exists('$(AppRoot)\srchybrid\MediaMetadataFallbackSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\MuleListKeyboardShortcutsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\MuleListKeyboardShortcutsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\NullGuardSeams.h" Condition="Exists('$(AppRoot)\srchybrid\NullGuardSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\OtherFunctionsSeams.h" Condition="Exists('$(AppRoot)\srchybrid\OtherFunctionsSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\PartFileEndgameSeams.h" Condition="Exists('$(AppRoot)\srchybrid\PartFileEndgameSeams.h')" />

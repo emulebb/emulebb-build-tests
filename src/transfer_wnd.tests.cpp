@@ -88,9 +88,11 @@ TEST_CASE("Transfer window seam maps direct list shortcuts")
 {
 	using TransferWndSeams::ETransferListShortcutCommand;
 
+	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'D', true, false, false) == ETransferListShortcutCommand::Downloads);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'U', true, false, false) == ETransferListShortcutCommand::Uploading);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'Q', true, false, false) == ETransferListShortcutCommand::OnQueue);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'K', true, false, false) == ETransferListShortcutCommand::KnownClients);
+	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'D', true, false, true) == ETransferListShortcutCommand::DownloadingClients);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'U', false, false, false) == ETransferListShortcutCommand::None);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'U', true, true, false) == ETransferListShortcutCommand::None);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'U', true, false, true) == ETransferListShortcutCommand::None);

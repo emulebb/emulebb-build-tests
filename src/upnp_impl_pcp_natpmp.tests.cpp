@@ -25,8 +25,8 @@ TEST_CASE("Shared UPnP discovery seam classifies owner-lifetime waits")
 {
 	CHECK(UPnPDiscoveryThreadSeams::ClassifyOwnerLifetimeWait(WAIT_OBJECT_0) == UPnPDiscoveryThreadSeams::EOwnerLifetimeWaitAction::ReleaseFinished);
 	CHECK(UPnPDiscoveryThreadSeams::ClassifyOwnerLifetimeWait(WAIT_FAILED) == UPnPDiscoveryThreadSeams::EOwnerLifetimeWaitAction::ReleaseAfterWaitFailure);
-	CHECK(UPnPDiscoveryThreadSeams::ClassifyOwnerLifetimeWait(WAIT_TIMEOUT) == UPnPDiscoveryThreadSeams::EOwnerLifetimeWaitAction::ReleaseAfterWaitFailure);
-	CHECK(UPnPDiscoveryThreadSeams::ClassifyOwnerLifetimeWait(WAIT_ABANDONED) == UPnPDiscoveryThreadSeams::EOwnerLifetimeWaitAction::ReleaseAfterWaitFailure);
+	CHECK(UPnPDiscoveryThreadSeams::ClassifyOwnerLifetimeWait(WAIT_TIMEOUT) == UPnPDiscoveryThreadSeams::EOwnerLifetimeWaitAction::KeepOwnerAlive);
+	CHECK(UPnPDiscoveryThreadSeams::ClassifyOwnerLifetimeWait(WAIT_ABANDONED) == UPnPDiscoveryThreadSeams::EOwnerLifetimeWaitAction::KeepOwnerAlive);
 }
 
 TEST_CASE("Shared UPnP discovery seam uses interlocked abort flags")
