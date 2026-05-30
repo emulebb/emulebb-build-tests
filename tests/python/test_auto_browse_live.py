@@ -163,6 +163,18 @@ def test_live_wire_inputs_update_writes_selected_safe_result(tmp_path: Path) -> 
     assert updated["auto_browse"]["direct_bootstrap_transfers"][0]["name"] == "live.iso"
 
 
+def test_build_ed2k_link_accepts_rest_size_bytes_field() -> None:
+    module = load_auto_browse_module()
+
+    assert module.build_ed2k_link(
+        {
+            "hash": "ABCDEF0123456789ABCDEF0123456789",
+            "name": "live image.iso",
+            "sizeBytes": 2048,
+        }
+    ) == "ed2k://|file|live%20image.iso|2048|ABCDEF0123456789ABCDEF0123456789|/"
+
+
 def test_transfer_search_result_wait_keeps_polling_running_empty_searches(monkeypatch) -> None:
     module = load_auto_browse_module()
     responses = iter(

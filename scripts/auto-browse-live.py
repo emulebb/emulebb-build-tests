@@ -189,8 +189,21 @@ def reorder_server_rows(server_rows: list[dict[str, Any]]) -> list[dict[str, Any
 def build_ed2k_link(result_row: dict[str, Any]) -> str:
     """Builds one minimal ED2K file link from a REST search-result row."""
 
-    file_name = urllib.parse.quote(str(result_row["name"]), safe="")
-    return f"ed2k://|file|{file_name}|{int(result_row['size'])}|{result_row['hash']}|/"
+    raw_name = str(result_row.get("name") or "").strip()
+    raw_hash = str(result_row.get("hash") or "").strip()
+    raw_size = result_row.get("sizeBytes") or result_row.get("size")
+    if not raw_name:
+        raise ValueError("Search result row is missing a file name.")
+    if not raw_hash:
+        raise ValueError("Search result row is missing a file hash.")
+    try:
+        size_bytes = int(raw_size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Search result row is missing a valid file size.") from exc
+    if size_bytes <= 0:
+        raise ValueError("Search result row must have a positive file size.")
+    file_name = urllib.parse.quote(raw_name, safe="")
+    return f"ed2k://|file|{file_name}|{size_bytes}|{raw_hash}|/"
 
 
 def is_safe_download_result(result_row: dict[str, Any]) -> bool:
