@@ -404,6 +404,7 @@ def test_first_live_wire_term_keeps_only_primary_operator_term() -> None:
 def test_temp_qbit_download_client_creates_and_tests(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []
+    monkeypatch.setattr(module, "wait_for_qbit_endpoint_ready", lambda *_args, **_kwargs: {"ready": True, "attempt_count": 1})
 
     def fake_request(
         prowlarr_url: str,
@@ -453,6 +454,7 @@ def test_temp_qbit_download_client_creates_and_tests(monkeypatch) -> None:
 def test_temp_qbit_download_client_cleans_up_when_test_fails(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []
+    monkeypatch.setattr(module, "wait_for_qbit_endpoint_ready", lambda *_args, **_kwargs: {"ready": True, "attempt_count": 1})
 
     def fake_request(
         prowlarr_url: str,
@@ -497,6 +499,75 @@ def test_temp_qbit_download_client_cleans_up_when_test_fails(monkeypatch) -> Non
         "/api/v1/downloadclient/test",
         "/api/v1/downloadclient/41",
     ]
+
+
+def test_temp_qbit_download_client_retries_transient_create_failure(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    requests: list[dict[str, Any]] = []
+    monkeypatch.setattr(module, "wait_for_qbit_endpoint_ready", lambda *_args, **_kwargs: {"ready": True, "attempt_count": 1})
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    def fake_request(
+        prowlarr_url: str,
+        api_key: str,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: object | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        requests.append({"path": path, "method": method, "json_body": json_body})
+        create_count = sum(1 for request in requests if request["path"] == "/api/v1/downloadclient?forceSave=true")
+        if path == "/api/v1/downloadclient/schema":
+            return {"status": 200, "json": [qbit_schema()], "body_text": "[]"}
+        if path == "/api/v1/downloadclient?forceSave=true" and method == "POST" and create_count == 1:
+            return {
+                "status": 400,
+                "json": None,
+                "body_text": "Unable to connect to qBittorrent: The SSL connection could not be established.",
+            }
+        if path == "/api/v1/downloadclient?forceSave=true" and method == "POST":
+            return {"status": 201, "json": {"id": 41, "fields": qbit_schema()["fields"]}, "body_text": "{}"}
+        if path == "/api/v1/downloadclient/test" and method == "POST":
+            return {"status": 200, "json": None, "body_text": ""}
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(module, "prowlarr_request", fake_request)
+
+    client = module.create_temp_qbit_download_client(
+        "http://prowlarr.test",
+        "key",
+        name="client",
+        host="127.0.0.1",
+        port=8080,
+        emule_api_key="emule-key",
+        category="prowlarr_grabs_cat",
+    )
+
+    assert client["id"] == 41
+    assert len(client["_emulebbTransientRetries"]) == 1
+    assert [request["path"] for request in requests].count("/api/v1/downloadclient?forceSave=true") == 2
+
+
+def test_wait_for_qbit_endpoint_ready_retries_busy_web_thread(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls = 0
+
+    def fake_qbit_login(_base_url, _api_key):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("Web Interface rejected connection because 1 accepted-client thread is already active")
+        return "SID=ok", {"status": 200, "body_text": "Ok."}
+
+    monkeypatch.setattr(module, "qbit_login", fake_qbit_login)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.wait_for_qbit_endpoint_ready("https://127.0.0.1:4711", "secret", timeout_seconds=10.0)
+
+    assert result["ready"] is True
+    assert result["attempt_count"] == 2
+    assert len(result["transient_errors"]) == 1
 
 
 def test_ensure_emule_category_creates_missing_category(monkeypatch, tmp_path: Path) -> None:

@@ -33,6 +33,18 @@ DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 90.0
 DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS = 300.0
 PROWLARR_LIVE_SEARCH_TIMEOUT_SECONDS = DEFAULT_SEARCH_TIMEOUT_SECONDS
+QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS = 10
+QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS = 2.0
+QBIT_ENDPOINT_READY_TIMEOUT_SECONDS = 60.0
+QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
+    "unable to connect to qbittorrent",
+    "ssl connection could not be established",
+    "connection was aborted",
+    "forcibly closed",
+    "software in your host machine",
+    "accepted-client",
+    "web interface rejected",
+)
 
 TORZNAB_DIRECT_ERROR_SCENARIOS: tuple[dict[str, object], ...] = (
     {
@@ -129,6 +141,23 @@ def require_success(result: dict[str, Any], description: str) -> Any:
         body = str(result.get("body_text") or "")
         raise RuntimeError(f"{description} failed with HTTP {status}: {body[:500]}")
     return result.get("json")
+
+
+def is_transient_qbit_client_result(result: dict[str, Any]) -> bool:
+    """Returns true when Prowlarr reports a retryable local qBit readiness failure."""
+
+    status = int(result.get("status") or 0)
+    if status not in {400, 409, 500, 502, 503}:
+        return False
+    body = str(result.get("body_text") or "").lower()
+    return any(fragment in body for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
+
+
+def is_transient_qbit_exception(exc: BaseException) -> bool:
+    """Returns true for retryable local qBit socket failures from eMuleBB."""
+
+    message = str(exc).lower()
+    return any(fragment in message for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
 
 
 def is_no_results_validation_error(result: dict[str, Any]) -> bool:
@@ -391,6 +420,48 @@ def test_qbit_download_client(prowlarr_url: str, api_key: str, client: dict[str,
     return int(test_result.get("status") or 0)
 
 
+def build_qbit_base_url(host: str, port: int, *, use_ssl: bool) -> str:
+    """Builds the eMuleBB qBittorrent-compatible base URL used by Prowlarr."""
+
+    scheme = "https" if use_ssl else "http"
+    return f"{scheme}://{host}:{int(port)}"
+
+
+def wait_for_qbit_endpoint_ready(
+    base_url: str,
+    emule_api_key: str,
+    *,
+    timeout_seconds: float = QBIT_ENDPOINT_READY_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Waits for eMuleBB's qBit-compatible endpoint to accept a direct login."""
+
+    observations: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            _cookie, login = qbit_login(base_url, emule_api_key)
+            return {
+                "ready": True,
+                "attempt_count": attempt,
+                "login_status": int(login.get("status") or 0),
+                "transient_errors": observations[-5:],
+            }
+        except (RuntimeError, OSError, TimeoutError, urllib.error.URLError) as exc:
+            observations.append(
+                {
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:300],
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"eMuleBB qBittorrent endpoint did not become ready. Transient observations: {observations[-5:]!r}") from exc
+            time.sleep(min(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS, remaining))
+
+
 def create_temp_qbit_download_client(
     prowlarr_url: str,
     api_key: str,
@@ -416,26 +487,55 @@ def create_temp_qbit_download_client(
         category=category,
         use_ssl=use_ssl,
     )
+    endpoint_ready = wait_for_qbit_endpoint_ready(
+        build_qbit_base_url(host, port, use_ssl=use_ssl),
+        emule_api_key,
+        timeout_seconds=QBIT_ENDPOINT_READY_TIMEOUT_SECONDS,
+    )
     try:
-        saved = require_success(
-            prowlarr_request(
+        transient_errors: list[str] = []
+        for attempt in range(1, QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS + 1):
+            created_client_id = None
+            create_result = prowlarr_request(
                 prowlarr_url,
                 api_key,
                 "/api/v1/downloadclient?forceSave=true",
                 method="POST",
                 json_body=public_provider_payload(payload),
-            ),
-            "Prowlarr eMuleBB qBittorrent client create",
-        )
-        if not isinstance(saved, dict) or not saved.get("id"):
-            raise RuntimeError("Prowlarr did not return a created qBittorrent client id.")
-        created_client_id = int(saved["id"])
+            )
+            if is_transient_qbit_client_result(create_result) and attempt < QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS:
+                transient_errors.append(str(create_result.get("body_text") or "")[:500])
+                time.sleep(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS)
+                continue
+            saved = require_success(create_result, "Prowlarr eMuleBB qBittorrent client create")
+            if not isinstance(saved, dict) or not saved.get("id"):
+                raise RuntimeError("Prowlarr did not return a created qBittorrent client id.")
+            created_client_id = int(saved["id"])
 
-        saved["_emulebbSchemaSummary"] = schema_summary
-        saved["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
-        saved["_emulebbTemporary"] = True
-        saved["_emulebbTestStatus"] = test_qbit_download_client(prowlarr_url, api_key, saved)
-        return saved
+            test_payload = public_provider_payload(json.loads(json.dumps(saved)))
+            test_result = prowlarr_request(
+                prowlarr_url,
+                api_key,
+                "/api/v1/downloadclient/test",
+                method="POST",
+                json_body=test_payload,
+                timeout_seconds=60.0,
+            )
+            if is_transient_qbit_client_result(test_result) and attempt < QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS:
+                transient_errors.append(str(test_result.get("body_text") or "")[:500])
+                delete_download_client(prowlarr_url, api_key, created_client_id)
+                created_client_id = None
+                time.sleep(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS)
+                continue
+            require_success(test_result, "Prowlarr eMuleBB qBittorrent client test")
+            saved["_emulebbSchemaSummary"] = schema_summary
+            saved["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
+            saved["_emulebbTemporary"] = True
+            saved["_emulebbTestStatus"] = int(test_result.get("status") or 0)
+            saved["_emulebbEndpointReady"] = endpoint_ready
+            saved["_emulebbTransientRetries"] = transient_errors
+            return saved
+        raise RuntimeError("Prowlarr eMuleBB qBittorrent client create exhausted transient retry attempts.")
     except Exception as exc:
         if created_client_id is not None:
             try:
@@ -460,6 +560,8 @@ def summarize_qbit_download_client(client: dict[str, Any], *, category: str) -> 
         "schema": client.get("_emulebbSchemaSummary"),
         "test_status": client.get("_emulebbTestStatus"),
         "certificate_policy": client.get("_emulebbCertificatePolicy"),
+        "endpoint_ready": client.get("_emulebbEndpointReady"),
+        "transient_retry_count": len(client.get("_emulebbTransientRetries") or []),
     }
 
 
