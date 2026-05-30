@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib.util
 import json
-import shutil
 import socket
 import ssl
-import subprocess
 import sys
 import time
 import urllib.error
@@ -226,20 +225,8 @@ def install_certificate_in_current_user_root(certificate_path: str) -> dict[str,
 
     if not certificate_path:
         return {"installed": False}
-    certutil = shutil.which("certutil.exe") or shutil.which("certutil")
-    if not certutil:
-        raise RuntimeError("certutil.exe is required to trust disposable HTTPS certificates for Prowlarr live tests.")
     thumbprint = certificate_thumbprint_sha1(certificate_path)
-    result = subprocess.run(
-        [certutil, "-user", "-addstore", "-f", "Root", certificate_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to add disposable HTTPS certificate to CurrentUser Root: exit {result.returncode}.")
+    _windows_add_certificate_to_current_user_root(Path(certificate_path).read_text(encoding="ascii"))
     return {"installed": True, "store": "CurrentUser\\Root", "thumbprint": thumbprint}
 
 
@@ -251,23 +238,109 @@ def remove_certificate_from_current_user_root(trust_record: dict[str, object]) -
     thumbprint = str(trust_record.get("thumbprint") or "").strip()
     if not thumbprint:
         return {"removed": False, "error": "missing_thumbprint"}
-    certutil = shutil.which("certutil.exe") or shutil.which("certutil")
-    if not certutil:
-        return {"removed": False, "thumbprint": thumbprint, "error": "certutil_missing"}
-    result = subprocess.run(
-        [certutil, "-user", "-delstore", "Root", thumbprint],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    removed = _windows_delete_certificate_from_current_user_root(thumbprint)
     return {
-        "removed": result.returncode == 0,
+        "removed": removed,
         "store": "CurrentUser\\Root",
         "thumbprint": thumbprint,
-        "returncode": result.returncode,
     }
+
+
+class _CryptoApiBlob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+
+def _open_current_user_root_store() -> int:
+    if sys.platform != "win32":
+        raise RuntimeError("Windows CurrentUser Root certificate store is required for this HTTPS Prowlarr live test.")
+
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    crypt32.CertOpenStore.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+    crypt32.CertOpenStore.restype = ctypes.c_void_p
+
+    cert_store_prov_system_w = 10
+    cert_system_store_current_user = 0x00010000
+    store = crypt32.CertOpenStore(
+        ctypes.c_void_p(cert_store_prov_system_w),
+        0,
+        None,
+        cert_system_store_current_user,
+        ctypes.c_wchar_p("ROOT"),
+    )
+    if not store:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return int(store)
+
+
+def _windows_add_certificate_to_current_user_root(certificate_pem: str) -> None:
+    der_bytes = ssl.PEM_cert_to_DER_cert(certificate_pem)
+    der_buffer = (ctypes.c_ubyte * len(der_bytes)).from_buffer_copy(der_bytes)
+    store = _open_current_user_root_store()
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    crypt32.CertAddEncodedCertificateToStore.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_ubyte),
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    crypt32.CertAddEncodedCertificateToStore.restype = ctypes.c_bool
+    crypt32.CertCloseStore.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    crypt32.CertCloseStore.restype = ctypes.c_bool
+    try:
+        encoding = 0x00000001 | 0x00010000
+        replace_existing = 3
+        if not crypt32.CertAddEncodedCertificateToStore(
+            ctypes.c_void_p(store),
+            encoding,
+            der_buffer,
+            len(der_bytes),
+            replace_existing,
+            None,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        crypt32.CertCloseStore(ctypes.c_void_p(store), 0)
+
+
+def _windows_delete_certificate_from_current_user_root(thumbprint: str) -> bool:
+    thumbprint_bytes = bytes.fromhex(thumbprint)
+    thumbprint_buffer = (ctypes.c_ubyte * len(thumbprint_bytes)).from_buffer_copy(thumbprint_bytes)
+    blob = _CryptoApiBlob(len(thumbprint_bytes), thumbprint_buffer)
+    store = _open_current_user_root_store()
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    crypt32.CertFindCertificateInStore.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    crypt32.CertFindCertificateInStore.restype = ctypes.c_void_p
+    crypt32.CertDeleteCertificateFromStore.argtypes = [ctypes.c_void_p]
+    crypt32.CertDeleteCertificateFromStore.restype = ctypes.c_bool
+    crypt32.CertCloseStore.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    crypt32.CertCloseStore.restype = ctypes.c_bool
+    try:
+        encoding = 0x00000001 | 0x00010000
+        cert_find_hash = 0x00010000
+        context = crypt32.CertFindCertificateInStore(
+            ctypes.c_void_p(store),
+            encoding,
+            0,
+            cert_find_hash,
+            ctypes.byref(blob),
+            None,
+        )
+        if not context:
+            return False
+        if not crypt32.CertDeleteCertificateFromStore(context):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return True
+    finally:
+        crypt32.CertCloseStore(ctypes.c_void_p(store), 0)
 
 
 def build_indexer_payload(

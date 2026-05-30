@@ -325,24 +325,20 @@ def test_disposable_certificate_trust_store_uses_current_user_root(monkeypatch, 
     module = load_prowlarr_module()
     cert_path = tmp_path / "webserver-cert.pem"
     cert_path.write_text("certificate\n", encoding="ascii")
-    calls: list[list[str]] = []
+    calls: list[tuple[str, str]] = []
 
-    def fake_run(command, **kwargs):
-        calls.append([str(part) for part in command])
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(module.shutil, "which", lambda name: "certutil.exe" if name == "certutil.exe" else None)
     monkeypatch.setattr(module, "certificate_thumbprint_sha1", lambda _path: "ABCDEF")
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(module, "_windows_add_certificate_to_current_user_root", lambda pem: calls.append(("add", pem)))
+    monkeypatch.setattr(module, "_windows_delete_certificate_from_current_user_root", lambda thumbprint: calls.append(("delete", thumbprint)) or True)
 
     install = module.install_certificate_in_current_user_root(str(cert_path))
     cleanup = module.remove_certificate_from_current_user_root(install)
 
     assert install == {"installed": True, "store": "CurrentUser\\Root", "thumbprint": "ABCDEF"}
-    assert cleanup == {"removed": True, "store": "CurrentUser\\Root", "thumbprint": "ABCDEF", "returncode": 0}
+    assert cleanup == {"removed": True, "store": "CurrentUser\\Root", "thumbprint": "ABCDEF"}
     assert calls == [
-        ["certutil.exe", "-user", "-addstore", "-f", "Root", str(cert_path)],
-        ["certutil.exe", "-user", "-delstore", "Root", "ABCDEF"],
+        ("add", "certificate\n"),
+        ("delete", "ABCDEF"),
     ]
 
 
