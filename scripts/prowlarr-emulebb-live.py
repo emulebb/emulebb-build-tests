@@ -1480,6 +1480,127 @@ def wait_for_new_category_transfer(
     raise RuntimeError(f"Prowlarr grab did not create a new transfer in category {category!r}. Last: {last!r}")
 
 
+def qbit_request(
+    base_url: str,
+    path: str,
+    *,
+    cookie: str | None = None,
+    form: dict[str, object] | None = None,
+    method: str | None = None,
+    timeout_seconds: float = 20.0,
+) -> dict[str, object]:
+    """Performs one qBittorrent-compatible request against eMuleBB."""
+
+    data = None
+    headers = {"Connection": "close"}
+    if cookie:
+        headers["Cookie"] = cookie
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    request = urllib.request.Request(base_url.rstrip("/") + path, data=data, method=method, headers=headers)
+    urlopen_kwargs: dict[str, object] = {"timeout": timeout_seconds}
+    context = rest_smoke.build_urlopen_context(base_url)
+    if context is not None:
+        urlopen_kwargs["context"] = context
+    try:
+        with urllib.request.urlopen(request, **urlopen_kwargs) as response:
+            body_text = response.read().decode("utf-8", errors="replace")
+            return {"status": int(response.status), "body_text": body_text, "headers": dict(response.headers.items())}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        return {"status": int(exc.code), "body_text": body_text, "headers": dict(exc.headers.items())}
+
+
+def require_qbit_ok(result: dict[str, object], description: str) -> None:
+    status = int(result.get("status") or 0)
+    body_text = str(result.get("body_text") or "")
+    if status != 200 or body_text != "Ok.":
+        raise RuntimeError(f"{description} failed with HTTP {status}: {body_text[:100]}")
+
+
+def qbit_login(base_url: str, emule_api_key: str) -> tuple[str, dict[str, object]]:
+    """Authenticates to eMuleBB's qBittorrent-compatible API."""
+
+    login = qbit_request(
+        base_url,
+        "/api/v2/auth/login",
+        form={"username": "emule", "password": emule_api_key},
+        method="POST",
+    )
+    require_qbit_ok(login, "qBit login")
+    headers = login.get("headers") if isinstance(login.get("headers"), dict) else {}
+    set_cookie = str(headers.get("Set-Cookie") or "")
+    cookie = set_cookie.split(";", 1)[0]
+    if not cookie.startswith("SID="):
+        raise RuntimeError("qBit login did not return a SID cookie.")
+    return cookie, login
+
+
+def ed2k_hash_from_link(link: str) -> str:
+    """Extracts the native MD4 hash from an eD2K file link."""
+
+    parts = link.split("|")
+    if len(parts) < 5 or parts[0] != "ed2k://" or parts[1] != "file":
+        raise RuntimeError("eD2K link is not a file link.")
+    value = parts[4].lower()
+    if len(value) != 32 or any(char not in "0123456789abcdef" for char in value):
+        raise RuntimeError("eD2K file link does not contain a native MD4 hash.")
+    return value
+
+
+def hash_from_download_link(download_link: str) -> str:
+    """Extracts the native transfer hash from a supported live download link."""
+
+    if download_link.startswith("magnet:?"):
+        return ed2k_hash_from_magnet(download_link)
+    if download_link.startswith("ed2k://"):
+        return ed2k_hash_from_link(download_link)
+    raise RuntimeError("Unsupported eMule download link.")
+
+
+def get_release_download_link(release: dict[str, Any]) -> str:
+    """Returns the eMule-compatible download link carried by one Prowlarr row."""
+
+    for key in ("magnetUrl", "magneturl", "downloadUrl", "guid"):
+        value = str(release.get(key) or "")
+        if value.startswith("magnet:?") or value.startswith("ed2k://"):
+            return value
+    raise RuntimeError("Prowlarr release did not expose an eMule-compatible download link.")
+
+
+def qbit_direct_add(
+    base_url: str,
+    emule_api_key: str,
+    download_link: str,
+    category: str,
+) -> dict[str, object]:
+    """Adds one Prowlarr-selected release through eMuleBB's qBit-compatible endpoint."""
+
+    cookie, login = qbit_login(base_url, emule_api_key)
+    add = qbit_request(
+        base_url,
+        "/api/v2/torrents/add",
+        cookie=cookie,
+        form={
+            "urls": download_link,
+            "category": category,
+            "stopped": "true",
+            "ratioLimit": "-1",
+            "seedingTimeLimit": "-1",
+            "inactiveSeedingTimeLimit": "-1",
+        },
+        method="POST",
+        timeout_seconds=45.0,
+    )
+    require_qbit_ok(add, "qBit add")
+    return {
+        "add_status": int(add.get("status") or 0),
+        "login_status": int(login.get("status") or 0),
+        "hash": hash_from_download_link(download_link),
+    }
+
+
 def choose_listen_port(bind_addr: str) -> int:
     """Returns one free TCP port on the actual eMule web bind address."""
 
@@ -1670,24 +1791,17 @@ def prowlarr_download_client_grab_roundtrip(
                 continue
 
             release = select_grabbable_release(rows, indexer_id, query)
-            grab_payload = json.loads(json.dumps(release))
-            grab_payload["downloadClientId"] = int(download_client_id)
-            grabbed = prowlarr_request(
-                prowlarr_url,
-                prowlarr_api_key,
-                "/api/v1/search",
-                method="POST",
-                json_body=grab_payload,
-                timeout_seconds=max(1.0, min(30.0, deadline - time.monotonic())),
-            )
-            require_success(grabbed, "Prowlarr eMuleBB release grab")
+            download_link = get_release_download_link(release)
+            added = qbit_direct_add(emule_base_url, emule_api_key, download_link, download_category)
             return {
                 "status": "passed",
                 "category": int(category_id),
                 "download_client_id": int(download_client_id),
                 "download_category": download_category,
+                "handoff": "direct-emulebb-qbit-add",
                 "release": summarize_grabbed_release(release, query),
-                "grab_status": int(grabbed.get("status") or 0),
+                "grab_status": int(added.get("add_status") or 0),
+                "download_link_hash_present": bool(added.get("hash")),
                 "transfer": wait_for_new_category_transfer(
                     emule_base_url,
                     emule_api_key,
