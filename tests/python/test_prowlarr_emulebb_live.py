@@ -578,6 +578,31 @@ def test_native_rest_transfer_add_retries_transient_socket_abort(monkeypatch) ->
     assert len(calls) == 2
 
 
+def test_transfer_hashes_retries_transient_socket_abort(monkeypatch) -> None:
+    module = load_prowlarr_module()
+    calls = 0
+
+    def fake_http_request(_base_url: str, path: str, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        assert path == "/api/v1/transfers"
+        if calls == 1:
+            raise urllib.error.URLError(10053)
+        rows = [{"hash": "fedcba9876543210fedcba9876543210"}]
+        return {
+            "status": 200,
+            "json": rows,
+            "raw_json": {"data": rows, "meta": {"apiVersion": "v1"}},
+            "body_text": "[]",
+        }
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    assert module.transfer_hashes("https://127.0.0.1:4711", "key") == {"fedcba9876543210fedcba9876543210"}
+    assert calls == 2
+
+
 def test_prowlarr_download_client_grab_adds_release_through_native_rest_endpoint(monkeypatch) -> None:
     module = load_prowlarr_module()
     prowlarr_requests: list[dict[str, Any]] = []

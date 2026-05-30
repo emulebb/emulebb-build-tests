@@ -1429,11 +1429,12 @@ def ed2k_hash_from_magnet(magnet: str) -> str:
 def transfer_hashes(base_url: str, emule_api_key: str) -> set[str]:
     """Returns currently visible native transfer hashes."""
 
-    result = rest_smoke.http_request(
+    result = retry_emule_rest_request(
         base_url,
         "/api/v1/transfers",
         api_key=emule_api_key,
-        request_timeout_seconds=30.0,
+        timeout_seconds=60.0,
+        request_timeout_seconds=15.0,
     )
     rows = rest_smoke.require_json_array(result, 200)
     return {
@@ -1457,10 +1458,11 @@ def wait_for_new_category_transfer(
     last: dict[str, object] | None = None
     while time.monotonic() < deadline:
         request_timeout = min(30.0, max(1.0, deadline - time.monotonic()))
-        result = rest_smoke.http_request(
+        result = retry_emule_rest_request(
             base_url,
             "/api/v1/transfers",
             api_key=emule_api_key,
+            timeout_seconds=request_timeout,
             request_timeout_seconds=request_timeout,
         )
         rows = rest_smoke.require_json_array(result, 200)
