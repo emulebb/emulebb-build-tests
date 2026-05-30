@@ -1056,6 +1056,7 @@ def create_https_certificate_pair(app_exe: Path, artifacts_dir: Path, *, hosts: 
         raise RuntimeError(f"eMule HTTPS certificate generation did not create a certificate at '{cert_path}'.")
     if not key_path.is_file() or key_path.stat().st_size <= 0:
         raise RuntimeError(f"eMule HTTPS certificate generation did not create a key at '{key_path}'.")
+    require_usable_https_pem_pair(cert_path, key_path)
     return {
         "certificate": str(cert_path),
         "key": str(key_path),

@@ -210,6 +210,7 @@ def test_https_urlopen_context_uses_generated_certificate_trust(monkeypatch: pyt
 def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     module = load_rest_api_smoke_module()
     observed_commands: list[list[str]] = []
+    observed_pem_checks: list[tuple[Path, Path]] = []
 
     def fake_run(command, **kwargs):
         observed_commands.append(list(command))
@@ -222,6 +223,11 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        module,
+        "require_usable_https_pem_pair",
+        lambda cert, key: observed_pem_checks.append((cert, key)),
+    )
 
     material = module.create_https_certificate_pair(Path("emulebb.exe"), tmp_path, hosts=("192.168.1.210", "127.0.0.1"))
 
@@ -243,6 +249,9 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
             "--host",
             "192.168.1.210",
         ]
+    ]
+    assert observed_pem_checks == [
+        (tmp_path / "https-cert" / "webserver-cert.pem", tmp_path / "https-cert" / "webserver-key.pem")
     ]
 
 
