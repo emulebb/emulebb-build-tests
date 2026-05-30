@@ -1909,6 +1909,41 @@ def test_transfer_hashes_retries_busy_web_thread(monkeypatch: pytest.MonkeyPatch
     assert calls == 2
 
 
+def test_arr_request_retries_transient_local_socket_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls = 0
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(_request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise module.urllib.error.URLError("An established connection was aborted by the software in your host machine")
+        assert timeout == 30.0
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.arr_request("http://radarr.test", "key", "/api/v3/system/status")
+
+    assert result["status"] == 200
+    assert result["json"] == {"ok": True}
+    assert len(result["_emulebbTransientRetries"]) == 1
+    assert calls == 2
+
+
 def test_arr_readiness_summaries_are_compact() -> None:
     module = load_radarr_sonarr_module()
 

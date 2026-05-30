@@ -61,6 +61,7 @@ QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS = 2.0
 QBIT_ENDPOINT_READY_TIMEOUT_SECONDS = 60.0
 QBIT_DIRECT_ADD_TRANSIENT_RETRY_ATTEMPTS = 5
 EMULE_REST_TRANSIENT_RETRY_ATTEMPTS = 5
+LOCAL_HTTP_TRANSIENT_RETRY_ATTEMPTS = 5
 QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
     "unable to connect to qbittorrent",
     "ssl connection could not be established",
@@ -153,6 +154,13 @@ QBIT_ROUTE_COMPLETENESS_SCENARIOS: tuple[dict[str, object], ...] = (
 )
 
 
+def is_transient_local_http_exception(exc: BaseException) -> bool:
+    """Returns true for retryable localhost socket failures from test controllers."""
+
+    message = str(exc).lower()
+    return any(fragment in message for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
+
+
 def arr_request(
     arr_url: str,
     api_key: str,
@@ -169,21 +177,40 @@ def arr_request(
     if json_body is not None:
         data = json.dumps(json_body).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
-    request = urllib.request.Request(arr_url.rstrip("/") + path, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            body_text = response.read().decode("utf-8", errors="replace")
-            payload = json.loads(body_text) if body_text else None
-            return {"status": int(response.status), "json": payload, "body_text": body_text}
-    except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
-        payload = None
-        if body_text:
-            try:
-                payload = json.loads(body_text)
-            except json.JSONDecodeError:
-                payload = None
-        return {"status": int(exc.code), "json": payload, "body_text": body_text}
+    observations: list[dict[str, object]] = []
+    for attempt in range(1, LOCAL_HTTP_TRANSIENT_RETRY_ATTEMPTS + 1):
+        request = urllib.request.Request(arr_url.rstrip("/") + path, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                body_text = response.read().decode("utf-8", errors="replace")
+                payload = json.loads(body_text) if body_text else None
+                result = {"status": int(response.status), "json": payload, "body_text": body_text}
+                if observations:
+                    result["_emulebbTransientRetries"] = observations[-5:]
+                return result
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            payload = None
+            if body_text:
+                try:
+                    payload = json.loads(body_text)
+                except json.JSONDecodeError:
+                    payload = None
+            return {"status": int(exc.code), "json": payload, "body_text": body_text}
+        except (OSError, TimeoutError, urllib.error.URLError) as exc:
+            if not is_transient_local_http_exception(exc) or attempt >= LOCAL_HTTP_TRANSIENT_RETRY_ATTEMPTS:
+                raise
+            observations.append(
+                {
+                    "path": path.split("apikey=", 1)[0],
+                    "method": method,
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:300],
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            time.sleep(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS)
+    raise RuntimeError(f"Arr request exhausted transient retry attempts: {method} {path}")
 
 
 def require_success(result: dict[str, Any], description: str) -> Any:
@@ -295,8 +322,7 @@ def is_transient_qbit_client_result(result: dict[str, Any]) -> bool:
 def is_transient_qbit_exception(exc: BaseException) -> bool:
     """Returns true for retryable local qBit socket failures from eMuleBB."""
 
-    message = str(exc).lower()
-    return any(fragment in message for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
+    return is_transient_local_http_exception(exc)
 
 
 def emule_rest_request_with_transient_retry(description: str, request_factory, *, attempts: int = EMULE_REST_TRANSIENT_RETRY_ATTEMPTS) -> dict[str, Any]:
