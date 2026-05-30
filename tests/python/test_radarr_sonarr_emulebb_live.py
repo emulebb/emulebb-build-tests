@@ -1890,6 +1890,25 @@ def test_wait_for_qbit_endpoint_ready_retries_busy_web_thread(monkeypatch: pytes
     assert len(result["transient_errors"]) == 1
 
 
+def test_transfer_hashes_retries_busy_web_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls = 0
+
+    def fake_http_request(_base_url, _path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise module.urllib.error.URLError("Web Interface rejected connection because 1 accepted-client thread is already active")
+        return {"status": 200, "json": [{"hash": "ABCDEF0123456789ABCDEF0123456789"}]}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.rest_smoke, "require_json_array", lambda result, status: result["json"] if result["status"] == status else [])
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    assert module.transfer_hashes("https://127.0.0.1:4711", "secret") == {"abcdef0123456789abcdef0123456789"}
+    assert calls == 2
+
+
 def test_arr_readiness_summaries_are_compact() -> None:
     module = load_radarr_sonarr_module()
 

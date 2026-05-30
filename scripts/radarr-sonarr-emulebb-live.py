@@ -60,6 +60,7 @@ QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS = 10
 QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS = 2.0
 QBIT_ENDPOINT_READY_TIMEOUT_SECONDS = 60.0
 QBIT_DIRECT_ADD_TRANSIENT_RETRY_ATTEMPTS = 5
+EMULE_REST_TRANSIENT_RETRY_ATTEMPTS = 5
 QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
     "unable to connect to qbittorrent",
     "ssl connection could not be established",
@@ -296,6 +297,32 @@ def is_transient_qbit_exception(exc: BaseException) -> bool:
 
     message = str(exc).lower()
     return any(fragment in message for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
+
+
+def emule_rest_request_with_transient_retry(description: str, request_factory, *, attempts: int = EMULE_REST_TRANSIENT_RETRY_ATTEMPTS) -> dict[str, Any]:
+    """Retries transient loopback REST aborts caused by the single web-client thread."""
+
+    observations: list[dict[str, object]] = []
+    for attempt in range(1, attempts + 1):
+        try:
+            result = request_factory()
+            if observations:
+                result = dict(result)
+                result["_emulebbTransientRetries"] = observations[-5:]
+            return result
+        except (RuntimeError, OSError, TimeoutError, urllib.error.URLError) as exc:
+            if not is_transient_qbit_exception(exc) or attempt >= attempts:
+                raise
+            observations.append(
+                {
+                    "description": description,
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:300],
+                    "observed_at": round(time.time(), 3),
+                }
+            )
+            time.sleep(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS)
+    raise RuntimeError(f"{description} exhausted transient retry attempts.")
 
 
 def is_transient_prowlarr_indexer_result(result: dict[str, Any]) -> bool:
@@ -1275,10 +1302,13 @@ def direct_torznab_source_rows(
 ) -> tuple[list[dict[str, Any]], dict[str, object]]:
     """Fetches direct eMule Torznab rows for source-count enrichment."""
 
-    result = rest_smoke.http_request(
-        emule_base_url,
-        prowlarr_live.build_direct_torznab_search_path(emule_api_key, query, category_id),
-        request_timeout_seconds=max(1.0, min(90.0, timeout_seconds)),
+    result = emule_rest_request_with_transient_retry(
+        "direct Torznab source rows",
+        lambda: rest_smoke.http_request(
+            emule_base_url,
+            prowlarr_live.build_direct_torznab_search_path(emule_api_key, query, category_id),
+            request_timeout_seconds=max(1.0, min(90.0, timeout_seconds)),
+        ),
     )
     status = int(result.get("status") or 0)
     rows = parse_direct_torznab_release_rows(str(result.get("body_text") or "")) if status == 200 else []
@@ -2227,11 +2257,14 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
 def transfer_hashes(base_url: str, emule_api_key: str) -> set[str]:
     """Returns currently visible native transfer hashes."""
 
-    result = rest_smoke.http_request(
-        base_url,
-        "/api/v1/transfers",
-        api_key=emule_api_key,
-        request_timeout_seconds=30.0,
+    result = emule_rest_request_with_transient_retry(
+        "transfer hash snapshot",
+        lambda: rest_smoke.http_request(
+            base_url,
+            "/api/v1/transfers",
+            api_key=emule_api_key,
+            request_timeout_seconds=30.0,
+        ),
     )
     rows = rest_smoke.require_json_array(result, 200)
     return {
@@ -2303,11 +2336,14 @@ def wait_for_new_transfer_category(
     last: dict[str, object] | None = None
     while time.monotonic() < deadline:
         request_timeout = min(30.0, max(1.0, deadline - time.monotonic()))
-        result = rest_smoke.http_request(
-            base_url,
-            "/api/v1/transfers",
-            api_key=emule_api_key,
-            request_timeout_seconds=request_timeout,
+        result = emule_rest_request_with_transient_retry(
+            "new transfer category poll",
+            lambda: rest_smoke.http_request(
+                base_url,
+                "/api/v1/transfers",
+                api_key=emule_api_key,
+                request_timeout_seconds=request_timeout,
+            ),
         )
         rows = rest_smoke.require_json_array(result, 200)
         for row in rows:
