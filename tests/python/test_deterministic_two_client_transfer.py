@@ -493,6 +493,42 @@ def test_godzilla_queue_downloads_uses_retry_rest_request(monkeypatch) -> None:
     assert calls == [("POST", "/api/v1/transfers")]
 
 
+def test_godzilla_spiral_hammer_searches_use_retry_rest_request(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_retry_spiral_test")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def fake_retry(_base_url, path, *, method="GET", json_body=None, **_kwargs):
+        calls.append((method, path, dict(json_body or {})))
+        return {"status": 200, "json": {"id": "search-1"}, "transient_errors": [{"type": "ConnectionAbortedError"}]}
+
+    monkeypatch.setattr(godzilla.dtt, "retry_rest_request", fake_retry)
+    monkeypatch.setattr(godzilla, "server_telemetry_snapshot", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+
+    result = godzilla.run_spiral_hammer(
+        base_url="http://127.0.0.1:4711",
+        api_key="key",
+        admin_base_url="http://127.0.0.1:8080",
+        amule_control_exe=None,
+        amule_profile=None,
+        links=[],
+        queries=["alpha", "beta", "gamma"],
+        waves=1,
+        sleep_seconds=0.0,
+    )
+
+    assert result["waves"][0]["actions"][:3] == [
+        {"kind": "rest-search", "query": "beta", "response": {"status": 200}},
+        {"kind": "rest-search", "query": "gamma", "response": {"status": 200}},
+        {"kind": "rest-search", "query": "alpha", "response": {"status": 200}},
+    ]
+    assert calls == [
+        ("POST", "/api/v1/searches", {"query": "beta", "method": "server", "type": ""}),
+        ("POST", "/api/v1/searches", {"query": "gamma", "method": "server", "type": ""}),
+        ("POST", "/api/v1/searches", {"query": "alpha", "method": "server", "type": ""}),
+    ]
+
+
 def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_log_marker_scan_test")
     log_path = tmp_path / "emulebb-verbose.log"

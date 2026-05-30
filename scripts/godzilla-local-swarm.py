@@ -870,7 +870,24 @@ def run_spiral_hammer(
         assert isinstance(actions, list)
         for index in range(wave * 3):
             query = queries[(wave + index) % len(queries)]
-            start = rest_smoke.start_live_search(base_url, api_key, "server", query, forced_method="server")
+            response = dtt.retry_rest_request(
+                base_url,
+                "/api/v1/searches",
+                method="POST",
+                api_key=api_key,
+                json_body={"query": query, "method": "server", "type": ""},
+                timeout_seconds=30.0,
+                request_timeout_seconds=10.0,
+            )
+            start = {
+                "ok": int(response.get("status", 0)) == 200
+                and isinstance(response.get("json"), dict)
+                and bool(response["json"].get("id")),
+                "attempts": [{"method": "server", "response": response}],
+                "selected_method": "server",
+                "method_candidates": ["server"],
+                "response": response,
+            }
             actions.append(
                 {
                     "kind": "rest-search",
