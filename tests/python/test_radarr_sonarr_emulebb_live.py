@@ -987,6 +987,85 @@ def test_prowlarr_fallback_uses_direct_torznab_when_row_has_no_magnet(monkeypatc
     ]
 
 
+def test_prowlarr_fallback_uses_direct_torznab_when_indexer_is_quarantined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, object]] = []
+    ed2k_link = "ed2k://|file|Operator.Movie.mkv|1400000000|fedcba9876543210fedcba9876543210|/"
+
+    monkeypatch.setattr(module, "transfer_hashes", lambda *_args, **_kwargs: {"oldhash"})
+    monkeypatch.setattr(
+        module.prowlarr_live,
+        "build_prowlarr_search_path",
+        lambda title, category_id, indexer_id: f"/api/v1/search?query={title}&categories={category_id}&indexerIds={indexer_id}",
+    )
+    monkeypatch.setattr(
+        module.prowlarr_live,
+        "prowlarr_request",
+        lambda *_args, **_kwargs: {
+            "status": 429,
+            "json": {"message": "Indexer is disabled due to recent failures."},
+            "body_text": "Indexer is disabled due to recent failures.",
+        },
+    )
+
+    def fake_http_request(_base_url, path, **_kwargs):
+        assert path.startswith("/indexer/emulebb/api?t=search&cat=2000&q=")
+        body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Operator Movie 1080p</title>
+      <link>{ed2k_link}</link>
+      <enclosure url="{ed2k_link}" length="1400000000" type="application/x-ed2k-link" />
+      <torznab:attr name="size" value="1400000000" />
+      <torznab:attr name="peers" value="20" />
+    </item>
+  </channel>
+</rss>"""
+        return {"status": 200, "body_text": body}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        module,
+        "qbit_direct_add",
+        lambda _base_url, _api_key, selected_link, category: calls.append(("qbit_add", (selected_link, category)))
+        or {"add_status": 200, "hash": "fedcba9876543210fedcba9876543210"},
+    )
+    monkeypatch.setattr(
+        module,
+        "wait_for_new_transfer_category",
+        lambda *_args, **kwargs: calls.append(("new_transfer", kwargs["category"]))
+        or {"hash": "fedcba9876543210fedcba9876543210", "categoryName": kwargs["category"]},
+    )
+
+    result = module.grab_first_arr_release_via_prowlarr(
+        kind="radarr",
+        arr_url="http://radarr.test",
+        arr_api_key="key",
+        arr_indexer_id=40,
+        arr_indexer_name="eMuleBB Local",
+        prowlarr_url="http://prowlarr.test",
+        prowlarr_api_key="prowlarr-key",
+        prowlarr_indexer_id=50,
+        emule_base_url="http://127.0.0.1:1",
+        emule_api_key="emule-key",
+        title="operator movie",
+        category_id=module.TORZNAB_MOVIE_CATEGORY,
+        download_category=module.RADARR_IMPORT_CATEGORY,
+        timeout_seconds=10.0,
+    )
+
+    assert result["source"] == "prowlarr_eMule_indexer_qbit_add"
+    assert result["search_source"] == "direct_torznab_after_prowlarr_quarantine"
+    assert result["hash_present"] is True
+    assert calls == [
+        ("qbit_add", (ed2k_link, module.RADARR_IMPORT_CATEGORY)),
+        ("new_transfer", module.RADARR_IMPORT_CATEGORY),
+    ]
+
+
 def test_direct_torznab_parser_preserves_namespaced_magnet_attr() -> None:
     module = load_radarr_sonarr_module()
     magnet = "magnet:?xt=urn:btih:fedcba9876543210fedcba987654321000000000&dn=Operator.Movie.mkv&xl=42"

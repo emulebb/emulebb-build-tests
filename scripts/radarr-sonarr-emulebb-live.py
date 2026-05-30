@@ -65,6 +65,12 @@ QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
     "forcibly closed",
     "software in your host machine",
 )
+PROWLARR_INDEXER_TRANSIENT_ERROR_FRAGMENTS = (
+    "too many requests",
+    "recent failures",
+    "indexer is disabled",
+    "unavailable due to failures",
+)
 SONARR_EPISODE_TITLE_PATTERNS = (
     re.compile(r"\bs\d{1,2}e\d{1,3}\b", re.IGNORECASE),
     re.compile(r"\b\d{1,2}x\d{1,3}\b", re.IGNORECASE),
@@ -279,6 +285,18 @@ def is_transient_qbit_client_result(result: dict[str, Any]) -> bool:
         return False
     body = str(result.get("body_text") or "").lower()
     return any(fragment in body for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
+
+
+def is_transient_prowlarr_indexer_result(result: dict[str, Any]) -> bool:
+    """Returns true when Prowlarr has temporarily quarantined the eMuleBB indexer."""
+
+    status = int(result.get("status") or 0)
+    if status == 429:
+        return True
+    if status not in {400, 409, 500, 502, 503}:
+        return False
+    body = str(result.get("body_text") or "").lower()
+    return any(fragment in body for fragment in PROWLARR_INDEXER_TRANSIENT_ERROR_FRAGMENTS)
 
 
 def get_tag_id(prowlarr_url: str, api_key: str, label: str) -> int | None:
@@ -1242,6 +1260,51 @@ def enrich_arr_release_sources(rows: list[dict[str, Any]], source_rows: list[dic
                 enriched_count += 1
         enriched.append(copied)
     return enriched, enriched_count
+
+
+def select_direct_torznab_release_for_grab(
+    *,
+    kind: str,
+    emule_base_url: str,
+    emule_api_key: str,
+    title: str,
+    category_id: int,
+    timeout_seconds: float,
+    min_sources: int,
+) -> tuple[dict[str, Any] | None, dict[str, object]]:
+    """Selects a grabbable row directly from eMuleBB's Torznab surface."""
+
+    rows, summary = direct_torznab_source_rows(
+        emule_base_url,
+        emule_api_key,
+        title,
+        category_id,
+        timeout_seconds,
+    )
+    require_episode_like = kind == "sonarr"
+    prefer_sources = kind == "sonarr"
+    ranked_rows = rank_arr_releases(
+        rows,
+        title,
+        min_sources=min_sources,
+        require_episode_like=require_episode_like,
+        prefer_sources=prefer_sources,
+    )
+    summary["ranked_count"] = len(ranked_rows)
+    if ranked_rows:
+        return ranked_rows[0], summary
+    if rows:
+        try:
+            select_best_arr_release(
+                rows,
+                title,
+                min_sources=min_sources,
+                require_episode_like=require_episode_like,
+                prefer_sources=prefer_sources,
+            )
+        except RuntimeError as exc:
+            summary["selection_error"] = str(exc)[:500]
+    return None, summary
 
 
 def sonarr_release_title_is_episode_like(row: dict[str, Any]) -> bool:
@@ -2220,6 +2283,53 @@ def get_release_download_link(release: dict[str, Any]) -> str:
     raise RuntimeError("Prowlarr release did not expose an eMule download link.")
 
 
+def add_selected_release_through_qbit(
+    *,
+    emule_base_url: str,
+    emule_api_key: str,
+    selected: dict[str, Any],
+    title: str,
+    arr_indexer_name: str,
+    download_category: str,
+    before_hashes: set[str],
+    timeout_seconds: float,
+    attempt_count: int,
+    search_source: str,
+) -> dict[str, object]:
+    """Adds one selected release through eMuleBB's qBit-compatible endpoint."""
+
+    download_link = get_release_download_link(selected)
+    added = qbit_direct_add(
+        emule_base_url,
+        emule_api_key,
+        download_link,
+        download_category,
+    )
+    new_transfer = wait_for_new_transfer_category(
+        emule_base_url,
+        emule_api_key,
+        category=download_category,
+        before_hashes=before_hashes,
+        timeout_seconds=min(120.0, max(1.0, timeout_seconds)),
+    )
+    transfer_hash = str(new_transfer.get("hash") or "")
+    return {
+        "attempt_count": attempt_count,
+        "source": "prowlarr_eMule_indexer_qbit_add",
+        "search_source": search_source,
+        "title_present": bool(selected.get("title")),
+        "downloadUrl_present": bool(selected.get("downloadUrl")),
+        "guid_present": bool(selected.get("guid")),
+        "indexer": arr_indexer_name,
+        "selection": prowlarr_live.summarize_release_selection(selected, title),
+        "hash": transfer_hash,
+        "hash_present": bool(transfer_hash),
+        "grab_status": int(added.get("add_status") or 0),
+        "download_link_hash_present": bool(added.get("hash")),
+        "category_transfer": {key: value for key, value in new_transfer.items() if key != "hash"},
+    }
+
+
 def grab_first_arr_release_via_prowlarr(
     *,
     kind: str,
@@ -2285,6 +2395,33 @@ def grab_first_arr_release_via_prowlarr(
                 "indexers": summarize_arr_release_indexers(rows),
             }
         )
+        if is_transient_prowlarr_indexer_result(result):
+            selected, direct_summary = select_direct_torznab_release_for_grab(
+                kind=kind,
+                emule_base_url=emule_base_url,
+                emule_api_key=emule_api_key,
+                title=title,
+                category_id=category_id,
+                timeout_seconds=max(1.0, deadline - time.monotonic()),
+                min_sources=required_sources,
+            )
+            attempts[-1]["direct_torznab_quarantine_fallback"] = direct_summary
+            if selected is not None:
+                try:
+                    return add_selected_release_through_qbit(
+                        emule_base_url=emule_base_url,
+                        emule_api_key=emule_api_key,
+                        selected=selected,
+                        title=title,
+                        arr_indexer_name=arr_indexer_name,
+                        download_category=download_category,
+                        before_hashes=before_hashes,
+                        timeout_seconds=deadline - time.monotonic(),
+                        attempt_count=len(attempts),
+                        search_source="direct_torznab_after_prowlarr_quarantine",
+                    )
+                except RuntimeError as exc:
+                    attempts[-1]["direct_torznab_grab_error"] = str(exc)[:500]
         if status >= 200 and status < 300 and matches:
             require_episode_like = kind == "sonarr"
             prefer_sources = kind == "sonarr"
@@ -2325,7 +2462,7 @@ def grab_first_arr_release_via_prowlarr(
             else:
                 selected = prowlarr_live.select_grabbable_release(matches, prowlarr_indexer_id, title)
             try:
-                download_link = get_release_download_link(selected)
+                get_release_download_link(selected)
             except RuntimeError:
                 direct_rows, direct_summary = direct_torznab_source_rows(
                     emule_base_url,
@@ -2350,36 +2487,20 @@ def grab_first_arr_release_via_prowlarr(
                         prefer_sources=prefer_sources,
                     )
                 selected = ranked_direct_rows[0]
-                download_link = get_release_download_link(selected)
+                get_release_download_link(selected)
                 attempts[-1]["direct_torznab_download_link_fallback"] = direct_summary
-            added = qbit_direct_add(
-                emule_base_url,
-                emule_api_key,
-                download_link,
-                download_category,
-            )
-            new_transfer = wait_for_new_transfer_category(
-                emule_base_url,
-                emule_api_key,
-                category=download_category,
+            return add_selected_release_through_qbit(
+                emule_base_url=emule_base_url,
+                emule_api_key=emule_api_key,
+                selected=selected,
+                title=title,
+                arr_indexer_name=arr_indexer_name,
+                download_category=download_category,
                 before_hashes=before_hashes,
-                timeout_seconds=min(120.0, max(1.0, deadline - time.monotonic())),
+                timeout_seconds=deadline - time.monotonic(),
+                attempt_count=len(attempts),
+                search_source="prowlarr",
             )
-            transfer_hash = str(new_transfer.get("hash") or "")
-            return {
-                "attempt_count": len(attempts),
-                "source": "prowlarr_eMule_indexer_qbit_add",
-                "title_present": bool(selected.get("title")),
-                "downloadUrl_present": bool(selected.get("downloadUrl")),
-                "guid_present": bool(selected.get("guid")),
-                "indexer": arr_indexer_name,
-                "selection": prowlarr_live.summarize_release_selection(selected, title),
-                "hash": transfer_hash,
-                "hash_present": bool(transfer_hash),
-                "grab_status": int(added.get("add_status") or 0),
-                "download_link_hash_present": bool(added.get("hash")),
-                "category_transfer": {key: value for key, value in new_transfer.items() if key != "hash"},
-            }
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(5.0, remaining))
