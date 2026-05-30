@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,21 @@ class FakeHarnessCliCommon:
     def prepare_run_paths(self, **kwargs):
         source_artifacts_dir = self.root / "source-artifacts"
         source_artifacts_dir.mkdir(parents=True)
+        appdata = self.root / "appdata"
+        os.environ["APPDATA"] = str(appdata)
+        hide_logs = appdata / "Hide.me" / "Logs"
+        hide_logs.mkdir(parents=True, exist_ok=True)
+        hide_logs.joinpath("log.txt").write_text("Remote host resolved: 198.51.100.9\n", encoding="utf-8")
+        for spec in live_e2e_suite.SUITE_SPECS:
+            if spec.network_scope != "vpn":
+                continue
+            app_logs = source_artifacts_dir / spec.name / "profile" / "logs"
+            app_logs.mkdir(parents=True, exist_ok=True)
+            app_logs.joinpath("emulebb-verbose.log").write_text(
+                "VPN public IPv4 probe: provider=http://api.ipify.org/ "
+                "bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=198.51.100.9\n",
+                encoding="utf-8",
+            )
         return SimpleNamespace(
             repo_root=self.root,
             workspace_root=self.root / "workspaces" / "workspace",
@@ -71,8 +87,23 @@ def option_values(command: list[str], option: str) -> list[str]:
 def install_profiled_command_capture(monkeypatch, commands: list[list[str]]) -> None:
     """Captures aggregate child commands without requiring local xperf tools."""
 
+    def write_matching_vpn_probe_logs(child_artifacts_dir: Path) -> None:
+        appdata = child_artifacts_dir.parents[1] / "appdata"
+        monkeypatch.setenv("APPDATA", str(appdata))
+        hide_logs = appdata / "Hide.me" / "Logs"
+        hide_logs.mkdir(parents=True, exist_ok=True)
+        hide_logs.joinpath("log.txt").write_text("Remote host resolved: 198.51.100.9\n", encoding="utf-8")
+        app_logs = child_artifacts_dir / "profile" / "logs"
+        app_logs.mkdir(parents=True, exist_ok=True)
+        app_logs.joinpath("emulebb-verbose.log").write_text(
+            "VPN public IPv4 probe: provider=http://api.ipify.org/ bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=198.51.100.9\n",
+            encoding="utf-8",
+        )
+
     def fake_run_profiled(command, *, spec, args, child_artifacts_dir, app_exe):
         commands.append(command)
+        if spec.network_scope == "vpn":
+            write_matching_vpn_probe_logs(child_artifacts_dir)
         profile_options = live_e2e_suite.resolve_suite_cpu_profile_options(spec, args)
         if not profile_options.enabled:
             return 0, None
@@ -127,6 +158,90 @@ def test_test_network_vpn_keeps_only_public_network_scope() -> None:
 
     assert [spec.name for spec in selected] == ["rest-api"]
     assert [row["name"] for row in skipped] == ["preference-ui", "deterministic-two-client-transfer"]
+
+
+def test_parse_latest_hide_me_remote_host_ipv4(tmp_path: Path) -> None:
+    logs = tmp_path / "Hide.me" / "Logs"
+    logs.mkdir(parents=True)
+    first = logs / "log_old.txt"
+    latest = logs / "log_latest.txt"
+    first.write_text("05/30/2026 [INF] [Connection] Remote host resolved: 203.0.113.4\n", encoding="utf-8")
+    latest.write_text(
+        "05/30/2026 [INF] [Connection] Remote host resolved: 198.51.100.7\n"
+        "05/30/2026 [INF] [Connection] Remote host resolved: 198.51.100.9\n",
+        encoding="utf-8",
+    )
+
+    result = live_e2e_suite.parse_latest_hide_me_remote_host_ipv4(logs)
+
+    assert result["found"] is True
+    assert result["ip"] == "198.51.100.9"
+    assert result["line_number"] == 2
+
+
+def test_parse_latest_emulebb_public_probe_ipv4(tmp_path: Path) -> None:
+    log_dir = tmp_path / "suite" / "profile" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "emulebb-verbose.log").write_text(
+        "VPN public IPv4 probe: provider=http://ipv4.icanhazip.com/ "
+        "bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=198.51.100.9\n",
+        encoding="utf-8",
+    )
+
+    result = live_e2e_suite.parse_latest_emulebb_public_probe_ipv4(tmp_path)
+
+    assert result["found"] is True
+    assert result["ip"] == "198.51.100.9"
+
+
+def test_vpn_public_ip_check_matches_hide_me_and_emulebb_logs(tmp_path: Path) -> None:
+    appdata = tmp_path / "appdata"
+    logs = appdata / "Hide.me" / "Logs"
+    logs.mkdir(parents=True)
+    logs.joinpath("log.txt").write_text("Remote host resolved: 198.51.100.9\n", encoding="utf-8")
+    profile_logs = tmp_path / "artifacts" / "profile" / "logs"
+    profile_logs.mkdir(parents=True)
+    profile_logs.joinpath("emulebb-verbose.log").write_text(
+        "VPN public IPv4 probe: provider=http://api.ipify.org/ bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=198.51.100.9\n",
+        encoding="utf-8",
+    )
+
+    result = live_e2e_suite.build_vpn_public_ip_check(
+        child_artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        network_scope="vpn",
+        appdata_dir=str(appdata),
+    )
+
+    assert result["enabled"] is True
+    assert result["matched"] is True
+    assert result["expected"]["ip"] == "198.51.100.9"
+    assert result["actual"]["ip"] == "198.51.100.9"
+
+
+def test_vpn_public_ip_check_detects_mismatch(tmp_path: Path) -> None:
+    appdata = tmp_path / "appdata"
+    logs = appdata / "Hide.me" / "Logs"
+    logs.mkdir(parents=True)
+    logs.joinpath("log.txt").write_text("Remote host resolved: 198.51.100.9\n", encoding="utf-8")
+    profile_logs = tmp_path / "artifacts" / "profile" / "logs"
+    profile_logs.mkdir(parents=True)
+    profile_logs.joinpath("emulebb-verbose.log").write_text(
+        "VPN public IPv4 probe: provider=http://api.ipify.org/ bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=203.0.113.4\n",
+        encoding="utf-8",
+    )
+
+    result = live_e2e_suite.build_vpn_public_ip_check(
+        child_artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        network_scope="vpn",
+        appdata_dir=str(appdata),
+    )
+
+    assert result["enabled"] is True
+    assert result["matched"] is False
+    assert result["expected"]["ip"] == "198.51.100.9"
+    assert result["actual"]["ip"] == "203.0.113.4"
 
 
 def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Path, monkeypatch) -> None:

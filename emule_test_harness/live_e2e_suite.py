@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -109,6 +110,8 @@ DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS = 120.0
 DEFAULT_CHILD_SUITE_TIMEOUT_SECONDS = 2.0 * 60.0 * 60.0
 DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS = 8.0 * 60.0 * 60.0
 DEFAULT_LIVE_PROCESS_MONITOR_TIMEOUT_SECONDS = 10.0 * 60.0 * 60.0
+HIDE_ME_REMOTE_HOST_PATTERN = re.compile(r"\bRemote host resolved:\s*(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b")
+EMULEBB_PUBLIC_IPV4_PROBE_PATTERN = re.compile(r"\bVPN public IPv4 probe:\s+.*\bpublicIp=(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b")
 DEFAULT_CONTROLLER_STORAGE_VHD_SIZE_MB = 6144
 DEFAULT_ARR_CONTROLLER_STORAGE_VHD_SIZE_MB = 32768
 SUITE_TIMEOUT_RETURN_CODE = 124
@@ -1556,6 +1559,107 @@ def read_child_suite_result(child_artifacts_dir: Path) -> dict[str, object] | No
     return payload if isinstance(payload, dict) else None
 
 
+def is_strict_ipv4_literal(value: str) -> bool:
+    parts = value.strip().split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not part.isdecimal() or int(part) > 255:
+            return False
+    return True
+
+
+def newest_files(paths: list[Path]) -> list[Path]:
+    def sort_key(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(paths, key=sort_key, reverse=True)
+
+
+def parse_latest_hide_me_remote_host_ipv4(logs_dir: Path) -> dict[str, object]:
+    """Returns the newest hide.me Remote host resolved IPv4 from local logs."""
+
+    if not logs_dir.is_dir():
+        return {"found": False, "reason": f"hide.me logs directory is missing: {logs_dir}"}
+    for path in newest_files([item for item in logs_dir.glob("*.txt") if item.is_file()]):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_number, line in reversed(list(enumerate(lines, start=1))):
+            match = HIDE_ME_REMOTE_HOST_PATTERN.search(line)
+            if not match:
+                continue
+            ip_address = match.group("ip")
+            if is_strict_ipv4_literal(ip_address):
+                return {
+                    "found": True,
+                    "ip": ip_address,
+                    "source": "hide.me Remote host resolved",
+                    "log_path": str(path),
+                    "line_number": line_number,
+                }
+    return {"found": False, "reason": f"no hide.me Remote host resolved IPv4 found under {logs_dir}"}
+
+
+def parse_latest_emulebb_public_probe_ipv4(artifacts_dir: Path) -> dict[str, object]:
+    """Returns the newest eMuleBB startup public IPv4 probe line from child artifacts."""
+
+    for path in newest_files([item for item in artifacts_dir.rglob("emulebb-verbose.log") if item.is_file()]):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_number, line in reversed(list(enumerate(lines, start=1))):
+            match = EMULEBB_PUBLIC_IPV4_PROBE_PATTERN.search(line)
+            if not match:
+                continue
+            ip_address = match.group("ip")
+            if is_strict_ipv4_literal(ip_address):
+                return {
+                    "found": True,
+                    "ip": ip_address,
+                    "source": "eMuleBB VPN public IPv4 probe",
+                    "log_path": str(path),
+                    "line_number": line_number,
+                }
+    return {"found": False, "reason": f"no eMuleBB VPN public IPv4 probe line found under {artifacts_dir}"}
+
+
+def build_vpn_public_ip_check(
+    *,
+    child_artifacts_dir: Path,
+    p2p_bind_interface_name: str,
+    network_scope: str,
+    appdata_dir: str | None = None,
+) -> dict[str, object]:
+    """Compares eMuleBB's bound public IPv4 probe with hide.me's selected remote host."""
+
+    if network_scope != "vpn" or p2p_bind_interface_name.strip().casefold() != "hide.me":
+        return {
+            "enabled": False,
+            "reason": f"network_scope={network_scope}, p2p_bind_interface_name={p2p_bind_interface_name}",
+        }
+
+    appdata = Path(appdata_dir or os.environ.get("APPDATA", ""))
+    hide_me = (
+        parse_latest_hide_me_remote_host_ipv4(appdata / "Hide.me" / "Logs")
+        if str(appdata)
+        else {"found": False, "reason": "APPDATA is not set"}
+    )
+    emulebb = parse_latest_emulebb_public_probe_ipv4(child_artifacts_dir)
+    matched = bool(hide_me.get("found")) and bool(emulebb.get("found")) and hide_me.get("ip") == emulebb.get("ip")
+    return {
+        "enabled": True,
+        "matched": matched,
+        "expected": hide_me,
+        "actual": emulebb,
+    }
+
+
 def extract_child_resource_diagnostics(child_result: dict[str, object] | None) -> dict[str, object] | None:
     """Extracts bounded memory/resource diagnostics from a child suite report."""
 
@@ -2443,6 +2547,15 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             )
         if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures:
             result["admin_volume_fixture"] = dict(summary["admin_volume_fixtures"])  # type: ignore[arg-type]
+        vpn_public_ip_check = build_vpn_public_ip_check(
+            child_artifacts_dir=child_artifacts_dir,
+            p2p_bind_interface_name=child_p2p_bind_interface_name,
+            network_scope=spec.network_scope,
+        )
+        result["vpn_public_ip_check"] = vpn_public_ip_check
+        if vpn_public_ip_check.get("enabled") and not vpn_public_ip_check.get("matched"):
+            suite_status = "failed"
+            result["status"] = suite_status
         summary["suites"].append(result)  # type: ignore[index]
         if suite_status == "failed":
             summary["status"] = "failed"
