@@ -50,6 +50,14 @@ DEFAULT_DIRECT_BOOTSTRAP_SOURCE_TIMEOUT_SECONDS = 180.0
 DEFAULT_SOURCE_BROWSE_TRANSFER_TIMEOUT_SECONDS = 120.0
 DEFAULT_SOURCE_BROWSE_ATTEMPT_TIMEOUT_SECONDS = 20.0
 DEFAULT_SOURCE_BROWSE_READY_SOURCE_TIMEOUT_SECONDS = 60.0
+LOCAL_HTTP_TRANSIENT_RETRY_ATTEMPTS = 30
+LOCAL_HTTP_TRANSIENT_RETRY_DELAY_SECONDS = 2.0
+LOCAL_HTTP_TRANSIENT_FRAGMENTS = (
+    "connection was aborted",
+    "forcibly closed",
+    "software in your host machine",
+    "accepted-client",
+)
 SOURCE_BROWSE_READY_STATES = {
     "connected",
     "downloading",
@@ -70,6 +78,33 @@ class TransferCandidateUnavailableError(RuntimeError):
     def __init__(self, message: str, attempts: list[dict[str, object]]) -> None:
         super().__init__(message)
         self.attempts = attempts
+
+
+def is_transient_local_http_exception(exc: BaseException) -> bool:
+    """Returns true for short-lived loopback REST socket aborts."""
+
+    if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, TimeoutError, OSError)):
+        message = str(exc).lower()
+        return any(fragment in message for fragment in LOCAL_HTTP_TRANSIENT_FRAGMENTS)
+    return False
+
+
+def emule_rest_request(base_url: str, path: str, **kwargs) -> dict[str, object]:
+    """Retries transient eMuleBB REST socket failures from the live harness."""
+
+    observations: list[str] = []
+    for attempt in range(1, LOCAL_HTTP_TRANSIENT_RETRY_ATTEMPTS + 1):
+        try:
+            result = rest_smoke.http_request(base_url, path, **kwargs)
+            if observations:
+                result["transient_errors"] = observations[-5:]
+            return result
+        except Exception as exc:
+            if not is_transient_local_http_exception(exc) or attempt >= LOCAL_HTTP_TRANSIENT_RETRY_ATTEMPTS:
+                raise
+            observations.append(str(exc))
+            time.sleep(LOCAL_HTTP_TRANSIENT_RETRY_DELAY_SECONDS)
+    raise RuntimeError(f"eMuleBB REST request exhausted transient retry attempts: {path}")
 
 
 def compact_http_result(result: dict[str, object]) -> dict[str, object]:
@@ -217,14 +252,14 @@ def is_safe_download_result(result_row: dict[str, Any]) -> bool:
 def fetch_search_results(base_url: str, api_key: str, search_id: str) -> dict[str, Any]:
     """Fetches one search-results payload and validates the response shape."""
 
-    result = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
+    result = emule_rest_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
     return require_json_object(result, 200)
 
 
 def start_transfer_search(base_url: str, api_key: str, method: str, query: str) -> dict[str, object]:
     """Starts one file-oriented live search suitable for selecting a safe transfer."""
 
-    response = rest_smoke.http_request(
+    response = emule_rest_request(
         base_url,
         "/api/v1/searches",
         method="POST",
@@ -267,7 +302,7 @@ def wait_for_transfer_search_results(
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
+        result = emule_rest_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
         payload = require_json_object(result, 200)
         rows = payload.get("results")
         assert isinstance(rows, list), compact_http_result(result)
@@ -655,7 +690,7 @@ def request_source_browse(
     if not client_id:
         raise ValueError("source selector must include userHash or address/ip and port")
 
-    result = rest_smoke.http_request(
+    result = emule_rest_request(
         base_url,
         f"/api/v1/transfers/{transfer_hash}/sources/{client_id}/operations/browse",
         method="POST",
@@ -676,7 +711,7 @@ def wait_for_source_browse_results(
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
+        result = emule_rest_request(base_url, f"/api/v1/searches/{search_id}", api_key=api_key)
         if int(result["status"]) == 404:
             payload = result.get("json")
             if isinstance(payload, dict) and payload.get("error") == "NOT_FOUND":
@@ -780,7 +815,7 @@ def add_transfer_from_search_result(base_url: str, api_key: str, result_row: dic
     transfer_hash = str(result_row.get("hash") or "").strip().lower()
     if not transfer_hash:
         raise ValueError("Search result row is missing a file hash.")
-    add_result = rest_smoke.http_request(
+    add_result = emule_rest_request(
         base_url,
         "/api/v1/transfers",
         method="POST",
@@ -795,7 +830,7 @@ def add_transfer_from_search_result(base_url: str, api_key: str, result_row: dic
 def observe_transfer_materialization(base_url: str, api_key: str, transfer_hash: str) -> dict[str, object]:
     """Returns a compact native transfer snapshot after a live bootstrap add."""
 
-    result = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=api_key)
+    result = emule_rest_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=api_key)
     payload = require_json_object(result, 200)
     if payload.get("hash") != transfer_hash:
         raise RuntimeError(f"Transfer materialization hash mismatch: expected {transfer_hash!r}, got {payload.get('hash')!r}")
@@ -823,7 +858,7 @@ def wait_for_transfer_sources(
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}/sources", api_key=api_key)
+        result = emule_rest_request(base_url, f"/api/v1/transfers/{transfer_hash}/sources", api_key=api_key)
         assert int(result["status"]) == 200, compact_http_result(result)
         payload = rest_smoke.require_json_array(result, 200)
         snapshot = {
@@ -853,7 +888,7 @@ def wait_for_source_browse_candidates(
     observations: list[dict[str, object]] = []
     best_candidate_result: dict[str, object] | None = None
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}/sources", api_key=api_key)
+        result = emule_rest_request(base_url, f"/api/v1/transfers/{transfer_hash}/sources", api_key=api_key)
         assert int(result["status"]) == 200, compact_http_result(result)
         payload = rest_smoke.require_json_array(result, 200)
         candidates = iter_source_browse_candidates(payload)
@@ -957,7 +992,7 @@ def wait_for_auto_browse_success(
     deadline = time.time() + timeout_seconds
     observations: list[dict[str, object]] = []
     while time.time() < deadline:
-        result = rest_smoke.http_request(base_url, "/api/v1/logs?limit=400", api_key=api_key)
+        result = emule_rest_request(base_url, "/api/v1/logs?limit=400", api_key=api_key)
         assert int(result["status"]) == 200, compact_http_result(result)
         payload = rest_smoke.require_json_array(result, 200)
 
@@ -1182,8 +1217,8 @@ def main() -> int:
         report["checks"]["ready"] = compact_http_result(ready)
 
         record_phase(artifacts_dir, report, "auth")
-        no_key = rest_smoke.http_request(base_url, "/api/v1/app")
-        wrong_key = rest_smoke.http_request(base_url, "/api/v1/app", api_key="wrong-key")
+        no_key = emule_rest_request(base_url, "/api/v1/app")
+        wrong_key = emule_rest_request(base_url, "/api/v1/app", api_key="wrong-key")
         assert int(no_key["status"]) == 401
         assert int(wrong_key["status"]) == 401
         report["checks"]["auth"] = {
@@ -1192,7 +1227,7 @@ def main() -> int:
         }
 
         record_phase(artifacts_dir, report, "servers_list")
-        servers = rest_smoke.http_request(base_url, "/api/v1/servers", api_key=args.api_key)
+        servers = emule_rest_request(base_url, "/api/v1/servers", api_key=args.api_key)
         assert int(servers["status"]) == 200, compact_http_result(servers)
         server_rows = rest_smoke.require_json_array(servers, 200)
         assert server_rows, compact_http_result(servers)

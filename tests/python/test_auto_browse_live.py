@@ -41,6 +41,29 @@ def test_auto_browse_help_runs_without_pythonpath(tmp_path: Path) -> None:
     assert "auto-browse" in result.stdout
 
 
+def test_emule_rest_request_retries_transient_socket_abort(monkeypatch) -> None:
+    module = load_auto_browse_module()
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_http_request(base_url: str, path: str, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionAbortedError("[WinError 10053] An established connection was aborted by the software in your host machine")
+        return {"status": 200, "json": {"ok": True}, "body_text": "{}"}
+
+    monkeypatch.setattr(module.rest_smoke, "http_request", fake_http_request)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = module.emule_rest_request("http://127.0.0.1:1", "/api/v1/app", api_key="key")
+
+    assert result["status"] == 200
+    assert calls == 2
+    assert sleeps == [module.LOCAL_HTTP_TRANSIENT_RETRY_DELAY_SECONDS]
+    assert result["transient_errors"]
+
+
 def make_inputs(module):
     """Returns a validated live-wire input fixture for auto-browse tests."""
 
