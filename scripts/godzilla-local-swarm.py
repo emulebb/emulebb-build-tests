@@ -723,7 +723,7 @@ def run_emulebb_search_hammer(base_url: str, api_key: str, *, queries: list[str]
     for index in range(rounds):
         query = queries[index % len(queries)]
         row: dict[str, object] = {"round": index + 1, "query": query}
-        start = rest_smoke.start_live_search(base_url, api_key, "server", query, forced_method="server")
+        start = start_server_search_with_retry(base_url, api_key, query)
         row["start"] = rest_smoke.compact_http_result(start["response"]) if start.get("response") else start
         search_id = None
         response = start.get("response")
@@ -734,6 +734,29 @@ def run_emulebb_search_hammer(base_url: str, api_key: str, *, queries: list[str]
         rows.append(row)
     cleanup = rest_smoke.compact_http_result(rest_smoke.delete_all_searches(base_url, api_key))
     return {"rounds": rows, "cleanup": cleanup}
+
+
+def start_server_search_with_retry(base_url: str, api_key: str, query: str) -> dict[str, object]:
+    """Starts one server search through the transient-safe REST wrapper."""
+
+    response = dtt.retry_rest_request(
+        base_url,
+        "/api/v1/searches",
+        method="POST",
+        api_key=api_key,
+        json_body={"query": query, "method": "server", "type": ""},
+        timeout_seconds=30.0,
+        request_timeout_seconds=10.0,
+    )
+    return {
+        "ok": int(response.get("status", 0)) == 200
+        and isinstance(response.get("json"), dict)
+        and bool(response["json"].get("id")),
+        "attempts": [{"method": "server", "response": response}],
+        "selected_method": "server",
+        "method_candidates": ["server"],
+        "response": response,
+    }
 
 
 def run_amule_command_hammer(
@@ -870,24 +893,7 @@ def run_spiral_hammer(
         assert isinstance(actions, list)
         for index in range(wave * 3):
             query = queries[(wave + index) % len(queries)]
-            response = dtt.retry_rest_request(
-                base_url,
-                "/api/v1/searches",
-                method="POST",
-                api_key=api_key,
-                json_body={"query": query, "method": "server", "type": ""},
-                timeout_seconds=30.0,
-                request_timeout_seconds=10.0,
-            )
-            start = {
-                "ok": int(response.get("status", 0)) == 200
-                and isinstance(response.get("json"), dict)
-                and bool(response["json"].get("id")),
-                "attempts": [{"method": "server", "response": response}],
-                "selected_method": "server",
-                "method_candidates": ["server"],
-                "response": response,
-            }
+            start = start_server_search_with_retry(base_url, api_key, query)
             actions.append(
                 {
                     "kind": "rest-search",

@@ -529,6 +529,35 @@ def test_godzilla_spiral_hammer_searches_use_retry_rest_request(monkeypatch) -> 
     ]
 
 
+def test_godzilla_control_plane_search_hammer_uses_retry_rest_request(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_retry_control_search_test")
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def fake_retry(_base_url, path, *, method="GET", json_body=None, **_kwargs):
+        calls.append((method, path, dict(json_body or {})))
+        return {"status": 200, "json": {"id": "search-1"}, "transient_errors": [{"type": "ConnectionAbortedError"}]}
+
+    monkeypatch.setattr(godzilla.dtt, "retry_rest_request", fake_retry)
+    monkeypatch.setattr(godzilla.rest_smoke, "compact_http_result", lambda result: {"status": result["status"]})
+    monkeypatch.setattr(godzilla.rest_smoke, "wait_for_search_observation", lambda *_args, **_kwargs: {"observed": True})
+    monkeypatch.setattr(godzilla.rest_smoke, "delete_all_searches", lambda *_args, **_kwargs: {"status": 200})
+
+    result = godzilla.run_emulebb_search_hammer(
+        "http://127.0.0.1:4711",
+        "key",
+        queries=["alpha", "beta"],
+        rounds=2,
+    )
+
+    assert [row["start"] for row in result["rounds"]] == [{"status": 200}, {"status": 200}]
+    assert [row["observation"] for row in result["rounds"]] == [{"observed": True}, {"observed": True}]
+    assert result["cleanup"] == {"status": 200}
+    assert calls == [
+        ("POST", "/api/v1/searches", {"query": "alpha", "method": "server", "type": ""}),
+        ("POST", "/api/v1/searches", {"query": "beta", "method": "server", "type": ""}),
+    ]
+
+
 def test_godzilla_log_marker_scan_counts_and_samples(tmp_path: Path) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_log_marker_scan_test")
     log_path = tmp_path / "emulebb-verbose.log"
