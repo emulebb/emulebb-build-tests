@@ -121,15 +121,15 @@ TEST_CASE("Desktop UI refresh intervals throttle non-forced list refreshes")
 	CHECK(ShouldRunPreferenceAlignedDisplayRefresh(true, 101u, 100u, 10000u));
 }
 
-TEST_CASE("Transfer display timer uses the normalized desktop refresh cadence")
+TEST_CASE("Unified desktop presentation timer uses selected cadence and paused title fallback")
 {
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(0u) == 0u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(500u) == 500u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(1000u) == 1000u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(2000u) == 2000u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(5000u) == 5000u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(10000u) == 10000u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(750u) == 2000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(0u) == 10000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(500u) == 500u);
+	CHECK(GetDesktopPresentationTimerDelayMs(1000u) == 1000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(2000u) == 2000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(5000u) == 5000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(10000u) == 10000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(750u) == 2000u);
 }
 
 TEST_CASE("Transfer display refresh state pauses when the UI should not present updates")
@@ -143,12 +143,18 @@ TEST_CASE("Transfer display refresh state pauses when the UI should not present 
 	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, false, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
 }
 
-TEST_CASE("Transfer-rate presentation remains lightweight and visible-window scoped")
+TEST_CASE("Unified desktop presentation pauses routine updates but keeps title cadence")
 {
-	CHECK(GetTransferRateDisplayRefreshTimerDelayMs() == 1000u);
-	CHECK(ShouldRefreshTransferRatePresentation(false, true));
-	CHECK_FALSE(ShouldRefreshTransferRatePresentation(true, true));
-	CHECK_FALSE(ShouldRefreshTransferRatePresentation(false, false));
+	CHECK(ShouldRefreshRoutineDesktopPresentation(false, true, 500u));
+	CHECK(ShouldRefreshRoutineDesktopPresentation(false, true, 2000u));
+	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(false, true, 0u));
+	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(true, true, 500u));
+	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(false, false, 500u));
+
+	CHECK(ShouldRefreshPausedTitlePresentation(false, true, 0u));
+	CHECK_FALSE(ShouldRefreshPausedTitlePresentation(false, true, 500u));
+	CHECK_FALSE(ShouldRefreshPausedTitlePresentation(true, true, 0u));
+	CHECK_FALSE(ShouldRefreshPausedTitlePresentation(false, false, 0u));
 }
 
 TEST_CASE("Transfer display mask keeps hidden-list work pending")

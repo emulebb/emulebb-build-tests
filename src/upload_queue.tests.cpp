@@ -42,13 +42,13 @@ TEST_CASE("Upload queue timer diagnostics count only loops slower than the inter
 	CHECK_FALSE(ShouldCountSlowUploadTimerLoop(1u, 0u));
 }
 
-TEST_CASE("Upload queue presentation cadence is owned by the transfer display timer")
+TEST_CASE("Upload queue presentation cadence is owned by the unified desktop timer")
 {
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(0u) == 0u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(500u) == 500u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(2000u) == 2000u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(10000u) == 10000u);
-	CHECK(GetTransferDisplayRefreshTimerDelayMs(750u) == 2000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(0u) == 10000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(500u) == 500u);
+	CHECK(GetDesktopPresentationTimerDelayMs(2000u) == 2000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(10000u) == 10000u);
+	CHECK(GetDesktopPresentationTimerDelayMs(750u) == 2000u);
 }
 
 TEST_CASE("Upload disk IO seam bounds pending overlapped reads before Windows quota failure")
