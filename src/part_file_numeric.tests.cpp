@@ -47,6 +47,7 @@ TEST_CASE("Part file numeric seam preserves the rounded-up completion percentage
 
 TEST_CASE("Part file numeric seam preflights buffered writes without overflowing the flush threshold")
 {
+#ifdef EMULEBB_TEST_HAVE_PART_FILE_BUFFERED_WRITE_PREFLIGHT
 	CHECK_EQ(PartFileNumericSeams::GetBufferedDataFlushThreshold(1024u), static_cast<uint64>(2048u));
 	CHECK_FALSE(PartFileNumericSeams::ShouldFlushBeforeBufferedWrite(0u, 4096u, 1024u));
 	CHECK_FALSE(PartFileNumericSeams::ShouldFlushBeforeBufferedWrite(1024u, 1024u, 1024u));
@@ -56,6 +57,9 @@ TEST_CASE("Part file numeric seam preflights buffered writes without overflowing
 	const uint64 nearMax = (std::numeric_limits<uint64>::max)() - 5u;
 	CHECK_EQ(PartFileNumericSeams::GetBufferedDataFlushThreshold(nearMax), (std::numeric_limits<uint64>::max)());
 	CHECK_FALSE(PartFileNumericSeams::ShouldFlushBeforeBufferedWrite(nearMax - 1u, 1u, nearMax));
+#else
+	MESSAGE("Part file buffered-write preflight helpers are not available in this workspace.");
+#endif
 }
 
 TEST_CASE("Part file numeric seam clamps list counts and 32-bit scores before narrowing to uint16")

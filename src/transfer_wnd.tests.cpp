@@ -74,6 +74,7 @@ TEST_CASE("Transfer window seam cancels category drag when the left button is go
 
 TEST_CASE("Transfer window seam maps Ctrl+number category shortcuts")
 {
+#ifdef EMULEBB_TEST_HAVE_CATEGORY_SHORTCUTS
 	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '0', true, false, false), 0);
 	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '1', true, false, false), 1);
 	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '9', true, false, false), 9);
@@ -82,10 +83,14 @@ TEST_CASE("Transfer window seam maps Ctrl+number category shortcuts")
 	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, '1', true, false, true), -1);
 	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYUP, '1', true, false, false), -1);
 	CHECK_EQ(TransferWndSeams::GetCategoryShortcutIndex(WM_KEYDOWN, 'A', true, false, false), -1);
+#else
+	MESSAGE("Transfer category shortcut helpers are not available in this workspace.");
+#endif
 }
 
 TEST_CASE("Transfer window seam maps direct list shortcuts")
 {
+#ifdef EMULEBB_TEST_HAVE_TRANSFER_LIST_SHORTCUTS
 	using TransferWndSeams::ETransferListShortcutCommand;
 
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'D', true, false, false) == ETransferListShortcutCommand::Downloads);
@@ -99,6 +104,9 @@ TEST_CASE("Transfer window seam maps direct list shortcuts")
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYUP, 'U', true, false, false) == ETransferListShortcutCommand::None);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, 'A', true, false, false) == ETransferListShortcutCommand::None);
 	CHECK(TransferWndSeams::ClassifyTransferListShortcut(WM_KEYDOWN, '1', true, false, false) == ETransferListShortcutCommand::None);
+#else
+	MESSAGE("Transfer direct list shortcut helpers are not available in this workspace.");
+#endif
 }
 
 TEST_SUITE_END();

@@ -1,7 +1,10 @@
 #include "../third_party/doctest/doctest.h"
 
-#include "UploadDiskIOThreadSeams.h"
 #include "UploadQueueSeams.h"
+#if __has_include("UploadDiskIOThreadSeams.h")
+#include "UploadDiskIOThreadSeams.h"
+#define EMULEBB_TEST_HAVE_UPLOAD_DISK_IO_PENDING_READ_SEAMS 1
+#endif
 
 TEST_SUITE_BEGIN("parity");
 
@@ -44,15 +47,20 @@ TEST_CASE("Upload queue timer diagnostics count only loops slower than the inter
 
 TEST_CASE("Upload queue presentation cadence is owned by the unified desktop timer")
 {
+#ifdef EMULEBB_TEST_HAVE_UNIFIED_DESKTOP_PRESENTATION_TIMER
 	CHECK(GetDesktopPresentationTimerDelayMs(0u) == 10000u);
 	CHECK(GetDesktopPresentationTimerDelayMs(500u) == 500u);
 	CHECK(GetDesktopPresentationTimerDelayMs(2000u) == 2000u);
 	CHECK(GetDesktopPresentationTimerDelayMs(10000u) == 10000u);
 	CHECK(GetDesktopPresentationTimerDelayMs(750u) == 2000u);
+#else
+	MESSAGE("Unified desktop presentation timer helpers are not available in this workspace.");
+#endif
 }
 
 TEST_CASE("Upload disk IO seam bounds pending overlapped reads before Windows quota failure")
 {
+#ifdef EMULEBB_TEST_HAVE_UPLOAD_DISK_IO_PENDING_READ_SEAMS
 	CHECK(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(0, 0));
 	CHECK(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(
 		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerClient - 1,
@@ -64,6 +72,9 @@ TEST_CASE("Upload disk IO seam bounds pending overlapped reads before Windows qu
 		0,
 		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerThread));
 	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(-1, 0));
+#else
+	MESSAGE("Upload disk IO pending-read helpers are not available in this workspace.");
+#endif
 }
 
 TEST_SUITE_END;

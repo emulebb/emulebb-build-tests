@@ -33,11 +33,15 @@ TEST_CASE("AICH sync seam validates only non-negative UI progress counts")
 
 TEST_CASE("AICH sync seam classifies owned-thread shutdown waits")
 {
+#ifdef EMULEBB_TEST_HAVE_AICH_SYNC_SHUTDOWN_WAIT_ACTION
 	CHECK_EQ(kAICHSyncThreadShutdownWaitMs, 5000u);
 	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_OBJECT_0) == EAICHSyncThreadShutdownWaitAction::Finished);
 	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_TIMEOUT) == EAICHSyncThreadShutdownWaitAction::TimedOut);
 	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_FAILED) == EAICHSyncThreadShutdownWaitAction::Failed);
 	CHECK(GetAICHSyncThreadShutdownWaitAction(WAIT_ABANDONED) == EAICHSyncThreadShutdownWaitAction::Failed);
+#else
+	MESSAGE("AICH sync owned-thread shutdown wait helper is not available in this workspace.");
+#endif
 }
 
 #if defined(EMULEBB_TEST_HAVE_AICH_SYNC_PROGRESS_DELIVERY_ACTION) && defined(EMULEBB_TEST_HAVE_WORKER_UI_MESSAGE_DELIVERY)

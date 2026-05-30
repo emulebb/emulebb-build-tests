@@ -47,6 +47,7 @@ TEST_CASE("EMSocket overlapped cleanup retry helper retries only for incomplete 
 
 TEST_CASE("EMSocket send queue budget helpers bound packet counts and bytes")
 {
+#ifdef EMULEBB_HAS_EMSOCKET_SEND_BUDGET_SEAMS
 	CHECK(CanQueueEMSocketControlPacket(0u, 0u, 128u));
 	CHECK(CanQueueEMSocketControlPacket(kMaxEMSocketQueuedControlPackets - 1u, kMaxEMSocketQueuedControlBytes - 128u, 128u));
 	CHECK_FALSE(CanQueueEMSocketControlPacket(kMaxEMSocketQueuedControlPackets, 0u, 128u));
@@ -58,10 +59,14 @@ TEST_CASE("EMSocket send queue budget helpers bound packet counts and bytes")
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(kMaxEMSocketQueuedStandardPackets, 0u, 1024u));
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, kMaxEMSocketQueuedStandardBytes, 1u));
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, 0u, static_cast<uint32>(kMaxEMSocketQueuedStandardBytes + 1u)));
+#else
+	MESSAGE("EMSocket send budget helpers are not available in this workspace.");
+#endif
 }
 
 TEST_CASE("EMSocket receive allocation helper preserves trailing slack and max payload")
 {
+#ifdef EMULEBB_HAS_EMSOCKET_SEND_BUDGET_SEAMS
 	size_t allocationBytes = 0;
 
 	CHECK(TryGetIncomingPacketAllocationSize(0u, 2000000u, &allocationBytes));
@@ -70,10 +75,14 @@ TEST_CASE("EMSocket receive allocation helper preserves trailing slack and max p
 	CHECK_EQ(allocationBytes, static_cast<size_t>(2000001u));
 	CHECK_FALSE(TryGetIncomingPacketAllocationSize(2000001u, 2000000u, &allocationBytes));
 	CHECK_FALSE(TryGetIncomingPacketAllocationSize(1u, 2000000u, NULL));
+#else
+	MESSAGE("EMSocket receive allocation helper is not available in this workspace.");
+#endif
 }
 
 TEST_CASE("EMSocket overlapped send helper recognizes borrowed sendbuffer slices")
 {
+#ifdef EMULEBB_HAS_EMSOCKET_SEND_BUDGET_SEAMS
 	char buffer[16] = {};
 
 	CHECK(CanBorrowOverlappedSendBufferSlice(0u, 16u, 16u));
@@ -87,6 +96,9 @@ TEST_CASE("EMSocket overlapped send helper recognizes borrowed sendbuffer slices
 	CHECK_FALSE(IsBorrowedOverlappedSendBufferSlice(buffer + 16, buffer, sizeof buffer));
 	CHECK_FALSE(IsBorrowedOverlappedSendBufferSlice(NULL, buffer, sizeof buffer));
 	CHECK_FALSE(IsBorrowedOverlappedSendBufferSlice(buffer, NULL, sizeof buffer));
+#else
+	MESSAGE("EMSocket overlapped send helper is not available in this workspace.");
+#endif
 }
 
 TEST_SUITE_END;

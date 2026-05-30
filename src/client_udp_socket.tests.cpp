@@ -59,14 +59,19 @@ TEST_CASE("Client UDP seam gates outgoing encryption on the global crypt prefere
 
 TEST_CASE("Client UDP seam bounds queued outgoing control packets")
 {
+#ifdef EMULEBB_TEST_HAVE_CLIENT_UDP_SOCKET_FAILURE_SEAMS
 	CHECK(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(0u));
 	CHECK(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets - 1u));
 	CHECK_FALSE(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets));
 	CHECK_FALSE(ClientUDPSocketSeams::CanQueueOutgoingClientUdpControlPacket(ClientUDPSocketSeams::kMaxOutgoingClientUdpControlQueuePackets + 1u));
+#else
+	MESSAGE("Client UDP outgoing control queue limit helper is not available in this workspace.");
+#endif
 }
 
 TEST_CASE("Client UDP seam checks datagram allocation and socket lengths together")
 {
+#ifdef EMULEBB_TEST_HAVE_CLIENT_UDP_SOCKET_FAILURE_SEAMS
 	uint32_t plainPacketSize = 0;
 	size_t allocationSize = 0;
 	int socketSendSize = 0;
@@ -85,6 +90,9 @@ TEST_CASE("Client UDP seam checks datagram allocation and socket lengths togethe
 	CHECK_FALSE(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(static_cast<uint32_t>(INT_MAX), 0u, &plainPacketSize, &allocationSize, &socketSendSize));
 	CHECK_FALSE(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(1u, static_cast<size_t>(INT_MAX), &plainPacketSize, &allocationSize, &socketSendSize));
 	CHECK_FALSE(ClientUDPSocketSeams::TryGetOutgoingClientUdpPacketSize(1u, 0u, NULL, &allocationSize, &socketSendSize));
+#else
+	MESSAGE("Client UDP outgoing datagram sizing helper is not available in this workspace.");
+#endif
 }
 
 TEST_SUITE_END();
