@@ -56,6 +56,15 @@ DEFAULT_LOCAL_ARR_FIXTURE_SIZE_BYTES = 132 * 1024 * 1024
 MIN_ARR_RELEASE_SOURCES = 10
 MIN_ARR_RELEASE_TITLE_MATCH_SCORE = 150
 ARR_LOCAL_CERTIFICATE_VALIDATION = "disabledForLocalAddresses"
+QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS = 3
+QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS = 2.0
+QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
+    "unable to connect to qbittorrent",
+    "ssl connection could not be established",
+    "connection was aborted",
+    "forcibly closed",
+    "software in your host machine",
+)
 SONARR_EPISODE_TITLE_PATTERNS = (
     re.compile(r"\bs\d{1,2}e\d{1,3}\b", re.IGNORECASE),
     re.compile(r"\b\d{1,2}x\d{1,3}\b", re.IGNORECASE),
@@ -260,6 +269,16 @@ def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:
     """Returns a provider payload without harness-only report metadata."""
 
     return {key: value for key, value in provider.items() if not str(key).startswith("_emulebb")}
+
+
+def is_transient_qbit_client_result(result: dict[str, Any]) -> bool:
+    """Returns true when Arr reports a retryable local qBittorrent readiness failure."""
+
+    status = int(result.get("status") or 0)
+    if status not in {400, 409, 500, 502, 503}:
+        return False
+    body = str(result.get("body_text") or "").lower()
+    return any(fragment in body for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
 
 
 def get_tag_id(prowlarr_url: str, api_key: str, label: str) -> int | None:
@@ -999,28 +1018,41 @@ def create_temp_qbit_client(
         use_ssl=use_ssl,
     )
     try:
-        created = require_success(
-            arr_request(
+        transient_errors: list[str] = []
+        for attempt in range(1, QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS + 1):
+            created_client_id = None
+            create_result = arr_request(
                 arr_url,
                 api_key,
                 "/api/v3/downloadclient?forceSave=true",
                 method="POST",
                 json_body=public_provider_payload(payload),
-            ),
-            "Arr eMuleBB qBittorrent client create",
-        )
-        if not isinstance(created, dict) or not created.get("id"):
-            raise RuntimeError("Arr did not return a created qBittorrent client id.")
-        created_client_id = int(created["id"])
+            )
+            if is_transient_qbit_client_result(create_result) and attempt < QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS:
+                transient_errors.append(str(create_result.get("body_text") or "")[:500])
+                time.sleep(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS)
+                continue
+            created = require_success(create_result, "Arr eMuleBB qBittorrent client create")
+            if not isinstance(created, dict) or not created.get("id"):
+                raise RuntimeError("Arr did not return a created qBittorrent client id.")
+            created_client_id = int(created["id"])
 
-        test_payload = public_provider_payload(json.loads(json.dumps(created)))
-        test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
-        require_success(test_result, "Arr eMuleBB qBittorrent client test")
-        created["_emulebbSchemaSummary"] = schema_summary
-        created["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
-        created["_emulebbHostCertificateValidation"] = host_certificate_validation
-        created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
-        return created
+            test_payload = public_provider_payload(json.loads(json.dumps(created)))
+            test_result = arr_request(arr_url, api_key, "/api/v3/downloadclient/test", method="POST", json_body=test_payload, timeout_seconds=60.0)
+            if is_transient_qbit_client_result(test_result) and attempt < QBIT_CLIENT_TRANSIENT_RETRY_ATTEMPTS:
+                transient_errors.append(str(test_result.get("body_text") or "")[:500])
+                delete_download_client(arr_url, api_key, created_client_id)
+                created_client_id = None
+                time.sleep(QBIT_CLIENT_TRANSIENT_RETRY_DELAY_SECONDS)
+                continue
+            require_success(test_result, "Arr eMuleBB qBittorrent client test")
+            created["_emulebbSchemaSummary"] = schema_summary
+            created["_emulebbCertificatePolicy"] = payload.get("_emulebbCertificatePolicy")
+            created["_emulebbHostCertificateValidation"] = host_certificate_validation
+            created["_emulebbTestStatus"] = int(test_result.get("status") or 0)
+            created["_emulebbTransientRetries"] = transient_errors
+            return created
+        raise RuntimeError("Arr eMuleBB qBittorrent client create exhausted transient retry attempts.")
     except Exception as exc:
         if created_client_id is not None:
             try:

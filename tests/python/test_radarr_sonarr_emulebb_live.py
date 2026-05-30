@@ -1741,6 +1741,53 @@ def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.M
     ]
 
 
+def test_temp_qbit_client_retries_transient_https_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_radarr_sonarr_module()
+    calls: list[tuple[str, str]] = []
+    schema = arr_qbit_schema(certificate_validation=True)
+
+    monkeypatch.setattr(module, "get_qbit_schema", lambda _arr_url, _api_key: schema)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        method = str(kwargs.get("method") or "GET")
+        calls.append((method, path))
+        if path == "/api/v3/config/host" and method == "GET":
+            return {"status": 200, "json": {"id": 1, "certificateValidation": "enabled"}, "body_text": "{}"}
+        if path == "/api/v3/config/host" and method == "PUT":
+            return {"status": 202, "json": kwargs["json_body"], "body_text": "{}"}
+        if path == "/api/v3/downloadclient?forceSave=true" and calls.count((method, path)) == 1:
+            return {
+                "status": 400,
+                "json": None,
+                "body_text": "Unable to connect to qBittorrent: The SSL connection could not be established.",
+            }
+        if path == "/api/v3/downloadclient?forceSave=true":
+            return {"status": 201, "json": {"id": 77, "fields": []}, "body_text": "{}"}
+        if path == "/api/v3/downloadclient/test":
+            return {"status": 200, "json": {"ok": True}, "body_text": "{}"}
+        raise AssertionError(f"Unexpected Arr request: {method} {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    created = module.create_temp_qbit_client(
+        "http://radarr.test",
+        "key",
+        name="eMuleBB Live radarr 4711",
+        host="127.0.0.1",
+        port=4711,
+        emule_api_key="emule-key",
+        category_field="movieCategory",
+        category="RADARR_ENG",
+        use_ssl=True,
+    )
+
+    assert created["id"] == 77
+    assert created["_emulebbTestStatus"] == 200
+    assert len(created["_emulebbTransientRetries"]) == 1
+    assert calls.count(("POST", "/api/v3/downloadclient?forceSave=true")) == 2
+
+
 def test_arr_readiness_summaries_are_compact() -> None:
     module = load_radarr_sonarr_module()
 
