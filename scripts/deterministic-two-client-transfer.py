@@ -609,6 +609,8 @@ def configure_client_profile(
 ) -> None:
     """Applies deterministic network and optional REST settings to one profile."""
 
+    bind_interface = p2p_bind_interface_name.strip()
+    effective_p2p_bind_addr = "" if bind_interface else p2p_bind_addr.strip()
     values: list[tuple[str, str]] = [
             ("Nick", nick),
             ("Port", str(tcp_port)),
@@ -644,9 +646,9 @@ def configure_client_profile(
             ("MaxLogFileSize", "10485760"),
             ("MaxLogBuff", "256"),
             ("LogFileFormat", "0"),
-            ("BindInterface", p2p_bind_interface_name.strip()),
-            ("BindAddr", p2p_bind_addr.strip()),
-            ("BlockNetworkWhenBindUnavailableAtStartup", "1" if p2p_bind_interface_name.strip() else "0"),
+            ("BindInterface", bind_interface),
+            ("BindAddr", effective_p2p_bind_addr),
+            ("BlockNetworkWhenBindUnavailableAtStartup", "1" if bind_interface or effective_p2p_bind_addr else "0"),
     ]
     if crypt_layer_supported is not None:
         values.append(("CryptLayerSupported", "1" if crypt_layer_supported else "0"))

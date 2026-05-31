@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -140,12 +141,13 @@ def test_build_server_config_uses_workspace_artifact_paths(tmp_path: Path) -> No
         admin_port=8080,
         catalog_path=catalog_path,
         token="secret",
+        admin_address="192.0.2.10",
     )
 
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     assert payload == config
     assert payload["listen_address"] == "0.0.0.0:4661"
-    assert payload["admin_listen_address"] == "127.0.0.1:8080"
+    assert payload["admin_listen_address"] == "192.0.2.10:8080"
     assert payload["catalog_path"] == str(catalog_path)
     assert payload["protocol_obfuscation"] is True
     assert payload["server_udp"] is True
@@ -162,6 +164,7 @@ def test_build_server_config_allows_protocol_overrides(tmp_path: Path) -> None:
         admin_port=8080,
         catalog_path=catalog_path,
         token="secret",
+        admin_address="192.0.2.10",
         protocol_obfuscation=False,
         server_udp=False,
     )
@@ -304,6 +307,32 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
     assert "CryptTCPPaddingLength=128" in emule_section
 
 
+def test_configure_client_profile_prefers_p2p_interface_over_bind_address(tmp_path: Path) -> None:
+    module = load_suite_module()
+    config_dir = tmp_path / "profile" / "config"
+    config_dir.mkdir(parents=True)
+    module.live_common.write_utf16_ini_text(config_dir / "preferences.ini", "[eMule]\n[WebServer]\n")
+
+    module.configure_client_profile(
+        config_dir=config_dir,
+        app_exe=tmp_path / "app" / "emulebb.exe",
+        nick=module.CLIENT01.nick,
+        tcp_port=4662,
+        udp_port=4672,
+        ed2k_enabled=True,
+        autoconnect=True,
+        p2p_bind_interface_name="hide.me",
+        p2p_bind_addr="10.54.210.222",
+    )
+
+    text = module.live_common.read_ini_text(config_dir / "preferences.ini")
+    emule_section = text.split("[WebServer]", 1)[0]
+    assert "BindInterface=hide.me" in emule_section
+    assert re.search(r"BindAddr=\r?\n", emule_section)
+    assert "BindAddr=10.54.210.222" not in emule_section
+    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in emule_section
+
+
 def test_configure_client_profile_preserves_recursive_shared_directory_contract(tmp_path: Path) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_recursive_share_test")
     root = tmp_path / "library"
@@ -324,31 +353,31 @@ def test_configure_client_profile_preserves_recursive_shared_directory_contract(
 def test_godzilla_runtime_root_is_drive_letter_only() -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_runtime_root_test")
 
-    assert godzilla.parse_args([]).vhd_runtime_root == "drive-letter"
+    assert godzilla.parse_args(["--lan-bind-addr", "192.0.2.10"]).vhd_runtime_root == "drive-letter"
     with pytest.raises(SystemExit):
-        godzilla.parse_args(["--vhd-runtime-root", "folder-mount"])
+        godzilla.parse_args(["--lan-bind-addr", "192.0.2.10", "--vhd-runtime-root", "folder-mount"])
 
 
 def test_godzilla_stage_defaults_to_full_and_accepts_launch_scale() -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_stage_test")
 
-    assert godzilla.parse_args([]).stage == "full"
-    assert godzilla.parse_args(["--stage", "launch-scale"]).stage == "launch-scale"
+    assert godzilla.parse_args(["--lan-bind-addr", "192.0.2.10"]).stage == "full"
+    assert godzilla.parse_args(["--lan-bind-addr", "192.0.2.10", "--stage", "launch-scale"]).stage == "launch-scale"
     with pytest.raises(SystemExit):
-        godzilla.parse_args(["--stage", "unknown"])
+        godzilla.parse_args(["--lan-bind-addr", "192.0.2.10", "--stage", "unknown"])
 
 
 def test_godzilla_lan_mode_uses_x_local_ip(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_env_test")
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
-    args = godzilla.parse_args([])
+    args = godzilla.parse_args(["--lan-bind-addr", "192.0.2.10"])
     godzilla.validate_args(args)
 
     assert args.total_client_count == 30
     assert args.extra_emulebb_clients == 27
     assert godzilla.resolve_local_p2p_address(args) == "192.0.2.10"
-    assert godzilla.resolve_LAN_BIND_ADDR(args, "192.0.2.10") == "192.0.2.10"
+    assert godzilla.resolve_lan_bind_addr(args, "192.0.2.10") == "192.0.2.10"
 
 
 def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Path) -> None:
@@ -357,6 +386,8 @@ def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Pa
         [
             "--total-client-count",
             "3",
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--emulebb-files",
             "1",
             "--harness-files",
@@ -595,6 +626,8 @@ def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
         [
             "--total-client-count",
             "3",
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--emulebb-files",
             "1",
             "--harness-files",
@@ -613,7 +646,7 @@ def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
 
 def test_default_fixture_size_is_132_mib() -> None:
     module = load_suite_module()
-    args = module.parse_args([])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert module.DEFAULT_FIXTURE_SIZE_BYTES == 132 * 1024 * 1024
     assert args.fixture_size_bytes == module.DEFAULT_FIXTURE_SIZE_BYTES
