@@ -26,6 +26,11 @@ TEST_CASE("VPN Guard startup connection commands wait for runtime monitor arming
 	CHECK_FALSE(VpnGuardPolicySeams::IsRuntimeMonitorRequired(VpnGuardSeams::EMode::Block, true));
 	CHECK(VpnGuardPolicySeams::IsRuntimeMonitorRequired(VpnGuardSeams::EMode::Block, false));
 
+	CHECK(VpnGuardPolicySeams::CanUseP2PConnectionCommands(VpnGuardSeams::EMode::Off, false, false));
+	CHECK_FALSE(VpnGuardPolicySeams::CanUseP2PConnectionCommands(VpnGuardSeams::EMode::Block, false, false));
+	CHECK(VpnGuardPolicySeams::CanUseP2PConnectionCommands(VpnGuardSeams::EMode::Block, false, true));
+	CHECK_FALSE(VpnGuardPolicySeams::CanUseP2PConnectionCommands(VpnGuardSeams::EMode::Block, true, true));
+
 	CHECK(VpnGuardPolicySeams::CanUseStartupConnectionCommands(VpnGuardSeams::EMode::Off, false, false));
 	CHECK_FALSE(VpnGuardPolicySeams::CanUseStartupConnectionCommands(VpnGuardSeams::EMode::Block, false, false));
 	CHECK(VpnGuardPolicySeams::CanUseStartupConnectionCommands(VpnGuardSeams::EMode::Block, false, true));

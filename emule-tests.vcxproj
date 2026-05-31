@@ -260,6 +260,7 @@
     <ClCompile Include="src\speed_quick_actions.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\SpeedQuickActionsSeams.h')" />
     <ClCompile Include="src\standby_prevention.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\StandbyPreventionSeams.h')" />
     <ClCompile Include="src\udp_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UDPSocketSeams.h')" />
+    <ClCompile Include="src\port_rebind_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PortRebindPolicySeams.h')" />
     <ClCompile Include="src\vpn_guard_policy.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\VpnGuardPolicySeams.h')" />
     <ClCompile Include="src\vpn_guard_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\VpnGuardSeams.h')" />
     <ClCompile Include="src\startup_config_override.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\StartupConfigOverride.h')" />
@@ -375,6 +376,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\SocketIoSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SocketIoSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SocketPolicySeams.h" Condition="Exists('$(AppRoot)\srchybrid\SocketPolicySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\StatusBarInfo.h" Condition="Exists('$(AppRoot)\srchybrid\StatusBarInfo.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\PortRebindPolicySeams.h" Condition="Exists('$(AppRoot)\srchybrid\PortRebindPolicySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\TrayNotificationSeams.h" Condition="Exists('$(AppRoot)\srchybrid\TrayNotificationSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\TransferWndSeams.h" Condition="Exists('$(AppRoot)\srchybrid\TransferWndSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\UPnPImplMiniLibSeams.h" Condition="Exists('$(AppRoot)\srchybrid\UPnPImplMiniLibSeams.h')" />
