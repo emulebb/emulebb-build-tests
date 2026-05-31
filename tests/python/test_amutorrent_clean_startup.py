@@ -80,6 +80,69 @@ def test_live_wire_inputs_path_accepts_workspace_relative_explicit_path(tmp_path
     assert clean.resolve_clean_live_wire_inputs_path(repo_root, str(workspace_relative)) == inputs_file.resolve()
 
 
+def test_browser_fetch_retries_safe_transient_get(monkeypatch) -> None:
+    clean = load_clean_module()
+    monkeypatch.setattr(clean.time, "sleep", lambda _seconds: None)
+
+    class Page:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, *_args):
+            self.calls += 1
+            if self.calls == 1:
+                return {"status": 500, "payload": {"type": "error", "message": "eMuleBB request failed: read ECONNRESET"}}
+            return {"status": 200, "payload": {"ok": True}}
+
+    page = Page()
+
+    assert clean.fetch_page_json(page, "/api/v1/ed2k/servers") == {"status": 200, "payload": {"ok": True}, "attempts": 2}
+    assert page.calls == 2
+
+
+def test_browser_fetch_retries_safe_config_test_post(monkeypatch) -> None:
+    clean = load_clean_module()
+    monkeypatch.setattr(clean.time, "sleep", lambda _seconds: None)
+
+    class Page:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, *_args):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("net::ERR_CONNECTION_RESET")
+            return {"status": 200, "payload": {"success": True}}
+
+    page = Page()
+
+    assert clean.fetch_page_json(page, "/api/config/test", "POST", {"emulebb": {}}) == {
+        "status": 200,
+        "payload": {"success": True},
+        "attempts": 2,
+    }
+    assert page.calls == 2
+
+
+def test_browser_fetch_does_not_retry_mutating_post(monkeypatch) -> None:
+    clean = load_clean_module()
+    monkeypatch.setattr(clean.time, "sleep", lambda _seconds: None)
+
+    class Page:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, *_args):
+            self.calls += 1
+            return {"status": 500, "payload": {"type": "error", "message": "eMuleBB request failed: read ECONNRESET"}}
+
+    page = Page()
+    result = clean.fetch_page_json(page, "/api/v1/downloads/add", "POST", {"items": []})
+
+    assert result["status"] == 500
+    assert page.calls == 1
+
+
 @pytest.mark.parametrize(
     "row",
     [

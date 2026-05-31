@@ -51,6 +51,17 @@ wait_for_requested_networks = rest_api_smoke.wait_for_requested_networks
 wait_for_rest_ready = rest_api_smoke.wait_for_rest_ready
 write_json = live_common.write_json
 
+BROWSER_FETCH_TRANSIENT_MARKERS = (
+    "ECONNRESET",
+    "ERR_CONNECTION_RESET",
+    "socket hang up",
+    "UNEXPECTED_EOF_WHILE_READING",
+    "Remote end closed connection without response",
+    "WinError 10053",
+    "WinError 10054",
+    "WinError 10061",
+)
+
 
 def build_clean_amutorrent_environment(
     *,
@@ -129,23 +140,57 @@ def resolve_clean_live_wire_inputs_path(repo_root: Path, raw_path: str | None) -
     return resolved
 
 
-def fetch_page_json(page: Any, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
+def fetch_page_json_once(page: Any, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
     """Runs one same-origin browser fetch and returns status plus parsed payload."""
 
-    return page.evaluate(
-        """async ({path, method, body}) => {
-            const response = await fetch(path, {
-                method,
-                headers: {'Content-Type': 'application/json'},
-                body: body == null ? undefined : JSON.stringify(body)
-            });
-            const text = await response.text();
-            let payload = null;
-            try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = {parseError: String(e), text}; }
-            return {status: response.status, payload};
-        }""",
-        {"path": path, "method": method, "body": body},
-    )
+    try:
+        return page.evaluate(
+            """async ({path, method, body}) => {
+                const response = await fetch(path, {
+                    method,
+                    headers: {'Content-Type': 'application/json'},
+                    body: body == null ? undefined : JSON.stringify(body)
+                });
+                const text = await response.text();
+                let payload = null;
+                try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = {parseError: String(e), text}; }
+                return {status: response.status, payload};
+            }""",
+            {"path": path, "method": method, "body": body},
+        )
+    except Exception as exc:
+        return {"status": 0, "payload": {"type": "error", "message": str(exc)}}
+
+
+def is_retryable_browser_fetch(method: str, path: str, result: dict[str, Any]) -> bool:
+    """Returns whether a browser-origin aMuTorrent request can be retried safely."""
+
+    method_upper = method.upper()
+    if method_upper != "GET" and not (method_upper == "POST" and path.split("?", 1)[0] == "/api/config/test"):
+        return False
+    payload = result.get("payload")
+    if isinstance(payload, dict):
+        message = " ".join(str(payload.get(key) or "") for key in ("message", "error", "text"))
+    else:
+        message = str(payload or "")
+    return any(marker in message for marker in BROWSER_FETCH_TRANSIENT_MARKERS)
+
+
+def fetch_page_json(page: Any, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Runs one same-origin browser fetch, retrying safe transient bridge resets."""
+
+    attempts = 3 if method.upper() == "GET" or path.split("?", 1)[0] == "/api/config/test" else 1
+    last_result: dict[str, Any] = {}
+    for attempt in range(1, attempts + 1):
+        last_result = fetch_page_json_once(page, path, method, body)
+        if not is_retryable_browser_fetch(method, path, last_result):
+            if attempt > 1:
+                last_result["attempts"] = attempt
+            return last_result
+        if attempt < attempts:
+            time.sleep(0.5 * attempt)
+    last_result["attempts"] = attempts
+    return last_result
 
 
 def require_browser_http_ok(name: str, result: dict[str, Any]) -> dict[str, Any]:
