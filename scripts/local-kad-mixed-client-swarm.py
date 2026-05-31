@@ -59,7 +59,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--harness-exe")
@@ -297,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
-            "rest_bind_addr": args.bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "participants": {key: asdict(value) for key, value in specs.items()},
             "client_inventory": {
                 "harness": harness_client.as_report(),
@@ -329,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
                 app_exe=app_exe,
                 spec=spec,
                 api_key=args.api_key,
-                rest_bind_addr=args.bind_addr,
+                lan_bind_addr=args.lan_bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
             )
@@ -395,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"][f"{CLIENT01.profile_id}_rest_ready"] = rest_smoke.compact_http_result(
             rest_smoke.wait_for_rest_ready(
-                local_kad.base_url(args.bind_addr, specs["emulebb"]),
+                local_kad.base_url(args.lan_bind_addr, specs["emulebb"]),
                 args.api_key,
                 args.rest_ready_timeout_seconds,
             )
@@ -417,11 +417,11 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "start_kad"
         report["checks"][f"{CLIENT01.profile_id}_kad_start"] = local_kad.start_kad(
-            local_kad.base_url(args.bind_addr, specs["emulebb"]),
+            local_kad.base_url(args.lan_bind_addr, specs["emulebb"]),
             args.api_key,
         )
         report["checks"][f"{CLIENT01.profile_id}_kad_running"] = rest_smoke.wait_for_kad_running(
-            local_kad.base_url(args.bind_addr, specs["emulebb"]),
+            local_kad.base_url(args.lan_bind_addr, specs["emulebb"]),
             args.api_key,
             args.kad_running_timeout_seconds,
         )
@@ -457,7 +457,7 @@ def main(argv: list[str] | None = None) -> int:
                     "target_kind": target_key,
                     "target_udp_port": target.udp_port,
                     "result": local_kad.bootstrap_kad(
-                        local_kad.base_url(args.bind_addr, source),
+                        local_kad.base_url(args.lan_bind_addr, source),
                         args.api_key,
                         peer_address=p2p_address,
                         peer_udp_port=target.udp_port,
@@ -472,13 +472,13 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["swarm_readiness_policy"] = {
             "min_contacts_per_emule_client": args.min_contacts_per_emule_client,
             "require_connected": True,
-            "single_bind_address_limit": "Kad accepts one contact per IP in this local single-address matrix; multi-contact assertions require per-client local IP aliases or adapters.",
+            "single_lan_bind_address_limit": "Kad accepts one contact per IP in this local single-address matrix; multi-contact assertions require per-client local IP aliases or adapters.",
             "tracing_harness_policy": "Kad autostarts from preferences and preseeded nodes.dat; no eMuleBB JSON REST API is expected on the harness branch.",
             "amule_policy": "Kad must be running through EC; outbound paths are driven by nodes.dat preseed.",
         }
         report["checks"]["emule_family_swarm_ready"] = local_kad.wait_for_local_swarm(
             specs=[specs["emulebb"]],
-            bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             api_key=args.api_key,
             min_contacts_per_client=args.min_contacts_per_emule_client,
             require_connected=True,
@@ -486,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["final_kad_status"] = {
             CLIENT01.profile_id: local_kad.compact_local_kad_status(
-                local_kad.get_kad_status(local_kad.base_url(args.bind_addr, specs["emulebb"]), args.api_key)
+                local_kad.get_kad_status(local_kad.base_url(args.lan_bind_addr, specs["emulebb"]), args.api_key)
             ),
             CLIENT02.profile_id: local_kad.compact_local_kad_status(
                 {

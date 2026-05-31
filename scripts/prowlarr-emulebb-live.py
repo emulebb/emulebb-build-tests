@@ -1941,7 +1941,7 @@ def qbit_direct_add(
     }
 
 
-def choose_listen_port(bind_addr: str) -> int:
+def choose_listen_port(lan_bind_addr: str) -> int:
     """Returns one free TCP port on the actual eMule web bind address."""
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -2257,7 +2257,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--env-file", default=str((REPO_ROOT / live_env.DEFAULT_ENV_FILE_NAME).resolve()))
     parser.add_argument("--emule-api-key", default="prowlarr-emulebb-live-key")
-    parser.add_argument("--bind-addr")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
@@ -2278,15 +2278,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_bind_addr(prowlarr_url: str, explicit_bind_addr: str | None) -> str:
+def resolve_lan_bind_addr(prowlarr_url: str, explicit_lan_bind_addr: str | None) -> str:
     """Chooses the eMule web bind address reachable by local Prowlarr."""
 
-    if explicit_bind_addr:
-        return explicit_bind_addr
+    if explicit_lan_bind_addr:
+        return rest_smoke.require_lan_bind_addr(explicit_lan_bind_addr)
     parsed = urllib.parse.urlparse(prowlarr_url)
-    if parsed.hostname and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
-        return parsed.hostname
-    return "127.0.0.1"
+    if parsed.hostname:
+        return rest_smoke.require_lan_bind_addr(parsed.hostname)
+    raise RuntimeError("--lan-bind-addr is required; loopback is not usable with VPN split tunneling.")
 
 
 def main() -> int:
@@ -2334,8 +2334,8 @@ def main() -> int:
     )
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
-    bind_addr = resolve_bind_addr(prowlarr_url, args.bind_addr)
-    port = choose_listen_port(bind_addr)
+    lan_bind_addr = resolve_lan_bind_addr(prowlarr_url, args.lan_bind_addr)
+    port = choose_listen_port(lan_bind_addr)
     use_https = args.rest_webserver_scheme == "https"
     emule_base_url = f"{args.rest_webserver_scheme}://{bind_addr}:{port}"
     torznab_base_url = f"{emule_base_url}/indexer/emulebb"

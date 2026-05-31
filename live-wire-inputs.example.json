@@ -43,10 +43,10 @@
   "local_package_install": {
     "target_path": "C:\\tools\\emulebb",
     "import_profile_dir": "F:\\M\\H06T01\\dldz\\EMULE_BIN",
-    "control_bind_address": "127.0.0.1",
+    "lan_bind_address": "192.0.2.10",
     "emulebb_port": 4711,
     "amutorrent_port": 4000,
-    "amutorrent_bind_address": "127.0.0.1",
+    "amutorrent_lan_bind_address": "192.0.2.10",
     "p2p_bind_interface": "hide.me",
     "dependency_manifest": "C:\\example\\emulebb-suite-dependencies.json",
     "enable_rest": true,

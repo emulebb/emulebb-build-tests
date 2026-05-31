@@ -161,9 +161,10 @@ TEST_NETWORK_ALLOWED_SCOPES = {
     "vpn": {"vpn"},
     "all": set(TEST_NETWORK_SCOPES),
 }
-BIND_ADDR_SUITE_NAMES = frozenset(
+LAN_BIND_ADDR_SUITE_NAMES = frozenset(
     {
         "amutorrent-browser-smoke",
+        "auto-browse-live",
         "category-incoming-path-matrix",
         "deterministic-two-client-transfer",
         "disk-space-guard-live",
@@ -175,18 +176,19 @@ BIND_ADDR_SUITE_NAMES = frozenset(
         "local-kad-mixed-client-swarm",
         "local-kad-swarm",
         "multi-client-p2p-matrix",
+        "package-helper-integration",
         "prowlarr-emulebb",
         "radarr-emulebb",
         "radarr-emulebb-local",
         "rest-api",
         "rest-cold-start-dump-stress",
+        "search-ui-live",
         "shared-directories-rest",
         "sonarr-emulebb",
         "sonarr-emulebb-local",
         "vhd-partfile-recovery",
     }
 )
-WEB_BIND_ADDR_SUITE_NAMES = frozenset({"auto-browse-live"})
 LAN_INTERFACE_ENV = "EMULEBB_TEST_LAN_INTERFACE"
 LAN_IP_RESOLVED_ENV = "EMULEBB_TEST_LAN_IP_RESOLVED"
 X_LOCAL_IP_ENV = "X_LOCAL_IP"
@@ -1085,7 +1087,7 @@ def build_suite_command(
     prowlarr_exe: Path | None = None,
     radarr_exe: Path | None = None,
     sonarr_exe: Path | None = None,
-    controller_bind_addr: str | None = None,
+    lan_bind_addr: str | None = None,
     fail_fast: bool = False,
 ) -> list[str]:
     """Builds one child suite command line."""
@@ -1112,10 +1114,8 @@ def build_suite_command(
             command.extend(["--profile-dir", str(seed_config_dir.parent.resolve())])
     if spec.name == "live-process-monitor" and live_process_monitor_profile_dir is not None:
         command.extend(["--profile-dir", str(live_process_monitor_profile_dir.resolve())])
-    if controller_bind_addr and spec.name in BIND_ADDR_SUITE_NAMES:
-        command.extend(["--bind-addr", controller_bind_addr])
-    if controller_bind_addr and spec.name in WEB_BIND_ADDR_SUITE_NAMES:
-        command.extend(["--web-bind-addr", controller_bind_addr])
+    if lan_bind_addr and spec.name in LAN_BIND_ADDR_SUITE_NAMES:
+        command.extend(["--lan-bind-addr", lan_bind_addr])
     if spec.accepts_startup_trace_mode:
         command.extend(["--startup-trace-mode", startup_trace_mode])
     if spec.accepts_shared_root and shared_root is not None:
@@ -2145,7 +2145,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     lan_bind_interface_name = os.environ.get(LAN_INTERFACE_ENV, "").strip()
     lan_bind_interface_address = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
-    controller_bind_addr = os.environ.get(X_LOCAL_IP_ENV, "").strip() or lan_bind_interface_address
+    lan_bind_addr = os.environ.get(X_LOCAL_IP_ENV, "").strip() or lan_bind_interface_address
     vpn_bind_interface_name = os.environ.get(VPN_INTERFACE_ENV, "").strip()
     vpn_bind_interface_address = os.environ.get(VPN_IP_RESOLVED_ENV, "").strip()
     network_context_json = os.environ.get(NETWORK_CONTEXT_JSON_ENV, "").strip()
@@ -2181,7 +2181,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                 "interface_name": lan_bind_interface_name,
                 "ip_address": lan_bind_interface_address,
             },
-            "controller_bind_address": controller_bind_addr,
+            "lan_bind_address": lan_bind_addr,
             "vpn": {
                 "interface_name": vpn_bind_interface_name,
                 "ip_address": vpn_bind_interface_address,
@@ -2503,7 +2503,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             prowlarr_exe=Path(args.prowlarr_exe) if args.prowlarr_exe else None,
             radarr_exe=Path(args.radarr_exe) if args.radarr_exe else None,
             sonarr_exe=Path(args.sonarr_exe) if args.sonarr_exe else None,
-            controller_bind_addr=controller_bind_addr or None,
+            lan_bind_addr=lan_bind_addr or None,
             fail_fast=args.fail_fast,
         )
         started = time.monotonic()

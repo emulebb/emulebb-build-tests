@@ -128,6 +128,36 @@ def test_build_search_plan_rejects_empty_terms_and_rounds() -> None:
         raise AssertionError("invalid Search UI live plan was accepted")
 
 
+def test_configure_search_ui_profile_uses_LAN_BIND_ADDR_and_p2p_interface(monkeypatch, tmp_path: Path) -> None:
+    module = load_search_ui_module()
+    calls = []
+
+    class FakeRestSmoke:
+        @staticmethod
+        def configure_webserver_profile(config_dir, app_exe, api_key, port, bind_addr):
+            calls.append(("rest", config_dir, app_exe, api_key, port, bind_addr))
+
+        @staticmethod
+        def apply_p2p_bind_interface_override(config_dir, bind_interface):
+            calls.append(("p2p", config_dir, bind_interface))
+
+    monkeypatch.setattr(module, "rest_smoke", FakeRestSmoke)
+
+    module.configure_search_ui_profile(
+        tmp_path / "config",
+        tmp_path / "emulebb.exe",
+        "api-key",
+        4711,
+        "192.0.2.10",
+        "hide.me",
+    )
+
+    assert calls == [
+        ("rest", tmp_path / "config", tmp_path / "emulebb.exe", "api-key", 4711, "192.0.2.10"),
+        ("p2p", tmp_path / "config", "hide.me"),
+    ]
+
+
 def test_is_safe_ui_download_candidate_rejects_executables_video_and_bad_hash() -> None:
     module = load_search_ui_module()
     base = {

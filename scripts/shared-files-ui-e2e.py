@@ -73,7 +73,7 @@ IDC_SFLIST = 2167
 IDC_SF_FNAME = 3038
 IDC_SHAREDDIRSTREE = 2926
 VHD_MONITORED_FOLDER_SCENARIO = "monitored-folder-events-vhd"
-CONTROLLER_BIND_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
+lan_bind_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
 
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
@@ -398,7 +398,7 @@ def prepare_tree_refresh_stress_fixture(
         scenario_id=artifacts_dir.name,
     )
     rest_api_key = f"shared-files-ui-{scenario_name}-key"
-    rest_bind_host = resolve_controller_bind_host()
+    rest_bind_host = resolve_lan_bind_host()
     rest_port = choose_rest_listen_port(rest_bind_host)
     configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port, rest_bind_host)
     fixture.update(
@@ -465,14 +465,14 @@ def prepare_duplicate_reuse_fixture(seed_config_dir: Path, artifacts_dir: Path) 
     return fixture
 
 
-def resolve_controller_bind_host() -> str:
-    """Returns the LAN controller host for local REST checks, or loopback."""
+def resolve_lan_bind_host() -> str:
+    """Returns the LAN controller host for local REST checks."""
 
-    for name in CONTROLLER_BIND_ENV_NAMES:
+    for name in lan_bind_ENV_NAMES:
         value = os.environ.get(name, "").strip()
         if value:
-            return rest_api_smoke.rest_base_host_for_bind_addr(value)
-    return "127.0.0.1"
+            return rest_api_smoke.rest_base_host_for_lan_bind_addr(value)
+    raise RuntimeError("X_LOCAL_IP or EMULEBB_TEST_LAN_IP_RESOLVED must provide the LAN bind address.")
 
 
 def choose_rest_listen_port(bind_host: str) -> int:
@@ -502,7 +502,7 @@ def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: 
             app_exe=app_exe,
             api_key=api_key,
             port=port,
-            bind_addr=bind_host,
+            lan_bind_addr=bind_host,
             use_gzip=False,
             allow_admin_high_level_func=True,
         ),
@@ -537,7 +537,7 @@ def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_di
         scenario_id=artifacts_dir.name,
     )
     rest_api_key = "shared-files-ui-lifecycle-key"
-    rest_bind_host = resolve_controller_bind_host()
+    rest_bind_host = resolve_lan_bind_host()
     rest_port = choose_rest_listen_port(rest_bind_host)
     configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port, rest_bind_host)
     fixture.update(
@@ -614,7 +614,7 @@ def prepare_monitored_folder_events_fixture_at_root(
         scenario_id=artifacts_dir.name,
     )
     rest_api_key = "shared-files-ui-monitor-key"
-    rest_bind_host = resolve_controller_bind_host()
+    rest_bind_host = resolve_lan_bind_host()
     rest_port = choose_rest_listen_port(rest_bind_host)
     configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port, rest_bind_host)
     fixture.update(
@@ -1600,7 +1600,7 @@ def require_json_array(result: dict[str, object], expected_status: int) -> list[
 
 
 def wait_for_rest_ready(base_url: str, api_key: str) -> dict[str, object]:
-    """Waits until the live REST API accepts authenticated localhost requests."""
+    """Waits until the live REST API accepts authenticated LAN-bound requests."""
 
     return wait_for(
         lambda: http_request(base_url, "/api/v1/app", api_key=api_key),

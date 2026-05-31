@@ -24,14 +24,14 @@ def load_suite_module():
 
 def test_local_kad_defaults_are_local_and_bounded() -> None:
     module = load_suite_module()
-    args = module.parse_args([])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.client_count == 3
     assert args.min_contacts_per_client == 1
     assert args.bootstrap_mode == "rest"
     assert args.nodes_dat_fixture_mode == "valid"
     assert args.p2p_bind_interface_name == ""
-    assert args.bind_addr == "127.0.0.1"
+    assert args.lan_bind_addr == "192.0.2.10"
     assert args.swarm_ready_timeout_seconds == 240.0
 
 
@@ -39,15 +39,24 @@ def test_validate_args_requires_real_swarm() -> None:
     module = load_suite_module()
 
     with pytest.raises(ValueError, match="at least 2"):
-        module.validate_args(module.parse_args(["--client-count", "1"]))
+        module.validate_args(module.parse_args(["--lan-bind-addr", "192.0.2.10", "--client-count", "1"]))
     with pytest.raises(ValueError, match="may be zero only"):
-        module.validate_args(module.parse_args(["--min-contacts-per-client", "0"]))
+        module.validate_args(module.parse_args(["--lan-bind-addr", "192.0.2.10", "--min-contacts-per-client", "0"]))
     with pytest.raises(ValueError, match="lower than client count"):
-        module.validate_args(module.parse_args(["--client-count", "3", "--min-contacts-per-client", "3"]))
+        module.validate_args(module.parse_args(["--lan-bind-addr", "192.0.2.10", "--client-count", "3", "--min-contacts-per-client", "3"]))
     with pytest.raises(ValueError, match="requires preseed or both"):
-        module.validate_args(module.parse_args(["--nodes-dat-fixture-mode", "stale"]))
+        module.validate_args(module.parse_args(["--lan-bind-addr", "192.0.2.10", "--nodes-dat-fixture-mode", "stale"]))
     module.validate_args(
-        module.parse_args(["--bootstrap-mode", "preseed", "--nodes-dat-fixture-mode", "truncated", "--min-contacts-per-client", "0"])
+        module.parse_args([
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--bootstrap-mode",
+            "preseed",
+            "--nodes-dat-fixture-mode",
+            "truncated",
+            "--min-contacts-per-client",
+            "0",
+        ])
     )
 
 
@@ -101,7 +110,7 @@ def test_configure_kad_client_profile_is_local_only(monkeypatch, tmp_path: Path)
         app_exe=tmp_path / "app" / "emulebb.exe",
         spec=spec,
         api_key="key",
-        rest_bind_addr="127.0.0.1",
+        lan_bind_addr="192.0.2.10",
         p2p_bind_interface_name="",
         p2p_bind_addr="10.1.2.3",
     )

@@ -56,9 +56,10 @@ def test_prowlarr_live_report_contract_requires_download_client_grab_proof() -> 
 def test_parser_defaults_rest_webserver_to_https() -> None:
     module = load_prowlarr_module()
 
-    args = module.build_parser().parse_args([])
+    args = module.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.rest_webserver_scheme == "https"
+    assert args.lan_bind_addr == "192.0.2.10"
 
 
 def test_upsert_creates_indexer_with_force_save_to_avoid_live_validation(monkeypatch) -> None:
@@ -244,7 +245,7 @@ def test_qbit_download_client_payload_sets_emule_connection_and_category() -> No
     payload = module.build_qbit_download_client_payload(
         qbit_schema(),
         name="eMuleBB Live Prowlarr 12345",
-        host="192.168.1.210",
+        host="192.0.2.10",
         port=12345,
         emule_api_key="emule-key",
         category="prowlarr_grabs_cat",
@@ -253,7 +254,7 @@ def test_qbit_download_client_payload_sets_emule_connection_and_category() -> No
     assert payload["name"] == "eMuleBB Live Prowlarr 12345"
     assert payload["enable"] is True
     assert payload["implementation"] == "QBittorrent"
-    assert field_value(payload, "host") == "192.168.1.210"
+    assert field_value(payload, "host") == "192.0.2.10"
     assert field_value(payload, "port") == 12345
     assert field_value(payload, "useSsl") is False
     assert field_value(payload, "urlBase") == ""
@@ -1181,7 +1182,7 @@ def test_secret_ignore_check_uses_secret_file_git_worktree(tmp_path: Path, monke
     secret_root = tmp_path / "bountarr"
     secret_root.mkdir()
     secret_path = secret_root / ".env"
-    secret_path.write_text("PROWLARR_URL=http://localhost\n", encoding="utf-8")
+    secret_path.write_text("PROWLARR_URL=http://127.0.0.1\n", encoding="utf-8")
     calls: list[tuple[list[str], Path | None]] = []
 
     def fake_run(args, **kwargs):

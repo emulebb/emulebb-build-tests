@@ -34,12 +34,12 @@ def test_clean_environment_keeps_wizard_enabled_and_removes_emulebb_env(tmp_path
         amutorrent_port=4002,
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
-        bind_addr="192.168.1.44",
+        lan_bind_addr="192.0.2.11",
         extra_ca_cert=str(tmp_path / "webserver-cert.pem"),
     )
 
     assert env["PORT"] == "4002"
-    assert env["BIND_ADDRESS"] == "192.168.1.44"
+    assert env["lan_bind_address"] == "192.0.2.11"
     assert env["AMUTORRENT_DATA_DIR"] == str(tmp_path / "amutorrent-data")
     assert env["WEB_AUTH_ENABLED"] == "false"
     assert "SKIP_SETUP_WIZARD" not in env
@@ -52,9 +52,10 @@ def test_clean_environment_keeps_wizard_enabled_and_removes_emulebb_env(tmp_path
 def test_parser_defaults_to_ignored_live_wire_file() -> None:
     clean = load_clean_module()
 
-    args = clean.build_parser().parse_args([])
+    args = clean.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.configuration == "Debug"
+    assert args.lan_bind_addr == "192.0.2.10"
     assert args.p2p_bind_interface_name == "hide.me"
     assert args.rest_webserver_scheme == "https"
     assert args.live_wire_inputs_file.endswith("live-wire-inputs.local.json")
@@ -230,11 +231,11 @@ def test_clean_startup_script_does_not_hardcode_runtime_live_terms() -> None:
     assert '"ubuntu"' not in script_text
 
 
-def test_clean_startup_uses_controller_bind_for_runtime_urls() -> None:
+def test_clean_startup_uses_lan_bind_for_runtime_urls() -> None:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-clean-startup.py"
     script_text = script_path.read_text(encoding="utf-8")
 
-    assert "controller_host = rest_api_smoke.rest_base_host_for_bind_addr(args.bind_addr)" in script_text
-    assert 'emule_base_url = f"{rest_scheme}://{controller_host}:{emule_port}"' in script_text
-    assert 'amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"' in script_text
-    assert "emule_host=controller_host" in script_text
+    assert "lan_host = rest_api_smoke.rest_base_host_for_lan_bind_addr(args.lan_bind_addr)" in script_text
+    assert 'emule_base_url = f"{rest_scheme}://{lan_host}:{emule_port}"' in script_text
+    assert 'amutorrent_base_url = f"http://{lan_host}:{amutorrent_port}"' in script_text
+    assert "emule_host=lan_host" in script_text

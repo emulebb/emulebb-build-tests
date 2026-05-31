@@ -48,7 +48,7 @@ def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkey
     )
 
     assert env["PORT"] == "19001"
-    assert env["BIND_ADDRESS"] == "10.55.0.10"
+    assert env["lan_bind_address"] == "10.55.0.10"
     assert env["AMUTORRENT_DATA_DIR"].endswith("amutorrent-data")
     assert env["WEB_AUTH_ENABLED"] == "false"
     assert env["SKIP_SETUP_WIZARD"] == "true"
@@ -150,12 +150,12 @@ def test_browser_payload_helper_accepts_declared_list_endpoints() -> None:
 
     payload = module.require_browser_http_payload(
         "interfaces",
-        {"status": 200, "payload": [{"value": "192.168.1.210"}]},
+        {"status": 200, "payload": [{"value": "192.0.2.10"}]},
         allow_list=True,
     )
     summary = module.summarize_browser_http_result({"status": 200, "payload": payload})
 
-    assert payload == [{"value": "192.168.1.210"}]
+    assert payload == [{"value": "192.0.2.10"}]
     assert summary == {"status": 200, "payload_type": "list", "item_count": 1}
 
 

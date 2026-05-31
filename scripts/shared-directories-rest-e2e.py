@@ -80,9 +80,9 @@ def configure_rest_only_profile(
     app_exe: Path,
     api_key: str,
     port: int,
-    bind_addr: str,
+    lan_bind_addr: str,
 ) -> None:
-    """Enables localhost REST while keeping P2P networks disabled."""
+    """Enables LAN-bound REST while keeping P2P networks disabled."""
 
     live_common.apply_emule_preferences(
         config_dir,
@@ -101,7 +101,7 @@ def configure_rest_only_profile(
             app_exe=app_exe,
             api_key=api_key,
             port=port,
-            bind_addr=bind_addr,
+            lan_bind_addr=lan_bind_addr,
             use_gzip=False,
             allow_admin_high_level_func=True,
         ),
@@ -710,7 +710,7 @@ def main() -> int:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default="shared-directories-rest-test-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument(
         "--mounted-shared-root",
@@ -741,8 +741,9 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
 
-    port = choose_listen_port()
-    base_url = f"http://127.0.0.1:{port}"
+    base_host = rest_api_smoke.rest_base_host_for_lan_bind_addr(args.lan_bind_addr)
+    port = choose_listen_port(args.lan_bind_addr)
+    base_url = f"http://{base_host}:{port}"
     fixtures = create_fixture_tree(artifacts_dir)
     mounted_shared_root = Path(args.mounted_shared_root).resolve() if args.mounted_shared_root else None
     admin_fixture_context = None
@@ -775,7 +776,7 @@ def main() -> int:
         app_exe,
         args.api_key,
         port,
-        args.bind_addr,
+        args.lan_bind_addr,
     )
 
     flat_path = live_common.win_path(fixtures["flat"], trailing_slash=True)
@@ -803,7 +804,7 @@ def main() -> int:
             "profile_base": str(profile_base),
             "config_dir": str(config_dir),
             "api_key_length": len(args.api_key),
-            "bind_addr": args.bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "rest_ready_timeout_seconds": args.rest_ready_timeout_seconds,
         },
         "fixtures": {key: str(value) for key, value in fixtures.items()},

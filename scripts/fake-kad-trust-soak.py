@@ -411,8 +411,9 @@ def run_soak(args: argparse.Namespace) -> int:
     )
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
-    port = rest_smoke.choose_listen_port()
-    base_url = f"http://127.0.0.1:{port}"
+    lan_bind_addr = rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    port = rest_smoke.choose_listen_port(lan_bind_addr)
+    base_url = f"http://{lan_bind_addr}:{port}"
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="fake-kad-trust-soak")
     seed_refresh = None
     if not args.skip_live_seed_refresh:
@@ -425,7 +426,7 @@ def run_soak(args: argparse.Namespace) -> int:
         paths.app_exe,
         args.api_key,
         port,
-        "127.0.0.1",
+        lan_bind_addr,
     )
     if args.p2p_bind_interface_name:
         rest_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
@@ -705,6 +706,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--api-key", default="emulebb-rest-test-key")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--duration-seconds", type=float, default=DEFAULT_DURATION_SECONDS)
     parser.add_argument("--cycle-pause-seconds", type=float, default=DEFAULT_CYCLE_PAUSE_SECONDS)
     parser.add_argument("--search-observation-timeout-seconds", type=float, default=DEFAULT_SEARCH_OBSERVATION_TIMEOUT_SECONDS)

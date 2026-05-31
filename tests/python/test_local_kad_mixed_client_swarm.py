@@ -23,9 +23,9 @@ def load_suite_module():
 
 def test_mixed_kad_defaults_are_local_and_cross_client() -> None:
     module = load_suite_module()
-    args = module.parse_args([])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
-    assert args.bind_addr == "127.0.0.1"
+    assert args.lan_bind_addr == "192.0.2.10"
     assert args.p2p_bind_interface_name == ""
     assert args.min_contacts_per_emule_client == 1
     assert args.bootstrap_throttle_seconds == module.DEFAULT_BOOTSTRAP_THROTTLE_SECONDS
@@ -35,9 +35,9 @@ def test_mixed_kad_validation_rejects_non_swarm_settings() -> None:
     module = load_suite_module()
 
     with pytest.raises(ValueError, match="at least 1"):
-        module.validate_args(module.parse_args(["--min-contacts-per-emule-client", "0"]))
+        module.validate_args(module.parse_args(["--lan-bind-addr", "192.0.2.10", "--min-contacts-per-emule-client", "0"]))
     with pytest.raises(ValueError, match="zero or greater"):
-        module.validate_args(module.parse_args(["--bootstrap-throttle-seconds", "-1"]))
+        module.validate_args(module.parse_args(["--lan-bind-addr", "192.0.2.10", "--bootstrap-throttle-seconds", "-1"]))
 
 
 def test_build_participant_specs_uses_stable_client_names() -> None:

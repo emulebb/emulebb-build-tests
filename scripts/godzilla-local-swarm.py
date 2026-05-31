@@ -184,7 +184,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--crash-monitor", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--lan-mode", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--lan-address-env", default=X_LOCAL_IP_ENV)
     parser.add_argument("--p2p-bind-interface-name", default="")
@@ -499,18 +499,18 @@ def resolve_local_p2p_address(args: argparse.Namespace) -> str:
     return discover_local_lan_ipv4()
 
 
-def resolve_rest_bind_addr(args: argparse.Namespace, p2p_address: str) -> str:
+def resolve_lan_bind_addr(args: argparse.Namespace, p2p_address: str) -> str:
     """Returns the REST bind address, promoting loopback defaults to LAN mode."""
 
-    candidate = str(args.bind_addr or "").strip()
+    candidate = str(args.lan_bind_addr or "").strip()
     if not bool(args.lan_mode):
-        return candidate or "127.0.0.1"
+        return dtt.rest_smoke.require_lan_bind_addr(candidate)
     if not candidate or candidate.lower() == "localhost":
         return p2p_address
     try:
         address = ipaddress.IPv4Address(candidate)
     except ipaddress.AddressValueError as exc:
-        raise RuntimeError(f"--bind-addr must be an IPv4 address in Godzilla LAN mode, got {candidate!r}.") from exc
+        raise RuntimeError(f"--lan-bind-addr must be an IPv4 address in Godzilla LAN mode, got {candidate!r}.") from exc
     if address.is_loopback or address.is_link_local or address.is_unspecified:
         return p2p_address
     return str(address)
@@ -2216,12 +2216,12 @@ def main(argv: list[str] | None = None) -> int:
         protocol_case = protocol_matrix.PROTOCOL_CASE_MAP[args.protocol_case]
         client_protocol_preferences = protocol_preferences(protocol_case)
         p2p_address = resolve_local_p2p_address(args)
-        args.bind_addr = resolve_rest_bind_addr(args, p2p_address)
+        args.lan_bind_addr = resolve_lan_bind_addr(args, p2p_address)
         ports = choose_ports(args.extra_emulebb_clients)
         if args.amutorrent_controller:
             ports["amutorrent"] = allocate_free_tcp_port(set(ports.values()))
-        base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
-        ed2k_admin_address = p2p_address if bool(args.lan_mode) else "127.0.0.1"
+        base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
+        ed2k_admin_address = p2p_address if bool(args.lan_mode) else args.lan_bind_addr
         admin_base_url = f"http://{ed2k_admin_address}:{ports['ed2k_admin']}"
         for index in range(args.extra_emulebb_clients):
             identity = extra_emulebb_identity(index)
@@ -2232,7 +2232,7 @@ def main(argv: list[str] | None = None) -> int:
                     "tcp_port": ports[f"extra_emulebb_{index}_tcp"],
                     "udp_port": ports[f"extra_emulebb_{index}_udp"],
                     "rest_port": ports[f"extra_emulebb_{index}_rest"],
-                    "base_url": f"http://{args.bind_addr}:{ports[f'extra_emulebb_{index}_rest']}",
+                    "base_url": f"http://{args.lan_bind_addr}:{ports[f'extra_emulebb_{index}_rest']}",
                     "p2p_address": p2p_address,
                     "server_port": ports["ed2k_tcp"],
                 }
@@ -2258,7 +2258,7 @@ def main(argv: list[str] | None = None) -> int:
         report["network"] = {
             "lan_mode": bool(args.lan_mode),
             "lan_address_env": args.lan_address_env,
-            "rest_bind_addr": args.bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "ed2k_admin_bind_addr": ed2k_admin_address,
             "p2p_bind_interface_address": p2p_address,
             "ports": ports,
@@ -2364,7 +2364,7 @@ def main(argv: list[str] | None = None) -> int:
             autoconnect=False,
             rest_api_key=args.api_key,
             rest_port=ports["client1_rest"],
-            rest_bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             p2p_bind_addr=p2p_address,
             **client_protocol_preferences,
@@ -2392,7 +2392,7 @@ def main(argv: list[str] | None = None) -> int:
                 autoconnect=False,
                 rest_api_key=args.api_key,
                 rest_port=int(client["rest_port"]),
-                rest_bind_addr=args.bind_addr,
+                lan_bind_addr=args.lan_bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
                 **client_protocol_preferences,
@@ -2539,7 +2539,7 @@ def main(argv: list[str] | None = None) -> int:
             env = amutorrent_local.build_local_amutorrent_environment(
                 base_env=os.environ,
                 amutorrent_port=ports["amutorrent"],
-                bind_addr=args.bind_addr,
+                lan_bind_addr=args.lan_bind_addr,
                 node_path=node_path,
                 data_dir=amutorrent_data_dir,
                 emulebb_rest_port=ports["client1_rest"],
@@ -2556,7 +2556,7 @@ def main(argv: list[str] | None = None) -> int:
                 stderr=subprocess.STDOUT,
                 text=True,
             )
-            amutorrent_base_url = f"http://{args.bind_addr}:{ports['amutorrent']}"
+            amutorrent_base_url = f"http://{args.lan_bind_addr}:{ports['amutorrent']}"
             amutorrent_smoke.wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.rest_ready_timeout_seconds)
             report["amutorrent"] = {
                 "base_url": amutorrent_base_url,

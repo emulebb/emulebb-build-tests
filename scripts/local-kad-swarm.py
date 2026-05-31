@@ -74,7 +74,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--client-count", type=int, default=DEFAULT_CLIENT_COUNT)
@@ -271,14 +271,14 @@ def configure_kad_client_profile(
     app_exe: Path,
     spec: KadClientSpec,
     api_key: str,
-    rest_bind_addr: str,
+    lan_bind_addr: str,
     p2p_bind_interface_name: str,
     p2p_bind_addr: str,
 ) -> dict[str, object]:
     """Applies local-only Kad and REST preferences to one eMuleBB profile."""
 
     bind_interface = p2p_bind_interface_name.strip()
-    bind_addr = "" if bind_interface else p2p_bind_addr.strip()
+    effective_p2p_bind_addr = "" if bind_interface else p2p_bind_addr.strip()
     live_common.apply_emule_preferences(
         config_dir,
         (
@@ -304,8 +304,8 @@ def configure_kad_client_profile(
             ("MaxDownload", str(dtt.DETERMINISTIC_BANDWIDTH_LIMIT_KIB)),
             ("CloseUPnPOnExit", "0"),
             ("BindInterface", bind_interface),
-            ("BindAddr", bind_addr),
-            ("BlockNetworkWhenBindUnavailableAtStartup", "1" if bind_interface or bind_addr else "0"),
+            ("BindAddr", effective_p2p_bind_addr),
+            ("BlockNetworkWhenBindUnavailableAtStartup", "1" if bind_interface or effective_p2p_bind_addr else "0"),
             ("DebugClientKadUDP", "1"),
         ),
     )
@@ -316,7 +316,7 @@ def configure_kad_client_profile(
             app_exe=app_exe,
             api_key=api_key,
             port=spec.rest_port,
-            bind_addr=rest_bind_addr,
+            lan_bind_addr=rest_smoke.require_lan_bind_addr(lan_bind_addr),
         ),
     )
     return {
@@ -324,15 +324,15 @@ def configure_kad_client_profile(
         "preferences": dtt.read_preferences_snapshot(config_dir),
         "local_bind": {
             "p2p_bind_interface_name": bind_interface,
-            "p2p_bind_addr": bind_addr,
+            "p2p_bind_addr": effective_p2p_bind_addr,
         },
     }
 
 
-def base_url(bind_addr: str, spec: KadClientSpec) -> str:
+def base_url(lan_bind_addr: str, spec: KadClientSpec) -> str:
     """Returns the REST base URL for one local Kad client."""
 
-    return f"http://{bind_addr}:{spec.rest_port}"
+    return f"http://{lan_bind_addr}:{spec.rest_port}"
 
 
 def get_kad_status(base_url_text: str, api_key: str) -> dict[str, Any]:
@@ -401,7 +401,7 @@ def build_bootstrap_plan(specs: list[KadClientSpec]) -> list[tuple[KadClientSpec
 def wait_for_local_swarm(
     *,
     specs: list[KadClientSpec],
-    bind_addr: str,
+    lan_bind_addr: str,
     api_key: str,
     min_contacts_per_client: int,
     require_connected: bool,
@@ -478,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
-            "rest_bind_addr": args.bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "bootstrap_mode": args.bootstrap_mode,
             "nodes_dat_fixture_mode": args.nodes_dat_fixture_mode,
             "clients": [asdict(spec) for spec in specs],
@@ -497,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
                 app_exe=paths.app_exe,
                 spec=spec,
                 api_key=args.api_key,
-                rest_bind_addr=args.bind_addr,
+                lan_bind_addr=args.lan_bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
                 p2p_bind_addr=p2p_address,
             )
@@ -528,14 +528,14 @@ def main(argv: list[str] | None = None) -> int:
                 minimized_to_tray=True,
             )
             report["checks"][f"{spec.profile_id}_rest_ready"] = rest_smoke.compact_http_result(
-                rest_smoke.wait_for_rest_ready(base_url(args.bind_addr, spec), args.api_key, args.rest_ready_timeout_seconds)
+                rest_smoke.wait_for_rest_ready(base_url(args.lan_bind_addr, spec), args.api_key, args.rest_ready_timeout_seconds)
             )
 
         for spec in specs:
             current_phase = f"start_kad_{spec.profile_id}"
-            report["checks"][f"{spec.profile_id}_kad_start"] = start_kad(base_url(args.bind_addr, spec), args.api_key)
+            report["checks"][f"{spec.profile_id}_kad_start"] = start_kad(base_url(args.lan_bind_addr, spec), args.api_key)
             report["checks"][f"{spec.profile_id}_kad_running"] = rest_smoke.wait_for_kad_running(
-                base_url(args.bind_addr, spec),
+                base_url(args.lan_bind_addr, spec),
                 args.api_key,
                 args.kad_running_timeout_seconds,
             )
@@ -550,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
                         "target": target.profile_id,
                         "target_udp_port": target.udp_port,
                         "result": bootstrap_kad(
-                            base_url(args.bind_addr, source),
+                            base_url(args.lan_bind_addr, source),
                             args.api_key,
                             peer_address=p2p_address,
                             peer_udp_port=target.udp_port,
@@ -574,14 +574,14 @@ def main(argv: list[str] | None = None) -> int:
         }
         report["checks"]["swarm_ready"] = wait_for_local_swarm(
             specs=specs,
-            bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             api_key=args.api_key,
             min_contacts_per_client=args.min_contacts_per_client,
             require_connected=require_connected,
             timeout_seconds=args.swarm_ready_timeout_seconds,
         )
         report["checks"]["final_kad_status"] = {
-            spec.profile_id: compact_local_kad_status(get_kad_status(base_url(args.bind_addr, spec), args.api_key))
+            spec.profile_id: compact_local_kad_status(get_kad_status(base_url(args.lan_bind_addr, spec), args.api_key))
             for spec in specs
         }
         report["status"] = "passed"

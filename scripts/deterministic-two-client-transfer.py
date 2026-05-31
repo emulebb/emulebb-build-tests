@@ -83,7 +83,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
@@ -174,14 +174,15 @@ def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, o
     return result
 
 
-def is_port_available(port: int, *, host: str = "127.0.0.1", udp: bool = False) -> bool:
+def is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
     """Reports whether a TCP or UDP port can be bound locally."""
 
+    bind_host = rest_smoke.require_lan_bind_addr(host)
     family = socket.AF_INET
     sock_type = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
     with socket.socket(family, sock_type) as probe:
         try:
-            probe.bind((host, port))
+            probe.bind((bind_host, port))
         except OSError:
             return False
     return True
@@ -265,7 +266,7 @@ def build_server_config(
     admin_port: int,
     catalog_path: Path,
     token: str,
-    admin_address: str = "127.0.0.1",
+    admin_address: str,
     protocol_obfuscation: bool = True,
     server_udp: bool = True,
 ) -> dict[str, object]:
@@ -598,7 +599,7 @@ def configure_client_profile(
     autoconnect: bool,
     rest_api_key: str | None = None,
     rest_port: int | None = None,
-    rest_bind_addr: str = "127.0.0.1",
+    lan_bind_addr: str = "",
     p2p_bind_interface_name: str = "",
     p2p_bind_addr: str = "",
     crypt_layer_supported: bool | None = None,
@@ -673,7 +674,7 @@ def configure_client_profile(
                 app_exe=app_exe,
                 api_key=rest_api_key,
                 port=rest_port,
-                bind_addr=rest_bind_addr,
+                lan_bind_addr=rest_smoke.require_lan_bind_addr(lan_bind_addr),
             ),
         )
 
@@ -918,10 +919,11 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             catalog_path=catalog_path,
             token=args.api_key,
+            admin_address=args.lan_bind_addr,
         )
         current_phase = "start_ed2k_server"
         server_process = start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        admin_base_url = f"http://127.0.0.1:{ports['ed2k_admin']}"
+        admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
         report["checks"]["ed2k_server_health"] = wait_for_admin_health(admin_base_url, 30.0)
 
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
@@ -957,7 +959,7 @@ def main(argv: list[str] | None = None) -> int:
             autoconnect=False,
             rest_api_key=args.api_key,
             rest_port=ports["client1_rest"],
-            rest_bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         configure_client_profile(
@@ -1035,7 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "launch_client1"
         client1_app = live_common.launch_app(paths.app_exe, Path(client1["profile_base"]), minimized_to_tray=True)
-        base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
+        base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
         report["checks"]["client1_rest_ready"] = rest_smoke.compact_http_result(
             rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
         )

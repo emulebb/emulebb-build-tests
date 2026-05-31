@@ -64,18 +64,21 @@ def test_emule_rest_request_retries_transient_socket_abort(monkeypatch) -> None:
     assert result["transient_errors"]
 
 
-def test_build_base_url_uses_configured_web_bind_address() -> None:
+def test_build_base_url_uses_configured_lan_bind_address() -> None:
     module = load_auto_browse_module()
 
-    assert module.build_base_url("192.168.1.210", 4711) == "http://192.168.1.210:4711"
-    assert module.build_base_url("127.0.0.1", 4711) == "http://127.0.0.1:4711"
+    assert module.build_base_url("192.0.2.10", 4711) == "http://192.0.2.10:4711"
 
 
-def test_build_base_url_maps_wildcard_bind_to_loopback() -> None:
+def test_build_base_url_rejects_loopback_and_wildcard() -> None:
     module = load_auto_browse_module()
 
-    assert module.build_base_url("0.0.0.0", 4711) == "http://127.0.0.1:4711"
-    assert module.build_base_url("::", 4711) == "http://127.0.0.1:4711"
+    for candidate in ("127.0.0.1", "0.0.0.0", "::"):
+        try:
+            module.build_base_url(candidate, 4711)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted invalid LAN bind address: {candidate}")
 
 
 def make_inputs(module):

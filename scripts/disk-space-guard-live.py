@@ -306,7 +306,7 @@ def run_disk_space_guard_case(
             paths.app_exe,
             args.api_key,
             port,
-            args.bind_addr,
+            args.lan_bind_addr,
         )
         summary["profile_base"] = str(profile_fixture["profile_base"])
         summary["config_dir"] = str(profile_fixture["config_dir"])
@@ -387,7 +387,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mount-root")
     parser.add_argument("--keep-admin-fixtures", action="store_true")
     parser.add_argument("--api-key", default="disk-space-guard-test-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--guard-transfer-size-mb", type=int)
     return parser
@@ -411,7 +411,7 @@ def run_disk_space_guard(args: argparse.Namespace) -> dict[str, object]:
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     config = build_admin_fixture_config(paths, args)
     port = rest_smoke.choose_listen_port()
-    base_url = f"http://{args.bind_addr}:{port}"
+    base_url = f"http://{args.lan_bind_addr}:{port}"
     guard_size_mb = args.guard_transfer_size_mb or max(args.vhd_size_mb * 2, args.vhd_size_mb + 128)
     guard_size_bytes = guard_size_mb * 1024 * 1024
     cases = build_disk_space_guard_cases()

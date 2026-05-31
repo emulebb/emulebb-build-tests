@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import socket
 import ssl
@@ -1014,20 +1015,44 @@ class LiveNetworkUnavailableError(RuntimeError):
     """Raised when live seed files load but no external network candidate connects."""
 
 
-def rest_base_host_for_bind_addr(bind_addr: str) -> str:
-    """Returns the host the harness should use to reach one WebServer bind address."""
+LAN_BIND_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
 
-    bind_host = bind_addr.strip()
-    if not bind_host or bind_host in {"0.0.0.0", "::"}:
-        return "127.0.0.1"
+
+def lan_bind_addr_from_env() -> str | None:
+    """Returns the LAN bind address supplied by workspace network discovery."""
+
+    for name in LAN_BIND_ENV_NAMES:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def require_lan_bind_addr(
+    lan_bind_addr: str | None = None,
+    *,
+    option_name: str = "--lan-bind-addr",
+    allow_env_fallback: bool = False,
+) -> str:
+    """Returns an explicit non-loopback LAN bind address, or raises."""
+
+    bind_host = (lan_bind_addr or (lan_bind_addr_from_env() if allow_env_fallback else None) or "").strip()
+    if bind_host in {"", "0.0.0.0", "::", "[::]", "localhost", "::1"} or bind_host.startswith("127."):
+        raise ValueError(f"{option_name} must be an explicit LAN address; loopback/wildcard binds break VPN split tunneling.")
     return bind_host
 
 
-def choose_listen_port(bind_addr: str = "127.0.0.1") -> int:
+def rest_base_host_for_lan_bind_addr(lan_bind_addr: str) -> str:
+    """Returns the host the harness should use to reach one WebServer bind address."""
+
+    return require_lan_bind_addr(lan_bind_addr, allow_env_fallback=False)
+
+
+def choose_listen_port(lan_bind_addr: str | None = None) -> int:
     """Returns one ephemeral TCP port for the smoke listener bind address."""
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind((rest_base_host_for_bind_addr(bind_addr), 0))
+        probe.bind((rest_base_host_for_lan_bind_addr(lan_bind_addr), 0))
         return int(probe.getsockname()[1])
 
 
@@ -1038,7 +1063,7 @@ def create_https_certificate_pair(app_exe: Path, artifacts_dir: Path, *, hosts: 
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / "webserver-cert.pem"
     key_path = cert_dir / "webserver-key.pem"
-    certificate_hosts = tuple(dict.fromkeys(("127.0.0.1", "localhost", *(host for host in hosts if host))))
+    certificate_hosts = tuple(dict.fromkeys(host for host in hosts if host))
     command = [
         str(app_exe),
         "--generate-webserver-cert",
@@ -1147,7 +1172,7 @@ def verify_https_pem_readiness(
     base_url: str,
     certificate_path: str,
     key_path: str,
-    bind_addr: str,
+    lan_bind_addr: str,
 ) -> dict[str, object]:
     """Verifies generated HTTPS PEM material and profile wiring before launch."""
 
@@ -1168,7 +1193,7 @@ def verify_https_pem_readiness(
                 "HTTPSCertificate": str(certificate),
                 "HTTPSKey": str(key),
                 "Port": str(endpoint["port"]),
-                "BindAddr": bind_addr,
+                "BindAddr": lan_bind_addr,
             },
         },
     }
@@ -1218,8 +1243,8 @@ def verify_https_pem_readiness(
             errors.append(f"WebServer HTTPSKey is {observed['HTTPSKey']!r}, expected {str(key)!r}.")
         if observed["Port"] != str(endpoint["port"]):
             errors.append(f"WebServer Port is {observed['Port']!r}, expected {endpoint['port']!r}.")
-        if observed["BindAddr"] != bind_addr:
-            errors.append(f"WebServer BindAddr is {observed['BindAddr']!r}, expected {bind_addr!r}.")
+        if observed["BindAddr"] != lan_bind_addr:
+            errors.append(f"WebServer BindAddr is {observed['BindAddr']!r}, expected {lan_bind_addr!r}.")
 
     summary["ok"] = not errors
     if errors:
@@ -1329,7 +1354,7 @@ def configure_webserver_profile(
     app_exe: Path,
     api_key: str,
     port: int,
-    bind_addr: str,
+    lan_bind_addr: str,
     *,
     use_https: bool = False,
     https_certificate: str = "",
@@ -1356,7 +1381,7 @@ def configure_webserver_profile(
             app_exe=app_exe,
             api_key=api_key,
             port=port,
-            bind_addr=bind_addr,
+            lan_bind_addr=require_lan_bind_addr(lan_bind_addr),
             use_gzip=True,
             allow_admin_high_level_func=True,
             use_https=use_https,
@@ -1467,7 +1492,9 @@ def parse_base_url_endpoint(base_url: str) -> dict[str, object]:
     parsed = urllib.parse.urlparse(base_url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError(f"Unsupported REST base URL scheme for socket probes: {parsed.scheme!r}")
-    host = parsed.hostname or "127.0.0.1"
+    if not parsed.hostname:
+        raise ValueError(f"REST base URL must include a host: {base_url!r}")
+    host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     return {
         "scheme": parsed.scheme,
@@ -1608,7 +1635,9 @@ def exercise_rest_socket_adversity(
 
     host = str(endpoint["host"])
     port = int(endpoint["port"])
-    quoted_host = host.encode("ascii", errors="ignore") or b"127.0.0.1"
+    quoted_host = host.encode("ascii", errors="ignore")
+    if not quoted_host:
+        raise ValueError(f"REST base URL host must be ASCII for raw socket probes: {host!r}")
     api_key_bytes = api_key.encode("ascii", errors="ignore")
     probes = [
         {
@@ -1915,7 +1944,9 @@ def exercise_rest_leak_churn(
     endpoint = parse_base_url_endpoint(base_url)
     host = str(endpoint["host"])
     port = int(endpoint["port"])
-    quoted_host = host.encode("ascii", errors="ignore") or b"127.0.0.1"
+    quoted_host = host.encode("ascii", errors="ignore")
+    if not quoted_host:
+        raise ValueError(f"REST base URL host must be ASCII for leak churn probes: {host!r}")
     api_key_bytes = api_key.encode("ascii", errors="ignore")
     http_payloads = (
         {
@@ -6214,7 +6245,7 @@ def main() -> int:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="rest-smoke-test-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--webserver-scheme", choices=["http", "https"], default="http")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
@@ -6289,7 +6320,7 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
 
-    base_host = rest_base_host_for_bind_addr(args.bind_addr)
+    base_host = rest_base_host_for_lan_bind_addr(args.lan_bind_addr)
     port = choose_listen_port(base_host)
     base_url = f"{args.webserver_scheme}://{base_host}:{port}"
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="rest-api-smoke")
@@ -6310,7 +6341,7 @@ def main() -> int:
         app_exe,
         args.api_key,
         port,
-        args.bind_addr,
+        args.lan_bind_addr,
         use_https=(args.webserver_scheme == "https"),
         https_certificate=https_material["certificate"],
         https_key=https_material["key"],
@@ -6336,7 +6367,7 @@ def main() -> int:
             "profile_base": str(profile["profile_base"]),
             "config_dir": str(profile["config_dir"]),
             "api_key_length": len(args.api_key),
-            "bind_addr": args.bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "webserver_scheme": args.webserver_scheme,
             "https_certificate": https_material["certificate"],
             "https_certificate_generator": https_material["generator"],
@@ -6385,7 +6416,7 @@ def main() -> int:
                 base_url=base_url,
                 certificate_path=https_material["certificate"],
                 key_path=https_material["key"],
-                bind_addr=args.bind_addr,
+                lan_bind_addr=args.lan_bind_addr,
             )
             report["checks"]["https_pem_readiness"] = https_pem_readiness
 

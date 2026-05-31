@@ -215,7 +215,7 @@ def test_materialize_private_harness_profile_writes_local_preferences(tmp_path: 
         live_profiles.PrivateHarnessProfileSpec(
             seed_config_dir=seed_config_dir,
             profile_root=profile_root,
-            bind_addr="127.0.0.1",
+            lan_bind_addr="127.0.0.1",
             tcp_port=33111,
             udp_port=33112,
             server_udp_port=33113,
@@ -275,7 +275,7 @@ def test_materialize_private_harness_profile_preserves_identity_files_on_reset(t
         live_profiles.PrivateHarnessProfileSpec(
             seed_config_dir=seed_config_dir,
             profile_root=profile_root,
-            bind_addr="127.0.0.1",
+            lan_bind_addr="127.0.0.1",
             tcp_port=33111,
             udp_port=33112,
         )
@@ -300,7 +300,7 @@ def test_apply_private_harness_obfuscation_updates_crypto_flags(tmp_path: Path) 
         live_profiles.PrivateHarnessProfileSpec(
             seed_config_dir=seed_config_dir,
             profile_root=tmp_path / "private-profile",
-            bind_addr="127.0.0.1",
+            lan_bind_addr="127.0.0.1",
             tcp_port=33111,
             udp_port=33112,
         )
@@ -335,6 +335,7 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
             app_exe=app_exe,
             api_key="api-key",
             port=4711,
+            lan_bind_addr="192.0.2.10",
             use_gzip=False,
             allow_admin_high_level_func=False,
             max_file_upload_size_mb=5,
@@ -348,7 +349,7 @@ def test_apply_webserver_profile_writes_typed_rest_overlay(tmp_path: Path) -> No
     assert emule_section.count("WebTemplateFile=") == 1
     assert f"WebTemplateFile={expected_template}" in emule_section
     assert "ApiKey=api-key" in text
-    assert "BindAddr=127.0.0.1" in text
+    assert "BindAddr=192.0.2.10" in text
     assert "Port=4711" in text
     assert "Enabled=1" in text
     assert "UseGzip=0" in text

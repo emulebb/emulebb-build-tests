@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default="local-dumps-crash-test-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--dump-timeout-seconds", type=float, default=90.0)
@@ -430,8 +430,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     artifacts_dir = paths.source_artifacts_dir
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
-    port = rest_smoke.choose_listen_port()
-    base_url = f"http://127.0.0.1:{port}"
+    base_host = rest_smoke.rest_base_host_for_lan_bind_addr(args.lan_bind_addr)
+    port = rest_smoke.choose_listen_port(args.lan_bind_addr)
+    base_url = f"http://{base_host}:{port}"
     report: dict[str, object] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "suite": SUITE_NAME,
@@ -472,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
             "profile_base": str(profile["profile_base"]),
             "config_dir": str(profile["config_dir"]),
             "api_key_length": len(args.api_key),
-            "bind_addr": args.bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "enable_crash_test_endpoint": True,
             "enable_upnp": True,
         }
@@ -481,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
             paths.app_exe,
             args.api_key,
             port,
-            args.bind_addr,
+            args.lan_bind_addr,
             enable_crash_test_endpoint=True,
         )
         report["launch_inputs"]["emule_crash_dump"] = configure_emule_crash_dump_mode(Path(profile["config_dir"]), 2)

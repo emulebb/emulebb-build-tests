@@ -145,7 +145,7 @@ def prepare_amule_profile(
     udp_port: int,
     ec_port: int,
     advertised_address: str,
-    ec_address: str = "127.0.0.1",
+    ec_address: str,
     connect_to_kad: bool = False,
     connect_to_ed2k: bool = True,
 ) -> AmuleRuntimeProfile:

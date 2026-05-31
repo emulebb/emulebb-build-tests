@@ -633,7 +633,7 @@ def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypa
     commands: list[list[str]] = []
     monkeypatch.delenv("X_LOCAL_IP", raising=False)
     monkeypatch.setenv("EMULEBB_TEST_LAN_INTERFACE", "Wi-Fi")
-    monkeypatch.setenv("EMULEBB_TEST_LAN_IP_RESOLVED", "192.168.1.44")
+    monkeypatch.setenv("EMULEBB_TEST_LAN_IP_RESOLVED", "192.0.2.11")
     monkeypatch.setattr(
         live_e2e_suite,
         "run_suite_command",
@@ -656,14 +656,42 @@ def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypa
     )
 
     assert summary["test_network"] == "lan"
-    assert summary["network_context"]["lan"] == {"interface_name": "Wi-Fi", "ip_address": "192.168.1.44"}
-    assert summary["network_context"]["controller_bind_address"] == "192.168.1.44"
+    assert summary["network_context"]["lan"] == {"interface_name": "Wi-Fi", "ip_address": "192.0.2.11"}
+    assert summary["network_context"]["lan_bind_address"] == "192.0.2.11"
     assert [suite["network_scope"] for suite in summary["suites"]] == ["lan", "lan"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["Wi-Fi"]
-    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.44"]
-    assert option_values(commands[0], "--bind-addr") == ["192.168.1.44"]
-    assert option_values(commands[1], "--bind-addr") == ["192.168.1.44"]
-    assert option_values(commands[1], "--p2p-bind-interface-address") == ["192.168.1.44"]
+    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.0.2.11"]
+    assert option_values(commands[0], "--lan-bind-addr") == ["192.0.2.11"]
+    assert option_values(commands[1], "--lan-bind-addr") == ["192.0.2.11"]
+    assert option_values(commands[1], "--p2p-bind-interface-address") == ["192.0.2.11"]
+
+
+def test_vpn_search_ui_uses_lan_rest_bind_and_vpn_p2p_bind(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "search-ui-live",
+            "--test-network",
+            "vpn",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["test_network"] == "vpn"
+    assert summary["network_context"]["lan_bind_address"] == "192.0.2.10"
+    assert [suite["network_scope"] for suite in summary["suites"]] == ["vpn"]
+    assert option_values(commands[0], "--lan-bind-addr") == ["192.0.2.10"]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == ["hide.me"]
 
 
 def test_preference_ui_directory_tree_stress_reaches_child_suite(tmp_path: Path, monkeypatch) -> None:
@@ -1107,7 +1135,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
             "--p2p-bind-interface-name",
             "Ethernet",
             "--godzilla-p2p-bind-interface-address",
-            "192.168.1.210",
+            "192.0.2.10",
             "--godzilla-visible-ui",
             "--godzilla-cpu-profile",
             "--godzilla-stage",
@@ -1149,7 +1177,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert option_values(commands[0], "--stage") == ["launch-scale"]
     assert option_values(commands[0], "--vhd-runtime-root") == ["drive-letter"]
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["Ethernet"]
-    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.168.1.210"]
+    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.0.2.10"]
     assert option_values(commands[0], "--total-client-count") == ["12"]
     assert option_values(commands[0], "--peer-transfer-count") == ["444"]
     assert option_values(commands[0], "--harness-transfer-count") == ["222"]
@@ -1162,7 +1190,7 @@ def test_godzilla_local_swarm_forwards_visible_ui_and_lan_bind(tmp_path: Path, m
     assert option_values(commands[0], "--adverse-recovery-timeout-seconds") == ["45.0"]
     assert summary["godzilla_local_swarm"] == {
         "visible_ui": True,
-        "p2p_bind_interface_address": "192.168.1.210",
+        "p2p_bind_interface_address": "192.0.2.10",
         "cpu_profile": True,
         "stage": "launch-scale",
         "vhd_runtime_root": "drive-letter",
@@ -1197,7 +1225,7 @@ def test_local_kad_bootstrap_mode_reaches_local_kad_suite(tmp_path: Path) -> Non
     assert option_values(command, "--min-contacts-per-client") == ["0"]
 
 
-def test_rest_api_vpn_bind_address_does_not_override_webserver_loopback(tmp_path: Path) -> None:
+def test_rest_api_vpn_lan_bind_address_does_not_override_webserver_loopback(tmp_path: Path) -> None:
     command = live_e2e_suite.build_suite_command(
         spec=suite_spec("rest-api"),
         scripts_dir=tmp_path / "scripts",
@@ -1209,7 +1237,7 @@ def test_rest_api_vpn_bind_address_does_not_override_webserver_loopback(tmp_path
     )
 
     assert script_name(command) == "rest-api-smoke.py"
-    assert option_values(command, "--bind-addr") == []
+    assert option_values(command, "--lan-bind-addr") == []
     assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
 
 

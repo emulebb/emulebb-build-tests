@@ -92,8 +92,8 @@ def invoke_json_api(
         return json.loads(text) if text else None
 
 
-def write_arr_config(data_dir: Path, *, port: int, api_key: str, instance_name: str) -> Path:
-    """Writes the minimal Servarr config needed for isolated localhost tests."""
+def write_arr_config(data_dir: Path, *, port: int, api_key: str, instance_name: str, lan_bind_addr: str) -> Path:
+    """Writes the minimal Servarr config needed for isolated LAN-bound tests."""
 
     data_dir.mkdir(parents=True, exist_ok=True)
     config_path = data_dir / "config.xml"
@@ -104,7 +104,7 @@ def write_arr_config(data_dir: Path, *, port: int, api_key: str, instance_name: 
                 f"  <LogLevel>info</LogLevel>",
                 f"  <Port>{port}</Port>",
                 "  <UrlBase></UrlBase>",
-                "  <BindAddress>127.0.0.1</BindAddress>",
+                f"  <BindAddress>{lan_bind_addr}</BindAddress>",
                 "  <EnableSsl>False</EnableSsl>",
                 f"  <ApiKey>{api_key}</ApiKey>",
                 "  <AuthenticationMethod>None</AuthenticationMethod>",
@@ -120,8 +120,8 @@ def write_arr_config(data_dir: Path, *, port: int, api_key: str, instance_name: 
     return config_path
 
 
-def start_arr(name: str, exe_path: Path, data_dir: Path, port: int, api_key: str, log_path: Path) -> subprocess.Popen[str]:
-    write_arr_config(data_dir, port=port, api_key=api_key, instance_name=f"eMuleBB {name} helper test")
+def start_arr(name: str, exe_path: Path, data_dir: Path, port: int, api_key: str, log_path: Path, lan_bind_addr: str) -> subprocess.Popen[str]:
+    write_arr_config(data_dir, port=port, api_key=api_key, instance_name=f"eMuleBB {name} helper test", lan_bind_addr=lan_bind_addr)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     output = log_path.open("w", encoding="utf-8", errors="replace")
     process = subprocess.Popen(
@@ -280,23 +280,24 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         report["dependencies"]["amutorrent_node"] = node_info
 
         seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
-        emule_port = rest_smoke.choose_listen_port()
-        amutorrent_port = rest_smoke.choose_listen_port()
-        prowlarr_port = rest_smoke.choose_listen_port()
-        radarr_port = rest_smoke.choose_listen_port()
-        sonarr_port = rest_smoke.choose_listen_port()
+        lan_bind_addr = rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+        emule_port = rest_smoke.choose_listen_port(lan_bind_addr)
+        amutorrent_port = rest_smoke.choose_listen_port(lan_bind_addr)
+        prowlarr_port = rest_smoke.choose_listen_port(lan_bind_addr)
+        radarr_port = rest_smoke.choose_listen_port(lan_bind_addr)
+        sonarr_port = rest_smoke.choose_listen_port(lan_bind_addr)
         emule_api_key = args.api_key
         prowlarr_api_key = secrets.token_hex(16)
         radarr_api_key = secrets.token_hex(16)
         sonarr_api_key = secrets.token_hex(16)
-        emule_base_url = f"http://127.0.0.1:{emule_port}"
-        amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
-        prowlarr_base_url = f"http://127.0.0.1:{prowlarr_port}"
-        radarr_base_url = f"http://127.0.0.1:{radarr_port}"
-        sonarr_base_url = f"http://127.0.0.1:{sonarr_port}"
+        emule_base_url = f"http://{lan_bind_addr}:{emule_port}"
+        amutorrent_base_url = f"http://{lan_bind_addr}:{amutorrent_port}"
+        prowlarr_base_url = f"http://{lan_bind_addr}:{prowlarr_port}"
+        radarr_base_url = f"http://{lan_bind_addr}:{radarr_port}"
+        sonarr_base_url = f"http://{lan_bind_addr}:{sonarr_port}"
 
         profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id=SUITE_NAME)
-        rest_smoke.configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, emule_api_key, emule_port, "127.0.0.1")
+        rest_smoke.configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, emule_api_key, emule_port, lan_bind_addr)
         app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
         live_common.wait_for_main_window(app)
         report["checks"]["emule_rest_ready"] = rest_smoke.wait_for_rest_ready(emule_base_url, emule_api_key, args.ready_timeout_seconds)
@@ -309,7 +310,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         ]
         for name, exe_path, data_dir, port, api_key, base_url, status_path in arr_specs:
             assert exe_path is not None
-            process = start_arr(name, exe_path, data_dir, port, api_key, artifacts_dir / f"{name}.log")
+            process = start_arr(name, exe_path, data_dir, port, api_key, artifacts_dir / f"{name}.log", lan_bind_addr)
             arr_processes.append(process)
             wait_for_http(base_url, status_path, api_key=api_key, timeout_seconds=args.ready_timeout_seconds)
             report["checks"][f"{name}_ready"] = {"port": port, "pid": process.pid}
@@ -321,7 +322,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         env.update(
             {
                 "PORT": str(amutorrent_port),
-                "BIND_ADDRESS": "127.0.0.1",
+                "lan_bind_address": lan_bind_addr,
                 "AMUTORRENT_DATA_DIR": str(amutorrent_data_dir),
                 "WEB_AUTH_ENABLED": "false",
                 "SKIP_SETUP_WIZARD": "true",
@@ -495,6 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default="package-helper-test-key")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--ready-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--dependency-mode", choices=live_dependencies.DEPENDENCY_MODES, default="cache-only")
     parser.add_argument("--dependency-channel", choices=live_dependencies.DEPENDENCY_CHANNELS, default="pinned")

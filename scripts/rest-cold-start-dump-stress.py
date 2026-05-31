@@ -491,7 +491,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default="rest-cold-start-dump-stress-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
@@ -3083,8 +3083,9 @@ def main(argv: list[str] | None = None) -> int:
     artifacts_dir = paths.source_artifacts_dir
     diagnostics_dir = artifacts_dir
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
-    port = rest_smoke.choose_listen_port()
-    base_url = f"http://127.0.0.1:{port}"
+    base_host = rest_smoke.rest_base_host_for_lan_bind_addr(args.lan_bind_addr)
+    port = rest_smoke.choose_listen_port(args.lan_bind_addr)
+    base_url = f"http://{base_host}:{port}"
     tools = discover_diagnostic_tools()
     symbol_env = build_symbol_environment(paths.app_exe, artifacts_dir)
     downloads_per_search = resolve_downloads_per_search(args)
@@ -3193,7 +3194,7 @@ def main(argv: list[str] | None = None) -> int:
             "incoming_dir": str(profile["incoming_dir"]),
             "temp_dir": str(profile["temp_dir"]),
             "api_key_length": len(args.api_key),
-            "bind_addr": args.bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "enable_upnp": True,
         }
         rest_smoke.configure_webserver_profile(
@@ -3201,7 +3202,7 @@ def main(argv: list[str] | None = None) -> int:
             paths.app_exe,
             args.api_key,
             port,
-            args.bind_addr,
+            args.lan_bind_addr,
         )
         if args.p2p_bind_interface_name:
             rest_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)

@@ -223,7 +223,7 @@ def run_vhd_partfile_recovery(args: argparse.Namespace) -> dict[str, object]:
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     config = build_admin_fixture_config(paths, args)
     port = rest_smoke.choose_listen_port()
-    base_url = f"http://{args.bind_addr}:{port}"
+    base_url = f"http://{args.lan_bind_addr}:{port}"
     transfer_size_bytes = args.transfer_size_mb * 1024 * 1024
     transfer_link = build_recovery_transfer_link(transfer_size_bytes)
     transfer_hash = DEFAULT_TRANSFER_HASH.lower()
@@ -273,7 +273,7 @@ def run_vhd_partfile_recovery(args: argparse.Namespace) -> dict[str, object]:
                 paths.app_exe,
                 args.api_key,
                 port,
-                args.bind_addr,
+                args.lan_bind_addr,
             )
             profile_base = Path(str(profile["profile_base"]))
             summary["profile"] = {
@@ -403,7 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mount-root")
     parser.add_argument("--keep-admin-fixtures", action="store_true")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--transfer-size-mb", type=int, default=64)
     return parser

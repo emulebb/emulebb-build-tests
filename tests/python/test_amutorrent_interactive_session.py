@@ -29,6 +29,7 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
         emule_port=47110,
         api_key="test-key",
         instance_id="emulebb-127.0.0.1-47110",
+        lan_bind_addr="192.0.2.10",
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
         use_ssl=True,
@@ -36,7 +37,7 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
     )
 
     assert env["PORT"] == "4001"
-    assert env["BIND_ADDRESS"] == "127.0.0.1"
+    assert env["lan_bind_address"] == "192.0.2.10"
     assert env["AMUTORRENT_DATA_DIR"] == str(tmp_path / "amutorrent-data")
     assert env["SKIP_SETUP_WIZARD"] == "true"
     assert env["EMULEBB_ENABLED"] == "true"
@@ -65,8 +66,8 @@ def test_write_stop_script_closes_emule_and_stops_amutorrent(tmp_path: Path) -> 
 def test_parser_defaults_to_local_control_session() -> None:
     session = load_session_module()
 
-    args = session.build_parser().parse_args([])
+    args = session.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.configuration == "Debug"
     assert args.live_network is False
-    assert args.bind_addr == "127.0.0.1"
+    assert args.lan_bind_addr == "192.0.2.10"

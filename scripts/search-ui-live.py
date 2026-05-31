@@ -193,11 +193,12 @@ class RemoteBuffer:
         self.close()
 
 
-def choose_rest_listen_port() -> int:
-    """Returns one ephemeral localhost TCP port for a live REST verification listener."""
+def choose_rest_listen_port(lan_bind_addr: str) -> int:
+    """Returns one ephemeral LAN TCP port for a live REST verification listener."""
 
+    bind_host = rest_smoke.rest_base_host_for_lan_bind_addr(lan_bind_addr)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        sock.bind((bind_host, 0))
         return int(sock.getsockname()[1])
 
 
@@ -249,15 +250,22 @@ def summarize_search_plan(search_plan: list[dict[str, object]]) -> list[dict[str
     ]
 
 
-def configure_search_ui_profile(config_dir: Path, app_exe: Path, api_key: str, port: int, bind_interface: str) -> None:
-    """Enables live network policy and localhost REST for the Search UI scenario."""
+def configure_search_ui_profile(
+    config_dir: Path,
+    app_exe: Path,
+    api_key: str,
+    port: int,
+    lan_bind_addr: str,
+    bind_interface: str,
+) -> None:
+    """Enables live network policy and REST for the Search UI scenario."""
 
     rest_smoke.configure_webserver_profile(
         config_dir,
         app_exe,
         api_key,
         port,
-        "127.0.0.1",
+        lan_bind_addr,
     )
     rest_smoke.apply_p2p_bind_interface_override(config_dir, bind_interface)
 
@@ -841,6 +849,7 @@ def run_search_ui_live(
     artifacts_dir: Path,
     live_wire_inputs_file: Path,
     p2p_bind_interface_name: str,
+    lan_bind_addr: str,
     skip_live_seed_refresh: bool,
     ui_search_rounds: int,
     ui_download_lifecycle_count: int,
@@ -855,26 +864,29 @@ def run_search_ui_live(
     live_inputs = live_wire_inputs.load_live_wire_inputs(live_wire_inputs_file)
     search_plan = build_search_plan(live_inputs.generic_open_terms, ui_search_rounds)
     rest_api_key = "search-ui-live-key"
-    rest_port = choose_rest_listen_port()
+    rest_host = rest_smoke.rest_base_host_for_lan_bind_addr(lan_bind_addr)
+    rest_port = choose_rest_listen_port(lan_bind_addr)
     profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="search-ui-live")
     configure_search_ui_profile(
         Path(str(profile["config_dir"])),
         app_exe,
         rest_api_key,
         rest_port,
+        lan_bind_addr,
         p2p_bind_interface_name,
     )
     seed_refresh = None
     if not skip_live_seed_refresh:
         seed_refresh = refresh_seed_files(Path(str(profile["config_dir"])))
 
-    base_url = f"http://127.0.0.1:{rest_port}"
+    base_url = f"http://{rest_host}:{rest_port}"
     report: dict[str, object] = {
         "suite": "search-ui-live",
         "status": "failed",
         "app_exe": str(app_exe),
         "profile_base": str(profile["profile_base"]),
         "rest_base_url": base_url,
+        "lan_bind_addr": lan_bind_addr,
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh": seed_refresh,
         "live_wire_inputs_file": str(live_inputs.path),
@@ -1059,6 +1071,7 @@ def main(argv: list[str]) -> int:
         "--live-wire-inputs-file",
         default=str(live_wire_inputs.get_default_inputs_path(Path(__file__).resolve().parent.parent)),
     )
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ui-search-rounds", type=int, default=DEFAULT_UI_SEARCH_ROUNDS)
     parser.add_argument("--ui-download-lifecycle-count", type=int, default=DEFAULT_UI_DOWNLOAD_LIFECYCLE_COUNT)
@@ -1090,6 +1103,7 @@ def main(argv: list[str]) -> int:
             artifacts_dir=artifacts_dir,
             live_wire_inputs_file=live_wire_inputs.resolve_inputs_path(paths.repo_root, args.live_wire_inputs_file),
             p2p_bind_interface_name=args.p2p_bind_interface_name,
+            lan_bind_addr=args.lan_bind_addr,
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             ui_search_rounds=args.ui_search_rounds,
             ui_download_lifecycle_count=args.ui_download_lifecycle_count,

@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=90.0)
@@ -187,7 +187,7 @@ def build_local_amutorrent_environment(
     *,
     base_env: dict[str, str],
     amutorrent_port: int,
-    bind_addr: str,
+    lan_bind_addr: str,
     node_path: Path,
     data_dir: Path,
     emulebb_rest_port: int,
@@ -203,7 +203,7 @@ def build_local_amutorrent_environment(
     env.update(
         {
             "PORT": str(amutorrent_port),
-            "BIND_ADDRESS": bind_addr,
+            "lan_bind_address": bind_addr,
             "AMUTORRENT_DATA_DIR": str(data_dir.resolve()),
             "WEB_AUTH_ENABLED": "false",
             "SKIP_SETUP_WIZARD": "true",
@@ -995,11 +995,11 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             catalog_path=catalog_path,
             token=args.api_key,
-            admin_address=args.bind_addr,
+            admin_address=args.lan_bind_addr,
         )
         current_phase = "start_ed2k_server"
         server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        admin_base_url = f"http://{args.bind_addr}:{ports['ed2k_admin']}"
+        admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
         report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
 
         fixture_dir = paths.source_artifacts_dir / "seed-shared"
@@ -1033,7 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
             udp_port=ports["amule_udp"],
             ec_port=ports["amule_ec"],
             advertised_address=p2p_address,
-            ec_address=args.bind_addr,
+            ec_address=args.lan_bind_addr,
         )
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
         dtt.configure_client_profile(
@@ -1046,7 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
             autoconnect=False,
             rest_api_key=args.api_key,
             rest_port=ports["client1_rest"],
-            rest_bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         dtt.configure_client_profile(
@@ -1125,7 +1125,7 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "launch_download_clients"
         client1_app = live_common.launch_app(paths.app_exe, Path(client1["profile_base"]), minimized_to_tray=True)
-        client1_base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
+        client1_base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
         report["checks"]["client1_rest_ready"] = rest_smoke.compact_http_result(
             rest_smoke.wait_for_rest_ready(client1_base_url, args.api_key, args.rest_ready_timeout_seconds)
         )
@@ -1173,7 +1173,7 @@ def main(argv: list[str] | None = None) -> int:
         env = build_local_amutorrent_environment(
             base_env=os.environ,
             amutorrent_port=ports["amutorrent"],
-            bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
             emulebb_rest_port=ports["client1_rest"],
@@ -1190,7 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
             stderr=subprocess.STDOUT,
             text=True,
         )
-        amutorrent_base_url = f"http://{args.bind_addr}:{ports['amutorrent']}"
+        amutorrent_base_url = f"http://{args.lan_bind_addr}:{ports['amutorrent']}"
         amutorrent_smoke.wait_for_http_ok(f"{amutorrent_base_url}/api/config/status", args.rest_ready_timeout_seconds)
         report["amutorrent"] = {
             "base_url": amutorrent_base_url,

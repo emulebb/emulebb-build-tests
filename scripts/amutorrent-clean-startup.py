@@ -69,7 +69,7 @@ def build_clean_amutorrent_environment(
     amutorrent_port: int,
     node_path: Path,
     data_dir: Path,
-    bind_addr: str = "127.0.0.1",
+    lan_bind_addr: str,
     extra_ca_cert: str = "",
 ) -> dict[str, str]:
     """Builds the environment for first-run aMuTorrent without pre-seeding eMuleBB."""
@@ -78,7 +78,7 @@ def build_clean_amutorrent_environment(
     env.update(
         {
             "PORT": str(amutorrent_port),
-            "BIND_ADDRESS": bind_addr,
+            "lan_bind_address": rest_api_smoke.require_lan_bind_addr(lan_bind_addr),
             "AMUTORRENT_DATA_DIR": str(data_dir),
             "WEB_AUTH_ENABLED": "false",
         }
@@ -511,7 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-clean-startup-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
@@ -544,15 +544,15 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = amutorrent_smoke.resolve_amutorrent_node()
 
-    controller_host = rest_api_smoke.rest_base_host_for_bind_addr(args.bind_addr)
-    emule_port = choose_listen_port(args.bind_addr)
-    amutorrent_port = choose_listen_port(args.bind_addr)
+    lan_host = rest_api_smoke.rest_base_host_for_lan_bind_addr(args.lan_bind_addr)
+    emule_port = choose_listen_port(args.lan_bind_addr)
+    amutorrent_port = choose_listen_port(args.lan_bind_addr)
     if emule_port == amutorrent_port:
-        amutorrent_port = choose_listen_port(args.bind_addr)
+        amutorrent_port = choose_listen_port(args.lan_bind_addr)
     rest_scheme = normalize_rest_scheme(args.rest_webserver_scheme)
-    emule_base_url = f"{rest_scheme}://{controller_host}:{emule_port}"
-    amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"
-    instance_id = f"emulebb-{controller_host}-{emule_port}"
+    emule_base_url = f"{rest_scheme}://{lan_host}:{emule_port}"
+    amutorrent_base_url = f"http://{lan_host}:{amutorrent_port}"
+    instance_id = f"emulebb-{lan_host}-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-clean-data"
@@ -560,7 +560,7 @@ def main() -> int:
         scheme=rest_scheme,
         app_exe=paths.app_exe,
         artifacts_dir=artifacts_dir,
-        hosts=(controller_host,),
+        hosts=(lan_host,),
     )
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-clean-startup")
@@ -569,7 +569,7 @@ def main() -> int:
         paths.app_exe,
         args.api_key,
         emule_port,
-        args.bind_addr,
+        args.lan_bind_addr,
         args.p2p_bind_interface_name,
         live_network=True,
         use_https=bool(rest_transport["use_https"]),
@@ -583,8 +583,8 @@ def main() -> int:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "configuration": args.configuration,
         "p2p_bind_interface_name": args.p2p_bind_interface_name,
-        "controller_bind_address": args.bind_addr,
-        "controller_host": controller_host,
+        "lan_bind_address": args.lan_bind_addr,
+        "lan_host": lan_host,
         "enable_upnp": True,
         "rest_webserver_scheme": rest_transport["scheme"],
         "emule_base_url": emule_base_url,
@@ -629,7 +629,7 @@ def main() -> int:
             amutorrent_port=amutorrent_port,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
-            bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             extra_ca_cert=str(rest_transport["node_extra_ca_cert"]),
         )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
@@ -644,7 +644,7 @@ def main() -> int:
         report["amutorrent_process_id"] = amutorrent.pid
         report["checks"]["wizard"] = drive_first_run_wizard(
             base_url=amutorrent_base_url,
-            emule_host=controller_host,
+            emule_host=lan_host,
             emule_port=emule_port,
             api_key=args.api_key,
             use_ssl=bool(rest_transport["use_https"]),

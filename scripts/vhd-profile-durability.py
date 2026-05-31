@@ -155,18 +155,19 @@ def run_first_launch_and_crash(
         scenario_id="mounted-profile",
     )
     profile["expected_shared_files"] = int(shared_tree.get("file_count", 0) or 0)
+    lan_bind_addr = rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
     rest_smoke.configure_webserver_profile(
         Path(str(profile["config_dir"])),
         paths.app_exe,
         API_KEY,
         port,
-        "127.0.0.1",
+        lan_bind_addr,
         enable_crash_test_endpoint=True,
     )
     if args.p2p_bind_interface_name:
         rest_smoke.apply_p2p_bind_interface_override(Path(str(profile["config_dir"])), args.p2p_bind_interface_name)
 
-    base_url = f"http://127.0.0.1:{port}"
+    base_url = f"http://{lan_bind_addr}:{port}"
     startup_profile_path = Path(str(profile["startup_profile_path"]))
     shared_cache_path = Path(str(profile["config_dir"])) / "sharedcache.dat"
     summary: dict[str, object] = {
@@ -285,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--admin-volume-fixtures", action="store_true")
     parser.add_argument("--vhd-size-mb", type=int, default=384)
     parser.add_argument("--mount-root")
@@ -313,7 +315,8 @@ def run_vhd_profile_durability(args: argparse.Namespace) -> dict[str, object]:
     )
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     config = build_admin_fixture_config(paths, args)
-    port = rest_smoke.choose_listen_port()
+    lan_bind_addr = rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    port = rest_smoke.choose_listen_port(lan_bind_addr)
     summary: dict[str, object] = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "status": "failed",
@@ -329,6 +332,7 @@ def run_vhd_profile_durability(args: argparse.Namespace) -> dict[str, object]:
             "request_timeout_seconds": args.request_timeout_seconds,
             "crash_timeout_seconds": args.crash_timeout_seconds,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
+            "lan_bind_addr": lan_bind_addr,
         },
         "admin_volume_fixture": {
             "enabled": True,

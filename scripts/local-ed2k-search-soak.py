@@ -73,7 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
@@ -340,11 +340,12 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             catalog_path=catalog_path,
             token=args.api_key,
+            admin_address=args.lan_bind_addr,
         )
 
         current_phase = "start_ed2k_server"
         server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        admin_base_url = f"http://127.0.0.1:{ports['ed2k_admin']}"
+        admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
         report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
 
         current_phase = "prepare_profiles"
@@ -361,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
             autoconnect=False,
             rest_api_key=args.api_key,
             rest_port=ports["client1_rest"],
-            rest_bind_addr=args.bind_addr,
+            lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
         )
         dtt.configure_client_profile(
@@ -430,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "launch_emulebb"
         client1_app = live_common.launch_app(paths.app_exe, Path(client1["profile_base"]))
-        base_url = f"http://{args.bind_addr}:{ports['client1_rest']}"
+        base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"
         report["checks"]["emulebb_rest_ready"] = rest_smoke.compact_http_result(
             rest_smoke.wait_for_rest_ready(base_url, args.api_key, args.rest_ready_timeout_seconds)
         )

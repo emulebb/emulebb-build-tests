@@ -49,7 +49,7 @@ def configure_session_profile(
     app_exe: Path,
     api_key: str,
     port: int,
-    bind_addr: str,
+    lan_bind_addr: str,
     p2p_bind_interface_name: str,
     *,
     live_network: bool,
@@ -75,7 +75,7 @@ def configure_session_profile(
             app_exe=app_exe,
             api_key=api_key,
             port=port,
-            bind_addr=bind_addr,
+            lan_bind_addr=lan_bind_addr,
             use_gzip=True,
             allow_admin_high_level_func=True,
             use_https=use_https,
@@ -93,6 +93,7 @@ def build_amutorrent_environment(
     emule_port: int,
     api_key: str,
     instance_id: str,
+    lan_bind_addr: str,
     node_path: Path,
     data_dir: Path,
     use_ssl: bool = False,
@@ -101,15 +102,16 @@ def build_amutorrent_environment(
     """Builds the environment used by the interactive aMuTorrent server."""
 
     env = dict(base_env)
+    lan_bind_host = rest_api_smoke.require_lan_bind_addr(lan_bind_addr)
     env.update(
         {
             "PORT": str(amutorrent_port),
-            "BIND_ADDRESS": "127.0.0.1",
+            "lan_bind_address": lan_bind_host,
             "AMUTORRENT_DATA_DIR": str(data_dir),
             "WEB_AUTH_ENABLED": "false",
             "SKIP_SETUP_WIZARD": "true",
             "EMULEBB_ENABLED": "true",
-            "EMULEBB_HOST": "127.0.0.1",
+            "EMULEBB_HOST": lan_bind_host,
             "EMULEBB_PORT": str(emule_port),
             "EMULEBB_API_KEY": api_key,
             "EMULEBB_USE_SSL": "true" if use_ssl else "false",
@@ -181,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-interactive-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--live-network", action="store_true")
@@ -208,14 +210,15 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = amutorrent_smoke.resolve_amutorrent_node()
 
-    emule_port = choose_listen_port()
-    amutorrent_port = choose_listen_port()
+    emule_port = choose_listen_port(args.lan_bind_addr)
+    amutorrent_port = choose_listen_port(args.lan_bind_addr)
     if emule_port == amutorrent_port:
-        amutorrent_port = choose_listen_port()
+        amutorrent_port = choose_listen_port(args.lan_bind_addr)
 
-    emule_base_url = f"http://127.0.0.1:{emule_port}"
-    amutorrent_base_url = f"http://127.0.0.1:{amutorrent_port}"
-    instance_id = f"emulebb-127.0.0.1-{emule_port}"
+    lan_bind_addr = rest_api_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    emule_base_url = f"http://{lan_bind_addr}:{emule_port}"
+    amutorrent_base_url = f"http://{lan_bind_addr}:{amutorrent_port}"
+    instance_id = f"emulebb-{lan_bind_addr}-{emule_port}"
     artifacts_dir = paths.source_artifacts_dir
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-data"
@@ -226,7 +229,7 @@ def main() -> int:
         paths.app_exe,
         args.api_key,
         emule_port,
-        args.bind_addr,
+        args.lan_bind_addr,
         args.p2p_bind_interface_name,
         live_network=bool(args.live_network),
     )
@@ -272,6 +275,7 @@ def main() -> int:
             emule_port=emule_port,
             api_key=args.api_key,
             instance_id=instance_id,
+            lan_bind_addr=lan_bind_addr,
             node_path=node_path,
             data_dir=amutorrent_data_dir,
         )

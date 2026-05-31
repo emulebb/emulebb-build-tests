@@ -124,7 +124,7 @@ def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tm
     preferences_path.write_text("[eMule]\nConfirmExit=1\n[WebServer]\nEnabled=0\n", encoding="utf-16")
     app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
-    module.configure_webserver_profile(config_dir, app_exe, "api-key", 4711, "127.0.0.1")
+    module.configure_webserver_profile(config_dir, app_exe, "api-key", 4711, "192.0.2.10")
 
     text = module.live_common.read_ini_text(preferences_path)
     assert "Enabled=1" in text
@@ -144,7 +144,7 @@ def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -
         app_exe,
         "api-key",
         4711,
-        "127.0.0.1",
+        "192.0.2.10",
         enable_crash_test_endpoint=True,
     )
 
@@ -168,19 +168,20 @@ def test_rest_socket_adversity_base_url_parsing() -> None:
         "host": "127.0.0.1",
         "port": 4711,
     }
-    assert module.parse_base_url_endpoint("https://localhost") == {
+    assert module.parse_base_url_endpoint("https://127.0.0.1") == {
         "scheme": "https",
-        "host": "localhost",
+        "host": "127.0.0.1",
         "port": 443,
     }
 
 
-def test_rest_base_host_uses_explicit_bind_address_for_vpn() -> None:
+def test_rest_base_host_uses_explicit_lan_bind_address_for_vpn() -> None:
     module = load_rest_api_smoke_module()
 
-    assert module.rest_base_host_for_bind_addr("10.54.221.82") == "10.54.221.82"
-    assert module.rest_base_host_for_bind_addr("") == "127.0.0.1"
-    assert module.rest_base_host_for_bind_addr("0.0.0.0") == "127.0.0.1"
+    assert module.rest_base_host_for_lan_bind_addr("10.54.221.82") == "10.54.221.82"
+    for candidate in ("", "127.0.0.1", "0.0.0.0", "::"):
+        with pytest.raises(ValueError):
+            module.rest_base_host_for_lan_bind_addr(candidate)
 
 
 def test_https_urlopen_context_is_only_used_for_https() -> None:
@@ -238,7 +239,7 @@ def test_http_request_retries_transient_rest_socket_abort(monkeypatch: pytest.Mo
     monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
 
-    result = module.http_request("http://192.168.1.210:4711", "/api/v1/app", api_key="key")
+    result = module.http_request("http://192.0.2.10:4711", "/api/v1/app", api_key="key")
 
     assert len(calls) == 2
     assert result["status"] == 200
@@ -275,7 +276,7 @@ def test_http_request_retries_direct_transient_rest_socket_abort(monkeypatch: py
     monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
 
-    result = module.http_request("http://192.168.1.210:4711", "/api/v1/app", api_key="key")
+    result = module.http_request("http://192.0.2.10:4711", "/api/v1/app", api_key="key")
 
     assert len(calls) == 2
     assert result["status"] == 200
@@ -309,7 +310,7 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
         lambda cert, key: observed_pem_checks.append((cert, key)),
     )
 
-    material = module.create_https_certificate_pair(Path("emulebb.exe"), tmp_path, hosts=("192.168.1.210", "127.0.0.1"))
+    material = module.create_https_certificate_pair(Path("emulebb.exe"), tmp_path, hosts=("192.0.2.10",))
 
     assert material["generator"] == "emule-cli"
     assert Path(material["certificate"]).read_text(encoding="utf-8") == "certificate"
@@ -321,15 +322,11 @@ def test_https_certificate_pair_is_generated_by_emule_cli(monkeypatch: pytest.Mo
             "--cert",
             str(tmp_path / "https-cert" / "webserver-cert.pem"),
             "--key",
-            str(tmp_path / "https-cert" / "webserver-key.pem"),
-            "--host",
-            "127.0.0.1",
-            "--host",
-            "localhost",
-            "--host",
-            "192.168.1.210",
+                str(tmp_path / "https-cert" / "webserver-key.pem"),
+                "--host",
+                "192.0.2.10",
+            ]
         ]
-    ]
     assert observed_pem_checks == [
         (tmp_path / "https-cert" / "webserver-cert.pem", tmp_path / "https-cert" / "webserver-key.pem")
     ]
@@ -343,7 +340,7 @@ def write_https_preferences(
     key: Path,
     use_https: str = "1",
     port: int = 4711,
-    bind_addr: str = "127.0.0.1",
+    lan_bind_addr: str = "127.0.0.1",
 ) -> None:
     config_dir.mkdir(parents=True, exist_ok=True)
     module.live_common.write_utf16_ini_text(
@@ -355,7 +352,7 @@ def write_https_preferences(
                 f"HTTPSCertificate={certificate}",
                 f"HTTPSKey={key}",
                 f"Port={port}",
-                f"BindAddr={bind_addr}",
+                f"BindAddr={lan_bind_addr}",
             ]
         ),
     )
@@ -377,7 +374,7 @@ def test_https_pem_readiness_accepts_generated_pair_and_profile(monkeypatch: pyt
         base_url="https://127.0.0.1:4711",
         certificate_path=str(cert_path),
         key_path=str(key_path),
-        bind_addr="127.0.0.1",
+        lan_bind_addr="127.0.0.1",
     )
 
     assert summary["ok"] is True
@@ -402,7 +399,7 @@ def test_https_pem_readiness_rejects_missing_certificate(tmp_path: Path) -> None
             base_url="https://127.0.0.1:4711",
             certificate_path=str(cert_path),
             key_path=str(key_path),
-            bind_addr="127.0.0.1",
+            lan_bind_addr="127.0.0.1",
         )
 
 
@@ -421,7 +418,7 @@ def test_https_pem_readiness_rejects_empty_key(tmp_path: Path) -> None:
             base_url="https://127.0.0.1:4711",
             certificate_path=str(cert_path),
             key_path=str(key_path),
-            bind_addr="127.0.0.1",
+            lan_bind_addr="127.0.0.1",
         )
 
 
@@ -446,7 +443,7 @@ def test_https_pem_readiness_rejects_unloadable_pair(monkeypatch: pytest.MonkeyP
             base_url="https://127.0.0.1:4711",
             certificate_path=str(cert_path),
             key_path=str(key_path),
-            bind_addr="127.0.0.1",
+            lan_bind_addr="127.0.0.1",
         )
 
 
@@ -467,7 +464,7 @@ def test_https_pem_readiness_rejects_profile_config_mismatch(monkeypatch: pytest
             base_url="https://127.0.0.1:4711",
             certificate_path=str(cert_path),
             key_path=str(key_path),
-            bind_addr="127.0.0.1",
+            lan_bind_addr="127.0.0.1",
         )
 
 

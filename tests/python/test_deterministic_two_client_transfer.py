@@ -94,10 +94,10 @@ def test_discover_interface_ipv4_falls_back_to_hostname_when_windows_adapter_que
     monkeypatch.setattr(
         module.socket,
         "getaddrinfo",
-        lambda *_args, **_kwargs: [(module.socket.AF_INET, None, None, None, ("192.168.1.210", 0))],
+        lambda *_args, **_kwargs: [(module.socket.AF_INET, None, None, None, ("192.0.2.10", 0))],
     )
 
-    assert module.discover_interface_ipv4("") == "192.168.1.210"
+    assert module.discover_interface_ipv4("") == "192.0.2.10"
 
 
 def test_discover_interface_ipv4_reports_named_interface_adapter_query_failure(monkeypatch) -> None:
@@ -181,11 +181,11 @@ def test_build_server_config_allows_admin_bind_override(tmp_path: Path) -> None:
         admin_port=8080,
         catalog_path=catalog_path,
         token="secret",
-        admin_address="192.168.1.210",
+        admin_address="192.0.2.10",
     )
 
-    assert config["admin_listen_address"] == "192.168.1.210:8080"
-    assert json.loads(config_path.read_text(encoding="utf-8"))["admin_listen_address"] == "192.168.1.210:8080"
+    assert config["admin_listen_address"] == "192.0.2.10:8080"
+    assert json.loads(config_path.read_text(encoding="utf-8"))["admin_listen_address"] == "192.0.2.10:8080"
 
 
 def test_parse_exported_ed2k_file_link() -> None:
@@ -288,7 +288,7 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
         udp_port=4672,
         ed2k_enabled=True,
         autoconnect=True,
-        p2p_bind_addr="192.168.1.210",
+        p2p_bind_addr="192.0.2.10",
         crypt_layer_supported=True,
         crypt_layer_requested=True,
         crypt_layer_required=True,
@@ -297,7 +297,7 @@ def test_configure_client_profile_can_apply_protocol_obfuscation_preferences(tmp
 
     text = module.live_common.read_ini_text(config_dir / "preferences.ini")
     emule_section = text.split("[WebServer]", 1)[0]
-    assert "BindAddr=192.168.1.210" in emule_section
+    assert "BindAddr=192.0.2.10" in emule_section
     assert "CryptLayerSupported=1" in emule_section
     assert "CryptLayerRequested=1" in emule_section
     assert "CryptLayerRequired=1" in emule_section
@@ -340,15 +340,15 @@ def test_godzilla_stage_defaults_to_full_and_accepts_launch_scale() -> None:
 
 def test_godzilla_lan_mode_uses_x_local_ip(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_lan_env_test")
-    monkeypatch.setenv("X_LOCAL_IP", "192.168.1.210")
+    monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")
 
     args = godzilla.parse_args([])
     godzilla.validate_args(args)
 
     assert args.total_client_count == 30
     assert args.extra_emulebb_clients == 27
-    assert godzilla.resolve_local_p2p_address(args) == "192.168.1.210"
-    assert godzilla.resolve_rest_bind_addr(args, "192.168.1.210") == "192.168.1.210"
+    assert godzilla.resolve_local_p2p_address(args) == "192.0.2.10"
+    assert godzilla.resolve_LAN_BIND_ADDR(args, "192.0.2.10") == "192.0.2.10"
 
 
 def test_godzilla_generate_library_reports_failed_path(monkeypatch, tmp_path: Path) -> None:

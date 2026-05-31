@@ -53,7 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
@@ -98,8 +98,8 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
             args.configuration,
             "--api-key",
             args.api_key,
-            "--bind-addr",
-            args.bind_addr,
+            "--lan-bind-addr",
+            args.lan_bind_addr,
             "--rest-ready-timeout-seconds",
             str(args.rest_ready_timeout_seconds),
             "--server-connect-timeout-seconds",

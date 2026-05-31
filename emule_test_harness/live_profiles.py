@@ -62,7 +62,7 @@ class WebServerProfileSpec:
     app_exe: Path
     api_key: str
     port: int
-    bind_addr: str = "127.0.0.1"
+    lan_bind_addr: str
     enabled: bool = True
     use_gzip: bool = True
     allow_admin_high_level_func: bool = True
@@ -93,7 +93,7 @@ class PrivateHarnessProfileSpec:
 
     seed_config_dir: Path
     profile_root: Path
-    bind_addr: str
+    lan_bind_addr: str
     tcp_port: int
     udp_port: int
     server_udp_port: int = 0
@@ -194,7 +194,7 @@ def apply_webserver_profile(config_dir: Path, spec: WebServerProfileSpec) -> Non
         ("Password", ""),
         ("PasswordLow", ""),
         ("ApiKey", spec.api_key),
-        ("BindAddr", spec.bind_addr),
+        ("BindAddr", spec.lan_bind_addr),
         ("Port", str(spec.port)),
         ("WebUseUPnP", "0"),
         ("Enabled", "1" if spec.enabled else "0"),
@@ -300,7 +300,7 @@ def _private_harness_preferences_text(spec: PrivateHarnessProfileSpec) -> str:
         f"Port={spec.tcp_port}\n"
         f"UDPPort={spec.udp_port}\n"
         f"ServerUDPPort={spec.server_udp_port}\n"
-        f"BindAddr={spec.bind_addr}\n"
+        f"BindAddr={spec.lan_bind_addr}\n"
         "AllowLocalHostIP=1\n"
         "FilterBadIPs=0\n"
         "Autoconnect=1\n"

@@ -557,7 +557,7 @@ def activate_tree_item(tree_hwnd: int, label: str) -> None:
     time.sleep(0.3)
 
 
-def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
+def configure_profile(config_dir: Path, app_exe: Path, rest_port: int, lan_bind_addr: str) -> None:
     live_common.apply_emule_preferences(
         config_dir,
         (
@@ -592,7 +592,7 @@ def configure_profile(config_dir: Path, app_exe: Path, rest_port: int) -> None:
             app_exe=app_exe,
             api_key="preference-ui-e2e-key",
             port=rest_port,
-            bind_addr="127.0.0.1",
+            lan_bind_addr=lan_bind_addr,
             enabled=False,
             use_gzip=True,
             allow_admin_high_level_func=False,
@@ -733,7 +733,8 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
             shared_dirs=[],
             scenario_id="preference-roundtrip",
         )
-    rest_port = rest_smoke.choose_listen_port()
+    lan_bind_addr = rest_smoke.require_lan_bind_addr(args.lan_bind_addr)
+    rest_port = rest_smoke.choose_listen_port(lan_bind_addr)
     config_dir = Path(profile["config_dir"])
     preferences_path = config_dir / "preferences.ini"
     ip_filter_url_history_path = config_dir / "AC_IPFilterUpdateURLs.dat"
@@ -741,7 +742,7 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
     perf_log_file = artifacts_dir / "perf-ui-e2e.log"
     fake_ffmpeg = artifacts_dir / "ffmpeg.exe"
     fake_ffmpeg.write_bytes(b"fake ffmpeg executable for preference validation")
-    configure_profile(config_dir, paths.app_exe, rest_port)
+    configure_profile(config_dir, paths.app_exe, rest_port, lan_bind_addr)
     (config_dir / "ipfilter.dat").write_text("1.2.3.4 - 1.2.3.4 , 100 , preference-ui-e2e\r\n", encoding="ascii")
 
     app = None
@@ -849,17 +850,17 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
         report["checks"]["web_interface_screenshot"] = {
             "screenshot": capture_dialog_screenshot(app, dialog_hwnd, web_interface_screenshot),
             "port": control_rect(find_control(dialog_hwnd, IDC_WSPORT, "Edit")),
-            "bind_address": control_rect(find_control(dialog_hwnd, IDC_WEBBINDADDR, "Edit")),
+            "lan_bind_address": control_rect(find_control(dialog_hwnd, IDC_WEBBINDADDR, "Edit")),
             "template": control_rect(find_control(dialog_hwnd, IDC_TMPLPATH, "Edit")),
             "max_upload": control_rect(find_control(dialog_hwnd, IDC_WS_MAXFILEUPLOAD, "Edit")),
             "allowed_ips": control_rect(find_control(dialog_hwnd, IDC_WS_ALLOWEDIPS, "Edit")),
         }
         ensure_checkbox(find_control(dialog_hwnd, IDC_WSENABLED, "Button"), True)
         set_edit_text(find_control(dialog_hwnd, IDC_WSPORT, "Edit"), str(rest_port))
-        set_edit_text(find_control(dialog_hwnd, IDC_WEBBINDADDR, "Edit"), "127.0.0.1")
+        set_edit_text(find_control(dialog_hwnd, IDC_WEBBINDADDR, "Edit"), lan_bind_addr)
         set_edit_text(find_control(dialog_hwnd, IDC_TMPLPATH, "Edit"), str(paths.app_exe.parent.parent.parent / "webinterface" / "eMule.tmpl"))
         set_edit_text(find_control(dialog_hwnd, IDC_WS_MAXFILEUPLOAD, "Edit"), "23")
-        set_edit_text(find_control(dialog_hwnd, IDC_WS_ALLOWEDIPS, "Edit"), "127.0.0.1;10.1.2.3")
+        set_edit_text(find_control(dialog_hwnd, IDC_WS_ALLOWEDIPS, "Edit"), "192.0.2.20;10.1.2.3")
 
         select_page(dialog_hwnd, "Extended")
         tweaks_tree = find_control(dialog_hwnd, IDC_EXT_OPTS, "SysTreeView32")
@@ -929,10 +930,10 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
             },
             "WebServer": {
                 "Enabled": "1",
-                "BindAddr": "127.0.0.1",
+                "BindAddr": lan_bind_addr,
                 "Port": str(rest_port),
                 "MaxFileUploadSizeMB": "23",
-                "AllowedIPs": "127.0.0.1;10.1.2.3",
+                "AllowedIPs": "192.0.2.20;10.1.2.3",
             },
             "PerfLog": {
                 "Mode": "2",
@@ -1000,6 +1001,7 @@ def main() -> None:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--keep-running", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--shared-root", default=r"C:\tmp\00_long_paths")
     parser.add_argument("--directories-tree-stress", action="store_true")
     parser.add_argument("--web-interface-screenshot-name", default="web-interface.png")

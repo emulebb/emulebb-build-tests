@@ -178,7 +178,7 @@ def configure_auto_browse_profile(
     app_exe: Path,
     api_key: str,
     port: int,
-    web_bind_addr: str,
+    lan_bind_addr: str,
 ) -> None:
     """Enables REST, auto-browse, and visible browse logging inside the isolated profile."""
 
@@ -187,7 +187,7 @@ def configure_auto_browse_profile(
         app_exe=app_exe,
         api_key=api_key,
         port=port,
-        bind_addr=web_bind_addr,
+        lan_bind_addr=lan_bind_addr,
     )
 
     preferences_path = config_dir / "preferences.ini"
@@ -1079,13 +1079,10 @@ def wait_for_process_id(app: object) -> int | None:
     return process_id if isinstance(process_id, int) else None
 
 
-def build_base_url(web_bind_addr: str, port: int) -> str:
+def build_base_url(lan_bind_addr: str, port: int) -> str:
     """Returns the REST base URL that matches the configured WebServer bind."""
 
-    bind_addr = web_bind_addr.strip() if web_bind_addr else "127.0.0.1"
-    if bind_addr in {"", "0.0.0.0", "::", "[::]"}:
-        bind_addr = "127.0.0.1"
-    host = bind_addr
+    host = rest_smoke.require_lan_bind_addr(lan_bind_addr)
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     return f"http://{host}:{port}"
@@ -1102,7 +1099,7 @@ def main() -> int:
     parser.add_argument("--keep-running", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default="auto-browse-live-key")
-    parser.add_argument("--web-bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=540.0)
@@ -1144,8 +1141,8 @@ def main() -> int:
 
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
-    port = rest_smoke.choose_listen_port()
-    base_url = build_base_url(args.web_bind_addr, port)
+    port = rest_smoke.choose_listen_port(args.lan_bind_addr)
+    base_url = build_base_url(args.lan_bind_addr, port)
 
     profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="auto-browse-live")
     seed_refresh = None
@@ -1159,7 +1156,7 @@ def main() -> int:
         app_exe=paths.app_exe,
         api_key=args.api_key,
         port=port,
-        web_bind_addr=args.web_bind_addr,
+        lan_bind_addr=args.lan_bind_addr,
     )
     rest_smoke.apply_p2p_bind_interface_override(
         config_dir=Path(profile["config_dir"]),
@@ -1182,7 +1179,7 @@ def main() -> int:
             "profile_base": str(profile["profile_base"]),
             "config_dir": str(profile["config_dir"]),
             "api_key_length": len(args.api_key),
-            "web_bind_addr": args.web_bind_addr,
+            "lan_bind_addr": args.lan_bind_addr,
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "enable_upnp": True,
             "autoconnect_via_preferences": True,

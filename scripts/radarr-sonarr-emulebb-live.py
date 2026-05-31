@@ -155,7 +155,7 @@ QBIT_ROUTE_COMPLETENESS_SCENARIOS: tuple[dict[str, object], ...] = (
 
 
 def is_transient_local_http_exception(exc: BaseException) -> bool:
-    """Returns true for retryable localhost socket failures from test controllers."""
+    """Returns true for retryable local controller socket failures."""
 
     message = str(exc).lower()
     return any(fragment in message for fragment in QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS)
@@ -3845,7 +3845,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--env-file", default=str((REPO_ROOT / live_env.DEFAULT_ENV_FILE_NAME).resolve()))
     parser.add_argument("--emule-api-key", default="arr-emulebb-live-key")
-    parser.add_argument("--bind-addr")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
@@ -3900,7 +3900,7 @@ def run_arr_checks(
     prowlarr_url: str,
     prowlarr_api_key: str,
     prowlarr_indexer_id: int,
-    bind_addr: str,
+    lan_bind_addr: str,
     port: int,
     emule_api_key: str,
     indexer_name: str,
@@ -4413,8 +4413,8 @@ def main() -> int:
     prowlarr_url = env_values["PROWLARR_URL"].rstrip("/")
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
     indexer_name = env_values["EMULEBB_TEST_PROWLARR_INDEXER_NAME"]
-    bind_addr = prowlarr_live.resolve_bind_addr(prowlarr_url, args.bind_addr)
-    port = prowlarr_live.choose_listen_port(bind_addr)
+    lan_bind_addr = prowlarr_live.resolve_lan_bind_addr(prowlarr_url, args.lan_bind_addr)
+    port = prowlarr_live.choose_listen_port(lan_bind_addr)
     use_https = args.rest_webserver_scheme == "https"
     emule_base_url = f"{args.rest_webserver_scheme}://{bind_addr}:{port}"
     torznab_base_url = f"{emule_base_url}/indexer/emulebb"
@@ -4617,13 +4617,14 @@ def main() -> int:
                 admin_port=local_ports["ed2k_admin"],
                 catalog_path=local_catalog_path,
                 token=args.emule_api_key,
+                admin_address=bind_addr,
             )
             local_ed2k_server_process = dtt.start_ed2k_server(
                 ed2k_exe,
                 local_config_path,
                 local_server_dir / "server.log",
             )
-            local_admin_base_url = f"http://127.0.0.1:{local_ports['ed2k_admin']}"
+            local_admin_base_url = f"http://{bind_addr}:{local_ports['ed2k_admin']}"
             report["checks"]["local_ed2k_server_health"] = dtt.wait_for_admin_health(local_admin_base_url, 30.0)
 
             fake_release_name = arr_fake_release_name(kind, media_terms[0])
@@ -4646,7 +4647,7 @@ def main() -> int:
                 autoconnect=False,
                 rest_api_key=args.emule_api_key,
                 rest_port=port,
-                rest_bind_addr=bind_addr,
+                lan_bind_addr=bind_addr,
                 p2p_bind_interface_name=args.p2p_bind_interface_name,
             )
             dtt.configure_client_profile(

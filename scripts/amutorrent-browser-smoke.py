@@ -181,10 +181,10 @@ def require_amutorrent_server_dependencies(amutorrent_root: Path, node_info: dic
         )
 
 
-def normalize_controller_bind_address(value: str | None) -> str:
+def normalize_lan_bind_address(value: str | None) -> str:
     """Returns the explicit controller bind address for local HTTP surfaces."""
 
-    return (value or "").strip() or "127.0.0.1"
+    return rest_api_smoke.require_lan_bind_addr(value, allow_env_fallback=False)
 
 
 def _browser_host_sort_key(value: str) -> tuple[int, str]:
@@ -207,34 +207,10 @@ def _browser_host_sort_key(value: str) -> tuple[int, str]:
     return (3, value)
 
 
-def resolve_browser_controller_host(controller_bind_address: str) -> str:
+def resolve_browser_lan_host(lan_bind_address: str) -> str:
     """Returns a browser-reachable host for the aMuTorrent controller."""
 
-    bind_address = normalize_controller_bind_address(controller_bind_address)
-    if bind_address not in {"0.0.0.0", "::"}:
-        return bind_address
-
-    candidates: list[str] = []
-    configured = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
-    if configured:
-        candidates.append(configured)
-
-    try:
-        candidates.extend(value for value in collect_adapter_ipv4_addresses() if value not in candidates)
-    except Exception:
-        candidates = candidates[:1]
-
-    reachable_candidates: list[str] = []
-    for value in sorted(candidates, key=_browser_host_sort_key):
-        try:
-            address = ipaddress.ip_address(value)
-        except ValueError:
-            continue
-        if address.version == 4 and not address.is_loopback and not address.is_link_local:
-            reachable_candidates.append(value)
-    if reachable_candidates:
-        return reachable_candidates[0]
-    return "127.0.0.1"
+    return normalize_lan_bind_address(lan_bind_address)
 
 
 def build_admin_fixture_config(paths, args: argparse.Namespace) -> AdminVolumeFixtureConfig:
@@ -878,7 +854,7 @@ def main() -> int:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
     parser.add_argument("--api-key", default="amutorrent-browser-smoke-key")
-    parser.add_argument("--bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
@@ -947,18 +923,19 @@ def main() -> int:
     if amutorrent_data_dir is None:
         amutorrent_data_dir = artifacts_dir / "amutorrent-data"
 
-    emule_port = choose_listen_port()
-    amutorrent_port = choose_listen_port()
+    emule_port = choose_listen_port(args.lan_bind_addr)
+    amutorrent_port = choose_listen_port(args.lan_bind_addr)
     if emule_port == amutorrent_port:
-        amutorrent_port = choose_listen_port()
-    controller_bind_addr = normalize_controller_bind_address(args.bind_addr)
-    controller_host = resolve_browser_controller_host(controller_bind_addr)
-    amutorrent_bind_addr = controller_bind_addr
-    amutorrent_browser_host = resolve_browser_controller_host(amutorrent_bind_addr)
-    emule_base_url = f"http://{controller_host}:{emule_port}"
-    amutorrent_base_url = f"http://{controller_host}:{amutorrent_port}"
+        amutorrent_port = choose_listen_port(args.lan_bind_addr)
+    lan_bind_addr = normalize_lan_bind_address(args.lan_bind_addr)
+    lan_host = resolve_browser_lan_host(lan_bind_addr)
+    amutorrent_lan_bind_addr = lan_bind_addr
+    amutorrent_bind_addr = amutorrent_lan_bind_addr
+    amutorrent_browser_host = resolve_browser_lan_host(amutorrent_bind_addr)
+    emule_base_url = f"http://{lan_host}:{emule_port}"
+    amutorrent_base_url = f"http://{lan_host}:{amutorrent_port}"
     amutorrent_browser_base_url = f"http://{amutorrent_browser_host}:{amutorrent_port}"
-    instance_id = f"emulebb-{controller_host}-{emule_port}"
+    instance_id = f"emulebb-{lan_host}-{emule_port}"
 
     profile = prepare_profile_base(
         seed_config_dir,
@@ -968,7 +945,7 @@ def main() -> int:
         incoming_dir=incoming_dir,
         temp_dir=temp_dir,
     )
-    configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, controller_bind_addr)
+    configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, lan_bind_addr)
     rest_api_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
 
     report: dict[str, Any] = {
@@ -987,8 +964,8 @@ def main() -> int:
         "enable_upnp": True,
         "launch_inputs": {
             "app_exe": str(paths.app_exe),
-            "bind_addr": controller_bind_addr,
-            "controller_host": controller_host,
+            "lan_bind_addr": lan_bind_addr,
+            "lan_host": lan_host,
             "config_dir": str(profile["config_dir"]),
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "enable_upnp": True,
@@ -1026,12 +1003,12 @@ def main() -> int:
         env.update(
             {
                 "PORT": str(amutorrent_port),
-                "BIND_ADDRESS": amutorrent_bind_addr,
+                "lan_bind_address": amutorrent_bind_addr,
                 "AMUTORRENT_DATA_DIR": str(amutorrent_data_dir),
                 "WEB_AUTH_ENABLED": "false",
                 "SKIP_SETUP_WIZARD": "true",
                 "EMULEBB_ENABLED": "true",
-                "EMULEBB_HOST": controller_host,
+                "EMULEBB_HOST": lan_host,
                 "EMULEBB_PORT": str(emule_port),
                 "EMULEBB_API_KEY": args.api_key,
                 "EMULEBB_USE_SSL": "false",
