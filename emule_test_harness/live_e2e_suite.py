@@ -164,6 +164,7 @@ TEST_NETWORK_ALLOWED_SCOPES = {
 LAN_BIND_ADDR_SUITE_NAMES = frozenset(
     {
         "amutorrent-browser-smoke",
+        "amutorrent-local-ed2k-ui-live",
         "auto-browse-live",
         "category-incoming-path-matrix",
         "deterministic-two-client-transfer",
@@ -177,6 +178,7 @@ LAN_BIND_ADDR_SUITE_NAMES = frozenset(
         "local-kad-swarm",
         "multi-client-p2p-matrix",
         "package-helper-integration",
+        "preference-ui",
         "prowlarr-emulebb",
         "radarr-emulebb",
         "radarr-emulebb-local",
@@ -187,6 +189,7 @@ LAN_BIND_ADDR_SUITE_NAMES = frozenset(
         "sonarr-emulebb",
         "sonarr-emulebb-local",
         "vhd-partfile-recovery",
+        "vhd-profile-durability",
     }
 )
 LAN_INTERFACE_ENV = "EMULEBB_TEST_LAN_INTERFACE"
