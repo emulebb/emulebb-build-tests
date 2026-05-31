@@ -180,6 +180,15 @@ def test_main_window_detection_rejects_generic_startup_dialog(monkeypatch) -> No
     assert not module.is_main_emule_window(1003)
 
 
+def test_main_window_detection_rejects_starting_progress_dialog(monkeypatch) -> None:
+    module = load_live_common_module()
+
+    monkeypatch.setattr(module.win32gui, "GetClassName", lambda hwnd: "#32770")
+    monkeypatch.setattr(module.win32gui, "GetWindowText", lambda hwnd: "Starting eMuleBB")
+
+    assert not module.is_main_emule_window(1004)
+
+
 def test_find_process_main_window_enumerates_hidden_top_level_dialog(monkeypatch) -> None:
     module = load_live_common_module()
 

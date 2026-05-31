@@ -67,6 +67,7 @@ WINDOWS_PATH_LIMIT = 260
 PATH_SAMPLE_LIMIT = 5
 MAIN_WINDOW_TITLE_PREFIXES = ("eMule v", "eMuleBB", "eMule harness v")
 MAIN_WINDOW_TITLE_MARKERS = (" eMule v", " eMuleBB", " eMule harness v")
+NON_MAIN_WINDOW_TITLE_PREFIXES = ("Starting eMule", "Shutting down eMule")
 STARTUP_PROFILE_COMPLETE_PHASE_ID = "startup.complete"
 STARTUP_PROFILE_COMPLETE_PHASE_NAME = "StartupTimer complete"
 STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
@@ -272,6 +273,8 @@ def is_main_emule_window(hwnd: int) -> bool:
 
     title = win32gui.GetWindowText(hwnd)
     if win32gui.GetClassName(hwnd) != "#32770":
+        return False
+    if title.startswith(NON_MAIN_WINDOW_TITLE_PREFIXES):
         return False
     return title.startswith(MAIN_WINDOW_TITLE_PREFIXES) or any(
         marker in title for marker in MAIN_WINDOW_TITLE_MARKERS
