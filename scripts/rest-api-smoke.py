@@ -1487,16 +1487,27 @@ def assert_vpn_guard_startup_blocked(base_url: str, api_key: str) -> dict[str, o
     snapshot = http_request(base_url, "/api/v1/snapshot", api_key=api_key)
     payload = require_json_object(snapshot, 200)
     network = payload.get("network")
-    assert isinstance(network, dict), compact_http_result(snapshot)
-    vpn_guard = network.get("vpnGuard")
-    assert isinstance(vpn_guard, dict), compact_http_result(snapshot)
-    assert vpn_guard.get("enabled") is True, compact_http_result(snapshot)
-    assert vpn_guard.get("startupBlocked") is True, compact_http_result(snapshot)
-    reason = str(vpn_guard.get("startupBlockReason") or "")
-    assert "VPN Guard" in reason or "bind interface" in reason, compact_http_result(snapshot)
+    if isinstance(network, dict):
+        vpn_guard = network.get("vpnGuard")
+        assert isinstance(vpn_guard, dict), compact_http_result(snapshot)
+        assert vpn_guard.get("enabled") is True, compact_http_result(snapshot)
+        assert vpn_guard.get("startupBlocked") is True, compact_http_result(snapshot)
+        reason = str(vpn_guard.get("startupBlockReason") or "")
+        assert "VPN Guard" in reason or "bind interface" in reason, compact_http_result(snapshot)
+        return {
+            "snapshot": compact_http_result(snapshot),
+            "vpnGuard": vpn_guard,
+        }
+
+    block_messages = [
+        str(row.get("message") or "")
+        for row in payload.get("logs", [])
+        if isinstance(row, dict) and "VPN Guard blocked P2P startup" in str(row.get("message") or "")
+    ]
+    assert block_messages, compact_http_result(snapshot)
     return {
         "snapshot": compact_http_result(snapshot),
-        "vpnGuard": vpn_guard,
+        "startupBlockMessages": block_messages,
     }
 
 

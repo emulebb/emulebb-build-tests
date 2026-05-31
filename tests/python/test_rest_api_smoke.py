@@ -214,6 +214,47 @@ def test_vpn_guard_startup_block_assertion_accepts_snapshot(monkeypatch: pytest.
     assert result["vpnGuard"]["startupBlocked"] is True
 
 
+def test_vpn_guard_startup_block_assertion_accepts_log_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": {
+                "logs": [
+                    {
+                        "level": "error",
+                        "message": (
+                            "VPN Guard blocked P2P startup for this session because "
+                            "detected public IPv4 149.88.27.82 is outside allowed CIDRs 8.8.8.8/32."
+                        ),
+                    }
+                ]
+            },
+            "raw_json": {
+                "data": {
+                    "logs": [
+                        {
+                            "level": "error",
+                            "message": (
+                                "VPN Guard blocked P2P startup for this session because "
+                                "detected public IPv4 149.88.27.82 is outside allowed CIDRs 8.8.8.8/32."
+                            ),
+                        }
+                    ]
+                },
+                "meta": {"apiVersion": "v1"},
+            },
+        },
+    )
+
+    result = module.assert_vpn_guard_startup_blocked("http://192.0.2.10:4711", "api-key")
+
+    assert result["startupBlockMessages"]
+
+
 def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tmp_path: Path) -> None:
     module = load_rest_api_smoke_module()
     config_dir = tmp_path / "config"
