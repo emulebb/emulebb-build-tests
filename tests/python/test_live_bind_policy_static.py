@@ -10,6 +10,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_ROOT = REPO_ROOT / "scripts"
 HARNESS_ROOT = REPO_ROOT / "emule_test_harness"
 
+STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES = {
+    "amutorrent-clean-startup.py": "vpn",
+    "amutorrent-emulebb-ui-live.py": "vpn",
+    "amutorrent-interactive-session.py": "vpn",
+    "amutorrent-resilience-live.py": "vpn",
+    "deterministic-amule-transfer.py": "lan",
+    "fake-kad-trust-soak.py": "vpn",
+    "radarr-sonarr-emulebb-live.py": "vpn",
+    "three-client-swarm-transfer.py": "lan",
+}
+
 
 def python_sources(*roots: Path) -> list[Path]:
     return sorted(path for root in roots for path in root.rglob("*.py"))
@@ -78,5 +89,36 @@ def test_lan_bind_argument_is_required_for_live_scripts() -> None:
             body = match.group("body")
             if "required=True" not in body:
                 offenders.append(str(script_path.relative_to(REPO_ROOT)))
+
+    assert offenders == []
+
+
+def test_standalone_p2p_live_scripts_have_network_scope_classification() -> None:
+    registered_scripts = {spec.script_name for spec in live_e2e_suite.SUITE_SPECS}
+    offenders: list[str] = []
+
+    for script_path in sorted(SCRIPT_ROOT.glob("*.py")):
+        text = read_text(script_path)
+        if "--p2p-bind-interface-name" not in text or script_path.name in registered_scripts:
+            continue
+        if STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES.get(script_path.name) not in {"vpn", "lan"}:
+            offenders.append(script_path.name)
+
+    assert offenders == []
+
+
+def test_public_vpn_standalone_scripts_enable_vpn_guard_surface() -> None:
+    offenders: list[str] = []
+
+    for script_name, network_scope in sorted(STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES.items()):
+        if network_scope != "vpn":
+            continue
+        text = read_text(SCRIPT_ROOT / script_name)
+        if "--vpn-guard-enabled" not in text:
+            offenders.append(f"{script_name}: missing --vpn-guard-enabled")
+        if "--vpn-guard-allowed-public-ip-cidrs" not in text:
+            offenders.append(f"{script_name}: missing --vpn-guard-allowed-public-ip-cidrs")
+        if 'default="hide.me"' not in text and "DEFAULT_P2P_BIND_INTERFACE_NAME" not in text:
+            offenders.append(f"{script_name}: public VPN default is not hide.me")
 
     assert offenders == []
