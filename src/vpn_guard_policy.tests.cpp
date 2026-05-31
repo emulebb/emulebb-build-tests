@@ -20,6 +20,27 @@ TEST_CASE("VPN Guard public IP probe allows only successful CIDR matches")
 	CHECK_FALSE(VpnGuardPolicySeams::IsProbeResultAllowed(false, false));
 }
 
+TEST_CASE("VPN Guard startup connection commands wait for runtime monitor arming")
+{
+	CHECK_FALSE(VpnGuardPolicySeams::IsRuntimeMonitorRequired(VpnGuardSeams::EMode::Off, false));
+	CHECK_FALSE(VpnGuardPolicySeams::IsRuntimeMonitorRequired(VpnGuardSeams::EMode::Block, true));
+	CHECK(VpnGuardPolicySeams::IsRuntimeMonitorRequired(VpnGuardSeams::EMode::Block, false));
+
+	CHECK(VpnGuardPolicySeams::CanUseStartupConnectionCommands(VpnGuardSeams::EMode::Off, false, false));
+	CHECK_FALSE(VpnGuardPolicySeams::CanUseStartupConnectionCommands(VpnGuardSeams::EMode::Block, false, false));
+	CHECK(VpnGuardPolicySeams::CanUseStartupConnectionCommands(VpnGuardSeams::EMode::Block, false, true));
+	CHECK_FALSE(VpnGuardPolicySeams::CanUseStartupConnectionCommands(VpnGuardSeams::EMode::Block, true, true));
+}
+
+TEST_CASE("VPN Guard startup auto-connect posts only after runtime monitor arming")
+{
+	CHECK_FALSE(VpnGuardPolicySeams::CanPostStartupAutoConnect(false, VpnGuardSeams::EMode::Off, false, false));
+	CHECK(VpnGuardPolicySeams::CanPostStartupAutoConnect(true, VpnGuardSeams::EMode::Off, false, false));
+	CHECK_FALSE(VpnGuardPolicySeams::CanPostStartupAutoConnect(true, VpnGuardSeams::EMode::Block, false, false));
+	CHECK(VpnGuardPolicySeams::CanPostStartupAutoConnect(true, VpnGuardSeams::EMode::Block, false, true));
+	CHECK_FALSE(VpnGuardPolicySeams::CanPostStartupAutoConnect(true, VpnGuardSeams::EMode::Block, true, true));
+}
+
 TEST_CASE("VPN Guard failure action blocks startup but exits at runtime")
 {
 	CHECK(VpnGuardPolicySeams::GetFailureAction(false) == VpnGuardPolicySeams::EFailureAction::BlockStartup);
