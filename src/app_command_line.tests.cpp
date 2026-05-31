@@ -73,6 +73,34 @@ TEST_CASE("App command line accepts startup singleton switches")
 	CHECK(result.bAssertFile);
 }
 
+TEST_CASE("App command line parses hidden restart sidecar request mode")
+{
+	const auto result = Parse({_T("emulebb.exe"), _T("--restart-sidecar"), _T("--request"), _T("C:\\profiles\\test-root\\config\\emulebb-restart-request-pid42.json")});
+
+	CHECK(result.eMode == AppCommandLineSeams::EMode::RestartSidecar);
+	CHECK(result.strRestartRequestFile == CString(_T("C:\\profiles\\test-root\\config\\emulebb-restart-request-pid42.json")));
+}
+
+TEST_CASE("App command line rejects invalid restart sidecar forms")
+{
+	const auto missingRequest = Parse({_T("emulebb.exe"), _T("--restart-sidecar")});
+	const auto relativeRequest = Parse({_T("emulebb.exe"), _T("--restart-sidecar"), _T("--request"), _T("restart.json")});
+	const auto requestWithoutMode = Parse({_T("emulebb.exe"), _T("--request"), _T("C:\\profiles\\restart.json")});
+	const auto duplicateRequest = Parse({_T("emulebb.exe"), _T("--restart-sidecar"), _T("--request"), _T("C:\\profiles\\one.json"), _T("--request"), _T("C:\\profiles\\two.json")});
+	const auto startupOption = Parse({_T("emulebb.exe"), _T("--restart-sidecar"), _T("--request"), _T("C:\\profiles\\restart.json"), _T("-c"), _T("C:\\profiles\\test-root")});
+
+	CHECK(missingRequest.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(missingRequest.strError == CString(_T("The --restart-sidecar command requires --request.")));
+	CHECK(relativeRequest.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(relativeRequest.strError == CString(_T("The --request option requires a canonical absolute restart request file path.")));
+	CHECK(requestWithoutMode.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(requestWithoutMode.strError == CString(_T("The --request option requires --restart-sidecar.")));
+	CHECK(duplicateRequest.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(duplicateRequest.strError == CString(_T("The --request option may be specified only once.")));
+	CHECK(startupOption.eMode == AppCommandLineSeams::EMode::Invalid);
+	CHECK(startupOption.strError == CString(_T("The --restart-sidecar command does not accept normal startup options.")));
+}
+
 TEST_CASE("App command line rejects duplicate and valued no-value switches")
 {
 	const auto duplicate = Parse({_T("emulebb.exe"), _T("-ignoreinstances"), _T("-ignoreinstances")});

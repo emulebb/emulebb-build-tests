@@ -239,6 +239,7 @@
     <ClCompile Include="src\release_file_format_goldens.tests.cpp" />
     <ClCompile Include="src\resource_ownership.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ResourceOwnershipSeams.h')" />
     <ClCompile Include="src\release_update_check.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ReleaseUpdateCheckSeams.h')" />
+    <ClCompile Include="src\restart_app_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\RestartAppSeams.h')" />
     <ClCompile Include="src\rar_file.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\RARFileSeams.h')" />
     <ClCompile Include="src\ring.tests.cpp" />
     <ClCompile Include="src\rolling_log_window.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\RollingLogWindowSeams.h')" />
@@ -358,6 +359,7 @@
     <ClInclude Include="$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProtocolReceiveFlowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ProUserMenuCopySeams.h" Condition="Exists('$(AppRoot)\srchybrid\ProUserMenuCopySeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\RegexMatchSeams.h" Condition="Exists('$(AppRoot)\srchybrid\RegexMatchSeams.h')" />
+    <ClInclude Include="$(AppRoot)\srchybrid\RestartAppSeams.h" Condition="Exists('$(AppRoot)\srchybrid\RestartAppSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\ResourceOwnershipSeams.h" Condition="Exists('$(AppRoot)\srchybrid\ResourceOwnershipSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\RollingLogWindowSeams.h" Condition="Exists('$(AppRoot)\srchybrid\RollingLogWindowSeams.h')" />
     <ClInclude Include="$(AppRoot)\srchybrid\SearchListViewSeams.h" Condition="Exists('$(AppRoot)\srchybrid\SearchListViewSeams.h')" />
