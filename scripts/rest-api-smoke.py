@@ -6407,6 +6407,8 @@ def main() -> int:
     vpn_guard_allowed_public_ip_cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip()
     if not vpn_guard_allowed_public_ip_cidrs and vpn_guard_config is not None:
         vpn_guard_allowed_public_ip_cidrs = str(vpn_guard_config.get("allowedPublicIpCidrs") or "").strip()
+    if args.vpn_guard_scenario == "off":
+        vpn_guard_allowed_public_ip_cidrs = ""
     effective_p2p_bind_interface_name = args.p2p_bind_interface_name
     if args.vpn_guard_scenario != "off" and vpn_guard_config is not None:
         effective_p2p_bind_interface_name = str(vpn_guard_config.get("p2pBindInterfaceName") or "").strip()

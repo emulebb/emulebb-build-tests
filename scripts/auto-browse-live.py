@@ -1101,6 +1101,7 @@ def main() -> int:
     parser.add_argument("--api-key", default="auto-browse-live-key")
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=540.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=120.0)
@@ -1161,6 +1162,7 @@ def main() -> int:
     rest_smoke.apply_p2p_bind_interface_override(
         config_dir=Path(profile["config_dir"]),
         interface_name=args.p2p_bind_interface_name,
+        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
     )
 
     app = None

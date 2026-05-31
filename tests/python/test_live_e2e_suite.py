@@ -75,6 +75,8 @@ def parse_args(*argv: str):
         args.extend(["--test-network", "all"])
     if "--vpn-guard-scenario" not in args and "--vpn-guard-live-config" not in args:
         args.extend(["--vpn-guard-live-config", str(Path("vpn-guard-live.json").resolve())])
+    if "--vpn-guard-allowed-public-ip-cidrs" not in args and "--vpn-guard-scenario" not in args:
+        args.extend(["--vpn-guard-allowed-public-ip-cidrs", "8.8.8.8/32"])
     return live_e2e_suite.build_parser().parse_args(args)
 
 
@@ -844,11 +846,13 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     browser_command = commands[7]
     assert script_name(browser_command) == "amutorrent-browser-smoke.py"
     assert option_values(browser_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(browser_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
 
     prowlarr_command = commands[8]
     assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"
     assert "--enable-upnp" in prowlarr_command
     assert option_values(prowlarr_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(prowlarr_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
     assert option_values(prowlarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(prowlarr_command, "--rest-webserver-scheme") == ["https"]
     assert option_values(prowlarr_command, "--direct-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)]
@@ -861,6 +865,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert script_name(arr_command) == "radarr-emulebb-live.py"
     assert "--enable-upnp" in arr_command
     assert option_values(arr_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(arr_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
     assert option_values(arr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(arr_command, "--rest-webserver-scheme") == ["https"]
     assert "--qbit-live-wire-rounds" not in arr_command
@@ -873,6 +878,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert script_name(sonarr_command) == "sonarr-emulebb-live.py"
     assert "--enable-upnp" in sonarr_command
     assert option_values(sonarr_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(sonarr_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
     assert option_values(sonarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(sonarr_command, "--rest-webserver-scheme") == ["https"]
     assert "--sonarr-series-root" not in sonarr_command
@@ -883,6 +889,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     auto_browse_command = commands[11]
     assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(auto_browse_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
     assert "--update-live-wire-inputs" not in auto_browse_command
 
 
@@ -2186,6 +2193,7 @@ def test_search_ui_live_suite_is_selectable_with_live_network_policy(tmp_path: P
     assert [suite["name"] for suite in summary["suites"]] == ["search-ui-live"]
     assert script_name(commands[0]) == "search-ui-live.py"
     assert option_values(commands[0], "--p2p-bind-interface-name") == ["hide.me"]
+    assert option_values(commands[0], "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
     assert option_values(commands[0], "--live-wire-inputs-file")
     assert option_values(commands[0], "--ui-search-rounds") == ["1"]
     assert option_values(commands[0], "--ui-download-lifecycle-count") == ["1"]

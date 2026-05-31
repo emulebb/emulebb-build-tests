@@ -856,6 +856,7 @@ def main() -> int:
     parser.add_argument("--api-key", default="amutorrent-browser-smoke-key")
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--search-rounds", type=int, default=DEFAULT_SEARCH_ROUNDS)
@@ -946,7 +947,11 @@ def main() -> int:
         temp_dir=temp_dir,
     )
     configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, lan_bind_addr)
-    rest_api_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
+    rest_api_smoke.apply_p2p_bind_interface_override(
+        Path(profile["config_dir"]),
+        args.p2p_bind_interface_name,
+        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+    )
 
     report: dict[str, Any] = {
         "suite": SUITE_NAME,

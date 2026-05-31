@@ -49,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key", default="local-dumps-crash-test-key")
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--dump-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--request-timeout-seconds", type=float, default=5.0)
@@ -487,7 +488,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["launch_inputs"]["emule_crash_dump"] = configure_emule_crash_dump_mode(Path(profile["config_dir"]), 2)
         if args.p2p_bind_interface_name:
-            rest_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
+            rest_smoke.apply_p2p_bind_interface_override(
+                Path(profile["config_dir"]),
+                args.p2p_bind_interface_name,
+                vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+            )
 
         app = rest_smoke.launch_app(paths.app_exe, Path(profile["profile_base"]))
         process_id = rest_smoke.get_app_process_id(app)

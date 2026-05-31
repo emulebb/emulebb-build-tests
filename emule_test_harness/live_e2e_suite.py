@@ -221,6 +221,7 @@ class SuiteSpec:
     is_search_ui_live: bool = False
     is_resource_ui_smoke: bool = False
     is_package_helper_integration: bool = False
+    accepts_vpn_guard_profile: bool = False
     accepts_mounted_shared_root: bool = False
     requires_admin_volume_fixtures: bool = False
     accepts_admin_volume_fixtures: bool = False
@@ -266,6 +267,7 @@ SUITE_SPECS = (
         network_scope="vpn",
         uses_live_seed_refresh=True,
         is_search_ui_live=True,
+        accepts_vpn_guard_profile=True,
         default_enabled=False,
     ),
     SuiteSpec(
@@ -389,6 +391,7 @@ SUITE_SPECS = (
         network_scope="vpn",
         uses_live_seed_refresh=True,
         is_rest_api=True,
+        accepts_vpn_guard_profile=True,
     ),
     SuiteSpec(
         name="disk-space-guard-live",
@@ -439,6 +442,7 @@ SUITE_SPECS = (
         network_scope="vpn",
         uses_live_seed_refresh=True,
         is_rest_cold_start_dump_stress=True,
+        accepts_vpn_guard_profile=True,
         default_enabled=False,
     ),
     SuiteSpec(
@@ -446,6 +450,7 @@ SUITE_SPECS = (
         script_name="local-dumps-crash-smoke.py",
         category="rest",
         network_scope="vpn",
+        accepts_vpn_guard_profile=True,
         default_enabled=False,
     ),
     SuiteSpec(
@@ -461,6 +466,7 @@ SUITE_SPECS = (
         category="rest",
         network_scope="vpn",
         is_amutorrent_browser=True,
+        accepts_vpn_guard_profile=True,
         accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
@@ -478,6 +484,7 @@ SUITE_SPECS = (
         network_scope="vpn",
         uses_live_seed_refresh=True,
         is_prowlarr_emulebb=True,
+        accepts_vpn_guard_profile=True,
     ),
     SuiteSpec(
         name="radarr-emulebb",
@@ -486,6 +493,7 @@ SUITE_SPECS = (
         network_scope="vpn",
         uses_live_seed_refresh=True,
         is_arr_emulebb=True,
+        accepts_vpn_guard_profile=True,
         accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
@@ -495,6 +503,7 @@ SUITE_SPECS = (
         network_scope="vpn",
         uses_live_seed_refresh=True,
         is_arr_emulebb=True,
+        accepts_vpn_guard_profile=True,
         accepts_admin_volume_fixtures=True,
     ),
     SuiteSpec(
@@ -522,6 +531,7 @@ SUITE_SPECS = (
         network_scope="vpn",
         uses_live_seed_refresh=True,
         is_auto_browse=True,
+        accepts_vpn_guard_profile=True,
     ),
 )
 SUITE_NAMES = tuple(spec.name for spec in SUITE_SPECS)
@@ -1189,7 +1199,7 @@ def build_suite_command(
             command.append("--rest-stop-start-after-churn")
         if vpn_guard_live_config is not None:
             command.extend(["--vpn-guard-live-config", str(vpn_guard_live_config.resolve())])
-        if vpn_guard_allowed_public_ip_cidrs:
+        if vpn_guard_scenario != "off" and vpn_guard_allowed_public_ip_cidrs:
             command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
         command.extend(["--vpn-guard-scenario", vpn_guard_scenario])
         if vpn_guard_expected_startup_block:
@@ -1204,6 +1214,8 @@ def build_suite_command(
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_amutorrent_browser and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.accepts_vpn_guard_profile and not spec.is_rest_api and vpn_guard_scenario != "off" and vpn_guard_allowed_public_ip_cidrs:
+        command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
     if spec.is_package_helper_integration:
         command.extend(["--dependency-mode", dependency_mode])
         command.extend(["--dependency-channel", dependency_channel])
@@ -2146,10 +2158,19 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     requested_specs = resolve_suite_specs(args.suite)
     selected_specs, skipped_suites = filter_suite_specs_for_network(requested_specs, args.test_network)
     selected_rest_api = any(spec.is_rest_api for spec in selected_specs)
+    selected_vpn_guard_profiles = any(spec.accepts_vpn_guard_profile and spec.network_scope == "vpn" for spec in selected_specs)
     if selected_rest_api and args.vpn_guard_scenario != "off" and not args.vpn_guard_live_config:
         raise ValueError("REST live-wire suites require --vpn-guard-live-config unless --vpn-guard-scenario off is explicit.")
-    if selected_rest_api and args.vpn_guard_scenario != "off" and args.p2p_bind_interface_name.casefold() != "hide.me":
-        raise ValueError("REST live-wire VPN Guard scenarios must bind P2P through hide.me.")
+    effective_vpn_guard_allowed_public_ip_cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip()
+    if not effective_vpn_guard_allowed_public_ip_cidrs and args.vpn_guard_live_config:
+        live_config = json.loads(Path(args.vpn_guard_live_config).read_text(encoding="utf-8"))
+        effective_vpn_guard_allowed_public_ip_cidrs = str(live_config.get("allowedPublicIpCidrs") or "").strip()
+    if args.vpn_guard_scenario == "off":
+        effective_vpn_guard_allowed_public_ip_cidrs = ""
+    if selected_vpn_guard_profiles and args.vpn_guard_scenario != "off" and args.p2p_bind_interface_name.casefold() != "hide.me":
+        raise ValueError("VPN Guard live-wire scenarios must bind P2P through hide.me.")
+    if selected_vpn_guard_profiles and args.vpn_guard_scenario != "off" and not effective_vpn_guard_allowed_public_ip_cidrs:
+        raise ValueError("VPN Guard live-wire scenarios require allowed public IP CIDRs.")
     if any(spec.requires_admin_volume_fixtures for spec in selected_specs) and not args.admin_volume_fixtures:
         raise ValueError("Selected admin storage live suites require --admin-volume-fixtures.")
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
@@ -2269,7 +2290,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
         "vpn_guard": {
             "live_config": str(args.vpn_guard_live_config or ""),
-            "allowed_public_ip_cidrs": args.vpn_guard_allowed_public_ip_cidrs,
+            "allowed_public_ip_cidrs": effective_vpn_guard_allowed_public_ip_cidrs,
             "scenario": args.vpn_guard_scenario,
             "expected_startup_block": bool(args.vpn_guard_expected_startup_block),
         },
@@ -2460,7 +2481,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_leak_churn_cycles=args.rest_leak_churn_cycles,
             rest_stop_start_after_churn=args.rest_stop_start_after_churn,
             vpn_guard_live_config=Path(args.vpn_guard_live_config) if args.vpn_guard_live_config else None,
-            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+            vpn_guard_allowed_public_ip_cidrs=effective_vpn_guard_allowed_public_ip_cidrs,
             vpn_guard_scenario=args.vpn_guard_scenario,
             vpn_guard_expected_startup_block=args.vpn_guard_expected_startup_block,
             multi_client_require_optional_clients=args.multi_client_require_optional_clients,
@@ -2590,6 +2611,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             result["directories_tree_stress"] = bool(args.preference_ui_directories_tree_stress)
         if spec.is_resource_ui_smoke:
             result["language_scope"] = "release"
+        if spec.accepts_vpn_guard_profile:
+            result["vpn_guard"] = dict(summary["vpn_guard"])  # type: ignore[arg-type]
         if spec.is_rest_api:
             result.update(
                 {
@@ -2604,7 +2627,6 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                     "rest_leak_churn_budget": args.rest_leak_churn_budget,
                     "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
                     "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
-                    "vpn_guard": dict(summary["vpn_guard"]),  # type: ignore[arg-type]
                     "rest_download_trigger_count": args.rest_download_trigger_count,
                     "rest_search_method_override": args.rest_search_method_override,
                     "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",

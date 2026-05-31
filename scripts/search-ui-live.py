@@ -257,6 +257,7 @@ def configure_search_ui_profile(
     port: int,
     lan_bind_addr: str,
     bind_interface: str,
+    vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
     """Enables live network policy and REST for the Search UI scenario."""
 
@@ -267,7 +268,11 @@ def configure_search_ui_profile(
         port,
         lan_bind_addr,
     )
-    rest_smoke.apply_p2p_bind_interface_override(config_dir, bind_interface)
+    rest_smoke.apply_p2p_bind_interface_override(
+        config_dir,
+        bind_interface,
+        vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
+    )
 
 
 def http_request(base_url: str, path: str, *, api_key: str, request_timeout_seconds: float = 5.0) -> dict[str, object]:
@@ -874,6 +879,7 @@ def run_search_ui_live(
         rest_port,
         lan_bind_addr,
         p2p_bind_interface_name,
+        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
     )
     seed_refresh = None
     if not skip_live_seed_refresh:
@@ -1073,6 +1079,7 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--ui-search-rounds", type=int, default=DEFAULT_UI_SEARCH_ROUNDS)
     parser.add_argument("--ui-download-lifecycle-count", type=int, default=DEFAULT_UI_DOWNLOAD_LIFECYCLE_COUNT)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=240.0)

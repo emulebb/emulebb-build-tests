@@ -494,6 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=30.0)
@@ -3205,7 +3206,11 @@ def main(argv: list[str] | None = None) -> int:
             args.lan_bind_addr,
         )
         if args.p2p_bind_interface_name:
-            rest_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
+            rest_smoke.apply_p2p_bind_interface_override(
+                Path(profile["config_dir"]),
+                args.p2p_bind_interface_name,
+                vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+            )
 
         app = rest_smoke.launch_app(paths.app_exe, Path(profile["profile_base"]))
         process_id = rest_smoke.get_app_process_id(app)
