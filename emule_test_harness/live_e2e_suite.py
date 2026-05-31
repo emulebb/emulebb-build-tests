@@ -1647,7 +1647,7 @@ def parse_latest_emulebb_public_probe_ipv4(artifacts_dir: Path, extra_roots: Ite
         item
         for root in search_roots
         if root.exists()
-        for item in root.rglob("emulebb-verbose.log")
+        for item in root.rglob("emulebb-verbose*.log")
         if item.is_file()
     ]
     for path in newest_files(log_paths):

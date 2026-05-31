@@ -227,6 +227,22 @@ def test_parse_latest_emulebb_public_probe_ipv4_searches_extra_roots(tmp_path: P
     assert result["ip"] == "198.51.100.11"
 
 
+def test_parse_latest_emulebb_public_probe_ipv4_searches_rotated_logs(tmp_path: Path) -> None:
+    log_dir = tmp_path / "profile" / "logs"
+    log_dir.mkdir(parents=True)
+    log_dir.joinpath("emulebb-verbose.log").write_text("current run without probe\n", encoding="utf-8")
+    log_dir.joinpath("emulebb-verbose-20260531-060650.log").write_text(
+        "VPN public IPv4 probe: provider=http://api.ipify.org/ "
+        "bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=198.51.100.12\n",
+        encoding="utf-8",
+    )
+
+    result = live_e2e_suite.parse_latest_emulebb_public_probe_ipv4(tmp_path)
+
+    assert result["found"] is True
+    assert result["ip"] == "198.51.100.12"
+
+
 def test_vpn_public_ip_check_matches_hide_me_and_emulebb_logs(tmp_path: Path) -> None:
     appdata = tmp_path / "appdata"
     logs = appdata / "Hide.me" / "Logs"
