@@ -211,6 +211,7 @@ def test_vpn_public_ip_check_matches_hide_me_and_emulebb_logs(tmp_path: Path) ->
         p2p_bind_interface_name="hide.me",
         network_scope="vpn",
         appdata_dir=str(appdata),
+        probe_wait_seconds=0.0,
     )
 
     assert result["enabled"] is True
@@ -236,12 +237,43 @@ def test_vpn_public_ip_check_detects_mismatch(tmp_path: Path) -> None:
         p2p_bind_interface_name="hide.me",
         network_scope="vpn",
         appdata_dir=str(appdata),
+        probe_wait_seconds=0.0,
     )
 
     assert result["enabled"] is True
     assert result["matched"] is False
     assert result["expected"]["ip"] == "198.51.100.9"
     assert result["actual"]["ip"] == "203.0.113.4"
+
+
+def test_vpn_public_ip_check_waits_for_delayed_emulebb_probe(tmp_path: Path, monkeypatch) -> None:
+    appdata = tmp_path / "appdata"
+    logs = appdata / "Hide.me" / "Logs"
+    logs.mkdir(parents=True)
+    logs.joinpath("log.txt").write_text("Remote host resolved: 198.51.100.9\n", encoding="utf-8")
+    profile_logs = tmp_path / "artifacts" / "profile" / "logs"
+    profile_logs.mkdir(parents=True)
+    sleep_calls = []
+
+    def fake_sleep(_seconds: float) -> None:
+        sleep_calls.append(_seconds)
+        profile_logs.joinpath("emulebb-verbose.log").write_text(
+            "VPN public IPv4 probe: provider=http://api.ipify.org/ bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=198.51.100.9\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(live_e2e_suite.time, "sleep", fake_sleep)
+
+    result = live_e2e_suite.build_vpn_public_ip_check(
+        child_artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        network_scope="vpn",
+        appdata_dir=str(appdata),
+        probe_wait_seconds=10.0,
+    )
+
+    assert sleep_calls
+    assert result["matched"] is True
 
 
 def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Path, monkeypatch) -> None:

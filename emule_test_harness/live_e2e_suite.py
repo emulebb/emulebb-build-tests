@@ -1638,12 +1638,24 @@ def parse_latest_emulebb_public_probe_ipv4(artifacts_dir: Path) -> dict[str, obj
     return {"found": False, "reason": f"no eMuleBB VPN public IPv4 probe line found under {artifacts_dir}"}
 
 
+def wait_for_emulebb_public_probe_ipv4(artifacts_dir: Path, timeout_seconds: float = 15.0) -> dict[str, object]:
+    """Waits briefly for the child profile log to expose the public IPv4 probe."""
+
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    last_result = parse_latest_emulebb_public_probe_ipv4(artifacts_dir)
+    while not last_result.get("found") and time.monotonic() < deadline:
+        time.sleep(0.5)
+        last_result = parse_latest_emulebb_public_probe_ipv4(artifacts_dir)
+    return last_result
+
+
 def build_vpn_public_ip_check(
     *,
     child_artifacts_dir: Path,
     p2p_bind_interface_name: str,
     network_scope: str,
     appdata_dir: str | None = None,
+    probe_wait_seconds: float = 15.0,
 ) -> dict[str, object]:
     """Compares eMuleBB's bound public IPv4 probe with hide.me's selected remote host."""
 
@@ -1659,7 +1671,7 @@ def build_vpn_public_ip_check(
         if str(appdata)
         else {"found": False, "reason": "APPDATA is not set"}
     )
-    emulebb = parse_latest_emulebb_public_probe_ipv4(child_artifacts_dir)
+    emulebb = wait_for_emulebb_public_probe_ipv4(child_artifacts_dir, timeout_seconds=probe_wait_seconds)
     matched = bool(hide_me.get("found")) and bool(emulebb.get("found")) and hide_me.get("ip") == emulebb.get("ip")
     return {
         "enabled": True,
