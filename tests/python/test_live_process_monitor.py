@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv
 
 import pytest
 
@@ -213,6 +214,35 @@ def test_summarize_metric_rows_reports_deltas() -> None:
     assert summary["working_set_mb"] == {"min": 100.0, "max": 140.0, "delta": 40.0}
     assert summary["private_mb"] == {"min": 90.0, "max": 120.0, "delta": 30.0}
     assert summary["handles"] == {"min": 10.0, "max": 14.0, "delta": 4.0}
+
+
+def test_write_metric_csv_includes_launch_identity(tmp_path: Path) -> None:
+    output = tmp_path / "metrics.csv"
+
+    live_process_monitor.write_metric_csv(
+        output,
+        [
+            {
+                "utc_time": "2026-05-31T00:00:00Z",
+                "elapsed_seconds": 1.25,
+                "launch": 2,
+                "pid": 4321,
+                "cpu_seconds": 0.5,
+                "process_pct_one_core": 12.5,
+                "working_set_mb": 100.0,
+                "peak_working_set_mb": 110.0,
+                "private_mb": 90.0,
+                "pagefile_mb": 95.0,
+                "handles": 250,
+                "exit_code": live_process_monitor.STILL_ACTIVE,
+            }
+        ],
+    )
+
+    rows = list(csv.DictReader(output.open(newline="", encoding="utf-8")))
+
+    assert rows[0]["launch"] == "2"
+    assert rows[0]["pid"] == "4321"
 
 
 def test_live_process_monitor_script_publishes_interrupted_reports() -> None:

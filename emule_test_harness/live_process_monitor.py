@@ -547,6 +547,8 @@ def write_metric_csv(path: Path, rows: list[dict[str, object]]) -> None:
     fieldnames = [
         "utc_time",
         "elapsed_seconds",
+        "launch",
+        "pid",
         "cpu_seconds",
         "process_pct_one_core",
         "working_set_mb",
