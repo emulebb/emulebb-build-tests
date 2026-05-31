@@ -148,6 +148,16 @@ def test_browser_smoke_reports_live_network_launch_inputs() -> None:
     assert 'BindAddr=hide.me' not in script_text
 
 
+def test_browser_smoke_waits_for_segment_delta_patches() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "delta?.changed" in script_text
+    assert "itemsByHash.get(expected)" in script_text
+    assert "Array.isArray(item.gapStatus)" in script_text
+    assert "Array.isArray(item.reqStatus)" in script_text
+
+
 def test_browser_smoke_isolates_amutorrent_port_and_state() -> None:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
     script_text = script_path.read_text(encoding="utf-8")

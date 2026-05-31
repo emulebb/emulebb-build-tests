@@ -693,6 +693,7 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                         return await new Promise(resolve => {
                             let settled = false;
                             let latest = null;
+                            const itemsByHash = new Map();
                             let requestTimer = null;
                             const finish = result => {
                                 if (settled) return;
@@ -705,6 +706,26 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                             const findItem = items => Array.isArray(items)
                                 ? items.find(item => String(item?.hash || '').toLowerCase() === expected)
                                 : null;
+                            const mergeItem = item => {
+                                const hash = String(item?.hash || '').toLowerCase();
+                                if (!hash) return null;
+                                const merged = {...(itemsByHash.get(hash) || {}), ...item};
+                                itemsByHash.set(hash, merged);
+                                return merged;
+                            };
+                            const mergeItems = items => {
+                                if (!Array.isArray(items)) return;
+                                for (const item of items) mergeItem(item);
+                            };
+                            const maybeFinish = item => {
+                                if (
+                                    item
+                                    && Array.isArray(item.gapStatus)
+                                    && Array.isArray(item.reqStatus)
+                                ) {
+                                    finish({status: 200, payload: {item}});
+                                }
+                            };
                             const requestSnapshot = () => {
                                 if (ws.readyState === WebSocket.OPEN) {
                                     ws.send(JSON.stringify({action: 'requestFullSnapshot'}));
@@ -727,16 +748,13 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                                 try { message = JSON.parse(event.data); } catch (error) { return; }
                                 if (message?.type !== 'batch-update') return;
                                 latest = message;
-                                const item = findItem(message?.data?.items);
-                                if (
-                                    item
-                                    && Array.isArray(item.partStatus)
-                                    && Array.isArray(item.gapStatus)
-                                    && Array.isArray(item.reqStatus)
-                                    && Array.isArray(item.peers)
-                                ) {
-                                    finish({status: 200, payload: {item}});
-                                }
+                                mergeItems(message?.data?.items);
+                                const delta = message?.data?.delta || {};
+                                mergeItems(delta?.added);
+                                mergeItems(delta?.changed);
+                                maybeFinish(findItem(message?.data?.items));
+                                maybeFinish(findItem(delta?.changed));
+                                maybeFinish(itemsByHash.get(expected));
                             };
                         });
                     }""",
