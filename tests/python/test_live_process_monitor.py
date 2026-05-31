@@ -252,3 +252,18 @@ def test_live_process_monitor_script_publishes_interrupted_reports() -> None:
     assert "except KeyboardInterrupt:" in source
     assert 'report["status"] = "interrupted"' in source
     assert "persist_runtime_artifacts()" in source[source.index("finally:") :]
+
+
+def test_live_process_monitor_copies_profile_before_policy_mutation() -> None:
+    script = Path(__file__).resolve().parents[2] / "scripts" / "live-process-monitor.py"
+    source = script.read_text(encoding="utf-8")
+
+    copy_index = source.index("shutil.copytree(source_profile_dir, profile_under_test_dir)")
+    policy_index = source.index("live_profiles.apply_live_network_policy(")
+
+    assert "source_profile_dir = config.profile_dir.resolve()" in source
+    assert 'profile_under_test_dir = artifacts_dir / "profile-under-test"' in source
+    assert "config = live_process_monitor.merge_config(config, profile_dir=profile_under_test_dir)" in source
+    assert '"profile_dir_source": str(source_profile_dir)' in source
+    assert '"profile_dir_copied": True' in source
+    assert copy_index < policy_index

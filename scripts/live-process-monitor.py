@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -139,6 +140,14 @@ def main() -> int:
     )
     app_exe = config.app_exe or paths.app_exe
     live_process_monitor.validate_config(config, app_exe=app_exe)
+    source_profile_dir = config.profile_dir.resolve()
+    profile_under_test_dir = artifacts_dir / "profile-under-test"
+    if profile_under_test_dir.resolve().parent != artifacts_dir.resolve():
+        raise RuntimeError(f"Refusing to prepare live monitor profile outside artifacts dir: {profile_under_test_dir}")
+    if profile_under_test_dir.exists():
+        shutil.rmtree(profile_under_test_dir)
+    shutil.copytree(source_profile_dir, profile_under_test_dir)
+    config = live_process_monitor.merge_config(config, profile_dir=profile_under_test_dir)
     if args.p2p_bind_interface_name:
         live_profiles.apply_live_network_policy(
             config.profile_dir,
@@ -160,6 +169,9 @@ def main() -> int:
         "configuration": args.configuration,
         "app_exe": str(app_exe),
         "profile_dir_configured": True,
+        "profile_dir_source": str(source_profile_dir),
+        "profile_dir": str(config.profile_dir),
+        "profile_dir_copied": True,
         "duration_seconds": config.duration_seconds,
         "sample_interval_seconds": config.sample_interval_seconds,
         "cpu_profile": bool(args.cpu_profile),
