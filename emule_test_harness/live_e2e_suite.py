@@ -10,6 +10,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from emule_test_harness.artifact_names import result_file_name
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
@@ -1623,10 +1624,33 @@ def read_log_text(path: Path) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def parse_latest_emulebb_public_probe_ipv4(artifacts_dir: Path) -> dict[str, object]:
-    """Returns the newest eMuleBB startup public IPv4 probe line from child artifacts."""
+def unique_probe_roots(primary_root: Path, extra_roots: Iterable[Path] = ()) -> list[Path]:
+    """Returns ordered unique roots searched for eMuleBB probe logs."""
 
-    for path in newest_files([item for item in artifacts_dir.rglob("emulebb-verbose.log") if item.is_file()]):
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for root in (primary_root, *extra_roots):
+        resolved = root.resolve()
+        key = str(resolved).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+def parse_latest_emulebb_public_probe_ipv4(artifacts_dir: Path, extra_roots: Iterable[Path] = ()) -> dict[str, object]:
+    """Returns the newest eMuleBB startup public IPv4 probe line from known log roots."""
+
+    search_roots = unique_probe_roots(artifacts_dir, extra_roots)
+    log_paths = [
+        item
+        for root in search_roots
+        if root.exists()
+        for item in root.rglob("emulebb-verbose.log")
+        if item.is_file()
+    ]
+    for path in newest_files(log_paths):
         try:
             lines = read_log_text(path).splitlines()
         except OSError:
@@ -1644,17 +1668,26 @@ def parse_latest_emulebb_public_probe_ipv4(artifacts_dir: Path) -> dict[str, obj
                     "log_path": str(path),
                     "line_number": line_number,
                 }
-    return {"found": False, "reason": f"no eMuleBB VPN public IPv4 probe line found under {artifacts_dir}"}
+    return {
+        "found": False,
+        "reason": "no eMuleBB VPN public IPv4 probe line found under "
+        + ", ".join(str(root) for root in search_roots),
+    }
 
 
-def wait_for_emulebb_public_probe_ipv4(artifacts_dir: Path, timeout_seconds: float = 15.0) -> dict[str, object]:
+def wait_for_emulebb_public_probe_ipv4(
+    artifacts_dir: Path,
+    *,
+    extra_roots: Iterable[Path] = (),
+    timeout_seconds: float = 15.0,
+) -> dict[str, object]:
     """Waits briefly for the child profile log to expose the public IPv4 probe."""
 
     deadline = time.monotonic() + max(0.0, timeout_seconds)
-    last_result = parse_latest_emulebb_public_probe_ipv4(artifacts_dir)
+    last_result = parse_latest_emulebb_public_probe_ipv4(artifacts_dir, extra_roots)
     while not last_result.get("found") and time.monotonic() < deadline:
         time.sleep(0.5)
-        last_result = parse_latest_emulebb_public_probe_ipv4(artifacts_dir)
+        last_result = parse_latest_emulebb_public_probe_ipv4(artifacts_dir, extra_roots)
     return last_result
 
 
@@ -1664,6 +1697,7 @@ def build_vpn_public_ip_check(
     p2p_bind_interface_name: str,
     network_scope: str,
     appdata_dir: str | None = None,
+    emulebb_probe_roots: Iterable[Path] = (),
     probe_wait_seconds: float = 15.0,
 ) -> dict[str, object]:
     """Compares eMuleBB's bound public IPv4 probe with hide.me's selected remote host."""
@@ -1680,7 +1714,11 @@ def build_vpn_public_ip_check(
         if str(appdata)
         else {"found": False, "reason": "APPDATA is not set"}
     )
-    emulebb = wait_for_emulebb_public_probe_ipv4(child_artifacts_dir, timeout_seconds=probe_wait_seconds)
+    emulebb = wait_for_emulebb_public_probe_ipv4(
+        child_artifacts_dir,
+        extra_roots=emulebb_probe_roots,
+        timeout_seconds=probe_wait_seconds,
+    )
     matched = bool(hide_me.get("found")) and bool(emulebb.get("found")) and hide_me.get("ip") == emulebb.get("ip")
     return {
         "enabled": True,
@@ -2577,10 +2615,16 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             )
         if spec.requires_admin_volume_fixtures or spec.accepts_admin_volume_fixtures:
             result["admin_volume_fixture"] = dict(summary["admin_volume_fixtures"])  # type: ignore[arg-type]
+        emulebb_probe_roots = (
+            [live_process_monitor_profile_dir]
+            if spec.name == "live-process-monitor" and live_process_monitor_profile_dir is not None
+            else []
+        )
         vpn_public_ip_check = build_vpn_public_ip_check(
             child_artifacts_dir=child_artifacts_dir,
             p2p_bind_interface_name=child_p2p_bind_interface_name,
             network_scope=spec.network_scope,
+            emulebb_probe_roots=emulebb_probe_roots,
         )
         result["vpn_public_ip_check"] = vpn_public_ip_check
         if vpn_public_ip_check.get("enabled") and not vpn_public_ip_check.get("matched"):
