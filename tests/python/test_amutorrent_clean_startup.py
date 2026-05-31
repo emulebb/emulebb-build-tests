@@ -124,6 +124,36 @@ def test_browser_fetch_retries_safe_config_test_post(monkeypatch) -> None:
     assert page.calls == 2
 
 
+def test_browser_fetch_retries_nested_config_test_bridge_reset(monkeypatch) -> None:
+    clean = load_clean_module()
+    monkeypatch.setattr(clean.time, "sleep", lambda _seconds: None)
+
+    class Page:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, *_args):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "status": 200,
+                    "payload": {
+                        "success": False,
+                        "results": {"emulebb": {"success": False, "error": "read ECONNRESET"}},
+                    },
+                }
+            return {"status": 200, "payload": {"success": True}}
+
+    page = Page()
+
+    assert clean.fetch_page_json(page, "/api/config/test", "POST", {"emulebb": {}}) == {
+        "status": 200,
+        "payload": {"success": True},
+        "attempts": 2,
+    }
+    assert page.calls == 2
+
+
 def test_browser_fetch_does_not_retry_mutating_post(monkeypatch) -> None:
     clean = load_clean_module()
     monkeypatch.setattr(clean.time, "sleep", lambda _seconds: None)

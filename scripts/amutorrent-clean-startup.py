@@ -162,6 +162,24 @@ def fetch_page_json_once(page: Any, path: str, method: str = "GET", body: dict[s
         return {"status": 0, "payload": {"type": "error", "message": str(exc)}}
 
 
+def payload_text_fragments(value: Any) -> list[str]:
+    """Returns string fragments from nested browser-fetch payload values."""
+
+    if isinstance(value, dict):
+        fragments: list[str] = []
+        for item in value.values():
+            fragments.extend(payload_text_fragments(item))
+        return fragments
+    if isinstance(value, list):
+        fragments = []
+        for item in value:
+            fragments.extend(payload_text_fragments(item))
+        return fragments
+    if value is None:
+        return []
+    return [str(value)]
+
+
 def is_retryable_browser_fetch(method: str, path: str, result: dict[str, Any]) -> bool:
     """Returns whether a browser-origin aMuTorrent request can be retried safely."""
 
@@ -169,10 +187,7 @@ def is_retryable_browser_fetch(method: str, path: str, result: dict[str, Any]) -
     if method_upper != "GET" and not (method_upper == "POST" and path.split("?", 1)[0] == "/api/config/test"):
         return False
     payload = result.get("payload")
-    if isinstance(payload, dict):
-        message = " ".join(str(payload.get(key) or "") for key in ("message", "error", "text"))
-    else:
-        message = str(payload or "")
+    message = " ".join(payload_text_fragments(payload))
     return any(marker in message for marker in BROWSER_FETCH_TRANSIENT_MARKERS)
 
 
