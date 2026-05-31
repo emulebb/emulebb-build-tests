@@ -1378,6 +1378,15 @@ def wait_for_main_window(app: Application):
     return wait_for(resolve, timeout=90.0, interval=0.5, description="eMule main window")
 
 
+def resolve_launched_process_id(app: Application, main_hwnd: int) -> int:
+    """Returns the launched process id, falling back to the main window owner."""
+
+    process_id = live_common.resolve_app_process_id(app)
+    if process_id is not None:
+        return int(process_id)
+    return int(win32process.GetWindowThreadProcessId(main_hwnd)[1])
+
+
 def wait_for_list_count(list_hwnd: int, minimum_count: int) -> int:
     """Waits until the Shared Files list exposes at least the requested item count."""
 
@@ -2084,7 +2093,7 @@ def run_shared_files_e2e(
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["process_id"] = process_id
         summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
         summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
@@ -2304,7 +2313,7 @@ def run_dynamic_folder_lifecycle_e2e(
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["process_id"] = process_id
         summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
         summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
@@ -2490,7 +2499,7 @@ def run_monitored_folder_events_e2e(
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["process_id"] = process_id
         summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
         summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
@@ -2718,7 +2727,7 @@ def run_generated_robustness_e2e(
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["process_id"] = process_id
         summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
         summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
@@ -2905,7 +2914,7 @@ def run_tree_refresh_stress_e2e(
         main_window = live_common.wait_for_main_window(app, timeout=900.0)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["process_id"] = process_id
 
         summary["startup_profile_required"] = bool(require_startup_profile)
@@ -3028,7 +3037,7 @@ def run_tree_refresh_stress_e2e(
         main_window = live_common.wait_for_main_window(app, timeout=900.0)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["cached_relaunch_process_id"] = process_id
         process_handle = open_process(process_id)
 
@@ -3175,7 +3184,7 @@ def run_duplicate_startup_reuse_e2e(
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["first_launch_process_id"] = process_id
         process_handle = open_process(process_id)
 
@@ -3235,7 +3244,7 @@ def run_duplicate_startup_reuse_e2e(
         main_window = live_common.wait_for_main_window(app)
         main_hwnd = main_window.handle
         live_common.bring_window_to_front(main_window)
-        process_id = win32process.GetWindowThreadProcessId(main_hwnd)[1]
+        process_id = resolve_launched_process_id(app, main_hwnd)
         summary["relaunch_process_id"] = process_id
         process_handle = open_process(process_id)
 

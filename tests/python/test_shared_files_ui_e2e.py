@@ -47,6 +47,23 @@ def test_tree_label_matches_drive_rejects_other_drives() -> None:
     assert not module.tree_label_matches_drive("C-drive backup", "D:\\")
 
 
+def test_resolve_launched_process_id_prefers_launch_metadata(monkeypatch) -> None:
+    module = load_shared_files_module()
+
+    monkeypatch.setattr(module.live_common, "resolve_app_process_id", lambda app: 4321)
+
+    assert module.resolve_launched_process_id(object(), 1001) == 4321
+
+
+def test_resolve_launched_process_id_falls_back_to_window_owner(monkeypatch) -> None:
+    module = load_shared_files_module()
+
+    monkeypatch.setattr(module.live_common, "resolve_app_process_id", lambda app: None)
+    monkeypatch.setattr(module.win32process, "GetWindowThreadProcessId", lambda hwnd: (99, 2468))
+
+    assert module.resolve_launched_process_id(object(), 1001) == 2468
+
+
 def test_vhd_monitored_scenario_requires_admin_monitor_root(tmp_path: Path) -> None:
     module = load_shared_files_module()
 
