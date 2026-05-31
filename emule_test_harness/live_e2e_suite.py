@@ -2222,10 +2222,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     selected_specs, skipped_suites = filter_suite_specs_for_network(requested_specs, args.test_network)
     selected_vpn_guard_profiles = any(spec.accepts_vpn_guard_profile and spec.network_scope == "vpn" for spec in selected_specs)
     vpn_guard_config_path = Path(args.vpn_guard_live_config) if args.vpn_guard_live_config else None
-    if selected_vpn_guard_profiles and args.vpn_guard_scenario in {"not-allowlisted", "vpn-off"} and (
+    if selected_vpn_guard_profiles and args.vpn_guard_scenario != "off" and (
         vpn_guard_config_path is None or not vpn_guard_config_path.is_file()
     ):
-        raise ValueError("Negative VPN Guard live-wire scenarios require --vpn-guard-live-config.")
+        raise ValueError("VPN Guard live-wire scenarios require --vpn-guard-live-config.")
     vpn_guard_config = vpn_guard_live.load_config(vpn_guard_config_path) if vpn_guard_config_path is not None and vpn_guard_config_path.is_file() else None
     effective_vpn_guard_live_config_path = vpn_guard_config_path if vpn_guard_config is not None else None
     effective_vpn_guard_allowed_public_ip_cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip()
@@ -2233,7 +2233,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         effective_vpn_guard_allowed_public_ip_cidrs = str(vpn_guard_config.get("allowedPublicIpCidrs") or "").strip()
     if args.vpn_guard_scenario == "off":
         effective_vpn_guard_allowed_public_ip_cidrs = ""
-    if vpn_guard_config is not None and args.vpn_guard_scenario != "off":
+    if selected_vpn_guard_profiles and vpn_guard_config is not None and args.vpn_guard_scenario != "off":
         args.p2p_bind_interface_name = str(vpn_guard_config.get("p2pBindInterfaceName") or "").strip()
     if selected_vpn_guard_profiles and args.vpn_guard_scenario != "off" and args.p2p_bind_interface_name.casefold() != "hide.me":
         raise ValueError("VPN Guard live-wire scenarios must bind P2P through hide.me.")

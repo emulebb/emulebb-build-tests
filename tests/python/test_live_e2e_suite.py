@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import pytest
 
 from emule_test_harness import live_e2e_suite
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
+from emule_test_harness import vpn_guard_live
 
 
 class FakeHarnessCliCommon:
@@ -74,7 +76,15 @@ def parse_args(*argv: str):
     if "--test-network" not in args:
         args.extend(["--test-network", "all"])
     if "--vpn-guard-scenario" not in args and "--vpn-guard-live-config" not in args:
-        args.extend(["--vpn-guard-live-config", str(Path("vpn-guard-live.json").resolve())])
+        config_path = Path(tempfile.gettempdir()) / "emulebb-test-vpn-guard-live.json"
+        vpn_guard_live.write_config(
+            config_path,
+            vpn_guard_live.build_config(
+                p2p_bind_interface_name="hide.me",
+                public_ip="8.8.8.8",
+            ),
+        )
+        args.extend(["--vpn-guard-live-config", str(config_path.resolve())])
     if "--vpn-guard-allowed-public-ip-cidrs" not in args and "--vpn-guard-scenario" not in args:
         args.extend(["--vpn-guard-allowed-public-ip-cidrs", "8.8.8.8/32"])
     return live_e2e_suite.build_parser().parse_args(args)
@@ -836,7 +846,9 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["off"]
-    assert option_values(rest_command, "--vpn-guard-live-config") == []
+    rest_vpn_config = option_values(rest_command, "--vpn-guard-live-config")
+    assert len(rest_vpn_config) == 1
+    assert Path(rest_vpn_config[0]).is_file()
     assert option_values(rest_command, "--vpn-guard-scenario") == ["success"]
     assert "--vpn-guard-expected-startup-block" not in rest_command
     assert "--skip-live-seed-refresh" not in rest_command
@@ -1301,6 +1313,26 @@ def test_vpn_guard_success_can_run_without_public_cidrs(tmp_path: Path) -> None:
     assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
     assert "--vpn-guard-enabled" in command
     assert option_values(command, "--vpn-guard-allowed-public-ip-cidrs") == []
+
+
+def test_vpn_guard_success_campaign_requires_live_config(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    install_profiled_command_capture(monkeypatch, commands)
+
+    with pytest.raises(ValueError, match="VPN Guard live-wire scenarios require --vpn-guard-live-config"):
+        live_e2e_suite.run_live_e2e_suite(
+            parse_args(
+                "--workspace-root",
+                str(tmp_path / "workspaces" / "workspace"),
+                "--suite",
+                "search-ui-live",
+                "--vpn-guard-live-config",
+                str(tmp_path / "missing-vpn-guard-live.json"),
+            ),
+            FakeHarnessCliCommon(tmp_path),
+        )
+
+    assert commands == []
 
 
 def test_vpn_guard_campaign_hooks_apply_negative_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
