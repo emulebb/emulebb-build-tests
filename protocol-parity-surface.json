@@ -37,6 +37,12 @@
       "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
     },
     {
+      "path_glob": "srchybrid/Protocol*",
+      "item_id": "CI-045",
+      "reason": "Protocol guard helpers reject malformed packets and bounded persisted metadata without changing stock wire shapes.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
       "path_glob": "srchybrid/Search*",
       "item_id": "FEAT-029",
       "reason": "Search ceiling and Kad lifetime behavior intentionally expanded without changing packet formats.",
@@ -91,9 +97,21 @@
       "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
     },
     {
+      "path_glob": "srchybrid/kademlia/utils/MiscUtils*",
+      "item_id": "CI-045",
+      "reason": "DEBUG-only hex dump utility removal is diagnostic cleanup and does not affect Kad runtime protocol behavior.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
       "path_glob": "srchybrid/kademlia/utils/NodesDatSupport*",
       "item_id": "CI-028",
       "reason": "Nodes.dat import, inspection, and replacement behavior is part of the Kad bootstrap parity gate.",
+      "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
+    },
+    {
+      "path_glob": "srchybrid/kademlia/utils/ThreadName.cpp",
+      "item_id": "CI-045",
+      "reason": "DEBUG-only thread-name exception cleanup is diagnostic-only and does not affect Kad runtime protocol behavior.",
       "proof_command": "python -m emule_workspace test protocol-parity --config Release --platform x64"
     },
     {
