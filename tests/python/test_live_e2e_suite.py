@@ -828,6 +828,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["off"]
     assert option_values(rest_command, "--vpn-guard-live-config") == [summary["vpn_guard"]["live_config"]]
     assert option_values(rest_command, "--vpn-guard-scenario") == ["success"]
+    assert "--vpn-guard-expected-startup-block" not in rest_command
     assert "--skip-live-seed-refresh" not in rest_command
     assert summary["suites"][6]["rest_coverage_budget"] == "contract"
     assert summary["suites"][6]["rest_stress_budget"] == "smoke"
@@ -1266,6 +1267,23 @@ def test_rest_api_can_run_explicit_vpn_guard_off_scenario(tmp_path: Path) -> Non
 
     assert option_values(command, "--vpn-guard-scenario") == ["off"]
     assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
+
+
+def test_rest_api_can_expect_vpn_guard_startup_block(tmp_path: Path) -> None:
+    command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("rest-api"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        vpn_guard_live_config=tmp_path / "vpn-guard-live.json",
+        vpn_guard_expected_startup_block=True,
+    )
+
+    assert option_values(command, "--vpn-guard-live-config") == [str((tmp_path / "vpn-guard-live.json").resolve())]
+    assert "--vpn-guard-expected-startup-block" in command
 
 
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:

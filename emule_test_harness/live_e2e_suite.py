@@ -1020,6 +1020,7 @@ def build_suite_command(
     vpn_guard_live_config: Path | None = None,
     vpn_guard_allowed_public_ip_cidrs: str = "",
     vpn_guard_scenario: str = "success",
+    vpn_guard_expected_startup_block: bool = False,
     multi_client_require_optional_clients: bool = False,
     p2p_bind_interface_name: str = "hide.me",
     p2p_bind_interface_address: str | None = None,
@@ -1191,6 +1192,8 @@ def build_suite_command(
         if vpn_guard_allowed_public_ip_cidrs:
             command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
         command.extend(["--vpn-guard-scenario", vpn_guard_scenario])
+        if vpn_guard_expected_startup_block:
+            command.append("--vpn-guard-expected-startup-block")
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -1871,6 +1874,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vpn-guard-live-config")
     parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--vpn-guard-scenario", choices=["off", "success", "not-allowlisted", "vpn-off"], default="success")
+    parser.add_argument("--vpn-guard-expected-startup-block", action="store_true")
     parser.add_argument("--multi-client-require-optional-clients", action="store_true")
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
@@ -2267,6 +2271,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "live_config": str(args.vpn_guard_live_config or ""),
             "allowed_public_ip_cidrs": args.vpn_guard_allowed_public_ip_cidrs,
             "scenario": args.vpn_guard_scenario,
+            "expected_startup_block": bool(args.vpn_guard_expected_startup_block),
         },
         "multi_client_p2p_matrix": {
             "require_optional_clients": bool(args.multi_client_require_optional_clients),
@@ -2457,6 +2462,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             vpn_guard_live_config=Path(args.vpn_guard_live_config) if args.vpn_guard_live_config else None,
             vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
             vpn_guard_scenario=args.vpn_guard_scenario,
+            vpn_guard_expected_startup_block=args.vpn_guard_expected_startup_block,
             multi_client_require_optional_clients=args.multi_client_require_optional_clients,
             p2p_bind_interface_name=child_p2p_bind_interface_name,
             p2p_bind_interface_address=child_p2p_bind_interface_address,
