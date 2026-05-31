@@ -282,6 +282,9 @@ NATIVE_ROUTE_HEADER_PATH = (
     / "srchybrid"
     / "WebServerJsonSeams.h"
 )
+QBIT_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerQBitCompatSeams.h")
+TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompatSeams.h")
+TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
 UNSAFE_OPENAPI_OPERATIONS = {"captureDiagnosticDump", "triggerDiagnosticCrashTest", "shutdownApp"}
 UNSAFE_BROAD_MUTATION_PATHS = (
     "/api/v1/app/shutdown",
@@ -357,6 +360,82 @@ OPENAPI_TAG_FAMILIES = {
     "Searches": "searches",
     "Friends": "friends",
     "Logs": "logs",
+}
+QBIT_JSON_RESPONSE_PATHS = {
+    "/api/v2/app/preferences",
+    "/api/v2/torrents/categories",
+    "/api/v2/torrents/info",
+    "/api/v2/torrents/properties",
+    "/api/v2/torrents/files",
+}
+QBIT_ADAPTER_ROUTE_FIELD_CONTRACTS: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {
+    ("POST", "/api/v2/auth/login"): {
+        "formFields": ("password", "username"),
+        "requiredFormFields": ("password", "username"),
+    },
+    ("POST", "/api/v2/torrents/createcategory"): {
+        "formFields": ("category",),
+        "requiredFormFields": ("category",),
+    },
+    ("GET", "/api/v2/torrents/info"): {
+        "queryFields": ("category",),
+    },
+    ("GET", "/api/v2/torrents/properties"): {
+        "queryFields": ("hash",),
+        "requiredQueryFields": ("hash",),
+    },
+    ("GET", "/api/v2/torrents/files"): {
+        "queryFields": ("hash",),
+        "requiredQueryFields": ("hash",),
+    },
+    ("POST", "/api/v2/torrents/add"): {
+        "formFields": (
+            "category",
+            "inactiveSeedingTimeLimit",
+            "paused",
+            "ratioLimit",
+            "seedingTimeLimit",
+            "stopped",
+            "urls",
+        ),
+        "requiredFormFields": ("urls",),
+    },
+    ("POST", "/api/v2/torrents/delete"): {
+        "formFields": ("deleteFiles", "hashes"),
+        "requiredFormFields": ("hashes",),
+    },
+    ("POST", "/api/v2/torrents/setcategory"): {
+        "formFields": ("category", "hashes"),
+        "requiredFormFields": ("category", "hashes"),
+    },
+    ("POST", "/api/v2/torrents/pause"): {
+        "formFields": ("hashes",),
+        "requiredFormFields": ("hashes",),
+    },
+    ("POST", "/api/v2/torrents/stop"): {
+        "formFields": ("hashes",),
+        "requiredFormFields": ("hashes",),
+    },
+    ("POST", "/api/v2/torrents/resume"): {
+        "formFields": ("hashes",),
+        "requiredFormFields": ("hashes",),
+    },
+    ("POST", "/api/v2/torrents/start"): {
+        "formFields": ("hashes",),
+        "requiredFormFields": ("hashes",),
+    },
+    ("POST", "/api/v2/torrents/setsharelimits"): {
+        "formFields": ("hashes", "inactiveSeedingTimeLimit", "ratioLimit", "seedingTimeLimit"),
+        "requiredFormFields": ("hashes",),
+    },
+    ("POST", "/api/v2/torrents/topprio"): {
+        "formFields": ("hashes",),
+        "requiredFormFields": ("hashes",),
+    },
+    ("POST", "/api/v2/torrents/setforcestart"): {
+        "formFields": ("hashes", "value"),
+        "requiredFormFields": ("hashes",),
+    },
 }
 
 
@@ -677,6 +756,194 @@ def assert_contract_routes_match_openapi() -> dict[str, object]:
         and not duplicate_operation_ids
         and not missing_required_body_payloads
         and not unknown_execution_models,
+    }
+
+
+def _sorted_tuple(values: Iterable[str]) -> tuple[str, ...]:
+    """Returns a stable tuple for contract registry fields."""
+
+    return tuple(sorted(values))
+
+
+def load_qbit_adapter_route_specs(qbit_route_header_path: Path = QBIT_ROUTE_HEADER_PATH) -> tuple[dict[str, object], ...]:
+    """Extracts qBittorrent-compatible routes from the native adapter seam."""
+
+    source = qbit_route_header_path.read_text(encoding="utf-8")
+    block = source[
+        source.index("inline const std::vector<SQBitRouteSpec> &GetQBitRouteSpecs()") :
+        source.index("inline const SQBitRouteSpec *FindQBitRouteSpec")
+    ]
+    specs = re.findall(r'\{"([A-Z]+)", "([^"]+)", (true|false)\}', block)
+    return tuple(
+        {
+            "method": method,
+            "path": path.lower(),
+            "authRequired": auth_required == "true",
+        }
+        for method, path, auth_required in specs
+    )
+
+
+def load_torznab_endpoint_path(torznab_route_header_path: Path = TORZNAB_ROUTE_HEADER_PATH) -> str:
+    """Extracts the Torznab adapter endpoint path from the native seam."""
+
+    source = torznab_route_header_path.read_text(encoding="utf-8")
+    endpoint = re.search(r'pszEndpoint\s*=\s*"([^"]+)"', source)
+    if endpoint is None:
+        raise RuntimeError("Torznab endpoint path is missing from WebServerArrCompatSeams.h")
+    return endpoint.group(1).lower()
+
+
+def load_torznab_query_fields(torznab_route_header_path: Path = TORZNAB_ROUTE_HEADER_PATH) -> tuple[str, ...]:
+    """Extracts normalized Torznab query fields consumed by the adapter seam."""
+
+    source = torznab_route_header_path.read_text(encoding="utf-8")
+    fields = set(re.findall(r'normalized\.find\("([^"]+)"\)', source))
+    return _sorted_tuple(fields)
+
+
+def _adapter_operation_id(adapter: str, method: str, path: str) -> str:
+    """Builds a stable compact operation id for one adapter route."""
+
+    path_tokens = re.sub(r"[^a-z0-9]+", "_", path.lower()).strip("_")
+    return f"{adapter}_{method.lower()}_{path_tokens}"
+
+
+def _qbit_response_kind(path: str) -> str:
+    """Returns the public response body family for one qBit-compatible route."""
+
+    return "json" if path in QBIT_JSON_RESPONSE_PATHS else "text"
+
+
+def _qbit_error_statuses(path: str, auth_required: bool) -> tuple[int, ...]:
+    """Returns stable adapter-local error statuses for one qBit route."""
+
+    statuses = {400, 404}
+    if auth_required:
+        statuses.update({403, 503})
+    if path == "/api/v2/auth/login":
+        return (200,)
+    return tuple(sorted(statuses))
+
+
+def build_adapter_contract_routes() -> tuple[dict[str, object], ...]:
+    """Builds the public adapter contract registry from adapter seams."""
+
+    routes: list[dict[str, object]] = []
+    for spec in load_qbit_adapter_route_specs():
+        method = str(spec["method"])
+        path = str(spec["path"])
+        fields = QBIT_ADAPTER_ROUTE_FIELD_CONTRACTS.get((method, path), {})
+        auth_required = bool(spec["authRequired"])
+        routes.append(
+            {
+                "name": _adapter_operation_id("qbit", method, path),
+                "adapter": "qbittorrent",
+                "family": "qbit",
+                "method": method,
+                "path": path,
+                "authMode": "session-cookie" if auth_required else "none",
+                "authRequired": auth_required,
+                "requestKind": "form" if method == "POST" else ("query" if fields.get("queryFields") else "none"),
+                "queryFields": fields.get("queryFields", ()),
+                "requiredQueryFields": fields.get("requiredQueryFields", ()),
+                "formFields": fields.get("formFields", ()),
+                "requiredFormFields": fields.get("requiredFormFields", ()),
+                "responseKind": _qbit_response_kind(path),
+                "errorResponseKind": "text",
+                "successStatuses": (200,),
+                "errorStatuses": _qbit_error_statuses(path, auth_required),
+                "unknownFieldsPolicy": "ignored-after-parse",
+                "source": "WebServerQBitCompatSeams::GetQBitRouteSpecs",
+            }
+        )
+
+    torznab_path = load_torznab_endpoint_path()
+    routes.append(
+        {
+            "name": _adapter_operation_id("torznab", "GET", torznab_path),
+            "adapter": "torznab",
+            "family": "torznab",
+            "method": "GET",
+            "path": torznab_path,
+            "pathAliases": (f"{torznab_path}/",),
+            "authMode": "api-key-query-or-header",
+            "authRequired": True,
+            "requestKind": "query",
+            "queryFields": load_torznab_query_fields(),
+            "requiredQueryFields": (),
+            "acceptedTypes": ("caps", "movie", "search", "tvsearch"),
+            "responseKind": "xml",
+            "errorResponseKind": "xml",
+            "successStatuses": (200,),
+            "errorStatuses": (400, 401, 503),
+            "unknownFieldsPolicy": "ignored-after-decode",
+            "source": "WebServerArrCompatSeams::TryParseTorznabRequest",
+        }
+    )
+    return tuple(routes)
+
+
+ADAPTER_CONTRACT_ROUTES: tuple[dict[str, object], ...] = build_adapter_contract_routes()
+
+
+def normalize_adapter_contract_path(path: str) -> str:
+    """Normalizes a concrete adapter probe path to the adapter route path."""
+
+    parsed = urllib.parse.urlsplit(path)
+    normalized = parsed.path.lower()
+    if normalized == "/indexer/emulebb/api/":
+        return "/indexer/emulebb/api"
+    return normalized
+
+
+def assert_adapter_contract_routes_match_sources() -> dict[str, object]:
+    """Verifies adapter registry routes remain generated from native seams."""
+
+    qbit_source_routes = {
+        (str(route["method"]), str(route["path"])): bool(route["authRequired"])
+        for route in load_qbit_adapter_route_specs()
+    }
+    registry_qbit_routes = {
+        (str(route["method"]), str(route["path"])): bool(route["authRequired"])
+        for route in ADAPTER_CONTRACT_ROUTES
+        if route["family"] == "qbit"
+    }
+    torznab_path = load_torznab_endpoint_path()
+    torznab_handler = TORZNAB_HANDLER_SOURCE_PATH.read_text(encoding="utf-8")
+    registry_torznab_routes = {
+        (str(route["method"]), str(route["path"]))
+        for route in ADAPTER_CONTRACT_ROUTES
+        if route["family"] == "torznab"
+    }
+    names = [str(route["name"]) for route in ADAPTER_CONTRACT_ROUTES]
+    duplicate_names = sorted({name for name in names if names.count(name) > 1})
+    mismatched_qbit_auth = sorted(
+        (method, path)
+        for (method, path), auth_required in registry_qbit_routes.items()
+        if qbit_source_routes.get((method, path)) != auth_required
+    )
+    missing_qbit_routes = sorted(set(qbit_source_routes) - set(registry_qbit_routes))
+    extra_qbit_routes = sorted(set(registry_qbit_routes) - set(qbit_source_routes))
+    torznab_source_ok = (
+        ('strPath != "/indexer/emulebb/api"' in torznab_handler)
+        and ('WebServerJson::ToStdString(rData.strMethod) != "GET"' in torznab_handler)
+        and (("GET", torznab_path) in registry_torznab_routes)
+    )
+    return {
+        "registry_route_count": len(ADAPTER_CONTRACT_ROUTES),
+        "qbit_route_count": len(registry_qbit_routes),
+        "torznab_route_count": len(registry_torznab_routes),
+        "duplicate_names": duplicate_names,
+        "missing_qbit_routes": missing_qbit_routes,
+        "extra_qbit_routes": extra_qbit_routes,
+        "mismatched_qbit_auth": mismatched_qbit_auth,
+        "torznab_source_ok": torznab_source_ok,
+        "ok": not duplicate_names
+        and not missing_qbit_routes
+        and not extra_qbit_routes
+        and not mismatched_qbit_auth
+        and torznab_source_ok,
     }
 REST_STRESS_READ_PATHS = (
     "/api/v1/app",
@@ -1001,6 +1268,41 @@ REST_STRESS_ADAPTER_OPERATIONS: tuple[dict[str, object], ...] = (
         "api_key": False,
     },
 )
+
+
+def assert_rest_stress_adapter_operations_match_contract() -> dict[str, object]:
+    """Verifies live adapter probes stay inside the adapter contract registry."""
+
+    registry = {
+        (str(route["method"]), normalize_adapter_contract_path(str(route["path"]))): route
+        for route in ADAPTER_CONTRACT_ROUTES
+    }
+    missing_operations: list[tuple[str, str]] = []
+    response_kind_mismatches: list[tuple[str, str]] = []
+    status_mismatches: list[tuple[str, str, tuple[int, ...]]] = []
+    for operation in REST_STRESS_ADAPTER_OPERATIONS:
+        method = str(operation["method"])
+        path = normalize_adapter_contract_path(str(operation["path"]))
+        route = registry.get((method, path))
+        if route is None:
+            missing_operations.append((method, path))
+            continue
+        response_kind = operation.get("response_kind")
+        allowed_response_kinds = {route.get("responseKind"), route.get("errorResponseKind")}
+        if response_kind is not None and response_kind not in allowed_response_kinds:
+            response_kind_mismatches.append((method, path))
+        allowed_statuses = set(route["successStatuses"]) | set(route["errorStatuses"])
+        expected_statuses = tuple(int(status) for status in operation["expected_statuses"])
+        if not set(expected_statuses) <= allowed_statuses:
+            status_mismatches.append((method, path, expected_statuses))
+    return {
+        "adapter_registry_route_count": len(ADAPTER_CONTRACT_ROUTES),
+        "stress_operation_count": len(REST_STRESS_ADAPTER_OPERATIONS),
+        "missing_operations": missing_operations,
+        "response_kind_mismatches": response_kind_mismatches,
+        "status_mismatches": status_mismatches,
+        "ok": not missing_operations and not response_kind_mismatches and not status_mismatches,
+    }
 REST_STRESS_LEGACY_OPERATIONS: tuple[dict[str, object], ...] = ()
 REST_INTENTIONALLY_UNSUPPORTED = (
     "category_crud",

@@ -1085,7 +1085,7 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
         wait_ready_func=lambda _base_url, _api_key, _timeout: {
             "status": 200,
             "content_type": "application/json",
-            "json": {"name": "eMule"},
+            "json": {"name": "eMuleBB"},
         },
         get_pid_func=fake_pid,
         snapshot_func=fake_snapshot,
@@ -1100,7 +1100,7 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
     assert summary["ready"] == {
         "status": 200,
         "content_type": "application/json",
-        "json": {"name": "eMule"},
+        "json": {"name": "eMuleBB"},
     }
     assert summary["snapshots"]["before_shutdown"]["process_id"] == 111
     assert summary["snapshots"]["after_relaunch"]["process_id"] == 222
@@ -1112,6 +1112,24 @@ def test_restart_app_after_churn_records_shutdown_relaunch_and_ready_evidence() 
         "private_bytes": 0,
         "working_set_bytes": 0,
     }
+
+
+def test_native_rest_app_identity_uses_public_product_name() -> None:
+    workspace_root = Path(__file__).resolve().parents[4]
+    source = (
+        workspace_root
+        / "workspaces"
+        / "workspace"
+        / "app"
+        / "emulebb-main"
+        / "srchybrid"
+        / "WebServerJson.cpp"
+    ).read_text(encoding="utf-8")
+
+    app_start = source.index("json BuildAppJson")
+    app_block = source[app_start : source.index("json BuildSharedFilesListJson", app_start)]
+    assert '{"name", "eMuleBB"}' in app_block
+    assert '{"name", "eMule"}' not in app_block
 
 
 def test_restart_app_after_churn_tolerates_tray_relaunch_window_absence() -> None:
@@ -2089,30 +2107,24 @@ def test_rest_search_type_docs_reject_alias_and_remap_language() -> None:
 
 
 def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_boundary() -> None:
+    module = load_rest_api_smoke_module()
     workspace_root = Path(__file__).resolve().parents[4]
     rest_docs_dir = workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest"
     adapter_doc = (rest_docs_dir / "REST-API-ADAPTERS.md").read_text(encoding="utf-8")
     contract_doc = (rest_docs_dir / "REST-API-CONTRACT.md").read_text(encoding="utf-8")
     parity_doc = (rest_docs_dir / "REST-API-PARITY-INVENTORY.md").read_text(encoding="utf-8")
-    qbit_seams = (
-        workspace_root
-        / "workspaces"
-        / "workspace"
-        / "app"
-        / "emulebb-main"
-        / "srchybrid"
-        / "WebServerQBitCompatSeams.h"
-    ).read_text(encoding="utf-8")
-
-    route_specs = re.findall(r'\{"(GET|POST)", "([^"]+)", (?:true|false)\}', qbit_seams)
-    assert len(route_specs) == 19
 
     adapter_doc_lower = adapter_doc.lower()
-    for method, path in route_specs:
+    qbit_routes = [route for route in module.ADAPTER_CONTRACT_ROUTES if route["family"] == "qbit"]
+    assert len(qbit_routes) == 19
+    for route in qbit_routes:
+        method = str(route["method"]).lower()
+        path = str(route["path"])
         assert f"| `{method.lower()}` | `{path}` |" in adapter_doc_lower
 
     normalized_adapter_doc = re.sub(r"\s+", " ", adapter_doc_lower)
     assert "not a full qbittorrent web api clone" in normalized_adapter_doc
+    assert "adapter_contract_routes" in normalized_adapter_doc
 
     for required_text in (
         "/indexer/emulebb/api",
@@ -2142,6 +2154,37 @@ def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_bounda
     assert "not a functional parity promise" in parity_doc_lower
     assert "compile-only" in parity_doc_lower
     assert "legacy action" not in parity_doc_lower
+
+
+def test_adapter_contract_registry_matches_sources_and_public_shapes() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.assert_adapter_contract_routes_match_sources()
+    assert summary["ok"], summary
+
+    routes = {
+        (route["method"], route["path"]): route
+        for route in module.ADAPTER_CONTRACT_ROUTES
+    }
+    assert summary["qbit_route_count"] == 19
+    assert routes[("GET", "/api/v2/app/webapiversion")]["authRequired"] is False
+    assert routes[("GET", "/api/v2/app/preferences")]["responseKind"] == "json"
+    assert routes[("POST", "/api/v2/torrents/add")]["requiredFormFields"] == ("urls",)
+    assert routes[("POST", "/api/v2/torrents/delete")]["requiredFormFields"] == ("hashes",)
+    assert routes[("GET", "/api/v2/torrents/properties")]["requiredQueryFields"] == ("hash",)
+
+    torznab = routes[("GET", "/indexer/emulebb/api")]
+    assert torznab["responseKind"] == "xml"
+    assert torznab["authMode"] == "api-key-query-or-header"
+    assert torznab["acceptedTypes"] == ("caps", "movie", "search", "tvsearch")
+    assert torznab["queryFields"] == ("cat", "ep", "limit", "offset", "q", "season", "t", "year")
+
+
+def test_rest_stress_adapter_operations_match_adapter_contract_registry() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.assert_rest_stress_adapter_operations_match_contract()
+    assert summary["ok"], summary
 
 
 def test_rest_error_response_requires_json_not_html() -> None:
