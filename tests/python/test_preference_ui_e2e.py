@@ -83,3 +83,21 @@ def test_capture_dialog_screenshot_records_persistent_screen_grab_failure(
     assert result["path"] == str(output_path)
     assert result["attempts"] == 3
     assert result["error"] == {"type": "OSError", "message": "screen grab failed"}
+
+
+def test_wait_for_preferences_dialog_requires_page_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_script_module()
+
+    def enum_windows(callback, lparam) -> None:
+        callback(100, lparam)
+        callback(200, lparam)
+
+    monkeypatch.setattr(module.win32gui, "EnumWindows", enum_windows)
+    monkeypatch.setattr(module.win32gui, "IsWindowVisible", lambda hwnd: True)
+    monkeypatch.setattr(module.win32gui, "GetClassName", lambda hwnd: "#32770")
+    monkeypatch.setattr(module.win32process, "GetWindowThreadProcessId", lambda hwnd: (1, 4321))
+    monkeypatch.setattr(module.win32gui, "GetWindowText", lambda hwnd: "Preferences" if hwnd == 100 else "Other dialog")
+    monkeypatch.setattr(module, "find_child_control", lambda hwnd, control_id, class_name=None: 300 if hwnd == 200 else None)
+    monkeypatch.setattr(module, "wait_for", lambda resolve, **_kwargs: resolve())
+
+    assert module.wait_for_preferences_dialog(4321, 999) == 200

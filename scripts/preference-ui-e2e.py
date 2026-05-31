@@ -253,6 +253,9 @@ def find_child_control(root_hwnd: int, control_id: int, class_name: str | None =
 
 
 def wait_for_preferences_dialog(process_id: int, main_hwnd: int) -> int:
+    def is_preferences_dialog(hwnd: int) -> bool:
+        return find_child_control(hwnd, PAGE_TREE_ID, "SysTreeView32") is not None
+
     def resolve() -> int | None:
         matches: list[int] = []
 
@@ -267,9 +270,12 @@ def wait_for_preferences_dialog(process_id: int, main_hwnd: int) -> int:
 
         win32gui.EnumWindows(callback, 0)
         for hwnd in matches:
-            if "Preferences" in win32gui.GetWindowText(hwnd):
+            if "Preferences" in win32gui.GetWindowText(hwnd) and is_preferences_dialog(hwnd):
                 return hwnd
-        return matches[0] if matches else None
+        for hwnd in matches:
+            if is_preferences_dialog(hwnd):
+                return hwnd
+        return None
 
     return wait_for(resolve, timeout=20.0, interval=0.2, description="Preferences dialog")
 
