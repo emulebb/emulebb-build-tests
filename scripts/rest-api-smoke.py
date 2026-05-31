@@ -1535,7 +1535,7 @@ def summarize_network_diagnostics_payload(payload: dict[str, Any], *, label: str
     ):
         assert isinstance(binding.get(key), str), f"{label} missing network.binding.{key}"
     assert isinstance(binding.get("activeInterfaceIndex"), int), f"{label} missing network.binding.activeInterfaceIndex"
-    assert isinstance(binding.get("resolveResult"), int), f"{label} missing network.binding.resolveResult"
+    assert isinstance(binding.get("resolveResult"), str), f"{label} missing network.binding.resolveResult"
 
     vpn_guard = network.get("vpnGuard")
     assert isinstance(vpn_guard, dict), f"{label} missing network.vpnGuard diagnostics"

@@ -286,11 +286,11 @@ def test_network_diagnostics_contract_asserts_status_and_snapshot(monkeypatch: p
             "activeInterfaceId": "hide.me",
             "activeInterfaceName": "hide.me",
             "activeInterfaceIndex": 11,
-            "resolveResult": 1,
+            "resolveResult": "resolved",
         },
         "vpnGuard": {
             "enabled": True,
-            "mode": "Block",
+            "mode": "block",
             "allowedPublicIpCidrs": "8.8.8.8/32",
             "startupBlocked": False,
             "startupBlockReason": "",
@@ -1554,6 +1554,8 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert schemas["KadBootstrapRequest"]["properties"]["port"]["minimum"] == 1
     assert schemas["KadBootstrapRequest"]["properties"]["port"]["maximum"] == 65535
     assert document["paths"]["/kad/operations/bootstrap"]["post"]["requestBody"]["required"] is True
+    assert schemas["Kad"]["properties"]["blockedByVpnGuard"] == {"type": "boolean"}
+    assert schemas["Kad"]["properties"]["network"] == {"$ref": "#/components/schemas/NetworkStatus"}
     assert schemas["SearchResultDownloadRequest"]["not"] == {"required": ["categoryId", "categoryName"]}
     assert schemas["SearchResultDownloadRequest"]["properties"]["categoryId"]["maximum"] == 4294967295
 
@@ -1561,7 +1563,22 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
     assert schemas["Stats"]["properties"]["sharedHashingCount"] == {"type": "integer", "minimum": 0}
     assert schemas["App"]["properties"]["lifecycle"] == {"$ref": "#/components/schemas/AppLifecycle"}
     assert schemas["Status"]["properties"]["lifecycle"] == {"$ref": "#/components/schemas/AppLifecycle"}
+    assert "connected" not in schemas["Status"]["properties"]
+    assert "downloadSpeedKiBps" not in schemas["Status"]["properties"]
+    assert "uploadSpeedKiBps" not in schemas["Status"]["properties"]
     assert schemas["AppLifecycle"]["properties"]["state"]["enum"] == ["starting", "running", "shuttingdown", "done"]
+    assert schemas["EnvelopeMeta"]["required"] == ["apiVersion"]
+    assert schemas["NetworkStatus"]["properties"]["binding"]["properties"]["resolveResult"]["enum"] == [
+        "default",
+        "resolved",
+        "interfacenotfound",
+        "interfacenameambiguous",
+        "interfacehasnoaddress",
+        "addressnotfoundoninterface",
+        "addressnotfound",
+        "unknown",
+    ]
+    assert schemas["NetworkStatus"]["properties"]["vpnGuard"]["properties"]["mode"]["enum"] == ["off", "block"]
 
     category_id_schema_paths: list[str] = []
 
@@ -1831,7 +1848,6 @@ def test_openapi_response_numeric_bounds_match_runtime_domains() -> None:
     schemas = module.load_openapi_document()["components"]["schemas"]
 
     minimum_zero_fields = {
-        "Status": ["downloadSpeedKiBps", "uploadSpeedKiBps"],
         "Stats": [
             "downloadSpeedKiBps",
             "uploadSpeedKiBps",
@@ -2645,22 +2661,60 @@ components:
 
 def test_openapi_custom_success_response_samples_match_contract() -> None:
     module = load_rest_api_smoke_module()
+    meta = {"apiVersion": "v1"}
+    network = {
+        "ports": {"tcp": 4662, "udp": 4672, "serverUdp": 4672},
+        "binding": {
+            "configuredAddress": "",
+            "configuredInterfaceId": "",
+            "configuredInterfaceName": "hide.me",
+            "activeConfiguredAddress": "",
+            "activeInterfaceId": "",
+            "activeInterfaceName": "hide.me",
+            "activeInterfaceIndex": 12,
+            "resolveResult": "resolved",
+        },
+        "vpnGuard": {
+            "enabled": True,
+            "mode": "block",
+            "allowedPublicIpCidrs": "",
+            "startupBlocked": True,
+            "startupBlockReason": "VPN Guard blocked P2P startup",
+        },
+    }
     samples = {
-        "BulkOperationResponse": {"data": {"items": [{"ok": True, "hash": "0" * 32}], "total": 1}, "meta": {}},
-        "PeerBanResponse": {"data": {"ok": True, "banned": True}, "meta": {}},
-        "UploadRemoveResponse": {"data": {"ok": True, "removed": "queue"}, "meta": {}},
-        "UrlImportResponse": {"data": {"ok": True, "imported": False}, "meta": {}},
+        "BulkOperationResponse": {"data": {"items": [{"ok": True, "hash": "0" * 32}], "total": 1}, "meta": meta},
+        "PeerBanResponse": {"data": {"ok": True, "banned": True}, "meta": meta},
+        "UploadRemoveResponse": {"data": {"ok": True, "removed": "queue"}, "meta": meta},
+        "UrlImportResponse": {"data": {"ok": True, "imported": False}, "meta": meta},
         "SharedFileCreateResponse": {
             "data": {"ok": True, "path": "C:/incoming/example.dat", "alreadyShared": False, "queued": True, "file": None},
-            "meta": {},
+            "meta": meta,
         },
         "SharedFileDeleteResponse": {
             "data": {"ok": True, "deletedFiles": False, "path": "C:/incoming/example.dat", "hash": "0" * 32},
-            "meta": {},
+            "meta": meta,
         },
-        "TransferSourceBrowseResponse": {"data": {"ok": True, "alreadyPending": False, "searchId": "12"}, "meta": {}},
-        "SearchResultDownloadResponse": {"data": {"ok": True, "searchId": "12", "hash": "0" * 32}, "meta": {}},
-        "Ed2kLinkResponse": {"data": {"hash": "0" * 32, "link": "ed2k://|file|example.dat|1|hash|/"}, "meta": {}},
+        "TransferSourceBrowseResponse": {"data": {"ok": True, "alreadyPending": False, "searchId": "12"}, "meta": meta},
+        "SearchResultDownloadResponse": {"data": {"ok": True, "searchId": "12", "hash": "0" * 32}, "meta": meta},
+        "Ed2kLinkResponse": {"data": {"hash": "0" * 32, "link": "ed2k://|file|example.dat|1|hash|/"}, "meta": meta},
+        "KadResponse": {
+            "data": {
+                "running": False,
+                "connected": False,
+                "firewalled": None,
+                "bootstrapping": False,
+                "bootstrapProgress": 0,
+                "contactCount": None,
+                "lanMode": False,
+                "users": None,
+                "files": None,
+                "operationQueued": False,
+                "blockedByVpnGuard": True,
+                "network": network,
+            },
+            "meta": meta,
+        },
     }
 
     for response_name, payload in samples.items():
@@ -2682,7 +2736,7 @@ def test_openapi_custom_success_responses_reject_generic_ok_fallbacks() -> None:
         "Ed2kLinkResponse",
     ):
         with pytest.raises(module.jsonschema.ValidationError):
-            module.validate_openapi_response_payload(response_name, {"data": {"ok": True}, "meta": {}})
+            module.validate_openapi_response_payload(response_name, {"data": {"ok": True}, "meta": {"apiVersion": "v1"}})
 
 
 def test_openapi_error_code_enum_covers_native_rest_codes() -> None:
