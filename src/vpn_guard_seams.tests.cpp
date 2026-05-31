@@ -40,12 +40,20 @@ TEST_CASE("VPN Guard parses public CIDRs and single public IPv4 addresses")
 	CHECK_FALSE(VpnGuardSeams::IsPublicIpv4Allowed(ParseIpv4ForTest(_T("8.8.4.4")), ranges));
 }
 
-TEST_CASE("VPN Guard rejects empty malformed and non-public ranges")
+TEST_CASE("VPN Guard treats empty CIDRs as interface-only guard")
 {
 	std::vector<VpnGuardSeams::SAllowedPublicIpv4Range> ranges;
 	CString strError;
 
-	CHECK_FALSE(VpnGuardSeams::TryParseAllowedPublicIpv4Ranges(_T(""), ranges, strError));
+	CHECK(VpnGuardSeams::TryParseAllowedPublicIpv4Ranges(_T(""), ranges, strError));
+	CHECK(ranges.empty());
+}
+
+TEST_CASE("VPN Guard rejects malformed and non-public ranges")
+{
+	std::vector<VpnGuardSeams::SAllowedPublicIpv4Range> ranges;
+	CString strError;
+
 	CHECK_FALSE(VpnGuardSeams::TryParseAllowedPublicIpv4Ranges(_T("not-an-ip"), ranges, strError));
 	CHECK_FALSE(VpnGuardSeams::TryParseAllowedPublicIpv4Ranges(_T("8.8.8.0/33"), ranges, strError));
 	CHECK_FALSE(VpnGuardSeams::TryParseAllowedPublicIpv4Ranges(_T("10.0.0.0/8"), ranges, strError));

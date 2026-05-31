@@ -160,6 +160,24 @@ def test_apply_live_network_profile_sets_bind_interface_and_upnp(tmp_path: Path)
     assert "BindAddr=127.0.0.1" in webserver_section
 
 
+def test_apply_live_network_profile_can_enable_vpn_guard_without_cidrs(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    write_utf16_ini_text(preferences_path, "[eMule]\nBindAddr=127.0.0.1\n[UPnP]\nEnableUPnP=0\n")
+
+    live_profiles.apply_live_network_profile(
+        config_dir,
+        live_profiles.LiveNetworkProfileSpec(vpn_guard_enabled=True),
+    )
+
+    emule_section = section_text(live_profiles.read_ini_text(preferences_path), "eMule")
+    assert "BindInterface=hide.me" in emule_section
+    assert "BindAddr=" in emule_section
+    assert "VpnGuardMode=Block" in emule_section
+    assert "VpnGuardAllowedPublicIpCidrs=" in emule_section
+
+
 def test_apply_live_network_profile_rejects_empty_interface(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

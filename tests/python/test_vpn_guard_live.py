@@ -32,6 +32,20 @@ def test_config_roundtrip_and_command_rendering(tmp_path) -> None:
     ) == ["tool", "--exe", "C:\\app\\emulebb.exe", "--iface", "hide.me"]
 
 
+def test_config_allows_interface_only_guard_without_cidrs(tmp_path) -> None:
+    path = tmp_path / "vpn-guard-live.json"
+    path.write_text(
+        '{"schema":"emulebb.vpnGuardLiveConfig.v1","p2pBindInterfaceName":"hide.me",'
+        '"allowedPublicIpCidrs":"","commands":{}}',
+        encoding="utf-8",
+    )
+
+    loaded = vpn_guard_live.load_config(path)
+
+    assert loaded["p2pBindInterfaceName"] == "hide.me"
+    assert loaded["allowedPublicIpCidrs"] == ""
+
+
 def test_config_rejects_unknown_hook(tmp_path) -> None:
     path = tmp_path / "vpn-guard-live.json"
     path.write_text(

@@ -18,6 +18,12 @@ TEST_CASE("VPN Guard public IP probe allows only successful CIDR matches")
 	CHECK_FALSE(VpnGuardPolicySeams::IsProbeResultAllowed(true, false));
 	CHECK_FALSE(VpnGuardPolicySeams::IsProbeResultAllowed(false, true));
 	CHECK_FALSE(VpnGuardPolicySeams::IsProbeResultAllowed(false, false));
+
+	CHECK(VpnGuardPolicySeams::IsProbeResultAllowed(false, false, false));
+	CHECK(VpnGuardPolicySeams::IsProbeResultAllowed(false, true, false));
+	CHECK(VpnGuardPolicySeams::IsProbeResultAllowed(true, true, true));
+	CHECK_FALSE(VpnGuardPolicySeams::IsProbeResultAllowed(true, true, false));
+	CHECK_FALSE(VpnGuardPolicySeams::IsProbeResultAllowed(true, false, true));
 }
 
 TEST_CASE("VPN Guard startup connection commands wait for runtime monitor arming")

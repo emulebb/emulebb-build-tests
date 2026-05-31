@@ -136,6 +136,24 @@ def test_p2p_bind_override_can_enable_vpn_guard(tmp_path: Path) -> None:
     assert "VpnGuardAllowedPublicIpCidrs=8.8.8.8/32" in text
 
 
+def test_p2p_bind_override_can_enable_vpn_guard_without_cidrs(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text(
+        "[eMule]\nBindAddr=127.0.0.1\nBindInterface=\n",
+        encoding="utf-16",
+    )
+
+    module.apply_p2p_bind_interface_override(config_dir, "hide.me", vpn_guard_enabled=True)
+
+    text = module.live_common.read_ini_text(preferences_path)
+    assert "BindInterface=hide.me" in text
+    assert "VpnGuardMode=Block" in text
+    assert "VpnGuardAllowedPublicIpCidrs=" in text
+
+
 def test_vpn_guard_scenarios_run_expected_hook_sequences(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rest_api_smoke_module()
     observed: list[str] = []

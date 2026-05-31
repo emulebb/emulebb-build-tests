@@ -58,9 +58,6 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError(f"VPN Guard live config schema must be {SCHEMA!r}.")
     if not str(payload.get("p2pBindInterfaceName") or "").strip():
         raise ValueError("VPN Guard live config requires p2pBindInterfaceName.")
-    cidrs = str(payload.get("allowedPublicIpCidrs") or "").strip()
-    if not cidrs:
-        raise ValueError("VPN Guard live config requires allowedPublicIpCidrs.")
     commands = payload.get("commands", {})
     if not isinstance(commands, dict):
         raise ValueError("VPN Guard live config commands must be an object.")

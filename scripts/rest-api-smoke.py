@@ -1401,12 +1401,14 @@ def apply_p2p_bind_interface_override(
     config_dir: Path,
     interface_name: str,
     vpn_guard_allowed_public_ip_cidrs: str = "",
+    vpn_guard_enabled: bool = False,
 ) -> None:
     """Writes the requested P2P bind interface name into the isolated profile."""
 
     live_common.apply_live_network_policy(
         config_dir,
         p2p_bind_interface_name=interface_name,
+        vpn_guard_enabled=vpn_guard_enabled,
         vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )
 
@@ -6358,6 +6360,7 @@ def main() -> int:
     parser.add_argument("--webserver-scheme", choices=["http", "https"], default="http")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
     parser.add_argument("--vpn-guard-live-config")
     parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--vpn-guard-scenario", choices=["off", "success", "not-allowlisted", "vpn-off"], default="success")
@@ -6402,8 +6405,8 @@ def main() -> int:
         if args.vpn_guard_live_config
         else None
     )
-    if args.vpn_guard_scenario != "off" and vpn_guard_config is None:
-        raise ValueError("--vpn-guard-scenario requires --vpn-guard-live-config unless the scenario is off.")
+    if args.vpn_guard_scenario in {"not-allowlisted", "vpn-off"} and vpn_guard_config is None:
+        raise ValueError("Negative VPN Guard scenarios require --vpn-guard-live-config.")
     vpn_guard_allowed_public_ip_cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip()
     if not vpn_guard_allowed_public_ip_cidrs and vpn_guard_config is not None:
         vpn_guard_allowed_public_ip_cidrs = str(vpn_guard_config.get("allowedPublicIpCidrs") or "").strip()
@@ -6412,11 +6415,12 @@ def main() -> int:
     effective_p2p_bind_interface_name = args.p2p_bind_interface_name
     if args.vpn_guard_scenario != "off" and vpn_guard_config is not None:
         effective_p2p_bind_interface_name = str(vpn_guard_config.get("p2pBindInterfaceName") or "").strip()
-    if args.vpn_guard_scenario != "off":
+    vpn_guard_enabled = args.vpn_guard_enabled or args.vpn_guard_scenario != "off"
+    if vpn_guard_enabled:
         if effective_p2p_bind_interface_name.casefold() != "hide.me":
             raise ValueError("VPN Guard live scenarios must bind P2P through hide.me.")
-        if not vpn_guard_allowed_public_ip_cidrs:
-            raise ValueError("VPN Guard live scenarios require allowed public IP CIDRs.")
+        if args.vpn_guard_scenario == "not-allowlisted" and not vpn_guard_allowed_public_ip_cidrs:
+            raise ValueError("VPN Guard not-allowlisted scenario requires allowed public IP CIDRs.")
     vpn_guard_expected_startup_block = args.vpn_guard_expected_startup_block or args.vpn_guard_scenario in {
         "not-allowlisted",
         "vpn-off",
@@ -6488,6 +6492,7 @@ def main() -> int:
             Path(profile["config_dir"]),
             effective_p2p_bind_interface_name,
             vpn_guard_allowed_public_ip_cidrs,
+            vpn_guard_enabled,
         )
     vpn_guard_hook_context = build_vpn_guard_hook_context(
         app_exe=app_exe,
