@@ -273,6 +273,51 @@ def test_vpn_guard_startup_block_assertion_accepts_log_snapshot(monkeypatch: pyt
     assert result["startupBlockMessages"]
 
 
+def test_network_diagnostics_contract_asserts_status_and_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    network = {
+        "ports": {"tcp": 4662, "udp": 4672, "serverUdp": 4665},
+        "binding": {
+            "configuredAddress": "",
+            "configuredInterfaceId": "hide.me",
+            "configuredInterfaceName": "hide.me",
+            "activeConfiguredAddress": "10.8.0.4",
+            "activeInterfaceId": "hide.me",
+            "activeInterfaceName": "hide.me",
+            "activeInterfaceIndex": 11,
+            "resolveResult": 1,
+        },
+        "vpnGuard": {
+            "enabled": True,
+            "mode": "Block",
+            "allowedPublicIpCidrs": "8.8.8.8/32",
+            "startupBlocked": False,
+            "startupBlockReason": "",
+        },
+    }
+
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "content_type": "application/json",
+            "json": {"network": network},
+            "raw_json": {"data": {"network": network}, "meta": {"apiVersion": "v1"}},
+        },
+    )
+
+    result = module.assert_network_diagnostics_contract(
+        "http://192.0.2.10:4711",
+        "api-key",
+        status_payload={"network": network},
+    )
+
+    assert result["statusNetwork"]["vpnGuard"]["enabled"] is True
+    assert result["snapshotNetwork"]["binding"]["activeInterfaceName"] == "hide.me"
+
+
 def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tmp_path: Path) -> None:
     module = load_rest_api_smoke_module()
     config_dir = tmp_path / "config"

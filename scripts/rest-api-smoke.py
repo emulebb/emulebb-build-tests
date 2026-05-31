@@ -1513,6 +1513,80 @@ def assert_vpn_guard_startup_blocked(base_url: str, api_key: str) -> dict[str, o
     }
 
 
+def summarize_network_diagnostics_payload(payload: dict[str, Any], *, label: str) -> dict[str, object]:
+    """Validates and summarizes the network diagnostics contract from REST payloads."""
+
+    network = payload.get("network")
+    assert isinstance(network, dict), f"{label} missing network diagnostics"
+    ports = network.get("ports")
+    assert isinstance(ports, dict), f"{label} missing network.ports diagnostics"
+    for key in ("tcp", "udp", "serverUdp"):
+        assert isinstance(ports.get(key), int), f"{label} missing network.ports.{key}"
+
+    binding = network.get("binding")
+    assert isinstance(binding, dict), f"{label} missing network.binding diagnostics"
+    for key in (
+        "configuredAddress",
+        "configuredInterfaceId",
+        "configuredInterfaceName",
+        "activeConfiguredAddress",
+        "activeInterfaceId",
+        "activeInterfaceName",
+    ):
+        assert isinstance(binding.get(key), str), f"{label} missing network.binding.{key}"
+    assert isinstance(binding.get("activeInterfaceIndex"), int), f"{label} missing network.binding.activeInterfaceIndex"
+    assert isinstance(binding.get("resolveResult"), int), f"{label} missing network.binding.resolveResult"
+
+    vpn_guard = network.get("vpnGuard")
+    assert isinstance(vpn_guard, dict), f"{label} missing network.vpnGuard diagnostics"
+    assert isinstance(vpn_guard.get("enabled"), bool), f"{label} missing network.vpnGuard.enabled"
+    assert isinstance(vpn_guard.get("mode"), str), f"{label} missing network.vpnGuard.mode"
+    assert isinstance(vpn_guard.get("allowedPublicIpCidrs"), str), f"{label} missing network.vpnGuard.allowedPublicIpCidrs"
+    assert isinstance(vpn_guard.get("startupBlocked"), bool), f"{label} missing network.vpnGuard.startupBlocked"
+    assert isinstance(vpn_guard.get("startupBlockReason"), str), f"{label} missing network.vpnGuard.startupBlockReason"
+    return {
+        "ports": dict(ports),
+        "binding": {
+            "configuredAddress": binding["configuredAddress"],
+            "configuredInterfaceName": binding["configuredInterfaceName"],
+            "activeConfiguredAddress": binding["activeConfiguredAddress"],
+            "activeInterfaceName": binding["activeInterfaceName"],
+            "resolveResult": binding["resolveResult"],
+        },
+        "vpnGuard": {
+            "enabled": vpn_guard["enabled"],
+            "mode": vpn_guard["mode"],
+            "allowedPublicIpCidrsConfigured": bool(vpn_guard["allowedPublicIpCidrs"]),
+            "startupBlocked": vpn_guard["startupBlocked"],
+        },
+    }
+
+
+def assert_network_diagnostics_contract(
+    base_url: str,
+    api_key: str,
+    *,
+    status_payload: dict[str, Any] | None = None,
+) -> dict[str, object]:
+    """Asserts that status and snapshot expose the same network diagnostics contract."""
+
+    if status_payload is None:
+        status = http_request(base_url, "/api/v1/status", api_key=api_key)
+        status_payload = require_json_object(status, 200)
+        status_result = compact_http_result(status)
+    else:
+        status_result = {"status": 200, "source": "existing-status-payload"}
+
+    snapshot = http_request(base_url, "/api/v1/snapshot", api_key=api_key)
+    snapshot_payload = require_json_object(snapshot, 200)
+    return {
+        "status": status_result,
+        "snapshot": compact_http_result(snapshot),
+        "statusNetwork": summarize_network_diagnostics_payload(status_payload, label="status"),
+        "snapshotNetwork": summarize_network_diagnostics_payload(snapshot_payload, label="snapshot"),
+    }
+
+
 def http_request(
     base_url: str,
     path: str,
@@ -6650,6 +6724,13 @@ def main() -> int:
         assert isinstance(stats["json"].get("stats"), dict)
         assert "connected" in stats["json"]["stats"]
         report["checks"]["stats_global"] = compact_http_result(stats)
+
+        current_phase = set_phase(report, "network_diagnostics")
+        report["checks"]["network_diagnostics"] = assert_network_diagnostics_contract(
+            base_url,
+            args.api_key,
+            status_payload=stats["json"],
+        )
 
         current_phase = set_phase(report, "rest_surface")
         report["checks"]["rest_surface"] = exercise_rest_surface_smoke(base_url, args.api_key)
