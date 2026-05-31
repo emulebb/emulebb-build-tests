@@ -257,6 +257,7 @@ def configure_search_ui_profile(
     port: int,
     lan_bind_addr: str,
     bind_interface: str,
+    vpn_guard_enabled: bool = False,
     vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
     """Enables live network policy and REST for the Search UI scenario."""
@@ -271,6 +272,7 @@ def configure_search_ui_profile(
     rest_smoke.apply_p2p_bind_interface_override(
         config_dir,
         bind_interface,
+        vpn_guard_enabled=vpn_guard_enabled,
         vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )
 
@@ -879,6 +881,7 @@ def run_search_ui_live(
         rest_port,
         lan_bind_addr,
         p2p_bind_interface_name,
+        vpn_guard_enabled=args.vpn_guard_enabled,
         vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
     )
     seed_refresh = None
@@ -1079,6 +1082,7 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
     parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--ui-search-rounds", type=int, default=DEFAULT_UI_SEARCH_ROUNDS)
     parser.add_argument("--ui-download-lifecycle-count", type=int, default=DEFAULT_UI_DOWNLOAD_LIFECYCLE_COUNT)

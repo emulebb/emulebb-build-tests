@@ -53,6 +53,8 @@ def configure_session_profile(
     p2p_bind_interface_name: str,
     *,
     live_network: bool,
+    vpn_guard_enabled: bool = False,
+    vpn_guard_allowed_public_ip_cidrs: str = "",
     use_https: bool = False,
     https_certificate: str = "",
     https_key: str = "",
@@ -83,7 +85,12 @@ def configure_session_profile(
             https_key=https_key,
         ),
     )
-    rest_api_smoke.apply_p2p_bind_interface_override(config_dir, p2p_bind_interface_name)
+    rest_api_smoke.apply_p2p_bind_interface_override(
+        config_dir,
+        p2p_bind_interface_name,
+        vpn_guard_enabled=vpn_guard_enabled,
+        vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
+    )
 
 
 def build_amutorrent_environment(
@@ -185,6 +192,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key", default="amutorrent-interactive-key")
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--live-network", action="store_true")
     parser.add_argument("--no-open-browser", action="store_true")
@@ -232,6 +241,8 @@ def main() -> int:
         args.lan_bind_addr,
         args.p2p_bind_interface_name,
         live_network=bool(args.live_network),
+        vpn_guard_enabled=args.vpn_guard_enabled,
+        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
     )
 
     report: dict[str, Any] = {

@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import cpu_profile, live_process_monitor
+from emule_test_harness import cpu_profile, live_process_monitor, live_profiles
 
 import importlib.util
 
@@ -50,6 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--live-config-file", default=str(REPO_ROOT / "live-process-monitor.local.json"))
     parser.add_argument("--profile-dir")
+    parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--base-url")
     parser.add_argument("--api-key")
     parser.add_argument("--duration-seconds", type=float)
@@ -136,6 +139,13 @@ def main() -> int:
     )
     app_exe = config.app_exe or paths.app_exe
     live_process_monitor.validate_config(config, app_exe=app_exe)
+    if args.p2p_bind_interface_name:
+        live_profiles.apply_live_network_policy(
+            config.profile_dir,
+            p2p_bind_interface_name=args.p2p_bind_interface_name,
+            vpn_guard_enabled=args.vpn_guard_enabled,
+            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+        )
     live_process_monitor.validate_capture_mode(
         cpu_profile_enabled=bool(args.cpu_profile),
         enable_umdh=bool(args.enable_umdh),

@@ -14,7 +14,7 @@ from typing import Iterable
 
 from emule_test_harness.artifact_names import result_file_name
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
-from emule_test_harness import cpu_profile, live_wire_inputs, windows_processes
+from emule_test_harness import cpu_profile, live_wire_inputs, vpn_guard_live, windows_processes
 
 SHARED_FILES_UI_CORE_SCENARIOS = (
     "fixture-three-files",
@@ -411,6 +411,8 @@ SUITE_SPECS = (
         name="vhd-profile-durability",
         script_name="vhd-profile-durability.py",
         category="storage",
+        network_scope="vpn",
+        accepts_vpn_guard_profile=True,
         requires_admin_volume_fixtures=True,
         default_enabled=False,
     ),
@@ -458,6 +460,7 @@ SUITE_SPECS = (
         script_name="live-process-monitor.py",
         category="diagnostics",
         network_scope="vpn",
+        accepts_vpn_guard_profile=True,
         default_enabled=False,
     ),
     SuiteSpec(
@@ -1199,6 +1202,8 @@ def build_suite_command(
             command.append("--rest-stop-start-after-churn")
         if vpn_guard_live_config is not None:
             command.extend(["--vpn-guard-live-config", str(vpn_guard_live_config.resolve())])
+        if vpn_guard_scenario != "off":
+            command.append("--vpn-guard-enabled")
         if vpn_guard_scenario != "off" and vpn_guard_allowed_public_ip_cidrs:
             command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
         command.extend(["--vpn-guard-scenario", vpn_guard_scenario])
@@ -1214,8 +1219,10 @@ def build_suite_command(
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     if spec.is_amutorrent_browser and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
-    if spec.accepts_vpn_guard_profile and not spec.is_rest_api and vpn_guard_scenario != "off" and vpn_guard_allowed_public_ip_cidrs:
-        command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
+    if spec.accepts_vpn_guard_profile and not spec.is_rest_api and vpn_guard_scenario != "off":
+        command.append("--vpn-guard-enabled")
+        if vpn_guard_allowed_public_ip_cidrs:
+            command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
     if spec.is_package_helper_integration:
         command.extend(["--dependency-mode", dependency_mode])
         command.extend(["--dependency-channel", dependency_channel])
@@ -1372,6 +1379,8 @@ def build_suite_command(
             command.append("--skip-dumps")
     if spec.name == "local-dumps-crash-smoke" and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.name in {"vhd-profile-durability", "live-process-monitor"} and p2p_bind_interface_name:
+        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
     return command
 
 
@@ -1399,6 +1408,60 @@ def run_suite_command(command: list[str]) -> int:
         except subprocess.TimeoutExpired:
             pass
         return SUITE_TIMEOUT_RETURN_CODE
+
+
+def build_vpn_guard_hook_context(
+    *,
+    app_exe: Path,
+    p2p_bind_interface_name: str,
+    allowed_public_ip_cidrs: str,
+) -> dict[str, str]:
+    """Builds placeholders for campaign-level VPN Guard hooks."""
+
+    return {
+        "app_exe": str(app_exe.resolve()),
+        "p2p_bind_interface_name": p2p_bind_interface_name,
+        "allowed_public_ip_cidrs": allowed_public_ip_cidrs,
+    }
+
+
+def run_vpn_guard_hook_sequence(config: dict[str, object], names: tuple[str, ...], context: dict[str, str]) -> list[dict[str, object]]:
+    """Runs one ordered VPN Guard hook sequence and requires configured hooks to pass."""
+
+    results: list[dict[str, object]] = []
+    for name in names:
+        result = vpn_guard_live.run_hook(config, name, context)
+        vpn_guard_live.require_hook_ok(result)
+        results.append(result)
+    return results
+
+
+def setup_vpn_guard_campaign_scenario(
+    config: dict[str, object] | None,
+    scenario: str,
+    context: dict[str, str],
+) -> list[dict[str, object]]:
+    """Applies the requested VPN Guard state before one live-wire suite."""
+
+    if config is None or scenario == "off":
+        return []
+    if scenario == "vpn-off":
+        return run_vpn_guard_hook_sequence(config, ("removeAllowlistEmulebb", "disconnect", "checkDisconnected"), context)
+    if scenario == "not-allowlisted":
+        return run_vpn_guard_hook_sequence(config, ("connect", "removeAllowlistEmulebb", "checkConnected", "checkNotAllowlisted"), context)
+    return run_vpn_guard_hook_sequence(config, ("connect", "allowlistEmulebb", "checkConnected", "checkAllowlisted"), context)
+
+
+def restore_vpn_guard_campaign_scenario(
+    config: dict[str, object] | None,
+    scenario: str,
+    context: dict[str, str],
+) -> list[dict[str, object]]:
+    """Restores the operator VPN state after one live-wire suite."""
+
+    if config is None or scenario == "off":
+        return []
+    return run_vpn_guard_hook_sequence(config, ("connect", "allowlistEmulebb", "checkConnected", "checkAllowlisted"), context)
 
 
 def timeout_command_markers(command: list[str]) -> list[str]:
@@ -2157,20 +2220,25 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     )
     requested_specs = resolve_suite_specs(args.suite)
     selected_specs, skipped_suites = filter_suite_specs_for_network(requested_specs, args.test_network)
-    selected_rest_api = any(spec.is_rest_api for spec in selected_specs)
     selected_vpn_guard_profiles = any(spec.accepts_vpn_guard_profile and spec.network_scope == "vpn" for spec in selected_specs)
-    if selected_rest_api and args.vpn_guard_scenario != "off" and not args.vpn_guard_live_config:
-        raise ValueError("REST live-wire suites require --vpn-guard-live-config unless --vpn-guard-scenario off is explicit.")
+    vpn_guard_config_path = Path(args.vpn_guard_live_config) if args.vpn_guard_live_config else None
+    if selected_vpn_guard_profiles and args.vpn_guard_scenario in {"not-allowlisted", "vpn-off"} and (
+        vpn_guard_config_path is None or not vpn_guard_config_path.is_file()
+    ):
+        raise ValueError("Negative VPN Guard live-wire scenarios require --vpn-guard-live-config.")
+    vpn_guard_config = vpn_guard_live.load_config(vpn_guard_config_path) if vpn_guard_config_path is not None and vpn_guard_config_path.is_file() else None
+    effective_vpn_guard_live_config_path = vpn_guard_config_path if vpn_guard_config is not None else None
     effective_vpn_guard_allowed_public_ip_cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip()
-    if not effective_vpn_guard_allowed_public_ip_cidrs and args.vpn_guard_live_config:
-        live_config = json.loads(Path(args.vpn_guard_live_config).read_text(encoding="utf-8"))
-        effective_vpn_guard_allowed_public_ip_cidrs = str(live_config.get("allowedPublicIpCidrs") or "").strip()
+    if not effective_vpn_guard_allowed_public_ip_cidrs and vpn_guard_config is not None:
+        effective_vpn_guard_allowed_public_ip_cidrs = str(vpn_guard_config.get("allowedPublicIpCidrs") or "").strip()
     if args.vpn_guard_scenario == "off":
         effective_vpn_guard_allowed_public_ip_cidrs = ""
+    if vpn_guard_config is not None and args.vpn_guard_scenario != "off":
+        args.p2p_bind_interface_name = str(vpn_guard_config.get("p2pBindInterfaceName") or "").strip()
     if selected_vpn_guard_profiles and args.vpn_guard_scenario != "off" and args.p2p_bind_interface_name.casefold() != "hide.me":
         raise ValueError("VPN Guard live-wire scenarios must bind P2P through hide.me.")
-    if selected_vpn_guard_profiles and args.vpn_guard_scenario != "off" and not effective_vpn_guard_allowed_public_ip_cidrs:
-        raise ValueError("VPN Guard live-wire scenarios require allowed public IP CIDRs.")
+    if selected_vpn_guard_profiles and args.vpn_guard_scenario == "not-allowlisted" and not effective_vpn_guard_allowed_public_ip_cidrs:
+        raise ValueError("VPN Guard not-allowlisted scenarios require allowed public IP CIDRs.")
     if any(spec.requires_admin_volume_fixtures for spec in selected_specs) and not args.admin_volume_fixtures:
         raise ValueError("Selected admin storage live suites require --admin-volume-fixtures.")
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
@@ -2289,7 +2357,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
         "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
         "vpn_guard": {
-            "live_config": str(args.vpn_guard_live_config or ""),
+            "live_config": str(effective_vpn_guard_live_config_path or ""),
             "allowed_public_ip_cidrs": effective_vpn_guard_allowed_public_ip_cidrs,
             "scenario": args.vpn_guard_scenario,
             "expected_startup_block": bool(args.vpn_guard_expected_startup_block),
@@ -2480,7 +2548,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_leak_churn_budget=args.rest_leak_churn_budget,
             rest_leak_churn_cycles=args.rest_leak_churn_cycles,
             rest_stop_start_after_churn=args.rest_stop_start_after_churn,
-            vpn_guard_live_config=Path(args.vpn_guard_live_config) if args.vpn_guard_live_config else None,
+            vpn_guard_live_config=effective_vpn_guard_live_config_path,
             vpn_guard_allowed_public_ip_cidrs=effective_vpn_guard_allowed_public_ip_cidrs,
             vpn_guard_scenario=args.vpn_guard_scenario,
             vpn_guard_expected_startup_block=args.vpn_guard_expected_startup_block,
@@ -2561,13 +2629,31 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             fail_fast=args.fail_fast,
         )
         started = time.monotonic()
-        return_code, suite_cpu_profile = run_suite_command_with_optional_cpu_profile(
-            command,
-            spec=spec,
-            args=args,
-            child_artifacts_dir=child_artifacts_dir,
+        vpn_guard_hook_context = build_vpn_guard_hook_context(
             app_exe=paths.app_exe,
+            p2p_bind_interface_name=child_p2p_bind_interface_name,
+            allowed_public_ip_cidrs=effective_vpn_guard_allowed_public_ip_cidrs,
         )
+        vpn_guard_setup_hooks = setup_vpn_guard_campaign_scenario(
+            vpn_guard_config if spec.accepts_vpn_guard_profile else None,
+            args.vpn_guard_scenario,
+            vpn_guard_hook_context,
+        )
+        vpn_guard_restore_hooks: list[dict[str, object]] = []
+        try:
+            return_code, suite_cpu_profile = run_suite_command_with_optional_cpu_profile(
+                command,
+                spec=spec,
+                args=args,
+                child_artifacts_dir=child_artifacts_dir,
+                app_exe=paths.app_exe,
+            )
+        finally:
+            vpn_guard_restore_hooks = restore_vpn_guard_campaign_scenario(
+                vpn_guard_config if spec.accepts_vpn_guard_profile else None,
+                args.vpn_guard_scenario,
+                vpn_guard_hook_context,
+            )
         child_result = read_child_suite_result(child_artifacts_dir)
         suite_status = get_suite_status_from_return_code(return_code)
         result = {
@@ -2613,6 +2699,10 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             result["language_scope"] = "release"
         if spec.accepts_vpn_guard_profile:
             result["vpn_guard"] = dict(summary["vpn_guard"])  # type: ignore[arg-type]
+            result["vpn_guard_hooks"] = {
+                "setup": vpn_guard_setup_hooks,
+                "restore": vpn_guard_restore_hooks,
+            }
         if spec.is_rest_api:
             result.update(
                 {

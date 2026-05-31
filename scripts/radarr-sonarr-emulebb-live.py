@@ -3849,6 +3849,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
     parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
@@ -4523,6 +4524,7 @@ def main() -> int:
             rest_smoke.apply_p2p_bind_interface_override(
                 Path(profile["config_dir"]),
                 args.p2p_bind_interface_name,
+                vpn_guard_enabled=args.vpn_guard_enabled,
                 vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
             )
     except Exception:

@@ -165,7 +165,12 @@ def run_first_launch_and_crash(
         enable_crash_test_endpoint=True,
     )
     if args.p2p_bind_interface_name:
-        rest_smoke.apply_p2p_bind_interface_override(Path(str(profile["config_dir"])), args.p2p_bind_interface_name)
+        rest_smoke.apply_p2p_bind_interface_override(
+            Path(str(profile["config_dir"])),
+            args.p2p_bind_interface_name,
+            vpn_guard_enabled=args.vpn_guard_enabled,
+            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+        )
 
     base_url = f"http://{lan_bind_addr}:{port}"
     startup_profile_path = Path(str(profile["startup_profile_path"]))
@@ -295,6 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--request-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--crash-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     return parser
 
 

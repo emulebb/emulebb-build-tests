@@ -164,6 +164,14 @@ def test_test_network_vpn_keeps_only_public_network_scope() -> None:
     assert [row["name"] for row in skipped] == ["preference-ui", "deterministic-two-client-transfer"]
 
 
+def test_all_public_vpn_suites_are_vpn_guard_profiles() -> None:
+    assert [
+        spec.name
+        for spec in live_e2e_suite.SUITE_SPECS
+        if spec.network_scope == "vpn" and not spec.accepts_vpn_guard_profile
+    ] == []
+
+
 def test_parse_latest_hide_me_remote_host_ipv4(tmp_path: Path) -> None:
     logs = tmp_path / "Hide.me" / "Logs"
     logs.mkdir(parents=True)
@@ -828,7 +836,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["off"]
-    assert option_values(rest_command, "--vpn-guard-live-config") == [summary["vpn_guard"]["live_config"]]
+    assert option_values(rest_command, "--vpn-guard-live-config") == []
     assert option_values(rest_command, "--vpn-guard-scenario") == ["success"]
     assert "--vpn-guard-expected-startup-block" not in rest_command
     assert "--skip-live-seed-refresh" not in rest_command
@@ -1274,6 +1282,55 @@ def test_rest_api_can_run_explicit_vpn_guard_off_scenario(tmp_path: Path) -> Non
 
     assert option_values(command, "--vpn-guard-scenario") == ["off"]
     assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert "--vpn-guard-enabled" not in command
+
+
+def test_vpn_guard_success_can_run_without_public_cidrs(tmp_path: Path) -> None:
+    command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("search-ui-live"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        vpn_guard_scenario="success",
+        vpn_guard_allowed_public_ip_cidrs="",
+    )
+
+    assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
+    assert "--vpn-guard-enabled" in command
+    assert option_values(command, "--vpn-guard-allowed-public-ip-cidrs") == []
+
+
+def test_vpn_guard_campaign_hooks_apply_negative_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: list[str] = []
+
+    def fake_run_hook(_config, name, _context):
+        observed.append(name)
+        return {"configured": True, "returncode": 0, "hook": name}
+
+    monkeypatch.setattr(live_e2e_suite.vpn_guard_live, "run_hook", fake_run_hook)
+    config = {"commands": {}}
+    context = {
+        "app_exe": "emulebb.exe",
+        "p2p_bind_interface_name": "hide.me",
+        "allowed_public_ip_cidrs": "8.8.8.8/32",
+    }
+
+    live_e2e_suite.setup_vpn_guard_campaign_scenario(config, "not-allowlisted", context)
+    live_e2e_suite.restore_vpn_guard_campaign_scenario(config, "not-allowlisted", context)
+
+    assert observed == [
+        "connect",
+        "removeAllowlistEmulebb",
+        "checkConnected",
+        "checkNotAllowlisted",
+        "connect",
+        "allowlistEmulebb",
+        "checkConnected",
+        "checkAllowlisted",
+    ]
 
 
 def test_rest_api_can_expect_vpn_guard_startup_block(tmp_path: Path) -> None:

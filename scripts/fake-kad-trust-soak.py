@@ -429,7 +429,12 @@ def run_soak(args: argparse.Namespace) -> int:
         lan_bind_addr,
     )
     if args.p2p_bind_interface_name:
-        rest_smoke.apply_p2p_bind_interface_override(Path(profile["config_dir"]), args.p2p_bind_interface_name)
+        rest_smoke.apply_p2p_bind_interface_override(
+            Path(profile["config_dir"]),
+            args.p2p_bind_interface_name,
+            vpn_guard_enabled=args.vpn_guard_enabled,
+            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+        )
 
     app = None
     process_id = None
@@ -718,6 +723,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed-download-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--live-wire-inputs-file")
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--min-result-rows", type=int, default=1)
     parser.add_argument("--min-kad-publish-info-rows", type=int, default=1)
     parser.add_argument("--max-failed-cycles", type=int, default=0)

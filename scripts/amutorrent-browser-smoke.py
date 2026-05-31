@@ -856,6 +856,7 @@ def main() -> int:
     parser.add_argument("--api-key", default="amutorrent-browser-smoke-key")
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
     parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
@@ -950,6 +951,7 @@ def main() -> int:
     rest_api_smoke.apply_p2p_bind_interface_override(
         Path(profile["config_dir"]),
         args.p2p_bind_interface_name,
+        vpn_guard_enabled=args.vpn_guard_enabled,
         vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
     )
 

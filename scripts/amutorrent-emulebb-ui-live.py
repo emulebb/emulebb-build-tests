@@ -94,6 +94,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lan-bind-addr", required=True)
     parser.add_argument("--rest-webserver-scheme", choices=["http", "https"], default="https")
     parser.add_argument("--p2p-bind-interface-name", default=live_common.DEFAULT_P2P_BIND_INTERFACE_NAME)
+    parser.add_argument("--vpn-guard-enabled", action="store_true")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--network-ready-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--search-observation-timeout-seconds", type=float, default=120.0)
@@ -823,6 +825,8 @@ def main() -> int:
         args.lan_bind_addr,
         args.p2p_bind_interface_name,
         live_network=True,
+        vpn_guard_enabled=args.vpn_guard_enabled,
+        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
         use_https=bool(rest_transport["use_https"]),
         https_certificate=str(rest_transport["https_material"]["certificate"]) if rest_transport["https_material"] else "",
         https_key=str(rest_transport["https_material"]["key"]) if rest_transport["https_material"] else "",
