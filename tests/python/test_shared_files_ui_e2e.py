@@ -64,6 +64,24 @@ def test_resolve_launched_process_id_falls_back_to_window_owner(monkeypatch) -> 
     assert module.resolve_launched_process_id(object(), 1001) == 2468
 
 
+def test_resolve_controller_bind_host_prefers_local_ip(monkeypatch) -> None:
+    module = load_shared_files_module()
+
+    monkeypatch.setenv("X_LOCAL_IP", "192.168.1.210")
+    monkeypatch.setenv("EMULEBB_TEST_LAN_IP_RESOLVED", "10.54.210.115")
+
+    assert module.resolve_controller_bind_host() == "192.168.1.210"
+
+
+def test_resolve_controller_bind_host_falls_back_to_loopback(monkeypatch) -> None:
+    module = load_shared_files_module()
+
+    monkeypatch.delenv("X_LOCAL_IP", raising=False)
+    monkeypatch.delenv("EMULEBB_TEST_LAN_IP_RESOLVED", raising=False)
+
+    assert module.resolve_controller_bind_host() == "127.0.0.1"
+
+
 def test_vhd_monitored_scenario_requires_admin_monitor_root(tmp_path: Path) -> None:
     module = load_shared_files_module()
 

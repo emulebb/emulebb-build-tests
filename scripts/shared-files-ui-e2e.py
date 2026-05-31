@@ -56,6 +56,7 @@ def load_local_module(module_name: str, filename: str):
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
 generated_fixture = load_local_module("create_long_paths_tree", "create-long-paths-tree.py")
+rest_api_smoke = load_local_module("rest_api_smoke_helpers", "rest-api-smoke.py")
 
 WM_COMMAND = 0x0111
 WM_PAINT = 0x000F
@@ -72,6 +73,7 @@ IDC_SFLIST = 2167
 IDC_SF_FNAME = 3038
 IDC_SHAREDDIRSTREE = 2926
 VHD_MONITORED_FOLDER_SCENARIO = "monitored-folder-events-vhd"
+CONTROLLER_BIND_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
 
 LVM_FIRST = 0x1000
 LVM_GETITEMCOUNT = LVM_FIRST + 4
@@ -396,8 +398,9 @@ def prepare_tree_refresh_stress_fixture(
         scenario_id=artifacts_dir.name,
     )
     rest_api_key = f"shared-files-ui-{scenario_name}-key"
-    rest_port = choose_rest_listen_port()
-    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port)
+    rest_bind_host = resolve_controller_bind_host()
+    rest_port = choose_rest_listen_port(rest_bind_host)
+    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port, rest_bind_host)
     fixture.update(
         {
             "manifest_path": str(Path(str(manifest["manifest_path"])).resolve()),
@@ -413,8 +416,9 @@ def prepare_tree_refresh_stress_fixture(
             "sample_directories": [Path(str(path)).resolve() for path in subtree["sample_directories"]],
             "shared_directory_count": len(shared_dirs),
             "rest_api_key": rest_api_key,
+            "rest_bind_host": rest_bind_host,
             "rest_port": rest_port,
-            "rest_base_url": f"http://127.0.0.1:{rest_port}",
+            "rest_base_url": f"http://{rest_bind_host}:{rest_port}",
         }
     )
     return fixture
@@ -461,15 +465,25 @@ def prepare_duplicate_reuse_fixture(seed_config_dir: Path, artifacts_dir: Path) 
     return fixture
 
 
-def choose_rest_listen_port() -> int:
-    """Returns one ephemeral localhost TCP port for a live REST verification listener."""
+def resolve_controller_bind_host() -> str:
+    """Returns the LAN controller host for local REST checks, or loopback."""
+
+    for name in CONTROLLER_BIND_ENV_NAMES:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return rest_api_smoke.rest_base_host_for_bind_addr(value)
+    return "127.0.0.1"
+
+
+def choose_rest_listen_port(bind_host: str) -> int:
+    """Returns one ephemeral TCP port for a live REST verification listener."""
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
+        probe.bind((bind_host, 0))
         return int(probe.getsockname()[1])
 
 
-def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: int) -> None:
+def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: int, bind_host: str) -> None:
     """Enables the WebServer REST listener inside one isolated Shared Files UI profile."""
 
     live_common.apply_emule_preferences(
@@ -488,7 +502,7 @@ def configure_rest_profile(config_dir: Path, app_exe: Path, api_key: str, port: 
             app_exe=app_exe,
             api_key=api_key,
             port=port,
-            bind_addr="127.0.0.1",
+            bind_addr=bind_host,
             use_gzip=False,
             allow_admin_high_level_func=True,
         ),
@@ -523,8 +537,9 @@ def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_di
         scenario_id=artifacts_dir.name,
     )
     rest_api_key = "shared-files-ui-lifecycle-key"
-    rest_port = choose_rest_listen_port()
-    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port)
+    rest_bind_host = resolve_controller_bind_host()
+    rest_port = choose_rest_listen_port(rest_bind_host)
+    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port, rest_bind_host)
     fixture.update(
         {
             "candidate_dir": candidate_dir,
@@ -534,8 +549,9 @@ def prepare_dynamic_folder_lifecycle_fixture(seed_config_dir: Path, artifacts_di
             "after_add_names": ["alpha_dynamic.txt", "beta_dynamic.bin", "gamma_late.txt"],
             "after_delete_names": ["beta_dynamic.bin", "gamma_late.txt"],
             "rest_api_key": rest_api_key,
+            "rest_bind_host": rest_bind_host,
             "rest_port": rest_port,
-            "rest_base_url": f"http://127.0.0.1:{rest_port}",
+            "rest_base_url": f"http://{rest_bind_host}:{rest_port}",
         }
     )
     return fixture
@@ -598,8 +614,9 @@ def prepare_monitored_folder_events_fixture_at_root(
         scenario_id=artifacts_dir.name,
     )
     rest_api_key = "shared-files-ui-monitor-key"
-    rest_port = choose_rest_listen_port()
-    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port)
+    rest_bind_host = resolve_controller_bind_host()
+    rest_port = choose_rest_listen_port(rest_bind_host)
+    configure_rest_profile(Path(str(fixture["config_dir"])), app_exe, rest_api_key, rest_port, rest_bind_host)
     fixture.update(
         {
             "monitor_root": monitor_root,
@@ -614,8 +631,9 @@ def prepare_monitored_folder_events_fixture_at_root(
             "after_directory_event_names": after_directory_event_names,
             "after_delete_names": after_delete_names,
             "rest_api_key": rest_api_key,
+            "rest_bind_host": rest_bind_host,
             "rest_port": rest_port,
-            "rest_base_url": f"http://127.0.0.1:{rest_port}",
+            "rest_base_url": f"http://{rest_bind_host}:{rest_port}",
         }
     )
     return fixture
