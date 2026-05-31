@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import ssl
 import subprocess
+import time
 from types import SimpleNamespace
 import urllib.error
 
@@ -3550,6 +3551,53 @@ def test_rest_stress_retry_classification_is_limited_to_transient_resets() -> No
         RuntimeError("<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>")
     )
     assert not module.is_retryable_rest_stress_exception(TimeoutError("timed out"))
+
+
+def test_rest_stress_caps_inflight_workers_to_accepted_client_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    active_workers = 0
+    peak_workers = 0
+
+    monkeypatch.setattr(
+        module,
+        "build_rest_stress_operations",
+        lambda _budget: [
+            {
+                "method": "GET",
+                "path": "/api/v1/app",
+                "family": "app",
+                "scenario": "read",
+                "expected_statuses": (200,),
+                "response_kind": "text",
+            }
+        ],
+    )
+
+    def fake_http_request(*_args, **_kwargs):
+        nonlocal active_workers, peak_workers
+        active_workers += 1
+        peak_workers = max(peak_workers, active_workers)
+        try:
+            time.sleep(0.01)
+            return {"status": 200, "content_type": "text/plain", "body_text": "ok", "json": None, "raw_json": None}
+        finally:
+            active_workers -= 1
+
+    monkeypatch.setattr(module, "http_request", fake_http_request)
+
+    summary = module.exercise_rest_stress(
+        "https://127.0.0.1:4711",
+        "api-key",
+        budget="smoke",
+        duration_seconds=0.04,
+        concurrency=4,
+        max_failures=0,
+        request_timeout_seconds=1.0,
+    )
+
+    assert summary["requested_concurrency"] == 4
+    assert summary["effective_concurrency"] == module.REST_STRESS_ACCEPTED_CLIENT_THREAD_LIMIT
+    assert peak_workers == module.REST_STRESS_ACCEPTED_CLIENT_THREAD_LIMIT
 
 
 def test_rest_stress_response_error_classification_is_specific() -> None:

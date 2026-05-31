@@ -228,6 +228,7 @@ REST_STRESS_RETRYABLE_ERROR_FRAGMENTS = (
     "remote end closed connection without response",
 )
 REST_STRESS_REQUEST_MAX_ATTEMPTS = 6
+REST_STRESS_ACCEPTED_CLIENT_THREAD_LIMIT = 1
 DEFAULT_HTTPS_CA_FILE = object()
 HTTPS_TRUST_CA_FILE: str | None = None
 REST_LEAK_CHURN_RESOURCE_THRESHOLDS = {
@@ -2562,6 +2563,12 @@ def validate_rest_adversity_config(*, webserver_scheme: str, socket_budget: str,
         raise ValueError("REST TLS handshake adversity requires --webserver-scheme https.")
 
 
+def effective_rest_stress_worker_count(concurrency: int) -> int:
+    """Caps in-flight REST workers to the app's accepted-client thread budget."""
+
+    return max(1, min(concurrency, REST_STRESS_ACCEPTED_CLIENT_THREAD_LIMIT))
+
+
 def build_rest_stress_operations(budget: str) -> list[dict[str, object]]:
     """Builds the REST operation mix used by one bounded stress budget."""
 
@@ -3072,6 +3079,7 @@ def exercise_rest_stress(
         }
 
     deadline = time.monotonic() + duration_seconds
+    effective_concurrency = effective_rest_stress_worker_count(concurrency)
     operations = build_rest_stress_operations(budget)
     qbit_session_cookie = ""
     if any(
@@ -3171,16 +3179,16 @@ def exercise_rest_stress(
             "error": str(last_exception),
         }
 
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+    with ThreadPoolExecutor(max_workers=effective_concurrency) as executor:
         futures = {}
-        while time.monotonic() < deadline and len(futures) < concurrency:
+        while time.monotonic() < deadline and len(futures) < effective_concurrency:
             futures[executor.submit(run_one, next_index)] = next_index
             next_index += 1
         while futures:
             for future in as_completed(list(futures)):
                 futures.pop(future)
                 rows.append(future.result())
-                if resource_gate_enabled and len(rows) % max(1, concurrency) == 0:
+                if resource_gate_enabled and len(rows) % max(1, effective_concurrency) == 0:
                     peak_snapshot = max_resource_snapshot(peak_snapshot, get_process_resource_snapshot(process_id))
                 if time.monotonic() < deadline:
                     futures[executor.submit(run_one, next_index)] = next_index
@@ -3195,6 +3203,9 @@ def exercise_rest_stress(
         max_failures=max_failures,
         operations=operations,
     )
+    summary["requested_concurrency"] = concurrency
+    summary["effective_concurrency"] = effective_concurrency
+    summary["accepted_client_thread_limit"] = REST_STRESS_ACCEPTED_CLIENT_THREAD_LIMIT
     if not summary["ok"]:
         raise AssertionError(f"REST stress failures exceeded budget: {summary}")
     summary["resource_gate_enabled"] = resource_gate_enabled
