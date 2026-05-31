@@ -73,6 +73,8 @@ def parse_args(*argv: str):
     args = list(argv)
     if "--test-network" not in args:
         args.extend(["--test-network", "all"])
+    if "--vpn-guard-scenario" not in args and "--vpn-guard-live-config" not in args:
+        args.extend(["--vpn-guard-live-config", str(Path("vpn-guard-live.json").resolve())])
     return live_e2e_suite.build_parser().parse_args(args)
 
 
@@ -824,11 +826,14 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-leak-churn-budget") == ["off"]
+    assert option_values(rest_command, "--vpn-guard-live-config") == [summary["vpn_guard"]["live_config"]]
+    assert option_values(rest_command, "--vpn-guard-scenario") == ["success"]
     assert "--skip-live-seed-refresh" not in rest_command
     assert summary["suites"][6]["rest_coverage_budget"] == "contract"
     assert summary["suites"][6]["rest_stress_budget"] == "smoke"
     assert summary["suites"][6]["rest_stress_max_failures"] == 1
     assert summary["suites"][6]["rest_download_trigger_count"] == live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT
+    assert summary["suites"][6]["vpn_guard"]["scenario"] == "success"
     assert summary["arr_direct_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT
     assert summary["arr_prowlarr_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT
     assert summary["radarr_movie_root_configured"] is False
@@ -1245,6 +1250,22 @@ def test_rest_api_vpn_address_is_resolved_from_network_context() -> None:
     spec = suite_spec("rest-api")
 
     assert live_e2e_suite.suite_p2p_bind_interface_address(spec, "", "10.54.221.82") == "10.54.221.82"
+
+
+def test_rest_api_can_run_explicit_vpn_guard_off_scenario(tmp_path: Path) -> None:
+    command = live_e2e_suite.build_suite_command(
+        spec=suite_spec("rest-api"),
+        scripts_dir=tmp_path / "scripts",
+        python_executable="python",
+        workspace_root=tmp_path / "workspace",
+        configuration="Release",
+        artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        vpn_guard_scenario="off",
+    )
+
+    assert option_values(command, "--vpn-guard-scenario") == ["off"]
+    assert option_values(command, "--p2p-bind-interface-name") == ["hide.me"]
 
 
 def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monkeypatch) -> None:

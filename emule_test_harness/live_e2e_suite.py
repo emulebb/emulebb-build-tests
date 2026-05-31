@@ -1017,6 +1017,9 @@ def build_suite_command(
     rest_leak_churn_budget: str = "off",
     rest_leak_churn_cycles: int | None = None,
     rest_stop_start_after_churn: bool = False,
+    vpn_guard_live_config: Path | None = None,
+    vpn_guard_allowed_public_ip_cidrs: str = "",
+    vpn_guard_scenario: str = "success",
     multi_client_require_optional_clients: bool = False,
     p2p_bind_interface_name: str = "hide.me",
     p2p_bind_interface_address: str | None = None,
@@ -1183,6 +1186,11 @@ def build_suite_command(
             command.extend(["--rest-leak-churn-cycles", str(rest_leak_churn_cycles)])
         if rest_stop_start_after_churn:
             command.append("--rest-stop-start-after-churn")
+        if vpn_guard_live_config is not None:
+            command.extend(["--vpn-guard-live-config", str(vpn_guard_live_config.resolve())])
+        if vpn_guard_allowed_public_ip_cidrs:
+            command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
+        command.extend(["--vpn-guard-scenario", vpn_guard_scenario])
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -1860,6 +1868,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-leak-churn-budget", choices=["off", "smoke", "soak"], default="off")
     parser.add_argument("--rest-leak-churn-cycles", type=int)
     parser.add_argument("--rest-stop-start-after-churn", action="store_true")
+    parser.add_argument("--vpn-guard-live-config")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
+    parser.add_argument("--vpn-guard-scenario", choices=["off", "success", "not-allowlisted", "vpn-off"], default="success")
     parser.add_argument("--multi-client-require-optional-clients", action="store_true")
     parser.add_argument("--arr-direct-search-stress-count", type=int, default=DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)
     parser.add_argument("--arr-prowlarr-search-stress-count", type=int, default=DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)
@@ -2130,6 +2141,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     )
     requested_specs = resolve_suite_specs(args.suite)
     selected_specs, skipped_suites = filter_suite_specs_for_network(requested_specs, args.test_network)
+    selected_rest_api = any(spec.is_rest_api for spec in selected_specs)
+    if selected_rest_api and args.vpn_guard_scenario != "off" and not args.vpn_guard_live_config:
+        raise ValueError("REST live-wire suites require --vpn-guard-live-config unless --vpn-guard-scenario off is explicit.")
+    if selected_rest_api and args.vpn_guard_scenario != "off" and args.p2p_bind_interface_name.casefold() != "hide.me":
+        raise ValueError("REST live-wire VPN Guard scenarios must bind P2P through hide.me.")
     if any(spec.requires_admin_volume_fixtures for spec in selected_specs) and not args.admin_volume_fixtures:
         raise ValueError("Selected admin storage live suites require --admin-volume-fixtures.")
     scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
@@ -2247,6 +2263,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "rest_leak_churn_budget": args.rest_leak_churn_budget,
         "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
         "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
+        "vpn_guard": {
+            "live_config": str(args.vpn_guard_live_config or ""),
+            "allowed_public_ip_cidrs": args.vpn_guard_allowed_public_ip_cidrs,
+            "scenario": args.vpn_guard_scenario,
+        },
         "multi_client_p2p_matrix": {
             "require_optional_clients": bool(args.multi_client_require_optional_clients),
         },
@@ -2433,6 +2454,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             rest_leak_churn_budget=args.rest_leak_churn_budget,
             rest_leak_churn_cycles=args.rest_leak_churn_cycles,
             rest_stop_start_after_churn=args.rest_stop_start_after_churn,
+            vpn_guard_live_config=Path(args.vpn_guard_live_config) if args.vpn_guard_live_config else None,
+            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+            vpn_guard_scenario=args.vpn_guard_scenario,
             multi_client_require_optional_clients=args.multi_client_require_optional_clients,
             p2p_bind_interface_name=child_p2p_bind_interface_name,
             p2p_bind_interface_address=child_p2p_bind_interface_address,
@@ -2574,6 +2598,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
                     "rest_leak_churn_budget": args.rest_leak_churn_budget,
                     "rest_leak_churn_cycles": args.rest_leak_churn_cycles,
                     "rest_stop_start_after_churn": bool(args.rest_stop_start_after_churn),
+                    "vpn_guard": dict(summary["vpn_guard"]),  # type: ignore[arg-type]
                     "rest_download_trigger_count": args.rest_download_trigger_count,
                     "rest_search_method_override": args.rest_search_method_override,
                     "rest_contract_completeness_expected": args.rest_coverage_budget != "smoke",

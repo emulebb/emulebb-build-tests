@@ -112,8 +112,106 @@ def test_p2p_bind_override_writes_interface_name(tmp_path: Path) -> None:
     assert "BindInterface=hide.me" in text
     assert "BindAddr=hide.me" not in text
     assert "BindAddr=" in text
-    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in text
+    assert "BlockNetworkWhenBindUnavailableAtStartup" not in text
+    assert "VpnGuardMode=Off" in text
     assert "127.0.0.1" not in text
+
+
+def test_p2p_bind_override_can_enable_vpn_guard(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text(
+        "[eMule]\nBindAddr=127.0.0.1\nBindInterface=\nBlockNetworkWhenBindUnavailableAtStartup=1\n",
+        encoding="utf-16",
+    )
+
+    module.apply_p2p_bind_interface_override(config_dir, "hide.me", "8.8.8.8/32")
+
+    text = module.live_common.read_ini_text(preferences_path)
+    assert "BindInterface=hide.me" in text
+    assert "BlockNetworkWhenBindUnavailableAtStartup" not in text
+    assert "VpnGuardMode=Block" in text
+    assert "VpnGuardAllowedPublicIpCidrs=8.8.8.8/32" in text
+
+
+def test_vpn_guard_scenarios_run_expected_hook_sequences(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    observed: list[str] = []
+
+    def fake_run_hook(_config, name, _context):
+        observed.append(name)
+        return {"configured": True, "name": name, "returncode": 0}
+
+    monkeypatch.setattr(module.vpn_guard_live, "run_hook", fake_run_hook)
+
+    config = {"commands": {}}
+    context = {"app_exe": r"C:\app\emulebb.exe", "p2p_bind_interface_name": "hide.me"}
+
+    module.setup_vpn_guard_scenario(config, "success", context)
+    assert observed == ["connect", "checkConnected", "allowlistEmulebb", "checkAllowlisted"]
+
+    observed.clear()
+    module.setup_vpn_guard_scenario(config, "not-allowlisted", context)
+    assert observed == ["connect", "checkConnected", "removeAllowlistEmulebb", "checkNotAllowlisted"]
+
+    observed.clear()
+    module.setup_vpn_guard_scenario(config, "vpn-off", context)
+    assert observed == ["removeAllowlistEmulebb", "disconnect", "checkDisconnected"]
+
+
+def test_vpn_guard_restore_reconnects_and_allowlists(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+    observed: list[str] = []
+
+    def fake_run_hook(_config, name, _context):
+        observed.append(name)
+        return {"configured": True, "name": name, "returncode": 0}
+
+    monkeypatch.setattr(module.vpn_guard_live, "run_hook", fake_run_hook)
+
+    result = module.restore_vpn_guard_scenario({"commands": {}}, "vpn-off", {"p2p_bind_interface_name": "hide.me"})
+
+    assert result["enabled"] is True
+    assert observed == ["connect", "checkConnected", "allowlistEmulebb", "checkAllowlisted"]
+
+
+def test_vpn_guard_startup_block_assertion_accepts_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rest_api_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "http_request",
+        lambda *_args, **_kwargs: {
+            "status": 200,
+            "json": {
+                "network": {
+                    "vpnGuard": {
+                        "enabled": True,
+                        "startupBlocked": True,
+                        "startupBlockReason": "VPN Guard public IP mismatch",
+                    }
+                }
+            },
+            "raw_json": {
+                "data": {
+                    "network": {
+                        "vpnGuard": {
+                            "enabled": True,
+                            "startupBlocked": True,
+                            "startupBlockReason": "VPN Guard public IP mismatch",
+                        }
+                    }
+                },
+                "meta": {"apiVersion": "v1"},
+            },
+        },
+    )
+
+    result = module.assert_vpn_guard_startup_blocked("http://192.0.2.10:4711", "api-key")
+
+    assert result["vpnGuard"]["startupBlocked"] is True
 
 
 def test_configure_webserver_profile_keeps_crash_endpoint_disabled_by_default(tmp_path: Path) -> None:

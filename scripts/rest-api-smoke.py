@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import live_wire_inputs
+from emule_test_harness import live_wire_inputs, vpn_guard_live
 from emule_test_harness.live_seed_sources import (
     EMULE_SECURITY_HOME_URL,
     EMULE_SECURITY_NODES_DAT_URL,
@@ -1015,6 +1015,10 @@ class LiveNetworkUnavailableError(RuntimeError):
     """Raised when live seed files load but no external network candidate connects."""
 
 
+class VpnGuardStartupBlockVerified(RuntimeError):
+    """Raised internally after a startup-block scenario has been proven."""
+
+
 LAN_BIND_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
 
 
@@ -1396,10 +1400,104 @@ def configure_webserver_profile(
 def apply_p2p_bind_interface_override(
     config_dir: Path,
     interface_name: str,
+    vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
     """Writes the requested P2P bind interface name into the isolated profile."""
 
-    live_common.apply_live_network_policy(config_dir, p2p_bind_interface_name=interface_name)
+    live_common.apply_live_network_policy(
+        config_dir,
+        p2p_bind_interface_name=interface_name,
+        vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
+    )
+
+
+def build_vpn_guard_hook_context(
+    *,
+    app_exe: Path,
+    profile: dict[str, object],
+    p2p_bind_interface_name: str,
+    allowed_public_ip_cidrs: str,
+) -> dict[str, str]:
+    """Builds placeholder values available to VPN Guard live-test hook commands."""
+
+    return {
+        "app_exe": str(app_exe),
+        "profile_base": str(profile["profile_base"]),
+        "config_dir": str(profile["config_dir"]),
+        "p2p_bind_interface_name": p2p_bind_interface_name,
+        "allowed_public_ip_cidrs": allowed_public_ip_cidrs,
+    }
+
+
+def run_vpn_guard_hook_sequence(config: dict[str, object], hooks: list[str], context: dict[str, str]) -> list[dict[str, object]]:
+    """Runs configured VPN Guard hook commands and fails on configured hook errors."""
+
+    results: list[dict[str, object]] = []
+    for hook in hooks:
+        result = vpn_guard_live.run_hook(config, hook, context)
+        results.append(result)
+        vpn_guard_live.require_hook_ok(result)
+    return results
+
+
+def setup_vpn_guard_scenario(config: dict[str, object] | None, scenario: str, context: dict[str, str]) -> dict[str, object]:
+    """Runs pre-launch VPN/split-tunnel hooks for one VPN Guard live scenario."""
+
+    if config is None or scenario == "off":
+        return {"enabled": False, "scenario": scenario}
+    hooks_by_scenario = {
+        "success": ["connect", "checkConnected", "allowlistEmulebb", "checkAllowlisted"],
+        "not-allowlisted": ["connect", "checkConnected", "removeAllowlistEmulebb", "checkNotAllowlisted"],
+        "vpn-off": ["removeAllowlistEmulebb", "disconnect", "checkDisconnected"],
+    }
+    hooks = hooks_by_scenario[scenario]
+    return {
+        "enabled": True,
+        "scenario": scenario,
+        "hooks": run_vpn_guard_hook_sequence(config, hooks, context),
+    }
+
+
+def restore_vpn_guard_scenario(config: dict[str, object] | None, scenario: str, context: dict[str, str]) -> dict[str, object]:
+    """Best-effort restoration after VPN Guard live scenarios."""
+
+    if config is None or scenario == "off":
+        return {"enabled": False, "scenario": scenario}
+    try:
+        return {
+            "enabled": True,
+            "scenario": scenario,
+            "hooks": run_vpn_guard_hook_sequence(
+                config,
+                ["connect", "checkConnected", "allowlistEmulebb", "checkAllowlisted"],
+                context,
+            ),
+        }
+    except Exception as exc:  # pragma: no cover - best-effort live cleanup
+        return {
+            "enabled": True,
+            "scenario": scenario,
+            "error": repr(exc),
+        }
+
+
+def assert_vpn_guard_startup_blocked(base_url: str, api_key: str) -> dict[str, object]:
+    """Asserts that the diagnostic snapshot reports a VPN Guard startup block."""
+
+    snapshot = http_request(base_url, "/api/v1/snapshot", api_key=api_key)
+    payload = require_json_object(snapshot, 200)
+    network = payload.get("network")
+    assert isinstance(network, dict), compact_http_result(snapshot)
+    vpn_guard = network.get("vpnGuard")
+    assert isinstance(vpn_guard, dict), compact_http_result(snapshot)
+    assert vpn_guard.get("enabled") is True, compact_http_result(snapshot)
+    assert vpn_guard.get("startupBlocked") is True, compact_http_result(snapshot)
+    reason = str(vpn_guard.get("startupBlockReason") or "")
+    assert "VPN Guard" in reason or "bind interface" in reason, compact_http_result(snapshot)
+    return {
+        "snapshot": compact_http_result(snapshot),
+        "vpnGuard": vpn_guard,
+    }
 
 
 def http_request(
@@ -6249,6 +6347,10 @@ def main() -> int:
     parser.add_argument("--webserver-scheme", choices=["http", "https"], default="http")
     parser.add_argument("--enable-upnp", action="store_true", default=True)
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
+    parser.add_argument("--vpn-guard-live-config")
+    parser.add_argument("--vpn-guard-allowed-public-ip-cidrs", default="")
+    parser.add_argument("--vpn-guard-scenario", choices=["off", "success", "not-allowlisted", "vpn-off"], default="success")
+    parser.add_argument("--vpn-guard-expected-startup-block", action="store_true")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--server-activity-timeout-seconds", type=float, default=45.0)
     parser.add_argument("--kad-running-timeout-seconds", type=float, default=30.0)
@@ -6284,6 +6386,28 @@ def main() -> int:
         raise ValueError("Live download trigger count must be zero or greater.")
     if args.rest_stop_start_after_churn and args.rest_leak_churn_budget == "off":
         raise ValueError("REST stop/start after churn requires --rest-leak-churn-budget.")
+    vpn_guard_config = (
+        vpn_guard_live.load_config(Path(args.vpn_guard_live_config))
+        if args.vpn_guard_live_config
+        else None
+    )
+    if args.vpn_guard_scenario != "off" and vpn_guard_config is None:
+        raise ValueError("--vpn-guard-scenario requires --vpn-guard-live-config unless the scenario is off.")
+    vpn_guard_allowed_public_ip_cidrs = args.vpn_guard_allowed_public_ip_cidrs.strip()
+    if not vpn_guard_allowed_public_ip_cidrs and vpn_guard_config is not None:
+        vpn_guard_allowed_public_ip_cidrs = str(vpn_guard_config.get("allowedPublicIpCidrs") or "").strip()
+    effective_p2p_bind_interface_name = args.p2p_bind_interface_name
+    if args.vpn_guard_scenario != "off" and vpn_guard_config is not None:
+        effective_p2p_bind_interface_name = str(vpn_guard_config.get("p2pBindInterfaceName") or "").strip()
+    if args.vpn_guard_scenario != "off":
+        if effective_p2p_bind_interface_name.casefold() != "hide.me":
+            raise ValueError("VPN Guard live scenarios must bind P2P through hide.me.")
+        if not vpn_guard_allowed_public_ip_cidrs:
+            raise ValueError("VPN Guard live scenarios require allowed public IP CIDRs.")
+    vpn_guard_expected_startup_block = args.vpn_guard_expected_startup_block or args.vpn_guard_scenario in {
+        "not-allowlisted",
+        "vpn-off",
+    }
     effective_stress_budget = (
         "smoke"
         if args.rest_coverage_budget == "contract-stress" and args.rest_stress_budget == "off"
@@ -6346,11 +6470,18 @@ def main() -> int:
         https_certificate=https_material["certificate"],
         https_key=https_material["key"],
     )
-    if args.p2p_bind_interface_name:
+    if effective_p2p_bind_interface_name:
         apply_p2p_bind_interface_override(
             Path(profile["config_dir"]),
-            args.p2p_bind_interface_name,
+            effective_p2p_bind_interface_name,
+            vpn_guard_allowed_public_ip_cidrs,
         )
+    vpn_guard_hook_context = build_vpn_guard_hook_context(
+        app_exe=app_exe,
+        profile=profile,
+        p2p_bind_interface_name=effective_p2p_bind_interface_name,
+        allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
+    )
 
     app = None
     search_id = None
@@ -6372,7 +6503,13 @@ def main() -> int:
             "https_certificate": https_material["certificate"],
             "https_certificate_generator": https_material["generator"],
             "enable_upnp": True,
-            "p2p_bind_interface_name": args.p2p_bind_interface_name,
+            "p2p_bind_interface_name": effective_p2p_bind_interface_name,
+            "vpn_guard": {
+                "scenario": args.vpn_guard_scenario,
+                "config": str(args.vpn_guard_live_config or ""),
+                "allowed_public_ip_cidrs": vpn_guard_allowed_public_ip_cidrs,
+                "expected_startup_block": vpn_guard_expected_startup_block,
+            },
             "keep_running": bool(args.keep_running),
             "server_search_count": args.server_search_count,
             "kad_search_count": args.kad_search_count,
@@ -6408,6 +6545,14 @@ def main() -> int:
     pending_error: Exception | None = None
 
     try:
+        if args.vpn_guard_scenario != "off":
+            current_phase = set_phase(report, "vpn_guard_setup")
+            report["checks"]["vpn_guard_setup"] = setup_vpn_guard_scenario(
+                vpn_guard_config,
+                args.vpn_guard_scenario,
+                vpn_guard_hook_context,
+            )
+
         https_pem_readiness: dict[str, object] | None = None
         if args.webserver_scheme == "https":
             current_phase = set_phase(report, "https_pem_readiness")
@@ -6438,6 +6583,13 @@ def main() -> int:
             readiness_context=https_pem_readiness,
         )
         report["checks"]["ready"] = compact_http_result(ready)
+
+        if vpn_guard_expected_startup_block:
+            current_phase = set_phase(report, "vpn_guard_startup_block")
+            report["checks"]["vpn_guard_startup_block"] = assert_vpn_guard_startup_blocked(base_url, args.api_key)
+            current_phase = set_phase(report, "completed")
+            report["status"] = "passed"
+            raise VpnGuardStartupBlockVerified()
 
         if args.webserver_scheme == "https":
             current_phase = set_phase(report, "https_certificate_validation")
@@ -6756,7 +6908,9 @@ def main() -> int:
         current_phase = set_phase(report, "completed")
         report["status"] = "passed"
     except Exception as exc:
-        if isinstance(exc, LiveNetworkUnavailableError):
+        if isinstance(exc, VpnGuardStartupBlockVerified):
+            pass
+        elif isinstance(exc, LiveNetworkUnavailableError):
             report["status"] = "inconclusive"
             report["inconclusive_phase"] = current_phase
             report["inconclusive_reason"] = {
@@ -6801,6 +6955,23 @@ def main() -> int:
                             "type": type(exc).__name__,
                             "message": str(exc),
                         }
+        if args.vpn_guard_scenario != "off":
+            try:
+                cleanup["vpn_guard_restore"] = restore_vpn_guard_scenario(
+                    vpn_guard_config,
+                    args.vpn_guard_scenario,
+                    vpn_guard_hook_context,
+                )
+            except Exception as exc:  # pragma: no cover - best-effort operator environment cleanup
+                cleanup["vpn_guard_restore_error"] = repr(exc)
+                if pending_error is None:
+                    pending_error = exc
+                    report["status"] = "failed"
+                    report["failed_phase"] = "vpn_guard_restore"
+                    report["error"] = {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
         write_json(artifacts_dir / "rest-api-smoke-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
