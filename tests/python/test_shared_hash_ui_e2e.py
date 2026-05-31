@@ -152,7 +152,8 @@ def test_apply_live_network_policy_sets_bind_interface_and_upnp(tmp_path: Path) 
     text = module.live_common.read_ini_text(preferences_path)
     assert "BindInterface=hide.me" in text
     assert "BindAddr=" in text
-    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in text
+    assert "BlockNetworkWhenBindUnavailableAtStartup" not in text
+    assert "VpnGuardMode=Off" in text
     assert "[UPnP]" in text
     assert "EnableUPnP=1" in text
     assert "CloseUPnPOnExit=0" in text

@@ -12,6 +12,7 @@ from pathlib import Path
 from .ini import (
     patch_ini_value,
     read_ini_text,
+    remove_ini_section_value,
     upsert_ini_section_value,
     write_utf16_ini_text,
 )
@@ -53,6 +54,7 @@ class LiveNetworkProfileSpec:
 
     p2p_bind_interface_name: str = DEFAULT_P2P_BIND_INTERFACE_NAME
     close_upnp_on_exit: bool = False
+    vpn_guard_allowed_public_ip_cidrs: str = ""
 
 
 @dataclass(frozen=True)
@@ -141,12 +143,14 @@ def apply_live_network_policy(
     *,
     p2p_bind_interface_name: str = DEFAULT_P2P_BIND_INTERFACE_NAME,
     close_upnp_on_exit: bool = False,
+    vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> None:
     """Persists the workspace live-test P2P bind and UPnP policy."""
 
     spec = LiveNetworkProfileSpec(
         p2p_bind_interface_name=p2p_bind_interface_name,
         close_upnp_on_exit=close_upnp_on_exit,
+        vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )
     apply_live_network_profile(config_dir, spec)
 
@@ -162,7 +166,11 @@ def apply_live_network_profile(config_dir: Path, spec: LiveNetworkProfileSpec) -
     text = read_ini_text(preferences_path)
     text = upsert_ini_section_value(text, "eMule", "BindInterface", interface_name)
     text = upsert_ini_section_value(text, "eMule", "BindAddr", "")
-    text = upsert_ini_section_value(text, "eMule", "BlockNetworkWhenBindUnavailableAtStartup", "1")
+    text = remove_ini_section_value(text, "eMule", "BlockNetworkWhenBindUnavailableAtStartup")
+    text = remove_ini_section_value(text, "eMule", "ExitOnBindInterfaceLoss")
+    guard_cidrs = spec.vpn_guard_allowed_public_ip_cidrs.strip()
+    text = upsert_ini_section_value(text, "eMule", "VpnGuardMode", "Block" if guard_cidrs else "Off")
+    text = upsert_ini_section_value(text, "eMule", "VpnGuardAllowedPublicIpCidrs", guard_cidrs)
     text = upsert_ini_section_value(text, "UPnP", "EnableUPnP", "1")
     text = patch_ini_value(text, "CloseUPnPOnExit", "1" if spec.close_upnp_on_exit else "0")
     write_utf16_ini_text(preferences_path, text)

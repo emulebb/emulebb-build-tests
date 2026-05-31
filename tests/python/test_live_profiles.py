@@ -66,7 +66,9 @@ def test_build_profile_base_creates_fresh_isolated_profile(tmp_path: Path) -> No
     assert "BindInterface=hide.me" in emule_section
     assert "BindAddr=" in emule_section
     assert "BindAddr=hide.me" not in emule_section
-    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in emule_section
+    assert "BlockNetworkWhenBindUnavailableAtStartup" not in emule_section
+    assert "VpnGuardMode=Off" in emule_section
+    assert "VpnGuardAllowedPublicIpCidrs=" in emule_section
     assert "EnableUPnP=1" in upnp_section
     assert (config_dir / "preferences.dat").read_bytes() != b"prefs"
     user_hash = read_preferences_dat_user_hash(config_dir / "preferences.dat")
@@ -137,7 +139,10 @@ def test_apply_live_network_profile_sets_bind_interface_and_upnp(tmp_path: Path)
         "[eMule]\nBindAddr=127.0.0.1\n[WebServer]\nBindAddr=127.0.0.1\n[UPnP]\nEnableUPnP=0\n",
     )
 
-    live_profiles.apply_live_network_profile(config_dir, live_profiles.LiveNetworkProfileSpec())
+    live_profiles.apply_live_network_profile(
+        config_dir,
+        live_profiles.LiveNetworkProfileSpec(vpn_guard_allowed_public_ip_cidrs="8.8.8.8/32"),
+    )
 
     text = live_profiles.read_ini_text(preferences_path)
     emule_section = section_text(text, "eMule")
@@ -146,7 +151,9 @@ def test_apply_live_network_profile_sets_bind_interface_and_upnp(tmp_path: Path)
     assert "BindInterface=hide.me" in emule_section
     assert "BindAddr=hide.me" not in emule_section
     assert "BindAddr=" in emule_section
-    assert "BlockNetworkWhenBindUnavailableAtStartup=1" in emule_section
+    assert "BlockNetworkWhenBindUnavailableAtStartup" not in emule_section
+    assert "VpnGuardMode=Block" in emule_section
+    assert "VpnGuardAllowedPublicIpCidrs=8.8.8.8/32" in emule_section
     assert "EnableUPnP=1" in upnp_section
     assert "CloseUPnPOnExit=0" in text
     assert "127.0.0.1" not in emule_section

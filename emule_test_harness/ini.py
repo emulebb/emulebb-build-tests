@@ -98,3 +98,25 @@ def upsert_ini_section_value(text: str, section: str, key: str, value: str) -> s
         output.append(f"{key}={value}")
 
     return "\r\n".join(output) + "\r\n"
+
+
+def remove_ini_section_value(text: str, section: str, key: str) -> str:
+    """Removes one key/value pair from a simple INI section if present."""
+
+    section_header = f"[{section}]"
+    output: list[str] = []
+    inside_target = False
+
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            inside_target = stripped.lower() == section_header.lower()
+            output.append(raw_line)
+            continue
+
+        if inside_target and raw_line.partition("=")[0].strip().lower() == key.lower():
+            continue
+
+        output.append(raw_line)
+
+    return "\r\n".join(output) + "\r\n"
