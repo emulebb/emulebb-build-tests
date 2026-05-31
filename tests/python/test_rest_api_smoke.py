@@ -1678,7 +1678,7 @@ def test_openapi_response_dtos_expose_runtime_required_fields() -> None:
             "acceptingMutations",
             "shutdownInProgress",
         ],
-        "Status": ["lifecycle", "stats", "servers", "kad", "sharedStartupCache", "runtimeDiagnostics"],
+        "Status": ["lifecycle", "stats", "servers", "kad", "network", "sharedStartupCache", "runtimeDiagnostics"],
         "Stats": [
             "connected",
             "downloadSpeedKiBps",
@@ -2722,9 +2722,10 @@ def test_openapi_response_dtos_require_core_implementation_fields() -> None:
         "uploads",
         "uploadQueue",
         "servers",
-        "kad",
-        "logs",
-    }
+            "kad",
+            "network",
+            "logs",
+        }
     assert set(transfer_details_data["required"]) == {"transfer", "parts", "sources"}
     assert {
         "searchId",
