@@ -1614,12 +1614,21 @@ def parse_latest_hide_me_remote_host_ipv4(logs_dir: Path) -> dict[str, object]:
     return {"found": False, "reason": f"no hide.me Remote host resolved IPv4 found under {logs_dir}"}
 
 
+def read_log_text(path: Path) -> str:
+    """Reads UTF-8 or UTF-16 log text with replacement for damaged bytes."""
+
+    data = path.read_bytes()
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        return data.decode("utf-16", errors="replace")
+    return data.decode("utf-8", errors="replace")
+
+
 def parse_latest_emulebb_public_probe_ipv4(artifacts_dir: Path) -> dict[str, object]:
     """Returns the newest eMuleBB startup public IPv4 probe line from child artifacts."""
 
     for path in newest_files([item for item in artifacts_dir.rglob("emulebb-verbose.log") if item.is_file()]):
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = read_log_text(path).splitlines()
         except OSError:
             continue
         for line_number, line in reversed(list(enumerate(lines, start=1))):

@@ -194,6 +194,21 @@ def test_parse_latest_emulebb_public_probe_ipv4(tmp_path: Path) -> None:
     assert result["ip"] == "198.51.100.9"
 
 
+def test_parse_latest_emulebb_public_probe_ipv4_reads_utf16_logs(tmp_path: Path) -> None:
+    log_dir = tmp_path / "suite" / "profile" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "emulebb-verbose.log").write_text(
+        "VPN public IPv4 probe: provider=http://api.ipify.org/ "
+        "bindInterface=hide.me localBind=10.8.0.4 ifIndex=11 publicIp=198.51.100.10\n",
+        encoding="utf-16",
+    )
+
+    result = live_e2e_suite.parse_latest_emulebb_public_probe_ipv4(tmp_path)
+
+    assert result["found"] is True
+    assert result["ip"] == "198.51.100.10"
+
+
 def test_vpn_public_ip_check_matches_hide_me_and_emulebb_logs(tmp_path: Path) -> None:
     appdata = tmp_path / "appdata"
     logs = appdata / "Hide.me" / "Logs"
