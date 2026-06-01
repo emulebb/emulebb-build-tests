@@ -34,6 +34,9 @@ def test_headless_cases_cover_strict_app_command_line_failures(tmp_path: Path) -
         "-c",
         "relative\\profile",
     )
+    assert next(case for case in cases if case.name == "relative-profile-rejected").stderr_contains == (
+        "The -c option requires a canonical absolute eMuleBB base directory",
+    )
 
 
 def test_run_case_fails_on_missing_expected_output(tmp_path: Path, monkeypatch) -> None:

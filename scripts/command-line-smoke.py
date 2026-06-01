@@ -123,7 +123,7 @@ def build_headless_cases(artifacts_dir: Path) -> tuple[CommandLineCase, ...]:
             name="relative-profile-rejected",
             arguments=("-c", "relative\\profile"),
             expected_return_code=2,
-            stderr_contains=("The -c option requires a canonical absolute eMule base directory",),
+            stderr_contains=("The -c option requires a canonical absolute eMuleBB base directory",),
         ),
         CommandLineCase(
             name="partial-cert-generation-rejected",
