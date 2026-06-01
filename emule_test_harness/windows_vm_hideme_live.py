@@ -82,6 +82,26 @@ def http_json(
     return json.loads(raw.decode("utf-8-sig")) if raw else {}
 
 
+def retry_http_json(
+    description: str,
+    attempts: int,
+    base_url: str,
+    path: str,
+    **kwargs: Any,
+) -> Any:
+    """Calls REST with backoff for eMule's single-client web worker."""
+
+    last_error: str | None = None
+    for attempt in range(attempts):
+        try:
+            return http_json(base_url, path, **kwargs)
+        except (OSError, TimeoutError, urllib.error.URLError, RuntimeError) as exc:
+            last_error = str(exc)
+            time.sleep(min(1.0 + attempt, 5.0))
+    suffix = f": {last_error}" if last_error else ""
+    raise RuntimeError(f"{description} failed after {attempts} attempts{suffix}")
+
+
 def wait_until(description: str, timeout_seconds: float, callback):
     deadline = time.monotonic() + timeout_seconds
     last_error: str | None = None
@@ -370,14 +390,14 @@ def command_wait_rest(args: argparse.Namespace) -> int:
     result = wait_until(
         "eMuleBB REST API",
         args.timeout_seconds,
-        lambda: http_json(args.base_url, "/api/v1/status", api_key=args.api_key),
+        lambda: retry_http_json("REST status", 3, args.base_url, "/api/v1/status", api_key=args.api_key),
     )
     return emit({"name": "rest-ready", "status": "passed", "details": compact_status(result)})
 
 
 def command_assert_vpn_binding(args: argparse.Namespace) -> int:
     def probe():
-        payload = http_json(args.base_url, "/api/v1/status", api_key=args.api_key)
+        payload = retry_http_json("REST status", 3, args.base_url, "/api/v1/status", api_key=args.api_key)
         data = api_data(payload)
         network = data.get("network") if isinstance(data, dict) and isinstance(data.get("network"), dict) else {}
         text = json.dumps(network, sort_keys=True).casefold()
@@ -389,7 +409,9 @@ def command_assert_vpn_binding(args: argparse.Namespace) -> int:
 
 
 def command_import_server_met(args: argparse.Namespace) -> int:
-    response = http_json(
+    response = retry_http_json(
+        "server.met import",
+        3,
         args.base_url,
         "/api/v1/servers/operations/import-met-url",
         api_key=args.api_key,
@@ -397,12 +419,13 @@ def command_import_server_met(args: argparse.Namespace) -> int:
         body={"url": args.server_met_url},
         timeout_seconds=args.timeout_seconds,
     )
-    rows = api_rows(http_json(args.base_url, "/api/v1/servers", api_key=args.api_key), "servers")
+    time.sleep(2.0)
+    rows = api_rows(retry_http_json("server list", 6, args.base_url, "/api/v1/servers", api_key=args.api_key), "servers")
     return emit({"name": "server-met-import", "status": "passed", "response": response, "serverCount": len(rows)})
 
 
 def command_connect_live_server(args: argparse.Namespace) -> int:
-    rows = api_rows(http_json(args.base_url, "/api/v1/servers", api_key=args.api_key), "servers")
+    rows = api_rows(retry_http_json("server list", 6, args.base_url, "/api/v1/servers", api_key=args.api_key), "servers")
     candidates = [
         row for row in rows
         if row.get("address") and row.get("port")
@@ -415,7 +438,9 @@ def command_connect_live_server(args: argparse.Namespace) -> int:
         endpoint = f"{candidate['address']}:{candidate['port']}"
         attempt: dict[str, Any] = {"server": {"name": candidate.get("name"), "address": candidate.get("address"), "port": candidate.get("port")}}
         try:
-            attempt["connect"] = http_json(
+            attempt["connect"] = retry_http_json(
+                "server connect",
+                4,
                 args.base_url,
                 f"/api/v1/servers/{endpoint}/operations/connect",
                 api_key=args.api_key,
@@ -425,7 +450,9 @@ def command_connect_live_server(args: argparse.Namespace) -> int:
             )
             settle_deadline = time.monotonic() + min(45.0, max(5.0, deadline - time.monotonic()))
             while time.monotonic() < settle_deadline:
-                status = status_servers(http_json(args.base_url, "/api/v1/status", api_key=args.api_key))
+                status = status_servers(
+                    retry_http_json("server status", 4, args.base_url, "/api/v1/status", api_key=args.api_key)
+                )
                 attempt["lastStatus"] = status
                 if status.get("connected"):
                     return emit({"name": "server-connect", "status": "passed", "selected": attempt["server"], "attempts": attempts + [attempt]})
@@ -457,7 +484,9 @@ def command_live_search(args: argparse.Namespace) -> int:
     searches: list[dict[str, Any]] = []
     selected_transfer: dict[str, Any] | None = None
     for query in args.queries:
-        created = http_json(
+        created = retry_http_json(
+            "search create",
+            4,
             args.base_url,
             "/api/v1/searches",
             api_key=args.api_key,
@@ -471,14 +500,22 @@ def command_live_search(args: argparse.Namespace) -> int:
         observations: list[dict[str, Any]] = []
         deadline = time.monotonic() + args.timeout_seconds
         while time.monotonic() < deadline:
-            payload = http_json(args.base_url, f"/api/v1/searches/{search_id}", api_key=args.api_key)
+            payload = retry_http_json(
+                "search results",
+                4,
+                args.base_url,
+                f"/api/v1/searches/{search_id}",
+                api_key=args.api_key,
+            )
             data = api_data(payload)
             results = data.get("results") if isinstance(data, dict) and isinstance(data.get("results"), list) else []
             observation = {"status": data.get("status") if isinstance(data, dict) else None, "resultCount": len(results)}
             observations.append(observation)
             safe = next((row for row in results if isinstance(row, dict) and is_safe_download_candidate(row)), None)
             if safe and args.trigger_download and selected_transfer is None:
-                download = http_json(
+                download = retry_http_json(
+                    "search result download",
+                    4,
                     args.base_url,
                     f"/api/v1/searches/{search_id}/results/{safe['hash']}/operations/download",
                     api_key=args.api_key,
@@ -504,7 +541,10 @@ def command_live_search(args: argparse.Namespace) -> int:
     ok = bool(searches) and any(any(obs.get("resultCount", 0) > 0 for obs in row["observations"]) for row in searches)
     if args.trigger_download:
         ok = ok and selected_transfer is not None
-    return emit({"name": "live-search", "status": "passed" if ok else "failed", "searches": searches, "triggeredTransfer": selected_transfer})
+    result = {"name": "live-search", "status": "passed" if ok else "failed", "searches": searches, "triggeredTransfer": selected_transfer}
+    if not ok:
+        raise RuntimeError(json.dumps(result, sort_keys=True))
+    return emit(result)
 
 
 def command_stop_runtime(args: argparse.Namespace) -> int:
