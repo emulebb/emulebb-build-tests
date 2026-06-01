@@ -245,14 +245,13 @@ def launch_app(
     requires_interactive_ui: bool = False,
     extra_args: list[str] | tuple[str, ...] = (),
 ) -> Application:
-    """Starts the real app with the isolated `-c` override and startup profiling enabled."""
+    """Starts the real app with the isolated `-c` override."""
 
     if minimized_to_tray and requires_interactive_ui:
         raise ValueError("Interactive UI launches must not request minimized-to-tray startup.")
     require_pywinauto()
     if minimized_to_tray:
         apply_minimized_to_tray_startup(profile_base / "config")
-    os.environ["EMULEBB_STARTUP_PROFILE"] = "1"
     command_line = subprocess.list2cmdline(
         [str(app_exe), "-ignoreinstances", "-c", str(profile_base), *extra_args]
     )
