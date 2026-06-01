@@ -33,3 +33,25 @@ def test_runtime_preferences_ini_writers_stay_in_shared_profile_helpers() -> Non
                     offenders.append(f"{relative_path}: {pattern.pattern}")
 
     assert offenders == []
+
+
+def test_windows_vm_guest_helpers_stay_shared() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    forbidden_patterns = (
+        re.compile(r"def api_rows\s*\("),
+        re.compile(r"def api_data\s*\("),
+        re.compile(r"def http_json\s*\("),
+        re.compile(r"def wait_until\s*\("),
+        re.compile(r"def repair_firewall\s*\("),
+        re.compile(r"def start_visible_app\s*\("),
+        re.compile(r"def run\s*\("),
+    )
+    offenders: list[str] = []
+
+    for source_path in sorted((repo_root / "emule_test_harness").glob("windows_vm_*.py")):
+        text = source_path.read_text(encoding="utf-8")
+        for pattern in forbidden_patterns:
+            if pattern.search(text):
+                offenders.append(f"{source_path.relative_to(repo_root).as_posix()}: {pattern.pattern}")
+
+    assert offenders == []

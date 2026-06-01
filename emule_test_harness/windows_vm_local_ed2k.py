@@ -19,61 +19,32 @@ from typing import Any
 
 try:
     from emule_test_harness.vm_guest_profiles import (
+        api_data,
+        api_rows,
+        emit,
+        http_json,
         local_ed2k_preferences_text as preferences_text,
+        repair_firewall,
+        retry_http_json as _retry_http_json,
+        run,
+        start_visible_app,
+        wait_until,
         write_preferences_ini,
     )
 except ModuleNotFoundError:
-    from vm_guest_profiles import local_ed2k_preferences_text as preferences_text, write_preferences_ini
-
-
-def emit(payload: dict[str, Any]) -> int:
-    """Writes one JSON object for the host shim."""
-
-    print(json.dumps(payload, sort_keys=True))
-    return 0
-
-
-def run(command: list[str], *, timeout_seconds: float = 60.0) -> None:
-    """Runs one command and raises with useful output on failure."""
-
-    completed = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout_seconds,
-        check=False,
+    from vm_guest_profiles import (
+        api_data,
+        api_rows,
+        emit,
+        http_json,
+        local_ed2k_preferences_text as preferences_text,
+        repair_firewall,
+        retry_http_json as _retry_http_json,
+        run,
+        start_visible_app,
+        wait_until,
+        write_preferences_ini,
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        raise RuntimeError(f"{command[0]} failed with exit code {completed.returncode}: {detail}")
-
-
-def api_rows(payload: Any, *candidate_keys: str) -> list[dict[str, Any]]:
-    """Returns REST rows from either a raw list or a wrapped API object."""
-
-    data = api_data(payload)
-    if isinstance(data, list):
-        rows = data
-    elif isinstance(data, dict):
-        rows = None
-        for key in (*candidate_keys, "items"):
-            value = data.get(key)
-            if isinstance(value, list):
-                rows = value
-                break
-        rows = rows or []
-    else:
-        rows = []
-    return [row for row in rows if isinstance(row, dict)]
-
-
-def api_data(payload: Any) -> Any:
-    """Unwraps eMuleBB REST envelopes while keeping older raw test shapes valid."""
-
-    if isinstance(payload, dict) and "data" in payload:
-        return payload["data"]
-    return payload
 
 
 def status_servers(payload: Any) -> dict[str, Any]:
@@ -107,6 +78,12 @@ def read_server_status(base_url: str, api_key: str) -> dict[str, Any]:
             api_key=api_key,
         )
     )
+
+
+def retry_http_json(description: str, attempts: int, base_url: str, path: str, **kwargs: Any) -> Any:
+    """Retries REST through the runner-level request function for tests and live guest use."""
+
+    return _retry_http_json(description, attempts, base_url, path, request_func=http_json, **kwargs)
 
 
 def guest_ipv4() -> str:
@@ -158,27 +135,6 @@ def ed2k_link_with_source(link: str, *, source_ip: str, source_port: int) -> str
     return f"{link}|sources,{source_ip}:{source_port}|/"
 
 
-def repair_firewall(script_path: Path, program_path: Path, result_path: Path) -> dict[str, Any]:
-    """Runs the packaged firewall repair script and returns its result JSON."""
-
-    run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script_path),
-            "-ProgramPath",
-            str(program_path),
-            "-ResultPath",
-            str(result_path),
-        ],
-        timeout_seconds=60.0,
-    )
-    return json.loads(result_path.read_text(encoding="utf-8-sig"))
-
-
 def netsh_delete_rule(name: str) -> None:
     subprocess.run(
         ["netsh.exe", "advfirewall", "firewall", "delete", "rule", f"name={name}"],
@@ -206,88 +162,6 @@ def netsh_allow_program(name: str, program_path: Path, protocol: str) -> None:
         ],
         timeout_seconds=30.0,
     )
-
-
-def start_visible_app(exe_path: Path, profile_dir: Path, *, task_name: str, username: str, password: str) -> None:
-    """Starts eMuleBB in the interactive user session through Task Scheduler."""
-
-    subprocess.run(["schtasks.exe", "/Delete", "/TN", task_name, "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    command = f'"{exe_path}" -ignoreinstances -c "{profile_dir}"'
-    start_time = time.strftime("%H:%M", time.localtime(time.time() + 60))
-    run(
-        [
-            "schtasks.exe",
-            "/Create",
-            "/TN",
-            task_name,
-            "/SC",
-            "ONCE",
-            "/ST",
-            start_time,
-            "/TR",
-            command,
-            "/RU",
-            username,
-            "/RP",
-            password,
-            "/RL",
-            "HIGHEST",
-            "/IT",
-            "/F",
-        ],
-        timeout_seconds=30.0,
-    )
-    run(["schtasks.exe", "/Run", "/TN", task_name], timeout_seconds=30.0)
-
-
-def http_json(
-    base_url: str,
-    path: str,
-    *,
-    api_key: str,
-    method: str = "GET",
-    body: dict[str, Any] | None = None,
-    timeout_seconds: float = 30.0,
-) -> Any:
-    data = None
-    headers = {"X-API-Key": api_key}
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(base_url + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-        raw = response.read()
-    return json.loads(raw.decode("utf-8-sig")) if raw else {}
-
-
-def retry_http_json(description: str, attempts: int, *args: Any, **kwargs: Any) -> Any:
-    """Retries an idempotent REST call across transient listener resets."""
-
-    errors: list[str] = []
-    for index in range(1, attempts + 1):
-        try:
-            return http_json(*args, **kwargs)
-        except (ConnectionResetError, OSError, TimeoutError, urllib.error.URLError) as exc:
-            errors.append(f"attempt {index}: {type(exc).__name__}: {exc}")
-            if index == attempts:
-                break
-            time.sleep(1.0)
-    raise RuntimeError(f"{description} failed after {attempts} attempts: {errors[-3:]}")
-
-
-def wait_until(description: str, timeout_seconds: float, callback):
-    deadline = time.monotonic() + timeout_seconds
-    last_error: str | None = None
-    while time.monotonic() < deadline:
-        try:
-            result = callback()
-            if result:
-                return result
-        except (OSError, TimeoutError, urllib.error.URLError, RuntimeError) as exc:
-            last_error = str(exc)
-        time.sleep(1.0)
-    suffix = f": {last_error}" if last_error else ""
-    raise RuntimeError(f"Timed out waiting for {description}{suffix}")
 
 
 def command_prepare_client(args: argparse.Namespace) -> int:
