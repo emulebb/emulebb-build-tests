@@ -44,29 +44,61 @@ def run(command: list[str], *, timeout_seconds: float = 60.0) -> None:
 def api_rows(payload: Any, *candidate_keys: str) -> list[dict[str, Any]]:
     """Returns REST rows from either a raw list or a wrapped API object."""
 
-    if isinstance(payload, list):
-        rows = payload
-    elif isinstance(payload, dict):
+    data = api_data(payload)
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
         rows = None
-        for key in candidate_keys:
-            value = payload.get(key)
+        for key in (*candidate_keys, "items"):
+            value = data.get(key)
             if isinstance(value, list):
                 rows = value
                 break
-        if rows is None and isinstance(payload.get("data"), list):
-            rows = payload["data"]
-        elif rows is None and isinstance(payload.get("data"), dict):
-            data = payload["data"]
-            for key in candidate_keys:
-                value = data.get(key)
-                if isinstance(value, list):
-                    rows = value
-                    break
-        if rows is None:
-            rows = []
+        rows = rows or []
     else:
         rows = []
     return [row for row in rows if isinstance(row, dict)]
+
+
+def api_data(payload: Any) -> Any:
+    """Unwraps eMuleBB REST envelopes while keeping older raw test shapes valid."""
+
+    if isinstance(payload, dict) and "data" in payload:
+        return payload["data"]
+    return payload
+
+
+def status_servers(payload: Any) -> dict[str, Any]:
+    """Returns the server status object from /api/v1/status."""
+
+    data = api_data(payload)
+    if not isinstance(data, dict):
+        return {}
+    servers = data.get("servers")
+    return servers if isinstance(servers, dict) else {}
+
+
+def matching_server_row(rows: list[dict[str, Any]], address: str, port: int) -> dict[str, Any] | None:
+    """Finds a REST server row by endpoint."""
+
+    for row in rows:
+        if str(row.get("address")) == address and int(row.get("port", 0)) == port:
+            return row
+    return None
+
+
+def read_server_status(base_url: str, api_key: str) -> dict[str, Any]:
+    """Reads the server status snapshot with transient REST retry."""
+
+    return status_servers(
+        retry_http_json(
+            "server status",
+            3,
+            base_url,
+            "/api/v1/status",
+            api_key=api_key,
+        )
+    )
 
 
 def guest_ipv4() -> str:
@@ -106,6 +138,16 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def ed2k_link_with_source(link: str, *, source_ip: str, source_port: int) -> str:
+    """Adds a deterministic local source hint to an ED2K file link."""
+
+    if not source_ip or source_port <= 0 or "|sources," in link:
+        return link
+    if not link.endswith("|/"):
+        raise ValueError(f"Unsupported ED2K file link terminator: {link!r}")
+    return f"{link}|sources,{source_ip}:{source_port}|/"
 
 
 def preferences_text(
@@ -260,6 +302,21 @@ def http_json(
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         raw = response.read()
     return json.loads(raw.decode("utf-8-sig")) if raw else {}
+
+
+def retry_http_json(description: str, attempts: int, *args: Any, **kwargs: Any) -> Any:
+    """Retries an idempotent REST call across transient listener resets."""
+
+    errors: list[str] = []
+    for index in range(1, attempts + 1):
+        try:
+            return http_json(*args, **kwargs)
+        except (ConnectionResetError, OSError, TimeoutError, urllib.error.URLError) as exc:
+            errors.append(f"attempt {index}: {type(exc).__name__}: {exc}")
+            if index == attempts:
+                break
+            time.sleep(1.0)
+    raise RuntimeError(f"{description} failed after {attempts} attempts: {errors[-3:]}")
 
 
 def wait_until(description: str, timeout_seconds: float, callback):
@@ -423,40 +480,118 @@ def command_wait_rest(args: argparse.Namespace) -> int:
 def command_add_connect_server(args: argparse.Namespace) -> int:
     server = {"address": args.server_address, "port": args.server_port, "name": "emulebb-vm-local-ed2k", "connect": False}
     rows = api_rows(http_json(args.base_url, "/api/v1/servers", api_key=args.api_key), "servers")
-    if not any(str(row.get("address")) == args.server_address and int(row.get("port", 0)) == args.server_port for row in rows):
+    if matching_server_row(rows, args.server_address, args.server_port) is None:
         http_json(args.base_url, "/api/v1/servers", api_key=args.api_key, method="POST", body=server)
-    try:
-        connected = http_json(
-            args.base_url,
-            f"/api/v1/servers/{args.server_address}:{args.server_port}/operations/connect",
-            api_key=args.api_key,
-            method="POST",
-            body={},
+
+    row = wait_until(
+        "local ED2K server row",
+        30.0,
+        lambda: matching_server_row(
+            api_rows(http_json(args.base_url, "/api/v1/servers", api_key=args.api_key), "servers"),
+            args.server_address,
+            args.server_port,
+        ),
+    )
+
+    attempts: list[dict[str, Any]] = []
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        status = read_server_status(args.base_url, args.api_key)
+        if status.get("connected") or status.get("connecting"):
+            return emit(
+                {
+                    "name": "server-connect",
+                    "status": "passed",
+                    "details": {"server": row, "attempts": attempts, "serverStatus": status},
+                }
+            )
+        attempt: dict[str, Any] = {"ordinal": len(attempts) + 1}
+        try:
+            attempt["response"] = http_json(
+                args.base_url,
+                f"/api/v1/servers/{args.server_address}:{args.server_port}/operations/connect",
+                api_key=args.api_key,
+                method="POST",
+                body={},
+            )
+        except (ConnectionResetError, OSError, TimeoutError, urllib.error.URLError) as exc:
+            attempt["warning"] = f"connect request reset before response: {exc}"
+        attempts.append(attempt)
+        status = read_server_status(args.base_url, args.api_key)
+        if status.get("connected") or status.get("connecting"):
+            return emit(
+                {
+                    "name": "server-connect",
+                    "status": "passed",
+                    "details": {"server": row, "attempts": attempts, "serverStatus": status},
+                }
+            )
+        time.sleep(1.0)
+    raise RuntimeError(
+        "Timed out starting ED2K server connection: "
+        + json.dumps(
+            {
+                "server": row,
+                "attempts": attempts[-5:],
+                "serverStatus": read_server_status(args.base_url, args.api_key),
+            },
+            sort_keys=True,
         )
-    except (ConnectionResetError, OSError, TimeoutError, urllib.error.URLError) as exc:
-        connected = {"warning": f"connect request reset before response: {exc}"}
-    return emit({"name": "server-connect", "status": "passed", "details": connected})
+    )
 
 
 def command_wait_server_connected(args: argparse.Namespace) -> int:
     result = wait_until(
         "ED2K server connection",
         args.timeout_seconds,
-        lambda: http_json(args.base_url, "/api/v1/servers/status", api_key=args.api_key).get("connected"),
+        lambda: status_servers(http_json(args.base_url, "/api/v1/status", api_key=args.api_key)).get("connected"),
     )
     return emit({"name": "server-connected", "status": "passed", "details": {"connected": bool(result)}})
 
 
 def command_shared_link(args: argparse.Namespace) -> int:
-    http_json(args.base_url, "/api/v1/shared-files", api_key=args.api_key, method="POST", body={"path": args.path})
-    http_json(args.base_url, "/api/v1/shared-files/operations/reload", api_key=args.api_key, method="POST", body={})
+    retry_http_json(
+        "shared directory add",
+        3,
+        args.base_url,
+        "/api/v1/shared-files",
+        api_key=args.api_key,
+        method="POST",
+        body={"path": args.path},
+    )
+    retry_http_json(
+        "shared directory reload",
+        3,
+        args.base_url,
+        "/api/v1/shared-files/operations/reload",
+        api_key=args.api_key,
+        method="POST",
+        body={},
+    )
 
     def resolve():
-        rows = api_rows(http_json(args.base_url, "/api/v1/shared-files", api_key=args.api_key), "sharedFiles", "shared_files")
+        rows = api_rows(
+            retry_http_json(
+                "shared files list",
+                3,
+                args.base_url,
+                "/api/v1/shared-files",
+                api_key=args.api_key,
+            ),
+            "sharedFiles",
+            "shared_files",
+        )
         for row in rows:
             if row.get("name") == args.name and row.get("hash"):
-                link_payload = http_json(args.base_url, f"/api/v1/shared-files/{row['hash']}/ed2k-link", api_key=args.api_key)
-                link = link_payload.get("link", "")
+                link_payload = retry_http_json(
+                    "shared ED2K link",
+                    3,
+                    args.base_url,
+                    f"/api/v1/shared-files/{row['hash']}/ed2k-link",
+                    api_key=args.api_key,
+                )
+                link_data = api_data(link_payload)
+                link = link_data.get("link", "") if isinstance(link_data, dict) else ""
                 if link.startswith("ed2k://|file|"):
                     return {"name": "shared-ed2k-link", "status": "passed", "hash": row["hash"], "link": link}
         return None
@@ -464,15 +599,50 @@ def command_shared_link(args: argparse.Namespace) -> int:
     return emit(wait_until(f"shared ED2K link for {args.name}", args.timeout_seconds, resolve))
 
 
+def command_wait_shared_stable(args: argparse.Namespace) -> int:
+    """Waits for shared-file hashing to settle before downloads use the source."""
+
+    def resolve():
+        status = api_data(
+            retry_http_json(
+                "shared status",
+                3,
+                args.base_url,
+                "/api/v1/status",
+                api_key=args.api_key,
+            )
+        )
+        if not isinstance(status, dict):
+            return None
+        diagnostics = status.get("runtimeDiagnostics")
+        startup_cache = status.get("sharedStartupCache")
+        if not isinstance(diagnostics, dict) or not isinstance(startup_cache, dict):
+            return None
+        if int(diagnostics.get("sharedHashingCount") or 0) != 0:
+            return None
+        if int(startup_cache.get("hashingCount") or 0) != 0:
+            return None
+        if bool(startup_cache.get("deferredHashingActive")):
+            return None
+        if int(diagnostics.get("sharedFileCount") or 0) < 1:
+            return None
+        return {"diagnostics": diagnostics, "sharedStartupCache": startup_cache}
+
+    result = wait_until("shared files stable", args.timeout_seconds, resolve)
+    time.sleep(args.settle_seconds)
+    return emit({"name": "shared-stable", "status": "passed", "details": result, "settleSeconds": args.settle_seconds})
+
+
 def command_add_transfer(args: argparse.Namespace) -> int:
+    link = ed2k_link_with_source(args.link, source_ip=args.source_address, source_port=args.source_port)
     result = http_json(
         args.base_url,
         "/api/v1/transfers",
         api_key=args.api_key,
         method="POST",
-        body={"link": args.link, "paused": False, "categoryId": 0},
+        body={"link": link, "paused": False, "categoryId": 0},
     )
-    return emit({"name": "transfer-add", "status": "passed", "details": result})
+    return emit({"name": "transfer-add", "status": "passed", "details": result, "sourceAnnotated": link != args.link})
 
 
 def command_wait_completed(args: argparse.Namespace) -> int:
@@ -545,10 +715,19 @@ def build_parser() -> argparse.ArgumentParser:
     shared_link.add_argument("--timeout-seconds", type=float, default=120.0)
     shared_link.set_defaults(func=command_shared_link)
 
+    shared_stable = subparsers.add_parser("wait-shared-stable")
+    shared_stable.add_argument("--base-url", required=True)
+    shared_stable.add_argument("--api-key", required=True)
+    shared_stable.add_argument("--timeout-seconds", type=float, default=120.0)
+    shared_stable.add_argument("--settle-seconds", type=float, default=10.0)
+    shared_stable.set_defaults(func=command_wait_shared_stable)
+
     add_transfer = subparsers.add_parser("add-transfer")
     add_transfer.add_argument("--base-url", required=True)
     add_transfer.add_argument("--api-key", required=True)
     add_transfer.add_argument("--link", required=True)
+    add_transfer.add_argument("--source-address", default="")
+    add_transfer.add_argument("--source-port", default=0, type=int)
     add_transfer.set_defaults(func=command_add_transfer)
 
     completed = subparsers.add_parser("wait-completed")

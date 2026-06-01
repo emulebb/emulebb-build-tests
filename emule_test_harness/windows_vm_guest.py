@@ -328,17 +328,30 @@ try {
     $results[$target.target].checks += $links[$target.target]
   }
 
+  foreach ($target in $targets) {
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'wait-shared-stable',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey,
+      '--settle-seconds', '10'
+    )
+  }
+
   $results['win10'].checks += Invoke-GuestPython $sessions['win10'] $pythons['win10'] $runners['win10'] @(
     'add-transfer',
     '--base-url', $results['win10'].restBaseUrl,
     '--api-key', $payload.apiKey,
-    '--link', $links['win11'].link
+    '--link', $links['win11'].link,
+    '--source-address', $results['win11'].guest.ipv4,
+    '--source-port', [string] $payload.win11.tcpPort
   )
   $results['win11'].checks += Invoke-GuestPython $sessions['win11'] $pythons['win11'] $runners['win11'] @(
     'add-transfer',
     '--base-url', $results['win11'].restBaseUrl,
     '--api-key', $payload.apiKey,
-    '--link', $links['win10'].link
+    '--link', $links['win10'].link,
+    '--source-address', $results['win10'].guest.ipv4,
+    '--source-port', [string] $payload.win10.tcpPort
   )
 
   $results['win10'].checks += Invoke-GuestPython $sessions['win10'] $pythons['win10'] $runners['win10'] @(
