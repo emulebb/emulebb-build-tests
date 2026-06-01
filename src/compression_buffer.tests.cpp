@@ -73,4 +73,21 @@ TEST_CASE("Compression buffer seam grows legacy-owned buffers without losing inf
 #endif
 }
 
+TEST_CASE("Compression buffer seam preserves bytes produced before an inflate retry grow")
+{
+#ifdef EMULEBB_TEST_HAVE_OWNED_BYTE_BUFFER_GROWTH
+	std::unique_ptr<unsigned char[]> buffer(new unsigned char[2]);
+	buffer[0] = 0xA1u;
+	buffer[1] = 0xB2u;
+
+	CHECK(TryGrowOwnedByteBufferAfterInflate(buffer, 12u, 10u, 4u));
+	REQUIRE(buffer != nullptr);
+	CHECK_EQ(buffer[0], static_cast<unsigned char>(0xA1u));
+	CHECK_EQ(buffer[1], static_cast<unsigned char>(0xB2u));
+	CHECK_FALSE(TryGrowOwnedByteBufferAfterInflate(buffer, 9u, 10u, 4u));
+#else
+	MESSAGE("Compression owned-buffer growth helper is not available in this workspace.");
+#endif
+}
+
 TEST_SUITE_END;
