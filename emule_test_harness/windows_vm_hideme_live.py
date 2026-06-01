@@ -137,6 +137,53 @@ def require_hide_me_connected(timeout_seconds: float) -> dict[str, Any]:
     return wait_until("hide.me tunnel adapter", timeout_seconds, probe)
 
 
+def guest_ipv4() -> str:
+    """Returns the guest LAN IPv4 address used for harness control traffic."""
+
+    script = (
+        "$rows = Get-NetIPConfiguration | "
+        "Where-Object { $_.NetAdapter.Status -eq 'Up' -and "
+        "(($_.NetAdapter.Name + ' ' + $_.InterfaceDescription) -notmatch 'hide\\.me') } | "
+        "ForEach-Object { $_.IPv4Address | ForEach-Object { $_.IPAddress } }; "
+        "$rows | ConvertTo-Json -Compress"
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode == 0 and completed.stdout.strip():
+        payload = json.loads(completed.stdout)
+        rows = payload if isinstance(payload, list) else [payload]
+        usable = sorted(
+            str(address)
+            for address in rows
+            if str(address) and not str(address).startswith("127.") and str(address) != "0.0.0.0"
+        )
+        if usable:
+            return usable[0]
+
+    candidates: set[str] = set()
+    for host in {socket.gethostname(), socket.getfqdn(), ""}:
+        try:
+            for family, _, _, _, sockaddr in socket.getaddrinfo(host, None, socket.AF_INET):
+                if family == socket.AF_INET and sockaddr:
+                    candidates.add(str(sockaddr[0]))
+        except OSError:
+            continue
+    usable = sorted(
+        address
+        for address in candidates
+        if not address.startswith("127.") and address != "0.0.0.0"
+    )
+    if not usable:
+        raise RuntimeError("No non-loopback LAN IPv4 address is available in the guest.")
+    return usable[0]
+
+
 def preferences_text(
     *,
     target: str,
@@ -145,6 +192,7 @@ def preferences_text(
     tcp_port: int,
     udp_port: int,
     rest_port: int,
+    rest_bind_addr: str,
     api_key: str,
 ) -> str:
     return "\n".join(
@@ -176,7 +224,7 @@ def preferences_text(
             "Enabled=1",
             f"ApiKey={api_key}",
             f"Port={rest_port}",
-            "BindAddr=127.0.0.1",
+            f"BindAddr={rest_bind_addr}",
             "UseHTTPS=0",
             "[UPnP]",
             "EnableUPnP=1",
@@ -272,6 +320,7 @@ def command_prepare_client(args: argparse.Namespace) -> int:
         raise RuntimeError(f"Package did not contain eMuleBB\\emulebb.exe: {args.package_zip}")
 
     vpn = require_hide_me_connected(args.vpn_timeout_seconds)
+    ip_address = guest_ipv4()
     (config_dir / "preferences.ini").write_text(
         preferences_text(
             target=args.target,
@@ -280,6 +329,7 @@ def command_prepare_client(args: argparse.Namespace) -> int:
             tcp_port=args.tcp_port,
             udp_port=args.udp_port,
             rest_port=args.rest_port,
+            rest_bind_addr=ip_address,
             api_key=args.api_key,
         ),
         encoding="utf-16",
@@ -300,14 +350,14 @@ def command_prepare_client(args: argparse.Namespace) -> int:
         "schema": "emulebb.windows-vm-hideme-live-target.v1",
         "target": args.target,
         "status": "prepared",
-        "guest": {"computerName": socket.gethostname()},
+        "guest": {"computerName": socket.gethostname(), "ipv4": ip_address},
         "vpn": vpn,
         "appExe": str(exe),
         "profile": str(profile),
         "configDir": str(config_dir),
         "incomingDir": str(incoming),
         "tempDir": str(temp),
-        "restBaseUrl": f"http://127.0.0.1:{args.rest_port}",
+        "restBaseUrl": f"http://{ip_address}:{args.rest_port}",
         "checks": [{"name": "firewall-repair", "status": "passed", "details": repair_result}],
         "errors": [],
         "artifactsDir": str(artifacts),

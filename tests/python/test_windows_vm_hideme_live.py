@@ -11,6 +11,7 @@ def test_preferences_bind_p2p_to_hideme_and_enable_vpn_guard(tmp_path: Path) -> 
         tcp_port=4662,
         udp_port=4672,
         rest_port=4711,
+        rest_bind_addr="192.0.2.50",
         api_key="key",
     )
 
@@ -20,6 +21,8 @@ def test_preferences_bind_p2p_to_hideme_and_enable_vpn_guard(tmp_path: Path) -> 
     assert "NetworkED2K=1" in text
     assert "NetworkKademlia=0" in text
     assert "ApiKey=key" in text
+    assert "BindAddr=192.0.2.50" in text
+    assert "BindAddr=127.0.0.1" not in text
 
 
 def test_safe_download_candidate_rejects_programs_and_weak_sources() -> None:
