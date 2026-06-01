@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -61,6 +62,11 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
     assert campaign["proofTier"] == "rc-blocking-quick"
+    assert {
+        "emulebb.flow.windows-vm.local-ed2k.transfer.v1",
+        "emulebb.flow.windows-vm.hideme.live-wire.v1",
+        "emulebb.flow.windows-vm.package-smoke.release.v1",
+    } <= scenario_ids
     installer_scenario = next(
         scenario
         for phase in campaign["phases"]
@@ -72,6 +78,12 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
         scenario_id
         for gate in campaign["releaseGates"]
         if gate["id"] == "installer-backed-controller-surface"
+        for scenario_id in gate["coveredBy"]
+    }
+    assert "emulebb.flow.windows-vm.hideme.live-wire.v1" in {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        if gate["id"] == "quick-rc-live-proof"
         for scenario_id in gate["coveredBy"]
     }
 
@@ -190,6 +202,41 @@ def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
     assert scenarios["emulebb.flow.certification.fast.matrix.v1"]["status"] == "inconclusive"
     assert scenarios["emulebb.flow.livewire.release-expanded.weak-path.v1"]["status"] == "passed"
     assert scenarios["emulebb.flow.package.core.x64.v1"]["status"] == "missing-evidence"
+
+
+def test_campaign_report_glob_selects_matching_vm_profile(tmp_path: Path) -> None:
+    tests_root = tmp_path / "tests"
+    state_root = tmp_path / "state"
+    manifest_root = tests_root / "manifests" / "release-campaigns"
+    manifest_root.mkdir(parents=True)
+    for path in (repo_root() / "manifests" / "release-campaigns").glob("*.json"):
+        (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    matching = state_root / "test-reports" / "windows-vm" / "20260602T010000Z" / "windows-vm-result.json"
+    newer_other = state_root / "test-reports" / "windows-vm" / "20260602T020000Z" / "windows-vm-result.json"
+    matching.parent.mkdir(parents=True)
+    newer_other.parent.mkdir(parents=True)
+    matching.write_text(json.dumps({"status": "passed", "profile": "package-smoke"}), encoding="utf-8")
+    newer_other.write_text(json.dumps({"status": "passed", "profile": "hideme-live-wire"}), encoding="utf-8")
+    os.utime(matching, (1000, 1000))
+    os.utime(newer_other, (2000, 2000))
+
+    report = release_campaigns.build_release_campaign_report(
+        release_campaigns.ReleaseCampaignPaths(
+            tests_repo_root=tests_root,
+            workspace_state_root=state_root,
+        ),
+        campaign_id="emulebb-0.7.3",
+        phase_id="packaging-provenance",
+    )
+
+    scenario = next(
+        scenario
+        for scenario in report["scenarios"]
+        if scenario["id"] == "emulebb.flow.windows-vm.package-smoke.release.v1"
+    )
+    assert scenario["status"] == "passed"
+    assert scenario["evidence"][0]["path"] == str(matching.resolve())
 
 
 def test_terminal_report_contains_phase_status_and_warning(tmp_path: Path) -> None:

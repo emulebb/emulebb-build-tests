@@ -322,11 +322,30 @@ def _resolve_evidence_path(base: Path, evidence: dict[str, Any]) -> Path | None:
         return path if path.exists() else None
     glob_pattern = evidence.get("glob")
     if isinstance(glob_pattern, str) and glob_pattern:
-        matches = [path for path in base.glob(glob_pattern) if path.exists()]
+        matches = sorted(
+            (path for path in base.glob(glob_pattern) if path.exists()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
         if not matches:
             return None
-        return max(matches, key=lambda path: path.stat().st_mtime).resolve()
+        if isinstance(evidence.get("matches"), dict):
+            matching_path = next((path for path in matches if _evidence_matches(path, evidence)), None)
+            if matching_path is not None:
+                return matching_path.resolve()
+        return matches[0].resolve()
     return None
+
+
+def _evidence_matches(path: Path, evidence: dict[str, Any]) -> bool:
+    matches = evidence.get("matches")
+    if not isinstance(matches, dict):
+        return True
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return all(_json_pointer(payload, str(pointer)) == expected for pointer, expected in matches.items())
 
 
 def _read_evidence_status(path: Path, evidence: dict[str, Any]) -> str:
