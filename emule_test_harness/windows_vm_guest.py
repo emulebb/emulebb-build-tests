@@ -42,14 +42,31 @@ try {
     function New-Check($name, $status, $details) {
       [pscustomobject]@{ name = $name; status = $status; details = $details }
     }
+    function ConvertTo-ProcessArgument([string] $argument) {
+      if ($argument -notmatch '[\s"]') {
+        return $argument
+      }
+      return '"' + ($argument -replace '"', '\"') + '"'
+    }
     function Invoke-SmokeProcess($name, [string[]] $command, $expectedCode, $timeoutSeconds) {
       $stdout = Join-Path $script:artifacts ($name + '.stdout.txt')
       $stderr = Join-Path $script:artifacts ($name + '.stderr.txt')
-      $process = Start-Process -FilePath $command[0] -ArgumentList $command[1..($command.Length - 1)] -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+      $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+      $startInfo.FileName = $command[0]
+      $startInfo.Arguments = (($command[1..($command.Length - 1)] | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' ')
+      $startInfo.UseShellExecute = $false
+      $startInfo.RedirectStandardOutput = $true
+      $startInfo.RedirectStandardError = $true
+      $startInfo.CreateNoWindow = $true
+      $process = [System.Diagnostics.Process]::Start($startInfo)
       if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        Set-Content -Path $stdout -Value $process.StandardOutput.ReadToEnd() -Encoding UTF8
+        Set-Content -Path $stderr -Value $process.StandardError.ReadToEnd() -Encoding UTF8
         return New-Check $name 'failed' @{ exitCode = $null; expectedExitCode = $expectedCode; timedOut = $true; stdout = $stdout; stderr = $stderr }
       }
+      Set-Content -Path $stdout -Value $process.StandardOutput.ReadToEnd() -Encoding UTF8
+      Set-Content -Path $stderr -Value $process.StandardError.ReadToEnd() -Encoding UTF8
       $status = if ($process.ExitCode -eq $expectedCode) { 'passed' } else { 'failed' }
       return New-Check $name $status @{ exitCode = $process.ExitCode; expectedExitCode = $expectedCode; stdout = $stdout; stderr = $stderr }
     }
