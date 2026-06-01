@@ -412,3 +412,213 @@ finally {
   }
 }
 """
+
+
+def hideme_live_wire_script() -> str:
+    """Returns a PowerShell Direct shim for the Python hide.me live-wire runner."""
+
+    return r"""
+$ErrorActionPreference = 'Stop'
+$secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+$credential = [pscredential]::new($payload.username, $secure)
+$targets = @($payload.win10, $payload.win11)
+$sessions = @{}
+$roots = @{}
+$results = @{}
+$pythons = @{}
+$runners = @{}
+$packageZips = @{}
+
+function Wait-GuestSession($vmName) {
+  $deadline = (Get-Date).AddMinutes(10)
+  do {
+    Start-Sleep -Seconds 3
+    try {
+      return New-PSSession -VMName $vmName -Credential $credential -ErrorAction Stop
+    } catch {
+      if ((Get-Date) -gt $deadline) { throw }
+    }
+  } while ($true)
+}
+
+function Restore-Guest($target) {
+  $vm = Get-VM -Name $target.vmName -ErrorAction Stop
+  if ($payload.vpnSwitchName) {
+    Connect-VMNetworkAdapter -VMName $target.vmName -SwitchName $payload.vpnSwitchName
+  }
+  if ($vm.State -ne 'Off') {
+    Stop-VM -Name $target.vmName -TurnOff -Force
+  }
+  $snapshot = Get-VMSnapshot -VMName $target.vmName -Name $payload.checkpointName -ErrorAction Stop
+  Restore-VMSnapshot -VMSnapshot $snapshot -Confirm:$false
+  if ($payload.vpnSwitchName) {
+    Connect-VMNetworkAdapter -VMName $target.vmName -SwitchName $payload.vpnSwitchName
+  }
+  Start-VM -Name $target.vmName
+  return Wait-GuestSession $target.vmName
+}
+
+function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments) {
+  $stdout = Invoke-Command -Session $session -ScriptBlock {
+    param($python, $runner, [string[]] $arguments)
+    $output = & $python $runner @arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw ('guest python failed with exit code ' + $LASTEXITCODE + ":`n" + (($output | ForEach-Object { $_.ToString() }) -join "`n"))
+    }
+    $output
+  } -ArgumentList $python, $runner, $arguments
+  return ($stdout -join "`n") | ConvertFrom-Json
+}
+
+function Ensure-GuestPython($session) {
+  return Invoke-Command -Session $session -ScriptBlock {
+    $candidates = @(
+      'C:\Python313\python.exe',
+      'C:\Python312\python.exe',
+      'C:\Program Files\Python313\python.exe',
+      'C:\Program Files\Python312\python.exe'
+    )
+    foreach ($candidate in $candidates) {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        & $candidate -m pip --version | Out-Null
+        return $candidate
+      }
+    }
+    $command = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($command) {
+      & $command.Source -m pip --version | Out-Null
+      return $command.Source
+    }
+    throw 'Python with pip is not installed in the guest. Re-run vm-lab prepare to install the guest baseline.'
+  }
+}
+
+function Start-HideMe($session) {
+  Invoke-Command -Session $session -ScriptBlock {
+    $ErrorActionPreference = 'Stop'
+    $serviceExe = 'C:\Program Files (x86)\hide.me VPN\hidemesvc.exe'
+    $appExe = 'C:\Program Files (x86)\hide.me VPN\Hide.me.exe'
+    if (-not (Test-Path -LiteralPath $serviceExe -PathType Leaf)) {
+      throw ('hide.me service executable is missing: ' + $serviceExe)
+    }
+    if (-not (Test-Path -LiteralPath $appExe -PathType Leaf)) {
+      throw ('hide.me app executable is missing: ' + $appExe)
+    }
+    if (-not (Get-Service -Name hmevpnsvc -ErrorAction SilentlyContinue)) {
+      sc.exe create hmevpnsvc binPath= $serviceExe start= auto DisplayName= 'hide.me VPN Service' depend= RasMan | Out-Null
+      sc.exe description hmevpnsvc 'Provides network services for hide.me VPN' | Out-Null
+    }
+    Start-Service -Name hmevpnsvc -ErrorAction SilentlyContinue
+    Get-Process -Name 'Hide.me' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    $task = 'eMuleBB Launch hide.me structured'
+    Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+    $action = New-ScheduledTaskAction -Execute $appExe
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+    $principal = New-ScheduledTaskPrincipal -UserId 'emulebbtest' -RunLevel Highest -LogonType Interactive
+    Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    Start-ScheduledTask -TaskName $task
+  } | Out-Null
+}
+
+try {
+  foreach ($target in $targets) {
+    $session = Restore-Guest $target
+    $sessions[$target.target] = $session
+    Start-HideMe $session
+    $root = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $target.target
+    $roots[$target.target] = $root
+    Invoke-Command -Session $session -ScriptBlock {
+      param($root)
+      if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+      New-Item -ItemType Directory -Force -Path $root | Out-Null
+    } -ArgumentList $root
+    $python = Ensure-GuestPython $session
+    $guestZip = Join-Path $root (Split-Path -Leaf $payload.packageZip)
+    $guestRunner = Join-Path $root 'windows_vm_hideme_live.py'
+    Copy-Item -ToSession $session -Path $payload.packageZip -Destination $guestZip
+    Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
+    $pythons[$target.target] = $python
+    $runners[$target.target] = $guestRunner
+    $packageZips[$target.target] = $guestZip
+  }
+
+  foreach ($target in $targets) {
+    $results[$target.target] = Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'prepare-client',
+      '--root', $roots[$target.target],
+      '--target', $target.target,
+      '--package-zip', $packageZips[$target.target],
+      '--username', $payload.username,
+      '--password', $payload.password,
+      '--tcp-port', [string] $target.tcpPort,
+      '--udp-port', [string] $target.udpPort,
+      '--rest-port', [string] $target.restPort,
+      '--api-key', $payload.apiKey
+    )
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'wait-rest',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey
+    )
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'assert-vpn-binding',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey
+    )
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'import-server-met',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey
+    )
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'connect-live-server',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey
+    )
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'live-search',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey,
+      '--trigger-download'
+    )
+    $results[$target.target].status = 'passed'
+  }
+
+  [pscustomobject]@{
+    schema = 'emulebb.windows-vm-hideme-live-wire-result.v1'
+    status = 'passed'
+    generatedAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    targets = $results
+  } | ConvertTo-Json -Depth 12
+}
+catch {
+  [pscustomobject]@{
+    schema = 'emulebb.windows-vm-hideme-live-wire-result.v1'
+    status = 'failed'
+    generatedAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    error = @{ type = $_.Exception.GetType().FullName; message = $_.Exception.Message }
+    targets = $results
+  } | ConvertTo-Json -Depth 12
+}
+finally {
+  foreach ($target in $targets) {
+    $session = $sessions[$target.target]
+    if ($session) {
+      try {
+        if (-not $payload.keepRunning) {
+          Invoke-GuestPython $session $pythons[$target.target] $runners[$target.target] @('stop-runtime') | Out-Null
+        }
+        $destination = Join-Path $payload.hostReportDir $target.target
+        New-Item -ItemType Directory -Force -Path $destination | Out-Null
+        Copy-Item -FromSession $session -Path (Join-Path $roots[$target.target] '*') -Destination $destination -Recurse -Force
+      } catch {
+      }
+      Remove-PSSession $session -ErrorAction SilentlyContinue
+    }
+    if (-not $payload.keepRunning) {
+      Stop-VM -Name $target.vmName -Force -ErrorAction SilentlyContinue
+      Restore-VMSnapshot -VMName $target.vmName -Name $payload.checkpointName -Confirm:$false -ErrorAction SilentlyContinue
+    }
+  }
+}
+"""
