@@ -236,7 +236,7 @@ def _extract_ini_key_uses(workspace_root: Path) -> dict[str, IniKeyUse]:
 
 
 def _load_inventory(workspace_root: Path) -> dict[str, object]:
-    inventory_path = workspace_root / "repos" / "emulebb-build-tests" / "manifests" / "preference-inventory.v1.json"
+    inventory_path = Path(__file__).resolve().parents[2] / "manifests" / "preference-inventory.v1.json"
     return json.loads(inventory_path.read_text(encoding="utf-8"))
 
 

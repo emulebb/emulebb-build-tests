@@ -138,8 +138,8 @@ def test_configure_search_ui_profile_uses_LAN_BIND_ADDR_and_p2p_interface(monkey
             calls.append(("rest", config_dir, app_exe, api_key, port, bind_addr))
 
         @staticmethod
-        def apply_p2p_bind_interface_override(config_dir, bind_interface):
-            calls.append(("p2p", config_dir, bind_interface))
+        def apply_p2p_bind_interface_override(config_dir, bind_interface, **kwargs):
+            calls.append(("p2p", config_dir, bind_interface, kwargs))
 
     monkeypatch.setattr(module, "rest_smoke", FakeRestSmoke)
 
@@ -154,7 +154,12 @@ def test_configure_search_ui_profile_uses_LAN_BIND_ADDR_and_p2p_interface(monkey
 
     assert calls == [
         ("rest", tmp_path / "config", tmp_path / "emulebb.exe", "api-key", 4711, "192.0.2.10"),
-        ("p2p", tmp_path / "config", "hide.me"),
+        (
+            "p2p",
+            tmp_path / "config",
+            "hide.me",
+            {"vpn_guard_enabled": False, "vpn_guard_allowed_public_ip_cidrs": ""},
+        ),
     ]
 
 

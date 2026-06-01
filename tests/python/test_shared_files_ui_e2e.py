@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def load_shared_files_module():
     """Loads the hyphenated shared-files script for pure helper tests."""
@@ -73,13 +75,14 @@ def test_resolve_lan_bind_host_prefers_local_ip(monkeypatch) -> None:
     assert module.resolve_lan_bind_host() == "192.0.2.10"
 
 
-def test_resolve_lan_bind_host_falls_back_to_loopback(monkeypatch) -> None:
+def test_resolve_lan_bind_host_requires_explicit_lan_bind(monkeypatch) -> None:
     module = load_shared_files_module()
 
     monkeypatch.delenv("X_LOCAL_IP", raising=False)
     monkeypatch.delenv("EMULEBB_TEST_LAN_IP_RESOLVED", raising=False)
 
-    assert module.resolve_lan_bind_host() == "127.0.0.1"
+    with pytest.raises(RuntimeError, match="LAN bind address"):
+        module.resolve_lan_bind_host()
 
 
 def test_vhd_monitored_scenario_requires_admin_monitor_root(tmp_path: Path) -> None:

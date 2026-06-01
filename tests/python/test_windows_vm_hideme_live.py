@@ -11,7 +11,7 @@ def test_preferences_bind_p2p_to_hideme_and_enable_vpn_guard(tmp_path: Path) -> 
         tcp_port=4662,
         udp_port=4672,
         rest_port=4711,
-        rest_bind_addr="192.0.2.50",
+        lan_bind_addr="192.0.2.50",
         api_key="key",
     )
 

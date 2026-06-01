@@ -15,6 +15,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness.ini import write_utf16_ini_text
+
 SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 SAFE_QUERIES = ("linux", "ubuntu", "debian", "fedora")
 MIN_SAFE_SOURCES = 2
@@ -212,7 +214,7 @@ def preferences_text(
     tcp_port: int,
     udp_port: int,
     rest_port: int,
-    rest_bind_addr: str,
+    lan_bind_addr: str,
     api_key: str,
 ) -> str:
     return "\n".join(
@@ -244,7 +246,7 @@ def preferences_text(
             "Enabled=1",
             f"ApiKey={api_key}",
             f"Port={rest_port}",
-            f"BindAddr={rest_bind_addr}",
+            f"BindAddr={lan_bind_addr}",
             "UseHTTPS=0",
             "[UPnP]",
             "EnableUPnP=1",
@@ -341,7 +343,8 @@ def command_prepare_client(args: argparse.Namespace) -> int:
 
     vpn = require_hide_me_connected(args.vpn_timeout_seconds)
     ip_address = guest_ipv4()
-    (config_dir / "preferences.ini").write_text(
+    write_utf16_ini_text(
+        config_dir / "preferences.ini",
         preferences_text(
             target=args.target,
             incoming_dir=incoming,
@@ -349,10 +352,9 @@ def command_prepare_client(args: argparse.Namespace) -> int:
             tcp_port=args.tcp_port,
             udp_port=args.udp_port,
             rest_port=args.rest_port,
-            rest_bind_addr=ip_address,
+            lan_bind_addr=ip_address,
             api_key=args.api_key,
         ),
-        encoding="utf-16",
     )
     repair_result = repair_firewall(
         app_root / "scripts" / "Repair-Firewall.ps1",

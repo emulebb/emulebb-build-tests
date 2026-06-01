@@ -56,7 +56,7 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
 
 def test_matrix_defaults_to_132_mib_fixture() -> None:
     module = load_suite_module()
-    args = module.parse_args([])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.fixture_size_bytes == 132 * 1024 * 1024
     assert args.transfer_completion_timeout_seconds == 1800.0
@@ -151,6 +151,8 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
             str(tmp_path / "harness.exe"),
             "--profile-seed-dir",
             str(tmp_path / "seed"),
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--p2p-bind-interface-address",
             "10.1.2.3",
         ]
@@ -170,7 +172,7 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
 def test_common_child_args_forward_explicit_p2p_interface(tmp_path: Path) -> None:
     module = load_suite_module()
     command: list[str] = []
-    args = module.parse_args(["--p2p-bind-interface-name", "Ethernet"])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10", "--p2p-bind-interface-name", "Ethernet"])
 
     module.add_common_child_args(command, args)
 
@@ -195,6 +197,8 @@ def test_amule_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: P
             str(tmp_path / "emulebb.exe"),
             "--profile-seed-dir",
             str(tmp_path / "seed"),
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--p2p-bind-interface-address",
             "10.1.2.3",
             "--amule-daemon-exe",
@@ -236,6 +240,8 @@ def test_three_client_swarm_scenario_forwards_harness_and_amule(monkeypatch, tmp
             str(tmp_path / "harness.exe"),
             "--profile-seed-dir",
             str(tmp_path / "seed"),
+            "--lan-bind-addr",
+            "192.0.2.10",
             "--p2p-bind-interface-address",
             "10.1.2.3",
             "--amule-daemon-exe",

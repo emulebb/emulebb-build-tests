@@ -23,7 +23,7 @@ def load_suite_module():
 
 def test_local_soak_defaults_are_bounded_and_local() -> None:
     module = load_suite_module()
-    args = module.parse_args([])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.p2p_bind_interface_name == ""
     assert args.search_waves == 3

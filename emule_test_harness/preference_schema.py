@@ -92,7 +92,10 @@ OWNER_TOKEN_TO_SCHEMA_ID = {
     "udpport": "UDPPort",
     "bindaddr": "BindAddr::<default>",
     "bindinterface": "BindInterface",
-    "startupbindblock": "BlockNetworkWhenBindUnavailableAtStartup",
+    "vpnguardenabled": "VpnGuardMode",
+    "vpnguardmode": "VpnGuardMode",
+    "vpnguardallowedpublicipcidrs": "VpnGuardAllowedPublicIpCidrs",
+    "vpnguardpublicipcidrs": "VpnGuardAllowedPublicIpCidrs",
 }
 
 
@@ -107,7 +110,7 @@ def get_preference_paths(workspace_root: Path) -> PreferencePaths:
     return PreferencePaths(
         workspace_root=workspace_root,
         app_source=workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid",
-        build_tests_root=workspace_root / "repos" / "emulebb-build-tests",
+        build_tests_root=Path(__file__).resolve().parents[1],
     )
 
 

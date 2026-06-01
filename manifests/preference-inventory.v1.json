@@ -779,28 +779,6 @@
       "notes": ""
     },
     {
-      "id": "BlockNetworkWhenBindUnavailableAtStartup",
-      "storageFile": "preferences.ini",
-      "sections": [
-        "<default>"
-      ],
-      "key": "BlockNetworkWhenBindUnavailableAtStartup",
-      "sourceExpression": "_T(\"BlockNetworkWhenBindUnavailableAtStartup\")",
-      "kind": "literal",
-      "access": [
-        "read",
-        "write"
-      ],
-      "valueKinds": [
-        "Bool"
-      ],
-      "ownerField": "",
-      "uiApiSurface": "",
-      "clampOrNormalizer": "",
-      "classification": "active-roundtrip",
-      "notes": ""
-    },
-    {
       "id": "BringToFront",
       "storageFile": "preferences.ini",
       "sections": [
@@ -2810,28 +2788,6 @@
       ],
       "key": "EnableUPnP",
       "sourceExpression": "_T(\"EnableUPnP\")",
-      "kind": "literal",
-      "access": [
-        "read",
-        "write"
-      ],
-      "valueKinds": [
-        "Bool"
-      ],
-      "ownerField": "",
-      "uiApiSurface": "",
-      "clampOrNormalizer": "",
-      "classification": "active-roundtrip",
-      "notes": ""
-    },
-    {
-      "id": "ExitOnBindInterfaceLoss",
-      "storageFile": "preferences.ini",
-      "sections": [
-        "<default>"
-      ],
-      "key": "ExitOnBindInterfaceLoss",
-      "sourceExpression": "_T(\"ExitOnBindInterfaceLoss\")",
       "kind": "literal",
       "access": [
         "read",
@@ -9438,6 +9394,50 @@
       ],
       "valueKinds": [
         "Int"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
+      "id": "VpnGuardAllowedPublicIpCidrs",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "VpnGuardAllowedPublicIpCidrs",
+      "sourceExpression": "_T(\"VpnGuardAllowedPublicIpCidrs\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "String"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
+      "id": "VpnGuardMode",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "VpnGuardMode",
+      "sourceExpression": "_T(\"VpnGuardMode\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "String"
       ],
       "ownerField": "",
       "uiApiSurface": "",

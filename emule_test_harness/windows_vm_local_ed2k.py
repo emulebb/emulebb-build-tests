@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from emule_test_harness.ini import write_utf16_ini_text
+
 
 def emit(payload: dict[str, Any]) -> int:
     """Writes one JSON object for the host shim."""
@@ -363,7 +365,8 @@ def command_prepare_client(args: argparse.Namespace) -> int:
         size=args.fixture_size_bytes,
         seed=10 if args.target == "win10" else 11,
     )
-    (config_dir / "preferences.ini").write_text(
+    write_utf16_ini_text(
+        config_dir / "preferences.ini",
         preferences_text(
             target=args.target,
             incoming_dir=incoming,
@@ -374,7 +377,6 @@ def command_prepare_client(args: argparse.Namespace) -> int:
             rest_port=args.rest_port,
             api_key=args.api_key,
         ),
-        encoding="utf-16",
     )
 
     repair_result = repair_firewall(

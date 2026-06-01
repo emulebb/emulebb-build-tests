@@ -578,8 +578,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:442:0:autoconnect",
-        "PPgConnection.cpp:547:0:autoconnect"
+        "PPgConnection.cpp:445:0:autoconnect",
+        "PPgConnection.cpp:575:0:autoconnect"
       ],
       "restBindings": [
         "autoConnect"
@@ -791,10 +791,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:242:0:GetBindAddr",
         "PPgConnection.cpp:243:0:GetBindAddr",
-        "PPgConnection.cpp:453:0:GetConfiguredBindAddr",
-        "PPgConnection.cpp:522:0:GetConfiguredBindAddr"
+        "PPgConnection.cpp:244:0:GetBindAddr",
+        "PPgConnection.cpp:456:0:GetConfiguredBindAddr",
+        "PPgConnection.cpp:525:0:GetConfiguredBindAddr"
       ],
       "restBindings": [],
       "notes": ""
@@ -845,32 +845,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:189:0:GetBindInterface",
-        "PPgConnection.cpp:521:0:GetBindInterface"
-      ],
-      "restBindings": [],
-      "notes": ""
-    },
-    {
-      "id": "BlockNetworkWhenBindUnavailableAtStartup",
-      "inventoryId": "BlockNetworkWhenBindUnavailableAtStartup",
-      "storageFile": "preferences.ini",
-      "section": "<default>",
-      "key": "BlockNetworkWhenBindUnavailableAtStartup",
-      "sourceExpression": "_T(\"BlockNetworkWhenBindUnavailableAtStartup\")",
-      "valueType": "bool",
-      "access": [
-        "read",
-        "write"
-      ],
-      "classification": "editable-ui",
-      "ownerExpressions": [
-        "m_bBlockNetworkWhenBindUnavailableAtStartup"
-      ],
-      "defaultExpression": "",
-      "clampOrNormalizer": "",
-      "uiBindingIds": [
-        "PPgConnection.cpp:529:0:m_bBlockNetworkWhenBindUnavailableAtStartup"
+        "PPgConnection.cpp:190:0:GetBindInterface",
+        "PPgConnection.cpp:524:0:GetBindInterface"
       ],
       "restBindings": [],
       "notes": ""
@@ -2838,35 +2814,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:576:0:m_bEnableUPnP",
-        "PPgConnection.cpp:576:1:m_bEnableUPnP",
-        "PPgConnection.cpp:577:0:m_bEnableUPnP"
-      ],
-      "restBindings": [],
-      "notes": ""
-    },
-    {
-      "id": "ExitOnBindInterfaceLoss",
-      "inventoryId": "ExitOnBindInterfaceLoss",
-      "storageFile": "preferences.ini",
-      "section": "<default>",
-      "key": "ExitOnBindInterfaceLoss",
-      "sourceExpression": "_T(\"ExitOnBindInterfaceLoss\")",
-      "valueType": "bool",
-      "access": [
-        "read",
-        "write"
-      ],
-      "classification": "editable-ui",
-      "ownerExpressions": [
-        "IsExitOnBindInterfaceLossEnabled",
-        "SetExitOnBindInterfaceLossEnabled"
-      ],
-      "defaultExpression": "",
-      "clampOrNormalizer": "",
-      "uiBindingIds": [
-        "PPgConnection.cpp:455:0:IsExitOnBindInterfaceLossEnabled",
-        "PPgConnection.cpp:532:0:SetExitOnBindInterfaceLossEnabled"
+        "PPgConnection.cpp:604:0:m_bEnableUPnP",
+        "PPgConnection.cpp:604:1:m_bEnableUPnP",
+        "PPgConnection.cpp:605:0:m_bEnableUPnP"
       ],
       "restBindings": [],
       "notes": ""
@@ -4968,10 +4918,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:437:0:maxconnections",
-        "PPgConnection.cpp:559:0:maxconnections",
-        "PPgConnection.cpp:569:0:maxconnections",
-        "PPgConnection.cpp:573:0:SetMaxConnections",
+        "PPgConnection.cpp:440:0:maxconnections",
+        "PPgConnection.cpp:587:0:maxconnections",
+        "PPgConnection.cpp:597:0:maxconnections",
+        "PPgConnection.cpp:601:0:SetMaxConnections",
         "PPgStats.cpp:175:0:GetMaxConnections",
         "PPgStats.cpp:176:1:GetMaxConnections",
         "PPgStats.cpp:177:1:GetMaxConnections"
@@ -5030,9 +4980,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:430:0:GetConfiguredMaxDownload",
-        "PPgConnection.cpp:479:0:SetMaxDownload",
-        "PPgConnection.cpp:480:0:GetConfiguredMaxDownload"
+        "PPgConnection.cpp:433:0:GetConfiguredMaxDownload",
+        "PPgConnection.cpp:482:0:SetMaxDownload",
+        "PPgConnection.cpp:483:0:GetConfiguredMaxDownload"
       ],
       "restBindings": [
         "downloadLimitKiBps"
@@ -5181,7 +5131,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:486:0:SetMaxSourcesPerFile"
+        "PPgConnection.cpp:489:0:SetMaxSourcesPerFile"
       ],
       "restBindings": [
         "maxSourcesPerFile"
@@ -5208,12 +5158,12 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:431:0:GetConfiguredMaxUpload",
-        "PPgConnection.cpp:475:0:GetConfiguredMaxUpload",
-        "PPgConnection.cpp:482:0:SetMaxUpload",
-        "PPgConnection.cpp:483:0:GetConfiguredMaxUpload",
-        "PPgConnection.cpp:551:0:GetConfiguredMaxUpload",
-        "PPgConnection.cpp:552:0:GetConfiguredMaxUpload"
+        "PPgConnection.cpp:434:0:GetConfiguredMaxUpload",
+        "PPgConnection.cpp:478:0:GetConfiguredMaxUpload",
+        "PPgConnection.cpp:485:0:SetMaxUpload",
+        "PPgConnection.cpp:486:0:GetConfiguredMaxUpload",
+        "PPgConnection.cpp:579:0:GetConfiguredMaxUpload",
+        "PPgConnection.cpp:580:0:GetConfiguredMaxUpload"
       ],
       "restBindings": [
         "uploadLimitKiBps"
@@ -5547,8 +5497,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:445:0:networked2k",
-        "PPgConnection.cpp:543:0:SetNetworkED2K"
+        "PPgConnection.cpp:448:0:networked2k",
+        "PPgConnection.cpp:571:0:SetNetworkED2K"
       ],
       "restBindings": [
         "networkEd2k"
@@ -5576,9 +5526,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:370:0:networkkademlia",
-        "PPgConnection.cpp:443:0:GetNetworkKademlia",
-        "PPgConnection.cpp:541:0:SetNetworkKademlia"
+        "PPgConnection.cpp:372:0:networkkademlia",
+        "PPgConnection.cpp:446:0:GetNetworkKademlia",
+        "PPgConnection.cpp:569:0:SetNetworkKademlia"
       ],
       "restBindings": [
         "networkKademlia"
@@ -6167,12 +6117,12 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:338:0:port",
-        "PPgConnection.cpp:342:0:port",
-        "PPgConnection.cpp:360:0:port",
-        "PPgConnection.cpp:436:0:port",
-        "PPgConnection.cpp:493:0:port",
-        "PPgConnection.cpp:494:0:port"
+        "PPgConnection.cpp:340:0:port",
+        "PPgConnection.cpp:344:0:port",
+        "PPgConnection.cpp:362:0:port",
+        "PPgConnection.cpp:439:0:port",
+        "PPgConnection.cpp:496:0:port",
+        "PPgConnection.cpp:497:0:port"
       ],
       "restBindings": [],
       "notes": ""
@@ -6598,8 +6548,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:440:0:reconnect",
-        "PPgConnection.cpp:548:0:reconnect"
+        "PPgConnection.cpp:443:0:reconnect",
+        "PPgConnection.cpp:576:0:reconnect"
       ],
       "restBindings": [],
       "notes": ""
@@ -7369,10 +7319,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:441:0:m_bshowoverhead",
-        "PPgConnection.cpp:534:0:m_bshowoverhead",
-        "PPgConnection.cpp:535:0:m_bshowoverhead",
-        "PPgConnection.cpp:535:1:m_bshowoverhead"
+        "PPgConnection.cpp:444:0:m_bshowoverhead",
+        "PPgConnection.cpp:562:0:m_bshowoverhead",
+        "PPgConnection.cpp:563:0:m_bshowoverhead",
+        "PPgConnection.cpp:563:1:m_bshowoverhead"
       ],
       "restBindings": [],
       "notes": ""
@@ -8685,12 +8635,12 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:338:1:udpport",
-        "PPgConnection.cpp:342:1:udpport",
-        "PPgConnection.cpp:426:0:udpport",
-        "PPgConnection.cpp:444:0:GetUDPPort",
-        "PPgConnection.cpp:505:0:udpport",
-        "PPgConnection.cpp:506:0:udpport"
+        "PPgConnection.cpp:340:1:udpport",
+        "PPgConnection.cpp:344:1:udpport",
+        "PPgConnection.cpp:429:0:udpport",
+        "PPgConnection.cpp:447:0:GetUDPPort",
+        "PPgConnection.cpp:508:0:udpport",
+        "PPgConnection.cpp:509:0:udpport"
       ],
       "restBindings": [],
       "notes": ""
@@ -8713,8 +8663,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:247:1:GetActiveConfiguredBindAddr",
-        "PPgConnection.cpp:270:0:GetActiveConfiguredBindAddr"
+        "PPgConnection.cpp:248:1:GetActiveConfiguredBindAddr",
+        "PPgConnection.cpp:274:0:GetActiveConfiguredBindAddr"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: activebindaddr."
@@ -8737,9 +8687,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:238:0:GetActiveBindAddressResolveResult",
-        "PPgConnection.cpp:240:0:GetActiveBindAddressResolveResult",
-        "PPgConnection.cpp:247:2:GetActiveBindAddressResolveResult"
+        "PPgConnection.cpp:239:0:GetActiveBindAddressResolveResult",
+        "PPgConnection.cpp:241:0:GetActiveBindAddressResolveResult",
+        "PPgConnection.cpp:248:2:GetActiveBindAddressResolveResult"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: activebindaddressresolveresult."
@@ -8762,7 +8712,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:269:0:GetActiveBindInterface"
+        "PPgConnection.cpp:273:0:GetActiveBindInterface"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: activebindinterface."
@@ -8785,8 +8735,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:244:0:GetActiveBindInterfaceName",
-        "PPgConnection.cpp:247:0:GetActiveBindInterfaceName"
+        "PPgConnection.cpp:245:0:GetActiveBindInterfaceName",
+        "PPgConnection.cpp:248:0:GetActiveBindInterfaceName"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: activebindinterfacename."
@@ -8809,7 +8759,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:271:0:IsActiveStartupBindBlockEnabled"
+        "PPgConnection.cpp:275:0:IsActiveStartupBindBlockEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: activestartupbindblockenabled."
@@ -9028,7 +8978,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:523:0:SetBindNetworkSelection"
+        "PPgConnection.cpp:526:0:SetBindNetworkSelection"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: bindnetworkselection."
@@ -10785,9 +10735,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:476:0:maxGraphDownloadRate",
-        "PPgConnection.cpp:553:0:maxGraphDownloadRate",
-        "PPgConnection.cpp:554:0:maxGraphDownloadRate"
+        "PPgConnection.cpp:479:0:maxGraphDownloadRate",
+        "PPgConnection.cpp:581:0:maxGraphDownloadRate",
+        "PPgConnection.cpp:582:0:maxGraphDownloadRate"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxgraphdownloadrate."
@@ -10906,8 +10856,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:438:0:maxsourceperfile",
-        "PPgConnection.cpp:438:1:maxsourceperfile"
+        "PPgConnection.cpp:441:0:maxsourceperfile",
+        "PPgConnection.cpp:441:1:maxsourceperfile"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: maxsourceperfile."
@@ -11724,8 +11674,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:450:0:IsPortRandomizationOnStartupEnabled",
-        "PPgConnection.cpp:549:0:SetPortRandomizationOnStartupEnabled"
+        "PPgConnection.cpp:453:0:IsPortRandomizationOnStartupEnabled",
+        "PPgConnection.cpp:577:0:SetPortRandomizationOnStartupEnabled"
       ],
       "restBindings": [],
       "notes": "Synthetic UI/runtime preference owner token: portrandomizationonstartupenabled."
@@ -12133,30 +12083,6 @@
       "notes": "Synthetic UI/runtime preference owner token: startminimized."
     },
     {
-      "id": "ui-runtime::startupbindblockenabled",
-      "inventoryId": null,
-      "storageFile": null,
-      "section": null,
-      "key": null,
-      "sourceExpression": "",
-      "valueType": "unknown",
-      "access": [
-        "read"
-      ],
-      "classification": "ui-runtime",
-      "ownerExpressions": [
-        "IsStartupBindBlockEnabled"
-      ],
-      "defaultExpression": "",
-      "clampOrNormalizer": "",
-      "uiBindingIds": [
-        "PPgConnection.cpp:454:0:IsStartupBindBlockEnabled",
-        "PPgConnection.cpp:528:0:IsStartupBindBlockEnabled"
-      ],
-      "restBindings": [],
-      "notes": "Synthetic UI/runtime preference owner token: startupbindblockenabled."
-    },
-    {
       "id": "ui-runtime::statsmax",
       "inventoryId": null,
       "storageFile": null,
@@ -12497,8 +12423,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgConnection.cpp:449:0:IsUPnPEnabled",
-        "PPgConnection.cpp:575:0:IsUPnPEnabled",
+        "PPgConnection.cpp:452:0:IsUPnPEnabled",
+        "PPgConnection.cpp:603:0:IsUPnPEnabled",
         "PPgWebServer.cpp:192:0:IsUPnPEnabled",
         "PPgWebServer.cpp:335:1:IsUPnPEnabled",
         "PPgWebServer.cpp:388:0:IsUPnPEnabled"
@@ -13730,6 +13656,62 @@
       "notes": ""
     },
     {
+      "id": "VpnGuardAllowedPublicIpCidrs",
+      "inventoryId": "VpnGuardAllowedPublicIpCidrs",
+      "storageFile": "preferences.ini",
+      "section": "<default>",
+      "key": "VpnGuardAllowedPublicIpCidrs",
+      "sourceExpression": "_T(\"VpnGuardAllowedPublicIpCidrs\")",
+      "valueType": "string",
+      "access": [
+        "read",
+        "write"
+      ],
+      "classification": "editable-ui",
+      "ownerExpressions": [
+        "GetVpnGuardAllowedPublicIpCidrs",
+        "SetVpnGuardAllowedPublicIpCidrs"
+      ],
+      "defaultExpression": "",
+      "clampOrNormalizer": "",
+      "uiBindingIds": [
+        "PPgConnection.cpp:276:0:GetVpnGuardAllowedPublicIpCidrs",
+        "PPgConnection.cpp:458:0:GetVpnGuardAllowedPublicIpCidrs",
+        "PPgConnection.cpp:556:0:GetVpnGuardAllowedPublicIpCidrs",
+        "PPgConnection.cpp:558:0:SetVpnGuardAllowedPublicIpCidrs"
+      ],
+      "restBindings": [],
+      "notes": ""
+    },
+    {
+      "id": "VpnGuardMode",
+      "inventoryId": "VpnGuardMode",
+      "storageFile": "preferences.ini",
+      "section": "<default>",
+      "key": "VpnGuardMode",
+      "sourceExpression": "_T(\"VpnGuardMode\")",
+      "valueType": "string",
+      "access": [
+        "read",
+        "write"
+      ],
+      "classification": "editable-ui",
+      "ownerExpressions": [
+        "GetVpnGuardMode",
+        "IsVpnGuardEnabled",
+        "SetVpnGuardMode"
+      ],
+      "defaultExpression": "",
+      "clampOrNormalizer": "",
+      "uiBindingIds": [
+        "PPgConnection.cpp:457:0:IsVpnGuardEnabled",
+        "PPgConnection.cpp:555:0:GetVpnGuardMode",
+        "PPgConnection.cpp:557:0:SetVpnGuardMode"
+      ],
+      "restBindings": [],
+      "notes": ""
+    },
+    {
       "id": "WatchClipboard4ED2kFilelinks",
       "inventoryId": "WatchClipboard4ED2kFilelinks",
       "storageFile": "preferences.ini",
@@ -13926,10 +13908,10 @@
   ],
   "uiBindings": [
     {
-      "id": "PPgConnection.cpp:189:0:GetBindInterface",
+      "id": "PPgConnection.cpp:190:0:GetBindInterface",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 189,
+      "line": 190,
       "function": "FillBindInterfaceCombo",
       "access": "read",
       "ownerExpression": "GetBindInterface",
@@ -13940,10 +13922,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:238:0:GetActiveBindAddressResolveResult",
+      "id": "PPgConnection.cpp:239:0:GetActiveBindAddressResolveResult",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 238,
+      "line": 239,
       "function": "UpdateBindStatus",
       "access": "read",
       "ownerExpression": "GetActiveBindAddressResolveResult",
@@ -13954,10 +13936,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:240:0:GetActiveBindAddressResolveResult",
+      "id": "PPgConnection.cpp:241:0:GetActiveBindAddressResolveResult",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 240,
+      "line": 241,
       "function": "UpdateBindStatus",
       "access": "read",
       "ownerExpression": "GetActiveBindAddressResolveResult",
@@ -13965,20 +13947,6 @@
       "directControlIds": [],
       "schemaIds": [
         "ui-runtime::activebindaddressresolveresult"
-      ]
-    },
-    {
-      "id": "PPgConnection.cpp:242:0:GetBindAddr",
-      "page": "PPgConnection.cpp",
-      "dialogId": "IDD_PPG_CONNECTION",
-      "line": 242,
-      "function": "UpdateBindStatus",
-      "access": "read",
-      "ownerExpression": "GetBindAddr",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "BindAddr::<default>"
       ]
     },
     {
@@ -13996,24 +13964,24 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:244:0:GetActiveBindInterfaceName",
+      "id": "PPgConnection.cpp:244:0:GetBindAddr",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
       "line": 244,
       "function": "UpdateBindStatus",
       "access": "read",
-      "ownerExpression": "GetActiveBindInterfaceName",
+      "ownerExpression": "GetBindAddr",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
-        "ui-runtime::activebindinterfacename"
+        "BindAddr::<default>"
       ]
     },
     {
-      "id": "PPgConnection.cpp:247:0:GetActiveBindInterfaceName",
+      "id": "PPgConnection.cpp:245:0:GetActiveBindInterfaceName",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 247,
+      "line": 245,
       "function": "UpdateBindStatus",
       "access": "read",
       "ownerExpression": "GetActiveBindInterfaceName",
@@ -14024,10 +13992,24 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:247:1:GetActiveConfiguredBindAddr",
+      "id": "PPgConnection.cpp:248:0:GetActiveBindInterfaceName",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 247,
+      "line": 248,
+      "function": "UpdateBindStatus",
+      "access": "read",
+      "ownerExpression": "GetActiveBindInterfaceName",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "ui-runtime::activebindinterfacename"
+      ]
+    },
+    {
+      "id": "PPgConnection.cpp:248:1:GetActiveConfiguredBindAddr",
+      "page": "PPgConnection.cpp",
+      "dialogId": "IDD_PPG_CONNECTION",
+      "line": 248,
       "function": "UpdateBindStatus",
       "access": "read",
       "ownerExpression": "GetActiveConfiguredBindAddr",
@@ -14038,10 +14020,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:247:2:GetActiveBindAddressResolveResult",
+      "id": "PPgConnection.cpp:248:2:GetActiveBindAddressResolveResult",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 247,
+      "line": 248,
       "function": "UpdateBindStatus",
       "access": "read",
       "ownerExpression": "GetActiveBindAddressResolveResult",
@@ -14052,10 +14034,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:269:0:GetActiveBindInterface",
+      "id": "PPgConnection.cpp:273:0:GetActiveBindInterface",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 269,
+      "line": 273,
       "function": "UpdateRestartRequiredNotice",
       "access": "read",
       "ownerExpression": "GetActiveBindInterface",
@@ -14066,10 +14048,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:270:0:GetActiveConfiguredBindAddr",
+      "id": "PPgConnection.cpp:274:0:GetActiveConfiguredBindAddr",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 270,
+      "line": 274,
       "function": "UpdateRestartRequiredNotice",
       "access": "read",
       "ownerExpression": "GetActiveConfiguredBindAddr",
@@ -14080,10 +14062,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:271:0:IsActiveStartupBindBlockEnabled",
+      "id": "PPgConnection.cpp:275:0:IsActiveStartupBindBlockEnabled",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 271,
+      "line": 275,
       "function": "UpdateRestartRequiredNotice",
       "access": "read",
       "ownerExpression": "IsActiveStartupBindBlockEnabled",
@@ -14094,10 +14076,24 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:338:0:port",
+      "id": "PPgConnection.cpp:276:0:GetVpnGuardAllowedPublicIpCidrs",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 338,
+      "line": 276,
+      "function": "UpdateRestartRequiredNotice",
+      "access": "read",
+      "ownerExpression": "GetVpnGuardAllowedPublicIpCidrs",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "VpnGuardAllowedPublicIpCidrs"
+      ]
+    },
+    {
+      "id": "PPgConnection.cpp:340:0:port",
+      "page": "PPgConnection.cpp",
+      "dialogId": "IDD_PPG_CONNECTION",
+      "line": 340,
       "function": "ChangePorts",
       "access": "read",
       "ownerExpression": "port",
@@ -14108,10 +14104,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:338:1:udpport",
+      "id": "PPgConnection.cpp:340:1:udpport",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 338,
+      "line": 340,
       "function": "ChangePorts",
       "access": "read",
       "ownerExpression": "udpport",
@@ -14122,10 +14118,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:342:0:port",
+      "id": "PPgConnection.cpp:344:0:port",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 342,
+      "line": 344,
       "function": "ChangePorts",
       "access": "read",
       "ownerExpression": "port",
@@ -14136,10 +14132,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:342:1:udpport",
+      "id": "PPgConnection.cpp:344:1:udpport",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 342,
+      "line": 344,
       "function": "ChangePorts",
       "access": "read",
       "ownerExpression": "udpport",
@@ -14150,10 +14146,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:360:0:port",
+      "id": "PPgConnection.cpp:362:0:port",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 360,
+      "line": 362,
       "function": "ChangeUDP",
       "access": "read",
       "ownerExpression": "port",
@@ -14164,10 +14160,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:370:0:networkkademlia",
+      "id": "PPgConnection.cpp:372:0:networkkademlia",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 370,
+      "line": 372,
       "function": "OnEnChangeUDPDisable",
       "access": "read",
       "ownerExpression": "networkkademlia",
@@ -14182,10 +14178,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:426:0:udpport",
+      "id": "PPgConnection.cpp:429:0:udpport",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 426,
+      "line": 429,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "udpport",
@@ -14196,10 +14192,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:430:0:GetConfiguredMaxDownload",
+      "id": "PPgConnection.cpp:433:0:GetConfiguredMaxDownload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 430,
+      "line": 433,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetConfiguredMaxDownload",
@@ -14210,10 +14206,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:431:0:GetConfiguredMaxUpload",
+      "id": "PPgConnection.cpp:434:0:GetConfiguredMaxUpload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 431,
+      "line": 434,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetConfiguredMaxUpload",
@@ -14224,10 +14220,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:436:0:port",
+      "id": "PPgConnection.cpp:439:0:port",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 436,
+      "line": 439,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "port",
@@ -14242,10 +14238,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:437:0:maxconnections",
+      "id": "PPgConnection.cpp:440:0:maxconnections",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 437,
+      "line": 440,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "maxconnections",
@@ -14260,10 +14256,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:438:0:maxsourceperfile",
+      "id": "PPgConnection.cpp:441:0:maxsourceperfile",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 438,
+      "line": 441,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "maxsourceperfile",
@@ -14278,10 +14274,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:438:1:maxsourceperfile",
+      "id": "PPgConnection.cpp:441:1:maxsourceperfile",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 438,
+      "line": 441,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "maxsourceperfile",
@@ -14296,10 +14292,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:440:0:reconnect",
+      "id": "PPgConnection.cpp:443:0:reconnect",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 440,
+      "line": 443,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "reconnect",
@@ -14314,10 +14310,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:441:0:m_bshowoverhead",
+      "id": "PPgConnection.cpp:444:0:m_bshowoverhead",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 441,
+      "line": 444,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "m_bshowoverhead",
@@ -14332,10 +14328,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:442:0:autoconnect",
+      "id": "PPgConnection.cpp:445:0:autoconnect",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 442,
+      "line": 445,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "autoconnect",
@@ -14350,10 +14346,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:443:0:GetNetworkKademlia",
+      "id": "PPgConnection.cpp:446:0:GetNetworkKademlia",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 443,
+      "line": 446,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetNetworkKademlia",
@@ -14368,10 +14364,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:444:0:GetUDPPort",
+      "id": "PPgConnection.cpp:447:0:GetUDPPort",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 444,
+      "line": 447,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetUDPPort",
@@ -14386,10 +14382,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:445:0:networked2k",
+      "id": "PPgConnection.cpp:448:0:networked2k",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 445,
+      "line": 448,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "networked2k",
@@ -14404,10 +14400,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:449:0:IsUPnPEnabled",
+      "id": "PPgConnection.cpp:452:0:IsUPnPEnabled",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 449,
+      "line": 452,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "IsUPnPEnabled",
@@ -14422,10 +14418,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:450:0:IsPortRandomizationOnStartupEnabled",
+      "id": "PPgConnection.cpp:453:0:IsPortRandomizationOnStartupEnabled",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 450,
+      "line": 453,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "IsPortRandomizationOnStartupEnabled",
@@ -14440,10 +14436,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:453:0:GetConfiguredBindAddr",
+      "id": "PPgConnection.cpp:456:0:GetConfiguredBindAddr",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 453,
+      "line": 456,
       "function": "LoadSettings",
       "access": "read",
       "ownerExpression": "GetConfiguredBindAddr",
@@ -14458,46 +14454,46 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:454:0:IsStartupBindBlockEnabled",
+      "id": "PPgConnection.cpp:457:0:IsVpnGuardEnabled",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 454,
+      "line": 457,
       "function": "LoadSettings",
       "access": "read",
-      "ownerExpression": "IsStartupBindBlockEnabled",
+      "ownerExpression": "IsVpnGuardEnabled",
       "controlIds": [
-        "IDC_STARTUP_BIND_BLOCK"
+        "IDC_VPN_GUARD_ENABLED"
       ],
       "directControlIds": [
-        "IDC_STARTUP_BIND_BLOCK"
+        "IDC_VPN_GUARD_ENABLED"
       ],
       "schemaIds": [
-        "ui-runtime::startupbindblockenabled"
+        "VpnGuardMode"
       ]
     },
     {
-      "id": "PPgConnection.cpp:455:0:IsExitOnBindInterfaceLossEnabled",
+      "id": "PPgConnection.cpp:458:0:GetVpnGuardAllowedPublicIpCidrs",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 455,
+      "line": 458,
       "function": "LoadSettings",
       "access": "read",
-      "ownerExpression": "IsExitOnBindInterfaceLossEnabled",
+      "ownerExpression": "GetVpnGuardAllowedPublicIpCidrs",
       "controlIds": [
-        "IDC_EXIT_ON_BIND_LOSS"
+        "IDC_VPN_GUARD_CIDRS"
       ],
       "directControlIds": [
-        "IDC_EXIT_ON_BIND_LOSS"
+        "IDC_VPN_GUARD_CIDRS"
       ],
       "schemaIds": [
-        "ExitOnBindInterfaceLoss"
+        "VpnGuardAllowedPublicIpCidrs"
       ]
     },
     {
-      "id": "PPgConnection.cpp:475:0:GetConfiguredMaxUpload",
+      "id": "PPgConnection.cpp:478:0:GetConfiguredMaxUpload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 475,
+      "line": 478,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetConfiguredMaxUpload",
@@ -14508,10 +14504,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:476:0:maxGraphDownloadRate",
+      "id": "PPgConnection.cpp:479:0:maxGraphDownloadRate",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 476,
+      "line": 479,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "maxGraphDownloadRate",
@@ -14522,10 +14518,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:479:0:SetMaxDownload",
+      "id": "PPgConnection.cpp:482:0:SetMaxDownload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 479,
+      "line": 482,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxDownload",
@@ -14536,10 +14532,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:480:0:GetConfiguredMaxDownload",
+      "id": "PPgConnection.cpp:483:0:GetConfiguredMaxDownload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 480,
+      "line": 483,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetConfiguredMaxDownload",
@@ -14554,10 +14550,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:482:0:SetMaxUpload",
+      "id": "PPgConnection.cpp:485:0:SetMaxUpload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 482,
+      "line": 485,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxUpload",
@@ -14568,10 +14564,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:483:0:GetConfiguredMaxUpload",
+      "id": "PPgConnection.cpp:486:0:GetConfiguredMaxUpload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 483,
+      "line": 486,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetConfiguredMaxUpload",
@@ -14586,10 +14582,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:486:0:SetMaxSourcesPerFile",
+      "id": "PPgConnection.cpp:489:0:SetMaxSourcesPerFile",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 486,
+      "line": 489,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxSourcesPerFile",
@@ -14600,10 +14596,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:493:0:port",
+      "id": "PPgConnection.cpp:496:0:port",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 493,
+      "line": 496,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "port",
@@ -14614,10 +14610,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:494:0:port",
+      "id": "PPgConnection.cpp:497:0:port",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 494,
+      "line": 497,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "port",
@@ -14628,10 +14624,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:505:0:udpport",
+      "id": "PPgConnection.cpp:508:0:udpport",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 505,
+      "line": 508,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "udpport",
@@ -14642,10 +14638,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:506:0:udpport",
+      "id": "PPgConnection.cpp:509:0:udpport",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 506,
+      "line": 509,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "udpport",
@@ -14656,10 +14652,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:521:0:GetBindInterface",
+      "id": "PPgConnection.cpp:524:0:GetBindInterface",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 521,
+      "line": 524,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetBindInterface",
@@ -14670,10 +14666,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:522:0:GetConfiguredBindAddr",
+      "id": "PPgConnection.cpp:525:0:GetConfiguredBindAddr",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 522,
+      "line": 525,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetConfiguredBindAddr",
@@ -14684,10 +14680,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:523:0:SetBindNetworkSelection",
+      "id": "PPgConnection.cpp:526:0:SetBindNetworkSelection",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 523,
+      "line": 526,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetBindNetworkSelection",
@@ -14698,56 +14694,66 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:528:0:IsStartupBindBlockEnabled",
+      "id": "PPgConnection.cpp:555:0:GetVpnGuardMode",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 528,
+      "line": 555,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "IsStartupBindBlockEnabled",
+      "ownerExpression": "GetVpnGuardMode",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
-        "ui-runtime::startupbindblockenabled"
+        "VpnGuardMode"
       ]
     },
     {
-      "id": "PPgConnection.cpp:529:0:m_bBlockNetworkWhenBindUnavailableAtStartup",
+      "id": "PPgConnection.cpp:556:0:GetVpnGuardAllowedPublicIpCidrs",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 529,
+      "line": 556,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "m_bBlockNetworkWhenBindUnavailableAtStartup",
+      "ownerExpression": "GetVpnGuardAllowedPublicIpCidrs",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
-        "BlockNetworkWhenBindUnavailableAtStartup"
+        "VpnGuardAllowedPublicIpCidrs"
       ]
     },
     {
-      "id": "PPgConnection.cpp:532:0:SetExitOnBindInterfaceLossEnabled",
+      "id": "PPgConnection.cpp:557:0:SetVpnGuardMode",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 532,
+      "line": 557,
       "function": "OnApply",
       "access": "write",
-      "ownerExpression": "SetExitOnBindInterfaceLossEnabled",
-      "controlIds": [
-        "IDC_EXIT_ON_BIND_LOSS"
-      ],
-      "directControlIds": [
-        "IDC_EXIT_ON_BIND_LOSS"
-      ],
+      "ownerExpression": "SetVpnGuardMode",
+      "controlIds": [],
+      "directControlIds": [],
       "schemaIds": [
-        "ExitOnBindInterfaceLoss"
+        "VpnGuardMode"
       ]
     },
     {
-      "id": "PPgConnection.cpp:534:0:m_bshowoverhead",
+      "id": "PPgConnection.cpp:558:0:SetVpnGuardAllowedPublicIpCidrs",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 534,
+      "line": 558,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "SetVpnGuardAllowedPublicIpCidrs",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "VpnGuardAllowedPublicIpCidrs"
+      ]
+    },
+    {
+      "id": "PPgConnection.cpp:562:0:m_bshowoverhead",
+      "page": "PPgConnection.cpp",
+      "dialogId": "IDD_PPG_CONNECTION",
+      "line": 562,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bshowoverhead",
@@ -14762,10 +14768,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:535:0:m_bshowoverhead",
+      "id": "PPgConnection.cpp:563:0:m_bshowoverhead",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 535,
+      "line": 563,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bshowoverhead",
@@ -14776,10 +14782,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:535:1:m_bshowoverhead",
+      "id": "PPgConnection.cpp:563:1:m_bshowoverhead",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 535,
+      "line": 563,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bshowoverhead",
@@ -14790,10 +14796,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:541:0:SetNetworkKademlia",
+      "id": "PPgConnection.cpp:569:0:SetNetworkKademlia",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 541,
+      "line": 569,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetNetworkKademlia",
@@ -14808,10 +14814,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:543:0:SetNetworkED2K",
+      "id": "PPgConnection.cpp:571:0:SetNetworkED2K",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 543,
+      "line": 571,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetNetworkED2K",
@@ -14826,10 +14832,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:547:0:autoconnect",
+      "id": "PPgConnection.cpp:575:0:autoconnect",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 547,
+      "line": 575,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "autoconnect",
@@ -14844,10 +14850,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:548:0:reconnect",
+      "id": "PPgConnection.cpp:576:0:reconnect",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 548,
+      "line": 576,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "reconnect",
@@ -14862,10 +14868,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:549:0:SetPortRandomizationOnStartupEnabled",
+      "id": "PPgConnection.cpp:577:0:SetPortRandomizationOnStartupEnabled",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 549,
+      "line": 577,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetPortRandomizationOnStartupEnabled",
@@ -14880,10 +14886,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:551:0:GetConfiguredMaxUpload",
+      "id": "PPgConnection.cpp:579:0:GetConfiguredMaxUpload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 551,
+      "line": 579,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetConfiguredMaxUpload",
@@ -14894,10 +14900,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:552:0:GetConfiguredMaxUpload",
+      "id": "PPgConnection.cpp:580:0:GetConfiguredMaxUpload",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 552,
+      "line": 580,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetConfiguredMaxUpload",
@@ -14908,10 +14914,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:553:0:maxGraphDownloadRate",
+      "id": "PPgConnection.cpp:581:0:maxGraphDownloadRate",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 553,
+      "line": 581,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "maxGraphDownloadRate",
@@ -14922,10 +14928,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:554:0:maxGraphDownloadRate",
+      "id": "PPgConnection.cpp:582:0:maxGraphDownloadRate",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 554,
+      "line": 582,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "maxGraphDownloadRate",
@@ -14936,10 +14942,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:559:0:maxconnections",
+      "id": "PPgConnection.cpp:587:0:maxconnections",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 559,
+      "line": 587,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "maxconnections",
@@ -14950,10 +14956,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:569:0:maxconnections",
+      "id": "PPgConnection.cpp:597:0:maxconnections",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 569,
+      "line": 597,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "maxconnections",
@@ -14968,10 +14974,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:573:0:SetMaxConnections",
+      "id": "PPgConnection.cpp:601:0:SetMaxConnections",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 573,
+      "line": 601,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetMaxConnections",
@@ -14982,10 +14988,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:575:0:IsUPnPEnabled",
+      "id": "PPgConnection.cpp:603:0:IsUPnPEnabled",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 575,
+      "line": 603,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsUPnPEnabled",
@@ -15000,10 +15006,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:576:0:m_bEnableUPnP",
+      "id": "PPgConnection.cpp:604:0:m_bEnableUPnP",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 576,
+      "line": 604,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bEnableUPnP",
@@ -15014,10 +15020,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:576:1:m_bEnableUPnP",
+      "id": "PPgConnection.cpp:604:1:m_bEnableUPnP",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 576,
+      "line": 604,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bEnableUPnP",
@@ -15028,10 +15034,10 @@
       ]
     },
     {
-      "id": "PPgConnection.cpp:577:0:m_bEnableUPnP",
+      "id": "PPgConnection.cpp:605:0:m_bEnableUPnP",
       "page": "PPgConnection.cpp",
       "dialogId": "IDD_PPG_CONNECTION",
-      "line": 577,
+      "line": 605,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bEnableUPnP",

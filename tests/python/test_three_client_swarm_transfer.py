@@ -21,7 +21,7 @@ def load_suite_module():
 
 def test_swarm_defaults_to_132_mib_fixture_and_longer_timeout() -> None:
     module = load_suite_module()
-    args = module.parse_args([])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.fixture_size_bytes == 132 * 1024 * 1024
     assert args.transfer_completion_timeout_seconds == 1800.0

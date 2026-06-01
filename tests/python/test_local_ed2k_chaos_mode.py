@@ -22,7 +22,7 @@ def load_suite_module():
 
 def test_chaos_defaults_use_132_mib_and_optional_admin_volumes() -> None:
     module = load_suite_module()
-    args = module.build_parser().parse_args([])
+    args = module.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.p2p_bind_interface_name == ""
     assert args.fixture_size_bytes == 132 * 1024 * 1024

@@ -44,7 +44,9 @@ def test_local_arr_release_names_are_deterministic_and_searchable() -> None:
 def test_local_ed2k_parser_defaults_keep_fixture_in_workspace_control() -> None:
     module = load_radarr_sonarr_module()
 
-    args = module.build_parser().parse_args(["--deterministic-local-ed2k"])
+    args = module.build_parser().parse_args(
+        ["--lan-bind-addr", "192.0.2.10", "--deterministic-local-ed2k"]
+    )
 
     assert args.deterministic_local_ed2k is True
     assert args.local_ed2k_fixture_size_bytes == 132 * 1024 * 1024

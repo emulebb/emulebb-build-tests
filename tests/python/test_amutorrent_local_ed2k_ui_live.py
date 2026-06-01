@@ -23,7 +23,7 @@ def load_suite_module():
 def test_parser_defaults_use_local_ed2k_and_132_mib_fixture() -> None:
     module = load_suite_module()
 
-    args = module.parse_args([])
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.p2p_bind_interface_name == ""
     assert args.fixture_size_bytes == 132 * 1024 * 1024
@@ -38,7 +38,7 @@ def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkey
     env = module.build_local_amutorrent_environment(
         base_env={"PATH": "base-path", "UNRELATED": "kept"},
         amutorrent_port=19001,
-        bind_addr="10.55.0.10",
+        lan_bind_addr="10.55.0.10",
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
         emulebb_rest_port=19002,
