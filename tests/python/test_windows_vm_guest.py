@@ -19,6 +19,7 @@ def test_local_ed2k_transfer_script_is_minimal_transport_shim() -> None:
     script = windows_vm_guest.local_ed2k_transfer_script()
 
     assert "windows_vm_local_ed2k.py" in script
+    assert "vm_guest_profiles.py" in script
     assert "Invoke-GuestPython" in script
     assert "guest python failed with exit code" in script
     assert "2>&1" in script
@@ -35,6 +36,7 @@ def test_hideme_live_wire_script_uses_python_guest_runner_and_visible_vpn() -> N
     script = windows_vm_guest.hideme_live_wire_script()
 
     assert "windows_vm_hideme_live.py" in script
+    assert "vm_guest_profiles.py" in script
     assert "Start-HideMe" in script
     assert "New-ScheduledTaskAction" in script
     assert "assert-vpn-binding" in script

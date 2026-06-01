@@ -7,6 +7,7 @@ from pathlib import Path
 RUNTIME_PROFILE_WRITER_ALLOWLIST = {
     "emule_test_harness/ini.py",
     "emule_test_harness/live_profiles.py",
+    "emule_test_harness/vm_guest_profiles.py",
 }
 FORBIDDEN_RUNTIME_PROFILE_WRITER_PATTERNS = (
     re.compile(r"_preferences_content\s*\("),

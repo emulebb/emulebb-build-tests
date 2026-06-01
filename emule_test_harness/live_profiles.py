@@ -17,6 +17,10 @@ from .ini import (
     write_utf16_ini_text,
 )
 from .live_profile_seed import ensure_seed_profile_initialized, validate_seed_config_dir
+from .vm_guest_profiles import (
+    DEFAULT_HIDEME_VPN_GUARD_ALLOWED_PUBLIC_IP_CIDRS,
+    DEFAULT_HIDEME_VPN_GUARD_PUBLIC_IP_CIDRS,
+)
 
 PREFERENCES_DAT_VERSION = 0x14
 WINDOW_PLACEMENT_LENGTH = 44

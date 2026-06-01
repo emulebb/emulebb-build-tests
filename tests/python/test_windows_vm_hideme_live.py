@@ -18,6 +18,7 @@ def test_preferences_bind_p2p_to_hideme_and_enable_vpn_guard(tmp_path: Path) -> 
     assert "BindAddr=\n" in text
     assert "BindInterface=hide.me" in text
     assert "VpnGuardMode=Block" in text
+    assert f"VpnGuardAllowedPublicIpCidrs={live.DEFAULT_HIDEME_VPN_GUARD_ALLOWED_PUBLIC_IP_CIDRS}" in text
     assert "NetworkED2K=1" in text
     assert "NetworkKademlia=0" in text
     assert "ApiKey=key" in text

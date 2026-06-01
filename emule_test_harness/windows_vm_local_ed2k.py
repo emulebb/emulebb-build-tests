@@ -17,7 +17,13 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from emule_test_harness.ini import write_utf16_ini_text
+try:
+    from emule_test_harness.vm_guest_profiles import (
+        local_ed2k_preferences_text as preferences_text,
+        write_preferences_ini,
+    )
+except ModuleNotFoundError:
+    from vm_guest_profiles import local_ed2k_preferences_text as preferences_text, write_preferences_ini
 
 
 def emit(payload: dict[str, Any]) -> int:
@@ -150,58 +156,6 @@ def ed2k_link_with_source(link: str, *, source_ip: str, source_port: int) -> str
     if not link.endswith("|/"):
         raise ValueError(f"Unsupported ED2K file link terminator: {link!r}")
     return f"{link}|sources,{source_ip}:{source_port}|/"
-
-
-def preferences_text(
-    *,
-    target: str,
-    incoming_dir: Path,
-    temp_dir: Path,
-    tcp_port: int,
-    udp_port: int,
-    bind_addr: str,
-    rest_port: int,
-    api_key: str,
-) -> str:
-    """Builds the eMuleBB profile used by the local VM transfer test."""
-
-    return "\n".join(
-        [
-            "[eMule]",
-            f"Nick={target}-vm",
-            "ConfirmExit=0",
-            f"IncomingDir={incoming_dir}",
-            f"TempDir={temp_dir}",
-            f"Port={tcp_port}",
-            f"UDPPort={udp_port}",
-            "ServerUDPPort=65535",
-            f"BindAddr={bind_addr}",
-            "BindInterface=",
-            "BlockNetworkWhenBindUnavailableAtStartup=1",
-            "NetworkED2K=1",
-            "NetworkKademlia=0",
-            "Autoconnect=0",
-            "Reconnect=0",
-            "SafeServerConnect=0",
-            "FilterBadIPs=0",
-            "AllowLocalHostIP=1",
-            "GeoLocationLookupEnabled=0",
-            "IPFilterEnabled=0",
-            "SaveLogToDisk=1",
-            "SaveDebugToDisk=1",
-            "Verbose=1",
-            "FullVerbose=1",
-            "[WebServer]",
-            "Enabled=1",
-            f"ApiKey={api_key}",
-            f"Port={rest_port}",
-            "BindAddr=127.0.0.1",
-            "UseHTTPS=0",
-            "[UPnP]",
-            "EnableUPnP=0",
-            "",
-        ]
-    )
 
 
 def repair_firewall(script_path: Path, program_path: Path, result_path: Path) -> dict[str, Any]:
@@ -365,8 +319,8 @@ def command_prepare_client(args: argparse.Namespace) -> int:
         size=args.fixture_size_bytes,
         seed=10 if args.target == "win10" else 11,
     )
-    write_utf16_ini_text(
-        config_dir / "preferences.ini",
+    write_preferences_ini(
+        config_dir,
         preferences_text(
             target=args.target,
             incoming_dir=incoming,

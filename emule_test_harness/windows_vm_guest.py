@@ -259,8 +259,10 @@ try {
     $python = Ensure-GuestPython $session
     $guestZip = Join-Path $root (Split-Path -Leaf $payload.packageZip)
     $guestRunner = Join-Path $root 'windows_vm_local_ed2k.py'
+    $guestProfiles = Join-Path $root 'vm_guest_profiles.py'
     Copy-Item -ToSession $session -Path $payload.packageZip -Destination $guestZip
     Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
+    Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
     if ($target.target -eq 'win10') {
       Copy-Item -ToSession $session -Path $payload.serverExe -Destination (Join-Path $root 'goed2k-server.exe')
     }
@@ -535,8 +537,10 @@ try {
     $python = Ensure-GuestPython $session
     $guestZip = Join-Path $root (Split-Path -Leaf $payload.packageZip)
     $guestRunner = Join-Path $root 'windows_vm_hideme_live.py'
+    $guestProfiles = Join-Path $root 'vm_guest_profiles.py'
     Copy-Item -ToSession $session -Path $payload.packageZip -Destination $guestZip
     Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
+    Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
     $pythons[$target.target] = $python
     $runners[$target.target] = $guestRunner
     $packageZips[$target.target] = $guestZip

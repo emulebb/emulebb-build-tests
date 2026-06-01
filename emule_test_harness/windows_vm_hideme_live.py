@@ -15,12 +15,22 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from emule_test_harness.ini import write_utf16_ini_text
-
 SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 SAFE_QUERIES = ("linux", "ubuntu", "debian", "fedora")
 MIN_SAFE_SOURCES = 2
 MAX_SAFE_BYTES = 256 * 1024 * 1024
+try:
+    from emule_test_harness.vm_guest_profiles import (
+        DEFAULT_HIDEME_VPN_GUARD_ALLOWED_PUBLIC_IP_CIDRS,
+        hideme_live_preferences_text as preferences_text,
+        write_preferences_ini,
+    )
+except ModuleNotFoundError:
+    from vm_guest_profiles import (
+        DEFAULT_HIDEME_VPN_GUARD_ALLOWED_PUBLIC_IP_CIDRS,
+        hideme_live_preferences_text as preferences_text,
+        write_preferences_ini,
+    )
 
 
 def emit(payload: dict[str, Any]) -> int:
@@ -206,55 +216,6 @@ def guest_ipv4() -> str:
     return usable[0]
 
 
-def preferences_text(
-    *,
-    target: str,
-    incoming_dir: Path,
-    temp_dir: Path,
-    tcp_port: int,
-    udp_port: int,
-    rest_port: int,
-    lan_bind_addr: str,
-    api_key: str,
-) -> str:
-    return "\n".join(
-        [
-            "[eMule]",
-            f"Nick={target}-vm-hideme",
-            "ConfirmExit=0",
-            f"IncomingDir={incoming_dir}",
-            f"TempDir={temp_dir}",
-            f"Port={tcp_port}",
-            f"UDPPort={udp_port}",
-            "BindAddr=",
-            "BindInterface=hide.me",
-            "NetworkED2K=1",
-            "NetworkKademlia=0",
-            "Autoconnect=0",
-            "Reconnect=0",
-            "SafeServerConnect=0",
-            "FilterBadIPs=1",
-            "IPFilterEnabled=0",
-            "GeoLocationLookupEnabled=0",
-            "VpnGuardMode=Block",
-            "VpnGuardAllowedPublicIpCidrs=",
-            "SaveLogToDisk=1",
-            "SaveDebugToDisk=1",
-            "Verbose=1",
-            "FullVerbose=1",
-            "[WebServer]",
-            "Enabled=1",
-            f"ApiKey={api_key}",
-            f"Port={rest_port}",
-            f"BindAddr={lan_bind_addr}",
-            "UseHTTPS=0",
-            "[UPnP]",
-            "EnableUPnP=1",
-            "",
-        ]
-    )
-
-
 def repair_firewall(script_path: Path, program_path: Path, result_path: Path) -> dict[str, Any]:
     run(
         [
@@ -343,8 +304,8 @@ def command_prepare_client(args: argparse.Namespace) -> int:
 
     vpn = require_hide_me_connected(args.vpn_timeout_seconds)
     ip_address = guest_ipv4()
-    write_utf16_ini_text(
-        config_dir / "preferences.ini",
+    write_preferences_ini(
+        config_dir,
         preferences_text(
             target=args.target,
             incoming_dir=incoming,
