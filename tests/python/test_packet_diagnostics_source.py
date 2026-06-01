@@ -74,14 +74,28 @@ def test_packet_diagnostics_logging_api_is_compile_guarded() -> None:
 
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nextern CLogFile thePacketDiagnosticsLog;" in log_header
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\n#include \"Opcodes.h\"\n#endif" in log_source
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nCCriticalSection g_packetDiagnosticsLogLock;" in log_source
+    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nconstexpr UINT kMaxPacketDiagnosticsPayloadHexBytes = 4 * 1024;" in log_source
+    assert "CCriticalSection g_packetDiagnosticsLogLock;" in log_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nvoid PacketDiagnosticsLogInvalidSubOpcode(" in log_source
     assert '\\"schema\\":\\"ed2k_invalid_sub_opcode_v1\\"' in log_source
-    assert '\\"context_hex\\":\\"%s\\",\\"payload_hex\\":\\"%s\\"' in log_source
+    assert '\\"context_hex\\":\\"%s\\",\\"payload_hex_truncated\\":%s,\\"payload_hex\\":\\"%s\\"' in log_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nCLogFile thePacketDiagnosticsLog;" in emule_source
+    assert "thePacketDiagnosticsLog.SetFlushOnWrite(false)" in emule_source
     assert "thePacketDiagnosticsLog.SetFileFormat(Utf8);" in emule_source
     assert "LogArtifactNames::PacketDiagnosticsLogFileName()" in emule_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\ninline LPCTSTR PacketDiagnosticsLogFileName()" in artifacts
+
+
+def test_rest_recent_log_ring_is_bounded_and_clearable() -> None:
+    log_header = read_source("Log.h")
+    log_source = read_source("Log.cpp")
+    rest_source = read_source("WebServerJson.cpp")
+
+    assert "void ClearRecentLogEntries();" in log_header
+    assert "constexpr int kMaxRecentLogEntryChars = 4 * 1024;" in log_source
+    assert "TruncateLogLine(CString(pszText != NULL ? pszText : _T(\"\")), kMaxRecentLogEntryChars)" in log_source
+    assert "void ClearRecentLogEntries()\n{" in log_source
+    assert "ClearRecentLogEntries();" in rest_source
 
 
 def test_invalid_sub_opcode_diagnostics_call_sites_are_guarded() -> None:
