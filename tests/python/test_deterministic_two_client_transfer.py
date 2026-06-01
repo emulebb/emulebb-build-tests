@@ -82,6 +82,32 @@ def test_resolve_client2_app_exe_honors_override(tmp_path: Path) -> None:
     assert module.resolve_client2_app_exe(tmp_path / "workspace", "Release", str(override)) == override.resolve()
 
 
+def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
+    module = load_suite_module()
+    listen_hosts: list[str] = []
+    availability_checks: list[tuple[int, str | None, bool]] = []
+    next_port = iter(range(6100, 6110))
+
+    def fake_choose_listen_port(host: str | None = None) -> int:
+        listen_hosts.append(host or "")
+        return next(next_port)
+
+    def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
+        availability_checks.append((port, host, udp))
+        return True
+
+    monkeypatch.setattr(module.rest_smoke, "choose_listen_port", fake_choose_listen_port)
+    monkeypatch.setattr(module, "is_port_available", fake_is_port_available)
+
+    ports = module.choose_distinct_ports("172.24.112.1")
+
+    assert ports["ed2k_tcp"] == 6100
+    assert ports["ed2k_udp"] == 6104
+    assert listen_hosts == ["172.24.112.1"] * 8
+    assert all(host == "172.24.112.1" for _port, host, _udp in availability_checks)
+    assert availability_checks[0] == (6104, "172.24.112.1", True)
+
+
 def test_discover_interface_ipv4_falls_back_to_hostname_when_windows_adapter_query_fails(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module.os, "name", "nt")

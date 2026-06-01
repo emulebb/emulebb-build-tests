@@ -188,17 +188,18 @@ def is_port_available(port: int, *, host: str | None = None, udp: bool = False) 
     return True
 
 
-def choose_tcp_port_with_udp_offset(offset: int = 4) -> int:
+def choose_tcp_port_with_udp_offset(lan_bind_addr: str | None = None, offset: int = 4) -> int:
     """Chooses a TCP port whose conventional ED2K UDP status port is free."""
 
+    lan_bind_addr = rest_smoke.require_lan_bind_addr(lan_bind_addr, allow_env_fallback=True)
     for _ in range(100):
-        port = rest_smoke.choose_listen_port()
-        if port + offset <= 65535 and is_port_available(port + offset, udp=True):
+        port = rest_smoke.choose_listen_port(lan_bind_addr)
+        if port + offset <= 65535 and is_port_available(port + offset, host=lan_bind_addr, udp=True):
             return port
     raise RuntimeError("Could not allocate a TCP port with a free ED2K UDP offset.")
 
 
-def choose_distinct_ports() -> dict[str, int]:
+def choose_distinct_ports(lan_bind_addr: str | None = None) -> dict[str, int]:
     """Allocates the suite's local ports without intentional reuse."""
 
     ports: dict[str, int] = {}
@@ -210,13 +211,14 @@ def choose_distinct_ports() -> dict[str, int]:
         used.add(value)
         ports[name] = value
 
-    ed2k_tcp = choose_tcp_port_with_udp_offset()
+    lan_bind_addr = rest_smoke.require_lan_bind_addr(lan_bind_addr, allow_env_fallback=True)
+    ed2k_tcp = choose_tcp_port_with_udp_offset(lan_bind_addr)
     add("ed2k_tcp", ed2k_tcp)
     add("ed2k_udp", ed2k_tcp + 4)
     for name in ("ed2k_admin", "client1_rest", "client1_tcp", "client1_udp", "client2_tcp", "client2_udp"):
         for _ in range(100):
-            candidate = rest_smoke.choose_listen_port()
-            if candidate not in used and is_port_available(candidate, udp=name.endswith("_udp")):
+            candidate = rest_smoke.choose_listen_port(lan_bind_addr)
+            if candidate not in used and is_port_available(candidate, host=lan_bind_addr, udp=name.endswith("_udp")):
                 add(name, candidate)
                 break
         else:
@@ -900,7 +902,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         p2p_address = args.p2p_bind_interface_address or discover_interface_ipv4(args.p2p_bind_interface_name)
-        ports = choose_distinct_ports()
+        ports = choose_distinct_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
