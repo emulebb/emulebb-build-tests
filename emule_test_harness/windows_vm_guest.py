@@ -1,4 +1,4 @@
-"""Guest-side script templates for Windows VM harness runs."""
+"""Guest-side PowerShell Direct shims for Windows VM harness runs."""
 
 from __future__ import annotations
 
@@ -167,6 +167,235 @@ finally {
   if (-not $payload.keepRunning) {
     Stop-VM -Name $payload.vmName -Force
     Restore-VMSnapshot -VMName $payload.vmName -Name $payload.checkpointName -Confirm:$false
+  }
+}
+"""
+
+
+def local_ed2k_transfer_script() -> str:
+    """Returns a minimal PowerShell Direct shim for the Python VM transfer runner."""
+
+    return r"""
+$ErrorActionPreference = 'Stop'
+$secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+$credential = [pscredential]::new($payload.username, $secure)
+$targets = @($payload.win10, $payload.win11)
+$sessions = @{}
+$roots = @{}
+$results = @{}
+$pythons = @{}
+$runners = @{}
+$packageZips = @{}
+
+function Wait-GuestSession($vmName) {
+  $deadline = (Get-Date).AddMinutes(10)
+  do {
+    Start-Sleep -Seconds 3
+    try {
+      return New-PSSession -VMName $vmName -Credential $credential -ErrorAction Stop
+    } catch {
+      if ((Get-Date) -gt $deadline) { throw }
+    }
+  } while ($true)
+}
+
+function Restore-Guest($target) {
+  $vm = Get-VM -Name $target.vmName -ErrorAction Stop
+  if ($vm.State -ne 'Off') {
+    Stop-VM -Name $target.vmName -TurnOff -Force
+  }
+  $snapshot = Get-VMSnapshot -VMName $target.vmName -Name $payload.checkpointName -ErrorAction Stop
+  Restore-VMSnapshot -VMSnapshot $snapshot -Confirm:$false
+  Start-VM -Name $target.vmName
+  return Wait-GuestSession $target.vmName
+}
+
+function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments) {
+  $stdout = Invoke-Command -Session $session -ScriptBlock {
+    param($python, $runner, [string[]] $arguments)
+    $output = & $python $runner @arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw ('guest python failed with exit code ' + $LASTEXITCODE + ":`n" + (($output | ForEach-Object { $_.ToString() }) -join "`n"))
+    }
+    $output
+  } -ArgumentList $python, $runner, $arguments
+  return ($stdout -join "`n") | ConvertFrom-Json
+}
+
+function Ensure-GuestPython($session) {
+  return Invoke-Command -Session $session -ScriptBlock {
+    $candidates = @(
+      'C:\Python313\python.exe',
+      'C:\Python312\python.exe',
+      'C:\Program Files\Python313\python.exe',
+      'C:\Program Files\Python312\python.exe'
+    )
+    foreach ($candidate in $candidates) {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        & $candidate -m pip --version | Out-Null
+        return $candidate
+      }
+    }
+    $command = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($command) {
+      & $command.Source -m pip --version | Out-Null
+      return $command.Source
+    }
+    throw 'Python with pip is not installed in the guest. Re-run vm-lab prepare to install the guest baseline.'
+  }
+}
+
+try {
+  foreach ($target in $targets) {
+    $session = Restore-Guest $target
+    $sessions[$target.target] = $session
+    $root = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $target.target
+    $roots[$target.target] = $root
+    Invoke-Command -Session $session -ScriptBlock {
+      param($root)
+      if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+      New-Item -ItemType Directory -Force -Path $root | Out-Null
+    } -ArgumentList $root
+    $python = Ensure-GuestPython $session
+    $guestZip = Join-Path $root (Split-Path -Leaf $payload.packageZip)
+    $guestRunner = Join-Path $root 'windows_vm_local_ed2k.py'
+    Copy-Item -ToSession $session -Path $payload.packageZip -Destination $guestZip
+    Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
+    if ($target.target -eq 'win10') {
+      Copy-Item -ToSession $session -Path $payload.serverExe -Destination (Join-Path $root 'goed2k-server.exe')
+    }
+    $pythons[$target.target] = $python
+    $runners[$target.target] = $guestRunner
+    $packageZips[$target.target] = $guestZip
+  }
+
+  foreach ($target in $targets) {
+    $args = @(
+      'prepare-client',
+      '--root', $roots[$target.target],
+      '--target', $target.target,
+      '--package-zip', $packageZips[$target.target],
+      '--username', $payload.username,
+      '--password', $payload.password,
+      '--tcp-port', [string] $target.tcpPort,
+      '--udp-port', [string] $target.udpPort,
+      '--rest-port', [string] $target.restPort,
+      '--api-key', $payload.apiKey,
+      '--fixture-size-bytes', [string] $payload.fixtureSizeBytes
+    )
+    if ($target.target -eq 'win10') {
+      $args += @('--server-exe', (Join-Path $roots[$target.target] 'goed2k-server.exe'), '--admin-token', $payload.adminToken)
+    }
+    $results[$target.target] = Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] $args
+  }
+
+  $server = Invoke-GuestPython $sessions['win10'] $pythons['win10'] $runners['win10'] @(
+    'start-server',
+    '--root', $roots['win10'],
+    '--admin-token', $payload.adminToken
+  )
+  $serverAddress = $results['win10'].guest.ipv4
+
+  foreach ($target in $targets) {
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'wait-rest',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey
+    )
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'add-connect-server',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey,
+      '--server-address', $serverAddress,
+      '--server-port', '4661'
+    )
+    $results[$target.target].checks += Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'wait-server-connected',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey
+    )
+  }
+
+  $links = @{}
+  foreach ($target in $targets) {
+    $links[$target.target] = Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] @(
+      'shared-link',
+      '--base-url', $results[$target.target].restBaseUrl,
+      '--api-key', $payload.apiKey,
+      '--name', $results[$target.target].sample.name,
+      '--path', $results[$target.target].sample.path
+    )
+    $results[$target.target].checks += $links[$target.target]
+  }
+
+  $results['win10'].checks += Invoke-GuestPython $sessions['win10'] $pythons['win10'] $runners['win10'] @(
+    'add-transfer',
+    '--base-url', $results['win10'].restBaseUrl,
+    '--api-key', $payload.apiKey,
+    '--link', $links['win11'].link
+  )
+  $results['win11'].checks += Invoke-GuestPython $sessions['win11'] $pythons['win11'] $runners['win11'] @(
+    'add-transfer',
+    '--base-url', $results['win11'].restBaseUrl,
+    '--api-key', $payload.apiKey,
+    '--link', $links['win10'].link
+  )
+
+  $results['win10'].checks += Invoke-GuestPython $sessions['win10'] $pythons['win10'] $runners['win10'] @(
+    'wait-completed',
+    '--incoming-dir', $results['win10'].incomingDir,
+    '--name', $results['win11'].sample.name,
+    '--size', [string] $results['win11'].sample.size,
+    '--sha256', $results['win11'].sample.sha256
+  )
+  $results['win11'].checks += Invoke-GuestPython $sessions['win11'] $pythons['win11'] $runners['win11'] @(
+    'wait-completed',
+    '--incoming-dir', $results['win11'].incomingDir,
+    '--name', $results['win10'].sample.name,
+    '--size', [string] $results['win10'].sample.size,
+    '--sha256', $results['win10'].sample.sha256
+  )
+
+  foreach ($target in $targets) {
+    $results[$target.target].status = 'passed'
+  }
+  [pscustomobject]@{
+    schema = 'emulebb.windows-vm-local-ed2k-transfer-result.v1'
+    status = 'passed'
+    generatedAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    server = $server
+    links = $links
+    targets = $results
+  } | ConvertTo-Json -Depth 12
+}
+catch {
+  [pscustomobject]@{
+    schema = 'emulebb.windows-vm-local-ed2k-transfer-result.v1'
+    status = 'failed'
+    generatedAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    error = @{ type = $_.Exception.GetType().FullName; message = $_.Exception.Message }
+    targets = $results
+  } | ConvertTo-Json -Depth 12
+}
+finally {
+  foreach ($target in $targets) {
+    $session = $sessions[$target.target]
+    if ($session) {
+      try {
+        if (-not $payload.keepRunning) {
+          Invoke-GuestPython $session $pythons[$target.target] $runners[$target.target] @('stop-runtime') | Out-Null
+        }
+        $destination = Join-Path $payload.hostReportDir $target.target
+        New-Item -ItemType Directory -Force -Path $destination | Out-Null
+        Copy-Item -FromSession $session -Path (Join-Path $roots[$target.target] '*') -Destination $destination -Recurse -Force
+      } catch {
+      }
+      Remove-PSSession $session -ErrorAction SilentlyContinue
+    }
+    if (-not $payload.keepRunning) {
+      Stop-VM -Name $target.vmName -Force -ErrorAction SilentlyContinue
+      Restore-VMSnapshot -VMName $target.vmName -Name $payload.checkpointName -Confirm:$false -ErrorAction SilentlyContinue
+    }
   }
 }
 """
