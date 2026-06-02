@@ -191,25 +191,42 @@ def test_all_reusable_campaign_local_modes_plan_declared_local_suites(tmp_path: 
 
 
 def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
-    scenarios = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_KEY
+    for scenario in campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIOS:
+        local_command = scenario.command_for_mode("local", swarm_tier=2)
+        assert local_command == (
+            "python -m emule_workspace test campaign-scenario "
+            f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2"
+        )
 
-    local_command = scenarios["search-ui-local-swarm"].command_for_mode("local", swarm_tier=2)
-    assert local_command == (
-        "python -m emule_workspace test campaign-scenario "
-        "--scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 2"
-    )
+        vm_plan_command = scenario.command_for_mode(
+            "vm",
+            release_version="0.7.4-rc.2",
+            swarm_tier=3,
+            local_swarm_mode="plan",
+        )
+        assert vm_plan_command == (
+            "python -m emule_workspace test campaign-scenario "
+            f"--scenario {scenario.scenario_id} --mode vm "
+            "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3"
+        )
 
-    vm_command = scenarios["search-ui-local-swarm"].command_for_mode(
-        "vm",
-        release_version="0.7.4-rc.2",
-        swarm_tier=3,
-        local_swarm_mode="execute",
-    )
-    assert vm_command == (
-        "python -m emule_workspace test campaign-scenario "
-        "--scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm "
-        "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3 --local-swarm-mode execute"
-    )
+        vm_execute_command = scenario.command_for_mode(
+            "vm",
+            release_version="0.7.4-rc.2",
+            swarm_tier=3,
+            local_swarm_mode="execute",
+        )
+        assert vm_execute_command == (
+            "python -m emule_workspace test campaign-scenario "
+            f"--scenario {scenario.scenario_id} --mode vm "
+            "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3 --local-swarm-mode execute"
+        )
+
+        matrix_row = scenario.as_matrix_row()
+        assert matrix_row["localCommand"] == scenario.command_for_mode("local")
+        assert matrix_row["vmCommand"] == scenario.command_for_mode("vm")
+        assert matrix_row["vmPlanCommand"] == scenario.command_for_mode("vm", local_swarm_mode="plan")
+        assert matrix_row["vmExecuteCommand"] == scenario.command_for_mode("vm", local_swarm_mode="execute")
 
 
 def test_reusable_campaign_specs_reject_unsupported_command_options() -> None:
