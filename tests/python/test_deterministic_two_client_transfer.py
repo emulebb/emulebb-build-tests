@@ -63,6 +63,25 @@ def test_resolve_ed2k_server_exe_defaults_to_workspace_state(tmp_path: Path) -> 
     assert resolved == (workspace / "state" / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
 
 
+def test_build_or_skip_ed2k_server_binary_honors_explicit_exe_without_manifest(tmp_path: Path) -> None:
+    module = load_suite_module()
+    workspace = tmp_path / "vm" / "workspace"
+    server_exe = tmp_path / "harness" / "tools" / "goed2k-server.exe"
+    server_exe.parent.mkdir(parents=True)
+    server_exe.write_bytes(b"")
+
+    result = module.build_or_skip_ed2k_server_binary(
+        workspace,
+        server_exe,
+        exe_override=str(server_exe),
+    )
+
+    assert result["return_code"] == 0
+    assert result["server_exe"] == str(server_exe)
+    assert result["skipped"] is True
+    assert result["reason"] == "using explicit --ed2k-server-exe"
+
+
 def test_resolve_client2_app_exe_uses_tracing_harness_executable(tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"

@@ -174,6 +174,28 @@ def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, o
     return result
 
 
+def build_or_skip_ed2k_server_binary(
+    workspace_root: Path,
+    server_exe: Path,
+    *,
+    repo_override: str | None = None,
+    exe_override: str | None = None,
+) -> dict[str, object]:
+    """Builds the ED2K server unless an explicit executable override is already staged."""
+
+    if exe_override:
+        return {
+            "command": [],
+            "cwd": "",
+            "return_code": 0,
+            "server_exe": str(server_exe),
+            "skipped": True,
+            "reason": "using explicit --ed2k-server-exe",
+        }
+    server_repo = resolve_ed2k_server_repo(workspace_root, repo_override)
+    return build_ed2k_server_binary(server_repo, server_exe)
+
+
 def is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
     """Reports whether a TCP or UDP port can be bound locally."""
 
@@ -909,9 +931,13 @@ def main(argv: list[str] | None = None) -> int:
             "ports": ports,
         }
 
-        ed2k_repo = resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
         ed2k_exe = resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+        report["checks"]["server_build"] = build_or_skip_ed2k_server_binary(
+            paths.workspace_root,
+            ed2k_exe,
+            repo_override=args.ed2k_server_repo,
+            exe_override=args.ed2k_server_exe,
+        )
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         catalog_path = server_dir / "catalog.json"

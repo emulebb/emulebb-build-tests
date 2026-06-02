@@ -2274,9 +2274,13 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         current_phase = "build_ed2k_server"
-        ed2k_repo = dtt.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
         ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = dtt.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+        report["checks"]["server_build"] = dtt.build_or_skip_ed2k_server_binary(
+            paths.workspace_root,
+            ed2k_exe,
+            repo_override=args.ed2k_server_repo,
+            exe_override=args.ed2k_server_exe,
+        )
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         catalog_path = server_dir / "catalog.json"
         config_path = server_dir / "config.json"
