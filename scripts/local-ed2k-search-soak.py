@@ -313,16 +313,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
-        ports = dtt.choose_distinct_ports()
+        ports = dtt.choose_distinct_ports(args.lan_bind_addr)
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
             "ports": ports,
         }
 
-        ed2k_repo = dtt.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
         ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = dtt.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+        report["checks"]["server_build"] = dtt.build_or_skip_ed2k_server_binary(
+            paths.workspace_root,
+            ed2k_exe,
+            repo_override=args.ed2k_server_repo,
+            exe_override=args.ed2k_server_exe,
+        )
 
         current_phase = "prepare_catalog"
         server_dir = paths.source_artifacts_dir / "ed2k-server"

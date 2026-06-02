@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +32,66 @@ def test_local_soak_defaults_are_bounded_and_local() -> None:
     assert args.max_concurrent_searches == 6
     assert args.synthetic_catalog_files == 240
     assert args.fixture_size_bytes == 132 * 1024 * 1024
+
+
+def test_main_uses_lan_bind_and_staged_server_helper(tmp_path: Path, monkeypatch) -> None:
+    module = load_suite_module()
+    calls: dict[str, object] = {}
+    source_artifacts_dir = tmp_path / "artifacts"
+    server_exe = tmp_path / "harness" / "tools" / "goed2k-server.exe"
+    server_exe.parent.mkdir(parents=True)
+    server_exe.write_bytes(b"")
+
+    def fake_prepare_run_paths(**_kwargs):
+        source_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        return SimpleNamespace(
+            workspace_root=tmp_path / "workspace",
+            seed_config_dir=tmp_path / "seed",
+            source_artifacts_dir=source_artifacts_dir,
+            app_exe=tmp_path / "emulebb.exe",
+        )
+
+    def fake_choose_distinct_ports(host: str | None = None) -> dict[str, int]:
+        calls["port_host"] = host
+        return {
+            "ed2k_tcp": 4661,
+            "ed2k_admin": 8080,
+            "ed2k_udp": 4665,
+            "client1_tcp": 4662,
+            "client1_udp": 4672,
+            "client1_rest": 4711,
+            "client2_tcp": 4663,
+            "client2_udp": 4673,
+        }
+
+    def fake_build_or_skip(workspace_root, server_exe_arg, *, repo_override=None, exe_override=None):
+        calls["server_build"] = {
+            "workspace_root": workspace_root,
+            "server_exe": server_exe_arg,
+            "repo_override": repo_override,
+            "exe_override": exe_override,
+        }
+        raise RuntimeError("stop after staged server helper")
+
+    monkeypatch.setattr(module.harness_cli_common, "prepare_run_paths", fake_prepare_run_paths)
+    monkeypatch.setattr(module.harness_cli_common, "publish_run_artifacts", lambda _paths: None)
+    monkeypatch.setattr(module.harness_cli_common, "publish_latest_report", lambda _paths: None)
+    monkeypatch.setattr(module.harness_cli_common, "cleanup_source_artifacts", lambda _paths: None)
+    monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.77")
+    monkeypatch.setattr(module.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
+    monkeypatch.setattr(module.dtt, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
+    monkeypatch.setattr(module.dtt, "build_or_skip_ed2k_server_binary", fake_build_or_skip)
+
+    exit_code = module.main(["--lan-bind-addr", "192.0.2.77", "--ed2k-server-exe", str(server_exe)])
+
+    assert exit_code == 1
+    assert calls["port_host"] == "192.0.2.77"
+    assert calls["server_build"] == {
+        "workspace_root": tmp_path / "workspace",
+        "server_exe": server_exe,
+        "repo_override": None,
+        "exe_override": str(server_exe),
+    }
 
 
 def test_synthetic_catalog_records_are_deterministic_and_searchable() -> None:
