@@ -490,15 +490,77 @@ function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments) {
   return ($stdout -join "`n") | ConvertFrom-Json
 }
 
-function Copy-GuestArtifacts($session, $source, $destination) {
-  for ($attempt = 1; $attempt -le 5; $attempt++) {
-    try {
-      Copy-Item -FromSession $session -Path $source -Destination $destination -Recurse -Force
-      return
-    } catch {
-      if ($attempt -eq 5) { throw }
-      Start-Sleep -Seconds 2
+function Copy-GuestArtifacts($session, $sourceRoot, $destination) {
+  $snapshotRoot = $sourceRoot + '-artifact-snapshot'
+  Invoke-Command -Session $session -ScriptBlock {
+    param($sourceRoot, $snapshotRoot)
+    if (Test-Path -LiteralPath $snapshotRoot) {
+      Remove-Item -LiteralPath $snapshotRoot -Recurse -Force
     }
+    New-Item -ItemType Directory -Force -Path $snapshotRoot | Out-Null
+    $errors = @()
+    Get-ChildItem -LiteralPath $sourceRoot -Force -Recurse | ForEach-Object {
+      $relative = $_.FullName.Substring($sourceRoot.Length).TrimStart('\')
+      $target = Join-Path $snapshotRoot $relative
+      if ($_.PSIsContainer) {
+        New-Item -ItemType Directory -Force -Path $target | Out-Null
+        return
+      }
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+      $sourceStream = $null
+      $targetStream = $null
+      try {
+        $sourceStream = [System.IO.FileStream]::new(
+          $_.FullName,
+          [System.IO.FileMode]::Open,
+          [System.IO.FileAccess]::Read,
+          ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+        )
+        $targetStream = [System.IO.FileStream]::new(
+          $target,
+          [System.IO.FileMode]::Create,
+          [System.IO.FileAccess]::Write,
+          [System.IO.FileShare]::None
+        )
+        $sourceStream.CopyTo($targetStream)
+      } catch {
+        $errors += [pscustomobject]@{ path = $_.FullName; error = $_.Exception.Message }
+      } finally {
+        if ($targetStream) { $targetStream.Dispose() }
+        if ($sourceStream) { $sourceStream.Dispose() }
+      }
+    }
+    if ($errors.Count -gt 0) {
+      $errors | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $snapshotRoot 'artifact-copy-errors.json') -Encoding UTF8
+      throw ('Failed to snapshot {0} guest artifact file(s).' -f $errors.Count)
+    }
+  } -ArgumentList $sourceRoot, $snapshotRoot
+  try {
+    for ($attempt = 1; $attempt -le 15; $attempt++) {
+      try {
+        Copy-Item -FromSession $session -Path (Join-Path $snapshotRoot '*') -Destination $destination -Recurse -Force
+        return
+      } catch {
+        if ($attempt -eq 15) { throw }
+        Start-Sleep -Seconds 3
+      }
+    }
+  } finally {
+    Invoke-Command -Session $session -ScriptBlock {
+      param($snapshotRoot)
+      if (Test-Path -LiteralPath $snapshotRoot) {
+        Remove-Item -LiteralPath $snapshotRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    } -ArgumentList $snapshotRoot
+  }
+}
+
+function Stop-GuestRuntime($session) {
+  Invoke-Command -Session $session -ScriptBlock {
+    Get-Process -Name emulebb -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-ScheduledTask -TaskName 'eMuleBB VM*' -ErrorAction SilentlyContinue |
+      Stop-ScheduledTask -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
   }
 }
 
@@ -528,7 +590,8 @@ try {
     '--fixture-size-bytes', [string] $payload.fixtureSizeBytes
   )
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
-  Copy-GuestArtifacts $session (Join-Path $guestRoot '*') $payload.hostReportDir
+  Stop-GuestRuntime $session
+  Copy-GuestArtifacts $session $guestRoot $payload.hostReportDir
   $guestResult | ConvertTo-Json -Depth 12
 }
 finally {
