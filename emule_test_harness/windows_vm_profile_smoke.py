@@ -104,13 +104,13 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
     app_root = expanded / "eMuleBB"
     exe_path = app_root / "emulebb.exe"
     local_swarm_profile = args.profile in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
-    web_bind_addr = "127.0.0.1"
-    base_url = f"http://{web_bind_addr}:{REST_PORT}"
+    web_interface_bind_addr = "127.0.0.1"
+    base_url = f"http://{web_interface_bind_addr}:{REST_PORT}"
 
     try:
         if local_swarm_profile:
-            web_bind_addr = require_campaign_lan_bind_addr(args.lan_bind_addr)
-        base_url = f"http://{web_bind_addr}:{REST_PORT}"
+            web_interface_bind_addr = require_campaign_lan_bind_addr(args.lan_bind_addr)
+        base_url = f"http://{web_interface_bind_addr}:{REST_PORT}"
         reset_directory(artifacts)
         for directory in (config_dir, incoming_dir, temp_dir, shared_dir):
             directory.mkdir(parents=True, exist_ok=True)
@@ -124,7 +124,7 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                 temp_dir=temp_dir,
                 shared_dir=shared_dir,
                 enable_diagnostics=args.profile in {"crash-dump-smoke", "diagnostics-local-dumps"},
-                web_bind_addr=web_bind_addr,
+                web_interface_bind_addr=web_interface_bind_addr,
             ),
         )
         checks.append(make_fixture(shared_dir, args.fixture_size_bytes, args.profile))
@@ -212,7 +212,7 @@ def offline_preferences_text(
     temp_dir: Path,
     shared_dir: Path,
     enable_diagnostics: bool,
-    web_bind_addr: str = "127.0.0.1",
+    web_interface_bind_addr: str = "127.0.0.1",
 ) -> str:
     return "\n".join(
         [
@@ -238,7 +238,7 @@ def offline_preferences_text(
             "Enabled=1",
             f"ApiKey={API_KEY}",
             f"Port={REST_PORT}",
-            f"BindAddr={web_bind_addr}",
+            f"BindAddr={web_interface_bind_addr}",
             "UseHTTPS=0",
             "AllowAdminHiLevelFunc=1",
             f"EnableDiagnosticRestEndpoints={1 if enable_diagnostics else 0}",
