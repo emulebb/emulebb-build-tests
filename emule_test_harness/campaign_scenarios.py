@@ -11,6 +11,9 @@ VM_LOCAL_SWARM_MODES = ("plan", "execute")
 LOCAL_CAMPAIGN_TEST_NETWORK = "default"
 LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES = ("offline", "lan")
 LOCAL_SWARM_CLIENT_PRODUCTS = ("emulebb", "amule", "tracing-harness")
+CONTROL_BIND_SCOPES = ("lan",)
+P2P_MODES = ("local-swarm", "live-wire")
+P2P_BIND_SCOPES = ("lan", "hide.me")
 LOCAL_SWARM_TIERS = (1, 2, 3)
 DEFAULT_LOCAL_SWARM_TIER = 1
 DEFAULT_RELEASE_VERSION = "0.7.3-rc.1"
@@ -79,6 +82,26 @@ class CampaignScenarioSpec:
     live_wire: bool = False
     local_test_network: str = LOCAL_CAMPAIGN_TEST_NETWORK
     local_allowed_network_scopes: tuple[str, ...] = LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES
+    control_bind_scope: str = "lan"
+    amutorrent_bind_scope: str = "lan"
+    p2p_mode: str = "local-swarm"
+    p2p_bind_scope: str = "lan"
+
+    def __post_init__(self) -> None:
+        """Rejects unsupported controller/P2P network contract combinations early."""
+
+        if self.control_bind_scope not in CONTROL_BIND_SCOPES:
+            raise ValueError(f"Unsupported control bind scope: {self.control_bind_scope!r}.")
+        if self.amutorrent_bind_scope not in CONTROL_BIND_SCOPES:
+            raise ValueError(f"Unsupported aMuTorrent bind scope: {self.amutorrent_bind_scope!r}.")
+        if self.p2p_mode not in P2P_MODES:
+            raise ValueError(f"Unsupported P2P mode: {self.p2p_mode!r}.")
+        if self.p2p_bind_scope not in P2P_BIND_SCOPES:
+            raise ValueError(f"Unsupported P2P bind scope: {self.p2p_bind_scope!r}.")
+        if self.p2p_mode == "local-swarm" and self.p2p_bind_scope != "lan":
+            raise ValueError("Local-swarm P2P scenarios must bind P2P on LAN.")
+        if self.p2p_mode == "live-wire" and self.p2p_bind_scope != "hide.me":
+            raise ValueError("Live-wire P2P scenarios must bind P2P through hide.me.")
 
     def as_matrix_row(self) -> dict[str, Any]:
         """Returns the JSON shape used by audits and release tooling tests."""
@@ -97,6 +120,10 @@ class CampaignScenarioSpec:
             "scenarioId": self.scenario_id,
             "usesLocalSwarm": self.uses_local_swarm,
             "liveWire": self.live_wire,
+            "controlBindScope": self.control_bind_scope,
+            "amutorrentBindScope": self.amutorrent_bind_scope,
+            "p2pMode": self.p2p_mode,
+            "p2pBindScope": self.p2p_bind_scope,
             "localCommand": self.command_for_mode("local"),
             "vmCommand": self.command_for_mode("vm"),
             "vmPlanCommand": self.command_for_mode("vm", local_swarm_mode="plan"),
@@ -203,6 +230,11 @@ def build_campaign_scenario_matrix() -> dict[str, Any]:
         "schema": "emulebb-build-tests.campaign-scenario-matrix.v1",
         "executionModes": list(EXECUTION_MODES),
         "vmLocalSwarmModes": list(VM_LOCAL_SWARM_MODES),
+        "networkContracts": {
+            "controlBindScopes": list(CONTROL_BIND_SCOPES),
+            "p2pModes": list(P2P_MODES),
+            "p2pBindScopes": list(P2P_BIND_SCOPES),
+        },
         "localSwarm": {
             "clientProducts": list(LOCAL_SWARM_CLIENT_PRODUCTS),
             "tiers": list(LOCAL_SWARM_TIERS),

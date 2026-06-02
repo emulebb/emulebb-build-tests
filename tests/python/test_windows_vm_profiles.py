@@ -38,5 +38,9 @@ def test_windows_vm_profile_matrix_is_the_profile_authority() -> None:
         assert profile["localProfile"] == scenario.local_profile
         assert profile["localSuites"] == list(scenario.local_suites)
         assert profile["usesLocalSwarm"] is True
+        assert profile["controlBindScope"] == scenario.control_bind_scope == "lan"
+        assert profile["amutorrentBindScope"] == scenario.amutorrent_bind_scope == "lan"
+        assert profile["p2pMode"] == scenario.p2p_mode == "local-swarm"
+        assert profile["p2pBindScope"] == scenario.p2p_bind_scope == "lan"
         assert profile["scenarioId"] == scenario.scenario_id
     json.dumps(matrix)

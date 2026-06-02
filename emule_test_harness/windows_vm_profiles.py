@@ -28,6 +28,10 @@ class WindowsVmProfileSpec:
     local_suites: tuple[str, ...] = ()
     execution_modes: tuple[str, ...] = ("vm",)
     uses_local_swarm: bool = False
+    control_bind_scope: str = ""
+    amutorrent_bind_scope: str = ""
+    p2p_mode: str = ""
+    p2p_bind_scope: str = ""
 
 
 WINDOWS_VM_PROFILE_SPECS = (
@@ -161,6 +165,10 @@ WINDOWS_VM_PROFILE_SPECS = (
         local_suites=spec.local_suites,
         execution_modes=("local", "vm"),
         uses_local_swarm=spec.uses_local_swarm,
+        control_bind_scope=spec.control_bind_scope,
+        amutorrent_bind_scope=spec.amutorrent_bind_scope,
+        p2p_mode=spec.p2p_mode,
+        p2p_bind_scope=spec.p2p_bind_scope,
     )
     for spec in REUSABLE_CAMPAIGN_SCENARIOS
 )
@@ -191,6 +199,10 @@ def build_windows_vm_profile_matrix() -> dict[str, Any]:
                 "localProfile": spec.local_profile,
                 "localSuites": list(spec.local_suites),
                 "usesLocalSwarm": spec.uses_local_swarm,
+                "controlBindScope": spec.control_bind_scope,
+                "amutorrentBindScope": spec.amutorrent_bind_scope,
+                "p2pMode": spec.p2p_mode,
+                "p2pBindScope": spec.p2p_bind_scope,
             }
             for spec in WINDOWS_VM_PROFILE_SPECS
         ],

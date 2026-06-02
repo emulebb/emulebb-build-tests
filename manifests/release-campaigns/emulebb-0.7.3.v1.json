@@ -432,6 +432,10 @@
             "package-helper-integration"
           ],
           "vmProfile": "installer-controller-surface-vm",
+          "controlBindScope": "lan",
+          "amutorrentBindScope": "lan",
+          "p2pMode": "local-swarm",
+          "p2pBindScope": "lan",
           "evidence": [
             {
               "kind": "json-status",
@@ -465,6 +469,10 @@
             "package-helper-integration"
           ],
           "vmProfile": "prowlarr-controller-handoff-vm",
+          "controlBindScope": "lan",
+          "amutorrentBindScope": "lan",
+          "p2pMode": "local-swarm",
+          "p2pBindScope": "lan",
           "evidence": [
             {
               "kind": "json-status",
@@ -770,6 +778,10 @@
             "local-kad-swarm"
           ],
           "vmProfile": "search-ui-local-swarm-vm",
+          "controlBindScope": "lan",
+          "amutorrentBindScope": "lan",
+          "p2pMode": "local-swarm",
+          "p2pBindScope": "lan",
           "evidence": [
             {
               "kind": "json-status",
@@ -1075,6 +1087,10 @@
             "amutorrent-local-ed2k-ui-live"
           ],
           "vmProfile": "amutorrent-clean-startup-vm",
+          "controlBindScope": "lan",
+          "amutorrentBindScope": "lan",
+          "p2pMode": "local-swarm",
+          "p2pBindScope": "lan",
           "evidence": [
             {
               "kind": "json-status",
@@ -1108,6 +1124,10 @@
             "amutorrent-local-ed2k-ui-live"
           ],
           "vmProfile": "amutorrent-emulebb-ui-vm",
+          "controlBindScope": "lan",
+          "amutorrentBindScope": "lan",
+          "p2pMode": "local-swarm",
+          "p2pBindScope": "lan",
           "evidence": [
             {
               "kind": "json-status",

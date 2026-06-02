@@ -110,6 +110,10 @@ def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
             assert scenario["localProfile"] == shared.local_profile
             assert scenario["localSuites"] == list(shared.local_suites)
             assert scenario["vmProfile"] == spec.name
+            assert scenario["controlBindScope"] == shared.control_bind_scope == "lan"
+            assert scenario["amutorrentBindScope"] == shared.amutorrent_bind_scope == "lan"
+            assert scenario["p2pMode"] == shared.p2p_mode == "local-swarm"
+            assert scenario["p2pBindScope"] == shared.p2p_bind_scope == "lan"
         else:
             assert scenario["flowCategory"] == "windows-vm"
             assert f"test windows-vm --matrix {','.join(spec.required_targets)}" in scenario["command"]
@@ -262,6 +266,22 @@ def test_campaign_validation_rejects_local_vm_swarm_catalog_metadata_drift() -> 
         release_campaigns.validate_release_campaign(campaign, template)
 
 
+def test_campaign_validation_rejects_local_vm_swarm_network_contract_drift() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
+    scenario = next(
+        scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if scenario["flowCategory"] == "local-vm-swarm"
+    )
+    scenario["p2pMode"] = "live-wire"
+
+    with pytest.raises(release_campaigns.ReleaseCampaignError, match="p2pMode must match"):
+        release_campaigns.validate_release_campaign(campaign, template)
+
+
 def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
     tests_root = tmp_path / "tests"
     state_root = tmp_path / "state"
@@ -370,6 +390,10 @@ def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
     assert "--local-swarm-mode execute" in scenario["vmExecuteCommand"]
     assert "--dry-run" in scenario["vmPlanCommand"]
     assert scenario["vmPlanCommand"] == scenario["vmCommand"]
+    assert scenario["controlBindScope"] == "lan"
+    assert scenario["amutorrentBindScope"] == "lan"
+    assert scenario["p2pMode"] == "local-swarm"
+    assert scenario["p2pBindScope"] == "lan"
     assert "emulebb.flow.controller.installer-swarm.v1" in text
     assert "mode: vm (available: local, vm)" in text
     assert "local command: python -m emule_workspace test campaign-scenario" in text

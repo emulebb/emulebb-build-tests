@@ -197,6 +197,28 @@
         "vmProfile": {
           "type": "string"
         },
+        "controlBindScope": {
+          "enum": [
+            "lan"
+          ]
+        },
+        "amutorrentBindScope": {
+          "enum": [
+            "lan"
+          ]
+        },
+        "p2pMode": {
+          "enum": [
+            "local-swarm",
+            "live-wire"
+          ]
+        },
+        "p2pBindScope": {
+          "enum": [
+            "lan",
+            "hide.me"
+          ]
+        },
         "evidence": {
           "type": "array",
           "items": {

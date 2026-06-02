@@ -14,6 +14,11 @@ def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() ->
 
     assert matrix["executionModes"] == ["local", "vm"]
     assert matrix["vmLocalSwarmModes"] == ["plan", "execute"]
+    assert matrix["networkContracts"] == {
+        "controlBindScopes": ["lan"],
+        "p2pModes": ["local-swarm", "live-wire"],
+        "p2pBindScopes": ["lan", "hide.me"],
+    }
     assert matrix["scenarios"][0]["localTestNetwork"] == "default"
     assert matrix["scenarios"][0]["localAllowedNetworkScopes"] == ["offline", "lan"]
     assert matrix["localSwarm"] == {
@@ -49,6 +54,10 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
         assert scenario["localAllowedNetworkScopes"] == ["offline", "lan"]
         assert scenario["usesLocalSwarm"] is True
         assert scenario["liveWire"] is False
+        assert scenario["controlBindScope"] == "lan"
+        assert scenario["amutorrentBindScope"] == "lan"
+        assert scenario["p2pMode"] == "local-swarm"
+        assert scenario["p2pBindScope"] == "lan"
         assert scenario["localSuites"]
 
     assert scenarios["search-ui-local-swarm"]["releasePhase"] == "ui-resource-depth"
@@ -227,6 +236,10 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
         assert matrix_row["vmCommand"] == scenario.command_for_mode("vm")
         assert matrix_row["vmPlanCommand"] == scenario.command_for_mode("vm", local_swarm_mode="plan")
         assert matrix_row["vmExecuteCommand"] == scenario.command_for_mode("vm", local_swarm_mode="execute")
+        assert matrix_row["controlBindScope"] == scenario.control_bind_scope
+        assert matrix_row["amutorrentBindScope"] == scenario.amutorrent_bind_scope
+        assert matrix_row["p2pMode"] == scenario.p2p_mode
+        assert matrix_row["p2pBindScope"] == scenario.p2p_bind_scope
 
 
 def test_reusable_campaign_specs_reject_unsupported_command_options() -> None:
@@ -238,3 +251,36 @@ def test_reusable_campaign_specs_reject_unsupported_command_options() -> None:
         scenario.command_for_mode("local", swarm_tier=99)
     with pytest.raises(ValueError, match="local swarm mode"):
         scenario.command_for_mode("vm", local_swarm_mode="remote")
+
+
+def test_reusable_campaign_specs_reject_invalid_network_contracts() -> None:
+    base = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_KEY["search-ui-local-swarm"]
+
+    with pytest.raises(ValueError, match="Local-swarm P2P"):
+        campaign_scenarios.CampaignScenarioSpec(
+            key="bad-local",
+            title="Bad local",
+            release_phase=base.release_phase,
+            network_scope=base.network_scope,
+            local_profile=base.local_profile,
+            local_suites=base.local_suites,
+            vm_profile="bad-local-vm",
+            scenario_id="emulebb.flow.bad.local.v1",
+            uses_local_swarm=True,
+            p2p_mode="local-swarm",
+            p2p_bind_scope="hide.me",
+        )
+
+    with pytest.raises(ValueError, match="Live-wire P2P"):
+        campaign_scenarios.CampaignScenarioSpec(
+            key="bad-live",
+            title="Bad live",
+            release_phase=base.release_phase,
+            network_scope=base.network_scope,
+            local_profile=base.local_profile,
+            local_suites=base.local_suites,
+            vm_profile="bad-live-vm",
+            scenario_id="emulebb.flow.bad.live.v1",
+            p2p_mode="live-wire",
+            p2p_bind_scope="lan",
+        )
