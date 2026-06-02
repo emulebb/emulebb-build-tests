@@ -7,6 +7,7 @@ from typing import Any
 
 
 EXECUTION_MODES = ("local", "vm")
+VM_LOCAL_SWARM_MODES = ("plan", "execute")
 LOCAL_CAMPAIGN_TEST_NETWORK = "default"
 LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES = ("offline", "lan")
 LOCAL_SWARM_CLIENT_PRODUCTS = ("emulebb", "amule", "tracing-harness")
@@ -98,20 +99,33 @@ class CampaignScenarioSpec:
             "liveWire": self.live_wire,
             "localCommand": self.command_for_mode("local"),
             "vmCommand": self.command_for_mode("vm"),
+            "vmPlanCommand": self.command_for_mode("vm", local_swarm_mode="plan"),
+            "vmExecuteCommand": self.command_for_mode("vm", local_swarm_mode="execute"),
         }
 
-    def command_for_mode(self, mode: str, *, release_version: str = DEFAULT_RELEASE_VERSION) -> str:
+    def command_for_mode(
+        self,
+        mode: str,
+        *,
+        release_version: str = DEFAULT_RELEASE_VERSION,
+        swarm_tier: int = DEFAULT_LOCAL_SWARM_TIER,
+        local_swarm_mode: str = "plan",
+    ) -> str:
         """Returns the emule_workspace command that runs this scenario in one mode."""
 
         if mode not in EXECUTION_MODES:
             raise ValueError(f"Unsupported campaign scenario execution mode: {mode!r}.")
+        if swarm_tier not in LOCAL_SWARM_TIERS:
+            raise ValueError(f"Unsupported campaign scenario swarm tier: {swarm_tier!r}.")
+        if local_swarm_mode not in VM_LOCAL_SWARM_MODES:
+            raise ValueError(f"Unsupported campaign scenario VM local swarm mode: {local_swarm_mode!r}.")
         command = f"python -m emule_workspace test campaign-scenario --scenario {self.scenario_id} --mode {mode}"
         if mode == "vm":
-            return (
-                f"{command} --release-version {release_version} "
-                f"--skip-build --swarm-tier {DEFAULT_LOCAL_SWARM_TIER}"
-            )
-        return f"{command} --swarm-tier {DEFAULT_LOCAL_SWARM_TIER}"
+            command = f"{command} --release-version {release_version} --skip-build --swarm-tier {swarm_tier}"
+            if local_swarm_mode != "plan":
+                command = f"{command} --local-swarm-mode {local_swarm_mode}"
+            return command
+        return f"{command} --swarm-tier {swarm_tier}"
 
 
 REUSABLE_CAMPAIGN_SCENARIOS = (
@@ -186,6 +200,7 @@ def build_campaign_scenario_matrix() -> dict[str, Any]:
     return {
         "schema": "emulebb-build-tests.campaign-scenario-matrix.v1",
         "executionModes": list(EXECUTION_MODES),
+        "vmLocalSwarmModes": list(VM_LOCAL_SWARM_MODES),
         "localSwarm": {
             "clientProducts": list(LOCAL_SWARM_CLIENT_PRODUCTS),
             "tiers": list(LOCAL_SWARM_TIERS),

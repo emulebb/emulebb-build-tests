@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from emule_test_harness import campaign_scenarios, live_e2e_suite
 
 
@@ -9,6 +11,7 @@ def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() ->
     matrix = campaign_scenarios.build_campaign_scenario_matrix()
 
     assert matrix["executionModes"] == ["local", "vm"]
+    assert matrix["vmLocalSwarmModes"] == ["plan", "execute"]
     assert matrix["scenarios"][0]["localTestNetwork"] == "default"
     assert matrix["scenarios"][0]["localAllowedNetworkScopes"] == ["offline", "lan"]
     assert matrix["localSwarm"] == {
@@ -39,6 +42,7 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
     for scenario in scenarios.values():
         assert scenario["networkScope"] == "lan"
         assert scenario["executionModes"] == ["local", "vm"]
+        assert "--local-swarm-mode execute" in scenario["vmExecuteCommand"]
         assert scenario["localTestNetwork"] == "default"
         assert scenario["localAllowedNetworkScopes"] == ["offline", "lan"]
         assert scenario["usesLocalSwarm"] is True
@@ -81,15 +85,31 @@ def test_reusable_campaign_suites_stay_local_and_deterministic() -> None:
 def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
     scenarios = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_KEY
 
-    local_command = scenarios["search-ui-local-swarm"].command_for_mode("local")
+    local_command = scenarios["search-ui-local-swarm"].command_for_mode("local", swarm_tier=2)
     assert local_command == (
         "python -m emule_workspace test campaign-scenario "
-        "--scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 1"
+        "--scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 2"
     )
 
-    vm_command = scenarios["search-ui-local-swarm"].command_for_mode("vm", release_version="0.7.4-rc.2")
+    vm_command = scenarios["search-ui-local-swarm"].command_for_mode(
+        "vm",
+        release_version="0.7.4-rc.2",
+        swarm_tier=3,
+        local_swarm_mode="execute",
+    )
     assert vm_command == (
         "python -m emule_workspace test campaign-scenario "
         "--scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm "
-        "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 1"
+        "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3 --local-swarm-mode execute"
     )
+
+
+def test_reusable_campaign_specs_reject_unsupported_command_options() -> None:
+    scenario = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_KEY["search-ui-local-swarm"]
+
+    with pytest.raises(ValueError, match="execution mode"):
+        scenario.command_for_mode("remote")
+    with pytest.raises(ValueError, match="swarm tier"):
+        scenario.command_for_mode("local", swarm_tier=99)
+    with pytest.raises(ValueError, match="local swarm mode"):
+        scenario.command_for_mode("vm", local_swarm_mode="remote")
