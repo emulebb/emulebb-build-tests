@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from emule_test_harness import windows_vm_profile_smoke
 
 
@@ -62,3 +64,26 @@ def test_local_swarm_payload_check_reports_missing_harness() -> None:
     check = windows_vm_profile_smoke.local_swarm_payload_check(None)
 
     assert check["status"] == "failed"
+
+
+def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> None:
+    repo_root = Path(windows_vm_profile_smoke.__file__).resolve().parents[1]
+    app_root = tmp_path / "expanded" / "eMuleBB"
+    app_root.mkdir(parents=True)
+    (app_root / "emulebb.exe").write_text("", encoding="utf-8")
+
+    check = windows_vm_profile_smoke.local_swarm_plan_check(
+        "search-ui-local-swarm-vm",
+        1,
+        repo_root,
+        tmp_path / "guest-root",
+        app_root,
+        tmp_path / "artifacts",
+    )
+
+    command_names = [Path(command[1]).name for command in check["details"]["commands"]]
+    assert check["status"] == "passed"
+    assert check["details"]["summaryStatus"] == "planned"
+    assert set(check["details"]["suiteNames"]) == {"local-ed2k-search-soak", "local-kad-swarm", "godzilla-local-swarm"}
+    assert set(command_names) == {"local-ed2k-search-soak.py", "local-kad-swarm.py", "godzilla-local-swarm.py"}
+    assert check["details"]["tierOptions"]["total_client_count"] == 4

@@ -1926,6 +1926,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", choices=LIVE_E2E_PROFILES, default="default")
     parser.add_argument("--test-network", choices=TEST_NETWORKS, default="default")
     parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Resolve and report child suite commands without launching them.",
+    )
     parser.add_argument("--resource-ui-language-timeout-seconds", type=float, default=DEFAULT_RESOURCE_UI_LANGUAGE_TIMEOUT_SECONDS)
     parser.add_argument("--skip-live-seed-refresh", action="store_true")
     parser.add_argument("--rest-server-search-count", type=int, default=DEFAULT_REST_SEARCH_COUNT)
@@ -2499,6 +2504,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             if spec.is_prowlarr_emulebb or spec.is_arr_emulebb
         ],
         "fail_fast": bool(args.fail_fast),
+        "plan_only": bool(args.plan_only),
         "strict_success_required": True,
         "suites": [],
     }
@@ -2634,28 +2640,35 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             p2p_bind_interface_name=child_p2p_bind_interface_name,
             allowed_public_ip_cidrs=effective_vpn_guard_allowed_public_ip_cidrs,
         )
-        vpn_guard_setup_hooks = setup_vpn_guard_campaign_scenario(
-            vpn_guard_config if spec.accepts_vpn_guard_profile else None,
-            args.vpn_guard_scenario,
-            vpn_guard_hook_context,
-        )
+        vpn_guard_setup_hooks: list[dict[str, object]] = []
         vpn_guard_restore_hooks: list[dict[str, object]] = []
-        try:
-            return_code, suite_cpu_profile = run_suite_command_with_optional_cpu_profile(
-                command,
-                spec=spec,
-                args=args,
-                child_artifacts_dir=child_artifacts_dir,
-                app_exe=paths.app_exe,
-            )
-        finally:
-            vpn_guard_restore_hooks = restore_vpn_guard_campaign_scenario(
+        if args.plan_only:
+            return_code = 0
+            suite_cpu_profile = None
+            child_result = None
+            suite_status = "planned"
+        else:
+            vpn_guard_setup_hooks = setup_vpn_guard_campaign_scenario(
                 vpn_guard_config if spec.accepts_vpn_guard_profile else None,
                 args.vpn_guard_scenario,
                 vpn_guard_hook_context,
             )
-        child_result = read_child_suite_result(child_artifacts_dir)
-        suite_status = get_suite_status_from_return_code(return_code)
+            try:
+                return_code, suite_cpu_profile = run_suite_command_with_optional_cpu_profile(
+                    command,
+                    spec=spec,
+                    args=args,
+                    child_artifacts_dir=child_artifacts_dir,
+                    app_exe=paths.app_exe,
+                )
+            finally:
+                vpn_guard_restore_hooks = restore_vpn_guard_campaign_scenario(
+                    vpn_guard_config if spec.accepts_vpn_guard_profile else None,
+                    args.vpn_guard_scenario,
+                    vpn_guard_hook_context,
+                )
+            child_result = read_child_suite_result(child_artifacts_dir)
+            suite_status = get_suite_status_from_return_code(return_code)
         result = {
             "name": spec.name,
             "category": spec.category,
@@ -2782,6 +2795,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             if args.fail_fast:
                 break
 
+    if args.plan_only and summary["status"] == "passed":
+        summary["status"] = "planned"
     summary["local_dump_files"] = harness_cli_common.collect_local_dump_files(paths.local_dumps)
     result_path = paths.source_artifacts_dir / result_file_name(paths.suite_name)
     harness_cli_common.write_json_file(result_path, summary)

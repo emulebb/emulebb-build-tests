@@ -7,10 +7,12 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 try:
@@ -18,6 +20,7 @@ try:
         DEFAULT_LOCAL_SWARM_TIER,
         EXECUTION_MODES,
         LOCAL_SWARM_CLIENT_PRODUCTS,
+        LOCAL_SWARM_TIER_OPTIONS,
         LOCAL_SWARM_TIERS,
         REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE,
     )
@@ -34,6 +37,7 @@ except ModuleNotFoundError:
         DEFAULT_LOCAL_SWARM_TIER,
         EXECUTION_MODES,
         LOCAL_SWARM_CLIENT_PRODUCTS,
+        LOCAL_SWARM_TIER_OPTIONS,
         LOCAL_SWARM_TIERS,
         REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE,
     )
@@ -308,6 +312,7 @@ def run_profile_checks(
         return [
             local_swarm_contract_check(profile, args.swarm_tier),
             local_swarm_payload_check(args.harness_root),
+            local_swarm_plan_check(profile, args.swarm_tier, args.harness_root, args.root, app_root, artifacts),
         ]
     raise RuntimeError(f"Unsupported profile: {profile}")
 
@@ -329,6 +334,7 @@ def local_swarm_contract_check(profile: str, swarm_tier: int) -> dict[str, Any]:
             "swarmTiers": list(LOCAL_SWARM_TIERS),
             "defaultSwarmTier": DEFAULT_LOCAL_SWARM_TIER,
             "selectedSwarmTier": swarm_tier,
+            "selectedSwarmTierOptions": dict(LOCAL_SWARM_TIER_OPTIONS[swarm_tier]),
             "ed2kServerTarget": "win10",
             "vmTargets": ["win10", "win11"],
             "nonblockingCompanions": True,
@@ -358,6 +364,169 @@ def local_swarm_payload_check(harness_root: Path | None) -> dict[str, Any]:
             "missing": missing,
         },
     }
+
+
+class _PlanOnlyHarnessCliCommon:
+    """Minimal live-suite adapter used only to resolve staged VM child commands."""
+
+    def __init__(self, root: Path, app_root: Path, artifacts: Path) -> None:
+        self.root = root
+        self.app_root = app_root
+        self.artifacts = artifacts
+
+    def prepare_run_paths(self, **kwargs):
+        source_artifacts_dir = Path(kwargs["artifacts_dir"]).resolve()
+        source_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        app_exe = Path(kwargs["app_exe"]).resolve() if kwargs.get("app_exe") else self.app_root / "emulebb.exe"
+        return SimpleNamespace(
+            repo_root=self.root,
+            workspace_root=Path(kwargs["workspace_root"]).resolve(),
+            app_root=Path(kwargs["app_root"]).resolve() if kwargs.get("app_root") else self.app_root,
+            app_exe=app_exe,
+            seed_config_dir=None,
+            configuration=kwargs["configuration"],
+            suite_name=kwargs["suite_name"],
+            source_artifacts_dir=source_artifacts_dir,
+            run_report_dir=self.artifacts / "local-swarm-plan-run",
+            latest_report_dir=self.artifacts / "local-swarm-plan-latest",
+            keep_source_artifacts=True,
+            local_dumps={"dump_folder": str(source_artifacts_dir / "crash-dumps"), "image_names": ["emulebb.exe"]},
+        )
+
+    def find_python_executable(self) -> str:
+        return sys.executable
+
+    def write_json_file(self, path: Path, payload: Any) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def publish_run_artifacts(self, paths: Any) -> None:
+        paths.run_report_dir.mkdir(parents=True, exist_ok=True)
+
+    def publish_latest_report(self, paths: Any) -> None:
+        paths.latest_report_dir.mkdir(parents=True, exist_ok=True)
+
+    def cleanup_source_artifacts(self, _paths: Any) -> None:
+        return None
+
+    def collect_local_dump_files(self, _local_dumps: Any) -> dict[str, Any]:
+        return {"count": 0, "files": []}
+
+
+def local_swarm_plan_check(
+    profile: str,
+    swarm_tier: int,
+    harness_root: Path | None,
+    root: Path,
+    app_root: Path,
+    artifacts: Path,
+) -> dict[str, Any]:
+    """Resolves the staged local-swarm suite commands without launching them."""
+
+    if harness_root is None:
+        return {"name": "local-swarm-plan", "status": "failed", "details": {"error": "missing harness root"}}
+    if not (harness_root / "emule_test_harness" / "live_e2e_suite.py").is_file():
+        return {
+            "name": "local-swarm-plan",
+            "status": "failed",
+            "details": {"harnessRoot": str(harness_root), "error": "missing staged live_e2e_suite.py"},
+        }
+    try:
+        if str(harness_root) not in sys.path:
+            sys.path.insert(0, str(harness_root))
+        from emule_test_harness import live_e2e_suite
+
+        spec = REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE[profile]
+        suites = list(spec.local_suites)
+        if spec.uses_local_swarm and "godzilla-local-swarm" not in suites:
+            suites.append("godzilla-local-swarm")
+        tier_options = LOCAL_SWARM_TIER_OPTIONS[swarm_tier]
+        plan_artifacts = artifacts / "local-swarm-plan"
+        argv = [
+            "--workspace-root",
+            str((root / "workspace").resolve()),
+            "--app-root",
+            str(app_root.resolve()),
+            "--app-exe",
+            str((app_root / "emulebb.exe").resolve()),
+            "--artifacts-dir",
+            str(plan_artifacts.resolve()),
+            "--profile",
+            str(spec.local_profile),
+            "--test-network",
+            "lan",
+            "--admin-volume-fixtures",
+            "--plan-only",
+            "--godzilla-stage",
+            str(tier_options["stage"]),
+            "--godzilla-total-client-count",
+            str(tier_options["total_client_count"]),
+            "--godzilla-peer-transfer-count",
+            str(tier_options["peer_transfer_count"]),
+            "--godzilla-harness-transfer-count",
+            str(tier_options["harness_transfer_count"]),
+            "--godzilla-emulebb-files",
+            str(tier_options["emulebb_files"]),
+            "--godzilla-extra-emulebb-files",
+            str(tier_options["extra_emulebb_files"]),
+            "--godzilla-harness-files",
+            str(tier_options["harness_files"]),
+            "--godzilla-amule-files",
+            str(tier_options["amule_files"]),
+            "--godzilla-adverse-kill-cycles",
+            str(tier_options["adverse_kill_cycles"]),
+            "--godzilla-adverse-kill-warmup-seconds",
+            str(tier_options["adverse_kill_warmup_seconds"]),
+            "--godzilla-adverse-recovery-timeout-seconds",
+            str(tier_options["adverse_recovery_timeout_seconds"]),
+        ]
+        if bool(tier_options["cpu_profile"]):
+            argv.append("--godzilla-cpu-profile")
+        if bool(tier_options["fail_fast"]):
+            argv.append("--fail-fast")
+        for suite in suites:
+            argv.extend(["--suite", suite])
+        args = live_e2e_suite.build_parser().parse_args(argv)
+        summary = live_e2e_suite.run_live_e2e_suite(
+            args,
+            _PlanOnlyHarnessCliCommon(root, app_root, artifacts),
+        )
+        planned_suites = summary.get("suites") if isinstance(summary, dict) else None
+        planned_suite_rows = planned_suites if isinstance(planned_suites, list) else []
+        commands = [
+            row.get("command")
+            for row in planned_suite_rows
+            if isinstance(row, dict) and isinstance(row.get("command"), list)
+        ]
+        suite_names = [str(row.get("name")) for row in planned_suite_rows if isinstance(row, dict)]
+        expected_suites = set(suites)
+        status = (
+            "passed"
+            if summary.get("status") == "planned"
+            and expected_suites.issubset(set(suite_names))
+            and all(row.get("status") == "planned" for row in planned_suite_rows if isinstance(row, dict))
+            else "failed"
+        )
+        return {
+            "name": "local-swarm-plan",
+            "status": status,
+            "details": {
+                "harnessRoot": str(harness_root),
+                "vmProfile": profile,
+                "scenarioId": spec.scenario_id,
+                "swarmTier": swarm_tier,
+                "summaryStatus": summary.get("status"),
+                "suiteNames": suite_names,
+                "commands": commands,
+                "tierOptions": dict(tier_options),
+            },
+        }
+    except Exception as exc:
+        return {
+            "name": "local-swarm-plan",
+            "status": "failed",
+            "details": {"harnessRoot": str(harness_root), "error": f"{type(exc).__name__}: {exc}"},
+        }
 
 
 def powershell_script_parse_check(app_root: Path) -> dict[str, Any]:

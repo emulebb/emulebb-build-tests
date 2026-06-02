@@ -11,6 +11,53 @@ LOCAL_SWARM_CLIENT_PRODUCTS = ("emulebb", "amule", "tracing-harness")
 LOCAL_SWARM_TIERS = (1, 2, 3)
 DEFAULT_LOCAL_SWARM_TIER = 1
 DEFAULT_RELEASE_VERSION = "0.7.3-rc.1"
+LOCAL_SWARM_TIER_OPTIONS: dict[int, dict[str, object]] = {
+    1: {
+        "stage": "launch-scale",
+        "total_client_count": 4,
+        "peer_transfer_count": 24,
+        "harness_transfer_count": 24,
+        "emulebb_files": 80,
+        "extra_emulebb_files": 8,
+        "harness_files": 60,
+        "amule_files": 20,
+        "adverse_kill_cycles": 0,
+        "adverse_kill_warmup_seconds": 0.0,
+        "adverse_recovery_timeout_seconds": 180.0,
+        "cpu_profile": False,
+        "fail_fast": True,
+    },
+    2: {
+        "stage": "launch-scale",
+        "total_client_count": 10,
+        "peer_transfer_count": 120,
+        "harness_transfer_count": 120,
+        "emulebb_files": 240,
+        "extra_emulebb_files": 24,
+        "harness_files": 180,
+        "amule_files": 60,
+        "adverse_kill_cycles": 0,
+        "adverse_kill_warmup_seconds": 0.0,
+        "adverse_recovery_timeout_seconds": 180.0,
+        "cpu_profile": True,
+        "fail_fast": False,
+    },
+    3: {
+        "stage": "full",
+        "total_client_count": 18,
+        "peer_transfer_count": 360,
+        "harness_transfer_count": 360,
+        "emulebb_files": 720,
+        "extra_emulebb_files": 72,
+        "harness_files": 480,
+        "amule_files": 120,
+        "adverse_kill_cycles": 2,
+        "adverse_kill_warmup_seconds": 20.0,
+        "adverse_recovery_timeout_seconds": 180.0,
+        "cpu_profile": True,
+        "fail_fast": False,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -139,6 +186,7 @@ def build_campaign_scenario_matrix() -> dict[str, Any]:
             "clientProducts": list(LOCAL_SWARM_CLIENT_PRODUCTS),
             "tiers": list(LOCAL_SWARM_TIERS),
             "defaultTier": DEFAULT_LOCAL_SWARM_TIER,
+            "tierOptions": LOCAL_SWARM_TIER_OPTIONS,
             "ed2kServerTarget": "win10",
             "vmTargets": ["win10", "win11"],
         },

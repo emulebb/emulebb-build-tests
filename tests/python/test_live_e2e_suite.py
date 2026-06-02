@@ -1140,6 +1140,38 @@ def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, m
     assert summary["suites"][0]["timeout_seconds"] == live_e2e_suite.DEFAULT_GODZILLA_CHILD_SUITE_TIMEOUT_SECONDS
 
 
+def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda _command: pytest.fail("plan-only must not launch child suites"),
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "godzilla-local-swarm",
+            "--admin-volume-fixtures",
+            "--godzilla-stage",
+            "launch-scale",
+            "--godzilla-total-client-count",
+            "4",
+            "--plan-only",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    command = summary["suites"][0]["command"]
+    assert summary["status"] == "planned"
+    assert summary["plan_only"] is True
+    assert summary["suites"][0]["status"] == "planned"
+    assert script_name(command) == "godzilla-local-swarm.py"
+    assert option_values(command, "--stage") == ["launch-scale"]
+    assert option_values(command, "--total-client-count") == ["4"]
+
+
 def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:
     with pytest.raises(SystemExit):
         parse_args(

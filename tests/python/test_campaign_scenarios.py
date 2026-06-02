@@ -13,9 +13,12 @@ def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() ->
         "clientProducts": ["emulebb", "amule", "tracing-harness"],
         "tiers": [1, 2, 3],
         "defaultTier": 1,
+        "tierOptions": campaign_scenarios.LOCAL_SWARM_TIER_OPTIONS,
         "ed2kServerTarget": "win10",
         "vmTargets": ["win10", "win11"],
     }
+    assert matrix["localSwarm"]["tierOptions"][1]["stage"] == "launch-scale"
+    assert matrix["localSwarm"]["tierOptions"][3]["adverse_kill_cycles"] == 2
     assert matrix["scenarioCount"] == 5
     json.dumps(matrix)
 
