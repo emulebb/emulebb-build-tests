@@ -69,6 +69,14 @@ TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with liv
 	CHECK_FALSE(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 3000u, 2000u));
 }
 
+TEST_CASE("Upload queue cools down failed upload admissions only for non-friend peers with an IP")
+{
+	CHECK(ShouldCooldownFailedUploadAdmission(true, false, 0x01020304u));
+	CHECK_FALSE(ShouldCooldownFailedUploadAdmission(false, false, 0x01020304u));
+	CHECK_FALSE(ShouldCooldownFailedUploadAdmission(true, true, 0x01020304u));
+	CHECK_FALSE(ShouldCooldownFailedUploadAdmission(true, false, 0u));
+}
+
 TEST_CASE("Broadband idle upload recycling requires an empty local send pipeline")
 {
 	CHECK(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 0, 0, 10000u, 10000u));
