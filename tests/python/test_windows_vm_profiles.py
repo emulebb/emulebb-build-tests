@@ -23,4 +23,9 @@ def test_windows_vm_profile_matrix_is_the_profile_authority() -> None:
     assert profiles["cpu-heavy-quick"]["releasePhase"] == "stabilization-stress"
     assert profiles["resource-ui-smoke"]["releasePhase"] == "ui-resource-depth"
     assert profiles["release-expanded-ui"]["releasePhase"] == "live-wire-release"
+    assert profiles["package-helper-install"]["releasePhase"] == "packaging-provenance"
+    assert profiles["vhd-profile-isolation"]["releasePhase"] == "stabilization-stress"
+    assert profiles["shared-cache-filesystem"]["releasePhase"] == "ui-resource-depth"
+    assert profiles["diagnostics-local-dumps"]["releasePhase"] == "stabilization-stress"
+    assert profiles["ui-shared-files-depth"]["releasePhase"] == "ui-resource-depth"
     json.dumps(matrix)

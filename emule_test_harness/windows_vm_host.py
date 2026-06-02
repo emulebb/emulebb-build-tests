@@ -17,6 +17,11 @@ GUEST_SCRIPT_FACTORIES = {
     "cpu-heavy-quick": "profile_smoke_script",
     "resource-ui-smoke": "profile_smoke_script",
     "release-expanded-ui": "profile_smoke_script",
+    "package-helper-install": "profile_smoke_script",
+    "vhd-profile-isolation": "profile_smoke_script",
+    "shared-cache-filesystem": "profile_smoke_script",
+    "diagnostics-local-dumps": "profile_smoke_script",
+    "ui-shared-files-depth": "profile_smoke_script",
 }
 GUEST_RUNNER_FILES = {
     "local-ed2k-transfer": "windows_vm_local_ed2k.py",
@@ -26,6 +31,11 @@ GUEST_RUNNER_FILES = {
     "cpu-heavy-quick": "windows_vm_profile_smoke.py",
     "resource-ui-smoke": "windows_vm_profile_smoke.py",
     "release-expanded-ui": "windows_vm_profile_smoke.py",
+    "package-helper-install": "windows_vm_profile_smoke.py",
+    "vhd-profile-isolation": "windows_vm_profile_smoke.py",
+    "shared-cache-filesystem": "windows_vm_profile_smoke.py",
+    "diagnostics-local-dumps": "windows_vm_profile_smoke.py",
+    "ui-shared-files-depth": "windows_vm_profile_smoke.py",
 }
 PROFILE_HELPER_FILE = "vm_guest_profiles.py"
 LOCAL_ED2K_TARGET_ENDPOINTS = {

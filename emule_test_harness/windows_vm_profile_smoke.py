@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -30,6 +31,11 @@ SUPPORTED_PROFILES = {
     "cpu-heavy-quick",
     "resource-ui-smoke",
     "release-expanded-ui",
+    "package-helper-install",
+    "vhd-profile-isolation",
+    "shared-cache-filesystem",
+    "diagnostics-local-dumps",
+    "ui-shared-files-depth",
 }
 API_KEY = "vm-profile-smoke-api-key"
 REST_PORT = 4711
@@ -82,7 +88,7 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                 incoming_dir=incoming_dir,
                 temp_dir=temp_dir,
                 shared_dir=shared_dir,
-                enable_diagnostics=args.profile == "crash-dump-smoke",
+                enable_diagnostics=args.profile in {"crash-dump-smoke", "diagnostics-local-dumps"},
             ),
         )
         checks.append(make_fixture(shared_dir, args.fixture_size_bytes, args.profile))
@@ -96,7 +102,7 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
         app_started = True
         checks.append(wait_rest(base_url))
         checks.extend(run_rest_baseline(base_url))
-        checks.extend(run_profile_checks(args.profile, base_url, profile_dir, app_root, shared_dir))
+        checks.extend(run_profile_checks(args.profile, base_url, profile_dir, app_root, shared_dir, artifacts, args))
     except Exception as exc:
         errors.append(f"{type(exc).__name__}: {exc}")
     finally:
@@ -104,8 +110,10 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
             stop_runtime()
 
     checks.append(collect_application_events(artifacts))
-    if args.profile == "crash-dump-smoke":
+    if args.profile in {"crash-dump-smoke", "diagnostics-local-dumps"}:
         checks.append(collect_dumps(config_dir, "post-crash-profile-dumps"))
+        if args.profile == "diagnostics-local-dumps":
+            checks.append(collect_local_dumps(root / "local-dumps"))
         stop_runtime()
     status = "passed" if not errors and all(check.get("status") == "passed" for check in checks) else "failed"
     result = {
@@ -247,7 +255,15 @@ def run_rest_baseline(base_url: str) -> list[dict[str, Any]]:
     return checks
 
 
-def run_profile_checks(profile: str, base_url: str, profile_dir: Path, app_root: Path, shared_dir: Path) -> list[dict[str, Any]]:
+def run_profile_checks(
+    profile: str,
+    base_url: str,
+    profile_dir: Path,
+    app_root: Path,
+    shared_dir: Path,
+    artifacts: Path,
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
     if profile == "rest-smoke-stress":
         return [rest_loop_check(base_url, loops=80)]
     if profile == "crash-dump-smoke":
@@ -258,7 +274,251 @@ def run_profile_checks(profile: str, base_url: str, profile_dir: Path, app_root:
         return [resource_presence_check(app_root, min_lang=40)]
     if profile == "release-expanded-ui":
         return [resource_presence_check(app_root, min_lang=40), rest_loop_check(base_url, loops=120)]
+    if profile == "package-helper-install":
+        return [
+            powershell_script_parse_check(app_root),
+            install_suite_dry_run_check(app_root, artifacts),
+            firewall_repair_check(app_root, artifacts),
+        ]
+    if profile == "vhd-profile-isolation":
+        return [vhd_profile_launch_check(app_root, args)]
+    if profile == "shared-cache-filesystem":
+        return [shared_directories_rest_check(base_url, shared_dir)]
+    if profile == "diagnostics-local-dumps":
+        return [configure_local_dumps_check(args.root / "local-dumps"), manual_dump_check(base_url), crash_trigger_check(base_url)]
+    if profile == "ui-shared-files-depth":
+        return [resource_presence_check(app_root, min_lang=40), shared_directories_rest_check(base_url, shared_dir)]
     raise RuntimeError(f"Unsupported profile: {profile}")
+
+
+def powershell_script_parse_check(app_root: Path) -> dict[str, Any]:
+    scripts = sorted((app_root / "scripts").glob("*.ps1"))
+    failures: list[dict[str, str]] = []
+    for script in scripts:
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "& { param($path) $e=$null;$t=$null;"
+            "[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$t,[ref]$e)|Out-Null;"
+            "if($e.Count){$e|ForEach-Object{$_.Message}; exit 1} }",
+            str(script),
+        ]
+        completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        if completed.returncode != 0:
+            failures.append({"script": script.name, "stdout": completed.stdout.strip(), "stderr": completed.stderr.strip()})
+    return {
+        "name": "package-helper-powershell-parse",
+        "status": "passed" if scripts and not failures else "failed",
+        "details": {"scriptCount": len(scripts), "failures": failures},
+    }
+
+
+def install_suite_dry_run_check(app_root: Path, artifacts: Path) -> dict[str, Any]:
+    result_path = artifacts / "install-suite-dry-run.txt"
+    install_root = artifacts.parent / "suite-install"
+    script = app_root / "scripts" / "Install-eMuleBBSuite.ps1"
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script),
+        "-Bundle",
+        "Core",
+        "-InstallRoot",
+        str(install_root),
+        "-InstallKind",
+        "Test",
+        "-NonInteractive",
+        "-DryRun",
+        "-Force",
+        "-NoStart",
+    ]
+    completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False, timeout=120.0)
+    result_path.write_text(completed.stdout, encoding="utf-8", errors="replace")
+    return {
+        "name": "install-suite-dry-run",
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "details": {"exitCode": completed.returncode, "stdoutPath": str(result_path)},
+    }
+
+
+def firewall_repair_check(app_root: Path, artifacts: Path) -> dict[str, Any]:
+    result_path = artifacts / "firewall-repair-result.json"
+    script = app_root / "scripts" / "Repair-Firewall.ps1"
+    exe = app_root / "emulebb.exe"
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-ProgramPath",
+            str(exe),
+            "-ResultPath",
+            str(result_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+        timeout=90.0,
+    )
+    payload = json.loads(result_path.read_text(encoding="utf-8-sig")) if result_path.is_file() else {}
+    return {
+        "name": "firewall-repair-helper",
+        "status": "passed" if completed.returncode == 0 and payload.get("ok") is True else "failed",
+        "details": {"exitCode": completed.returncode, "resultPath": str(result_path), "ruleCount": len(payload.get("rules", [])) if isinstance(payload, dict) else 0},
+    }
+
+
+def vhd_profile_launch_check(app_root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    stop_runtime()
+    vhd_root = args.root / "vhd-profile"
+    vhd_path = args.root / "profile-isolation.vhd"
+    drive_letter = "V"
+    script_path = args.root / "mount-vhd-profile.diskpart"
+    script_path.write_text(
+        "\n".join(
+            [
+                f'create vdisk file="{vhd_path}" maximum=128 type=expandable',
+                f'select vdisk file="{vhd_path}"',
+                "attach vdisk",
+                "create partition primary",
+                "format fs=ntfs quick label=EMULEBBVHD",
+                f"assign letter={drive_letter}",
+                "exit",
+                "",
+            ]
+        ),
+        encoding="ascii",
+    )
+    completed = subprocess.run(["diskpart.exe", "/s", str(script_path)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False, timeout=120.0)
+    if completed.returncode != 0:
+        return {"name": "vhd-profile-launch", "status": "failed", "details": {"phase": "diskpart", "output": completed.stdout}}
+    mounted_root = Path(f"{drive_letter}:") / "emulebb-profile"
+    config_dir = mounted_root / "config"
+    incoming_dir = mounted_root / "incoming"
+    temp_dir = mounted_root / "temp"
+    shared_dir = mounted_root / "shared"
+    for directory in (config_dir, incoming_dir, temp_dir, shared_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    (shared_dir / "vhd-profile-sample.txt").write_text("vhd profile fixture\n", encoding="utf-8")
+    write_preferences_ini(
+        config_dir,
+        offline_preferences_text(
+            target=f"{args.target}-vhd",
+            incoming_dir=incoming_dir,
+            temp_dir=temp_dir,
+            shared_dir=shared_dir,
+            enable_diagnostics=False,
+        ),
+    )
+    start_visible_app(
+        app_root / "emulebb.exe",
+        mounted_root,
+        task_name=f"eMuleBB VM vhd-profile {args.target}",
+        username=args.username,
+        password=args.password,
+    )
+    try:
+        wait_rest(f"http://127.0.0.1:{REST_PORT}")
+        status = "passed"
+    except Exception as exc:
+        status = "failed"
+        error = f"{type(exc).__name__}: {exc}"
+    else:
+        error = ""
+    finally:
+        stop_runtime()
+        subprocess.run(["diskpart.exe", "/s", str(write_detach_vhd_script(args.root, vhd_path))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return {
+        "name": "vhd-profile-launch",
+        "status": status,
+        "details": {"vhdPath": str(vhd_path), "profileRoot": str(mounted_root), "error": error},
+    }
+
+
+def write_detach_vhd_script(root: Path, vhd_path: Path) -> Path:
+    script_path = root / "detach-vhd-profile.diskpart"
+    script_path.write_text(f'select vdisk file="{vhd_path}"\ndetach vdisk\nexit\n', encoding="ascii")
+    return script_path
+
+
+def shared_directories_rest_check(base_url: str, shared_dir: Path) -> dict[str, Any]:
+    flat_dir = shared_dir / "flat-rest"
+    recursive_dir = shared_dir / "recursive-rest"
+    flat_dir.mkdir(parents=True, exist_ok=True)
+    recursive_dir.joinpath("nested").mkdir(parents=True, exist_ok=True)
+    (flat_dir / "flat.txt").write_text("flat shared directory\n", encoding="utf-8")
+    (recursive_dir / "nested" / "recursive.txt").write_text("recursive shared directory\n", encoding="utf-8")
+    payload = {
+        "confirmReplaceRoots": True,
+        "roots": [
+            str(flat_dir) + "\\",
+            {"path": str(recursive_dir) + "\\", "recursive": True},
+        ],
+    }
+    try:
+        patched = retry_http_json(
+            "patch shared-directories",
+            8,
+            base_url,
+            "/api/v1/shared-directories",
+            api_key=API_KEY,
+            method="PATCH",
+            body=payload,
+            timeout_seconds=20.0,
+        )
+        retry_http_json("reload shared-directories", 8, base_url, "/api/v1/shared-directories/operations/reload", api_key=API_KEY, method="POST", body={}, timeout_seconds=20.0)
+        files = retry_http_json("shared-files after patch", 12, base_url, "/api/v1/shared-files", api_key=API_KEY, timeout_seconds=20.0)
+        return {"name": "shared-directories-rest-cache", "status": "passed", "details": {"patched": compact(patched), "files": compact(files)}}
+    except Exception as exc:
+        return {"name": "shared-directories-rest-cache", "status": "failed", "details": {"error": f"{type(exc).__name__}: {exc}"}}
+
+
+def configure_local_dumps_check(dump_dir: Path) -> dict[str, Any]:
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "reg.exe",
+        "add",
+        r"HKCU\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\emulebb.exe",
+        "/v",
+        "DumpFolder",
+        "/t",
+        "REG_EXPAND_SZ",
+        "/d",
+        str(dump_dir),
+        "/f",
+    ]
+    first = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    second = subprocess.run(
+        [
+            "reg.exe",
+            "add",
+            r"HKCU\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\emulebb.exe",
+            "/v",
+            "DumpType",
+            "/t",
+            "REG_DWORD",
+            "/d",
+            "2",
+            "/f",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return {
+        "name": "configure-wer-local-dumps",
+        "status": "passed" if first.returncode == 0 and second.returncode == 0 else "failed",
+        "details": {"dumpDir": str(dump_dir), "exitCodes": [first.returncode, second.returncode]},
+    }
 
 
 def call_check(name: str, base_url: str, path: str) -> dict[str, Any]:
@@ -359,6 +619,25 @@ def collect_dumps(config_dir: Path, name: str) -> dict[str, Any]:
         if path.stat().st_size > 0
     ]
     return {"name": name, "status": "passed" if dumps else "failed", "details": {"dumpCount": len(dumps), "dumps": dumps}}
+
+
+def collect_local_dumps(dump_dir: Path) -> dict[str, Any]:
+    dumps = [
+        {"path": str(path), "sizeBytes": path.stat().st_size}
+        for path in sorted(dump_dir.glob("*.dmp"))
+        if path.stat().st_size > 0
+    ]
+    return {
+        "name": "wer-local-dumps-collected",
+        "status": "passed",
+        "details": {
+            "dumpDir": str(dump_dir),
+            "dumpCount": len(dumps),
+            "dumps": dumps,
+            "required": False,
+            "reason": "WER LocalDumps can remain empty when the app crash handler writes its own dump first.",
+        },
+    }
 
 
 def collect_application_events(artifacts: Path) -> dict[str, Any]:
