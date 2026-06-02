@@ -14,7 +14,7 @@ from typing import Iterable
 
 from emule_test_harness.artifact_names import result_file_name
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
-from emule_test_harness import cpu_profile, live_wire_inputs, vpn_guard_live, windows_processes
+from emule_test_harness import campaign_scenarios, cpu_profile, live_wire_inputs, vpn_guard_live, windows_processes
 
 SHARED_FILES_UI_CORE_SCENARIOS = (
     "fixture-three-files",
@@ -1909,6 +1909,27 @@ def suite_p2p_bind_interface_address(spec: SuiteSpec, lan_interface_address: str
     return None
 
 
+def campaign_scenario_network_contract(scenario_id: str, key: str) -> dict[str, object]:
+    """Returns the shared network contract for a reusable campaign scenario."""
+
+    scenario = None
+    if scenario_id:
+        scenario = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID.get(scenario_id)
+    if scenario is None and key:
+        scenario = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_KEY.get(key)
+    if scenario is None:
+        return {}
+    return {
+        "network_scope": scenario.network_scope,
+        "local_test_network": scenario.local_test_network,
+        "local_allowed_network_scopes": list(scenario.local_allowed_network_scopes),
+        "control_bind_scope": scenario.control_bind_scope,
+        "amutorrent_bind_scope": scenario.amutorrent_bind_scope,
+        "p2p_mode": scenario.p2p_mode,
+        "p2p_bind_scope": scenario.p2p_bind_scope,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the aggregate live E2E argument parser."""
 
@@ -2579,6 +2600,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "local_suites": list(args.campaign_scenario_local_suite or ()),
             "execution_mode": "local",
             "uses_local_swarm": bool(args.campaign_scenario_uses_local_swarm),
+            **campaign_scenario_network_contract(args.campaign_scenario_id, args.campaign_scenario_key),
         }
 
     for spec in selected_specs:

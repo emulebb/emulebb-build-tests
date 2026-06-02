@@ -124,6 +124,13 @@ def test_live_e2e_summary_records_campaign_scenario_metadata(tmp_path: Path) -> 
         "local_suites": ["local-ed2k-search-soak", "godzilla-local-swarm"],
         "execution_mode": "local",
         "uses_local_swarm": True,
+        "network_scope": "lan",
+        "local_test_network": "default",
+        "local_allowed_network_scopes": ["offline", "lan"],
+        "control_bind_scope": "lan",
+        "amutorrent_bind_scope": "lan",
+        "p2p_mode": "local-swarm",
+        "p2p_bind_scope": "lan",
     }
 
 
