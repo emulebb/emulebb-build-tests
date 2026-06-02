@@ -35,7 +35,7 @@ def main() -> int:
     parser = live_e2e_suite.build_parser()
     args = parser.parse_args()
     summary = live_e2e_suite.run_live_e2e_suite(args, harness_cli_common)
-    return 0 if summary["status"] == "passed" else 1
+    return 0 if summary["status"] in {"passed", "planned"} else 1
 
 
 if __name__ == "__main__":
