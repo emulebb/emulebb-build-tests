@@ -725,7 +725,7 @@ def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypa
     assert option_values(commands[1], "--p2p-bind-interface-address") == ["192.0.2.11"]
 
 
-def test_lan_amutorrent_browser_uses_lan_address_without_vpn_guard(tmp_path: Path, monkeypatch) -> None:
+def test_lan_amutorrent_browser_clears_live_p2p_bind_without_vpn_guard(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.delenv("EMULEBB_TEST_LAN_INTERFACE", raising=False)
     monkeypatch.setattr(
@@ -749,8 +749,8 @@ def test_lan_amutorrent_browser_uses_lan_address_without_vpn_guard(tmp_path: Pat
     )
 
     assert summary["test_network"] == "lan"
-    assert option_values(commands[0], "--p2p-bind-interface-name") == []
-    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.0.2.11"]
+    assert option_values(commands[0], "--p2p-bind-interface-name") == [""]
+    assert option_values(commands[0], "--p2p-bind-interface-address") == []
     assert "--vpn-guard-enabled" not in commands[0]
 
 

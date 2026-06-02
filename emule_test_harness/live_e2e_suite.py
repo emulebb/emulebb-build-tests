@@ -1246,8 +1246,11 @@ def build_suite_command(
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
     if spec.is_auto_browse and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
-    if spec.is_amutorrent_browser and p2p_bind_interface_name and not p2p_bind_interface_address:
-        command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+    if spec.is_amutorrent_browser:
+        if p2p_bind_interface_name and not p2p_bind_interface_address:
+            command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
+        elif p2p_bind_interface_address:
+            command.extend(["--p2p-bind-interface-name", ""])
     if (
         spec.accepts_vpn_guard_profile
         and not spec.is_rest_api
@@ -1300,7 +1303,6 @@ def build_suite_command(
             "local-ed2k-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
-            "amutorrent-browser-smoke",
             "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_name
@@ -1318,7 +1320,6 @@ def build_suite_command(
             "local-ed2k-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
-            "amutorrent-browser-smoke",
             "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_address
