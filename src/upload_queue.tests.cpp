@@ -120,6 +120,17 @@ TEST_CASE("Upload queue cools down only short low-payload disconnect churn")
 	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, false, 1000u, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
 }
 
+TEST_CASE("Upload queue cools down only short no-socket upload churn")
+{
+	CHECK(ShouldCooldownNoSocketUploadSlot(true, false, 0x01020304u, 1000u, 0u));
+	CHECK(ShouldCooldownNoSocketUploadSlot(true, false, 0x01020304u, kShortFailedUploadCooldownMaxAgeMs, kShortFailedUploadCooldownMaxPayloadBytes));
+	CHECK_FALSE(ShouldCooldownNoSocketUploadSlot(false, false, 0x01020304u, 1000u, 0u));
+	CHECK_FALSE(ShouldCooldownNoSocketUploadSlot(true, true, 0x01020304u, 1000u, 0u));
+	CHECK_FALSE(ShouldCooldownNoSocketUploadSlot(true, false, 0u, 1000u, 0u));
+	CHECK_FALSE(ShouldCooldownNoSocketUploadSlot(true, false, 0x01020304u, kShortFailedUploadCooldownMaxAgeMs + 1u, 0u));
+	CHECK_FALSE(ShouldCooldownNoSocketUploadSlot(true, false, 0x01020304u, 1000u, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
+}
+
 TEST_CASE("Upload queue presentation cadence is owned by the unified desktop timer")
 {
 #ifdef EMULEBB_TEST_HAVE_UNIFIED_DESKTOP_PRESENTATION_TIMER
