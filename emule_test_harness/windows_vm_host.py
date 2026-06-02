@@ -12,10 +12,20 @@ GUEST_SCRIPT_FACTORIES = {
     "package-smoke": "package_smoke_script",
     "local-ed2k-transfer": "local_ed2k_transfer_script",
     "hideme-live-wire": "hideme_live_wire_script",
+    "rest-smoke-stress": "profile_smoke_script",
+    "crash-dump-smoke": "profile_smoke_script",
+    "cpu-heavy-quick": "profile_smoke_script",
+    "resource-ui-smoke": "profile_smoke_script",
+    "release-expanded-ui": "profile_smoke_script",
 }
 GUEST_RUNNER_FILES = {
     "local-ed2k-transfer": "windows_vm_local_ed2k.py",
     "hideme-live-wire": "windows_vm_hideme_live.py",
+    "rest-smoke-stress": "windows_vm_profile_smoke.py",
+    "crash-dump-smoke": "windows_vm_profile_smoke.py",
+    "cpu-heavy-quick": "windows_vm_profile_smoke.py",
+    "resource-ui-smoke": "windows_vm_profile_smoke.py",
+    "release-expanded-ui": "windows_vm_profile_smoke.py",
 }
 PROFILE_HELPER_FILE = "vm_guest_profiles.py"
 LOCAL_ED2K_TARGET_ENDPOINTS = {

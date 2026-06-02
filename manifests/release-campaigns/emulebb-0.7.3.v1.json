@@ -262,6 +262,31 @@
           ]
         },
         {
+          "id": "emulebb.flow.windows-vm.rest.smoke-stress.v1",
+          "title": "Windows VM REST smoke/stress companion",
+          "phase": "controller-surface",
+          "flowCategory": "windows-vm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile rest-smoke-stress --release-version 0.7.3-rc.1 --skip-build",
+          "localInputs": [
+            "vm-lab.local.json",
+            "Windows 10/11 Hyper-V clean checkpoints"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "rest-smoke-stress"
+              }
+            }
+          ]
+        },
+        {
           "id": "emulebb.flow.arr.prowlarr.search-to-client.live.v1",
           "title": "Prowlarr search and download-client handoff",
           "phase": "controller-surface",
@@ -519,6 +544,31 @@
               }
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.windows-vm.release-expanded.ui.v1",
+          "title": "Windows VM release-expanded UI companion",
+          "phase": "live-wire-release",
+          "flowCategory": "windows-vm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile release-expanded-ui --release-version 0.7.3-rc.1 --skip-build",
+          "localInputs": [
+            "vm-lab.local.json",
+            "Windows 10/11 Hyper-V clean checkpoints"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "release-expanded-ui"
+              }
+            }
+          ]
         }
       ]
     },
@@ -553,6 +603,31 @@
               "base": "workspace-state",
               "path": "test-reports/resource-ui-smoke/latest/resource-ui-smoke-summary.json",
               "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.windows-vm.resource-ui.smoke.v1",
+          "title": "Windows VM resource UI smoke companion",
+          "phase": "ui-resource-depth",
+          "flowCategory": "windows-vm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile resource-ui-smoke --release-version 0.7.3-rc.1 --skip-build",
+          "localInputs": [
+            "vm-lab.local.json",
+            "Windows 10/11 Hyper-V clean checkpoints"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "resource-ui-smoke"
+              }
             }
           ]
         },
@@ -683,6 +758,56 @@
               "base": "workspace-state",
               "path": "test-reports/local-dumps-crash-smoke/latest/local-dumps-crash-smoke-result.json",
               "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.windows-vm.crash-dump.smoke.v1",
+          "title": "Windows VM crash/dump smoke companion",
+          "phase": "stabilization-stress",
+          "flowCategory": "windows-vm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile crash-dump-smoke --release-version 0.7.3-rc.1 --skip-build",
+          "localInputs": [
+            "vm-lab.local.json",
+            "Windows 10/11 Hyper-V clean checkpoints"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "crash-dump-smoke"
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.windows-vm.cpu-heavy.quick.v1",
+          "title": "Windows VM CPU-heavy quick companion",
+          "phase": "stabilization-stress",
+          "flowCategory": "windows-vm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile cpu-heavy-quick --release-version 0.7.3-rc.1 --skip-build",
+          "localInputs": [
+            "vm-lab.local.json",
+            "Windows 10/11 Hyper-V clean checkpoints"
+          ],
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": false,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "cpu-heavy-quick"
+              }
             }
           ]
         },

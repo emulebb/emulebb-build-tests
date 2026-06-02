@@ -11,11 +11,17 @@ $ErrorActionPreference = 'Stop'
 $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
 $credential = [pscredential]::new($payload.username, $secure)
 $vm = Get-VM -Name $payload.vmName -ErrorAction Stop
+if ($payload.switchName) {
+  Connect-VMNetworkAdapter -VMName $payload.vmName -SwitchName $payload.switchName
+}
 if ($vm.State -ne 'Off') {
   Stop-VM -Name $payload.vmName -TurnOff -Force
 }
 $snapshot = Get-VMSnapshot -VMName $payload.vmName -Name $payload.checkpointName -ErrorAction Stop
 Restore-VMSnapshot -VMSnapshot $snapshot -Confirm:$false
+if ($payload.switchName) {
+  Connect-VMNetworkAdapter -VMName $payload.vmName -SwitchName $payload.switchName
+}
 Start-VM -Name $payload.vmName
 $deadline = (Get-Date).AddMinutes(10)
 $session = $null
@@ -411,6 +417,125 @@ finally {
       Stop-VM -Name $target.vmName -Force -ErrorAction SilentlyContinue
       Restore-VMSnapshot -VMName $target.vmName -Name $payload.checkpointName -Confirm:$false -ErrorAction SilentlyContinue
     }
+  }
+}
+"""
+
+
+def profile_smoke_script() -> str:
+    """Returns a PowerShell Direct shim for single-VM profile smoke runners."""
+
+    return r"""
+$ErrorActionPreference = 'Stop'
+$secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+$credential = [pscredential]::new($payload.username, $secure)
+$vm = Get-VM -Name $payload.vmName -ErrorAction Stop
+if ($payload.switchName) {
+  Connect-VMNetworkAdapter -VMName $payload.vmName -SwitchName $payload.switchName
+}
+if ($vm.State -ne 'Off') {
+  Stop-VM -Name $payload.vmName -TurnOff -Force
+}
+$snapshot = Get-VMSnapshot -VMName $payload.vmName -Name $payload.checkpointName -ErrorAction Stop
+Restore-VMSnapshot -VMSnapshot $snapshot -Confirm:$false
+if ($payload.switchName) {
+  Connect-VMNetworkAdapter -VMName $payload.vmName -SwitchName $payload.switchName
+}
+Start-VM -Name $payload.vmName
+
+function Wait-GuestSession($vmName) {
+  $deadline = (Get-Date).AddMinutes(10)
+  do {
+    Start-Sleep -Seconds 3
+    try {
+      return New-PSSession -VMName $vmName -Credential $credential -ErrorAction Stop
+    } catch {
+      if ((Get-Date) -gt $deadline) { throw }
+    }
+  } while ($true)
+}
+
+function Ensure-GuestPython($session) {
+  return Invoke-Command -Session $session -ScriptBlock {
+    $candidates = @(
+      'C:\Python313\python.exe',
+      'C:\Python312\python.exe',
+      'C:\Program Files\Python313\python.exe',
+      'C:\Program Files\Python312\python.exe'
+    )
+    foreach ($candidate in $candidates) {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        & $candidate -m pip --version | Out-Null
+        return $candidate
+      }
+    }
+    $command = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($command) {
+      & $command.Source -m pip --version | Out-Null
+      return $command.Source
+    }
+    throw 'Python with pip is not installed in the guest. Re-run vm-lab prepare to install the guest baseline.'
+  }
+}
+
+function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments) {
+  $stdout = Invoke-Command -Session $session -ScriptBlock {
+    param($python, $runner, [string[]] $arguments)
+    $output = & $python $runner @arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw ('guest python failed with exit code ' + $LASTEXITCODE + ":`n" + (($output | ForEach-Object { $_.ToString() }) -join "`n"))
+    }
+    $output
+  } -ArgumentList $python, $runner, $arguments
+  return ($stdout -join "`n") | ConvertFrom-Json
+}
+
+function Copy-GuestArtifacts($session, $source, $destination) {
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+      Copy-Item -FromSession $session -Path $source -Destination $destination -Recurse -Force
+      return
+    } catch {
+      if ($attempt -eq 5) { throw }
+      Start-Sleep -Seconds 2
+    }
+  }
+}
+
+$session = $null
+$guestRoot = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $payload.target
+$guestZip = Join-Path $guestRoot (Split-Path -Leaf $payload.packageZip)
+$guestRunner = Join-Path $guestRoot 'windows_vm_profile_smoke.py'
+$guestProfiles = Join-Path $guestRoot 'vm_guest_profiles.py'
+try {
+  $session = Wait-GuestSession $payload.vmName
+  Invoke-Command -Session $session -ScriptBlock {
+    param($root)
+    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+  } -ArgumentList $guestRoot
+  $python = Ensure-GuestPython $session
+  Copy-Item -ToSession $session -Path $payload.packageZip -Destination $guestZip
+  Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
+  Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
+  $guestResult = Invoke-GuestPython $session $python $guestRunner @(
+    '--profile', $payload.profileName,
+    '--root', $guestRoot,
+    '--target', $payload.target,
+    '--package-zip', $guestZip,
+    '--username', $payload.username,
+    '--password', $payload.password,
+    '--fixture-size-bytes', [string] $payload.fixtureSizeBytes
+  )
+  New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
+  Copy-GuestArtifacts $session (Join-Path $guestRoot '*') $payload.hostReportDir
+  $guestResult | ConvertTo-Json -Depth 12
+}
+finally {
+  if ($session) { Remove-PSSession $session }
+  if (-not $payload.keepRunning) {
+    Stop-VM -Name $payload.vmName -Force -ErrorAction SilentlyContinue
+    Restore-VMSnapshot -VMName $payload.vmName -Name $payload.checkpointName -Confirm:$false -ErrorAction SilentlyContinue
   }
 }
 """
