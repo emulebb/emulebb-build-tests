@@ -207,7 +207,7 @@ def run_one_search(
                 "retry_failures": failures,
                 "observations": observed.get("observations", [])[-5:],
             }
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, ConnectionResetError, TimeoutError) as exc:
             failures.append({"attempt": attempt, "type": type(exc).__name__, "message": str(exc)})
             if attempt >= attempts:
                 raise

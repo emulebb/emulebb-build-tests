@@ -133,6 +133,31 @@ def test_run_one_search_retries_transient_url_error(monkeypatch) -> None:
     assert len(result["retry_failures"]) == 1
 
 
+def test_run_one_search_retries_direct_connection_reset(monkeypatch) -> None:
+    module = load_suite_module()
+    attempts = []
+
+    def fake_start_server_search(_base_url: str, _api_key: str, query: str) -> dict[str, object]:
+        attempts.append(query)
+        if len(attempts) == 1:
+            raise ConnectionResetError("reset")
+        return {"id": "search-1", "response": {"status": 200}}
+
+    monkeypatch.setattr(module, "start_server_search", fake_start_server_search)
+    monkeypatch.setattr(
+        module,
+        "wait_for_search_results",
+        lambda *_args, **_kwargs: {"search": {"results": [{"hash": "A"}]}, "observations": [{"result_count": 1}]},
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.run_one_search("http://192.0.2.10:4711", "key", "local-soak-linux", 1.0)
+
+    assert result["search_id"] == "search-1"
+    assert result["attempts"] == 2
+    assert result["retry_failures"][0]["type"] == "ConnectionResetError"
+
+
 def test_write_catalog_uses_server_schema(tmp_path: Path) -> None:
     module = load_suite_module()
     path = tmp_path / "catalog.json"
