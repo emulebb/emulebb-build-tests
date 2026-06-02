@@ -65,6 +65,11 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "suite-dependencies.json" in script
     assert "-DependencyManifest $dependencyManifest" in script
     assert "-Bundle Controller" in script
+    assert "-ControlBindAddress $lanBindAddr" in script
+    assert "-EmulebbBindAddress $lanBindAddr" in script
+    assert "-AmutorrentBindAddress $lanBindAddr" in script
+    assert "-EmulebbBindAddress '127.0.0.1'" not in script
+    assert "-AmutorrentBindAddress '127.0.0.1'" not in script
     assert "Suite installer did not install aMuTorrent server path" in script
     assert "Suite installer did not install the pinned Node runtime" in script
     assert "guestHarnessManifests" in script

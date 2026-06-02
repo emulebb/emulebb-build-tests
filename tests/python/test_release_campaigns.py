@@ -100,7 +100,7 @@ def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
             assert scenario["flowCategory"] == "local-vm-swarm"
             assert scenario["command"] == (
                 "python -m emule_workspace test campaign-scenario "
-                f"--scenario {spec.scenario_id} --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1"
+                f"--scenario {spec.scenario_id} --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --dry-run"
             )
             assert scenario["localCommand"] == shared.command_for_mode("local")
             assert scenario["vmCommand"] == shared.command_for_mode("vm", release_version="0.7.3-rc.1")
@@ -368,6 +368,7 @@ def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
     text = release_campaigns.format_release_campaign_report(report)
 
     assert "--local-swarm-mode execute" in scenario["vmExecuteCommand"]
+    assert "--dry-run" in scenario["vmPlanCommand"]
     assert scenario["vmPlanCommand"] == scenario["vmCommand"]
     assert "emulebb.flow.controller.installer-swarm.v1" in text
     assert "mode: vm (available: local, vm)" in text

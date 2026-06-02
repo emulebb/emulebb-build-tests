@@ -207,7 +207,7 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
         assert vm_plan_command == (
             "python -m emule_workspace test campaign-scenario "
             f"--scenario {scenario.scenario_id} --mode vm "
-            "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3"
+            "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3 --dry-run"
         )
 
         vm_execute_command = scenario.command_for_mode(

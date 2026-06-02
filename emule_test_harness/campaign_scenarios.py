@@ -122,7 +122,9 @@ class CampaignScenarioSpec:
         command = f"python -m emule_workspace test campaign-scenario --scenario {self.scenario_id} --mode {mode}"
         if mode == "vm":
             command = f"{command} --release-version {release_version} --skip-build --swarm-tier {swarm_tier}"
-            if local_swarm_mode != "plan":
+            if local_swarm_mode == "plan":
+                command = f"{command} --dry-run"
+            else:
                 command = f"{command} --local-swarm-mode {local_swarm_mode}"
             return command
         return f"{command} --swarm-tier {swarm_tier}"

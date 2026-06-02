@@ -666,7 +666,7 @@ try {
           url = $nodeUrl
         }
       } | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 -LiteralPath $dependencyManifest
-      & $installer -NonInteractive -Force -NoStart -Bundle Controller -InstallRoot $installRoot -ReleaseBaseUrl $releaseBaseUrl -DependencyManifest $dependencyManifest -Version $version -Platform $platform -InstallKind Development -ControlBindAddress $lanBindAddr -EmulebbBindAddress '127.0.0.1' -AmutorrentBindAddress '127.0.0.1' -P2PBindInterface ''
+      & $installer -NonInteractive -Force -NoStart -Bundle Controller -InstallRoot $installRoot -ReleaseBaseUrl $releaseBaseUrl -DependencyManifest $dependencyManifest -Version $version -Platform $platform -InstallKind Development -ControlBindAddress $lanBindAddr -EmulebbBindAddress $lanBindAddr -AmutorrentBindAddress $lanBindAddr -P2PBindInterface ''
       if ($LASTEXITCODE -ne 0) {
         throw "Install-eMuleBBSuite.ps1 failed with exit code $LASTEXITCODE."
       }

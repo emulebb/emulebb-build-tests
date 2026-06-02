@@ -45,7 +45,7 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
             "--local-swarm-mode",
             "execute",
             "--lan-bind-addr",
-            "127.0.0.1",
+            "192.0.2.10",
         ]
     )
 
@@ -56,7 +56,7 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
     assert str(args.amule_daemon_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amuled.exe")
     assert str(args.amule_control_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amulecmd.exe")
     assert args.local_swarm_mode == "execute"
-    assert args.lan_bind_addr == "127.0.0.1"
+    assert args.lan_bind_addr == "192.0.2.10"
 
 
 def test_local_swarm_payload_check_accepts_staged_harness(tmp_path) -> None:
@@ -106,6 +106,7 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
         client2_app_exe=client2_app_exe,
         amule_daemon_exe=amule_daemon_exe,
         amule_control_exe=amule_control_exe,
+        lan_bind_addr="192.0.2.10",
     )
 
     command_names = [Path(command[1]).name for command in check["details"]["commands"]]
@@ -119,10 +120,10 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
     assert check["details"]["client2AppExe"] == str(client2_app_exe)
     assert check["details"]["amuleDaemonExe"] == str(amule_daemon_exe)
     assert check["details"]["amuleControlExe"] == str(amule_control_exe)
-    assert check["details"]["lanBindAddr"] == "127.0.0.1"
+    assert check["details"]["lanBindAddr"] == "192.0.2.10"
     for command in check["details"]["commands"]:
         assert "--lan-bind-addr" in command
-        assert "127.0.0.1" in command
+        assert "192.0.2.10" in command
         if Path(command[1]).name in {"local-ed2k-search-soak.py", "godzilla-local-swarm.py"}:
             assert "--ed2k-server-exe" in command
         if Path(command[1]).name == "godzilla-local-swarm.py":

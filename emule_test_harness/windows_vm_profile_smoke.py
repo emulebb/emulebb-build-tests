@@ -15,6 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+LAN_BIND_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
+
 try:
     from emule_test_harness.campaign_scenarios import (
         DEFAULT_LOCAL_SWARM_TIER,
@@ -77,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--amule-daemon-exe", type=Path)
     parser.add_argument("--amule-control-exe", type=Path)
     parser.add_argument("--local-swarm-mode", choices=["plan", "execute"], default="plan")
-    parser.add_argument("--lan-bind-addr", default="127.0.0.1")
+    parser.add_argument("--lan-bind-addr", default="")
     return parser
 
 
@@ -101,9 +103,14 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
     app_started = False
     app_root = expanded / "eMuleBB"
     exe_path = app_root / "emulebb.exe"
-    base_url = f"http://127.0.0.1:{REST_PORT}"
+    local_swarm_profile = args.profile in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
+    web_bind_addr = "127.0.0.1"
+    base_url = f"http://{web_bind_addr}:{REST_PORT}"
 
     try:
+        if local_swarm_profile:
+            web_bind_addr = require_campaign_lan_bind_addr(args.lan_bind_addr)
+        base_url = f"http://{web_bind_addr}:{REST_PORT}"
         reset_directory(artifacts)
         for directory in (config_dir, incoming_dir, temp_dir, shared_dir):
             directory.mkdir(parents=True, exist_ok=True)
@@ -117,6 +124,7 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
                 temp_dir=temp_dir,
                 shared_dir=shared_dir,
                 enable_diagnostics=args.profile in {"crash-dump-smoke", "diagnostics-local-dumps"},
+                web_bind_addr=web_bind_addr,
             ),
         )
         checks.append(make_fixture(shared_dir, args.fixture_size_bytes, args.profile))
@@ -204,6 +212,7 @@ def offline_preferences_text(
     temp_dir: Path,
     shared_dir: Path,
     enable_diagnostics: bool,
+    web_bind_addr: str = "127.0.0.1",
 ) -> str:
     return "\n".join(
         [
@@ -229,7 +238,7 @@ def offline_preferences_text(
             "Enabled=1",
             f"ApiKey={API_KEY}",
             f"Port={REST_PORT}",
-            "BindAddr=127.0.0.1",
+            f"BindAddr={web_bind_addr}",
             "UseHTTPS=0",
             "AllowAdminHiLevelFunc=1",
             f"EnableDiagnosticRestEndpoints={1 if enable_diagnostics else 0}",
@@ -443,7 +452,7 @@ def local_swarm_plan_check(
     client2_app_exe: Path | None = None,
     amule_daemon_exe: Path | None = None,
     amule_control_exe: Path | None = None,
-    lan_bind_addr: str = "127.0.0.1",
+    lan_bind_addr: str = "",
     execution_mode: str = "plan",
 ) -> dict[str, Any]:
     """Resolves or executes the staged local-swarm suite commands."""
@@ -460,6 +469,7 @@ def local_swarm_plan_check(
             "details": {"harnessRoot": str(harness_root), "error": "missing staged live_e2e_suite.py"},
         }
     try:
+        lan_bind_addr = require_campaign_lan_bind_addr(lan_bind_addr)
         if str(harness_root) not in sys.path:
             sys.path.insert(0, str(harness_root))
         from emule_test_harness import live_e2e_suite
@@ -603,6 +613,20 @@ def local_swarm_plan_check(
             "status": "failed",
             "details": {"harnessRoot": str(harness_root), "error": f"{type(exc).__name__}: {exc}"},
         }
+
+
+def require_campaign_lan_bind_addr(value: str | None = None) -> str:
+    """Returns the explicit LAN address used by migrated local/VM campaign profiles."""
+
+    bind_addr = (value or "").strip()
+    if not bind_addr:
+        for name in LAN_BIND_ENV_NAMES:
+            bind_addr = os.environ.get(name, "").strip()
+            if bind_addr:
+                break
+    if bind_addr in {"", "0.0.0.0", "::", "[::]", "localhost", "::1"} or bind_addr.startswith("127."):
+        raise ValueError("--lan-bind-addr must be an explicit LAN address for migrated campaign profiles.")
+    return bind_addr
 
 
 def powershell_script_parse_check(app_root: Path) -> dict[str, Any]:
