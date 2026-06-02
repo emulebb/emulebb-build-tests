@@ -46,3 +46,19 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
     assert scenarios["amutorrent-clean-startup"]["localSuites"] == [
         "amutorrent-local-ed2k-ui-live",
     ]
+
+
+def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
+    scenarios = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_KEY
+
+    local_command = scenarios["search-ui-local-swarm"].command_for_mode("local")
+    assert local_command == (
+        "python -m emule_workspace test live-e2e --profile multi-client-p2p "
+        "--suite local-ed2k-search-soak --suite local-kad-swarm --test-network lan"
+    )
+
+    vm_command = scenarios["search-ui-local-swarm"].command_for_mode("vm", release_version="0.7.4-rc.2")
+    assert vm_command == (
+        "python -m emule_workspace test windows-vm --matrix win10,win11 "
+        "--profile search-ui-local-swarm-vm --release-version 0.7.4-rc.2 --skip-build"
+    )

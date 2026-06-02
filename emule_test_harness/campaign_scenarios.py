@@ -10,6 +10,7 @@ EXECUTION_MODES = ("local", "vm")
 LOCAL_SWARM_CLIENT_PRODUCTS = ("emulebb", "amule", "tracing-harness")
 LOCAL_SWARM_TIERS = (1, 2, 3)
 DEFAULT_LOCAL_SWARM_TIER = 1
+DEFAULT_RELEASE_VERSION = "0.7.3-rc.1"
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,23 @@ class CampaignScenarioSpec:
             "scenarioId": self.scenario_id,
             "usesLocalSwarm": self.uses_local_swarm,
             "liveWire": self.live_wire,
+            "localCommand": self.command_for_mode("local"),
+            "vmCommand": self.command_for_mode("vm"),
         }
+
+    def command_for_mode(self, mode: str, *, release_version: str = DEFAULT_RELEASE_VERSION) -> str:
+        """Returns the emule_workspace command that runs this scenario in one mode."""
+
+        if mode == "local":
+            suite_args = " ".join(f"--suite {suite}" for suite in self.local_suites)
+            profile_arg = f"--profile {self.local_profile}" if self.local_profile else "--profile default"
+            return f"python -m emule_workspace test live-e2e {profile_arg} {suite_args} --test-network lan".strip()
+        if mode == "vm":
+            return (
+                "python -m emule_workspace test windows-vm --matrix win10,win11 "
+                f"--profile {self.vm_profile} --release-version {release_version} --skip-build"
+            )
+        raise ValueError(f"Unsupported campaign scenario execution mode: {mode!r}.")
 
 
 REUSABLE_CAMPAIGN_SCENARIOS = (

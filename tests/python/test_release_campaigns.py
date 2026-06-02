@@ -10,7 +10,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from emule_test_harness import release_campaigns, windows_vm_profiles
+from emule_test_harness import campaign_scenarios, release_campaigns, windows_vm_profiles
 
 
 def repo_root() -> Path:
@@ -94,10 +94,23 @@ def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
 
     for spec in windows_vm_profiles.WINDOWS_VM_PROFILE_SPECS:
         scenario = scenarios[spec.scenario_id]
-        assert scenario["flowCategory"] == "windows-vm"
         assert scenario["phase"] == spec.release_phase
-        assert f"test windows-vm --matrix {','.join(spec.required_targets)}" in scenario["command"]
-        assert f"--profile {spec.name}" in scenario["command"]
+        if spec.scenario_id in campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID:
+            shared = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID[spec.scenario_id]
+            assert scenario["flowCategory"] == "local-vm-swarm"
+            assert scenario["command"] == (
+                "python -m emule_workspace test campaign-scenario "
+                f"--scenario {spec.scenario_id} --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1"
+            )
+            assert scenario["executionMode"] == "vm"
+            assert scenario["executionModes"] == ["local", "vm"]
+            assert scenario["localProfile"] == shared.local_profile
+            assert scenario["localSuites"] == list(shared.local_suites)
+            assert scenario["vmProfile"] == spec.name
+        else:
+            assert scenario["flowCategory"] == "windows-vm"
+            assert f"test windows-vm --matrix {','.join(spec.required_targets)}" in scenario["command"]
+            assert f"--profile {spec.name}" in scenario["command"]
         evidence = scenario["evidence"][0]
         assert evidence["glob"] == "test-reports/windows-vm/*/windows-vm-result.json"
         assert evidence["matches"] == {"/profile": spec.name}

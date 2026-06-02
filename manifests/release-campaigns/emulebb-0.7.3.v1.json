@@ -409,6 +409,72 @@
               "statusPointer": "/status"
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.controller.installer-swarm.v1",
+          "title": "Installer-backed controller surface reusable VM swarm",
+          "phase": "controller-surface",
+          "flowCategory": "local-vm-swarm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "executionMode": "vm",
+          "executionModes": [
+            "local",
+            "vm"
+          ],
+          "localProfile": "installer-controller-surface",
+          "localSuites": [
+            "command-line-smoke",
+            "rest-api",
+            "prowlarr-emulebb",
+            "amutorrent-browser-smoke",
+            "live-process-monitor"
+          ],
+          "vmProfile": "installer-controller-surface-vm",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "installer-controller-surface-vm"
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.arr.prowlarr-handoff.swarm.v1",
+          "title": "Prowlarr controller handoff reusable VM swarm",
+          "phase": "controller-surface",
+          "flowCategory": "local-vm-swarm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "executionMode": "vm",
+          "executionModes": [
+            "local",
+            "vm"
+          ],
+          "localProfile": "controller-surface",
+          "localSuites": [
+            "prowlarr-emulebb"
+          ],
+          "vmProfile": "prowlarr-controller-handoff-vm",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "prowlarr-controller-handoff-vm"
+              }
+            }
+          ]
         }
       ]
     },
@@ -682,6 +748,38 @@
           ]
         },
         {
+          "id": "emulebb.flow.ui.search.local-swarm.v1",
+          "title": "Search UI local swarm reusable VM swarm",
+          "phase": "ui-resource-depth",
+          "flowCategory": "local-vm-swarm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "executionMode": "vm",
+          "executionModes": [
+            "local",
+            "vm"
+          ],
+          "localProfile": "multi-client-p2p",
+          "localSuites": [
+            "local-ed2k-search-soak",
+            "local-kad-swarm"
+          ],
+          "vmProfile": "search-ui-local-swarm-vm",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "search-ui-local-swarm-vm"
+              }
+            }
+          ]
+        },
+        {
           "id": "emulebb.flow.ui.preferences.resource-depth.v1",
           "title": "Preferences UI resource-depth companion",
           "phase": "ui-resource-depth",
@@ -950,6 +1048,68 @@
               "base": "workspace-state",
               "path": "test-reports/amutorrent-emulebb-ui-live/latest/amutorrent-emulebb-ui-live-result.json",
               "statusPointer": "/status"
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.amutorrent.clean-startup.swarm.v1",
+          "title": "aMuTorrent clean startup reusable VM swarm",
+          "phase": "stabilization-stress",
+          "flowCategory": "local-vm-swarm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "executionMode": "vm",
+          "executionModes": [
+            "local",
+            "vm"
+          ],
+          "localProfile": "multi-client-p2p",
+          "localSuites": [
+            "amutorrent-local-ed2k-ui-live"
+          ],
+          "vmProfile": "amutorrent-clean-startup-vm",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "amutorrent-clean-startup-vm"
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.amutorrent.emulebb-ui.swarm.v1",
+          "title": "aMuTorrent eMuleBB UI reusable VM swarm",
+          "phase": "stabilization-stress",
+          "flowCategory": "local-vm-swarm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "executionMode": "vm",
+          "executionModes": [
+            "local",
+            "vm"
+          ],
+          "localProfile": "multi-client-p2p",
+          "localSuites": [
+            "amutorrent-local-ed2k-ui-live"
+          ],
+          "vmProfile": "amutorrent-emulebb-ui-vm",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "amutorrent-emulebb-ui-vm"
+              }
             }
           ]
         },

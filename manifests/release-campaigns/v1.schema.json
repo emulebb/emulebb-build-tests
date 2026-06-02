@@ -164,6 +164,33 @@
             "type": "string"
           }
         },
+        "executionMode": {
+          "enum": [
+            "local",
+            "vm"
+          ]
+        },
+        "executionModes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "local",
+              "vm"
+            ]
+          }
+        },
+        "localProfile": {
+          "type": "string"
+        },
+        "localSuites": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "vmProfile": {
+          "type": "string"
+        },
         "evidence": {
           "type": "array",
           "items": {
