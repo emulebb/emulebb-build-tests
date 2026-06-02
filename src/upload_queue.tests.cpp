@@ -45,6 +45,20 @@ TEST_CASE("Upload queue timer diagnostics count only loops slower than the inter
 	CHECK_FALSE(ShouldCountSlowUploadTimerLoop(1u, 0u));
 }
 
+TEST_CASE("Broadband idle upload recycling requires an empty local send pipeline")
+{
+	CHECK(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 0, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(false, true, false, 0u, 0u, 0, 0, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, false, false, 0u, 0u, 0, 0, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, true, 0u, 0u, 0, 0, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 1u, 0u, 0, 0, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 1u, 0, 0, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 1, 0, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 1, 0, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 0, 1, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 0, 0, 9999u, 10000u));
+}
+
 TEST_CASE("Upload queue presentation cadence is owned by the unified desktop timer")
 {
 #ifdef EMULEBB_TEST_HAVE_UNIFIED_DESKTOP_PRESENTATION_TIMER
