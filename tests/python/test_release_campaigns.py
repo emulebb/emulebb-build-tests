@@ -102,6 +102,9 @@ def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
                 "python -m emule_workspace test campaign-scenario "
                 f"--scenario {spec.scenario_id} --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1"
             )
+            assert scenario["localCommand"] == shared.command_for_mode("local")
+            assert scenario["vmCommand"] == shared.command_for_mode("vm", release_version="0.7.3-rc.1")
+            assert scenario["command"] == scenario["vmCommand"]
             assert scenario["executionMode"] == "vm"
             assert scenario["executionModes"] == ["local", "vm"]
             assert scenario["localProfile"] == shared.local_profile
@@ -198,6 +201,22 @@ def test_campaign_validation_rejects_unknown_live_e2e_profile() -> None:
     campaign["phases"][2]["scenarios"][0]["liveE2eProfile"] = "unknown-profile"
 
     with pytest.raises(release_campaigns.ReleaseCampaignError, match="unknown live E2E profile"):
+        release_campaigns.validate_release_campaign(campaign, template)
+
+
+def test_campaign_validation_rejects_local_vm_swarm_command_mismatch() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
+    scenario = next(
+        scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if scenario["flowCategory"] == "local-vm-swarm"
+    )
+    scenario["executionMode"] = "local"
+
+    with pytest.raises(release_campaigns.ReleaseCampaignError, match="command must match"):
         release_campaigns.validate_release_campaign(campaign, template)
 
 

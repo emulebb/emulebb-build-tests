@@ -418,6 +418,8 @@
           "required": false,
           "blocking": false,
           "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode local --swarm-tier 1",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -451,6 +453,8 @@
           "required": false,
           "blocking": false,
           "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode local --swarm-tier 1",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -753,6 +757,8 @@
           "required": false,
           "blocking": false,
           "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 1",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -1057,6 +1063,8 @@
           "required": false,
           "blocking": false,
           "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode local --swarm-tier 1",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -1088,6 +1096,8 @@
           "required": false,
           "blocking": false,
           "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
+          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode local --swarm-tier 1",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1",
           "executionMode": "vm",
           "executionModes": [
             "local",

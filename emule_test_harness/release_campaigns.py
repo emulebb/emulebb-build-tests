@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from emule_test_harness import live_e2e_suite
+from emule_test_harness import campaign_scenarios, live_e2e_suite
 
 SCHEMA_VERSION = "emulebb-build-tests.release-campaign.v1"
 DEFAULT_TEMPLATE_ID = "emulebb.release.template.default.v1"
@@ -277,6 +277,10 @@ def _build_scenario_report(paths: ReleaseCampaignPaths, phase: dict[str, Any], s
         "required": bool(scenario.get("required", True)),
         "blocking": bool(scenario.get("blocking", True)),
         "command": scenario.get("command", "manual"),
+        "localCommand": scenario.get("localCommand", ""),
+        "vmCommand": scenario.get("vmCommand", ""),
+        "executionMode": scenario.get("executionMode", ""),
+        "executionModes": scenario.get("executionModes", []),
         "status": _aggregate_evidence_status(evidence_reports),
         "warnings": warnings,
         "evidence": evidence_reports,
@@ -423,6 +427,19 @@ def _validate_scenario_mapping(scenario: dict[str, Any]) -> None:
             raise ReleaseCampaignError(f"Scenario {scenario_id} references unknown live E2E profile: {profile}")
         if suite and suite not in live_e2e_suite.SUITE_NAMES:
             raise ReleaseCampaignError(f"Scenario {scenario_id} references unknown live E2E suite: {suite}")
+    if scenario.get("flowCategory") == "local-vm-swarm":
+        if scenario_id not in campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID:
+            raise ReleaseCampaignError(f"Scenario {scenario_id} is not a reusable local/VM campaign scenario.")
+        if scenario.get("executionModes") != list(campaign_scenarios.EXECUTION_MODES):
+            raise ReleaseCampaignError(f"Scenario {scenario_id} must declare local and VM execution modes.")
+        execution_mode = _required_str(scenario, "executionMode")
+        if execution_mode not in campaign_scenarios.EXECUTION_MODES:
+            raise ReleaseCampaignError(f"Scenario {scenario_id} has unsupported executionMode: {execution_mode}")
+        local_command = _required_str(scenario, "localCommand")
+        vm_command = _required_str(scenario, "vmCommand")
+        expected_command = local_command if execution_mode == "local" else vm_command
+        if command != expected_command:
+            raise ReleaseCampaignError(f"Scenario {scenario_id} command must match its {execution_mode} command.")
 
 
 def _require_schema(payload: dict[str, Any]) -> None:

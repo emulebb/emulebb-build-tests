@@ -152,6 +152,12 @@
         "command": {
           "type": "string"
         },
+        "localCommand": {
+          "type": "string"
+        },
+        "vmCommand": {
+          "type": "string"
+        },
         "liveE2eProfile": {
           "type": "string"
         },
