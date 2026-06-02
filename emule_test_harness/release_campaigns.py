@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -250,6 +251,10 @@ def format_release_campaign_report(report: dict[str, Any]) -> str:
             lines.append(f"{'':<21}       local command: {scenario['localCommand']}")
         if scenario.get("vmCommand"):
             lines.append(f"{'':<21}       vm command: {scenario['vmCommand']}")
+        if scenario.get("vmPlanCommand"):
+            lines.append(f"{'':<21}       vm plan command: {scenario['vmPlanCommand']}")
+        if scenario.get("vmExecuteCommand"):
+            lines.append(f"{'':<21}       vm execute command: {scenario['vmExecuteCommand']}")
         for warning in scenario["warnings"]:
             lines.append(f"{'':<21}       warning: {warning}")
     if report["warnings"]:
@@ -275,6 +280,7 @@ def _load_manifests(tests_repo_root: Path) -> list[dict[str, Any]]:
 def _build_scenario_report(paths: ReleaseCampaignPaths, phase: dict[str, Any], scenario: dict[str, Any]) -> dict[str, Any]:
     evidence_reports = [_build_evidence_report(paths, evidence) for evidence in scenario.get("evidence", ())]
     warnings = _scenario_warnings(evidence_reports)
+    generated_commands = _local_vm_swarm_generated_commands(scenario)
     return {
         "id": scenario["id"],
         "title": scenario["title"],
@@ -286,6 +292,8 @@ def _build_scenario_report(paths: ReleaseCampaignPaths, phase: dict[str, Any], s
         "command": scenario.get("command", "manual"),
         "localCommand": scenario.get("localCommand", ""),
         "vmCommand": scenario.get("vmCommand", ""),
+        "vmPlanCommand": generated_commands.get("vmPlanCommand", ""),
+        "vmExecuteCommand": generated_commands.get("vmExecuteCommand", ""),
         "executionMode": scenario.get("executionMode", ""),
         "executionModes": scenario.get("executionModes", []),
         "status": _aggregate_evidence_status(evidence_reports),
@@ -293,6 +301,32 @@ def _build_scenario_report(paths: ReleaseCampaignPaths, phase: dict[str, Any], s
         "evidence": evidence_reports,
         "localInputs": scenario.get("localInputs", []),
     }
+
+
+def _local_vm_swarm_generated_commands(scenario: dict[str, Any]) -> dict[str, str]:
+    """Returns catalog-generated command variants for reusable local/VM swarm rows."""
+
+    if scenario.get("flowCategory") != "local-vm-swarm":
+        return {}
+    scenario_id = str(scenario.get("id") or "")
+    shared = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID.get(scenario_id)
+    if shared is None:
+        return {}
+    release_version = _release_version_from_command(str(scenario.get("vmCommand") or scenario.get("command") or ""))
+    return {
+        "vmPlanCommand": shared.command_for_mode("vm", release_version=release_version, local_swarm_mode="plan"),
+        "vmExecuteCommand": shared.command_for_mode("vm", release_version=release_version, local_swarm_mode="execute"),
+    }
+
+
+def _release_version_from_command(command: str) -> str:
+    """Extracts a release version from one generated campaign command."""
+
+    tokens = shlex.split(command, posix=False)
+    for index, token in enumerate(tokens[:-1]):
+        if token == "--release-version":
+            return tokens[index + 1]
+    return campaign_scenarios.DEFAULT_RELEASE_VERSION
 
 
 def _build_evidence_report(paths: ReleaseCampaignPaths, evidence: dict[str, Any]) -> dict[str, Any]:

@@ -360,14 +360,24 @@ def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
         campaign_id="emulebb-0.7.3",
         phase_id="controller-surface",
     )
+    scenario = next(
+        scenario
+        for scenario in report["scenarios"]
+        if scenario["id"] == "emulebb.flow.controller.installer-swarm.v1"
+    )
     text = release_campaigns.format_release_campaign_report(report)
 
+    assert "--local-swarm-mode execute" in scenario["vmExecuteCommand"]
+    assert scenario["vmPlanCommand"] == scenario["vmCommand"]
     assert "emulebb.flow.controller.installer-swarm.v1" in text
     assert "mode: vm (available: local, vm)" in text
     assert "local command: python -m emule_workspace test campaign-scenario" in text
     assert "vm command: python -m emule_workspace test campaign-scenario" in text
+    assert "vm plan command: python -m emule_workspace test campaign-scenario" in text
+    assert "vm execute command: python -m emule_workspace test campaign-scenario" in text
     assert "--mode local" in text
     assert "--mode vm" in text
+    assert "--local-swarm-mode execute" in text
 
 
 def test_operator_script_help_loads() -> None:
