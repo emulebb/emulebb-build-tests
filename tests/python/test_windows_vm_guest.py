@@ -54,6 +54,10 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "campaign_scenarios.py" in script
     assert "localSwarmHarnessPackagePath" in script
     assert "localSwarmScriptPaths" in script
+    assert "localSwarmRestOpenApiPath" in script
+    assert "localSwarmAppSourcePaths" in script
+    assert "REST-API-OPENAPI.yaml" in script
+    assert "workspaces\\workspace\\app\\emulebb-main\\srchybrid" in script
     assert "--harness-root" in script
     assert "godzilla-local-swarm.py" not in script
     assert "--profile" in script

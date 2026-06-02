@@ -579,6 +579,7 @@ function Stop-GuestRuntime($session) {
 
 $session = $null
 $guestRoot = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $payload.target
+$guestRunRoot = Split-Path -Parent $guestRoot
 $guestZip = Join-Path $guestRoot (Split-Path -Leaf $payload.packageZip)
 $guestRunner = Join-Path $guestRoot 'windows_vm_profile_smoke.py'
 $guestProfiles = Join-Path $guestRoot 'vm_guest_profiles.py'
@@ -593,6 +594,8 @@ $guestClient2App = Join-Path $guestClient2Root 'emule.exe'
 $guestAmuleBinRoot = Join-Path $guestToolsRoot 'amule\bin'
 $guestAmuleDaemon = Join-Path $guestAmuleBinRoot 'amuled.exe'
 $guestAmuleControl = Join-Path $guestAmuleBinRoot 'amulecmd.exe'
+$guestToolingRestRoot = Join-Path $guestRoot 'emulebb-tooling\docs\rest'
+$guestAppSourceRoot = Join-Path $guestRunRoot 'workspaces\workspace\app\emulebb-main\srchybrid'
 try {
   $session = Wait-GuestSession $payload.vmName
   Invoke-Command -Session $session -ScriptBlock {
@@ -614,6 +617,22 @@ try {
   Copy-Item -ToSession $session -Path $payload.localSwarmHarnessPackagePath -Destination $guestHarnessPackage -Recurse -Force
   foreach ($scriptPath in @($payload.localSwarmScriptPaths)) {
     Copy-Item -ToSession $session -Path $scriptPath -Destination (Join-Path $guestScriptsRoot (Split-Path -Leaf $scriptPath)) -Force
+  }
+  if ($payload.localSwarmRestOpenApiPath) {
+    Invoke-Command -Session $session -ScriptBlock {
+      param($root)
+      New-Item -ItemType Directory -Force -Path $root | Out-Null
+    } -ArgumentList $guestToolingRestRoot
+    Copy-Item -ToSession $session -Path $payload.localSwarmRestOpenApiPath -Destination (Join-Path $guestToolingRestRoot 'REST-API-OPENAPI.yaml') -Force
+  }
+  if ($payload.localSwarmAppSourcePaths) {
+    Invoke-Command -Session $session -ScriptBlock {
+      param($root)
+      New-Item -ItemType Directory -Force -Path $root | Out-Null
+    } -ArgumentList $guestAppSourceRoot
+    foreach ($sourcePath in @($payload.localSwarmAppSourcePaths)) {
+      Copy-Item -ToSession $session -Path $sourcePath -Destination (Join-Path $guestAppSourceRoot (Split-Path -Leaf $sourcePath)) -Force
+    }
   }
   if ($payload.localSwarmGoed2kServerExe) {
     Copy-Item -ToSession $session -Path $payload.localSwarmGoed2kServerExe -Destination $guestGoed2kServer -Force
