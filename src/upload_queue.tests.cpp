@@ -74,6 +74,16 @@ TEST_CASE("Broadband stalled upload recycling requires queued work and a replace
 	CHECK_FALSE(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 1u, 0, 0, 0, 9999u, 10000u));
 }
 
+TEST_CASE("Upload queue cools down only short low-payload disconnect churn")
+{
+	CHECK(ShouldCooldownShortFailedUploadSlot(true, false, 1000u, 0u));
+	CHECK(ShouldCooldownShortFailedUploadSlot(true, false, kShortFailedUploadCooldownMaxAgeMs, kShortFailedUploadCooldownMaxPayloadBytes));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(false, false, 1000u, 0u));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, true, 1000u, 0u));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, false, kShortFailedUploadCooldownMaxAgeMs + 1u, 0u));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, false, 1000u, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
+}
+
 TEST_CASE("Upload queue presentation cadence is owned by the unified desktop timer")
 {
 #ifdef EMULEBB_TEST_HAVE_UNIFIED_DESKTOP_PRESENTATION_TIMER
