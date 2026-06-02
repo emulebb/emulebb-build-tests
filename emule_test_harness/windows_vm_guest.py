@@ -478,15 +478,23 @@ function Ensure-GuestPython($session) {
   }
 }
 
-function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments) {
+function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments, [string[]] $pythonPath = @()) {
   $stdout = Invoke-Command -Session $session -ScriptBlock {
-    param($python, $runner, [string[]] $arguments)
-    $output = & $python $runner @arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-      throw ('guest python failed with exit code ' + $LASTEXITCODE + ":`n" + (($output | ForEach-Object { $_.ToString() }) -join "`n"))
+    param($python, $runner, [string[]] $arguments, [string[]] $pythonPath)
+    $previousPythonPath = $env:PYTHONPATH
+    try {
+      if ($pythonPath.Count -gt 0) {
+        $env:PYTHONPATH = (($pythonPath + @($previousPythonPath)) | Where-Object { $_ }) -join [System.IO.Path]::PathSeparator
+      }
+      $output = & $python $runner @arguments 2>&1
+      if ($LASTEXITCODE -ne 0) {
+        throw ('guest python failed with exit code ' + $LASTEXITCODE + ":`n" + (($output | ForEach-Object { $_.ToString() }) -join "`n"))
+      }
+      $output
+    } finally {
+      $env:PYTHONPATH = $previousPythonPath
     }
-    $output
-  } -ArgumentList $python, $runner, $arguments
+  } -ArgumentList $python, $runner, $arguments, $pythonPath
   return ($stdout -join "`n") | ConvertFrom-Json
 }
 
@@ -648,7 +656,7 @@ try {
   if ($payload.localSwarmAmuleControlExe) {
     $runnerArgs += @('--amule-control-exe', $guestAmuleControl)
   }
-  $guestResult = Invoke-GuestPython $session $python $guestRunner $runnerArgs
+  $guestResult = Invoke-GuestPython $session $python $guestRunner $runnerArgs @($guestHarnessRoot, $guestRoot)
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
   Stop-GuestRuntime $session
   Copy-GuestArtifacts $session $guestRoot $payload.hostReportDir

@@ -60,4 +60,6 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "--swarm-tier" in script
     assert "fixtureSizeBytes" in script
     assert "Invoke-GuestPython" in script
+    assert "PYTHONPATH" in script
+    assert "@($guestHarnessRoot, $guestRoot)" in script
     assert "Restore-VMSnapshot" in script
