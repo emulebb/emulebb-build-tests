@@ -377,7 +377,7 @@ def allocate_free_tcp_port(used: set[int], lan_bind_addr: str | None = None) -> 
 
     for _ in range(100):
         candidate = rest_smoke.choose_listen_port(lan_bind_addr)
-        if candidate not in used and dtt.is_port_available(candidate):
+        if candidate not in used and dtt.is_port_available(candidate, host=lan_bind_addr):
             used.add(candidate)
             return candidate
     raise RuntimeError("Could not allocate an additional TCP port.")
@@ -394,7 +394,7 @@ def choose_ports(extra_emulebb_clients: int = 0, lan_bind_addr: str | None = Non
             udp = suffix == "udp"
             for _ in range(100):
                 candidate = rest_smoke.choose_listen_port(lan_bind_addr)
-                if candidate not in used and dtt.is_port_available(candidate, udp=udp):
+                if candidate not in used and dtt.is_port_available(candidate, host=lan_bind_addr, udp=udp):
                     ports[key] = candidate
                     used.add(candidate)
                     break

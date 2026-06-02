@@ -111,14 +111,19 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
 def test_choose_amule_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     module = load_script_module("deterministic-amule-transfer.py", "amule_transfer_for_port_bind_test")
     listen_hosts: list[str] = []
+    availability_checks: list[tuple[int, str | None, bool]] = []
     next_port = iter(range(6200, 6210))
 
     def fake_choose_listen_port(host: str | None = None) -> int:
         listen_hosts.append(host or "")
         return next(next_port)
 
+    def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
+        availability_checks.append((port, host, udp))
+        return True
+
     monkeypatch.setattr(module.rest_smoke, "choose_listen_port", fake_choose_listen_port)
-    monkeypatch.setattr(module.dtt, "is_port_available", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module.dtt, "is_port_available", fake_is_port_available)
 
     ports = module.choose_amule_ports({"ed2k_tcp": 4662}, "172.24.112.2")
 
@@ -126,11 +131,14 @@ def test_choose_amule_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     assert ports["amule_udp"] == 6201
     assert ports["amule_ec"] == 6202
     assert listen_hosts == ["172.24.112.2"] * 3
+    assert all(host == "172.24.112.2" for _port, host, _udp in availability_checks)
 
 
 def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
     godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_port_bind_test")
     observed: dict[str, str | None] = {}
+    availability_checks: list[tuple[int, str | None, bool]] = []
+    next_port = iter(range(6300, 6310))
 
     def fake_choose_distinct_ports(host: str | None = None) -> dict[str, int]:
         observed["dtt_host"] = host
@@ -140,13 +148,25 @@ def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
         observed["amule_host"] = host
         return {**base_ports, "amule_tcp": 4664, "amule_udp": 4674, "amule_ec": 4712}
 
+    def fake_choose_listen_port(host: str | None = None) -> int:
+        observed["extra_host"] = host
+        return next(next_port)
+
+    def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
+        availability_checks.append((port, host, udp))
+        return True
+
     monkeypatch.setattr(godzilla.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
     monkeypatch.setattr(godzilla.amule_seed, "choose_amule_ports", fake_choose_amule_ports)
+    monkeypatch.setattr(godzilla.rest_smoke, "choose_listen_port", fake_choose_listen_port)
+    monkeypatch.setattr(godzilla.dtt, "is_port_available", fake_is_port_available)
 
-    ports = godzilla.choose_ports(lan_bind_addr="172.24.112.3")
+    ports = godzilla.choose_ports(extra_emulebb_clients=1, lan_bind_addr="172.24.112.3")
 
     assert ports["amule_ec"] == 4712
-    assert observed == {"dtt_host": "172.24.112.3", "amule_host": "172.24.112.3"}
+    assert ports["extra_emulebb_0_rest"] == 6302
+    assert observed == {"dtt_host": "172.24.112.3", "amule_host": "172.24.112.3", "extra_host": "172.24.112.3"}
+    assert all(host == "172.24.112.3" for _port, host, _udp in availability_checks)
 
 
 def test_discover_interface_ipv4_falls_back_to_hostname_when_windows_adapter_query_fails(monkeypatch) -> None:

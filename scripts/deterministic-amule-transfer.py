@@ -79,7 +79,7 @@ def choose_amule_ports(base_ports: dict[str, int], lan_bind_addr: str | None = N
         udp = name.endswith("_udp")
         for _ in range(100):
             candidate = rest_smoke.choose_listen_port(lan_bind_addr)
-            if candidate not in used and dtt.is_port_available(candidate, udp=udp):
+            if candidate not in used and dtt.is_port_available(candidate, host=lan_bind_addr, udp=udp):
                 ports[name] = candidate
                 used.add(candidate)
                 break
