@@ -78,4 +78,6 @@ def test_profile_smoke_script_preserves_artifact_copy_errors_without_failing() -
     script = windows_vm_guest.profile_smoke_script()
 
     assert "artifact-copy-errors.json" in script
+    assert "$sourcePath = $_.FullName" in script
+    assert "path = $sourcePath" in script
     assert "Failed to snapshot" not in script

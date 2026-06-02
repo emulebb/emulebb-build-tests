@@ -508,6 +508,8 @@ def local_swarm_plan_check(
             "--godzilla-adverse-recovery-timeout-seconds",
             str(tier_options["adverse_recovery_timeout_seconds"]),
         ]
+        if lan_bind_addr:
+            argv.extend(["--lan-bind-addr", lan_bind_addr])
         if execution_mode == "plan":
             argv.append("--plan-only")
         if bool(tier_options["cpu_profile"]):

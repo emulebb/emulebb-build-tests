@@ -72,6 +72,56 @@ def test_build_client_specs_uses_stable_emulebb_names() -> None:
     assert specs[1].udp_port == 4902
 
 
+def test_choose_local_kad_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
+    module = load_suite_module()
+    listen_hosts: list[str | None] = []
+    availability_checks: list[tuple[int, str | None, bool]] = []
+    next_port = iter(range(6100, 6110))
+
+    def fake_choose_listen_port(host: str | None = None) -> int:
+        listen_hosts.append(host)
+        return next(next_port)
+
+    def fake_is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
+        availability_checks.append((port, host, udp))
+        return True
+
+    monkeypatch.setattr(module.rest_smoke, "choose_listen_port", fake_choose_listen_port)
+    monkeypatch.setattr(module.dtt, "is_port_available", fake_is_port_available)
+
+    ports = module.choose_local_kad_ports(2, "192.0.2.10")
+
+    assert ports == [(6100, 6101, 6102), (6103, 6104, 6105)]
+    assert listen_hosts == ["192.0.2.10"] * 6
+    assert all(host == "192.0.2.10" for _port, host, _udp in availability_checks)
+    assert availability_checks[2] == (6102, "192.0.2.10", True)
+
+
+def test_wait_for_local_swarm_uses_lan_bind_addr(monkeypatch) -> None:
+    module = load_suite_module()
+    urls: list[str] = []
+    specs = module.build_client_specs(1, [(4701, 4801, 4901)])
+
+    def fake_get_kad_status(base_url: str, _api_key: str) -> dict[str, object]:
+        urls.append(base_url)
+        return {"running": True, "connected": True, "contactCount": 1, "lanMode": True}
+
+    monkeypatch.setattr(module, "get_kad_status", fake_get_kad_status)
+    monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
+
+    result = module.wait_for_local_swarm(
+        specs=specs,
+        lan_bind_addr="192.0.2.10",
+        api_key="key",
+        min_contacts_per_client=1,
+        require_connected=True,
+        timeout_seconds=1.0,
+    )
+
+    assert result["ready"] is True
+    assert urls == ["http://192.0.2.10:4701"]
+
+
 def test_build_bootstrap_plan_connects_to_and_from_seed() -> None:
     module = load_suite_module()
     specs = module.build_client_specs(3, [(4701, 4801, 4901), (4702, 4802, 4902), (4703, 4803, 4903)])

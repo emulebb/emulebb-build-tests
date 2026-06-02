@@ -102,7 +102,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("nodes.dat fixture chaos requires preseed or both bootstrap mode.")
 
 
-def choose_local_kad_ports(client_count: int) -> list[tuple[int, int, int]]:
+def choose_local_kad_ports(client_count: int, host: str | None = None) -> list[tuple[int, int, int]]:
     """Allocates distinct REST/TCP/UDP port triples for local Kad clients."""
 
     if client_count < 2:
@@ -112,8 +112,8 @@ def choose_local_kad_ports(client_count: int) -> list[tuple[int, int, int]]:
 
     def choose(udp: bool = False) -> int:
         for _ in range(200):
-            candidate = rest_smoke.choose_listen_port()
-            if candidate not in used and dtt.is_port_available(candidate, udp=udp):
+            candidate = rest_smoke.choose_listen_port(host)
+            if candidate not in used and dtt.is_port_available(candidate, host=host, udp=udp):
                 used.add(candidate)
                 return candidate
         raise RuntimeError("Could not allocate a distinct local Kad port.")
@@ -415,7 +415,7 @@ def wait_for_local_swarm(
         snapshot_rows: list[dict[str, object]] = []
         ready = True
         for spec in specs:
-            status = get_kad_status(base_url(bind_addr, spec), api_key)
+            status = get_kad_status(base_url(lan_bind_addr, spec), api_key)
             compact = compact_local_kad_status(status)
             contact_count = compact.get("contactCount")
             row = {
@@ -474,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
-        specs = build_client_specs(args.client_count, choose_local_kad_ports(args.client_count))
+        specs = build_client_specs(args.client_count, choose_local_kad_ports(args.client_count, args.lan_bind_addr))
         report["network"] = {
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,

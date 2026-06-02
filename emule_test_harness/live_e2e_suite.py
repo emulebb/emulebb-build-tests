@@ -2119,6 +2119,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument("--rest-cold-start-dump-stress-skip-dumps", action="store_true")
+    parser.add_argument("--lan-bind-addr")
     parser.add_argument("--p2p-bind-interface-name", default="hide.me")
     parser.add_argument(
         "--live-wire-inputs-file",
@@ -2304,7 +2305,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
     shared_files_ui_scenarios = tuple(args.shared_files_ui_scenario or ())
     lan_bind_interface_name = os.environ.get(LAN_INTERFACE_ENV, "").strip()
     lan_bind_interface_address = os.environ.get(LAN_IP_RESOLVED_ENV, "").strip()
-    lan_bind_addr = os.environ.get(X_LOCAL_IP_ENV, "").strip() or lan_bind_interface_address
+    lan_bind_addr = str(args.lan_bind_addr or "").strip() or os.environ.get(X_LOCAL_IP_ENV, "").strip() or lan_bind_interface_address
     vpn_bind_interface_name = os.environ.get(VPN_INTERFACE_ENV, "").strip()
     vpn_bind_interface_address = os.environ.get(VPN_IP_RESOLVED_ENV, "").strip()
     network_context_json = os.environ.get(NETWORK_CONTEXT_JSON_ENV, "").strip()

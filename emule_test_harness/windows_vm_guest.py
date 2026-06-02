@@ -520,11 +520,12 @@ function Copy-GuestArtifacts($session, $sourceRoot, $destination) {
         return
       }
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+      $sourcePath = $_.FullName
       $sourceStream = $null
       $targetStream = $null
       try {
         $sourceStream = [System.IO.FileStream]::new(
-          $_.FullName,
+          $sourcePath,
           [System.IO.FileMode]::Open,
           [System.IO.FileAccess]::Read,
           ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
@@ -537,7 +538,7 @@ function Copy-GuestArtifacts($session, $sourceRoot, $destination) {
         )
         $sourceStream.CopyTo($targetStream)
       } catch {
-        $errors += [pscustomobject]@{ path = $_.FullName; error = $_.Exception.Message }
+        $errors += [pscustomobject]@{ path = $sourcePath; error = $_.Exception.Message }
       } finally {
         if ($targetStream) { $targetStream.Dispose() }
         if ($sourceStream) { $sourceStream.Dispose() }

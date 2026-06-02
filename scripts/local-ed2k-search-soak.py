@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 import time
+import urllib.error
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -48,6 +49,7 @@ DEFAULT_SEARCHES_PER_WAVE = 12
 DEFAULT_MAX_CONCURRENT_SEARCHES = 6
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 45.0
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 900.0
+DEFAULT_SEARCH_ATTEMPTS = 3
 SOAK_TERMS = (
     "local-soak-linux",
     "local-soak-ubuntu",
@@ -177,21 +179,40 @@ def wait_for_search_results(base_url: str, api_key: str, search_id: str, timeout
     return live_common.wait_for(resolve, timeout_seconds, 1.0, f"local ED2K search {search_id}")
 
 
-def run_one_search(base_url: str, api_key: str, query: str, timeout_seconds: float) -> dict[str, object]:
+def run_one_search(
+    base_url: str,
+    api_key: str,
+    query: str,
+    timeout_seconds: float,
+    attempts: int = DEFAULT_SEARCH_ATTEMPTS,
+) -> dict[str, object]:
     """Runs one complete local server search and returns a bounded result summary."""
 
-    started = time.monotonic()
-    created = start_server_search(base_url, api_key, query)
-    observed = wait_for_search_results(base_url, api_key, str(created["id"]), timeout_seconds)
-    results = observed["search"].get("results") if isinstance(observed.get("search"), dict) else []
-    result_count = len(results) if isinstance(results, list) else 0
-    return {
-        "query": query,
-        "search_id": created["id"],
-        "result_count": result_count,
-        "duration_seconds": round(time.monotonic() - started, 3),
-        "observations": observed.get("observations", [])[-5:],
-    }
+    if attempts <= 0:
+        raise ValueError("search attempts must be greater than zero.")
+    failures: list[dict[str, object]] = []
+    for attempt in range(1, attempts + 1):
+        started = time.monotonic()
+        try:
+            created = start_server_search(base_url, api_key, query)
+            observed = wait_for_search_results(base_url, api_key, str(created["id"]), timeout_seconds)
+            results = observed["search"].get("results") if isinstance(observed.get("search"), dict) else []
+            result_count = len(results) if isinstance(results, list) else 0
+            return {
+                "query": query,
+                "search_id": created["id"],
+                "result_count": result_count,
+                "duration_seconds": round(time.monotonic() - started, 3),
+                "attempts": attempt,
+                "retry_failures": failures,
+                "observations": observed.get("observations", [])[-5:],
+            }
+        except urllib.error.URLError as exc:
+            failures.append({"attempt": attempt, "type": type(exc).__name__, "message": str(exc)})
+            if attempt >= attempts:
+                raise
+            time.sleep(min(2.0, 0.25 * attempt))
+    raise RuntimeError("unreachable local ED2K search retry state")
 
 
 def run_search_waves(
