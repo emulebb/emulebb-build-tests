@@ -175,13 +175,14 @@ def test_all_reusable_campaign_vm_profiles_plan_declared_local_suites(tmp_path) 
             client2_app_exe=client2_app_exe,
             amule_daemon_exe=amule_daemon_exe,
             amule_control_exe=amule_control_exe,
+            lan_bind_addr="192.0.2.10",
         )
         expected_suites = set(scenario.local_suites)
         if scenario.uses_local_swarm:
             expected_suites.add("godzilla-local-swarm")
-        command_names = {Path(command[1]).name for command in check["details"]["commands"]}
 
         assert check["status"] == "passed", (profile, check["details"])
+        command_names = {Path(command[1]).name for command in check["details"]["commands"]}
         assert check["details"]["summaryStatus"] == "planned"
         assert set(check["details"]["suiteNames"]) == expected_suites
         assert command_names == {script_by_suite[suite] for suite in expected_suites}
@@ -219,6 +220,7 @@ def test_local_swarm_execute_check_runs_live_suite_without_plan_only(tmp_path, m
         app_root,
         tmp_path / "artifacts",
         execution_mode="execute",
+        lan_bind_addr="192.0.2.10",
     )
 
     assert check["name"] == "local-swarm-execute"
