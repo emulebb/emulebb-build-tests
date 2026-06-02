@@ -569,6 +569,7 @@ $guestRoot = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $payload.target
 $guestZip = Join-Path $guestRoot (Split-Path -Leaf $payload.packageZip)
 $guestRunner = Join-Path $guestRoot 'windows_vm_profile_smoke.py'
 $guestProfiles = Join-Path $guestRoot 'vm_guest_profiles.py'
+$guestCampaignScenarios = Join-Path $guestRoot 'campaign_scenarios.py'
 try {
   $session = Wait-GuestSession $payload.vmName
   Invoke-Command -Session $session -ScriptBlock {
@@ -580,6 +581,7 @@ try {
   Copy-Item -ToSession $session -Path $payload.packageZip -Destination $guestZip
   Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
   Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
+  Copy-Item -ToSession $session -Path (Join-Path (Split-Path -Parent $payload.profileHelperPath) 'campaign_scenarios.py') -Destination $guestCampaignScenarios
   $guestResult = Invoke-GuestPython $session $python $guestRunner @(
     '--profile', $payload.profileName,
     '--root', $guestRoot,

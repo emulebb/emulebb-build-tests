@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIOS
+
 WINDOWS_VM_SUITE_NAME = "windows-vm"
 WINDOWS_VM_RESULT_FILE_NAME = "windows-vm-result.json"
 WINDOWS_VM_SUMMARY_FILE_NAME = "windows-vm-summary.json"
@@ -22,6 +24,10 @@ class WindowsVmProfileSpec:
     required_targets: tuple[str, ...]
     result_file_name: str
     scenario_id: str
+    local_profile: str = ""
+    local_suites: tuple[str, ...] = ()
+    execution_modes: tuple[str, ...] = ("vm",)
+    uses_local_swarm: bool = False
 
 
 WINDOWS_VM_PROFILE_SPECS = (
@@ -142,6 +148,21 @@ WINDOWS_VM_PROFILE_SPECS = (
         result_file_name=WINDOWS_VM_RESULT_FILE_NAME,
         scenario_id="emulebb.flow.windows-vm.ui-shared-files.depth.v1",
     ),
+) + tuple(
+    WindowsVmProfileSpec(
+        name=spec.vm_profile,
+        title=f"Windows VM {spec.title}",
+        network_scope=spec.network_scope,
+        release_phase=spec.release_phase,
+        required_targets=SUPPORTED_TARGETS,
+        result_file_name=WINDOWS_VM_RESULT_FILE_NAME,
+        scenario_id=spec.scenario_id,
+        local_profile=spec.local_profile,
+        local_suites=spec.local_suites,
+        execution_modes=("local", "vm"),
+        uses_local_swarm=spec.uses_local_swarm,
+    )
+    for spec in REUSABLE_CAMPAIGN_SCENARIOS
 )
 WINDOWS_VM_PROFILE_BY_NAME = {spec.name: spec for spec in WINDOWS_VM_PROFILE_SPECS}
 WINDOWS_VM_PROFILE_BY_SCENARIO_ID = {spec.scenario_id: spec for spec in WINDOWS_VM_PROFILE_SPECS}
@@ -166,6 +187,10 @@ def build_windows_vm_profile_matrix() -> dict[str, Any]:
                 "requiredTargets": list(spec.required_targets),
                 "resultFileName": spec.result_file_name,
                 "scenarioId": spec.scenario_id,
+                "executionModes": list(spec.execution_modes),
+                "localProfile": spec.local_profile,
+                "localSuites": list(spec.local_suites),
+                "usesLocalSwarm": spec.uses_local_swarm,
             }
             for spec in WINDOWS_VM_PROFILE_SPECS
         ],

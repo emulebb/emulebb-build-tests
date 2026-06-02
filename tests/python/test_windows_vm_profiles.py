@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from emule_test_harness import windows_vm_profiles
+from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
 
 
 def test_windows_vm_profile_matrix_is_the_profile_authority() -> None:
@@ -28,4 +29,14 @@ def test_windows_vm_profile_matrix_is_the_profile_authority() -> None:
     assert profiles["shared-cache-filesystem"]["releasePhase"] == "ui-resource-depth"
     assert profiles["diagnostics-local-dumps"]["releasePhase"] == "stabilization-stress"
     assert profiles["ui-shared-files-depth"]["releasePhase"] == "ui-resource-depth"
+    for profile_name, scenario in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE.items():
+        profile = profiles[profile_name]
+        assert profile["networkScope"] == "lan"
+        assert profile["releasePhase"] == scenario.release_phase
+        assert profile["requiredTargets"] == ["win10", "win11"]
+        assert profile["executionModes"] == ["local", "vm"]
+        assert profile["localProfile"] == scenario.local_profile
+        assert profile["localSuites"] == list(scenario.local_suites)
+        assert profile["usesLocalSwarm"] is True
+        assert profile["scenarioId"] == scenario.scenario_id
     json.dumps(matrix)

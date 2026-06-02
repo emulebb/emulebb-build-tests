@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from emule_test_harness.campaign_scenarios import (
+        DEFAULT_LOCAL_SWARM_TIER,
+        EXECUTION_MODES,
+        LOCAL_SWARM_CLIENT_PRODUCTS,
+        LOCAL_SWARM_TIERS,
+        REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE,
+    )
     from emule_test_harness.vm_guest_profiles import (
         emit,
         http_json,
@@ -23,6 +30,13 @@ try:
         write_preferences_ini,
     )
 except ModuleNotFoundError:
+    from campaign_scenarios import (
+        DEFAULT_LOCAL_SWARM_TIER,
+        EXECUTION_MODES,
+        LOCAL_SWARM_CLIENT_PRODUCTS,
+        LOCAL_SWARM_TIERS,
+        REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE,
+    )
     from vm_guest_profiles import emit, http_json, retry_http_json, start_visible_app, wait_until, write_preferences_ini
 
 SUPPORTED_PROFILES = {
@@ -36,7 +50,7 @@ SUPPORTED_PROFILES = {
     "shared-cache-filesystem",
     "diagnostics-local-dumps",
     "ui-shared-files-depth",
-}
+} | set(REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE)
 API_KEY = "vm-profile-smoke-api-key"
 REST_PORT = 4711
 
@@ -288,7 +302,32 @@ def run_profile_checks(
         return [configure_local_dumps_check(args.root / "local-dumps"), manual_dump_check(base_url), crash_trigger_check(base_url)]
     if profile == "ui-shared-files-depth":
         return [resource_presence_check(app_root, min_lang=40), shared_directories_rest_check(base_url, shared_dir)]
+    if profile in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE:
+        return [local_swarm_contract_check(profile)]
     raise RuntimeError(f"Unsupported profile: {profile}")
+
+
+def local_swarm_contract_check(profile: str) -> dict[str, Any]:
+    """Records the shared local/VM swarm scenario contract for migrated campaigns."""
+
+    spec = REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE[profile]
+    return {
+        "name": "local-swarm-contract",
+        "status": "passed",
+        "details": {
+            "vmProfile": profile,
+            "scenarioId": spec.scenario_id,
+            "localProfile": spec.local_profile,
+            "localSuites": list(spec.local_suites),
+            "executionModes": list(EXECUTION_MODES),
+            "clientProducts": list(LOCAL_SWARM_CLIENT_PRODUCTS),
+            "swarmTiers": list(LOCAL_SWARM_TIERS),
+            "defaultSwarmTier": DEFAULT_LOCAL_SWARM_TIER,
+            "ed2kServerTarget": "win10",
+            "vmTargets": ["win10", "win11"],
+            "nonblockingCompanions": True,
+        },
+    }
 
 
 def powershell_script_parse_check(app_root: Path) -> dict[str, Any]:

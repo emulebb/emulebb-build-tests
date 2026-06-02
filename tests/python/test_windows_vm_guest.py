@@ -51,6 +51,7 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
 
     assert "windows_vm_profile_smoke.py" in script
     assert "vm_guest_profiles.py" in script
+    assert "campaign_scenarios.py" in script
     assert "--profile" in script
     assert "fixtureSizeBytes" in script
     assert "Invoke-GuestPython" in script

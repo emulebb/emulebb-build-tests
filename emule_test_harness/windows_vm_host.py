@@ -7,7 +7,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
 
+
+LOCAL_SWARM_VM_PROFILES = tuple(REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE)
 GUEST_SCRIPT_FACTORIES = {
     "package-smoke": "package_smoke_script",
     "local-ed2k-transfer": "local_ed2k_transfer_script",
@@ -22,6 +25,7 @@ GUEST_SCRIPT_FACTORIES = {
     "shared-cache-filesystem": "profile_smoke_script",
     "diagnostics-local-dumps": "profile_smoke_script",
     "ui-shared-files-depth": "profile_smoke_script",
+    **{profile: "profile_smoke_script" for profile in LOCAL_SWARM_VM_PROFILES},
 }
 GUEST_RUNNER_FILES = {
     "local-ed2k-transfer": "windows_vm_local_ed2k.py",
@@ -36,6 +40,7 @@ GUEST_RUNNER_FILES = {
     "shared-cache-filesystem": "windows_vm_profile_smoke.py",
     "diagnostics-local-dumps": "windows_vm_profile_smoke.py",
     "ui-shared-files-depth": "windows_vm_profile_smoke.py",
+    **{profile: "windows_vm_profile_smoke.py" for profile in LOCAL_SWARM_VM_PROFILES},
 }
 PROFILE_HELPER_FILE = "vm_guest_profiles.py"
 LOCAL_ED2K_TARGET_ENDPOINTS = {

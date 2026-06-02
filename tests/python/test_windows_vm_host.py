@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import windows_vm_host
+from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
 
 
 def test_guest_scripts_are_loaded_from_harness() -> None:
@@ -27,6 +28,16 @@ def test_guest_runner_paths_are_harness_owned() -> None:
     assert windows_vm_host.profile_helper_path(repo_root) == (
         repo_root / "emule_test_harness" / "vm_guest_profiles.py"
     )
+
+
+def test_reusable_campaign_vm_profiles_use_shared_contract_smoke_runner() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+
+    for profile in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE:
+        assert "windows_vm_profile_smoke.py" in windows_vm_host.load_guest_script(repo_root, profile)
+        assert windows_vm_host.guest_runner_path(repo_root, profile) == (
+            repo_root / "emule_test_harness" / "windows_vm_profile_smoke.py"
+        )
 
 
 def test_endpoint_payloads_materialize_vm_names() -> None:
