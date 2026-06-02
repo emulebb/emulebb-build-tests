@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from emule_test_harness import windows_vm_profile_smoke
+from emule_test_harness import windows_vm_host, windows_vm_profile_smoke
 
 
 def test_local_swarm_contract_records_selected_tier() -> None:
@@ -62,17 +62,13 @@ def test_local_swarm_payload_check_accepts_staged_harness(tmp_path) -> None:
     (harness_root / "emule_test_harness" / "live_e2e_suite.py").write_text("", encoding="utf-8")
     scripts = harness_root / "scripts"
     scripts.mkdir()
-    for name in (
-        "godzilla-local-swarm.py",
-        "local-ed2k-search-soak.py",
-        "local-kad-swarm.py",
-        "amutorrent-local-ed2k-ui-live.py",
-    ):
+    for name in windows_vm_host.LOCAL_SWARM_SCRIPT_FILES:
         (scripts / name).write_text("", encoding="utf-8")
 
     check = windows_vm_profile_smoke.local_swarm_payload_check(harness_root)
 
     assert check["status"] == "passed"
+    assert check["details"]["expectedCount"] == len(windows_vm_host.LOCAL_SWARM_SCRIPT_FILES) + 1
 
 
 def test_local_swarm_payload_check_reports_missing_harness() -> None:

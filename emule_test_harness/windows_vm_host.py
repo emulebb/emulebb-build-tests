@@ -7,7 +7,12 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
+try:
+    from emule_test_harness import live_e2e_suite
+    from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
+except ModuleNotFoundError:
+    import live_e2e_suite  # type: ignore[no-redef]
+    from campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
 
 
 LOCAL_SWARM_VM_PROFILES = tuple(REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE)
@@ -43,17 +48,21 @@ GUEST_RUNNER_FILES = {
     **{profile: "windows_vm_profile_smoke.py" for profile in LOCAL_SWARM_VM_PROFILES},
 }
 PROFILE_HELPER_FILE = "vm_guest_profiles.py"
-LOCAL_SWARM_SCRIPT_FILES = (
-    "amutorrent-browser-smoke.py",
-    "amutorrent-local-ed2k-ui-live.py",
-    "deterministic-amule-transfer.py",
-    "deterministic-two-client-transfer.py",
-    "godzilla-local-swarm.py",
-    "local-ed2k-protocol-combinations.py",
-    "local-ed2k-search-soak.py",
-    "local-kad-mixed-client-swarm.py",
-    "local-kad-swarm.py",
-    "multi-client-p2p-matrix.py",
+LIVE_E2E_SCRIPT_BY_SUITE = {spec.name: spec.script_name for spec in live_e2e_suite.SUITE_SPECS}
+
+
+def _reusable_campaign_suite_names() -> tuple[str, ...]:
+    names: list[str] = []
+    for spec in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE.values():
+        names.extend(spec.local_suites)
+        if spec.uses_local_swarm:
+            names.append("godzilla-local-swarm")
+    return tuple(dict.fromkeys(names))
+
+
+LOCAL_SWARM_SCRIPT_FILES = tuple(
+    LIVE_E2E_SCRIPT_BY_SUITE[suite_name]
+    for suite_name in _reusable_campaign_suite_names()
 )
 LOCAL_ED2K_TARGET_ENDPOINTS = {
     "win10": {"target": "win10", "tcpPort": 4662, "udpPort": 4672, "restPort": 4711},
