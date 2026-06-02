@@ -108,6 +108,47 @@ def test_choose_distinct_ports_probes_explicit_lan_bind_addr(monkeypatch) -> Non
     assert availability_checks[0] == (6104, "172.24.112.1", True)
 
 
+def test_choose_amule_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
+    module = load_script_module("deterministic-amule-transfer.py", "amule_transfer_for_port_bind_test")
+    listen_hosts: list[str] = []
+    next_port = iter(range(6200, 6210))
+
+    def fake_choose_listen_port(host: str | None = None) -> int:
+        listen_hosts.append(host or "")
+        return next(next_port)
+
+    monkeypatch.setattr(module.rest_smoke, "choose_listen_port", fake_choose_listen_port)
+    monkeypatch.setattr(module.dtt, "is_port_available", lambda *_args, **_kwargs: True)
+
+    ports = module.choose_amule_ports({"ed2k_tcp": 4662}, "172.24.112.2")
+
+    assert ports["amule_tcp"] == 6200
+    assert ports["amule_udp"] == 6201
+    assert ports["amule_ec"] == 6202
+    assert listen_hosts == ["172.24.112.2"] * 3
+
+
+def test_godzilla_choose_ports_probes_explicit_lan_bind_addr(monkeypatch) -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_port_bind_test")
+    observed: dict[str, str | None] = {}
+
+    def fake_choose_distinct_ports(host: str | None = None) -> dict[str, int]:
+        observed["dtt_host"] = host
+        return {"ed2k_tcp": 4662, "ed2k_udp": 4672, "client1_tcp": 4663, "client1_udp": 4673, "client1_rest": 4711}
+
+    def fake_choose_amule_ports(base_ports: dict[str, int], host: str | None = None) -> dict[str, int]:
+        observed["amule_host"] = host
+        return {**base_ports, "amule_tcp": 4664, "amule_udp": 4674, "amule_ec": 4712}
+
+    monkeypatch.setattr(godzilla.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
+    monkeypatch.setattr(godzilla.amule_seed, "choose_amule_ports", fake_choose_amule_ports)
+
+    ports = godzilla.choose_ports(lan_bind_addr="172.24.112.3")
+
+    assert ports["amule_ec"] == 4712
+    assert observed == {"dtt_host": "172.24.112.3", "amule_host": "172.24.112.3"}
+
+
 def test_discover_interface_ipv4_falls_back_to_hostname_when_windows_adapter_query_fails(monkeypatch) -> None:
     module = load_suite_module()
     monkeypatch.setattr(module.os, "name", "nt")

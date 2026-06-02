@@ -372,28 +372,28 @@ def generated_library_shared_dirs(root: Path) -> list[str]:
     return live_common.enumerate_recursive_directories(root)
 
 
-def allocate_free_tcp_port(used: set[int]) -> int:
+def allocate_free_tcp_port(used: set[int], lan_bind_addr: str | None = None) -> int:
     """Allocates one additional unique local TCP port."""
 
     for _ in range(100):
-        candidate = rest_smoke.choose_listen_port()
+        candidate = rest_smoke.choose_listen_port(lan_bind_addr)
         if candidate not in used and dtt.is_port_available(candidate):
             used.add(candidate)
             return candidate
     raise RuntimeError("Could not allocate an additional TCP port.")
 
 
-def choose_ports(extra_emulebb_clients: int = 0) -> dict[str, int]:
+def choose_ports(extra_emulebb_clients: int = 0, lan_bind_addr: str | None = None) -> dict[str, int]:
     """Allocates local ports for all clients and the ED2K server."""
 
-    ports = amule_seed.choose_amule_ports(dtt.choose_distinct_ports())
+    ports = amule_seed.choose_amule_ports(dtt.choose_distinct_ports(lan_bind_addr), lan_bind_addr)
     used = set(ports.values())
     for index in range(extra_emulebb_clients):
         for suffix in ("tcp", "udp", "rest"):
             key = f"extra_emulebb_{index}_{suffix}"
             udp = suffix == "udp"
             for _ in range(100):
-                candidate = rest_smoke.choose_listen_port()
+                candidate = rest_smoke.choose_listen_port(lan_bind_addr)
                 if candidate not in used and dtt.is_port_available(candidate, udp=udp):
                     ports[key] = candidate
                     used.add(candidate)
@@ -2217,7 +2217,7 @@ def main(argv: list[str] | None = None) -> int:
         client_protocol_preferences = protocol_preferences(protocol_case)
         p2p_address = resolve_local_p2p_address(args)
         args.lan_bind_addr = resolve_lan_bind_addr(args, p2p_address)
-        ports = choose_ports(args.extra_emulebb_clients)
+        ports = choose_ports(args.extra_emulebb_clients, args.lan_bind_addr)
         if args.amutorrent_controller:
             ports["amutorrent"] = allocate_free_tcp_port(set(ports.values()))
         base_url = f"http://{args.lan_bind_addr}:{ports['client1_rest']}"

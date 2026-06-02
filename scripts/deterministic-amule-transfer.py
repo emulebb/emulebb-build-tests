@@ -70,7 +70,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def choose_amule_ports(base_ports: dict[str, int]) -> dict[str, int]:
+def choose_amule_ports(base_ports: dict[str, int], lan_bind_addr: str | None = None) -> dict[str, int]:
     """Extends the common deterministic-transfer port allocation with aMule ports."""
 
     ports = dict(base_ports)
@@ -78,7 +78,7 @@ def choose_amule_ports(base_ports: dict[str, int]) -> dict[str, int]:
     for name in ("amule_tcp", "amule_udp", "amule_ec"):
         udp = name.endswith("_udp")
         for _ in range(100):
-            candidate = rest_smoke.choose_listen_port()
+            candidate = rest_smoke.choose_listen_port(lan_bind_addr)
             if candidate not in used and dtt.is_port_available(candidate, udp=udp):
                 ports[name] = candidate
                 used.add(candidate)
