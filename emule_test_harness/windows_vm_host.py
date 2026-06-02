@@ -1,0 +1,96 @@
+"""Host-side contracts for Windows VM harness orchestration."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+
+GUEST_SCRIPT_FACTORIES = {
+    "package-smoke": "package_smoke_script",
+    "local-ed2k-transfer": "local_ed2k_transfer_script",
+    "hideme-live-wire": "hideme_live_wire_script",
+}
+GUEST_RUNNER_FILES = {
+    "local-ed2k-transfer": "windows_vm_local_ed2k.py",
+    "hideme-live-wire": "windows_vm_hideme_live.py",
+}
+PROFILE_HELPER_FILE = "vm_guest_profiles.py"
+LOCAL_ED2K_TARGET_ENDPOINTS = {
+    "win10": {"target": "win10", "tcpPort": 4662, "udpPort": 4672, "restPort": 4711},
+    "win11": {"target": "win11", "tcpPort": 4762, "udpPort": 4772, "restPort": 4711},
+}
+HIDEME_LIVE_TARGET_ENDPOINTS = {
+    "win10": {"target": "win10", "tcpPort": 4862, "udpPort": 4872, "restPort": 4711},
+    "win11": {"target": "win11", "tcpPort": 4962, "udpPort": 4972, "restPort": 4711},
+}
+
+
+def load_guest_script(tests_repo_root: str | Path, profile_name: str) -> str:
+    """Returns the PowerShell Direct guest script for a Windows VM profile."""
+
+    factory_name = GUEST_SCRIPT_FACTORIES.get(profile_name)
+    if factory_name is None:
+        raise RuntimeError(f"Unsupported Windows VM guest script profile: {profile_name!r}.")
+    module = _load_windows_vm_guest_module(Path(tests_repo_root))
+    script_factory = getattr(module, factory_name, None)
+    if not callable(script_factory):
+        raise RuntimeError(f"Windows VM guest harness module is missing {factory_name}().")
+    script = script_factory()
+    if not isinstance(script, str) or not script.strip():
+        raise RuntimeError(f"Windows VM guest harness {factory_name}() returned an empty script.")
+    return script
+
+
+def guest_runner_path(tests_repo_root: str | Path, profile_name: str) -> Path:
+    """Returns the guest Python runner copied for a Windows VM profile."""
+
+    file_name = GUEST_RUNNER_FILES.get(profile_name)
+    if file_name is None:
+        raise RuntimeError(f"Windows VM profile has no guest runner: {profile_name!r}.")
+    return Path(tests_repo_root) / "emule_test_harness" / file_name
+
+
+def profile_helper_path(tests_repo_root: str | Path) -> Path:
+    """Returns the shared guest profile helper path."""
+
+    return Path(tests_repo_root) / "emule_test_harness" / PROFILE_HELPER_FILE
+
+
+def build_local_ed2k_target_payloads(vm_names: dict[str, str]) -> dict[str, dict[str, Any]]:
+    """Returns stable per-target ports for the local ED2K VM scenario."""
+
+    return _target_payloads(LOCAL_ED2K_TARGET_ENDPOINTS, vm_names)
+
+
+def build_hideme_live_target_payloads(vm_names: dict[str, str]) -> dict[str, dict[str, Any]]:
+    """Returns stable per-target ports for the hide.me live-wire VM scenario."""
+
+    return _target_payloads(HIDEME_LIVE_TARGET_ENDPOINTS, vm_names)
+
+
+def _target_payloads(
+    endpoints: dict[str, dict[str, int | str]],
+    vm_names: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    missing = sorted(set(endpoints) - set(vm_names))
+    if missing:
+        raise RuntimeError(f"Windows VM target payloads are missing VM name(s): {', '.join(missing)}.")
+    return {
+        key: {**endpoint, "vmName": vm_names[key]}
+        for key, endpoint in endpoints.items()
+    }
+
+
+def _load_windows_vm_guest_module(tests_repo_root: Path) -> ModuleType:
+    module_path = tests_repo_root / "emule_test_harness" / "windows_vm_guest.py"
+    if not module_path.is_file():
+        raise RuntimeError(f"Windows VM guest harness module is missing: {module_path}")
+    spec = importlib.util.spec_from_file_location("emulebb_windows_vm_guest", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load Windows VM guest harness module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
