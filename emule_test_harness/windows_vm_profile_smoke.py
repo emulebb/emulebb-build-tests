@@ -77,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--amule-daemon-exe", type=Path)
     parser.add_argument("--amule-control-exe", type=Path)
     parser.add_argument("--local-swarm-mode", choices=["plan", "execute"], default="plan")
+    parser.add_argument("--lan-bind-addr", default="127.0.0.1")
     return parser
 
 
@@ -330,6 +331,7 @@ def run_profile_checks(
                 client2_app_exe=args.client2_app_exe,
                 amule_daemon_exe=args.amule_daemon_exe,
                 amule_control_exe=args.amule_control_exe,
+                lan_bind_addr=args.lan_bind_addr,
                 execution_mode=args.local_swarm_mode,
             ),
         ]
@@ -441,6 +443,7 @@ def local_swarm_plan_check(
     client2_app_exe: Path | None = None,
     amule_daemon_exe: Path | None = None,
     amule_control_exe: Path | None = None,
+    lan_bind_addr: str = "127.0.0.1",
     execution_mode: str = "plan",
 ) -> dict[str, Any]:
     """Resolves or executes the staged local-swarm suite commands."""
@@ -522,12 +525,27 @@ def local_swarm_plan_check(
         for suite in suites:
             argv.extend(["--suite", suite])
         args = live_e2e_suite.build_parser().parse_args(argv)
-        if execution_mode == "execute":
-            stop_runtime()
-        summary = live_e2e_suite.run_live_e2e_suite(
-            args,
-            _LocalSwarmHarnessCliCommon(root, app_root, artifacts, execution_mode),
-        )
+        previous_x_local_ip = os.environ.get("X_LOCAL_IP")
+        previous_lan_ip = os.environ.get("EMULEBB_TEST_LAN_IP_RESOLVED")
+        if lan_bind_addr:
+            os.environ["X_LOCAL_IP"] = lan_bind_addr
+            os.environ.setdefault("EMULEBB_TEST_LAN_IP_RESOLVED", lan_bind_addr)
+        try:
+            if execution_mode == "execute":
+                stop_runtime()
+            summary = live_e2e_suite.run_live_e2e_suite(
+                args,
+                _LocalSwarmHarnessCliCommon(root, app_root, artifacts, execution_mode),
+            )
+        finally:
+            if previous_x_local_ip is None:
+                os.environ.pop("X_LOCAL_IP", None)
+            else:
+                os.environ["X_LOCAL_IP"] = previous_x_local_ip
+            if previous_lan_ip is None:
+                os.environ.pop("EMULEBB_TEST_LAN_IP_RESOLVED", None)
+            else:
+                os.environ["EMULEBB_TEST_LAN_IP_RESOLVED"] = previous_lan_ip
         planned_suites = summary.get("suites") if isinstance(summary, dict) else None
         planned_suite_rows = planned_suites if isinstance(planned_suites, list) else []
         commands = [
@@ -560,6 +578,7 @@ def local_swarm_plan_check(
                 "suiteNames": suite_names,
                 "commands": commands,
                 "tierOptions": dict(tier_options),
+                "lanBindAddr": lan_bind_addr,
                 "ed2kServerExe": str(ed2k_server_exe) if ed2k_server_exe is not None else "",
                 "client2AppExe": str(client2_app_exe) if client2_app_exe is not None else "",
                 "amuleDaemonExe": str(amule_daemon_exe) if amule_daemon_exe is not None else "",
