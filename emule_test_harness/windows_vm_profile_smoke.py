@@ -466,6 +466,7 @@ def local_swarm_plan_check(
         if spec.uses_local_swarm and "godzilla-local-swarm" not in suites:
             suites.append("godzilla-local-swarm")
         tier_options = LOCAL_SWARM_TIER_OPTIONS[swarm_tier]
+        test_network = str(getattr(spec, "local_test_network", "default"))
         plan_artifacts = artifacts / "local-swarm-plan"
         argv = [
             "--workspace-root",
@@ -479,7 +480,7 @@ def local_swarm_plan_check(
             "--profile",
             str(spec.local_profile),
             "--test-network",
-            "lan",
+            test_network,
             "--admin-volume-fixtures",
             "--godzilla-stage",
             str(tier_options["stage"]),
@@ -553,6 +554,7 @@ def local_swarm_plan_check(
                 "executionMode": execution_mode,
                 "vmProfile": profile,
                 "scenarioId": spec.scenario_id,
+                "testNetwork": test_network,
                 "swarmTier": swarm_tier,
                 "summaryStatus": summary.get("status"),
                 "suiteNames": suite_names,

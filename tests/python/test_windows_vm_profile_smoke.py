@@ -110,6 +110,7 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
     assert check["details"]["summaryStatus"] == "planned"
     assert set(check["details"]["suiteNames"]) == {"local-ed2k-search-soak", "local-kad-swarm", "godzilla-local-swarm"}
     assert set(command_names) == {"local-ed2k-search-soak.py", "local-kad-swarm.py", "godzilla-local-swarm.py"}
+    assert check["details"]["testNetwork"] == "default"
     assert check["details"]["tierOptions"]["total_client_count"] == 4
     assert check["details"]["ed2kServerExe"] == str(ed2k_server_exe)
     assert check["details"]["client2AppExe"] == str(client2_app_exe)
