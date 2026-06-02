@@ -51,6 +51,15 @@ TEST_CASE("Upload queue admission ignores peers held in slow-upload cooldown")
 	CHECK_FALSE(IsUploadQueueAdmissionCandidate(true));
 }
 
+TEST_CASE("Upload queue attempts admission only with an eligible waiting candidate unless direct admission allows empty queue")
+{
+	CHECK(ShouldAttemptUploadSlotAdmission(true, true, false));
+	CHECK(ShouldAttemptUploadSlotAdmission(true, false, false));
+	CHECK(ShouldAttemptUploadSlotAdmission(false, false, true));
+	CHECK_FALSE(ShouldAttemptUploadSlotAdmission(false, true, false));
+	CHECK_FALSE(ShouldAttemptUploadSlotAdmission(false, false, false));
+}
+
 TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
 {
 	CHECK(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 1000u, 2000u));
