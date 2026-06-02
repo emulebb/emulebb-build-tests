@@ -589,7 +589,8 @@ $guestHarnessPackage = Join-Path $guestHarnessRoot 'emule_test_harness'
 $guestHarnessManifests = Join-Path $guestHarnessRoot 'manifests'
 $guestScriptsRoot = Join-Path $guestHarnessRoot 'scripts'
 $guestToolsRoot = Join-Path $guestHarnessRoot 'tools'
-$guestAmutorrentRoot = Join-Path $guestToolsRoot 'amutorrent'
+$guestAmutorrentZip = Join-Path $guestRoot (Split-Path -Leaf $payload.localSwarmAmutorrentZip)
+$guestAmutorrentRoot = Join-Path $guestToolsRoot 'aMuTorrent'
 $guestGoed2kServer = Join-Path $guestToolsRoot 'goed2k-server.exe'
 $guestClient2Root = Join-Path $guestToolsRoot 'tracing-harness'
 $guestClient2App = Join-Path $guestClient2Root 'emule.exe'
@@ -623,8 +624,19 @@ try {
   foreach ($scriptPath in @($payload.localSwarmScriptPaths)) {
     Copy-Item -ToSession $session -Path $scriptPath -Destination (Join-Path $guestScriptsRoot (Split-Path -Leaf $scriptPath)) -Force
   }
-  if ($payload.localSwarmAmutorrentRoot) {
-    Copy-Item -ToSession $session -Path $payload.localSwarmAmutorrentRoot -Destination $guestAmutorrentRoot -Recurse -Force
+  if ($payload.localSwarmAmutorrentZip) {
+    Copy-Item -ToSession $session -Path $payload.localSwarmAmutorrentZip -Destination $guestAmutorrentZip -Force
+    Invoke-Command -Session $session -ScriptBlock {
+      param($zip, $toolsRoot, $amutorrentRoot)
+      if (Test-Path -LiteralPath $amutorrentRoot) {
+        Remove-Item -LiteralPath $amutorrentRoot -Recurse -Force
+      }
+      Expand-Archive -LiteralPath $zip -DestinationPath $toolsRoot -Force
+      $server = Join-Path $amutorrentRoot 'server\server.js'
+      if (-not (Test-Path -LiteralPath $server -PathType Leaf)) {
+        throw "aMuTorrent package did not expand to expected server path: $server"
+      }
+    } -ArgumentList $guestAmutorrentZip, $guestToolsRoot, $guestAmutorrentRoot
   }
   if ($payload.localSwarmRestOpenApiPath) {
     Invoke-Command -Session $session -ScriptBlock {
@@ -691,7 +703,7 @@ try {
   if ($payload.localSwarmLanBindAddr) {
     $runnerArgs += @('--lan-bind-addr', $payload.localSwarmLanBindAddr)
   }
-  if ($payload.localSwarmAmutorrentRoot) {
+  if ($payload.localSwarmAmutorrentZip) {
     Invoke-Command -Session $session -ScriptBlock {
       param($amutorrentRoot)
       $env:EMULEBB_TEST_AMUTORRENT_ROOT = $amutorrentRoot
