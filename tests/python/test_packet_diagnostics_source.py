@@ -18,12 +18,26 @@ def test_packet_diagnostics_compile_flag_is_opt_in() -> None:
     root = ET.fromstring(project)
     namespace = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
     definitions = root.findall(".//msb:PacketDiagnosticsPreprocessorDefinition", namespace)
+    preprocessor_definitions = [
+        element.text or ""
+        for element in root.findall(".//msb:PreprocessorDefinitions", namespace)
+    ]
 
     assert len(definitions) == 1
     assert definitions[0].attrib["Condition"] == "'$(EnablePacketDiagnostics)'=='true'"
     assert definitions[0].text == "EMULEBB_ENABLE_PACKET_DIAGNOSTICS;"
-    assert "$(PacketDiagnosticsPreprocessorDefinition)MBEDTLS_ALLOW_PRIVATE_ACCESS" in project
-    assert "$(StartupProfilingPreprocessorDefinition)$(PacketDiagnosticsPreprocessorDefinition)MBEDTLS_ALLOW_PRIVATE_ACCESS" in project
+    assert preprocessor_definitions
+    for config_definitions in preprocessor_definitions:
+        assert "$(PacketDiagnosticsPreprocessorDefinition)" in config_definitions
+        assert "MBEDTLS_ALLOW_PRIVATE_ACCESS" in config_definitions
+        assert config_definitions.index("$(PacketDiagnosticsPreprocessorDefinition)") < config_definitions.index(
+            "MBEDTLS_ALLOW_PRIVATE_ACCESS"
+        )
+    release_definitions = [
+        config_definitions for config_definitions in preprocessor_definitions if "NDEBUG" in config_definitions
+    ]
+    assert len(release_definitions) == 1
+    assert "$(StartupProfilingPreprocessorDefinition)" in release_definitions[0]
 
 
 def test_startup_profiling_compile_flag_is_opt_in() -> None:
