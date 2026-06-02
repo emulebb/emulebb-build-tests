@@ -64,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--username", required=True)
     parser.add_argument("--password", required=True)
     parser.add_argument("--fixture-size-bytes", type=int, default=25 * 1024 * 1024)
+    parser.add_argument("--swarm-tier", type=int, choices=LOCAL_SWARM_TIERS, default=DEFAULT_LOCAL_SWARM_TIER)
     return parser
 
 
@@ -303,11 +304,11 @@ def run_profile_checks(
     if profile == "ui-shared-files-depth":
         return [resource_presence_check(app_root, min_lang=40), shared_directories_rest_check(base_url, shared_dir)]
     if profile in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE:
-        return [local_swarm_contract_check(profile)]
+        return [local_swarm_contract_check(profile, args.swarm_tier)]
     raise RuntimeError(f"Unsupported profile: {profile}")
 
 
-def local_swarm_contract_check(profile: str) -> dict[str, Any]:
+def local_swarm_contract_check(profile: str, swarm_tier: int) -> dict[str, Any]:
     """Records the shared local/VM swarm scenario contract for migrated campaigns."""
 
     spec = REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE[profile]
@@ -323,6 +324,7 @@ def local_swarm_contract_check(profile: str) -> dict[str, Any]:
             "clientProducts": list(LOCAL_SWARM_CLIENT_PRODUCTS),
             "swarmTiers": list(LOCAL_SWARM_TIERS),
             "defaultSwarmTier": DEFAULT_LOCAL_SWARM_TIER,
+            "selectedSwarmTier": swarm_tier,
             "ed2kServerTarget": "win10",
             "vmTargets": ["win10", "win11"],
             "nonblockingCompanions": True,

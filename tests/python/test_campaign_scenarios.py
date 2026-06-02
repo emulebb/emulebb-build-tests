@@ -53,12 +53,13 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
 
     local_command = scenarios["search-ui-local-swarm"].command_for_mode("local")
     assert local_command == (
-        "python -m emule_workspace test live-e2e --profile multi-client-p2p "
-        "--suite local-ed2k-search-soak --suite local-kad-swarm --test-network lan"
+        "python -m emule_workspace test campaign-scenario "
+        "--scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 1"
     )
 
     vm_command = scenarios["search-ui-local-swarm"].command_for_mode("vm", release_version="0.7.4-rc.2")
     assert vm_command == (
-        "python -m emule_workspace test windows-vm --matrix win10,win11 "
-        "--profile search-ui-local-swarm-vm --release-version 0.7.4-rc.2 --skip-build"
+        "python -m emule_workspace test campaign-scenario "
+        "--scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm "
+        "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 1"
     )

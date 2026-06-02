@@ -53,6 +53,7 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "vm_guest_profiles.py" in script
     assert "campaign_scenarios.py" in script
     assert "--profile" in script
+    assert "--swarm-tier" in script
     assert "fixtureSizeBytes" in script
     assert "Invoke-GuestPython" in script
     assert "Restore-VMSnapshot" in script

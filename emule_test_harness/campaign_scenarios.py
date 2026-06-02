@@ -50,16 +50,15 @@ class CampaignScenarioSpec:
     def command_for_mode(self, mode: str, *, release_version: str = DEFAULT_RELEASE_VERSION) -> str:
         """Returns the emule_workspace command that runs this scenario in one mode."""
 
-        if mode == "local":
-            suite_args = " ".join(f"--suite {suite}" for suite in self.local_suites)
-            profile_arg = f"--profile {self.local_profile}" if self.local_profile else "--profile default"
-            return f"python -m emule_workspace test live-e2e {profile_arg} {suite_args} --test-network lan".strip()
+        if mode not in EXECUTION_MODES:
+            raise ValueError(f"Unsupported campaign scenario execution mode: {mode!r}.")
+        command = f"python -m emule_workspace test campaign-scenario --scenario {self.scenario_id} --mode {mode}"
         if mode == "vm":
             return (
-                "python -m emule_workspace test windows-vm --matrix win10,win11 "
-                f"--profile {self.vm_profile} --release-version {release_version} --skip-build"
+                f"{command} --release-version {release_version} "
+                f"--skip-build --swarm-tier {DEFAULT_LOCAL_SWARM_TIER}"
             )
-        raise ValueError(f"Unsupported campaign scenario execution mode: {mode!r}.")
+        return f"{command} --swarm-tier {DEFAULT_LOCAL_SWARM_TIER}"
 
 
 REUSABLE_CAMPAIGN_SCENARIOS = (

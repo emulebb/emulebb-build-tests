@@ -589,7 +589,8 @@ try {
     '--package-zip', $guestZip,
     '--username', $payload.username,
     '--password', $payload.password,
-    '--fixture-size-bytes', [string] $payload.fixtureSizeBytes
+    '--fixture-size-bytes', [string] $payload.fixtureSizeBytes,
+    '--swarm-tier', [string] $payload.swarmTier
   )
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
   Stop-GuestRuntime $session
