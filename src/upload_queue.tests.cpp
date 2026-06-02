@@ -45,6 +45,21 @@ TEST_CASE("Upload queue timer diagnostics count only loops slower than the inter
 	CHECK_FALSE(ShouldCountSlowUploadTimerLoop(1u, 0u));
 }
 
+TEST_CASE("Upload queue admission ignores peers held in slow-upload cooldown")
+{
+	CHECK(IsUploadQueueAdmissionCandidate(false));
+	CHECK_FALSE(IsUploadQueueAdmissionCandidate(true));
+}
+
+TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
+{
+	CHECK(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 1000u, 2000u));
+	CHECK_FALSE(ShouldApplyUploadRetryCooldown(true, 0x01020304u, 1000u, 2000u));
+	CHECK_FALSE(ShouldApplyUploadRetryCooldown(false, 0u, 1000u, 2000u));
+	CHECK_FALSE(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 2000u, 2000u));
+	CHECK_FALSE(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 3000u, 2000u));
+}
+
 TEST_CASE("Broadband idle upload recycling requires an empty local send pipeline")
 {
 	CHECK(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 0, 0, 10000u, 10000u));
