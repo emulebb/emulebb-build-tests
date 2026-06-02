@@ -146,7 +146,7 @@ def validate_release_campaign(campaign: dict[str, Any], template: dict[str, Any]
             scenario_ids.add(scenario_id)
             if scenario.get("phase") != phase_id:
                 raise ReleaseCampaignError(f"Scenario {scenario_id} must declare phase {phase_id}.")
-            _validate_scenario_mapping(scenario)
+            _validate_scenario_mapping(scenario, release_version=str(campaign["releaseVersion"]))
 
     gate_ids: set[str] = set()
     for gate in _required_list(campaign, "releaseGates"):
@@ -422,7 +422,7 @@ def _scenario_warnings(evidence_reports: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
-def _validate_scenario_mapping(scenario: dict[str, Any]) -> None:
+def _validate_scenario_mapping(scenario: dict[str, Any], *, release_version: str) -> None:
     scenario_id = _required_str(scenario, "id")
     command = _required_str(scenario, "command")
     _required_str(scenario, "title")
@@ -437,6 +437,7 @@ def _validate_scenario_mapping(scenario: dict[str, Any]) -> None:
     if scenario.get("flowCategory") == "local-vm-swarm":
         if scenario_id not in campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID:
             raise ReleaseCampaignError(f"Scenario {scenario_id} is not a reusable local/VM campaign scenario.")
+        shared = campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID[scenario_id]
         if scenario.get("executionModes") != list(campaign_scenarios.EXECUTION_MODES):
             raise ReleaseCampaignError(f"Scenario {scenario_id} must declare local and VM execution modes.")
         execution_mode = _required_str(scenario, "executionMode")
@@ -444,6 +445,18 @@ def _validate_scenario_mapping(scenario: dict[str, Any]) -> None:
             raise ReleaseCampaignError(f"Scenario {scenario_id} has unsupported executionMode: {execution_mode}")
         local_command = _required_str(scenario, "localCommand")
         vm_command = _required_str(scenario, "vmCommand")
+        expected_local_command = shared.command_for_mode("local")
+        expected_vm_command = shared.command_for_mode("vm", release_version=release_version)
+        if local_command != expected_local_command:
+            raise ReleaseCampaignError(f"Scenario {scenario_id} localCommand must match the shared scenario catalog.")
+        if vm_command != expected_vm_command:
+            raise ReleaseCampaignError(f"Scenario {scenario_id} vmCommand must match the shared scenario catalog.")
+        if scenario.get("localProfile") != shared.local_profile:
+            raise ReleaseCampaignError(f"Scenario {scenario_id} localProfile must match the shared scenario catalog.")
+        if scenario.get("localSuites") != list(shared.local_suites):
+            raise ReleaseCampaignError(f"Scenario {scenario_id} localSuites must match the shared scenario catalog.")
+        if scenario.get("vmProfile") != shared.vm_profile:
+            raise ReleaseCampaignError(f"Scenario {scenario_id} vmProfile must match the shared scenario catalog.")
         expected_command = local_command if execution_mode == "local" else vm_command
         if command != expected_command:
             raise ReleaseCampaignError(f"Scenario {scenario_id} command must match its {execution_mode} command.")

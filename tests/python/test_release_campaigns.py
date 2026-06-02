@@ -220,6 +220,48 @@ def test_campaign_validation_rejects_local_vm_swarm_command_mismatch() -> None:
         release_campaigns.validate_release_campaign(campaign, template)
 
 
+def test_campaign_validation_rejects_local_vm_swarm_catalog_command_drift() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
+    scenario = next(
+        scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if scenario["flowCategory"] == "local-vm-swarm"
+    )
+    scenario["localCommand"] = f"{scenario['localCommand']} --extra"
+
+    with pytest.raises(release_campaigns.ReleaseCampaignError, match="localCommand must match"):
+        release_campaigns.validate_release_campaign(campaign, template)
+
+
+def test_campaign_validation_rejects_local_vm_swarm_release_version_drift() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
+    campaign["releaseVersion"] = "0.7.4-rc.2"
+
+    with pytest.raises(release_campaigns.ReleaseCampaignError, match="vmCommand must match"):
+        release_campaigns.validate_release_campaign(campaign, template)
+
+
+def test_campaign_validation_rejects_local_vm_swarm_catalog_metadata_drift() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = copy.deepcopy(release_campaigns.load_release_campaign(root, "emulebb-0.7.3"))
+    scenario = next(
+        scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if scenario["flowCategory"] == "local-vm-swarm"
+    )
+    scenario["vmProfile"] = "other-vm-profile"
+
+    with pytest.raises(release_campaigns.ReleaseCampaignError, match="vmProfile must match"):
+        release_campaigns.validate_release_campaign(campaign, template)
+
+
 def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
     tests_root = tmp_path / "tests"
     state_root = tmp_path / "state"
