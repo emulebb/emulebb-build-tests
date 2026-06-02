@@ -1246,9 +1246,15 @@ def build_suite_command(
             command.extend(["--live-wire-inputs-file", str(live_wire_inputs_file.resolve())])
     if spec.is_auto_browse and p2p_bind_interface_name:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
-    if spec.is_amutorrent_browser and p2p_bind_interface_name:
+    if spec.is_amutorrent_browser and p2p_bind_interface_name and not p2p_bind_interface_address:
         command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
-    if spec.accepts_vpn_guard_profile and not spec.is_rest_api and vpn_guard_scenario != "off":
+    if (
+        spec.accepts_vpn_guard_profile
+        and not spec.is_rest_api
+        and vpn_guard_scenario != "off"
+        and p2p_bind_interface_name
+        and not (spec.is_amutorrent_browser and p2p_bind_interface_address)
+    ):
         command.append("--vpn-guard-enabled")
         if vpn_guard_allowed_public_ip_cidrs:
             command.extend(["--vpn-guard-allowed-public-ip-cidrs", vpn_guard_allowed_public_ip_cidrs])
@@ -1294,6 +1300,7 @@ def build_suite_command(
             "local-ed2k-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
+            "amutorrent-browser-smoke",
             "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_name
@@ -1311,6 +1318,7 @@ def build_suite_command(
             "local-ed2k-protocol-combinations",
             "local-kad-swarm",
             "local-kad-mixed-client-swarm",
+            "amutorrent-browser-smoke",
             "amutorrent-local-ed2k-ui-live",
         }
         and p2p_bind_interface_address
@@ -2579,9 +2587,14 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             args.p2p_bind_interface_name,
             lan_bind_interface_name,
         )
+        p2p_lan_address = (
+            lan_bind_addr
+            if normalize_test_network(args.test_network) == "lan" or args.campaign_scenario_uses_local_swarm
+            else ""
+        )
         child_p2p_bind_interface_address = suite_p2p_bind_interface_address(
             spec,
-            lan_bind_interface_address,
+            p2p_lan_address,
             vpn_bind_interface_address,
         )
         command = build_suite_command(

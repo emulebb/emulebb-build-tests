@@ -725,6 +725,35 @@ def test_lan_network_context_reaches_local_child_suites(tmp_path: Path, monkeypa
     assert option_values(commands[1], "--p2p-bind-interface-address") == ["192.0.2.11"]
 
 
+def test_lan_amutorrent_browser_uses_lan_address_without_vpn_guard(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.delenv("EMULEBB_TEST_LAN_INTERFACE", raising=False)
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--suite",
+            "amutorrent-browser-smoke",
+            "--test-network",
+            "lan",
+            "--lan-bind-addr",
+            "192.0.2.11",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["test_network"] == "lan"
+    assert option_values(commands[0], "--p2p-bind-interface-name") == []
+    assert option_values(commands[0], "--p2p-bind-interface-address") == ["192.0.2.11"]
+    assert "--vpn-guard-enabled" not in commands[0]
+
+
 def test_vpn_search_ui_uses_lan_rest_bind_and_vpn_p2p_bind(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setenv("X_LOCAL_IP", "192.0.2.10")

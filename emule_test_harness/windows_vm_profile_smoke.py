@@ -485,6 +485,12 @@ def local_swarm_plan_check(
             "--test-network",
             test_network,
             "--admin-volume-fixtures",
+            "--campaign-scenario-id",
+            str(spec.scenario_id),
+            "--campaign-scenario-vm-profile",
+            profile,
+            "--campaign-scenario-key",
+            str(spec.key),
             "--godzilla-stage",
             str(tier_options["stage"]),
             "--godzilla-total-client-count",
@@ -510,6 +516,10 @@ def local_swarm_plan_check(
         ]
         if lan_bind_addr:
             argv.extend(["--lan-bind-addr", lan_bind_addr])
+        if spec.uses_local_swarm:
+            argv.append("--campaign-scenario-uses-local-swarm")
+        for suite in spec.local_suites:
+            argv.extend(["--campaign-scenario-local-suite", suite])
         if execution_mode == "plan":
             argv.append("--plan-only")
         if bool(tier_options["cpu_profile"]):
