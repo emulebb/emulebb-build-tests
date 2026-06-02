@@ -42,6 +42,8 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
             "C:/tmp/harness/tools/amule/bin/amuled.exe",
             "--amule-control-exe",
             "C:/tmp/harness/tools/amule/bin/amulecmd.exe",
+            "--local-swarm-mode",
+            "execute",
         ]
     )
 
@@ -51,6 +53,7 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
     assert str(args.client2_app_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/tracing-harness/emule.exe")
     assert str(args.amule_daemon_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amuled.exe")
     assert str(args.amule_control_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amulecmd.exe")
+    assert args.local_swarm_mode == "execute"
 
 
 def test_local_swarm_payload_check_accepts_staged_harness(tmp_path) -> None:
@@ -123,3 +126,44 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
             assert "--client2-app-exe" in command
             assert "--amule-daemon-exe" in command
             assert "--amule-control-exe" in command
+
+
+def test_local_swarm_execute_check_runs_live_suite_without_plan_only(tmp_path, monkeypatch) -> None:
+    from emule_test_harness import live_e2e_suite
+
+    repo_root = Path(windows_vm_profile_smoke.__file__).resolve().parents[1]
+    app_root = tmp_path / "expanded" / "eMuleBB"
+    app_root.mkdir(parents=True)
+    (app_root / "emulebb.exe").write_text("", encoding="utf-8")
+    stopped = []
+    observed_plan_only = []
+
+    def fake_run_live_e2e_suite(args, _harness_cli_common):
+        observed_plan_only.append(args.plan_only)
+        suites = ["godzilla-local-swarm", "local-ed2k-search-soak", "local-kad-swarm"]
+        return {
+            "status": "passed",
+            "suites": [
+                {"name": name, "status": "passed", "command": ["python", f"{name}.py"]}
+                for name in suites
+            ],
+        }
+
+    monkeypatch.setattr(windows_vm_profile_smoke, "stop_runtime", lambda: stopped.append(True))
+    monkeypatch.setattr(live_e2e_suite, "run_live_e2e_suite", fake_run_live_e2e_suite)
+
+    check = windows_vm_profile_smoke.local_swarm_plan_check(
+        "search-ui-local-swarm-vm",
+        1,
+        repo_root,
+        tmp_path / "guest-root",
+        app_root,
+        tmp_path / "artifacts",
+        execution_mode="execute",
+    )
+
+    assert check["name"] == "local-swarm-execute"
+    assert check["status"] == "passed"
+    assert check["details"]["executionMode"] == "execute"
+    assert observed_plan_only == [False]
+    assert stopped == [True]

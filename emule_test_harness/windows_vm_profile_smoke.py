@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--client2-app-exe", type=Path)
     parser.add_argument("--amule-daemon-exe", type=Path)
     parser.add_argument("--amule-control-exe", type=Path)
+    parser.add_argument("--local-swarm-mode", choices=["plan", "execute"], default="plan")
     return parser
 
 
@@ -327,6 +328,7 @@ def run_profile_checks(
                 client2_app_exe=args.client2_app_exe,
                 amule_daemon_exe=args.amule_daemon_exe,
                 amule_control_exe=args.amule_control_exe,
+                execution_mode=args.local_swarm_mode,
             ),
         ]
     raise RuntimeError(f"Unsupported profile: {profile}")
@@ -381,13 +383,14 @@ def local_swarm_payload_check(harness_root: Path | None) -> dict[str, Any]:
     }
 
 
-class _PlanOnlyHarnessCliCommon:
-    """Minimal live-suite adapter used only to resolve staged VM child commands."""
+class _LocalSwarmHarnessCliCommon:
+    """Minimal live-suite adapter used to run or resolve staged VM child commands."""
 
-    def __init__(self, root: Path, app_root: Path, artifacts: Path) -> None:
+    def __init__(self, root: Path, app_root: Path, artifacts: Path, execution_mode: str) -> None:
         self.root = root
         self.app_root = app_root
         self.artifacts = artifacts
+        self.execution_mode = execution_mode
 
     def prepare_run_paths(self, **kwargs):
         source_artifacts_dir = Path(kwargs["artifacts_dir"]).resolve()
@@ -402,8 +405,8 @@ class _PlanOnlyHarnessCliCommon:
             configuration=kwargs["configuration"],
             suite_name=kwargs["suite_name"],
             source_artifacts_dir=source_artifacts_dir,
-            run_report_dir=self.artifacts / "local-swarm-plan-run",
-            latest_report_dir=self.artifacts / "local-swarm-plan-latest",
+            run_report_dir=self.artifacts / f"local-swarm-{self.execution_mode}-run",
+            latest_report_dir=self.artifacts / f"local-swarm-{self.execution_mode}-latest",
             keep_source_artifacts=True,
             local_dumps={"dump_folder": str(source_artifacts_dir / "crash-dumps"), "image_names": ["emulebb.exe"]},
         )
@@ -439,14 +442,18 @@ def local_swarm_plan_check(
     client2_app_exe: Path | None = None,
     amule_daemon_exe: Path | None = None,
     amule_control_exe: Path | None = None,
+    execution_mode: str = "plan",
 ) -> dict[str, Any]:
-    """Resolves the staged local-swarm suite commands without launching them."""
+    """Resolves or executes the staged local-swarm suite commands."""
 
+    if execution_mode not in {"plan", "execute"}:
+        return {"name": "local-swarm-plan", "status": "failed", "details": {"error": f"unsupported mode: {execution_mode}"}}
+    check_name = "local-swarm-plan" if execution_mode == "plan" else "local-swarm-execute"
     if harness_root is None:
-        return {"name": "local-swarm-plan", "status": "failed", "details": {"error": "missing harness root"}}
+        return {"name": check_name, "status": "failed", "details": {"error": "missing harness root"}}
     if not (harness_root / "emule_test_harness" / "live_e2e_suite.py").is_file():
         return {
-            "name": "local-swarm-plan",
+            "name": check_name,
             "status": "failed",
             "details": {"harnessRoot": str(harness_root), "error": "missing staged live_e2e_suite.py"},
         }
@@ -475,7 +482,6 @@ def local_swarm_plan_check(
             "--test-network",
             "lan",
             "--admin-volume-fixtures",
-            "--plan-only",
             "--godzilla-stage",
             str(tier_options["stage"]),
             "--godzilla-total-client-count",
@@ -499,6 +505,8 @@ def local_swarm_plan_check(
             "--godzilla-adverse-recovery-timeout-seconds",
             str(tier_options["adverse_recovery_timeout_seconds"]),
         ]
+        if execution_mode == "plan":
+            argv.append("--plan-only")
         if bool(tier_options["cpu_profile"]):
             argv.append("--godzilla-cpu-profile")
         if bool(tier_options["fail_fast"]):
@@ -514,9 +522,11 @@ def local_swarm_plan_check(
         for suite in suites:
             argv.extend(["--suite", suite])
         args = live_e2e_suite.build_parser().parse_args(argv)
+        if execution_mode == "execute":
+            stop_runtime()
         summary = live_e2e_suite.run_live_e2e_suite(
             args,
-            _PlanOnlyHarnessCliCommon(root, app_root, artifacts),
+            _LocalSwarmHarnessCliCommon(root, app_root, artifacts, execution_mode),
         )
         planned_suites = summary.get("suites") if isinstance(summary, dict) else None
         planned_suite_rows = planned_suites if isinstance(planned_suites, list) else []
@@ -527,18 +537,21 @@ def local_swarm_plan_check(
         ]
         suite_names = [str(row.get("name")) for row in planned_suite_rows if isinstance(row, dict)]
         expected_suites = set(suites)
+        expected_summary_status = "planned" if execution_mode == "plan" else "passed"
+        expected_suite_status = "planned" if execution_mode == "plan" else "passed"
         status = (
             "passed"
-            if summary.get("status") == "planned"
+            if summary.get("status") == expected_summary_status
             and expected_suites.issubset(set(suite_names))
-            and all(row.get("status") == "planned" for row in planned_suite_rows if isinstance(row, dict))
+            and all(row.get("status") == expected_suite_status for row in planned_suite_rows if isinstance(row, dict))
             else "failed"
         )
         return {
-            "name": "local-swarm-plan",
+            "name": check_name,
             "status": status,
             "details": {
                 "harnessRoot": str(harness_root),
+                "executionMode": execution_mode,
                 "vmProfile": profile,
                 "scenarioId": spec.scenario_id,
                 "swarmTier": swarm_tier,
@@ -554,7 +567,7 @@ def local_swarm_plan_check(
         }
     except Exception as exc:
         return {
-            "name": "local-swarm-plan",
+            "name": check_name,
             "status": "failed",
             "details": {"harnessRoot": str(harness_root), "error": f"{type(exc).__name__}: {exc}"},
         }

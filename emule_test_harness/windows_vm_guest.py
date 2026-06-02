@@ -633,6 +633,7 @@ try {
     '--password', $payload.password,
     '--fixture-size-bytes', [string] $payload.fixtureSizeBytes,
     '--swarm-tier', [string] $payload.swarmTier,
+    '--local-swarm-mode', $payload.localSwarmMode,
     '--harness-root', $guestHarnessRoot
   )
   if ($payload.localSwarmGoed2kServerExe) {
