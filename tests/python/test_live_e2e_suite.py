@@ -90,6 +90,43 @@ def parse_args(*argv: str):
     return live_e2e_suite.build_parser().parse_args(args)
 
 
+def test_live_e2e_summary_records_campaign_scenario_metadata(tmp_path: Path) -> None:
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--suite",
+            "local-ed2k-search-soak",
+            "--suite",
+            "godzilla-local-swarm",
+            "--campaign-scenario-key",
+            "search-ui-local-swarm",
+            "--campaign-scenario-id",
+            "emulebb.flow.ui.search.local-swarm.v1",
+            "--campaign-scenario-vm-profile",
+            "search-ui-local-swarm-vm",
+            "--campaign-scenario-local-suite",
+            "local-ed2k-search-soak",
+            "--campaign-scenario-local-suite",
+            "godzilla-local-swarm",
+            "--campaign-scenario-uses-local-swarm",
+            "--admin-volume-fixtures",
+            "--plan-only",
+            "--test-network",
+            "default",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "planned"
+    assert summary["campaign_scenario"] == {
+        "key": "search-ui-local-swarm",
+        "scenario_id": "emulebb.flow.ui.search.local-swarm.v1",
+        "vm_profile": "search-ui-local-swarm-vm",
+        "local_suites": ["local-ed2k-search-soak", "godzilla-local-swarm"],
+        "execution_mode": "local",
+        "uses_local_swarm": True,
+    }
+
+
 def script_name(command: list[str]) -> str:
     return Path(command[1]).name
 

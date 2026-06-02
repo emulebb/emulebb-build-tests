@@ -1967,6 +1967,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suite", action="append", choices=SUITE_NAMES)
     parser.add_argument("--profile", choices=LIVE_E2E_PROFILES, default="default")
     parser.add_argument("--test-network", choices=TEST_NETWORKS, default="default")
+    parser.add_argument("--campaign-scenario-key", default="")
+    parser.add_argument("--campaign-scenario-id", default="")
+    parser.add_argument("--campaign-scenario-vm-profile", default="")
+    parser.add_argument("--campaign-scenario-local-suite", action="append")
+    parser.add_argument("--campaign-scenario-uses-local-swarm", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument(
         "--plan-only",
@@ -2557,6 +2562,15 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "strict_success_required": True,
         "suites": [],
     }
+    if args.campaign_scenario_key or args.campaign_scenario_id:
+        summary["campaign_scenario"] = {
+            "key": args.campaign_scenario_key,
+            "scenario_id": args.campaign_scenario_id,
+            "vm_profile": args.campaign_scenario_vm_profile,
+            "local_suites": list(args.campaign_scenario_local_suite or ()),
+            "execution_mode": "local",
+            "uses_local_swarm": bool(args.campaign_scenario_uses_local_swarm),
+        }
 
     for spec in selected_specs:
         child_artifacts_dir = paths.source_artifacts_dir / spec.name
