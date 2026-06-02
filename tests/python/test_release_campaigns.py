@@ -10,7 +10,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from emule_test_harness import release_campaigns
+from emule_test_harness import release_campaigns, windows_vm_profiles
 
 
 def repo_root() -> Path:
@@ -62,11 +62,7 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
     assert campaign["proofTier"] == "rc-blocking-quick"
-    assert {
-        "emulebb.flow.windows-vm.local-ed2k.transfer.v1",
-        "emulebb.flow.windows-vm.hideme.live-wire.v1",
-        "emulebb.flow.windows-vm.package-smoke.release.v1",
-    } <= scenario_ids
+    assert set(windows_vm_profiles.WINDOWS_VM_PROFILE_BY_SCENARIO_ID) <= scenario_ids
     installer_scenario = next(
         scenario
         for phase in campaign["phases"]
@@ -86,6 +82,25 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
         if gate["id"] == "quick-rc-live-proof"
         for scenario_id in gate["coveredBy"]
     }
+
+
+def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
+    campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-0.7.3")
+    scenarios = {
+        scenario["id"]: scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    }
+
+    for spec in windows_vm_profiles.WINDOWS_VM_PROFILE_SPECS:
+        scenario = scenarios[spec.scenario_id]
+        assert scenario["flowCategory"] == "windows-vm"
+        assert scenario["phase"] == spec.release_phase
+        assert f"test windows-vm --matrix {','.join(spec.required_targets)}" in scenario["command"]
+        assert f"--profile {spec.name}" in scenario["command"]
+        evidence = scenario["evidence"][0]
+        assert evidence["glob"] == "test-reports/windows-vm/*/windows-vm-result.json"
+        assert evidence["matches"] == {"/profile": spec.name}
 
 
 def test_073_overnight_campaign_validates_and_covers_all_release_gates() -> None:
