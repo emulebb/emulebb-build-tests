@@ -59,8 +59,12 @@ TEST_CASE("Broadband idle upload recycling requires an empty local send pipeline
 	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 0, 0, 9999u, 10000u));
 }
 
-TEST_CASE("Broadband stalled upload recycling requires queued work and a replacement")
+TEST_CASE("Broadband stalled upload recycling requires queued work and replacement pressure")
 {
+	CHECK(HasStalledUploadReplacementPressure(true, 12, 12));
+	CHECK(HasStalledUploadReplacementPressure(false, 11, 12));
+	CHECK_FALSE(HasStalledUploadReplacementPressure(false, 12, 12));
+
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 1u, 0, 0, 0, 10000u, 10000u));
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 0u, 1, 0, 0, 10000u, 10000u));
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 0u, 0, 0, 1, 10000u, 10000u));
