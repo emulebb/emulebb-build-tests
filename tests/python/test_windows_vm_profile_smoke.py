@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from emule_test_harness import windows_vm_host, windows_vm_profile_smoke
+from emule_test_harness import campaign_scenarios, live_e2e_suite, windows_vm_host, windows_vm_profile_smoke
 
 
 def test_local_swarm_contract_records_selected_tier() -> None:
@@ -129,6 +129,44 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
             assert "--client2-app-exe" in command
             assert "--amule-daemon-exe" in command
             assert "--amule-control-exe" in command
+
+
+def test_all_reusable_campaign_vm_profiles_plan_declared_local_suites(tmp_path) -> None:
+    repo_root = Path(windows_vm_profile_smoke.__file__).resolve().parents[1]
+    script_by_suite = {spec.name: spec.script_name for spec in live_e2e_suite.SUITE_SPECS}
+    app_root = tmp_path / "expanded" / "eMuleBB"
+    app_root.mkdir(parents=True)
+    (app_root / "emulebb.exe").write_text("", encoding="utf-8")
+    ed2k_server_exe = tmp_path / "harness" / "tools" / "goed2k-server.exe"
+    client2_app_exe = tmp_path / "harness" / "tools" / "tracing-harness" / "emule.exe"
+    amule_daemon_exe = tmp_path / "harness" / "tools" / "amule" / "bin" / "amuled.exe"
+    amule_control_exe = tmp_path / "harness" / "tools" / "amule" / "bin" / "amulecmd.exe"
+    for path in (ed2k_server_exe, client2_app_exe, amule_daemon_exe, amule_control_exe):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+    for profile, scenario in campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE.items():
+        check = windows_vm_profile_smoke.local_swarm_plan_check(
+            profile,
+            1,
+            repo_root,
+            tmp_path / profile / "guest-root",
+            app_root,
+            tmp_path / profile / "artifacts",
+            ed2k_server_exe=ed2k_server_exe,
+            client2_app_exe=client2_app_exe,
+            amule_daemon_exe=amule_daemon_exe,
+            amule_control_exe=amule_control_exe,
+        )
+        expected_suites = set(scenario.local_suites)
+        if scenario.uses_local_swarm:
+            expected_suites.add("godzilla-local-swarm")
+        command_names = {Path(command[1]).name for command in check["details"]["commands"]}
+
+        assert check["status"] == "passed", (profile, check["details"])
+        assert check["details"]["summaryStatus"] == "planned"
+        assert set(check["details"]["suiteNames"]) == expected_suites
+        assert command_names == {script_by_suite[suite] for suite in expected_suites}
 
 
 def test_local_swarm_execute_check_runs_live_suite_without_plan_only(tmp_path, monkeypatch) -> None:
