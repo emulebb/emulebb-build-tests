@@ -47,6 +47,7 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
     payload = windows_vm_host.local_swarm_payload_paths(repo_root)
 
     assert payload["harnessPackage"] == repo_root / "emule_test_harness"
+    assert payload["manifests"] == repo_root / "manifests"
     script_names = {path.name for path in payload["scripts"]}
     assert {
         "godzilla-local-swarm.py",

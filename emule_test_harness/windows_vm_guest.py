@@ -586,6 +586,7 @@ $guestProfiles = Join-Path $guestRoot 'vm_guest_profiles.py'
 $guestCampaignScenarios = Join-Path $guestRoot 'campaign_scenarios.py'
 $guestHarnessRoot = Join-Path $guestRoot 'harness'
 $guestHarnessPackage = Join-Path $guestHarnessRoot 'emule_test_harness'
+$guestHarnessManifests = Join-Path $guestHarnessRoot 'manifests'
 $guestScriptsRoot = Join-Path $guestHarnessRoot 'scripts'
 $guestToolsRoot = Join-Path $guestHarnessRoot 'tools'
 $guestGoed2kServer = Join-Path $guestToolsRoot 'goed2k-server.exe'
@@ -615,6 +616,9 @@ try {
     New-Item -ItemType Directory -Force -Path $toolsRoot | Out-Null
   } -ArgumentList $guestHarnessRoot, $guestScriptsRoot, $guestToolsRoot
   Copy-Item -ToSession $session -Path $payload.localSwarmHarnessPackagePath -Destination $guestHarnessPackage -Recurse -Force
+  if ($payload.localSwarmManifestsPath) {
+    Copy-Item -ToSession $session -Path $payload.localSwarmManifestsPath -Destination $guestHarnessManifests -Recurse -Force
+  }
   foreach ($scriptPath in @($payload.localSwarmScriptPaths)) {
     Copy-Item -ToSession $session -Path $scriptPath -Destination (Join-Path $guestScriptsRoot (Split-Path -Leaf $scriptPath)) -Force
   }

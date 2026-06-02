@@ -136,6 +136,7 @@ def local_swarm_payload_paths(tests_repo_root: str | Path) -> dict[str, Any]:
     root = Path(tests_repo_root)
     return {
         "harnessPackage": root / "emule_test_harness",
+        "manifests": root / "manifests",
         "scripts": [root / "scripts" / name for name in LOCAL_SWARM_PAYLOAD_SCRIPT_FILES],
     }
 

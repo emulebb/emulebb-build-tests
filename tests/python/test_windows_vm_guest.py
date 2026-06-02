@@ -53,7 +53,9 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "vm_guest_profiles.py" in script
     assert "campaign_scenarios.py" in script
     assert "localSwarmHarnessPackagePath" in script
+    assert "localSwarmManifestsPath" in script
     assert "localSwarmScriptPaths" in script
+    assert "guestHarnessManifests" in script
     assert "localSwarmRestOpenApiPath" in script
     assert "localSwarmAppSourcePaths" in script
     assert "REST-API-OPENAPI.yaml" in script
