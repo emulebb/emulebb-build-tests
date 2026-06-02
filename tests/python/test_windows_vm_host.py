@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -82,6 +83,29 @@ def test_local_swarm_payload_scripts_include_sibling_helpers() -> None:
     assert set(windows_vm_host.LOCAL_SWARM_SCRIPT_FILES) <= payload_scripts
     assert set(windows_vm_host.LOCAL_SWARM_SUPPORT_SCRIPT_FILES) <= payload_scripts
     assert set(windows_vm_host.GODZILLA_LOCAL_SWARM_HELPER_SCRIPT_FILES) <= payload_scripts
+
+
+def test_local_swarm_payload_scripts_cover_recursive_sibling_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    payload_scripts = set(windows_vm_host.LOCAL_SWARM_PAYLOAD_SCRIPT_FILES)
+    pending = list(payload_scripts)
+    checked: set[str] = set()
+    imported: set[str] = set()
+    pattern = re.compile(r'load_local_module\([^)]*,\s*"([^"]+\.py)"\)')
+
+    while pending:
+        script_name = pending.pop()
+        if script_name in checked:
+            continue
+        checked.add(script_name)
+        source_path = repo_root / "scripts" / script_name
+        assert source_path.is_file()
+        for imported_script in pattern.findall(source_path.read_text(encoding="utf-8")):
+            imported.add(imported_script)
+            if imported_script not in checked:
+                pending.append(imported_script)
+
+    assert imported <= payload_scripts
 
 
 def test_endpoint_payloads_materialize_vm_names() -> None:

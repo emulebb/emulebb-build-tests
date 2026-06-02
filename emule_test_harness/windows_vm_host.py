@@ -67,6 +67,10 @@ LOCAL_SWARM_SCRIPT_FILES = tuple(
 LOCAL_SWARM_SUPPORT_SCRIPT_FILES = (
     "admin-volume-cleanup-audit.py",
     "amutorrent-browser-smoke.py",
+    "amutorrent-clean-startup.py",
+    "amutorrent-emulebb-ui-live.py",
+    "amutorrent-interactive-session.py",
+    "amutorrent-resilience-live.py",
     "emule-live-profile-common.py",
     "harness-cli-common.py",
     "rest-api-smoke.py",
