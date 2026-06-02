@@ -40,6 +40,21 @@ def test_reusable_campaign_vm_profiles_use_shared_contract_smoke_runner() -> Non
         )
 
 
+def test_local_swarm_payload_paths_are_harness_owned() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+
+    payload = windows_vm_host.local_swarm_payload_paths(repo_root)
+
+    assert payload["harnessPackage"] == repo_root / "emule_test_harness"
+    script_names = {path.name for path in payload["scripts"]}
+    assert {
+        "godzilla-local-swarm.py",
+        "local-ed2k-search-soak.py",
+        "local-kad-swarm.py",
+        "amutorrent-local-ed2k-ui-live.py",
+    } <= script_names
+
+
 def test_endpoint_payloads_materialize_vm_names() -> None:
     vm_names = {"win10": "emulebb-win10-test", "win11": "emulebb-win11-test"}
 

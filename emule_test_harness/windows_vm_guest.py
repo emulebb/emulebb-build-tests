@@ -570,6 +570,9 @@ $guestZip = Join-Path $guestRoot (Split-Path -Leaf $payload.packageZip)
 $guestRunner = Join-Path $guestRoot 'windows_vm_profile_smoke.py'
 $guestProfiles = Join-Path $guestRoot 'vm_guest_profiles.py'
 $guestCampaignScenarios = Join-Path $guestRoot 'campaign_scenarios.py'
+$guestHarnessRoot = Join-Path $guestRoot 'harness'
+$guestHarnessPackage = Join-Path $guestHarnessRoot 'emule_test_harness'
+$guestScriptsRoot = Join-Path $guestHarnessRoot 'scripts'
 try {
   $session = Wait-GuestSession $payload.vmName
   Invoke-Command -Session $session -ScriptBlock {
@@ -582,6 +585,15 @@ try {
   Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
   Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
   Copy-Item -ToSession $session -Path (Join-Path (Split-Path -Parent $payload.profileHelperPath) 'campaign_scenarios.py') -Destination $guestCampaignScenarios
+  Invoke-Command -Session $session -ScriptBlock {
+    param($harnessRoot, $scriptsRoot)
+    New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $scriptsRoot | Out-Null
+  } -ArgumentList $guestHarnessRoot, $guestScriptsRoot
+  Copy-Item -ToSession $session -Path $payload.localSwarmHarnessPackagePath -Destination $guestHarnessPackage -Recurse -Force
+  foreach ($scriptPath in @($payload.localSwarmScriptPaths)) {
+    Copy-Item -ToSession $session -Path $scriptPath -Destination (Join-Path $guestScriptsRoot (Split-Path -Leaf $scriptPath)) -Force
+  }
   $guestResult = Invoke-GuestPython $session $python $guestRunner @(
     '--profile', $payload.profileName,
     '--root', $guestRoot,
@@ -590,7 +602,8 @@ try {
     '--username', $payload.username,
     '--password', $payload.password,
     '--fixture-size-bytes', [string] $payload.fixtureSizeBytes,
-    '--swarm-tier', [string] $payload.swarmTier
+    '--swarm-tier', [string] $payload.swarmTier,
+    '--harness-root', $guestHarnessRoot
   )
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
   Stop-GuestRuntime $session

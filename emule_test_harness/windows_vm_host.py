@@ -43,6 +43,18 @@ GUEST_RUNNER_FILES = {
     **{profile: "windows_vm_profile_smoke.py" for profile in LOCAL_SWARM_VM_PROFILES},
 }
 PROFILE_HELPER_FILE = "vm_guest_profiles.py"
+LOCAL_SWARM_SCRIPT_FILES = (
+    "amutorrent-browser-smoke.py",
+    "amutorrent-local-ed2k-ui-live.py",
+    "deterministic-amule-transfer.py",
+    "deterministic-two-client-transfer.py",
+    "godzilla-local-swarm.py",
+    "local-ed2k-protocol-combinations.py",
+    "local-ed2k-search-soak.py",
+    "local-kad-mixed-client-swarm.py",
+    "local-kad-swarm.py",
+    "multi-client-p2p-matrix.py",
+)
 LOCAL_ED2K_TARGET_ENDPOINTS = {
     "win10": {"target": "win10", "tcpPort": 4662, "udpPort": 4672, "restPort": 4711},
     "win11": {"target": "win11", "tcpPort": 4762, "udpPort": 4772, "restPort": 4711},
@@ -82,6 +94,16 @@ def profile_helper_path(tests_repo_root: str | Path) -> Path:
     """Returns the shared guest profile helper path."""
 
     return Path(tests_repo_root) / "emule_test_harness" / PROFILE_HELPER_FILE
+
+
+def local_swarm_payload_paths(tests_repo_root: str | Path) -> dict[str, Any]:
+    """Returns host paths copied into guests for reusable local swarm profiles."""
+
+    root = Path(tests_repo_root)
+    return {
+        "harnessPackage": root / "emule_test_harness",
+        "scripts": [root / "scripts" / name for name in LOCAL_SWARM_SCRIPT_FILES],
+    }
 
 
 def build_local_ed2k_target_payloads(vm_names: dict[str, str]) -> dict[str, dict[str, Any]]:

@@ -65,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--password", required=True)
     parser.add_argument("--fixture-size-bytes", type=int, default=25 * 1024 * 1024)
     parser.add_argument("--swarm-tier", type=int, choices=LOCAL_SWARM_TIERS, default=DEFAULT_LOCAL_SWARM_TIER)
+    parser.add_argument("--harness-root", type=Path)
     return parser
 
 
@@ -304,7 +305,10 @@ def run_profile_checks(
     if profile == "ui-shared-files-depth":
         return [resource_presence_check(app_root, min_lang=40), shared_directories_rest_check(base_url, shared_dir)]
     if profile in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE:
-        return [local_swarm_contract_check(profile, args.swarm_tier)]
+        return [
+            local_swarm_contract_check(profile, args.swarm_tier),
+            local_swarm_payload_check(args.harness_root),
+        ]
     raise RuntimeError(f"Unsupported profile: {profile}")
 
 
@@ -328,6 +332,30 @@ def local_swarm_contract_check(profile: str, swarm_tier: int) -> dict[str, Any]:
             "ed2kServerTarget": "win10",
             "vmTargets": ["win10", "win11"],
             "nonblockingCompanions": True,
+        },
+    }
+
+
+def local_swarm_payload_check(harness_root: Path | None) -> dict[str, Any]:
+    """Verifies that VM mode staged the local swarm harness payload."""
+
+    if harness_root is None:
+        return {"name": "local-swarm-payload-staged", "status": "failed", "details": {"error": "missing harness root"}}
+    expected = (
+        harness_root / "emule_test_harness" / "live_e2e_suite.py",
+        harness_root / "scripts" / "godzilla-local-swarm.py",
+        harness_root / "scripts" / "local-ed2k-search-soak.py",
+        harness_root / "scripts" / "local-kad-swarm.py",
+        harness_root / "scripts" / "amutorrent-local-ed2k-ui-live.py",
+    )
+    missing = [str(path) for path in expected if not path.is_file()]
+    return {
+        "name": "local-swarm-payload-staged",
+        "status": "passed" if not missing else "failed",
+        "details": {
+            "harnessRoot": str(harness_root),
+            "expectedCount": len(expected),
+            "missing": missing,
         },
     }
 

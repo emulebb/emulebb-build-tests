@@ -52,6 +52,10 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "windows_vm_profile_smoke.py" in script
     assert "vm_guest_profiles.py" in script
     assert "campaign_scenarios.py" in script
+    assert "localSwarmHarnessPackagePath" in script
+    assert "localSwarmScriptPaths" in script
+    assert "--harness-root" in script
+    assert "godzilla-local-swarm.py" not in script
     assert "--profile" in script
     assert "--swarm-tier" in script
     assert "fixtureSizeBytes" in script
