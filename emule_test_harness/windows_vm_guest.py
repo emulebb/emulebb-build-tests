@@ -684,6 +684,9 @@ try {
   if ($payload.localSwarmAmuleControlExe) {
     $runnerArgs += @('--amule-control-exe', $guestAmuleControl)
   }
+  if ($payload.localSwarmLanBindAddr) {
+    $runnerArgs += @('--lan-bind-addr', $payload.localSwarmLanBindAddr)
+  }
   $guestResult = Invoke-GuestPython $session $python $guestRunner $runnerArgs @($guestHarnessRoot, $guestRoot)
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
   Stop-GuestRuntime $session
