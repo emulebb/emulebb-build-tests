@@ -248,33 +248,47 @@ def resolve_amule_client(
     """Resolves optional Windows aMule daemon and command binaries when present."""
 
     identity = CLIENT_IDENTITIES["amule"]
-    try:
-        root = resolve_manifest_repo(workspace_root, "amule")
-    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
-        return unavailable_manifest_client(identity, "amule", "amuled-amulecmd", exc)
-    daemon_candidates = [Path(override_daemon)] if override_daemon else [
-        workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amuled.exe",
-        root / "packaging" / "windows" / "dist" / "bin" / "amuled.exe",
-        root / "amule-portable-x64" / "bin" / "amuled.exe",
-        root / "build" / "bin" / "amuled.exe",
-        root / "build-windows-x64" / "src" / "amuled.exe",
-        root / "bin" / "amuled.exe",
-    ]
-    control_candidates = [Path(override_control)] if override_control else [
-        workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amulecmd.exe",
-        root / "packaging" / "windows" / "dist" / "bin" / "amulecmd.exe",
-        root / "amule-portable-x64" / "bin" / "amulecmd.exe",
-        root / "build" / "bin" / "amulecmd.exe",
-        root / "build-windows-x64" / "src" / "amulecmd.exe",
-        root / "bin" / "amulecmd.exe",
-    ]
+    root: Path | None = None
+    if not (override_daemon and override_control):
+        try:
+            root = resolve_manifest_repo(workspace_root, "amule")
+        except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+            return unavailable_manifest_client(identity, "amule", "amuled-amulecmd", exc)
+    daemon_candidates = (
+        [Path(override_daemon)]
+        if override_daemon
+        else [
+            workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amuled.exe",
+            root / "packaging" / "windows" / "dist" / "bin" / "amuled.exe",
+            root / "amule-portable-x64" / "bin" / "amuled.exe",
+            root / "build" / "bin" / "amuled.exe",
+            root / "build-windows-x64" / "src" / "amuled.exe",
+            root / "bin" / "amuled.exe",
+        ]
+    )
+    control_candidates = (
+        [Path(override_control)]
+        if override_control
+        else [
+            workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amulecmd.exe",
+            root / "packaging" / "windows" / "dist" / "bin" / "amulecmd.exe",
+            root / "amule-portable-x64" / "bin" / "amulecmd.exe",
+            root / "build" / "bin" / "amulecmd.exe",
+            root / "build-windows-x64" / "src" / "amulecmd.exe",
+            root / "bin" / "amulecmd.exe",
+        ]
+    )
     daemon = first_existing_file(daemon_candidates)
     control = first_existing_file(control_candidates)
     available = daemon is not None and control is not None
     if available:
         reason = "available"
     elif daemon is None and control is None:
-        reason = f"no built aMule daemon/control binaries found under {root} or workspace state"
+        reason = (
+            "no built aMule daemon/control binaries found in overrides"
+            if override_daemon or override_control
+            else f"no built aMule daemon/control binaries found under {root} or workspace state"
+        )
     elif daemon is None:
         reason = "missing amuled.exe"
     else:

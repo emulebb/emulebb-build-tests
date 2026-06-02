@@ -119,6 +119,23 @@ def test_resolve_amule_client_accepts_portable_workspace_build(tmp_path: Path, m
     assert amule.control_executable == control.resolve()
 
 
+def test_resolve_amule_client_accepts_explicit_vm_staged_binaries_without_manifest(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
+    workspace = tmp_path / "guest" / "workspace"
+    daemon = tmp_path / "harness" / "tools" / "amule" / "bin" / "amuled.exe"
+    control = tmp_path / "harness" / "tools" / "amule" / "bin" / "amulecmd.exe"
+    for executable in (daemon, control):
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"")
+
+    amule = multi_client.resolve_amule_client(workspace, str(daemon), str(control))
+
+    assert amule.available is True
+    assert amule.executable == daemon.resolve()
+    assert amule.control_executable == control.resolve()
+    assert amule.reason == "available"
+
+
 def test_optional_clients_report_unavailable_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
     workspace = tmp_path / "workspaces" / "workspace"
