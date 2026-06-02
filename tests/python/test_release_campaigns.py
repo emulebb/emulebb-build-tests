@@ -306,6 +306,28 @@ def test_terminal_report_contains_phase_status_and_warning(tmp_path: Path) -> No
     assert "missing required evidence" in text
 
 
+def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
+    tests_root = tmp_path / "tests"
+    manifest_root = tests_root / "manifests" / "release-campaigns"
+    manifest_root.mkdir(parents=True)
+    for path in (repo_root() / "manifests" / "release-campaigns").glob("*.json"):
+        (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    report = release_campaigns.build_release_campaign_report(
+        release_campaigns.ReleaseCampaignPaths(tests_repo_root=tests_root, workspace_state_root=tmp_path / "state"),
+        campaign_id="emulebb-0.7.3",
+        phase_id="controller-surface",
+    )
+    text = release_campaigns.format_release_campaign_report(report)
+
+    assert "emulebb.flow.controller.installer-swarm.v1" in text
+    assert "mode: vm (available: local, vm)" in text
+    assert "local command: python -m emule_workspace test campaign-scenario" in text
+    assert "vm command: python -m emule_workspace test campaign-scenario" in text
+    assert "--mode local" in text
+    assert "--mode vm" in text
+
+
 def test_operator_script_help_loads() -> None:
     completed = subprocess.run(
         [sys.executable, str(repo_root() / "scripts" / "show-release-campaigns.py"), "--help"],

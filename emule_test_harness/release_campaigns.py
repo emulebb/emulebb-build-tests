@@ -242,7 +242,14 @@ def format_release_campaign_report(report: dict[str, Any]) -> str:
         lines.append(
             f"{scenario['phase']:<21}  {req:<3}  {scenario['status']:<16}  {scenario['id']}"
         )
+        if scenario.get("executionModes"):
+            modes = ", ".join(str(mode) for mode in scenario["executionModes"])
+            lines.append(f"{'':<21}       mode: {scenario.get('executionMode') or 'manifest'} (available: {modes})")
         lines.append(f"{'':<21}       command: {scenario['command']}")
+        if scenario.get("localCommand"):
+            lines.append(f"{'':<21}       local command: {scenario['localCommand']}")
+        if scenario.get("vmCommand"):
+            lines.append(f"{'':<21}       vm command: {scenario['vmCommand']}")
         for warning in scenario["warnings"]:
             lines.append(f"{'':<21}       warning: {warning}")
     if report["warnings"]:
