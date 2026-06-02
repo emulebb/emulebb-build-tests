@@ -589,8 +589,11 @@ $guestHarnessPackage = Join-Path $guestHarnessRoot 'emule_test_harness'
 $guestHarnessManifests = Join-Path $guestHarnessRoot 'manifests'
 $guestScriptsRoot = Join-Path $guestHarnessRoot 'scripts'
 $guestToolsRoot = Join-Path $guestHarnessRoot 'tools'
-$guestAmutorrentZip = Join-Path $guestRoot (Split-Path -Leaf $payload.localSwarmAmutorrentZip)
-$guestAmutorrentRoot = Join-Path $guestToolsRoot 'aMuTorrent'
+$guestReleaseRoot = Join-Path $guestHarnessRoot 'release'
+$guestSuiteInstallRoot = Join-Path $guestHarnessRoot 'suite-install'
+$guestSuiteInstaller = Join-Path $guestHarnessRoot 'Install-eMuleBBSuite.ps1'
+$guestAmutorrentRoot = Join-Path $guestSuiteInstallRoot 'apps\aMuTorrent'
+$guestAmutorrentNode = ''
 $guestGoed2kServer = Join-Path $guestToolsRoot 'goed2k-server.exe'
 $guestClient2Root = Join-Path $guestToolsRoot 'tracing-harness'
 $guestClient2App = Join-Path $guestClient2Root 'emule.exe'
@@ -624,19 +627,48 @@ try {
   foreach ($scriptPath in @($payload.localSwarmScriptPaths)) {
     Copy-Item -ToSession $session -Path $scriptPath -Destination (Join-Path $guestScriptsRoot (Split-Path -Leaf $scriptPath)) -Force
   }
-  if ($payload.localSwarmAmutorrentZip) {
-    Copy-Item -ToSession $session -Path $payload.localSwarmAmutorrentZip -Destination $guestAmutorrentZip -Force
+  if ($payload.localSwarmReleaseAssetPaths) {
     Invoke-Command -Session $session -ScriptBlock {
-      param($zip, $toolsRoot, $amutorrentRoot)
-      if (Test-Path -LiteralPath $amutorrentRoot) {
-        Remove-Item -LiteralPath $amutorrentRoot -Recurse -Force
+      param($releaseRoot)
+      New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+    } -ArgumentList $guestReleaseRoot
+    foreach ($assetPath in @($payload.localSwarmReleaseAssetPaths)) {
+      Copy-Item -ToSession $session -Path $assetPath -Destination (Join-Path $guestReleaseRoot (Split-Path -Leaf $assetPath)) -Force
+    }
+    $guestAmutorrentNode = Invoke-Command -Session $session -ScriptBlock {
+      param($packageZip, $installer, $installRoot, $releaseRoot, $version, $platform, $lanBindAddr)
+      if (Test-Path -LiteralPath $installRoot) {
+        Remove-Item -LiteralPath $installRoot -Recurse -Force
       }
-      Expand-Archive -LiteralPath $zip -DestinationPath $toolsRoot -Force
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      $archive = [System.IO.Compression.ZipFile]::OpenRead($packageZip)
+      try {
+        $entry = $archive.GetEntry('eMuleBB/scripts/Install-eMuleBBSuite.ps1')
+        if ($null -eq $entry) {
+          throw 'Release package is missing eMuleBB/scripts/Install-eMuleBBSuite.ps1.'
+        }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $installer, $true)
+      } finally {
+        $archive.Dispose()
+      }
+      $releaseBaseUrl = ([Uri]$releaseRoot).AbsoluteUri
+      & $installer -NonInteractive -Force -NoStart -Bundle Controller -InstallRoot $installRoot -ReleaseBaseUrl $releaseBaseUrl -Version $version -Platform $platform -InstallKind Development -ControlBindAddress $lanBindAddr -EmulebbBindAddress '127.0.0.1' -AmutorrentBindAddress '127.0.0.1' -P2PBindInterface ''
+      if ($LASTEXITCODE -ne 0) {
+        throw "Install-eMuleBBSuite.ps1 failed with exit code $LASTEXITCODE."
+      }
+      $amutorrentRoot = Join-Path $installRoot 'apps\aMuTorrent'
       $server = Join-Path $amutorrentRoot 'server\server.js'
       if (-not (Test-Path -LiteralPath $server -PathType Leaf)) {
-        throw "aMuTorrent package did not expand to expected server path: $server"
+        throw "Suite installer did not install aMuTorrent server path: $server"
       }
-    } -ArgumentList $guestAmutorrentZip, $guestToolsRoot, $guestAmutorrentRoot
+      $node = Get-ChildItem -Path (Join-Path $installRoot 'runtime\node') -Filter node.exe -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+      if (-not $node) {
+        throw "Suite installer did not install the pinned Node runtime under $installRoot\runtime\node."
+      }
+      $env:EMULEBB_TEST_AMUTORRENT_ROOT = $amutorrentRoot
+      $env:AMUTORRENT_NODE_EXE = $node.FullName
+      $node.FullName
+    } -ArgumentList $guestZip, $guestSuiteInstaller, $guestSuiteInstallRoot, $guestReleaseRoot, $payload.releaseVersion, $payload.platform, $payload.localSwarmLanBindAddr
   }
   if ($payload.localSwarmRestOpenApiPath) {
     Invoke-Command -Session $session -ScriptBlock {
@@ -703,11 +735,12 @@ try {
   if ($payload.localSwarmLanBindAddr) {
     $runnerArgs += @('--lan-bind-addr', $payload.localSwarmLanBindAddr)
   }
-  if ($payload.localSwarmAmutorrentZip) {
+  if ($payload.localSwarmReleaseAssetPaths) {
     Invoke-Command -Session $session -ScriptBlock {
-      param($amutorrentRoot)
+      param($amutorrentRoot, $node)
       $env:EMULEBB_TEST_AMUTORRENT_ROOT = $amutorrentRoot
-    } -ArgumentList $guestAmutorrentRoot
+      $env:AMUTORRENT_NODE_EXE = $node
+    } -ArgumentList $guestAmutorrentRoot, $guestAmutorrentNode
   }
   $guestResult = Invoke-GuestPython $session $python $guestRunner $runnerArgs @($guestHarnessRoot, $guestRoot)
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null

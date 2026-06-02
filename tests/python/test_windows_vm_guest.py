@@ -55,11 +55,14 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "localSwarmHarnessPackagePath" in script
     assert "localSwarmManifestsPath" in script
     assert "localSwarmScriptPaths" in script
-    assert "localSwarmAmutorrentZip" in script
+    assert "localSwarmReleaseAssetPaths" in script
     assert "localSwarmAmutorrentRoot" not in script
     assert "EMULEBB_TEST_AMUTORRENT_ROOT" in script
-    assert "Expand-Archive -LiteralPath $zip -DestinationPath $toolsRoot" in script
-    assert "aMuTorrent package did not expand to expected server path" in script
+    assert "AMUTORRENT_NODE_EXE" in script
+    assert "Install-eMuleBBSuite.ps1" in script
+    assert "-Bundle Controller" in script
+    assert "Suite installer did not install aMuTorrent server path" in script
+    assert "Suite installer did not install the pinned Node runtime" in script
     assert "guestHarnessManifests" in script
     assert "localSwarmRestOpenApiPath" in script
     assert "localSwarmAppSourcePaths" in script
