@@ -64,6 +64,16 @@ LOCAL_SWARM_SCRIPT_FILES = tuple(
     LIVE_E2E_SCRIPT_BY_SUITE[suite_name]
     for suite_name in _reusable_campaign_suite_names()
 )
+LOCAL_SWARM_SUPPORT_SCRIPT_FILES = (
+    "admin-volume-cleanup-audit.py",
+    "amutorrent-browser-smoke.py",
+    "emule-live-profile-common.py",
+    "harness-cli-common.py",
+    "rest-api-smoke.py",
+)
+LOCAL_SWARM_PAYLOAD_SCRIPT_FILES = tuple(
+    dict.fromkeys((*LOCAL_SWARM_SCRIPT_FILES, *LOCAL_SWARM_SUPPORT_SCRIPT_FILES))
+)
 LOCAL_ED2K_TARGET_ENDPOINTS = {
     "win10": {"target": "win10", "tcpPort": 4662, "udpPort": 4672, "restPort": 4711},
     "win11": {"target": "win11", "tcpPort": 4762, "udpPort": 4772, "restPort": 4711},
@@ -111,7 +121,7 @@ def local_swarm_payload_paths(tests_repo_root: str | Path) -> dict[str, Any]:
     root = Path(tests_repo_root)
     return {
         "harnessPackage": root / "emule_test_harness",
-        "scripts": [root / "scripts" / name for name in LOCAL_SWARM_SCRIPT_FILES],
+        "scripts": [root / "scripts" / name for name in LOCAL_SWARM_PAYLOAD_SCRIPT_FILES],
     }
 
 

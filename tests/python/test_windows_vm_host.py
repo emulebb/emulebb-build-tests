@@ -52,13 +52,16 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
         "local-ed2k-search-soak.py",
         "local-kad-swarm.py",
         "amutorrent-local-ed2k-ui-live.py",
+        "package-helper-integration.py",
+        "rest-api-smoke.py",
+        "harness-cli-common.py",
     } <= script_names
 
 
 def test_local_swarm_payload_scripts_cover_reusable_campaign_suites() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     script_by_suite = {spec.name: spec.script_name for spec in live_e2e_suite.SUITE_SPECS}
-    payload_scripts = set(windows_vm_host.LOCAL_SWARM_SCRIPT_FILES)
+    payload_scripts = set(windows_vm_host.LOCAL_SWARM_PAYLOAD_SCRIPT_FILES)
 
     for scenario in REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE.values():
         suite_names = list(scenario.local_suites)
@@ -68,6 +71,13 @@ def test_local_swarm_payload_scripts_cover_reusable_campaign_suites() -> None:
             script_name = script_by_suite[suite_name]
             assert script_name in payload_scripts
             assert (repo_root / "scripts" / script_name).is_file()
+
+
+def test_local_swarm_payload_scripts_include_sibling_helpers() -> None:
+    payload_scripts = set(windows_vm_host.LOCAL_SWARM_PAYLOAD_SCRIPT_FILES)
+
+    assert set(windows_vm_host.LOCAL_SWARM_SCRIPT_FILES) <= payload_scripts
+    assert set(windows_vm_host.LOCAL_SWARM_SUPPORT_SCRIPT_FILES) <= payload_scripts
 
 
 def test_endpoint_payloads_materialize_vm_names() -> None:

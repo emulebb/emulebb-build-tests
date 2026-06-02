@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 
-from emule_test_harness import campaign_scenarios
+from emule_test_harness import campaign_scenarios, live_e2e_suite
 
 
 def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() -> None:
     matrix = campaign_scenarios.build_campaign_scenario_matrix()
 
     assert matrix["executionModes"] == ["local", "vm"]
+    assert matrix["scenarios"][0]["localTestNetwork"] == "default"
+    assert matrix["scenarios"][0]["localAllowedNetworkScopes"] == ["offline", "lan"]
     assert matrix["localSwarm"] == {
         "clientProducts": ["emulebb", "amule", "tracing-harness"],
         "tiers": [1, 2, 3],
@@ -37,6 +39,8 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
     for scenario in scenarios.values():
         assert scenario["networkScope"] == "lan"
         assert scenario["executionModes"] == ["local", "vm"]
+        assert scenario["localTestNetwork"] == "default"
+        assert scenario["localAllowedNetworkScopes"] == ["offline", "lan"]
         assert scenario["usesLocalSwarm"] is True
         assert scenario["liveWire"] is False
         assert scenario["localSuites"]
@@ -49,6 +53,29 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
     assert scenarios["amutorrent-clean-startup"]["localSuites"] == [
         "amutorrent-local-ed2k-ui-live",
     ]
+    assert scenarios["installer-controller-surface"]["localSuites"] == [
+        "command-line-smoke",
+        "amutorrent-browser-smoke",
+        "package-helper-integration",
+    ]
+    assert scenarios["prowlarr-controller-handoff"]["localSuites"] == [
+        "package-helper-integration",
+    ]
+
+
+def test_reusable_campaign_suites_stay_local_and_deterministic() -> None:
+    suite_by_name = {spec.name: spec for spec in live_e2e_suite.SUITE_SPECS}
+    allowed_scopes = set(campaign_scenarios.LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES)
+
+    for scenario in campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIOS:
+        suites = list(scenario.local_suites)
+        if scenario.uses_local_swarm:
+            suites.append("godzilla-local-swarm")
+        for suite_name in suites:
+            suite = suite_by_name[suite_name]
+            assert suite.network_scope in allowed_scopes, (scenario.key, suite.name, suite.network_scope)
+            assert suite.uses_live_seed_refresh is False, (scenario.key, suite.name)
+            assert suite.category != "live-wire", (scenario.key, suite.name)
 
 
 def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:

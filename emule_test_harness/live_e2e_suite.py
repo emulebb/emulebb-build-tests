@@ -491,10 +491,11 @@ SUITE_SPECS = (
         name="amutorrent-browser-smoke",
         script_name="amutorrent-browser-smoke.py",
         category="rest",
-        network_scope="vpn",
+        network_scope="lan",
         is_amutorrent_browser=True,
         accepts_vpn_guard_profile=True,
         accepts_admin_volume_fixtures=True,
+        default_enabled=False,
     ),
     SuiteSpec(
         name="package-helper-integration",

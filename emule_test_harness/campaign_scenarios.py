@@ -7,6 +7,8 @@ from typing import Any
 
 
 EXECUTION_MODES = ("local", "vm")
+LOCAL_CAMPAIGN_TEST_NETWORK = "default"
+LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES = ("offline", "lan")
 LOCAL_SWARM_CLIENT_PRODUCTS = ("emulebb", "amule", "tracing-harness")
 LOCAL_SWARM_TIERS = (1, 2, 3)
 DEFAULT_LOCAL_SWARM_TIER = 1
@@ -74,6 +76,8 @@ class CampaignScenarioSpec:
     scenario_id: str
     uses_local_swarm: bool = False
     live_wire: bool = False
+    local_test_network: str = LOCAL_CAMPAIGN_TEST_NETWORK
+    local_allowed_network_scopes: tuple[str, ...] = LOCAL_CAMPAIGN_ALLOWED_NETWORK_SCOPES
 
     def as_matrix_row(self) -> dict[str, Any]:
         """Returns the JSON shape used by audits and release tooling tests."""
@@ -84,6 +88,8 @@ class CampaignScenarioSpec:
             "releasePhase": self.release_phase,
             "networkScope": self.network_scope,
             "executionModes": list(EXECUTION_MODES),
+            "localTestNetwork": self.local_test_network,
+            "localAllowedNetworkScopes": list(self.local_allowed_network_scopes),
             "localProfile": self.local_profile,
             "localSuites": list(self.local_suites),
             "vmProfile": self.vm_profile,
@@ -117,10 +123,8 @@ REUSABLE_CAMPAIGN_SCENARIOS = (
         local_profile="installer-controller-surface",
         local_suites=(
             "command-line-smoke",
-            "rest-api",
-            "prowlarr-emulebb",
             "amutorrent-browser-smoke",
-            "live-process-monitor",
+            "package-helper-integration",
         ),
         vm_profile="installer-controller-surface-vm",
         scenario_id="emulebb.flow.controller.installer-swarm.v1",
@@ -154,7 +158,7 @@ REUSABLE_CAMPAIGN_SCENARIOS = (
         release_phase="controller-surface",
         network_scope="lan",
         local_profile="controller-surface",
-        local_suites=("prowlarr-emulebb",),
+        local_suites=("package-helper-integration",),
         vm_profile="prowlarr-controller-handoff-vm",
         scenario_id="emulebb.flow.arr.prowlarr-handoff.swarm.v1",
         uses_local_swarm=True,

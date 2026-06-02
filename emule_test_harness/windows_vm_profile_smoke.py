@@ -24,7 +24,7 @@ try:
         LOCAL_SWARM_TIERS,
         REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE,
     )
-    from emule_test_harness.windows_vm_host import LOCAL_SWARM_SCRIPT_FILES
+    from emule_test_harness.windows_vm_host import LOCAL_SWARM_PAYLOAD_SCRIPT_FILES
     from emule_test_harness.vm_guest_profiles import (
         emit,
         http_json,
@@ -42,7 +42,7 @@ except ModuleNotFoundError:
         LOCAL_SWARM_TIERS,
         REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE,
     )
-    from windows_vm_host import LOCAL_SWARM_SCRIPT_FILES
+    from windows_vm_host import LOCAL_SWARM_PAYLOAD_SCRIPT_FILES
     from vm_guest_profiles import emit, http_json, retry_http_json, start_visible_app, wait_until, write_preferences_ini
 
 SUPPORTED_PROFILES = {
@@ -368,7 +368,7 @@ def local_swarm_payload_check(harness_root: Path | None) -> dict[str, Any]:
         return {"name": "local-swarm-payload-staged", "status": "failed", "details": {"error": "missing harness root"}}
     expected = (
         harness_root / "emule_test_harness" / "live_e2e_suite.py",
-        *(harness_root / "scripts" / name for name in LOCAL_SWARM_SCRIPT_FILES),
+        *(harness_root / "scripts" / name for name in LOCAL_SWARM_PAYLOAD_SCRIPT_FILES),
     )
     missing = [str(path) for path in expected if not path.is_file()]
     return {

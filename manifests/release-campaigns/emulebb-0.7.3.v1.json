@@ -426,10 +426,8 @@
           "localProfile": "installer-controller-surface",
           "localSuites": [
             "command-line-smoke",
-            "rest-api",
-            "prowlarr-emulebb",
             "amutorrent-browser-smoke",
-            "live-process-monitor"
+            "package-helper-integration"
           ],
           "vmProfile": "installer-controller-surface-vm",
           "evidence": [
@@ -460,7 +458,7 @@
           ],
           "localProfile": "controller-surface",
           "localSuites": [
-            "prowlarr-emulebb"
+            "package-helper-integration"
           ],
           "vmProfile": "prowlarr-controller-handoff-vm",
           "evidence": [

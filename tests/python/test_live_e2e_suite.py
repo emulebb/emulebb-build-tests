@@ -766,7 +766,6 @@ def test_default_network_run_skips_public_vpn_default_suites(tmp_path: Path, mon
     ]
     assert [row["name"] for row in summary["skipped_suites"]] == [
         "rest-api",
-        "amutorrent-browser-smoke",
         "prowlarr-emulebb",
         "radarr-emulebb",
         "sonarr-emulebb",
@@ -812,7 +811,6 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
         "startup-profile-scenarios.py",
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
-        "amutorrent-browser-smoke.py",
         "prowlarr-emulebb-live.py",
         "radarr-emulebb-live.py",
         "sonarr-emulebb-live.py",
@@ -863,12 +861,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["radarr_movie_root_present"] is False
     assert summary["suites"][6]["rest_contract_completeness_expected"] is True
 
-    browser_command = commands[7]
-    assert script_name(browser_command) == "amutorrent-browser-smoke.py"
-    assert option_values(browser_command, "--p2p-bind-interface-name") == ["hide.me"]
-    assert option_values(browser_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
-
-    prowlarr_command = commands[8]
+    prowlarr_command = commands[7]
     assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"
     assert "--enable-upnp" in prowlarr_command
     assert option_values(prowlarr_command, "--p2p-bind-interface-name") == ["hide.me"]
@@ -878,10 +871,10 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(prowlarr_command, "--direct-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)]
     assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)]
     assert "--skip-live-seed-refresh" not in prowlarr_command
-    assert summary["suites"][8]["arr_integration"] is True
-    assert summary["suites"][8]["arr_direct_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT
+    assert summary["suites"][7]["arr_integration"] is True
+    assert summary["suites"][7]["arr_direct_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT
 
-    arr_command = commands[9]
+    arr_command = commands[8]
     assert script_name(arr_command) == "radarr-emulebb-live.py"
     assert "--enable-upnp" in arr_command
     assert option_values(arr_command, "--p2p-bind-interface-name") == ["hide.me"]
@@ -891,10 +884,10 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert "--qbit-live-wire-rounds" not in arr_command
     assert "--radarr-movie-root" not in arr_command
     assert "--skip-live-seed-refresh" not in arr_command
-    assert summary["suites"][9]["arr_integration"] is True
-    assert summary["suites"][9]["radarr_movie_root_configured"] is False
+    assert summary["suites"][8]["arr_integration"] is True
+    assert summary["suites"][8]["radarr_movie_root_configured"] is False
 
-    sonarr_command = commands[10]
+    sonarr_command = commands[9]
     assert script_name(sonarr_command) == "sonarr-emulebb-live.py"
     assert "--enable-upnp" in sonarr_command
     assert option_values(sonarr_command, "--p2p-bind-interface-name") == ["hide.me"]
@@ -903,10 +896,10 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert option_values(sonarr_command, "--rest-webserver-scheme") == ["https"]
     assert "--sonarr-series-root" not in sonarr_command
     assert "--skip-live-seed-refresh" not in sonarr_command
-    assert summary["suites"][10]["arr_integration"] is True
-    assert summary["suites"][10]["sonarr_series_root_configured"] is False
+    assert summary["suites"][9]["arr_integration"] is True
+    assert summary["suites"][9]["sonarr_series_root_configured"] is False
 
-    auto_browse_command = commands[11]
+    auto_browse_command = commands[10]
     assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(auto_browse_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
