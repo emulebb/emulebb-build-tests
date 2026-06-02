@@ -545,7 +545,6 @@ function Copy-GuestArtifacts($session, $sourceRoot, $destination) {
     }
     if ($errors.Count -gt 0) {
       $errors | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $snapshotRoot 'artifact-copy-errors.json') -Encoding UTF8
-      throw ('Failed to snapshot {0} guest artifact file(s).' -f $errors.Count)
     }
   } -ArgumentList $sourceRoot, $snapshotRoot
   try {

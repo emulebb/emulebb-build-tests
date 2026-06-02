@@ -72,3 +72,10 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "@($guestHarnessRoot, $guestRoot)" in script
     assert "guest python produced invalid JSON" in script
     assert "Restore-VMSnapshot" in script
+
+
+def test_profile_smoke_script_preserves_artifact_copy_errors_without_failing() -> None:
+    script = windows_vm_guest.profile_smoke_script()
+
+    assert "artifact-copy-errors.json" in script
+    assert "Failed to snapshot" not in script
