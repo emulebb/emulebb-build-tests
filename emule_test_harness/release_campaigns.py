@@ -249,6 +249,10 @@ def format_release_campaign_report(report: dict[str, Any]) -> str:
         lines.append(f"{'':<21}       command: {scenario['command']}")
         if scenario.get("localCommand"):
             lines.append(f"{'':<21}       local command: {scenario['localCommand']}")
+        if scenario.get("localPlanCommand"):
+            lines.append(f"{'':<21}       local plan command: {scenario['localPlanCommand']}")
+        if scenario.get("localExecuteCommand"):
+            lines.append(f"{'':<21}       local execute command: {scenario['localExecuteCommand']}")
         if scenario.get("vmCommand"):
             lines.append(f"{'':<21}       vm command: {scenario['vmCommand']}")
         if scenario.get("vmPlanCommand"):
@@ -291,6 +295,8 @@ def _build_scenario_report(paths: ReleaseCampaignPaths, phase: dict[str, Any], s
         "blocking": bool(scenario.get("blocking", True)),
         "command": scenario.get("command", "manual"),
         "localCommand": scenario.get("localCommand", ""),
+        "localPlanCommand": generated_commands.get("localPlanCommand", ""),
+        "localExecuteCommand": generated_commands.get("localExecuteCommand", ""),
         "vmCommand": scenario.get("vmCommand", ""),
         "vmPlanCommand": generated_commands.get("vmPlanCommand", ""),
         "vmExecuteCommand": generated_commands.get("vmExecuteCommand", ""),
@@ -318,6 +324,8 @@ def _local_vm_swarm_generated_commands(scenario: dict[str, Any]) -> dict[str, st
         return {}
     release_version = _release_version_from_command(str(scenario.get("vmCommand") or scenario.get("command") or ""))
     return {
+        "localPlanCommand": shared.command_for_mode("local", dry_run=True),
+        "localExecuteCommand": shared.command_for_mode("local"),
         "vmPlanCommand": shared.command_for_mode("vm", release_version=release_version, local_swarm_mode="plan"),
         "vmExecuteCommand": shared.command_for_mode("vm", release_version=release_version, local_swarm_mode="execute"),
     }

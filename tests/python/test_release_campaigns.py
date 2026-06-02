@@ -388,7 +388,10 @@ def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
     text = release_campaigns.format_release_campaign_report(report)
 
     assert "--local-swarm-mode execute" in scenario["vmExecuteCommand"]
+    assert "--dry-run" in scenario["localPlanCommand"]
+    assert "--dry-run" not in scenario["localExecuteCommand"]
     assert "--dry-run" in scenario["vmPlanCommand"]
+    assert scenario["localExecuteCommand"] == scenario["localCommand"]
     assert scenario["vmPlanCommand"] == scenario["vmCommand"]
     assert scenario["controlBindScope"] == "lan"
     assert scenario["amutorrentBindScope"] == "lan"
@@ -397,6 +400,8 @@ def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
     assert "emulebb.flow.controller.installer-swarm.v1" in text
     assert "mode: vm (available: local, vm)" in text
     assert "local command: python -m emule_workspace test campaign-scenario" in text
+    assert "local plan command: python -m emule_workspace test campaign-scenario" in text
+    assert "local execute command: python -m emule_workspace test campaign-scenario" in text
     assert "vm command: python -m emule_workspace test campaign-scenario" in text
     assert "vm plan command: python -m emule_workspace test campaign-scenario" in text
     assert "vm execute command: python -m emule_workspace test campaign-scenario" in text

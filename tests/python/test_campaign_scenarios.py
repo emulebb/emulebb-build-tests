@@ -49,6 +49,8 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
     for scenario in scenarios.values():
         assert scenario["networkScope"] == "lan"
         assert scenario["executionModes"] == ["local", "vm"]
+        assert "--dry-run" in scenario["localPlanCommand"]
+        assert "--dry-run" not in scenario["localExecuteCommand"]
         assert "--local-swarm-mode execute" in scenario["vmExecuteCommand"]
         assert scenario["localTestNetwork"] == "default"
         assert scenario["localAllowedNetworkScopes"] == ["offline", "lan"]
@@ -207,6 +209,12 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
             f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2"
         )
 
+        local_plan_command = scenario.command_for_mode("local", swarm_tier=2, dry_run=True)
+        assert local_plan_command == (
+            "python -m emule_workspace test campaign-scenario "
+            f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2 --dry-run"
+        )
+
         vm_plan_command = scenario.command_for_mode(
             "vm",
             release_version="0.7.4-rc.2",
@@ -233,6 +241,8 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
 
         matrix_row = scenario.as_matrix_row()
         assert matrix_row["localCommand"] == scenario.command_for_mode("local")
+        assert matrix_row["localPlanCommand"] == scenario.command_for_mode("local", dry_run=True)
+        assert matrix_row["localExecuteCommand"] == scenario.command_for_mode("local")
         assert matrix_row["vmCommand"] == scenario.command_for_mode("vm")
         assert matrix_row["vmPlanCommand"] == scenario.command_for_mode("vm", local_swarm_mode="plan")
         assert matrix_row["vmExecuteCommand"] == scenario.command_for_mode("vm", local_swarm_mode="execute")

@@ -125,6 +125,8 @@ class CampaignScenarioSpec:
             "p2pMode": self.p2p_mode,
             "p2pBindScope": self.p2p_bind_scope,
             "localCommand": self.command_for_mode("local"),
+            "localPlanCommand": self.command_for_mode("local", dry_run=True),
+            "localExecuteCommand": self.command_for_mode("local"),
             "vmCommand": self.command_for_mode("vm"),
             "vmPlanCommand": self.command_for_mode("vm", local_swarm_mode="plan"),
             "vmExecuteCommand": self.command_for_mode("vm", local_swarm_mode="execute"),
@@ -137,6 +139,7 @@ class CampaignScenarioSpec:
         release_version: str = DEFAULT_RELEASE_VERSION,
         swarm_tier: int = DEFAULT_LOCAL_SWARM_TIER,
         local_swarm_mode: str = "plan",
+        dry_run: bool = False,
     ) -> str:
         """Returns the emule_workspace command that runs this scenario in one mode."""
 
@@ -154,7 +157,10 @@ class CampaignScenarioSpec:
             else:
                 command = f"{command} --local-swarm-mode {local_swarm_mode}"
             return command
-        return f"{command} --swarm-tier {swarm_tier}"
+        command = f"{command} --swarm-tier {swarm_tier}"
+        if dry_run:
+            command = f"{command} --dry-run"
+        return command
 
 
 REUSABLE_CAMPAIGN_SCENARIOS = (
