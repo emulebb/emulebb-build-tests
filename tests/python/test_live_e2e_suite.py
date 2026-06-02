@@ -1156,6 +1156,12 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
             "--admin-volume-fixtures",
             "--ed2k-server-exe",
             str(tmp_path / "tools" / "goed2k-server.exe"),
+            "--client2-app-exe",
+            str(tmp_path / "tools" / "tracing-harness" / "emule.exe"),
+            "--amule-daemon-exe",
+            str(tmp_path / "tools" / "amule" / "bin" / "amuled.exe"),
+            "--amule-control-exe",
+            str(tmp_path / "tools" / "amule" / "bin" / "amulecmd.exe"),
             "--godzilla-stage",
             "launch-scale",
             "--godzilla-total-client-count",
@@ -1171,9 +1177,15 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
     assert summary["suites"][0]["status"] == "planned"
     assert script_name(command) == "godzilla-local-swarm.py"
     assert option_values(command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "goed2k-server.exe").resolve())]
+    assert option_values(command, "--client2-app-exe") == [str((tmp_path / "tools" / "tracing-harness" / "emule.exe").resolve())]
+    assert option_values(command, "--amule-daemon-exe") == [str((tmp_path / "tools" / "amule" / "bin" / "amuled.exe").resolve())]
+    assert option_values(command, "--amule-control-exe") == [str((tmp_path / "tools" / "amule" / "bin" / "amulecmd.exe").resolve())]
     assert option_values(command, "--stage") == ["launch-scale"]
     assert option_values(command, "--total-client-count") == ["4"]
     assert summary["local_dependency_overrides"]["ed2k_server_exe"] == str(tmp_path / "tools" / "goed2k-server.exe")
+    assert summary["local_dependency_overrides"]["client2_app_exe"] == str(tmp_path / "tools" / "tracing-harness" / "emule.exe")
+    assert summary["local_dependency_overrides"]["amule_daemon_exe"] == str(tmp_path / "tools" / "amule" / "bin" / "amuled.exe")
+    assert summary["local_dependency_overrides"]["amule_control_exe"] == str(tmp_path / "tools" / "amule" / "bin" / "amulecmd.exe")
 
 
 def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:

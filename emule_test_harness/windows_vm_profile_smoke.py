@@ -71,6 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--swarm-tier", type=int, choices=LOCAL_SWARM_TIERS, default=DEFAULT_LOCAL_SWARM_TIER)
     parser.add_argument("--harness-root", type=Path)
     parser.add_argument("--ed2k-server-exe", type=Path)
+    parser.add_argument("--client2-app-exe", type=Path)
+    parser.add_argument("--amule-daemon-exe", type=Path)
+    parser.add_argument("--amule-control-exe", type=Path)
     return parser
 
 
@@ -321,6 +324,9 @@ def run_profile_checks(
                 app_root,
                 artifacts,
                 ed2k_server_exe=args.ed2k_server_exe,
+                client2_app_exe=args.client2_app_exe,
+                amule_daemon_exe=args.amule_daemon_exe,
+                amule_control_exe=args.amule_control_exe,
             ),
         ]
     raise RuntimeError(f"Unsupported profile: {profile}")
@@ -430,6 +436,9 @@ def local_swarm_plan_check(
     app_root: Path,
     artifacts: Path,
     ed2k_server_exe: Path | None = None,
+    client2_app_exe: Path | None = None,
+    amule_daemon_exe: Path | None = None,
+    amule_control_exe: Path | None = None,
 ) -> dict[str, Any]:
     """Resolves the staged local-swarm suite commands without launching them."""
 
@@ -496,6 +505,12 @@ def local_swarm_plan_check(
             argv.append("--fail-fast")
         if ed2k_server_exe is not None:
             argv.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
+        if client2_app_exe is not None:
+            argv.extend(["--client2-app-exe", str(client2_app_exe.resolve())])
+        if amule_daemon_exe is not None:
+            argv.extend(["--amule-daemon-exe", str(amule_daemon_exe.resolve())])
+        if amule_control_exe is not None:
+            argv.extend(["--amule-control-exe", str(amule_control_exe.resolve())])
         for suite in suites:
             argv.extend(["--suite", suite])
         args = live_e2e_suite.build_parser().parse_args(argv)
@@ -532,6 +547,9 @@ def local_swarm_plan_check(
                 "commands": commands,
                 "tierOptions": dict(tier_options),
                 "ed2kServerExe": str(ed2k_server_exe) if ed2k_server_exe is not None else "",
+                "client2AppExe": str(client2_app_exe) if client2_app_exe is not None else "",
+                "amuleDaemonExe": str(amule_daemon_exe) if amule_daemon_exe is not None else "",
+                "amuleControlExe": str(amule_control_exe) if amule_control_exe is not None else "",
             },
         }
     except Exception as exc:

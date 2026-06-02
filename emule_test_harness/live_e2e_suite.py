@@ -109,6 +109,21 @@ ED2K_SERVER_EXE_SUITE_NAMES = {
     "local-ed2k-protocol-combinations",
     "amutorrent-local-ed2k-ui-live",
 }
+CLIENT2_APP_EXE_SUITE_NAMES = {
+    "deterministic-two-client-transfer",
+    "multi-client-p2p-matrix",
+    "godzilla-local-swarm",
+    "local-ed2k-search-soak",
+    "local-ed2k-chaos-mode",
+    "local-ed2k-protocol-combinations",
+    "amutorrent-local-ed2k-ui-live",
+}
+AMULE_EXE_SUITE_NAMES = {
+    "multi-client-p2p-matrix",
+    "godzilla-local-swarm",
+    "local-kad-mixed-client-swarm",
+    "amutorrent-local-ed2k-ui-live",
+}
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_PROFILE_CPU_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
@@ -1114,6 +1129,9 @@ def build_suite_command(
     dependency_cache_root: Path | None = None,
     refresh_dependencies: bool = False,
     ed2k_server_exe: Path | None = None,
+    client2_app_exe: Path | None = None,
+    amule_daemon_exe: Path | None = None,
+    amule_control_exe: Path | None = None,
     prowlarr_exe: Path | None = None,
     radarr_exe: Path | None = None,
     sonarr_exe: Path | None = None,
@@ -1257,6 +1275,13 @@ def build_suite_command(
         command.append("--require-optional-clients")
     if spec.name in ED2K_SERVER_EXE_SUITE_NAMES and ed2k_server_exe is not None:
         command.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
+    if spec.name in CLIENT2_APP_EXE_SUITE_NAMES and client2_app_exe is not None:
+        command.extend(["--client2-app-exe", str(client2_app_exe.resolve())])
+    if spec.name in AMULE_EXE_SUITE_NAMES:
+        if amule_daemon_exe is not None:
+            command.extend(["--amule-daemon-exe", str(amule_daemon_exe.resolve())])
+        if amule_control_exe is not None:
+            command.extend(["--amule-control-exe", str(amule_control_exe.resolve())])
     if (
         spec.name
         in {
@@ -1901,6 +1926,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dependency-cache-root")
     parser.add_argument("--refresh-dependencies", action="store_true")
     parser.add_argument("--ed2k-server-exe")
+    parser.add_argument("--client2-app-exe")
+    parser.add_argument("--amule-daemon-exe")
+    parser.add_argument("--amule-control-exe")
     parser.add_argument("--prowlarr-exe")
     parser.add_argument("--radarr-exe")
     parser.add_argument("--sonarr-exe")
@@ -2513,6 +2541,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         },
         "local_dependency_overrides": {
             "ed2k_server_exe": args.ed2k_server_exe,
+            "client2_app_exe": args.client2_app_exe,
+            "amule_daemon_exe": args.amule_daemon_exe,
+            "amule_control_exe": args.amule_control_exe,
         },
         "arr_live_wire_suites": [
             spec.name
@@ -2645,6 +2676,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             dependency_cache_root=Path(args.dependency_cache_root) if args.dependency_cache_root else None,
             refresh_dependencies=args.refresh_dependencies,
             ed2k_server_exe=Path(args.ed2k_server_exe) if args.ed2k_server_exe else None,
+            client2_app_exe=Path(args.client2_app_exe) if args.client2_app_exe else None,
+            amule_daemon_exe=Path(args.amule_daemon_exe) if args.amule_daemon_exe else None,
+            amule_control_exe=Path(args.amule_control_exe) if args.amule_control_exe else None,
             prowlarr_exe=Path(args.prowlarr_exe) if args.prowlarr_exe else None,
             radarr_exe=Path(args.radarr_exe) if args.radarr_exe else None,
             sonarr_exe=Path(args.sonarr_exe) if args.sonarr_exe else None,

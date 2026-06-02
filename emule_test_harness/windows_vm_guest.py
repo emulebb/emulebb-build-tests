@@ -575,6 +575,11 @@ $guestHarnessPackage = Join-Path $guestHarnessRoot 'emule_test_harness'
 $guestScriptsRoot = Join-Path $guestHarnessRoot 'scripts'
 $guestToolsRoot = Join-Path $guestHarnessRoot 'tools'
 $guestGoed2kServer = Join-Path $guestToolsRoot 'goed2k-server.exe'
+$guestClient2Root = Join-Path $guestToolsRoot 'tracing-harness'
+$guestClient2App = Join-Path $guestClient2Root 'emule.exe'
+$guestAmuleBinRoot = Join-Path $guestToolsRoot 'amule\bin'
+$guestAmuleDaemon = Join-Path $guestAmuleBinRoot 'amuled.exe'
+$guestAmuleControl = Join-Path $guestAmuleBinRoot 'amulecmd.exe'
 try {
   $session = Wait-GuestSession $payload.vmName
   Invoke-Command -Session $session -ScriptBlock {
@@ -600,6 +605,25 @@ try {
   if ($payload.localSwarmGoed2kServerExe) {
     Copy-Item -ToSession $session -Path $payload.localSwarmGoed2kServerExe -Destination $guestGoed2kServer -Force
   }
+  if ($payload.localSwarmClient2AppExe) {
+    Invoke-Command -Session $session -ScriptBlock {
+      param($root)
+      New-Item -ItemType Directory -Force -Path $root | Out-Null
+    } -ArgumentList $guestClient2Root
+    Copy-Item -ToSession $session -Path $payload.localSwarmClient2AppExe -Destination $guestClient2App -Force
+  }
+  if ($payload.localSwarmAmuleDaemonExe -or $payload.localSwarmAmuleControlExe) {
+    Invoke-Command -Session $session -ScriptBlock {
+      param($root)
+      New-Item -ItemType Directory -Force -Path $root | Out-Null
+    } -ArgumentList $guestAmuleBinRoot
+  }
+  if ($payload.localSwarmAmuleDaemonExe) {
+    Copy-Item -ToSession $session -Path $payload.localSwarmAmuleDaemonExe -Destination $guestAmuleDaemon -Force
+  }
+  if ($payload.localSwarmAmuleControlExe) {
+    Copy-Item -ToSession $session -Path $payload.localSwarmAmuleControlExe -Destination $guestAmuleControl -Force
+  }
   $runnerArgs = @(
     '--profile', $payload.profileName,
     '--root', $guestRoot,
@@ -613,6 +637,15 @@ try {
   )
   if ($payload.localSwarmGoed2kServerExe) {
     $runnerArgs += @('--ed2k-server-exe', $guestGoed2kServer)
+  }
+  if ($payload.localSwarmClient2AppExe) {
+    $runnerArgs += @('--client2-app-exe', $guestClient2App)
+  }
+  if ($payload.localSwarmAmuleDaemonExe) {
+    $runnerArgs += @('--amule-daemon-exe', $guestAmuleDaemon)
+  }
+  if ($payload.localSwarmAmuleControlExe) {
+    $runnerArgs += @('--amule-control-exe', $guestAmuleControl)
   }
   $guestResult = Invoke-GuestPython $session $python $guestRunner $runnerArgs
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
