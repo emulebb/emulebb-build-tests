@@ -84,6 +84,23 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
     }
 
 
+def test_073_campaign_contains_every_reusable_local_vm_swarm_scenario() -> None:
+    campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-0.7.3")
+    scenarios = {
+        scenario["id"]: scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    }
+
+    assert set(campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIO_BY_SCENARIO_ID) <= set(scenarios)
+    for spec in campaign_scenarios.REUSABLE_CAMPAIGN_SCENARIOS:
+        scenario = scenarios[spec.scenario_id]
+        assert scenario["flowCategory"] == "local-vm-swarm"
+        assert scenario["executionModes"] == ["local", "vm"]
+        assert scenario["localCommand"] == spec.command_for_mode("local")
+        assert scenario["vmCommand"] == spec.command_for_mode("vm", release_version=campaign["releaseVersion"])
+
+
 def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
     campaign = release_campaigns.load_release_campaign(repo_root(), "emulebb-0.7.3")
     scenarios = {
