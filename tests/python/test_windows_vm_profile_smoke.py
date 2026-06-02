@@ -34,11 +34,14 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
             "2",
             "--harness-root",
             "C:/tmp/harness",
+            "--ed2k-server-exe",
+            "C:/tmp/harness/tools/goed2k-server.exe",
         ]
     )
 
     assert args.swarm_tier == 2
     assert str(args.harness_root).replace("\\", "/").endswith("C:/tmp/harness")
+    assert str(args.ed2k_server_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/goed2k-server.exe")
 
 
 def test_local_swarm_payload_check_accepts_staged_harness(tmp_path) -> None:
@@ -71,6 +74,9 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
     app_root = tmp_path / "expanded" / "eMuleBB"
     app_root.mkdir(parents=True)
     (app_root / "emulebb.exe").write_text("", encoding="utf-8")
+    ed2k_server_exe = tmp_path / "harness" / "tools" / "goed2k-server.exe"
+    ed2k_server_exe.parent.mkdir(parents=True)
+    ed2k_server_exe.write_text("", encoding="utf-8")
 
     check = windows_vm_profile_smoke.local_swarm_plan_check(
         "search-ui-local-swarm-vm",
@@ -79,6 +85,7 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
         tmp_path / "guest-root",
         app_root,
         tmp_path / "artifacts",
+        ed2k_server_exe=ed2k_server_exe,
     )
 
     command_names = [Path(command[1]).name for command in check["details"]["commands"]]
@@ -87,3 +94,7 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
     assert set(check["details"]["suiteNames"]) == {"local-ed2k-search-soak", "local-kad-swarm", "godzilla-local-swarm"}
     assert set(command_names) == {"local-ed2k-search-soak.py", "local-kad-swarm.py", "godzilla-local-swarm.py"}
     assert check["details"]["tierOptions"]["total_client_count"] == 4
+    assert check["details"]["ed2kServerExe"] == str(ed2k_server_exe)
+    for command in check["details"]["commands"]:
+        if Path(command[1]).name in {"local-ed2k-search-soak.py", "godzilla-local-swarm.py"}:
+            assert "--ed2k-server-exe" in command

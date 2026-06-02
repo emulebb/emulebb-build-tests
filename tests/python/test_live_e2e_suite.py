@@ -1154,6 +1154,8 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
             "--suite",
             "godzilla-local-swarm",
             "--admin-volume-fixtures",
+            "--ed2k-server-exe",
+            str(tmp_path / "tools" / "goed2k-server.exe"),
             "--godzilla-stage",
             "launch-scale",
             "--godzilla-total-client-count",
@@ -1168,8 +1170,10 @@ def test_plan_only_resolves_godzilla_command_without_running_child(tmp_path: Pat
     assert summary["plan_only"] is True
     assert summary["suites"][0]["status"] == "planned"
     assert script_name(command) == "godzilla-local-swarm.py"
+    assert option_values(command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "goed2k-server.exe").resolve())]
     assert option_values(command, "--stage") == ["launch-scale"]
     assert option_values(command, "--total-client-count") == ["4"]
+    assert summary["local_dependency_overrides"]["ed2k_server_exe"] == str(tmp_path / "tools" / "goed2k-server.exe")
 
 
 def test_godzilla_local_swarm_rejects_folder_mount_runtime_root() -> None:

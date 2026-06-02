@@ -70,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-size-bytes", type=int, default=25 * 1024 * 1024)
     parser.add_argument("--swarm-tier", type=int, choices=LOCAL_SWARM_TIERS, default=DEFAULT_LOCAL_SWARM_TIER)
     parser.add_argument("--harness-root", type=Path)
+    parser.add_argument("--ed2k-server-exe", type=Path)
     return parser
 
 
@@ -312,7 +313,15 @@ def run_profile_checks(
         return [
             local_swarm_contract_check(profile, args.swarm_tier),
             local_swarm_payload_check(args.harness_root),
-            local_swarm_plan_check(profile, args.swarm_tier, args.harness_root, args.root, app_root, artifacts),
+            local_swarm_plan_check(
+                profile,
+                args.swarm_tier,
+                args.harness_root,
+                args.root,
+                app_root,
+                artifacts,
+                ed2k_server_exe=args.ed2k_server_exe,
+            ),
         ]
     raise RuntimeError(f"Unsupported profile: {profile}")
 
@@ -420,6 +429,7 @@ def local_swarm_plan_check(
     root: Path,
     app_root: Path,
     artifacts: Path,
+    ed2k_server_exe: Path | None = None,
 ) -> dict[str, Any]:
     """Resolves the staged local-swarm suite commands without launching them."""
 
@@ -484,6 +494,8 @@ def local_swarm_plan_check(
             argv.append("--godzilla-cpu-profile")
         if bool(tier_options["fail_fast"]):
             argv.append("--fail-fast")
+        if ed2k_server_exe is not None:
+            argv.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
         for suite in suites:
             argv.extend(["--suite", suite])
         args = live_e2e_suite.build_parser().parse_args(argv)
@@ -519,6 +531,7 @@ def local_swarm_plan_check(
                 "suiteNames": suite_names,
                 "commands": commands,
                 "tierOptions": dict(tier_options),
+                "ed2kServerExe": str(ed2k_server_exe) if ed2k_server_exe is not None else "",
             },
         }
     except Exception as exc:

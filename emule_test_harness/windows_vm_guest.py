@@ -573,6 +573,8 @@ $guestCampaignScenarios = Join-Path $guestRoot 'campaign_scenarios.py'
 $guestHarnessRoot = Join-Path $guestRoot 'harness'
 $guestHarnessPackage = Join-Path $guestHarnessRoot 'emule_test_harness'
 $guestScriptsRoot = Join-Path $guestHarnessRoot 'scripts'
+$guestToolsRoot = Join-Path $guestHarnessRoot 'tools'
+$guestGoed2kServer = Join-Path $guestToolsRoot 'goed2k-server.exe'
 try {
   $session = Wait-GuestSession $payload.vmName
   Invoke-Command -Session $session -ScriptBlock {
@@ -586,15 +588,19 @@ try {
   Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
   Copy-Item -ToSession $session -Path (Join-Path (Split-Path -Parent $payload.profileHelperPath) 'campaign_scenarios.py') -Destination $guestCampaignScenarios
   Invoke-Command -Session $session -ScriptBlock {
-    param($harnessRoot, $scriptsRoot)
+    param($harnessRoot, $scriptsRoot, $toolsRoot)
     New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $scriptsRoot | Out-Null
-  } -ArgumentList $guestHarnessRoot, $guestScriptsRoot
+    New-Item -ItemType Directory -Force -Path $toolsRoot | Out-Null
+  } -ArgumentList $guestHarnessRoot, $guestScriptsRoot, $guestToolsRoot
   Copy-Item -ToSession $session -Path $payload.localSwarmHarnessPackagePath -Destination $guestHarnessPackage -Recurse -Force
   foreach ($scriptPath in @($payload.localSwarmScriptPaths)) {
     Copy-Item -ToSession $session -Path $scriptPath -Destination (Join-Path $guestScriptsRoot (Split-Path -Leaf $scriptPath)) -Force
   }
-  $guestResult = Invoke-GuestPython $session $python $guestRunner @(
+  if ($payload.localSwarmGoed2kServerExe) {
+    Copy-Item -ToSession $session -Path $payload.localSwarmGoed2kServerExe -Destination $guestGoed2kServer -Force
+  }
+  $runnerArgs = @(
     '--profile', $payload.profileName,
     '--root', $guestRoot,
     '--target', $payload.target,
@@ -605,6 +611,10 @@ try {
     '--swarm-tier', [string] $payload.swarmTier,
     '--harness-root', $guestHarnessRoot
   )
+  if ($payload.localSwarmGoed2kServerExe) {
+    $runnerArgs += @('--ed2k-server-exe', $guestGoed2kServer)
+  }
+  $guestResult = Invoke-GuestPython $session $python $guestRunner $runnerArgs
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
   Stop-GuestRuntime $session
   Copy-GuestArtifacts $session $guestRoot $payload.hostReportDir

@@ -100,6 +100,15 @@ DEFAULT_GODZILLA_AMULE_FILES = 100
 DEFAULT_GODZILLA_ADVERSE_KILL_CYCLES = 2
 DEFAULT_GODZILLA_ADVERSE_KILL_WARMUP_SECONDS = 45.0
 DEFAULT_GODZILLA_ADVERSE_RECOVERY_TIMEOUT_SECONDS = 300.0
+ED2K_SERVER_EXE_SUITE_NAMES = {
+    "deterministic-two-client-transfer",
+    "multi-client-p2p-matrix",
+    "godzilla-local-swarm",
+    "local-ed2k-search-soak",
+    "local-ed2k-chaos-mode",
+    "local-ed2k-protocol-combinations",
+    "amutorrent-local-ed2k-ui-live",
+}
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
 DEFAULT_SHARED_FILES_UI_CPU_PROFILE_STACK_MIN_HITS = 10
 DEFAULT_PROFILE_CPU_MAX_FILE_MB = cpu_profile.DEFAULT_CPU_PROFILE_MAX_FILE_MB
@@ -1104,6 +1113,7 @@ def build_suite_command(
     dependency_channel: str = "pinned",
     dependency_cache_root: Path | None = None,
     refresh_dependencies: bool = False,
+    ed2k_server_exe: Path | None = None,
     prowlarr_exe: Path | None = None,
     radarr_exe: Path | None = None,
     sonarr_exe: Path | None = None,
@@ -1245,6 +1255,8 @@ def build_suite_command(
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
     if spec.name == "multi-client-p2p-matrix" and multi_client_require_optional_clients:
         command.append("--require-optional-clients")
+    if spec.name in ED2K_SERVER_EXE_SUITE_NAMES and ed2k_server_exe is not None:
+        command.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
     if (
         spec.name
         in {
@@ -1888,6 +1900,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dependency-channel", choices=["pinned", "latest"], default="pinned")
     parser.add_argument("--dependency-cache-root")
     parser.add_argument("--refresh-dependencies", action="store_true")
+    parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--prowlarr-exe")
     parser.add_argument("--radarr-exe")
     parser.add_argument("--sonarr-exe")
@@ -2498,6 +2511,9 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             "cache_root": args.dependency_cache_root,
             "refresh": bool(args.refresh_dependencies),
         },
+        "local_dependency_overrides": {
+            "ed2k_server_exe": args.ed2k_server_exe,
+        },
         "arr_live_wire_suites": [
             spec.name
             for spec in selected_specs
@@ -2628,6 +2644,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             dependency_channel=args.dependency_channel,
             dependency_cache_root=Path(args.dependency_cache_root) if args.dependency_cache_root else None,
             refresh_dependencies=args.refresh_dependencies,
+            ed2k_server_exe=Path(args.ed2k_server_exe) if args.ed2k_server_exe else None,
             prowlarr_exe=Path(args.prowlarr_exe) if args.prowlarr_exe else None,
             radarr_exe=Path(args.radarr_exe) if args.radarr_exe else None,
             sonarr_exe=Path(args.sonarr_exe) if args.sonarr_exe else None,
