@@ -55,6 +55,9 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
         "package-helper-integration.py",
         "rest-api-smoke.py",
         "harness-cli-common.py",
+        "deterministic-two-client-transfer.py",
+        "deterministic-amule-transfer.py",
+        "local-ed2k-protocol-combinations.py",
     } <= script_names
 
 
@@ -78,6 +81,7 @@ def test_local_swarm_payload_scripts_include_sibling_helpers() -> None:
 
     assert set(windows_vm_host.LOCAL_SWARM_SCRIPT_FILES) <= payload_scripts
     assert set(windows_vm_host.LOCAL_SWARM_SUPPORT_SCRIPT_FILES) <= payload_scripts
+    assert set(windows_vm_host.GODZILLA_LOCAL_SWARM_HELPER_SCRIPT_FILES) <= payload_scripts
 
 
 def test_endpoint_payloads_materialize_vm_names() -> None:

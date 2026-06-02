@@ -71,8 +71,19 @@ LOCAL_SWARM_SUPPORT_SCRIPT_FILES = (
     "harness-cli-common.py",
     "rest-api-smoke.py",
 )
+GODZILLA_LOCAL_SWARM_HELPER_SCRIPT_FILES = (
+    "deterministic-two-client-transfer.py",
+    "deterministic-amule-transfer.py",
+    "local-ed2k-protocol-combinations.py",
+)
 LOCAL_SWARM_PAYLOAD_SCRIPT_FILES = tuple(
-    dict.fromkeys((*LOCAL_SWARM_SCRIPT_FILES, *LOCAL_SWARM_SUPPORT_SCRIPT_FILES))
+    dict.fromkeys(
+        (
+            *LOCAL_SWARM_SCRIPT_FILES,
+            *LOCAL_SWARM_SUPPORT_SCRIPT_FILES,
+            *GODZILLA_LOCAL_SWARM_HELPER_SCRIPT_FILES,
+        )
+    )
 )
 LOCAL_ED2K_TARGET_ENDPOINTS = {
     "win10": {"target": "win10", "tcpPort": 4662, "udpPort": 4672, "restPort": 4711},

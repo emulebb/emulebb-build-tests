@@ -62,4 +62,5 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "Invoke-GuestPython" in script
     assert "PYTHONPATH" in script
     assert "@($guestHarnessRoot, $guestRoot)" in script
+    assert "guest python produced invalid JSON" in script
     assert "Restore-VMSnapshot" in script

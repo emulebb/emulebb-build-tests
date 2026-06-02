@@ -495,7 +495,12 @@ function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments, [
       $env:PYTHONPATH = $previousPythonPath
     }
   } -ArgumentList $python, $runner, $arguments, $pythonPath
-  return ($stdout -join "`n") | ConvertFrom-Json
+  $jsonText = $stdout -join "`n"
+  try {
+    return $jsonText | ConvertFrom-Json
+  } catch {
+    throw ("guest python produced invalid JSON:`n" + $jsonText)
+  }
 }
 
 function Copy-GuestArtifacts($session, $sourceRoot, $destination) {
