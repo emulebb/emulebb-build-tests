@@ -91,6 +91,30 @@ def test_require_server_dependencies_passes_when_runtime_modules_exist(tmp_path:
     smoke.require_amutorrent_server_dependencies(root, {"install_command": "npm ci --prefix server --omit=dev"})
 
 
+def test_resolve_amutorrent_root_prefers_staged_vm_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    smoke = load_smoke_module()
+    staged_root = tmp_path / "harness" / "tools" / "amutorrent"
+    (staged_root / "server").mkdir(parents=True)
+
+    monkeypatch.setenv(smoke.AMUTORRENT_ROOT_ENV, str(staged_root))
+
+    assert smoke.resolve_amutorrent_root(tmp_path / "workspace") == staged_root.resolve()
+
+
+def test_resolve_amutorrent_root_rejects_invalid_staged_vm_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = load_smoke_module()
+    staged_root = tmp_path / "not-amutorrent"
+    staged_root.mkdir()
+
+    monkeypatch.setenv(smoke.AMUTORRENT_ROOT_ENV, str(staged_root))
+
+    with pytest.raises(RuntimeError, match=smoke.AMUTORRENT_ROOT_ENV):
+        smoke.resolve_amutorrent_root(tmp_path / "workspace")
+
+
 def test_browser_controller_uses_explicit_lan_bind_address(monkeypatch: pytest.MonkeyPatch) -> None:
     smoke = load_smoke_module()
 

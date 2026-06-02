@@ -2853,7 +2853,7 @@ def test_package_helper_integration_uses_emulebb_release_asset_scripts() -> None
     script_text = (Path(__file__).resolve().parents[2] / "scripts" / "package-helper-integration.py").read_text(encoding="utf-8")
 
     assert "workspace_layout.resolve_workspace_repo(paths.workspace_root, \"build\")" in script_text
-    assert "workspace_layout.resolve_workspace_repo(paths.workspace_root, \"amutorrent\")" in script_text
+    assert "amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)" in script_text
     assert '"release_assets" / "emulebb" / "scripts"' in script_text
     assert '"release_assets" / "emule" / "scripts"' not in script_text
     assert '"repos" / "emulebb-build"' not in script_text

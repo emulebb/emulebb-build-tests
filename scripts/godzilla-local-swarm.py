@@ -2533,8 +2533,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.amutorrent_controller:
             current_phase = "launch_amutorrent_controller"
-            workspace_repo_root = amutorrent_smoke.find_workspace_repo_root(paths.workspace_root)
-            amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
+            amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
             node_info = amutorrent_smoke.resolve_amutorrent_node()
             node_path = Path(str(node_info["path"]))
             amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)

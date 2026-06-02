@@ -965,8 +965,7 @@ def main(argv: list[str] | None = None) -> int:
         amule_control_exe = amule_client.control_executable
         report["amule_inventory"] = amule_client.as_report()
 
-        workspace_repo_root = amutorrent_smoke.find_workspace_repo_root(paths.workspace_root)
-        amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
+        amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
         node_info = amutorrent_smoke.resolve_amutorrent_node()
         node_path = Path(str(node_info["path"]))
         report["node"] = node_info

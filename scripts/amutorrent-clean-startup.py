@@ -541,8 +541,7 @@ def main() -> int:
         artifacts_dir=args.artifacts_dir,
         keep_artifacts=args.keep_artifacts,
     )
-    workspace_repo_root = amutorrent_smoke.find_workspace_repo_root(paths.workspace_root)
-    amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
+    amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = amutorrent_smoke.resolve_amutorrent_node()
 

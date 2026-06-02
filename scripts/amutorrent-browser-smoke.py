@@ -27,6 +27,7 @@ from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 from emule_test_harness.windows_processes import collect_adapter_ipv4_addresses  # noqa: E402
 
 AMUTORRENT_NODE_ENV = "AMUTORRENT_NODE_EXE"
+AMUTORRENT_ROOT_ENV = "EMULEBB_TEST_AMUTORRENT_ROOT"
 SUPPORTED_NODE_MIN_MAJOR = 20
 SUPPORTED_NODE_MAX_MAJOR = 25
 DEFAULT_WINDOWS_NODE24 = Path(r"C:\bin\nodejs-v24\node.exe")
@@ -42,6 +43,9 @@ def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
 
     module_path = Path(__file__).resolve().with_name(filename)
+    existing = sys.modules.get(module_name)
+    if existing is not None and Path(getattr(existing, "__file__", "")).resolve() == module_path:
+        return existing
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
@@ -77,6 +81,18 @@ def find_workspace_repo_root(workspace_root: Path) -> Path:
         if (candidate / "repos" / "amutorrent").is_dir():
             return candidate
     raise RuntimeError(f"Could not find repos/amutorrent above {workspace_root}.")
+
+
+def resolve_amutorrent_root(workspace_root: Path) -> Path:
+    """Resolves the aMuTorrent repo from a staged VM root or local workspace."""
+
+    configured = os.environ.get(AMUTORRENT_ROOT_ENV, "").strip()
+    if configured:
+        root = Path(configured).resolve()
+        if not (root / "server").is_dir():
+            raise RuntimeError(f"{AMUTORRENT_ROOT_ENV} does not point at an aMuTorrent repo: {root}")
+        return root
+    return find_workspace_repo_root(workspace_root) / "repos" / "amutorrent"
 
 
 def wait_for_http_ok(url: str, timeout_seconds: float) -> None:
@@ -917,8 +933,7 @@ def main() -> int:
                 "local_control": asdict(fixture.local_control_identity),
             },
         }
-    workspace_repo_root = find_workspace_repo_root(paths.workspace_root)
-    amutorrent_root = workspace_repo_root / "repos" / "amutorrent"
+    amutorrent_root = resolve_amutorrent_root(paths.workspace_root)
     artifacts_dir = paths.source_artifacts_dir
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = resolve_amutorrent_node()

@@ -246,7 +246,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     artifacts_dir = paths.source_artifacts_dir
     result_path = artifacts_dir / f"{SUITE_NAME}-result.json"
     build_repo_root = workspace_layout.resolve_workspace_repo(paths.workspace_root, "build")
-    amutorrent_root = workspace_layout.resolve_workspace_repo(paths.workspace_root, "amutorrent")
+    amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
     report: dict[str, Any] = {
         "suite": SUITE_NAME,
         "status": "failed",
