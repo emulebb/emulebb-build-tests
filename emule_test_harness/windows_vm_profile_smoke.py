@@ -393,6 +393,24 @@ def local_swarm_payload_check(harness_root: Path | None) -> dict[str, Any]:
     }
 
 
+def prepare_staged_workspace_manifest(root: Path, app_root: Path) -> Path:
+    """Writes the minimal staged workspace manifest needed by reused local suites."""
+
+    workspace_root = root / "workspace"
+    build_scripts_root = workspace_root / "repos" / "emulebb-build" / "emule_workspace" / "release_assets" / "emulebb" / "scripts"
+    build_scripts_root.mkdir(parents=True, exist_ok=True)
+    package_scripts_root = app_root / "scripts"
+    if package_scripts_root.is_dir():
+        for script_path in package_scripts_root.glob("*.ps1"):
+            shutil.copy2(script_path, build_scripts_root / script_path.name)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "deps.json").write_text(
+        json.dumps({"workspace": {"repos": {"build": "repos/emulebb-build"}}}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return workspace_root
+
+
 class _LocalSwarmHarnessCliCommon:
     """Minimal live-suite adapter used to run or resolve staged VM child commands."""
 
@@ -478,12 +496,13 @@ def local_swarm_plan_check(
         suites = list(spec.local_suites)
         if spec.uses_local_swarm and "godzilla-local-swarm" not in suites:
             suites.append("godzilla-local-swarm")
+        workspace_root = prepare_staged_workspace_manifest(root, app_root)
         tier_options = LOCAL_SWARM_TIER_OPTIONS[swarm_tier]
         test_network = str(getattr(spec, "local_test_network", "default"))
         plan_artifacts = artifacts / "local-swarm-plan"
         argv = [
             "--workspace-root",
-            str((root / "workspace").resolve()),
+            str(workspace_root.resolve()),
             "--app-root",
             str(app_root.resolve()),
             "--app-exe",

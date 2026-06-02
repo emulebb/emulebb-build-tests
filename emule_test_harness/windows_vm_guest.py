@@ -590,6 +590,9 @@ $guestHarnessManifests = Join-Path $guestHarnessRoot 'manifests'
 $guestScriptsRoot = Join-Path $guestHarnessRoot 'scripts'
 $guestToolsRoot = Join-Path $guestHarnessRoot 'tools'
 $guestReleaseRoot = Join-Path $guestHarnessRoot 'release'
+$guestWorkspaceRoot = Join-Path $guestRoot 'workspace'
+$guestBuildRepoRoot = Join-Path $guestWorkspaceRoot 'repos\emulebb-build'
+$guestBuildHelperScriptsRoot = Join-Path $guestBuildRepoRoot 'emule_workspace\release_assets\emulebb\scripts'
 $guestSuiteInstallRoot = Join-Path $guestHarnessRoot 'suite-install'
 $guestSuiteInstaller = Join-Path $guestHarnessRoot 'Install-eMuleBBSuite.ps1'
 $guestSuiteDependencyManifest = Join-Path $guestHarnessRoot 'suite-dependencies.json'
@@ -620,11 +623,20 @@ try {
   Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
   Copy-Item -ToSession $session -Path (Join-Path (Split-Path -Parent $payload.profileHelperPath) 'campaign_scenarios.py') -Destination $guestCampaignScenarios
   Invoke-Command -Session $session -ScriptBlock {
-    param($harnessRoot, $scriptsRoot, $toolsRoot)
+    param($harnessRoot, $scriptsRoot, $toolsRoot, $workspaceRoot, $buildHelperScriptsRoot)
     New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $scriptsRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $toolsRoot | Out-Null
-  } -ArgumentList $guestHarnessRoot, $guestScriptsRoot, $guestToolsRoot
+    New-Item -ItemType Directory -Force -Path $workspaceRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $buildHelperScriptsRoot | Out-Null
+    @{
+      workspace = @{
+        repos = @{
+          build = 'repos/emulebb-build'
+        }
+      }
+    } | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $workspaceRoot 'deps.json')
+  } -ArgumentList $guestHarnessRoot, $guestScriptsRoot, $guestToolsRoot, $guestWorkspaceRoot, $guestBuildHelperScriptsRoot
   Copy-Item -ToSession $session -Path $payload.localSwarmHarnessPackagePath -Destination $guestHarnessPackage -Recurse -Force
   if ($payload.localSwarmManifestsPath) {
     Copy-Item -ToSession $session -Path $payload.localSwarmManifestsPath -Destination $guestHarnessManifests -Recurse -Force

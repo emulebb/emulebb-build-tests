@@ -76,6 +76,10 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "localSwarmRestOpenApiPath" in script
     assert "localSwarmAppSourcePaths" in script
     assert "localSwarmLanBindAddr" in script
+    assert "guestWorkspaceRoot" in script
+    assert "deps.json" in script
+    assert "repos/emulebb-build" in script
+    assert "emule_workspace\\release_assets\\emulebb\\scripts" in script
     assert "--lan-bind-addr" in script
     assert "REST-API-OPENAPI.yaml" in script
     assert "workspaces\\workspace\\app\\emulebb-main\\srchybrid" in script

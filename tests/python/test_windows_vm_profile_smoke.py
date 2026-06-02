@@ -80,6 +80,23 @@ def test_local_swarm_payload_check_reports_missing_harness() -> None:
     assert check["status"] == "failed"
 
 
+def test_prepare_staged_workspace_manifest_mirrors_package_helper_scripts(tmp_path) -> None:
+    root = tmp_path / "guest-root"
+    app_root = tmp_path / "expanded" / "eMuleBB"
+    scripts_root = app_root / "scripts"
+    scripts_root.mkdir(parents=True)
+    (scripts_root / "Register-Prowlarr.ps1").write_text("# helper\n", encoding="utf-8")
+    (scripts_root / "ignored.txt").write_text("ignored\n", encoding="utf-8")
+
+    workspace_root = windows_vm_profile_smoke.prepare_staged_workspace_manifest(root, app_root)
+
+    deps_json = (workspace_root / "deps.json").read_text(encoding="utf-8")
+    staged_scripts = workspace_root / "repos" / "emulebb-build" / "emule_workspace" / "release_assets" / "emulebb" / "scripts"
+    assert '"build": "repos/emulebb-build"' in deps_json
+    assert (staged_scripts / "Register-Prowlarr.ps1").read_text(encoding="utf-8") == "# helper\n"
+    assert not (staged_scripts / "ignored.txt").exists()
+
+
 def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> None:
     repo_root = Path(windows_vm_profile_smoke.__file__).resolve().parents[1]
     app_root = tmp_path / "expanded" / "eMuleBB"
