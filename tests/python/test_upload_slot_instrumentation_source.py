@@ -81,6 +81,8 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "QueuedBlockRequestAdmissionResult CUploadQueue::TryAdmitQueuedBlockRequestClient" in queue_source
     assert "ClassifyQueuedBlockRequestAdmission" in seams_header
     assert "ShouldAdmitQueuedBlockRequestToUploadSlot" in seams_header
+    assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in seams_header
+    assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in not_uploading_block
     assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this);" in not_uploading_block
     assert "TryAdmitQueuedBlockRequestClient(this, bCooldownCleared)" in not_uploading_block
     assert "accept-queued-request-direct-admit" in not_uploading_block
