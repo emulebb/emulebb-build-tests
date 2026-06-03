@@ -50,3 +50,14 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
         assert reason in header
         assert reason in source
     assert block.index("GetSlowUploadCooldownRemaining()") < block.index("waitingCooldownMinMs=%I64u")
+
+
+def test_stalled_upload_retry_cooldown_is_bounded() -> None:
+    source = read_app_source("UploadQueue.cpp")
+    stalled_block = source[
+        source.index("const bool bShouldRecycleIdle = ShouldRecycleIdleBroadbandUploadSlot") :
+        source.index("if (thePrefs.GetLogUlDlEvents())", source.index("const bool bShouldRecycleIdle = ShouldRecycleIdleBroadbandUploadSlot"))
+    ]
+
+    assert "GetUploadChurnRetryCooldownSeconds(thePrefs.GetSlowUploadCooldownSeconds())" in stalled_block
+    assert "uploadRetryCooldownIdle : uploadRetryCooldownStalled" in stalled_block
