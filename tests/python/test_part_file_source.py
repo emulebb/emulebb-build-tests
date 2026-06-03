@@ -14,6 +14,14 @@ def test_part_file_buffer_errors_do_not_report_success_as_unknown_write_error() 
     assert "CFileException::ThrowOsError((LONG)item->dwError, m_hpartfile.GetFileName());" not in source
 
 
+def test_part_file_shutdown_flush_wait_allows_broadband_write_drain() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    assert "constexpr DWORD kShutdownFlushWaitMs = 15000;" in source
+    assert "skips .part.met saves and forces costly" in source
+    assert source.count("kShutdownFlushWaitMs") == 3
+
+
 def test_part_file_preview_copy_logs_file_exception_details() -> None:
     source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[source.index("bool CPartFile::CopyPartFile") : source.index("void CPartFile::GetLeftToTransferAndAdditionalNeededSpace")]
