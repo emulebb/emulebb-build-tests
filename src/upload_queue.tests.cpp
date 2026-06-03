@@ -166,6 +166,14 @@ TEST_CASE("Upload queue admits queued block requests only after a valid cooldown
 	CHECK_FALSE(ShouldAdmitQueuedBlockRequestToUploadSlot(true, false, false, true));
 	CHECK_FALSE(ShouldAdmitQueuedBlockRequestToUploadSlot(true, true, true, true));
 	CHECK_FALSE(ShouldAdmitQueuedBlockRequestToUploadSlot(true, true, false, false));
+
+	CHECK_EQ(ClassifyQueuedBlockRequestAdmission(true, true, false, true, true, true), queuedBlockRequestAdmitted);
+	CHECK_EQ(ClassifyQueuedBlockRequestAdmission(false, true, false, true, true, true), queuedBlockRequestCooldownNotCleared);
+	CHECK_EQ(ClassifyQueuedBlockRequestAdmission(true, false, false, true, true, true), queuedBlockRequestNotOnQueue);
+	CHECK_EQ(ClassifyQueuedBlockRequestAdmission(true, true, true, true, true, true), queuedBlockRequestAlreadyUploading);
+	CHECK_EQ(ClassifyQueuedBlockRequestAdmission(true, true, false, false, true, true), queuedBlockRequestCapFull);
+	CHECK_EQ(ClassifyQueuedBlockRequestAdmission(true, true, false, true, false, true), queuedBlockRequestAdmissionDeferred);
+	CHECK_EQ(ClassifyQueuedBlockRequestAdmission(true, true, false, true, true, false), queuedBlockRequestDirectAddFailed);
 }
 
 TEST_CASE("Broadband stalled upload recycling requires queued work and replacement pressure")

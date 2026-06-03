@@ -73,17 +73,28 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
         client_source.index("if (HasCollectionUploadSlot())")
     ]
     direct_admit_block = queue_source[
-        queue_source.index("bool CUploadQueue::TryAdmitQueuedBlockRequestClient") :
+        queue_source.index("QueuedBlockRequestAdmissionResult CUploadQueue::TryAdmitQueuedBlockRequestClient") :
         queue_source.index("void CUploadQueue::PurgeExpiredUploadRetryCooldowns")
     ]
 
-    assert "TryAdmitQueuedBlockRequestClient(CUpDownClient *client, bool bQueuedRequestCooldownCleared)" in queue_header
+    assert "QueuedBlockRequestAdmissionResult TryAdmitQueuedBlockRequestClient(CUpDownClient *client, bool bQueuedRequestCooldownCleared)" in queue_header
+    assert "QueuedBlockRequestAdmissionResult CUploadQueue::TryAdmitQueuedBlockRequestClient" in queue_source
+    assert "ClassifyQueuedBlockRequestAdmission" in seams_header
     assert "ShouldAdmitQueuedBlockRequestToUploadSlot" in seams_header
     assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this);" in not_uploading_block
     assert "TryAdmitQueuedBlockRequestClient(this, bCooldownCleared)" in not_uploading_block
     assert "accept-queued-request-direct-admit" in not_uploading_block
-    assert "reject-not-uploading" in not_uploading_block
-    assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("reject-not-uploading")
+    assert "GetQueuedBlockRequestAdmissionInstrumentationReason(eQueuedRequestAdmissionResult)" in not_uploading_block
+    assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("GetQueuedBlockRequestAdmissionInstrumentationReason")
     assert "AcceptNewClient(uploadinglist.GetCount())" in direct_admit_block
     assert "ForceNewClient(true)" in direct_admit_block
     assert "AddUpNextClient(_T(\"Direct add after queued block request.\"), client)" in direct_admit_block
+    for reason in (
+        "reject-not-uploading-cooldown-not-cleared",
+        "reject-not-uploading-not-on-queue",
+        "reject-not-uploading-already-uploading",
+        "reject-not-uploading-cap-full",
+        "reject-not-uploading-admission-deferred",
+        "reject-not-uploading-direct-add-failed",
+    ):
+        assert reason in client_source
