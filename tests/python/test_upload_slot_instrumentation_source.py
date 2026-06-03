@@ -39,6 +39,15 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "m_noRequestUploadRetryCooldownByIP.size()" in block
     assert "bProductiveRecycle" in header
     assert "SetNoRequestUploadRetryCooldown(client, ullCooldownUntil, ullTrackUntil, bProductiveNoRequestRecycle)" in source
+    no_request_recycle_block = source[
+        source.index("if (ShouldRecycleNoRequestBroadbandUploadSlot(") :
+        source.index("if (!HasCompletedSlowUploadWarmup(client))")
+    ]
+    assert "const bool bProductiveNoRequestRecycle = IsProductiveNoRequestUploadRecycle(client->GetQueueSessionPayloadUp());" in no_request_recycle_block
+    assert no_request_recycle_block.index("const bool bProductiveNoRequestRecycle") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
+    assert "Broadband productive no-request recycle" in no_request_recycle_block
+    assert "Broadband unproductive no-request recycle" in no_request_recycle_block
+    assert "_T(\"productive\") : _T(\"unproductive\")" in no_request_recycle_block
     assert "UploadRetryCooldownReason eReason" in header
     assert "UploadRetryCooldownReason eReason);" in header
     for reason in (
