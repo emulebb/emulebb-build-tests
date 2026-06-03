@@ -290,6 +290,47 @@ def test_local_swarm_execute_check_runs_live_suite_without_plan_only(tmp_path, m
     assert stopped == [True]
 
 
+def test_installer_local_swarm_uses_auto_download_for_package_helpers(tmp_path, monkeypatch) -> None:
+    from emule_test_harness import live_e2e_suite
+
+    repo_root = Path(windows_vm_profile_smoke.__file__).resolve().parents[1]
+    app_root = tmp_path / "expanded" / "eMuleBB"
+    app_root.mkdir(parents=True)
+    (app_root / "emulebb.exe").write_text("", encoding="utf-8")
+    observed: list[tuple[str, list[str]]] = []
+
+    def fake_run_live_e2e_suite(args, _harness_cli_common):
+        observed.append((args.dependency_mode, list(args.suite)))
+        suites = ["command-line-smoke", "amutorrent-browser-smoke", "package-helper-integration", "godzilla-local-swarm"]
+        return {
+            "status": "planned",
+            "suites": [
+                {"name": name, "status": "planned", "command": ["python", f"{name}.py"]}
+                for name in suites
+            ],
+        }
+
+    monkeypatch.setattr(live_e2e_suite, "run_live_e2e_suite", fake_run_live_e2e_suite)
+
+    check = windows_vm_profile_smoke.local_swarm_plan_check(
+        "installer-controller-surface-vm",
+        1,
+        repo_root,
+        tmp_path / "guest-root",
+        app_root,
+        tmp_path / "artifacts",
+        lan_bind_addr="192.0.2.10",
+    )
+
+    assert check["status"] == "passed"
+    assert observed == [
+        (
+            "auto-download",
+            ["command-line-smoke", "amutorrent-browser-smoke", "package-helper-integration", "godzilla-local-swarm"],
+        )
+    ]
+
+
 def test_local_swarm_plan_check_sets_staged_rest_contract_env(tmp_path, monkeypatch) -> None:
     from emule_test_harness import live_e2e_suite
 

@@ -586,6 +586,8 @@ def local_swarm_plan_check(
             argv.append("--campaign-scenario-uses-local-swarm")
         for suite in spec.local_suites:
             argv.extend(["--campaign-scenario-local-suite", suite])
+        if "package-helper-integration" in suites:
+            argv.extend(["--dependency-mode", "auto-download"])
         if execution_mode == "plan":
             argv.append("--plan-only")
         if bool(tier_options["cpu_profile"]):
