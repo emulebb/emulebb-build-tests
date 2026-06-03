@@ -580,7 +580,6 @@ function Stop-GuestRuntime($session) {
 
 $session = $null
 $guestRoot = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $payload.target
-$guestRunRoot = Split-Path -Parent $guestRoot
 $guestZip = Join-Path $guestRoot (Split-Path -Leaf $payload.packageZip)
 $guestRunner = Join-Path $guestRoot 'windows_vm_profile_smoke.py'
 $guestProfiles = Join-Path $guestRoot 'vm_guest_profiles.py'
@@ -613,8 +612,9 @@ $guestClient2App = Join-Path $guestClient2Root 'emule.exe'
 $guestAmuleBinRoot = Join-Path $guestToolsRoot 'amule\bin'
 $guestAmuleDaemon = Join-Path $guestAmuleBinRoot 'amuled.exe'
 $guestAmuleControl = Join-Path $guestAmuleBinRoot 'amulecmd.exe'
-$guestToolingRestRoot = Join-Path $guestRoot 'emulebb-tooling\docs\rest'
-$guestAppSourceRoot = Join-Path $guestRunRoot 'workspaces\workspace\app\emulebb-main\srchybrid'
+$guestContractRoot = Join-Path $guestHarnessRoot 'contracts'
+$guestToolingRestRoot = Join-Path $guestContractRoot 'rest'
+$guestAppSourceRoot = Join-Path $guestContractRoot 'app-source\srchybrid'
 try {
   $session = Wait-GuestSession $payload.vmName
   Invoke-Command -Session $session -ScriptBlock {

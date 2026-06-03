@@ -272,16 +272,26 @@ REST_STRESS_LONG_UNICODE_PATH = (
     ("deep_unicode_λ_例" * 24)
     + "-linux-iso-library-Ω-例.mkv"
 )
-OPENAPI_CONTRACT_PATH = REPO_ROOT.parent / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
-NATIVE_ROUTE_HEADER_PATH = (
-    REPO_ROOT.parent.parent
-    / "workspaces"
-    / "workspace"
-    / "app"
-    / "emulebb-main"
-    / "srchybrid"
-    / "WebServerJsonSeams.h"
-)
+OPENAPI_CONTRACT_PATH = Path(
+    os.environ.get(
+        "EMULEBB_REST_OPENAPI_CONTRACT_PATH",
+        str(REPO_ROOT.parent / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"),
+    )
+).resolve()
+NATIVE_CONTRACT_SOURCE_ROOT = Path(
+    os.environ.get(
+        "EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR",
+        str(
+            REPO_ROOT.parent.parent
+            / "workspaces"
+            / "workspace"
+            / "app"
+            / "emulebb-main"
+            / "srchybrid"
+        ),
+    )
+).resolve()
+NATIVE_ROUTE_HEADER_PATH = NATIVE_CONTRACT_SOURCE_ROOT / "WebServerJsonSeams.h"
 QBIT_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerQBitCompatSeams.h")
 TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompatSeams.h")
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")

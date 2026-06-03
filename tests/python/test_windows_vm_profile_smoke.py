@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
+
+import pytest
 
 from emule_test_harness import campaign_scenarios, live_e2e_suite, windows_vm_host, windows_vm_profile_smoke
 
@@ -71,6 +74,20 @@ def test_offline_profile_preferences_can_bind_webserver_to_lan(tmp_path: Path) -
 
     assert "BindAddr=192.0.2.10" in text
     assert "BindAddr=127.0.0.1" not in text
+
+
+def test_vhd_profile_smoke_uses_lan_bind_when_supplied() -> None:
+    args = argparse.Namespace(lan_bind_addr="192.0.2.10")
+
+    assert windows_vm_profile_smoke.resolve_vhd_profile_bind_addr(args) == "192.0.2.10"
+
+
+@pytest.mark.parametrize("lan_bind_addr", ["127.0.0.1", "0.0.0.0", "localhost", "::1"])
+def test_vhd_profile_smoke_rejects_ambiguous_campaign_bind(lan_bind_addr: str) -> None:
+    args = argparse.Namespace(lan_bind_addr=lan_bind_addr)
+
+    with pytest.raises(ValueError, match="explicit LAN address"):
+        windows_vm_profile_smoke.resolve_vhd_profile_bind_addr(args)
 
 
 def test_local_swarm_payload_check_accepts_staged_harness(tmp_path) -> None:
@@ -242,3 +259,56 @@ def test_local_swarm_execute_check_runs_live_suite_without_plan_only(tmp_path, m
     assert check["details"]["executionMode"] == "execute"
     assert observed_plan_only == [False]
     assert stopped == [True]
+
+
+def test_local_swarm_plan_check_sets_staged_rest_contract_env(tmp_path, monkeypatch) -> None:
+    from emule_test_harness import live_e2e_suite
+
+    harness_root = tmp_path / "harness"
+    (harness_root / "emule_test_harness").mkdir(parents=True)
+    (harness_root / "emule_test_harness" / "live_e2e_suite.py").write_text("", encoding="utf-8")
+    rest_contract = harness_root / "contracts" / "rest" / "REST-API-OPENAPI.yaml"
+    native_contract_dir = harness_root / "contracts" / "app-source" / "srchybrid"
+    rest_contract.parent.mkdir(parents=True)
+    native_contract_dir.mkdir(parents=True)
+    rest_contract.write_text("openapi: 3.0.3\n", encoding="utf-8")
+    (native_contract_dir / "WebServerJsonSeams.h").write_text("// route contract\n", encoding="utf-8")
+    app_root = tmp_path / "expanded" / "eMuleBB"
+    app_root.mkdir(parents=True)
+    (app_root / "emulebb.exe").write_text("", encoding="utf-8")
+    observed_env: list[tuple[str | None, str | None]] = []
+
+    def fake_run_live_e2e_suite(_args, _harness_cli_common):
+        observed_env.append(
+            (
+                windows_vm_profile_smoke.os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH"),
+                windows_vm_profile_smoke.os.environ.get("EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR"),
+            )
+        )
+        return {
+            "status": "planned",
+            "suites": [
+                {"name": "local-ed2k-search-soak", "status": "planned", "command": ["python", "local-ed2k-search-soak.py"]},
+                {"name": "local-kad-swarm", "status": "planned", "command": ["python", "local-kad-swarm.py"]},
+                {"name": "godzilla-local-swarm", "status": "planned", "command": ["python", "godzilla-local-swarm.py"]},
+            ],
+        }
+
+    monkeypatch.delenv("EMULEBB_REST_OPENAPI_CONTRACT_PATH", raising=False)
+    monkeypatch.delenv("EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR", raising=False)
+    monkeypatch.setattr(live_e2e_suite, "run_live_e2e_suite", fake_run_live_e2e_suite)
+
+    check = windows_vm_profile_smoke.local_swarm_plan_check(
+        "search-ui-local-swarm-vm",
+        1,
+        harness_root,
+        tmp_path / "guest-root",
+        app_root,
+        tmp_path / "artifacts",
+        lan_bind_addr="192.0.2.10",
+    )
+
+    assert check["status"] == "passed"
+    assert observed_env == [(str(rest_contract), str(native_contract_dir))]
+    assert windows_vm_profile_smoke.os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH") is None
+    assert windows_vm_profile_smoke.os.environ.get("EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR") is None

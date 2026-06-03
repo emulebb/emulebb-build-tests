@@ -568,9 +568,17 @@ def local_swarm_plan_check(
         args = live_e2e_suite.build_parser().parse_args(argv)
         previous_x_local_ip = os.environ.get("X_LOCAL_IP")
         previous_lan_ip = os.environ.get("EMULEBB_TEST_LAN_IP_RESOLVED")
+        previous_openapi_contract = os.environ.get("EMULEBB_REST_OPENAPI_CONTRACT_PATH")
+        previous_native_contract = os.environ.get("EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR")
+        rest_openapi_contract = harness_root / "contracts" / "rest" / "REST-API-OPENAPI.yaml"
+        native_contract_source_dir = harness_root / "contracts" / "app-source" / "srchybrid"
         if lan_bind_addr:
             os.environ["X_LOCAL_IP"] = lan_bind_addr
             os.environ.setdefault("EMULEBB_TEST_LAN_IP_RESOLVED", lan_bind_addr)
+        if rest_openapi_contract.is_file():
+            os.environ["EMULEBB_REST_OPENAPI_CONTRACT_PATH"] = str(rest_openapi_contract)
+        if native_contract_source_dir.is_dir():
+            os.environ["EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR"] = str(native_contract_source_dir)
         try:
             if execution_mode == "execute":
                 stop_runtime()
@@ -587,6 +595,14 @@ def local_swarm_plan_check(
                 os.environ.pop("EMULEBB_TEST_LAN_IP_RESOLVED", None)
             else:
                 os.environ["EMULEBB_TEST_LAN_IP_RESOLVED"] = previous_lan_ip
+            if previous_openapi_contract is None:
+                os.environ.pop("EMULEBB_REST_OPENAPI_CONTRACT_PATH", None)
+            else:
+                os.environ["EMULEBB_REST_OPENAPI_CONTRACT_PATH"] = previous_openapi_contract
+            if previous_native_contract is None:
+                os.environ.pop("EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR", None)
+            else:
+                os.environ["EMULEBB_REST_NATIVE_CONTRACT_SOURCE_DIR"] = previous_native_contract
         planned_suites = summary.get("suites") if isinstance(summary, dict) else None
         planned_suite_rows = planned_suites if isinstance(planned_suites, list) else []
         commands = [
@@ -733,11 +749,20 @@ def firewall_repair_check(app_root: Path, artifacts: Path) -> dict[str, Any]:
     }
 
 
+def resolve_vhd_profile_bind_addr(args: argparse.Namespace) -> str:
+    """Returns the WebServer bind address used by the VHD profile smoke."""
+
+    if args.lan_bind_addr:
+        return require_campaign_lan_bind_addr(args.lan_bind_addr)
+    return "127.0.0.1"
+
+
 def vhd_profile_launch_check(app_root: Path, args: argparse.Namespace) -> dict[str, Any]:
     stop_runtime()
     vhd_root = args.root / "vhd-profile"
     vhd_path = args.root / "profile-isolation.vhd"
     drive_letter = "V"
+    bind_addr = resolve_vhd_profile_bind_addr(args)
     script_path = args.root / "mount-vhd-profile.diskpart"
     script_path.write_text(
         "\n".join(
@@ -773,6 +798,7 @@ def vhd_profile_launch_check(app_root: Path, args: argparse.Namespace) -> dict[s
             temp_dir=temp_dir,
             shared_dir=shared_dir,
             enable_diagnostics=False,
+            web_interface_bind_addr=bind_addr,
         ),
     )
     start_visible_app(
@@ -783,7 +809,7 @@ def vhd_profile_launch_check(app_root: Path, args: argparse.Namespace) -> dict[s
         password=args.password,
     )
     try:
-        wait_rest(f"http://127.0.0.1:{REST_PORT}")
+        wait_rest(f"http://{bind_addr}:{REST_PORT}")
         status = "passed"
     except Exception as exc:
         status = "failed"

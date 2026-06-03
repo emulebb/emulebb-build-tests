@@ -87,7 +87,10 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "emule_workspace\\release_assets\\emulebb\\scripts" in script
     assert "--lan-bind-addr" in script
     assert "REST-API-OPENAPI.yaml" in script
-    assert "workspaces\\workspace\\app\\emulebb-main\\srchybrid" in script
+    assert "guestContractRoot" in script
+    assert "contracts" in script
+    assert "app-source\\srchybrid" in script
+    assert "workspaces\\workspace\\app\\emulebb-main\\srchybrid" not in script
     assert "--harness-root" in script
     assert "godzilla-local-swarm.py" not in script
     assert "--profile" in script

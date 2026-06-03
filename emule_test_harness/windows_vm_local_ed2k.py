@@ -135,6 +135,32 @@ def ed2k_link_with_source(link: str, *, source_ip: str, source_port: int) -> str
     return f"{link}|sources,{source_ip}:{source_port}|/"
 
 
+def goed2k_server_config(*, listen_ip: str, catalog_path: Path, admin_token: str) -> dict[str, Any]:
+    """Builds the deterministic ED2K server config for VM-to-VM campaign traffic."""
+
+    if listen_ip.startswith("127.") or listen_ip == "0.0.0.0":
+        raise ValueError(f"goed2k-server listen_ip must be a guest LAN address: {listen_ip}")
+    return {
+        "listen_address": f"{listen_ip}:4661",
+        "admin_listen_address": f"{listen_ip}:8080",
+        "admin_token": admin_token,
+        "server_name": "emulebb-vm-local-ed2k",
+        "server_description": "eMuleBB VM local ED2K transfer server",
+        "catalog_path": str(catalog_path),
+        "server_udp": True,
+        "udp_port_offset": 4,
+    }
+
+
+def goed2k_admin_stats_url(config: dict[str, Any]) -> str:
+    """Returns the configured goed2k admin stats URL."""
+
+    address = str(config.get("admin_listen_address", "")).strip()
+    if not address:
+        raise ValueError("goed2k-server config is missing admin_listen_address.")
+    return f"http://{address}/api/stats"
+
+
 def netsh_delete_rule(name: str) -> None:
     subprocess.run(
         ["netsh.exe", "advfirewall", "firewall", "delete", "rule", f"name={name}"],
@@ -219,19 +245,7 @@ def command_prepare_client(args: argparse.Namespace) -> int:
         catalog_path = server_root / "catalog.json"
         catalog_path.write_text('{"files":[]}\n', encoding="utf-8")
         (server_root / "config.json").write_text(
-            json.dumps(
-                {
-                    "listen_address": "0.0.0.0:4661",
-                    "admin_listen_address": "127.0.0.1:8080",
-                    "admin_token": args.admin_token,
-                    "server_name": "emulebb-vm-local-ed2k",
-                    "server_description": "eMuleBB VM local ED2K transfer server",
-                    "catalog_path": str(catalog_path),
-                    "server_udp": True,
-                    "udp_port_offset": 4,
-                },
-                indent=2,
-            )
+            json.dumps(goed2k_server_config(listen_ip=ip_address, catalog_path=catalog_path, admin_token=args.admin_token), indent=2)
             + "\n",
             encoding="utf-8",
         )
@@ -277,6 +291,7 @@ def command_start_server(args: argparse.Namespace) -> int:
     config_path = root / "ed2k-server" / "config.json"
     artifacts = root / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     stdout = (artifacts / "goed2k-server.log").open("w", encoding="utf-8")
     process = subprocess.Popen(
         [str(server_exe), "-config", str(config_path)],
@@ -288,14 +303,23 @@ def command_start_server(args: argparse.Namespace) -> int:
 
     def ready():
         request = urllib.request.Request(
-            "http://127.0.0.1:8080/api/stats",
+            goed2k_admin_stats_url(config),
             headers={"X-Admin-Token": args.admin_token},
         )
         with urllib.request.urlopen(request, timeout=5.0) as response:
             return response.status == 200
 
     wait_until("goed2k-server admin API", 30.0, ready)
-    return emit({"name": "goed2k-server-ready", "status": "passed", "pid": process.pid, "port": 4661})
+    return emit(
+        {
+            "name": "goed2k-server-ready",
+            "status": "passed",
+            "pid": process.pid,
+            "listenAddress": config.get("listen_address", ""),
+            "adminListenAddress": config.get("admin_listen_address", ""),
+            "port": 4661,
+        }
+    )
 
 
 def command_wait_rest(args: argparse.Namespace) -> int:

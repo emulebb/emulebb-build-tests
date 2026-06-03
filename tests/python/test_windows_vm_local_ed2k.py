@@ -51,6 +51,29 @@ def test_ed2k_link_with_source_adds_standard_source_hint() -> None:
     assert windows_vm_local_ed2k.ed2k_link_with_source(annotated, source_ip="169.254.95.14", source_port=4762) == annotated
 
 
+def test_goed2k_server_config_binds_listener_and_admin_to_guest_lan(tmp_path: Path) -> None:
+    config = windows_vm_local_ed2k.goed2k_server_config(
+        listen_ip="169.254.95.14",
+        catalog_path=tmp_path / "catalog.json",
+        admin_token="secret",
+    )
+
+    assert config["listen_address"] == "169.254.95.14:4661"
+    assert config["admin_listen_address"] == "169.254.95.14:8080"
+    assert config["admin_token"] == "secret"
+    assert windows_vm_local_ed2k.goed2k_admin_stats_url(config) == "http://169.254.95.14:8080/api/stats"
+
+
+@pytest.mark.parametrize("listen_ip", ["127.0.0.1", "0.0.0.0"])
+def test_goed2k_server_config_rejects_ambiguous_campaign_binds(tmp_path: Path, listen_ip: str) -> None:
+    with pytest.raises(ValueError, match="guest LAN address"):
+        windows_vm_local_ed2k.goed2k_server_config(
+            listen_ip=listen_ip,
+            catalog_path=tmp_path / "catalog.json",
+            admin_token="secret",
+        )
+
+
 def test_api_rows_accepts_raw_and_wrapped_shapes() -> None:
     assert windows_vm_local_ed2k.api_rows([{"address": "127.0.0.1"}, "bad"], "servers") == [
         {"address": "127.0.0.1"}
