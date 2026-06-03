@@ -78,6 +78,9 @@ TEST_CASE("eMuleBB release evaluation ignores malformed and prerelease payloads"
 {
 	const SModReleaseVersion local = {1u, 1u, 1u};
 
+	const auto legacyLatest = EvaluateLatestReleaseJson(BuildReleaseJson("eMule_v0.60d-broadband", "eMule0.60d-broadband_x64-snapshot_2022.11.26.zip"), local, "x64");
+	CHECK_EQ(legacyLatest.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
+
 	const auto malformedTag = EvaluateLatestReleaseJson(BuildReleaseJson("v0.72a-bb.1", "emulebb-1.1.2-x64.zip"), local, "x64");
 	CHECK_EQ(malformedTag.eStatus, EReleaseEvaluationStatus::IgnoredRelease);
 

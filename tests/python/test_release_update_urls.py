@@ -22,6 +22,9 @@ def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
     emule_cpp = (app_source / "Emule.cpp").read_text(encoding="utf-8", errors="ignore")
     preferences_cpp = (app_source / "Preferences.cpp").read_text(encoding="utf-8", errors="ignore")
     emule_dlg_cpp = (app_source / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    release_update_check_cpp = (app_source / "ReleaseUpdateCheck.cpp").read_text(
+        encoding="utf-8", errors="ignore"
+    )
     release_tests_cpp = (
         workspace_root
         / "repos"
@@ -36,9 +39,12 @@ def test_release_update_and_help_urls_use_emulebb_owned_repositories() -> None:
     assert 'GetHomepageBaseURL() + _T("/faq/")' not in emule_dlg_cpp
     assert "https://github.com/emulebb/emulebb/releases" in preferences_cpp
     assert "https://api.github.com/repos/emulebb/emulebb/releases/latest" in preferences_cpp
+    assert "return thePrefs.GetVersionCheckLandingURL();" in preferences_cpp
+    assert "?q=nightly&expanded=true" in preferences_cpp
+    assert "case ReleaseUpdateCheckSeams::EReleaseEvaluationStatus::IgnoredRelease:" in release_update_check_cpp
     assert "https://github.com/emulebb/emulebb/releases/tag/" in release_tests_cpp
 
-    combined = "\n".join([emule_cpp, preferences_cpp, emule_dlg_cpp, release_tests_cpp])
+    combined = "\n".join([emule_cpp, preferences_cpp, emule_dlg_cpp, release_update_check_cpp, release_tests_cpp])
     assert "github.com/emulebb/emulebb-tooling/blob/main/docs/HELP.md" not in combined
     assert "github.com/itlezy" not in combined
     assert "api.github.com/repos/itlezy" not in combined
