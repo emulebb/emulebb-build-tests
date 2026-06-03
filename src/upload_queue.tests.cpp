@@ -120,10 +120,14 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(ShouldCooldownNoRequestUploadRecycle(false));
 	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(true));
 
+	CHECK_FALSE(IsProductiveNoRequestUploadRecycle(kProductiveNoRequestCooldownPayloadBytes - 1u));
+	CHECK(IsProductiveNoRequestUploadRecycle(kProductiveNoRequestCooldownPayloadBytes));
+
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(10u, false) == 10u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(kNoRequestUploadCooldownMaxSeconds, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == 120u);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true, true) == kNoRequestUploadCooldownMaxSeconds);
 }
 
 TEST_CASE("Upload queue clears retry cooldown only when queued peers request valid blocks")
