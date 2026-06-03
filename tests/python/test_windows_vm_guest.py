@@ -52,9 +52,11 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "windows_vm_profile_smoke.py" in script
     assert "vm_guest_profiles.py" in script
     assert "campaign_scenarios.py" in script
-    assert "localSwarmHarnessPackagePath" in script
-    assert "localSwarmManifestsPath" in script
-    assert "localSwarmScriptPaths" in script
+    assert "localSwarmHarnessArchivePath" in script
+    assert "Expand-Archive -LiteralPath $archivePath -DestinationPath $harnessRoot -Force" in script
+    assert "localSwarmHarnessPackagePath" not in script
+    assert "localSwarmManifestsPath" not in script
+    assert "localSwarmScriptPaths" not in script
     assert "localSwarmReleaseAssetPaths" in script
     assert "localSwarmNodeArchivePath" in script
     assert "localSwarmNodeSha256" in script

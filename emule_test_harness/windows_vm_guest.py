@@ -584,6 +584,10 @@ $guestZip = Join-Path $guestRoot (Split-Path -Leaf $payload.packageZip)
 $guestRunner = Join-Path $guestRoot 'windows_vm_profile_smoke.py'
 $guestProfiles = Join-Path $guestRoot 'vm_guest_profiles.py'
 $guestCampaignScenarios = Join-Path $guestRoot 'campaign_scenarios.py'
+$guestHarnessArchive = ''
+if ($payload.localSwarmHarnessArchivePath) {
+  $guestHarnessArchive = Join-Path $guestRoot (Split-Path -Leaf $payload.localSwarmHarnessArchivePath)
+}
 $guestHarnessRoot = Join-Path $guestRoot 'harness'
 $guestHarnessPackage = Join-Path $guestHarnessRoot 'emule_test_harness'
 $guestHarnessManifests = Join-Path $guestHarnessRoot 'manifests'
@@ -622,13 +626,19 @@ try {
   Copy-Item -ToSession $session -Path $payload.runnerPath -Destination $guestRunner
   Copy-Item -ToSession $session -Path $payload.profileHelperPath -Destination $guestProfiles
   Copy-Item -ToSession $session -Path (Join-Path (Split-Path -Parent $payload.profileHelperPath) 'campaign_scenarios.py') -Destination $guestCampaignScenarios
+  if ($payload.localSwarmHarnessArchivePath) {
+    Copy-Item -ToSession $session -Path $payload.localSwarmHarnessArchivePath -Destination $guestHarnessArchive
+  }
   Invoke-Command -Session $session -ScriptBlock {
-    param($harnessRoot, $scriptsRoot, $toolsRoot, $workspaceRoot, $buildHelperScriptsRoot)
+    param($archivePath, $harnessRoot, $scriptsRoot, $toolsRoot, $workspaceRoot, $buildHelperScriptsRoot)
     New-Item -ItemType Directory -Force -Path $harnessRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $scriptsRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $toolsRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $workspaceRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $buildHelperScriptsRoot | Out-Null
+    if ($archivePath) {
+      Expand-Archive -LiteralPath $archivePath -DestinationPath $harnessRoot -Force
+    }
     @{
       workspace = @{
         repos = @{
@@ -636,14 +646,7 @@ try {
         }
       }
     } | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $workspaceRoot 'deps.json')
-  } -ArgumentList $guestHarnessRoot, $guestScriptsRoot, $guestToolsRoot, $guestWorkspaceRoot, $guestBuildHelperScriptsRoot
-  Copy-Item -ToSession $session -Path $payload.localSwarmHarnessPackagePath -Destination $guestHarnessPackage -Recurse -Force
-  if ($payload.localSwarmManifestsPath) {
-    Copy-Item -ToSession $session -Path $payload.localSwarmManifestsPath -Destination $guestHarnessManifests -Recurse -Force
-  }
-  foreach ($scriptPath in @($payload.localSwarmScriptPaths)) {
-    Copy-Item -ToSession $session -Path $scriptPath -Destination (Join-Path $guestScriptsRoot (Split-Path -Leaf $scriptPath)) -Force
-  }
+  } -ArgumentList $guestHarnessArchive, $guestHarnessRoot, $guestScriptsRoot, $guestToolsRoot, $guestWorkspaceRoot, $guestBuildHelperScriptsRoot
   if ($payload.localSwarmReleaseAssetPaths) {
     Invoke-Command -Session $session -ScriptBlock {
       param($releaseRoot)
