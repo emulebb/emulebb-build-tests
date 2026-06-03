@@ -61,3 +61,29 @@ def test_stalled_upload_retry_cooldown_is_bounded() -> None:
 
     assert "GetUploadChurnRetryCooldownSeconds(thePrefs.GetSlowUploadCooldownSeconds())" in stalled_block
     assert "uploadRetryCooldownIdle : uploadRetryCooldownStalled" in stalled_block
+
+
+def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> None:
+    client_source = read_app_source("UploadClient.cpp")
+    queue_source = read_app_source("UploadQueue.cpp")
+    queue_header = read_app_source("UploadQueue.h")
+    seams_header = read_app_source("UploadQueueSeams.h")
+    not_uploading_block = client_source[
+        client_source.index("if (GetUploadState() != US_UPLOADING)") :
+        client_source.index("if (HasCollectionUploadSlot())")
+    ]
+    direct_admit_block = queue_source[
+        queue_source.index("bool CUploadQueue::TryAdmitQueuedBlockRequestClient") :
+        queue_source.index("void CUploadQueue::PurgeExpiredUploadRetryCooldowns")
+    ]
+
+    assert "TryAdmitQueuedBlockRequestClient(CUpDownClient *client, bool bQueuedRequestCooldownCleared)" in queue_header
+    assert "ShouldAdmitQueuedBlockRequestToUploadSlot" in seams_header
+    assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this);" in not_uploading_block
+    assert "TryAdmitQueuedBlockRequestClient(this, bCooldownCleared)" in not_uploading_block
+    assert "accept-queued-request-direct-admit" in not_uploading_block
+    assert "reject-not-uploading" in not_uploading_block
+    assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("reject-not-uploading")
+    assert "AcceptNewClient(uploadinglist.GetCount())" in direct_admit_block
+    assert "ForceNewClient(true)" in direct_admit_block
+    assert "AddUpNextClient(_T(\"Direct add after queued block request.\"), client)" in direct_admit_block

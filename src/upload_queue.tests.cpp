@@ -159,6 +159,15 @@ TEST_CASE("Upload queue clears no-request cooldown only once per cooldown window
 	CHECK_FALSE(ShouldAllowUploadRetryCooldownClear(true, true));
 }
 
+TEST_CASE("Upload queue admits queued block requests only after a valid cooldown clear and free slot")
+{
+	CHECK(ShouldAdmitQueuedBlockRequestToUploadSlot(true, true, false, true));
+	CHECK_FALSE(ShouldAdmitQueuedBlockRequestToUploadSlot(false, true, false, true));
+	CHECK_FALSE(ShouldAdmitQueuedBlockRequestToUploadSlot(true, false, false, true));
+	CHECK_FALSE(ShouldAdmitQueuedBlockRequestToUploadSlot(true, true, true, true));
+	CHECK_FALSE(ShouldAdmitQueuedBlockRequestToUploadSlot(true, true, false, false));
+}
+
 TEST_CASE("Broadband stalled upload recycling requires queued work and replacement pressure")
 {
 	CHECK(HasStalledUploadReplacementPressure(true, 12, 12));
