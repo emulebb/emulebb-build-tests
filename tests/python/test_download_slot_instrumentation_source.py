@@ -94,7 +94,7 @@ def test_download_slot_no_data_and_out_of_part_guards_are_conservative() -> None
 
     assert "kDownloadNoDataSlotCooldownThreshold = 2" in client_source
     assert "kDownloadNoDataSlotPayloadThresholdBytes = EMBLOCKSIZE" in client_source
-    assert "kDownloadFirstPayloadTimeoutMs = SEC2MS(30)" in client_source
+    assert "kDownloadFirstPayloadTimeoutMs = SEC2MS(60)" in client_source
     assert "timeout-first-payload" in timeout_block
     assert "!m_PendingBlocks_list.IsEmpty()" in timeout_block
     assert "GetSessionPayloadDown() == 0" in timeout_block
