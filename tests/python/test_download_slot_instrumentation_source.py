@@ -74,6 +74,9 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         client_source.index("bool IsTickInsideWindow")
     ]
     assert '_T("request-empty-nnp")' in throttle_block
+    assert '_T("disconnect-downloading")' in throttle_block
+    assert '_T("state-leave-downloading")' in throttle_block
+    assert '_T("state-leave-downloading-nnp")' in throttle_block
 
     assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION\nvoid CDownloadQueue::LogDownloadSlotInstrumentation" in queue_source
     assert "DownloadSlotInstrumentation: summary" in queue_source
