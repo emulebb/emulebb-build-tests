@@ -162,6 +162,8 @@ def test_endgame_steal_preserves_active_download_streams() -> None:
 
     assert "GetSessionPayloadDown() > 0 || GetSessionDown() > 0" in steal_block
     assert steal_block.index("GetSessionPayloadDown() > 0 || GetSessionDown() > 0") < steal_block.index("m_fileEndgameCancelTimes.Lookup")
+    assert "if (pending->fQueued)\n\t\t\tcontinue;" in steal_block
+    assert steal_block.index("if (pending->fQueued)") < steal_block.index("PartFileEndgameSeams::ShouldStealEndgameReservation")
     assert "SetDownloadState(DS_ONQUEUE, _T(\"Endgame block reassigned to a faster source.\"));" in steal_block
 
 
