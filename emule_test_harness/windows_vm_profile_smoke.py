@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import shutil
@@ -459,6 +460,42 @@ class _LocalSwarmHarnessCliCommon:
         return {"count": 0, "files": []}
 
 
+@contextmanager
+def capture_live_suite_child_output(live_e2e_suite: Any, artifacts: Path):
+    """Captures nested live-suite child output so VM profile smoke emits clean JSON."""
+
+    output_dir = artifacts / "local-swarm-child-output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    previous = live_e2e_suite.run_suite_command
+
+    def run_suite_command_capture(command: list[str]) -> int:
+        token = Path(command[1]).stem if len(command) > 1 else "child-suite"
+        index = len(list(output_dir.glob("*.stdout.txt"))) + 1
+        stdout_path = output_dir / f"{index:02d}-{token}.stdout.txt"
+        stderr_path = output_dir / f"{index:02d}-{token}.stderr.txt"
+        timeout_seconds = live_e2e_suite.resolve_child_suite_timeout_seconds(command)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+            return_code = process.returncode
+        except subprocess.TimeoutExpired:
+            live_e2e_suite.terminate_process_tree(process.pid, command)
+            try:
+                stdout, stderr = process.communicate(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = "", ""
+            return_code = live_e2e_suite.SUITE_TIMEOUT_RETURN_CODE
+        stdout_path.write_text(stdout or "", encoding="utf-8", errors="replace")
+        stderr_path.write_text(stderr or "", encoding="utf-8", errors="replace")
+        return return_code
+
+    live_e2e_suite.run_suite_command = run_suite_command_capture
+    try:
+        yield output_dir
+    finally:
+        live_e2e_suite.run_suite_command = previous
+
+
 def local_swarm_plan_check(
     profile: str,
     swarm_tier: int,
@@ -582,10 +619,11 @@ def local_swarm_plan_check(
         try:
             if execution_mode == "execute":
                 stop_runtime()
-            summary = live_e2e_suite.run_live_e2e_suite(
-                args,
-                _LocalSwarmHarnessCliCommon(root, app_root, artifacts, execution_mode),
-            )
+            with capture_live_suite_child_output(live_e2e_suite, artifacts):
+                summary = live_e2e_suite.run_live_e2e_suite(
+                    args,
+                    _LocalSwarmHarnessCliCommon(root, app_root, artifacts, execution_mode),
+                )
         finally:
             if previous_x_local_ip is None:
                 os.environ.pop("X_LOCAL_IP", None)

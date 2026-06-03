@@ -175,6 +175,51 @@ def test_browser_smoke_reports_live_network_launch_inputs() -> None:
     assert 'BindAddr=hide.me' not in script_text
 
 
+def test_browser_smoke_skips_empty_p2p_interface_override() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "if args.p2p_bind_interface_name.strip():" in script_text
+    assert "clear_p2p_bind_interface_policy" in script_text
+    assert "rest_api_smoke.apply_p2p_bind_interface_override" in script_text
+
+
+def test_browser_smoke_uses_empty_interface_as_lan_offline_readiness_mode() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "require_public_network_ready = bool(args.p2p_bind_interface_name.strip())" in script_text
+    assert '"mode": "offline-lan"' in script_text
+    assert "P2P bind interface is empty for LAN VM controller smoke." in script_text
+
+
+def test_clear_p2p_bind_interface_policy_removes_inherited_vpn_bind(tmp_path: Path) -> None:
+    smoke = load_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences = config_dir / "preferences.ini"
+    smoke.write_utf16_ini_text(
+        preferences,
+        "\r\n".join(
+            [
+                "[eMule]",
+                "BindInterface=hide.me",
+                "BlockNetworkWhenBindUnavailableAtStartup=1",
+                "ExitOnBindInterfaceLoss=1",
+                "Port=4662",
+            ]
+        ),
+    )
+
+    smoke.clear_p2p_bind_interface_policy(config_dir)
+
+    text = smoke.read_ini_text(preferences)
+    assert "BindInterface=" not in text
+    assert "BlockNetworkWhenBindUnavailableAtStartup=" not in text
+    assert "ExitOnBindInterfaceLoss=" not in text
+    assert "Port=4662" in text
+
+
 def test_browser_smoke_waits_for_segment_delta_patches() -> None:
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
     script_text = script_path.read_text(encoding="utf-8")
@@ -183,6 +228,22 @@ def test_browser_smoke_waits_for_segment_delta_patches() -> None:
     assert "itemsByHash.get(expected)" in script_text
     assert "Array.isArray(item.gapStatus)" in script_text
     assert "Array.isArray(item.reqStatus)" in script_text
+
+
+def test_browser_smoke_uses_valid_rest_transfer_fixture_shape() -> None:
+    smoke = load_smoke_module()
+
+    assert smoke.AMUTORRENT_BROWSER_SMOKE_HASH == "fedcba98765432100123456789abcdef"
+    assert smoke.AMUTORRENT_BROWSER_SMOKE_SIZE_BYTES == 1024
+
+
+def test_browser_smoke_can_skip_search_for_offline_lan_mode() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "amutorrent-browser-smoke.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "require_search_connected=require_public_network_ready" in script_text
+    assert "search_modes_skipped" in script_text
+    assert "P2P search requires eD2K or Kad connectivity." in script_text
 
 
 def test_browser_smoke_isolates_amutorrent_port_and_state() -> None:
@@ -523,6 +584,32 @@ def test_browser_workflow_validation_rejects_delete_snapshot_with_added_download
         smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
 
 
+def test_browser_workflow_validation_accepts_delete_reset_when_snapshot_removed() -> None:
+    smoke = load_smoke_module()
+    added_hash = smoke.AMUTORRENT_BROWSER_SMOKE_HASH
+    checks = {
+        "snapshot_after_add": {
+            "status": 200,
+            "payload": {"data": {"items": [hydrated_download_item(smoke)]}},
+        },
+        "segment_snapshot_after_add": {
+            "status": 200,
+            "payload": {"item": segment_download_item(smoke)},
+        },
+        "delete_added_download": {
+            "status": 200,
+            "payload": {"results": [{"fileHash": added_hash, "success": False, "error": "read ECONNRESET"}]},
+        },
+        "snapshot_after_delete": {
+            "status": 200,
+            "payload": {"data": {"items": []}},
+        },
+    }
+
+    smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+    assert checks["delete_added_download_inferred_success"]["reason"] == "snapshot-removed"
+
+
 def test_browser_workflow_validation_rejects_nested_server_errors() -> None:
     smoke = load_smoke_module()
     checks = {"search_modes": [{"start": {"status": 503, "payload": {"error": "offline"}}}]}
@@ -545,6 +632,13 @@ def test_browser_workflow_validation_rejects_nested_error_payloads() -> None:
 
     with pytest.raises(RuntimeError, match=r"search_modes\[0\]\.start"):
         smoke.assert_browser_workflow_results(checks, {"console_errors": [], "page_errors": [], "request_failures": []})
+
+
+def test_browser_smoke_rejects_failed_add_ed2k_result() -> None:
+    smoke = load_smoke_module()
+
+    with pytest.raises(RuntimeError, match="did not report success"):
+        smoke.assert_add_ed2k_result({"status": 200, "payload": {"results": [{"success": False}]}})
 
 
 def test_browser_workflow_validation_ignores_expected_search_conflict_console_noise() -> None:

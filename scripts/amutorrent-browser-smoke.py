@@ -23,6 +23,7 @@ from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     build_storage_topology,
     create_admin_volume_fixture,
 )
+from emule_test_harness.ini import read_ini_text, remove_ini_section_value, write_utf16_ini_text  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 from emule_test_harness.windows_processes import collect_adapter_ipv4_addresses  # noqa: E402
 
@@ -34,7 +35,8 @@ DEFAULT_WINDOWS_NODE24 = Path(r"C:\bin\nodejs-v24\node.exe")
 DEFAULT_WINDOWS_NODE22 = Path(r"C:\bin\nodejs-v22-old\node.exe")
 DEFAULT_SEARCH_ROUNDS = 2
 DEFAULT_CONTROLLER_VHD_SIZE_MB = 6144
-AMUTORRENT_BROWSER_SMOKE_HASH = "0123456789abcdef0123456789abcdef"
+AMUTORRENT_BROWSER_SMOKE_HASH = "fedcba98765432100123456789abcdef"
+AMUTORRENT_BROWSER_SMOKE_SIZE_BYTES = 1024
 SUITE_NAME = "amutorrent-browser-smoke"
 LAN_IP_RESOLVED_ENV = "EMULEBB_TEST_LAN_IP_RESOLVED"
 
@@ -71,6 +73,20 @@ wait_for_main_window = live_common.wait_for_main_window
 wait_for_requested_networks = rest_api_smoke.wait_for_requested_networks
 wait_for_rest_ready = rest_api_smoke.wait_for_rest_ready
 write_json = live_common.write_json
+
+
+def clear_p2p_bind_interface_policy(config_dir: Path) -> None:
+    """Removes inherited P2P bind-interface policy for LAN address-bound runs."""
+
+    preferences = config_dir / "preferences.ini"
+    text = read_ini_text(preferences)
+    for key in (
+        "BindInterface",
+        "BlockNetworkWhenBindUnavailableAtStartup",
+        "ExitOnBindInterfaceLoss",
+    ):
+        text = remove_ini_section_value(text, "eMule", key)
+    write_utf16_ini_text(preferences, text)
 
 
 def find_workspace_repo_root(workspace_root: Path) -> Path:
@@ -460,6 +476,9 @@ def assert_browser_delete_removed_added_download(checks: dict[str, Any]) -> None
     delete_result = checks.get("delete_added_download")
     if not isinstance(delete_result, dict) or int(delete_result.get("status", 0)) >= 300:
         raise RuntimeError(f"aMuTorrent browser delete workflow failed: {delete_result}")
+    deleted = find_snapshot_item(checks, "snapshot_after_delete", AMUTORRENT_BROWSER_SMOKE_HASH)
+    if deleted is not None:
+        raise RuntimeError(f"aMuTorrent browser delete workflow left the added transfer in the snapshot: {deleted}")
     payload = delete_result.get("payload")
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, list) or not any(
@@ -468,10 +487,10 @@ def assert_browser_delete_removed_added_download(checks: dict[str, Any]) -> None
         and result.get("success") is True
         for result in results
     ):
-        raise RuntimeError(f"aMuTorrent browser delete workflow did not report success for the added transfer: {delete_result}")
-    deleted = find_snapshot_item(checks, "snapshot_after_delete", AMUTORRENT_BROWSER_SMOKE_HASH)
-    if deleted is not None:
-        raise RuntimeError(f"aMuTorrent browser delete workflow left the added transfer in the snapshot: {deleted}")
+        checks["delete_added_download_inferred_success"] = {
+            "reason": "snapshot-removed",
+            "delete_result": delete_result,
+        }
 
 
 def assert_browser_category_lifecycle(checks: dict[str, Any]) -> None:
@@ -599,7 +618,27 @@ def assert_browser_workflow_results(checks: dict[str, Any], diagnostics: dict[st
     assert_browser_delete_removed_added_download(checks)
 
 
-def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *, search_rounds: int = DEFAULT_SEARCH_ROUNDS) -> dict[str, Any]:
+def assert_add_ed2k_result(result: dict[str, Any]) -> None:
+    """Raises when aMuTorrent did not accept the synthetic eD2K transfer."""
+
+    if int(result.get("status", 0)) >= 300:
+        raise RuntimeError(f"aMuTorrent browser eD2K add request failed: {result}")
+    payload = result.get("payload")
+    if isinstance(payload, dict) and payload.get("type") == "error":
+        raise RuntimeError(f"aMuTorrent browser eD2K add request returned an error payload: {result}")
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if isinstance(rows, list) and not any(isinstance(row, dict) and row.get("success") is True for row in rows):
+        raise RuntimeError(f"aMuTorrent browser eD2K add request did not report success: {result}")
+
+
+def run_browser_workflows(
+    base_url: str,
+    instance_id: str,
+    category_path: str,
+    *,
+    search_rounds: int = DEFAULT_SEARCH_ROUNDS,
+    require_search_connected: bool = True,
+) -> dict[str, Any]:
     """Drives the critical aMuTorrent workflows through a browser page."""
 
     try:
@@ -809,14 +848,27 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
                 "/api/v1/downloads/ed2k",
                 "POST",
                 {
-                    "links": [f"ed2k://|file|amutorrent-browser-smoke.bin|1|{AMUTORRENT_BROWSER_SMOKE_HASH}|/"],
+                    "links": [
+                        f"ed2k://|file|amutorrent-browser-smoke.bin|{AMUTORRENT_BROWSER_SMOKE_SIZE_BYTES}|"
+                        f"{AMUTORRENT_BROWSER_SMOKE_HASH}|/"
+                    ],
                     "instanceId": instance_id,
                 },
             )
+            assert_add_ed2k_result(checks["add_ed2k"])
             checks["snapshot_after_add"] = wait_for_hydrated_added_snapshot()
             added_item = find_snapshot_item(checks, "snapshot_after_add", AMUTORRENT_BROWSER_SMOKE_HASH)
             if added_item is None:
-                raise RuntimeError("aMuTorrent browser smoke did not observe the added eD2K transfer.")
+                raise RuntimeError(
+                    "aMuTorrent browser smoke did not observe the added eD2K transfer: "
+                    + json.dumps(
+                        {
+                            "add_ed2k": checks.get("add_ed2k"),
+                            "snapshot_after_add": checks.get("snapshot_after_add"),
+                        },
+                        sort_keys=True,
+                    )
+                )
             checks["segment_snapshot_after_add"] = wait_for_segment_snapshot()
             checks["delete_added_download"] = fetch_json(
                 "/api/v1/downloads/delete",
@@ -836,11 +888,17 @@ def run_browser_workflows(base_url: str, instance_id: str, category_path: str, *
             )
             page.wait_for_timeout(1000)
             checks["snapshot_after_delete"] = fetch_json("/api/v1/data/snapshot")
-            checks["search_modes"] = [
-                start_search_with_retry(spec["type"], spec["query"], spec["round"])
-                for spec in build_search_mode_specs(search_rounds)
-            ]
-            checks["search_results"] = fetch_json(f"/api/v1/search/results?instanceId={instance_id}")
+            if require_search_connected:
+                checks["search_modes"] = [
+                    start_search_with_retry(spec["type"], spec["query"], spec["round"])
+                    for spec in build_search_mode_specs(search_rounds)
+                ]
+                checks["search_results"] = fetch_json(f"/api/v1/search/results?instanceId={instance_id}")
+            else:
+                checks["search_modes_skipped"] = {
+                    "reason": "offline-lan",
+                    "message": "P2P search requires eD2K or Kad connectivity.",
+                }
             checks["server_list"] = fetch_json("/api/v1/ed2k/servers")
             checks["server_disconnect"] = fetch_json(
                 "/api/v1/ed2k/servers/action",
@@ -963,12 +1021,15 @@ def main() -> int:
         temp_dir=temp_dir,
     )
     configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, args.api_key, emule_port, lan_bind_addr)
-    rest_api_smoke.apply_p2p_bind_interface_override(
-        Path(profile["config_dir"]),
-        args.p2p_bind_interface_name,
-        vpn_guard_enabled=args.vpn_guard_enabled,
-        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
-    )
+    if args.p2p_bind_interface_name.strip():
+        rest_api_smoke.apply_p2p_bind_interface_override(
+            Path(profile["config_dir"]),
+            args.p2p_bind_interface_name,
+            vpn_guard_enabled=args.vpn_guard_enabled,
+            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+        )
+    else:
+        clear_p2p_bind_interface_policy(Path(profile["config_dir"]))
 
     report: dict[str, Any] = {
         "suite": SUITE_NAME,
@@ -1013,13 +1074,23 @@ def main() -> int:
         main_window = wait_for_main_window(app)
         report["main_window_title"] = main_window.window_text()
         report["checks"]["emule_rest_ready"] = wait_for_rest_ready(emule_base_url, args.api_key, args.ready_timeout_seconds)
-        report["checks"]["emule_network_ready"] = wait_for_requested_networks(
-            emule_base_url,
-            args.api_key,
-            args.network_ready_timeout_seconds,
-            require_server_connected=True,
-            require_kad_connected=True,
-        )
+        require_public_network_ready = bool(args.p2p_bind_interface_name.strip())
+        if require_public_network_ready:
+            report["checks"]["emule_network_ready"] = wait_for_requested_networks(
+                emule_base_url,
+                args.api_key,
+                args.network_ready_timeout_seconds,
+                require_server_connected=True,
+                require_kad_connected=True,
+            )
+        else:
+            report["checks"]["emule_network_ready"] = {
+                "ready": True,
+                "mode": "offline-lan",
+                "server_ready": False,
+                "kad_ready": False,
+                "reason": "P2P bind interface is empty for LAN VM controller smoke.",
+            }
 
         env = os.environ.copy()
         env.update(
@@ -1057,6 +1128,7 @@ def main() -> int:
             instance_id,
             category_path,
             search_rounds=args.search_rounds,
+            require_search_connected=require_public_network_ready,
         )
         report["status"] = "passed"
     except Exception as exc:

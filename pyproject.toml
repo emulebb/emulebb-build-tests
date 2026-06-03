@@ -11,6 +11,7 @@ dev = [
     "jsonschema>=4",
 ]
 live = [
+    "playwright",
     "pywin32",
     "pywinauto",
 ]

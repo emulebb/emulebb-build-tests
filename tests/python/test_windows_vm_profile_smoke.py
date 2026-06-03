@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,6 +111,33 @@ def test_local_swarm_payload_check_reports_missing_harness() -> None:
     check = windows_vm_profile_smoke.local_swarm_payload_check(None)
 
     assert check["status"] == "failed"
+
+
+def test_capture_live_suite_child_output_keeps_profile_smoke_json_clean(tmp_path: Path) -> None:
+    child = tmp_path / "child-output.py"
+    child.write_text(
+        "import sys\n"
+        "print('child stdout line')\n"
+        "print('child stderr line', file=sys.stderr)\n"
+        "raise SystemExit(7)\n",
+        encoding="utf-8",
+    )
+
+    original_runner = lambda _command: 99
+    fake_live_suite = SimpleNamespace(
+        run_suite_command=original_runner,
+        resolve_child_suite_timeout_seconds=lambda _command: 30,
+        terminate_process_tree=lambda _pid, _command: None,
+        SUITE_TIMEOUT_RETURN_CODE=124,
+    )
+
+    with windows_vm_profile_smoke.capture_live_suite_child_output(fake_live_suite, tmp_path) as output_dir:
+        return_code = fake_live_suite.run_suite_command([sys.executable, str(child)])
+
+    assert return_code == 7
+    assert fake_live_suite.run_suite_command is original_runner
+    assert (output_dir / "01-child-output.stdout.txt").read_text(encoding="utf-8") == "child stdout line\n"
+    assert (output_dir / "01-child-output.stderr.txt").read_text(encoding="utf-8") == "child stderr line\n"
 
 
 def test_prepare_staged_workspace_manifest_mirrors_package_helper_scripts(tmp_path) -> None:
