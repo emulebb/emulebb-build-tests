@@ -60,6 +60,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "block-reserve-empty",
         "request-sent",
         "block-complete",
+        "packet-zero-write",
         "request-empty-nnp",
         "out-of-part-reqs",
         "accept-suppressed-out-of-part-cooldown",
@@ -114,4 +115,4 @@ def test_download_slot_no_data_and_out_of_part_guards_are_conservative() -> None
     assert "CanAcceptUploadSlotAfterDownloadNoData" in client_header
     assert "NoteDownloadNoDataSlotFailure(pszReason)" in client_source
     assert "Suppressed OP_AcceptUploadReq after repeated no-data download slots" in client_source
-    assert "kOutOfPartReqsCooldownThreshold = 2" in client_source
+    assert "kOutOfPartReqsCooldownThreshold = 3" in client_source
