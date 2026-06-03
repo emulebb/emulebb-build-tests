@@ -79,6 +79,7 @@ TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with liv
 
 TEST_CASE("Upload queue cools down failed upload admissions only for non-friend peers with an IP")
 {
+	CHECK_EQ(kProductiveNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(10u));
 	CHECK_EQ(kUploadChurnRetryCooldownMaxSeconds, static_cast<std::uint32_t>(120u));
 	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, kUploadChurnRetryCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(30u) == 30u);
@@ -133,8 +134,10 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == 120u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
-	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true, true) == kNoRequestUploadCooldownMaxSeconds);
-	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true, true) == kNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(5u, false, true) == 5u);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
 }
 
 TEST_CASE("Upload queue clears retry cooldown only when queued peers request valid blocks")
