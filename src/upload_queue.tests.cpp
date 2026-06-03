@@ -126,6 +126,7 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(ShouldCooldownNoRequestUploadRecycle(false));
 	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(true));
 
+	CHECK_EQ(kProductiveNoRequestCooldownPayloadBytes, static_cast<std::uint64_t>(184320u));
 	CHECK_FALSE(IsProductiveNoRequestUploadRecycle(kProductiveNoRequestCooldownPayloadBytes - 1u));
 	CHECK(IsProductiveNoRequestUploadRecycle(kProductiveNoRequestCooldownPayloadBytes));
 
