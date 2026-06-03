@@ -62,6 +62,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "request-empty-nnp",
         "out-of-part-reqs",
         "accept-suppressed-out-of-part-cooldown",
+        "accept-suppressed-no-data-cooldown",
         "timeout",
         "disconnect-downloading",
     ):
@@ -73,3 +74,17 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION\n\tvoid\tLogDownloadSlotInstrumentation" in queue_header
     assert "m_ullDownloadBlockRequestsReserved" in client_header
     assert "m_uDownloadOutOfPartReqsSuppressions" in client_header
+    assert "highVolumeSuppressed=%I64u" in client_source
+    assert "noDataSuppressions=%u" in client_source
+
+
+def test_download_slot_no_data_and_out_of_part_guards_are_conservative() -> None:
+    client_source = read_app_source("DownloadClient.cpp")
+    client_header = read_app_source("UpDownClient.h")
+
+    assert "kDownloadNoDataSlotCooldownThreshold = 2" in client_source
+    assert "kDownloadNoDataSlotPayloadThresholdBytes = EMBLOCKSIZE" in client_source
+    assert "CanAcceptUploadSlotAfterDownloadNoData" in client_header
+    assert "NoteDownloadNoDataSlotFailure(pszReason)" in client_source
+    assert "Suppressed OP_AcceptUploadReq after repeated no-data download slots" in client_source
+    assert "kOutOfPartReqsCooldownThreshold = 2" in client_source
