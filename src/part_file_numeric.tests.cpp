@@ -62,6 +62,27 @@ TEST_CASE("Part file numeric seam preflights buffered writes without overflowing
 #endif
 }
 
+TEST_CASE("Part file numeric seam shortens active broadband buffer flush cadence conservatively")
+{
+	const uint64 legacyFlushLimitMs = 120u * 1000u;
+
+	CHECK_EQ(
+		PartFileNumericSeams::SelectBufferedDataFlushTimeLimitMs(false, legacyFlushLimitMs, 4096u, 1u),
+		legacyFlushLimitMs);
+	CHECK_EQ(
+		PartFileNumericSeams::SelectBufferedDataFlushTimeLimitMs(true, legacyFlushLimitMs, 0u, 1u),
+		legacyFlushLimitMs);
+	CHECK_EQ(
+		PartFileNumericSeams::SelectBufferedDataFlushTimeLimitMs(true, legacyFlushLimitMs, 4096u, 0u),
+		legacyFlushLimitMs);
+	CHECK_EQ(
+		PartFileNumericSeams::SelectBufferedDataFlushTimeLimitMs(true, legacyFlushLimitMs, 4096u, 1u),
+		PartFileNumericSeams::kBroadbandActiveBufferFlushTimeLimitMs);
+	CHECK_EQ(
+		PartFileNumericSeams::SelectBufferedDataFlushTimeLimitMs(true, 1000u, 4096u, 1u),
+		static_cast<uint64>(1000u));
+}
+
 TEST_CASE("Part file numeric seam clamps list counts and 32-bit scores before narrowing to uint16")
 {
 	CHECK_EQ(PartFileNumericSeams::ClampCountToUInt16(0), static_cast<uint16>(0u));
