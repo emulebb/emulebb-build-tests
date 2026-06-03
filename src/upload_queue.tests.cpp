@@ -131,6 +131,15 @@ TEST_CASE("Upload queue cools down only short no-socket upload churn")
 	CHECK_FALSE(ShouldCooldownNoSocketUploadSlot(true, false, 0x01020304u, 1000u, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
 }
 
+TEST_CASE("Upload queue keeps productive limited sessions during broadband underfill")
+{
+	CHECK(ShouldRotateBroadbandLimitedUploadSession(true, false, 100000u, 50000u));
+	CHECK(ShouldRotateBroadbandLimitedUploadSession(true, true, 49999u, 50000u));
+	CHECK_FALSE(ShouldRotateBroadbandLimitedUploadSession(false, false, 100000u, 50000u));
+	CHECK_FALSE(ShouldRotateBroadbandLimitedUploadSession(true, true, 50000u, 50000u));
+	CHECK_FALSE(ShouldRotateBroadbandLimitedUploadSession(true, true, 100000u, 50000u));
+}
+
 TEST_CASE("Upload queue presentation cadence is owned by the unified desktop timer")
 {
 #ifdef EMULEBB_TEST_HAVE_UNIFIED_DESKTOP_PRESENTATION_TIMER
