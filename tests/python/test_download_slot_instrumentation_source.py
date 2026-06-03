@@ -84,8 +84,20 @@ def test_download_slot_no_data_and_out_of_part_guards_are_conservative() -> None
     client_source = read_app_source("DownloadClient.cpp")
     client_header = read_app_source("UpDownClient.h")
 
+    timeout_block = client_source[
+        client_source.index("void CUpDownClient::CheckDownloadTimeout()") :
+        client_source.index("uint16 CUpDownClient::GetAvailablePartCount() const")
+    ]
+
     assert "kDownloadNoDataSlotCooldownThreshold = 2" in client_source
     assert "kDownloadNoDataSlotPayloadThresholdBytes = EMBLOCKSIZE" in client_source
+    assert "kDownloadFirstPayloadTimeoutMs = SEC2MS(30)" in client_source
+    assert "timeout-first-payload" in timeout_block
+    assert "!m_PendingBlocks_list.IsEmpty()" in timeout_block
+    assert "GetSessionPayloadDown() == 0" in timeout_block
+    assert "GetSessionDown() == 0" in timeout_block
+    assert "thePrefs.GetDownloadTimeout() > kDownloadFirstPayloadTimeoutMs" in timeout_block
+    assert timeout_block.index("timeout-first-payload") < timeout_block.index('LogDownloadSlotInstrumentation(_T("timeout"))')
     assert "CanAcceptUploadSlotAfterDownloadNoData" in client_header
     assert "NoteDownloadNoDataSlotFailure(pszReason)" in client_source
     assert "Suppressed OP_AcceptUploadReq after repeated no-data download slots" in client_source
