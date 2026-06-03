@@ -57,6 +57,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "DownloadSlotInstrumentation: client reason=%s" in client_source
     for anchor in (
         "block-reserved",
+        "block-reserve-empty",
         "request-sent",
         "block-complete",
         "request-empty-nnp",
@@ -75,6 +76,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "m_ullDownloadBlockRequestsReserved" in client_header
     assert "m_uDownloadOutOfPartReqsSuppressions" in client_header
     assert "highVolumeSuppressed=%I64u" in client_source
+    assert '_tcscmp(pszReason, _T("block-reserve-empty")) == 0' in client_source
     assert "noDataSuppressions=%u" in client_source
 
 
