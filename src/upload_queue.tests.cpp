@@ -117,6 +117,7 @@ TEST_CASE("Broadband no-request recycling bypasses slow warmup only for drained 
 
 TEST_CASE("Broadband no-request cooldown covers drained sessions")
 {
+	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(120u));
 	CHECK(ShouldCooldownNoRequestUploadRecycle(false));
 	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(true));
 
@@ -127,7 +128,9 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(kNoRequestUploadCooldownMaxSeconds, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == 120u);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true, true) == kNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true, true) == kNoRequestUploadCooldownMaxSeconds);
 }
 
 TEST_CASE("Upload queue clears retry cooldown only when queued peers request valid blocks")
