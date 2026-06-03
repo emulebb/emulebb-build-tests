@@ -115,6 +115,15 @@ TEST_CASE("Broadband no-request cooldown keeps productive drained sessions eligi
 	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(false, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
 }
 
+TEST_CASE("Upload queue clears retry cooldown only when queued peers request valid blocks")
+{
+	CHECK(ShouldClearUploadRetryCooldownOnQueuedRequest(true, true, true, true));
+	CHECK_FALSE(ShouldClearUploadRetryCooldownOnQueuedRequest(false, true, true, true));
+	CHECK_FALSE(ShouldClearUploadRetryCooldownOnQueuedRequest(true, false, true, true));
+	CHECK_FALSE(ShouldClearUploadRetryCooldownOnQueuedRequest(true, true, false, true));
+	CHECK_FALSE(ShouldClearUploadRetryCooldownOnQueuedRequest(true, true, true, false));
+}
+
 TEST_CASE("Broadband stalled upload recycling requires queued work and replacement pressure")
 {
 	CHECK(HasStalledUploadReplacementPressure(true, 12, 12));
