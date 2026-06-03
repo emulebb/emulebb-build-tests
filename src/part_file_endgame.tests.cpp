@@ -99,7 +99,7 @@ TEST_CASE("Part file endgame seam steals slow final reservations for active fast
 		120000u,
 		0u,
 		0u));
-	CHECK(PartFileEndgameSeams::ShouldStealEndgameReservation(
+	CHECK_FALSE(PartFileEndgameSeams::ShouldStealEndgameReservation(
 		true,
 		true,
 		10u * 1024u,
