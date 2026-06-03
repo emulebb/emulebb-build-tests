@@ -42,6 +42,7 @@ def test_stored_search_startup_stage_closes_progress_dialog_without_extra_queued
     final_block = startup_block[startup_block.index("default:") : startup_block.index("VERIFY(PostMessage(UM_STARTUP_NEXT_STAGE) != 0);")]
 
     assert "theApp.searchlist->LoadSearches();" in stored_search_block
+    assert stored_search_block.index("DestroyStartupProgress();") < stored_search_block.index("theApp.searchlist->LoadSearches();")
     assert "[[fallthrough]];" in stored_search_block
     assert "break;" not in stored_search_block
     assert "StopTimer();" in final_block
