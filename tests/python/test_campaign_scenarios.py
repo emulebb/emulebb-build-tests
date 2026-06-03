@@ -49,6 +49,9 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
     for scenario in scenarios.values():
         assert scenario["networkScope"] == "lan"
         assert scenario["executionModes"] == ["local", "vm"]
+        assert "--local-swarm-mode plan" in scenario["localPlanCommand"]
+        assert "--local-swarm-mode execute" in scenario["localExecuteCommand"]
+        assert "--local-swarm-mode plan" in scenario["vmPlanCommand"]
         assert "--dry-run" in scenario["localPlanCommand"]
         assert "--dry-run" not in scenario["localExecuteCommand"]
         assert "--local-swarm-mode execute" in scenario["vmExecuteCommand"]
@@ -206,13 +209,19 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
         local_command = scenario.command_for_mode("local", swarm_tier=2)
         assert local_command == (
             "python -m emule_workspace test campaign-scenario "
-            f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2"
+            f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2 --local-swarm-mode execute"
         )
 
         local_plan_command = scenario.command_for_mode("local", swarm_tier=2, dry_run=True)
         assert local_plan_command == (
             "python -m emule_workspace test campaign-scenario "
-            f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2 --dry-run"
+            f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2 --local-swarm-mode plan --dry-run"
+        )
+
+        explicit_local_plan_command = scenario.command_for_mode("local", swarm_tier=2, local_swarm_mode="plan")
+        assert explicit_local_plan_command == (
+            "python -m emule_workspace test campaign-scenario "
+            f"--scenario {scenario.scenario_id} --mode local --swarm-tier 2 --local-swarm-mode plan --dry-run"
         )
 
         vm_plan_command = scenario.command_for_mode(
@@ -224,7 +233,7 @@ def test_reusable_campaign_specs_build_local_and_vm_commands() -> None:
         assert vm_plan_command == (
             "python -m emule_workspace test campaign-scenario "
             f"--scenario {scenario.scenario_id} --mode vm "
-            "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3 --dry-run"
+            "--release-version 0.7.4-rc.2 --skip-build --swarm-tier 3 --local-swarm-mode plan --dry-run"
         )
 
         vm_execute_command = scenario.command_for_mode(

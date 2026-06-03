@@ -138,7 +138,7 @@ class CampaignScenarioSpec:
         *,
         release_version: str = DEFAULT_RELEASE_VERSION,
         swarm_tier: int = DEFAULT_LOCAL_SWARM_TIER,
-        local_swarm_mode: str = "plan",
+        local_swarm_mode: str | None = None,
         dry_run: bool = False,
     ) -> str:
         """Returns the emule_workspace command that runs this scenario in one mode."""
@@ -147,18 +147,18 @@ class CampaignScenarioSpec:
             raise ValueError(f"Unsupported campaign scenario execution mode: {mode!r}.")
         if swarm_tier not in LOCAL_SWARM_TIERS:
             raise ValueError(f"Unsupported campaign scenario swarm tier: {swarm_tier!r}.")
-        if local_swarm_mode not in VM_LOCAL_SWARM_MODES:
-            raise ValueError(f"Unsupported campaign scenario VM local swarm mode: {local_swarm_mode!r}.")
+        selected_swarm_mode = local_swarm_mode or ("plan" if mode == "vm" or dry_run else "execute")
+        if selected_swarm_mode not in VM_LOCAL_SWARM_MODES:
+            raise ValueError(f"Unsupported campaign scenario local swarm mode: {selected_swarm_mode!r}.")
         command = f"python -m emule_workspace test campaign-scenario --scenario {self.scenario_id} --mode {mode}"
         if mode == "vm":
             command = f"{command} --release-version {release_version} --skip-build --swarm-tier {swarm_tier}"
-            if local_swarm_mode == "plan":
+            command = f"{command} --local-swarm-mode {selected_swarm_mode}"
+            if selected_swarm_mode == "plan":
                 command = f"{command} --dry-run"
-            else:
-                command = f"{command} --local-swarm-mode {local_swarm_mode}"
             return command
-        command = f"{command} --swarm-tier {swarm_tier}"
-        if dry_run:
+        command = f"{command} --swarm-tier {swarm_tier} --local-swarm-mode {selected_swarm_mode}"
+        if dry_run or selected_swarm_mode == "plan":
             command = f"{command} --dry-run"
         return command
 
