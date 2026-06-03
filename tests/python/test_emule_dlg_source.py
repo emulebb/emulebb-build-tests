@@ -56,13 +56,22 @@ def test_stored_search_startup_stage_closes_progress_dialog_without_extra_queued
 def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -> None:
     dialog_source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
     app_source = (app_source_root() / "Emule.cpp").read_text(encoding="utf-8", errors="ignore")
+    lifecycle_source = (app_source_root() / "LifecycleProgressDlg.cpp").read_text(encoding="utf-8", errors="ignore")
     destroy_startup_block = dialog_source[dialog_source.index("void CemuleDlg::DestroyStartupProgress()") : dialog_source.index("BOOL CemuleApp::IsIdleMessage")]
     destroy_early_block = app_source[app_source.index("void CemuleApp::DestroyEarlyStartupProgress()") : app_source.index("bool CemuleApp::ProcessCommandline")]
+    pump_block = lifecycle_source[lifecycle_source.index("void PumpLifecycleProgressMessages") :]
+    close_if_running_block = dialog_source[dialog_source.index("void CemuleDlg::CloseStartupProgressIfRunning()") : dialog_source.index("BOOL CemuleApp::IsIdleMessage")]
 
     assert "m_pStartupProgressDlg->DestroyWindow();" in destroy_startup_block
     assert destroy_startup_block.index("m_pStartupProgressDlg = NULL;") < destroy_startup_block.index("PumpLifecycleProgressMessages(NULL);")
     assert "m_pEarlyStartupProgressDlg->DestroyWindow();" in destroy_early_block
     assert destroy_early_block.index("m_pEarlyStartupProgressDlg = NULL;") < destroy_early_block.index("PumpLifecycleProgressMessages(NULL);")
+    assert "PM_NOREMOVE" in pump_block
+    assert "msg.message == UM_STARTUP_NEXT_STAGE" in pump_block
+    assert "DestroyStartupProgress();" in close_if_running_block
+    assert "theApp.IsRunning()" in close_if_running_block
+    assert "CloseStartupProgressIfRunning();" in dialog_source[dialog_source.index("LRESULT CemuleDlg::OnStartupNextStage") : dialog_source.index("LRESULT CemuleDlg::OnBindInterfaceChanged")]
+    assert "CloseStartupProgressIfRunning();" in dialog_source[dialog_source.index("void CemuleDlg::OnTimer") : dialog_source.index("BOOL CemuleDlg::OnDeviceChange")]
 
 
 def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
