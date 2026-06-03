@@ -262,7 +262,7 @@ def command_prepare_client(args: argparse.Namespace) -> int:
             "size": args.fixture_size_bytes,
             "sha256": sample_sha256,
         },
-        "restBaseUrl": f"http://127.0.0.1:{args.rest_port}",
+        "restBaseUrl": f"http://{ip_address}:{args.rest_port}",
         "checks": [{"name": "firewall-repair", "status": "passed", "details": repair_result}],
         "errors": [],
         "artifactsDir": str(artifacts),

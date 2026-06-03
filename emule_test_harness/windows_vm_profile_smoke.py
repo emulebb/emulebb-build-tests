@@ -108,7 +108,7 @@ def run_profile(args: argparse.Namespace) -> dict[str, Any]:
     base_url = f"http://{web_interface_bind_addr}:{REST_PORT}"
 
     try:
-        if local_swarm_profile:
+        if args.lan_bind_addr or local_swarm_profile:
             web_interface_bind_addr = require_campaign_lan_bind_addr(args.lan_bind_addr)
         base_url = f"http://{web_interface_bind_addr}:{REST_PORT}"
         reset_directory(artifacts)

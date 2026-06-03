@@ -230,7 +230,7 @@ def local_ed2k_preferences_text(
             "Enabled=1",
             f"ApiKey={api_key}",
             f"Port={rest_port}",
-            "BindAddr=127.0.0.1",
+            f"BindAddr={bind_addr}",
             "UseHTTPS=0",
             "[UPnP]",
             "EnableUPnP=0",

@@ -43,8 +43,9 @@ try {
   } -ArgumentList $guestRoot
   Copy-Item -ToSession $session -Path $payload.packageZip -Destination $guestZip
   $guestResult = Invoke-Command -Session $session -ScriptBlock {
-    param($root, $zipPath)
+    param($root, $zipPath, $lanBindAddr)
     $ErrorActionPreference = 'Stop'
+    $webBindAddr = if ([string]::IsNullOrWhiteSpace($lanBindAddr)) { '127.0.0.1' } else { $lanBindAddr }
     function New-Check($name, $status, $details) {
       [pscustomobject]@{ name = $name; status = $status; details = $details }
     }
@@ -116,7 +117,7 @@ NetworkKademlia=0
 Enabled=1
 ApiKey=vm-smoke-api-key
 Port=4711
-BindAddr=127.0.0.1
+BindAddr=$webBindAddr
 UseHTTPS=0
 [UPnP]
 EnableUPnP=0
@@ -128,7 +129,7 @@ EnableUPnP=0
         do {
           Start-Sleep -Seconds 2
           try {
-            $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:4711/api/v1/status' -Headers @{ 'X-API-Key' = 'vm-smoke-api-key' } -TimeoutSec 5
+            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://$($webBindAddr):4711/api/v1/status" -Headers @{ 'X-API-Key' = 'vm-smoke-api-key' } -TimeoutSec 5
             if ($response.StatusCode -eq 200) {
               $restStatus = 'passed'
               break
@@ -139,7 +140,7 @@ EnableUPnP=0
       } finally {
         Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue
       }
-      $checks += New-Check 'first-run-rest-status' $restStatus @{ profile = $profile; url = 'http://127.0.0.1:4711/api/v1/status' }
+      $checks += New-Check 'first-run-rest-status' $restStatus @{ profile = $profile; url = "http://$($webBindAddr):4711/api/v1/status" }
     }
     $eventLogPath = Join-Path $script:artifacts 'application-events.json'
     Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddHours(-2) } -MaxEvents 50 |
@@ -163,7 +164,7 @@ EnableUPnP=0
     }
     $result | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $root 'target-result.json') -Encoding UTF8
     $result
-  } -ArgumentList $guestRoot, $guestZip
+  } -ArgumentList $guestRoot, $guestZip, $payload.lanBindAddr
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
   Copy-Item -FromSession $session -Path (Join-Path $guestRoot '*') -Destination $payload.hostReportDir -Recurse -Force
   $guestResult | ConvertTo-Json -Depth 8
@@ -763,6 +764,8 @@ try {
   }
   if ($payload.localSwarmLanBindAddr) {
     $runnerArgs += @('--lan-bind-addr', $payload.localSwarmLanBindAddr)
+  } elseif ($payload.lanBindAddr) {
+    $runnerArgs += @('--lan-bind-addr', $payload.lanBindAddr)
   }
   if ($payload.localSwarmReleaseAssetPaths) {
     Invoke-Command -Session $session -ScriptBlock {

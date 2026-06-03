@@ -59,6 +59,20 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
     assert args.lan_bind_addr == "192.0.2.10"
 
 
+def test_offline_profile_preferences_can_bind_webserver_to_lan(tmp_path: Path) -> None:
+    text = windows_vm_profile_smoke.offline_preferences_text(
+        target="win10",
+        incoming_dir=tmp_path / "incoming",
+        temp_dir=tmp_path / "temp",
+        shared_dir=tmp_path / "shared",
+        enable_diagnostics=False,
+        web_interface_bind_addr="192.0.2.10",
+    )
+
+    assert "BindAddr=192.0.2.10" in text
+    assert "BindAddr=127.0.0.1" not in text
+
+
 def test_local_swarm_payload_check_accepts_staged_harness(tmp_path) -> None:
     harness_root = tmp_path / "harness"
     (harness_root / "emule_test_harness").mkdir(parents=True)

@@ -22,7 +22,8 @@ def test_preferences_text_configures_local_ed2k_without_kad_or_interface_bind(tm
     assert "Nick=win11-vm" in text
     assert "NetworkED2K=1" in text
     assert "NetworkKademlia=0" in text
-    assert "BindAddr=169.254.83.248" in text
+    assert text.count("BindAddr=169.254.83.248") == 2
+    assert "BindAddr=127.0.0.1" not in text
     assert "BindInterface=\n" in text
     assert "Port=4762" in text
     assert "UDPPort=4772" in text
