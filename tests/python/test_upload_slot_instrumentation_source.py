@@ -21,6 +21,8 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "waitingCooldownMaxMs=%I64u" in block
     assert "waitingRetryCooldown=%Id" in block
     assert "waitingNoRequestCooldown=%Id" in block
+    assert "waitingNoRequestProductive=%Id" in block
+    assert "waitingNoRequestUnproductive=%Id" in block
     assert "waitingClientOnlyCooldown=%Id" in block
     assert "waitingRetryNoRequest=%Id" in block
     assert "waitingRetryChurn=%Id" in block
@@ -35,6 +37,8 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "itRetryCooldown->second.eReason" in block
     assert "m_uploadRetryCooldownByIP.size()" in block
     assert "m_noRequestUploadRetryCooldownByIP.size()" in block
+    assert "bProductiveRecycle" in header
+    assert "SetNoRequestUploadRetryCooldown(client, ullCooldownUntil, ullTrackUntil, bProductiveNoRequestRecycle)" in source
     assert "UploadRetryCooldownReason eReason" in header
     assert "UploadRetryCooldownReason eReason);" in header
     for reason in (
