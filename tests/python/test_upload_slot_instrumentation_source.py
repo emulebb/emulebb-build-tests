@@ -95,6 +95,8 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "ClassifyQueuedBlockRequestAdmission" in seams_header
     assert "ShouldAdmitQueuedBlockRequestToUploadSlot" in seams_header
     assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in seams_header
+    assert "bool bProductiveNoRequestRecycle" in seams_header
+    assert "|| bProductiveNoRequestRecycle" in seams_header
     assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in not_uploading_block
     assert "LPCTSTR pszCooldownClearInstrumentationReason = NULL;" in not_uploading_block
     assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this, &pszCooldownClearInstrumentationReason);" in not_uploading_block
@@ -105,7 +107,11 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("GetQueuedBlockRequestAdmissionInstrumentationReason")
     assert "bool ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason = NULL)" in queue_header
     assert "bool CUploadQueue::ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason)" in queue_source
-    assert "reject-not-uploading-no-request-clear-used" in queue_source
+    assert "const bool bProductiveNoRequestRecycle = itNoRequest->second.bProductiveRecycle;" in queue_source
+    assert "ShouldAllowNoRequestCooldownClear(true, itNoRequest->second.bQueuedRequestClearUsed, bProductiveNoRequestRecycle)" in queue_source
+    assert "reject-not-uploading-unproductive-no-request-clear-used" in queue_source
+    assert "bClearedProductiveNoRequestCooldown = true;" in queue_source
+    assert "bHadClientCooldown || bHadIPCooldown || bClearedProductiveNoRequestCooldown" in queue_source
     assert "reject-not-uploading-retry-clear-used" in queue_source
     assert "reject-not-uploading-no-request-only-cooldown" in queue_source
     assert "reject-not-uploading-no-active-cooldown" in queue_source

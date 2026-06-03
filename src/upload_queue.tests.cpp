@@ -155,12 +155,13 @@ TEST_CASE("Upload queue clears retry cooldown only when queued peers request val
 	CHECK_FALSE(ShouldAttemptUploadRetryCooldownClearOnQueuedRequest(true, true, false));
 }
 
-TEST_CASE("Upload queue clears no-request cooldown only once per cooldown window")
+TEST_CASE("Upload queue lets productive no-request peers prove renewed demand")
 {
-	CHECK(ShouldAllowNoRequestCooldownClear(false, false));
-	CHECK(ShouldAllowNoRequestCooldownClear(false, true));
-	CHECK(ShouldAllowNoRequestCooldownClear(true, false));
-	CHECK_FALSE(ShouldAllowNoRequestCooldownClear(true, true));
+	CHECK(ShouldAllowNoRequestCooldownClear(false, false, false));
+	CHECK(ShouldAllowNoRequestCooldownClear(false, true, false));
+	CHECK(ShouldAllowNoRequestCooldownClear(true, false, false));
+	CHECK_FALSE(ShouldAllowNoRequestCooldownClear(true, true, false));
+	CHECK(ShouldAllowNoRequestCooldownClear(true, true, true));
 
 	CHECK(ShouldAllowUploadRetryCooldownClear(false, false));
 	CHECK(ShouldAllowUploadRetryCooldownClear(false, true));
