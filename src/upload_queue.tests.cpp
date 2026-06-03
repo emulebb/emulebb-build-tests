@@ -60,6 +60,14 @@ TEST_CASE("Upload queue attempts admission only with an eligible waiting candida
 	CHECK_FALSE(ShouldAttemptUploadSlotAdmission(false, false, false));
 }
 
+TEST_CASE("Upload queue direct admission bypasses only cooldown-only waiting lists")
+{
+	CHECK(ShouldDirectAdmitBehindCooldownOnlyWaitingList(false, false));
+	CHECK_FALSE(ShouldDirectAdmitBehindCooldownOnlyWaitingList(true, false));
+	CHECK_FALSE(ShouldDirectAdmitBehindCooldownOnlyWaitingList(false, true));
+	CHECK_FALSE(ShouldDirectAdmitBehindCooldownOnlyWaitingList(true, true));
+}
+
 TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
 {
 	CHECK(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 1000u, 2000u));
