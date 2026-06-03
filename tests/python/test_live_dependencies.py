@@ -105,6 +105,23 @@ def test_resolve_portable_dependency_downloads_and_caches(tmp_path: Path) -> Non
     assert cached.exe_path == resolved.exe_path
 
 
+def test_default_urlopen_receives_trusted_https_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    context = object()
+    calls = []
+
+    def fake_urlopen(request, *, timeout=0, context=None):
+        calls.append({"request": request, "timeout": timeout, "context": context})
+        return FakeResponse(b"{}")
+
+    monkeypatch.setattr(live_dependencies, "trusted_https_context", lambda: context)
+    monkeypatch.setattr(live_dependencies.urllib.request, "urlopen", fake_urlopen)
+
+    with live_dependencies.open_https_url("https://example.invalid", timeout=17, opener=live_dependencies.urllib.request.urlopen):
+        pass
+
+    assert calls == [{"request": "https://example.invalid", "timeout": 17, "context": context}]
+
+
 def test_resolve_portable_dependency_pinned_uses_manifest_tag(tmp_path: Path) -> None:
     release = {
         "tag_name": live_dependencies.ARR_PORTABLE_DEPENDENCIES["radarr"]["tag"],

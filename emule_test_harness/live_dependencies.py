@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -99,7 +100,7 @@ def load_github_release(repo: str, tag: str, *, opener=urllib.request.urlopen) -
     endpoint = "latest" if tag == "latest" else f"tags/{tag}"
     url = f"https://api.github.com/repos/{repo}/releases/{endpoint}"
     request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "emulebb-live-tests"})
-    with opener(request, timeout=60) as response:
+    with open_https_url(request, timeout=60, opener=opener) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -149,13 +150,32 @@ def find_executable(root: Path, exe_name: str) -> Path | None:
     return matches[0] if matches else None
 
 
+def trusted_https_context() -> ssl.SSLContext:
+    """Returns a TLS context that uses certifi when the guest Python has it."""
+
+    try:
+        import certifi  # type: ignore[import-not-found]
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def open_https_url(request_or_url: Any, *, timeout: int, opener=urllib.request.urlopen) -> Any:
+    """Opens an HTTPS URL with a trusted CA bundle for the default urllib opener."""
+
+    if opener is urllib.request.urlopen:
+        return opener(request_or_url, timeout=timeout, context=trusted_https_context())
+    return opener(request_or_url, timeout=timeout)
+
+
 def download_file(url: str, destination: Path, *, opener=urllib.request.urlopen) -> None:
     """Downloads one dependency archive to a temporary file and promotes it atomically."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     try:
-        with opener(url, timeout=180) as response, temporary.open("wb") as handle:
+        with open_https_url(url, timeout=180, opener=opener) as response, temporary.open("wb") as handle:
             shutil.copyfileobj(response, handle)
         # Promote only a completed archive so cache-only follow-up runs never
         # observe a partially downloaded ZIP after interruption or timeout.
