@@ -91,6 +91,22 @@ TEST_CASE("Broadband idle upload recycling requires an empty local send pipeline
 	CHECK_FALSE(ShouldRecycleIdleBroadbandUploadSlot(true, true, false, 0u, 0u, 0, 0, 0, 9999u, 10000u));
 }
 
+TEST_CASE("Broadband no-request recycling bypasses slow warmup only for drained slots")
+{
+	CHECK(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, false, 0u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(false, false, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, true, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 1u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 1u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 1, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 1, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 1, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 9999u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, true, 9999u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, true, 0u, 10000u));
+}
+
 TEST_CASE("Broadband stalled upload recycling requires queued work and replacement pressure")
 {
 	CHECK(HasStalledUploadReplacementPressure(true, 12, 12));
