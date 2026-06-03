@@ -21,6 +21,20 @@ def test_startup_initialization_logs_mfc_exception_details() -> None:
     assert "bError = true;" in download_block
 
 
+def test_shutdown_keeps_part_file_writer_alive_through_download_queue_teardown() -> None:
+    source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    shutdown_block = source[
+        source.index("updateShutdownPhase(30, _T(\"Closing eMuleBB\")") :
+        source.index("updateShutdownPhase(100, _T(\"Closing eMuleBB\")")
+    ]
+
+    assert "keeping part-file writer alive for download teardown" in shutdown_block
+    assert "theApp.m_pUploadDiskIOThread->EndThread();" in shutdown_block
+    assert shutdown_block.index("theApp.m_pUploadDiskIOThread->EndThread();") < shutdown_block.index("delete theApp.downloadqueue;")
+    assert shutdown_block.index("delete theApp.downloadqueue;") < shutdown_block.index("theApp.m_pPartFileWriteThread->EndThread();")
+    assert shutdown_block.index("theApp.m_pPartFileWriteThread->EndThread();") < shutdown_block.index("delete theApp.m_pPartFileWriteThread;")
+
+
 def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
     source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
     start_block = source[source.index("void CemuleDlg::StartUPnP") : source.index("void CemuleDlg::RefreshUPnP")]
