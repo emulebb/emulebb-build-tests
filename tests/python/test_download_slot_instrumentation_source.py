@@ -77,6 +77,8 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "m_uDownloadOutOfPartReqsSuppressions" in client_header
     assert "highVolumeSuppressed=%I64u" in client_source
     assert '_tcscmp(pszReason, _T("block-reserve-empty")) == 0' in client_source
+    assert '_tcscmp(pszReason, _T("start-download")) == 0' in client_source
+    assert '_tcscmp(pszReason, _T("state-enter-downloading")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("state-transition")) == 0' in client_source
     assert "noDataSuppressions=%u" in client_source
 
