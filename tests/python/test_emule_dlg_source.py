@@ -44,11 +44,15 @@ def test_stored_search_startup_stage_closes_progress_dialog_without_extra_queued
     assert "theApp.searchlist->LoadSearches();" in stored_search_block
     assert "IDS_STARTUP_PROGRESS_LOADING_STORED_SEARCHES" not in stored_search_block
     assert stored_search_block.index("status = 6;") < stored_search_block.index("DestroyStartupProgress();")
+    assert stored_search_block.index("m_bStartupProgressFinished = true;") < stored_search_block.index("DestroyStartupProgress();")
+    assert stored_search_block.index("theApp.DestroyEarlyStartupProgress();") < stored_search_block.index("DestroyStartupProgress();")
     assert stored_search_block.index("DestroyStartupProgress();") < stored_search_block.index("theApp.searchlist->LoadSearches();")
     assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches%s"), (LPCTSTR)CExceptionStrDash(*ex));' in stored_search_block
     assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches - Unknown exception"));' in stored_search_block
     assert "[[fallthrough]];" in stored_search_block
     assert "break;" not in stored_search_block
+    assert final_block.index("m_bStartupProgressFinished = true;") < final_block.index("UpdateStartupProgress(")
+    assert final_block.index("theApp.DestroyEarlyStartupProgress();") < final_block.index("UpdateStartupProgress(")
     assert "StopTimer();" in final_block
     assert "DestroyStartupProgress();" in final_block
 
@@ -61,6 +65,8 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
     destroy_early_block = app_source[app_source.index("void CemuleApp::DestroyEarlyStartupProgress()") : app_source.index("bool CemuleApp::ProcessCommandline")]
     pump_block = lifecycle_source[lifecycle_source.index("void PumpLifecycleProgressMessages") :]
     close_if_running_block = dialog_source[dialog_source.index("void CemuleDlg::CloseStartupProgressIfRunning()") : dialog_source.index("BOOL CemuleApp::IsIdleMessage")]
+    show_block = dialog_source[dialog_source.index("void CemuleDlg::ShowStartupProgress()") : dialog_source.index("void CemuleDlg::UpdateStartupProgress")]
+    update_block = dialog_source[dialog_source.index("void CemuleDlg::UpdateStartupProgress") : dialog_source.index("void CemuleDlg::DestroyStartupProgress")]
 
     assert "m_pStartupProgressDlg->DestroyWindow();" in destroy_startup_block
     assert destroy_startup_block.index("m_pStartupProgressDlg = NULL;") < destroy_startup_block.index("PumpLifecycleProgressMessages(NULL);")
@@ -68,6 +74,12 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
     assert destroy_early_block.index("m_pEarlyStartupProgressDlg = NULL;") < destroy_early_block.index("PumpLifecycleProgressMessages(NULL);")
     assert "PM_NOREMOVE" in pump_block
     assert "msg.message == UM_STARTUP_NEXT_STAGE" in pump_block
+    assert "if (m_bStartupProgressFinished)" in show_block
+    assert show_block.index("if (m_bStartupProgressFinished)") < show_block.index("if (m_pStartupProgressDlg != NULL)")
+    assert "if (m_bStartupProgressFinished)" in update_block
+    assert update_block.index("if (m_bStartupProgressFinished)") < update_block.index("if (m_pStartupProgressDlg == NULL)")
+    assert "m_bStartupProgressFinished = true;" in close_if_running_block
+    assert "theApp.DestroyEarlyStartupProgress();" in close_if_running_block
     assert "DestroyStartupProgress();" in close_if_running_block
     assert "theApp.IsRunning()" in close_if_running_block
     assert "CloseStartupProgressIfRunning();" in dialog_source[dialog_source.index("LRESULT CemuleDlg::OnStartupNextStage") : dialog_source.index("LRESULT CemuleDlg::OnBindInterfaceChanged")]
