@@ -29,6 +29,16 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "waitingRetryStalled=%Id" in block
     assert "waitingRetrySlow=%Id" in block
     assert "waitingRetryUnknown=%Id" in block
+    assert "activeZeroRate=%Id" in block
+    assert "activeNoRequest=%Id" in block
+    assert "activeQueuedRequests=%Id" in block
+    assert "activePendingIO=%Id" in block
+    assert "activeBufferedPayload=%Id" in block
+    assert "activeSocketBacklog=%Id" in block
+    assert "pUploadingClient->m_BlockRequests_queue.GetCount()" in block
+    assert "pUploadingClient->m_nPendingIOBlocks.load()" in block
+    assert "pActiveClient->GetPayloadInBuffer()" in block
+    assert "pUploadSocket->DbgGetStdQueueCount()" in block
     assert "retryCooldowns=%u" in block
     assert "noRequestCooldowns=%u" in block
     assert "GetSlowUploadCooldownRemaining()" in block
