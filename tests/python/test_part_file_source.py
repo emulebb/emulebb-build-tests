@@ -153,6 +153,18 @@ def test_downloading_source_list_recovery_covers_remove_and_scan_entrypoints() -
     assert request_block.index("RecoverDownloadingSourceList(_T(\"chunk selection pass\"));") < request_block.index("uint16 transferringClientsScore = (uint16)m_downloadingSourceList.GetCount();")
 
 
+def test_endgame_steal_preserves_active_download_streams() -> None:
+    source = (app_source_root() / "DownloadClient.cpp").read_text(encoding="utf-8", errors="ignore")
+    steal_block = source[
+        source.index("bool CUpDownClient::CancelEndgameReservationForFasterPeer") :
+        source.index("void CUpDownClient::SetDownloadState")
+    ]
+
+    assert "GetSessionPayloadDown() > 0 || GetSessionDown() > 0" in steal_block
+    assert steal_block.index("GetSessionPayloadDown() > 0 || GetSessionDown() > 0") < steal_block.index("m_fileEndgameCancelTimes.Lookup")
+    assert "SetDownloadState(DS_ONQUEUE, _T(\"Endgame block reassigned to a faster source.\"));" in steal_block
+
+
 def test_downloading_source_list_recovery_rebuilds_from_live_sources() -> None:
     source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
     recover_block = source[
