@@ -65,6 +65,21 @@ TEST_CASE("Preference validation seam centralizes public REST preference ranges"
 	CHECK(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(PreferenceValidationSeams::kMaxUploadSlots));
 }
 
+TEST_CASE("Preference validation seam centralizes random listener port range")
+{
+	CHECK(PreferenceValidationSeams::kRandomListenerPortMin == 49152u);
+	CHECK(PreferenceValidationSeams::kRandomListenerPortMax == 65535u);
+	CHECK(PreferenceValidationSeams::kRandomListenerPortRange == 16384u);
+
+	CHECK_FALSE(PreferenceValidationSeams::IsRandomListenerPort(49151u));
+	CHECK(PreferenceValidationSeams::IsRandomListenerPort(49152u));
+	CHECK(PreferenceValidationSeams::IsRandomListenerPort(65535u));
+
+	CHECK(PreferenceValidationSeams::GetAdjacentRandomListenerPort(49152u) == 49153u);
+	CHECK(PreferenceValidationSeams::GetAdjacentRandomListenerPort(50000u) == 49999u);
+	CHECK(PreferenceValidationSeams::GetAdjacentRandomListenerPort(65535u) == 65534u);
+}
+
 TEST_CASE("Preference validation seam centralizes broadband upload policy ranges")
 {
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(PreferenceValidationSeams::kDefaultMaxUploadSlots) == PreferenceValidationSeams::kDefaultMaxUploadSlots);
