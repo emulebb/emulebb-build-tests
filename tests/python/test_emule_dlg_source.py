@@ -35,6 +35,19 @@ def test_shutdown_keeps_part_file_writer_alive_through_download_queue_teardown()
     assert shutdown_block.index("theApp.m_pPartFileWriteThread->EndThread();") < shutdown_block.index("delete theApp.m_pPartFileWriteThread;")
 
 
+def test_stored_search_startup_stage_closes_progress_dialog_without_extra_queued_hop() -> None:
+    source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    startup_block = source[source.index("void CemuleDlg::OnStartupTimer() noexcept") : source.index("void CemuleDlg::StopTimer()")]
+    stored_search_block = startup_block[startup_block.index("case 5:") : startup_block.index("default:")]
+    final_block = startup_block[startup_block.index("default:") : startup_block.index("VERIFY(PostMessage(UM_STARTUP_NEXT_STAGE) != 0);")]
+
+    assert "theApp.searchlist->LoadSearches();" in stored_search_block
+    assert "[[fallthrough]];" in stored_search_block
+    assert "break;" not in stored_search_block
+    assert "StopTimer();" in final_block
+    assert "DestroyStartupProgress();" in final_block
+
+
 def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
     source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
     start_block = source[source.index("void CemuleDlg::StartUPnP") : source.index("void CemuleDlg::RefreshUPnP")]
