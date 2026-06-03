@@ -107,6 +107,8 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "bool CUploadQueue::ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason)" in queue_source
     assert "reject-not-uploading-no-request-clear-used" in queue_source
     assert "reject-not-uploading-retry-clear-used" in queue_source
+    assert "reject-not-uploading-no-request-only-cooldown" in queue_source
+    assert "reject-not-uploading-no-active-cooldown" in queue_source
     assert "AcceptNewClient(uploadinglist.GetCount())" in direct_admit_block
     assert "ForceNewClient(true)" in direct_admit_block
     assert "AddUpNextClient(_T(\"Direct add after queued block request.\"), client)" in direct_admit_block
