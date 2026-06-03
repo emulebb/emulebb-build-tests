@@ -168,12 +168,15 @@ TEST_CASE("Broadband stalled upload recycling requires queued work and replaceme
 
 TEST_CASE("Upload queue cools down only short low-payload disconnect churn")
 {
-	CHECK(ShouldCooldownShortFailedUploadSlot(true, false, 1000u, 0u));
-	CHECK(ShouldCooldownShortFailedUploadSlot(true, false, kShortFailedUploadCooldownMaxAgeMs, kShortFailedUploadCooldownMaxPayloadBytes));
-	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(false, false, 1000u, 0u));
-	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, true, 1000u, 0u));
-	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, false, kShortFailedUploadCooldownMaxAgeMs + 1u, 0u));
-	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, false, 1000u, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
+	CHECK(ShouldCooldownShortFailedUploadSlot(true, false, false, 1000u, 0u));
+	CHECK(ShouldCooldownShortFailedUploadSlot(true, false, false, kShortFailedUploadCooldownMaxAgeMs, kShortFailedUploadCooldownMaxPayloadBytes));
+	CHECK(ShouldCooldownShortFailedUploadSlot(true, true, false, kShortFailedUploadCooldownMaxAgeMs + 1u, 0u));
+	CHECK(ShouldCooldownShortFailedUploadSlot(true, true, false, kRemoteCancelledUploadCooldownMaxAgeMs, kShortFailedUploadCooldownMaxPayloadBytes));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(false, false, false, 1000u, 0u));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, false, true, 1000u, 0u));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, false, false, kShortFailedUploadCooldownMaxAgeMs + 1u, 0u));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, true, false, kRemoteCancelledUploadCooldownMaxAgeMs + 1u, 0u));
+	CHECK_FALSE(ShouldCooldownShortFailedUploadSlot(true, true, false, 1000u, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
 }
 
 TEST_CASE("Upload queue cools down only short no-socket upload churn")
