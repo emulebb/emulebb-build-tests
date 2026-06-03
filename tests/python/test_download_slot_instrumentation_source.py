@@ -69,6 +69,12 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     ):
         assert anchor in client_source or anchor in base_client_source
 
+    throttle_block = client_source[
+        client_source.index("bool IsDownloadSlotInstrumentationHighVolumeReason") :
+        client_source.index("bool IsTickInsideWindow")
+    ]
+    assert '_T("request-empty-nnp")' in throttle_block
+
     assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION\nvoid CDownloadQueue::LogDownloadSlotInstrumentation" in queue_source
     assert "DownloadSlotInstrumentation: summary" in queue_source
     assert "LogDownloadSlotInstrumentation(curTick);" in queue_source
