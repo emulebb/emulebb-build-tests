@@ -34,6 +34,31 @@ TEST_CASE("App keyboard shortcut seam reserves native Alt-key commands")
 	}
 }
 
+TEST_CASE("App keyboard shortcut seam maps numeric toolbar shortcuts")
+{
+	struct SExpectedShortcut
+	{
+		char ch;
+		AppKeyboardShortcutsSeams::ECommand eCommand;
+	};
+	const SExpectedShortcut aShortcuts[] = {
+		{ '1', AppKeyboardShortcutsSeams::ECommand::ShowConnect },
+		{ '2', AppKeyboardShortcutsSeams::ECommand::ShowKad },
+		{ '3', AppKeyboardShortcutsSeams::ECommand::ShowServer },
+		{ '4', AppKeyboardShortcutsSeams::ECommand::ShowTransfers },
+		{ '5', AppKeyboardShortcutsSeams::ECommand::ShowSearch },
+		{ '6', AppKeyboardShortcutsSeams::ECommand::ShowSharedFiles },
+		{ '7', AppKeyboardShortcutsSeams::ECommand::ShowMessages },
+		{ '8', AppKeyboardShortcutsSeams::ECommand::ShowIrc },
+		{ '9', AppKeyboardShortcutsSeams::ECommand::ShowStatistics },
+		{ '0', AppKeyboardShortcutsSeams::ECommand::ShowOptions },
+	};
+	for (const SExpectedShortcut &shortcut : aShortcuts) {
+		CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, shortcut.ch, false) == shortcut.eCommand);
+		CHECK(AppKeyboardShortcutsSeams::ClassifySystemKeyMenu(SC_KEYMENU, shortcut.ch, true) == AppKeyboardShortcutsSeams::ECommand::None);
+	}
+}
+
 TEST_CASE("App keyboard shortcut seam leaves ordinary navigation and modal contexts alone")
 {
 	CHECK(AppKeyboardShortcutsSeams::ClassifyMainKeyMessage(WM_KEYDOWN, VK_TAB, true, false, false) == AppKeyboardShortcutsSeams::ECommand::None);
