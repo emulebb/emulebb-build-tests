@@ -86,11 +86,51 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "m_ullDownloadBlockRequestsReserved" in client_header
     assert "m_uDownloadOutOfPartReqsSuppressions" in client_header
     assert "highVolumeSuppressed=%I64u" in client_source
+    assert "PartFileBufferedDataStateSnapshot bufferSnapshot" in queue_source
+    assert "cur_file->GetBufferedDataStateSnapshot(bufferSnapshot);" in queue_source
+    for field in (
+        "bufferedReadyBytes=%I64u",
+        "bufferedPendingBytes=%I64u",
+        "bufferedWrittenBytes=%I64u",
+        "bufferedErrorBytes=%I64u",
+        "bufferedReadyItems=%u",
+        "bufferedPendingItems=%u",
+        "bufferedWrittenItems=%u",
+        "bufferedErrorItems=%u",
+        "bufferedReadyFiles=%u",
+        "bufferedPendingFiles=%u",
+        "bufferedWrittenFiles=%u",
+        "bufferedErrorFiles=%u",
+        "asyncWriteRefs=%Id",
+    ):
+        assert field in queue_source
     assert '_tcscmp(pszReason, _T("block-reserve-empty")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("start-download")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("state-enter-downloading")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("state-transition")) == 0' in client_source
     assert "noDataSuppressions=%u" in client_source
+
+
+def test_download_buffer_instrumentation_splits_part_file_flush_states() -> None:
+    part_header = read_app_source("PartFile.h")
+    part_source = read_app_source("PartFile.cpp")
+    queue_source = read_app_source("DownloadQueue.cpp")
+
+    assert "struct PartFileBufferedDataStateSnapshot" in part_header
+    assert "void\tGetBufferedDataStateSnapshot(PartFileBufferedDataStateSnapshot &rSnapshot) const;" in part_header
+    assert "void CPartFile::GetBufferedDataStateSnapshot(PartFileBufferedDataStateSnapshot &rSnapshot) const" in part_source
+    assert "rSnapshot.nAsyncWriteCount = GetAsyncWriteCount();" in part_source
+    assert "GetPartFileBufferedDataFlushState(*item)" in part_source
+    for state in ("PB_READY", "PB_PENDING", "PB_WRITTEN", "PB_ERROR"):
+        assert state in part_source
+    for aggregate in (
+        "uBufferedReadyBytes += bufferSnapshot.uReadyBytes;",
+        "uBufferedPendingBytes += bufferSnapshot.uPendingBytes;",
+        "uBufferedWrittenBytes += bufferSnapshot.uWrittenBytes;",
+        "uBufferedErrorBytes += bufferSnapshot.uErrorBytes;",
+        "iAsyncWriteRefs += bufferSnapshot.nAsyncWriteCount;",
+    ):
+        assert aggregate in queue_source
 
 
 def test_download_slot_no_data_and_out_of_part_guards_are_conservative() -> None:
