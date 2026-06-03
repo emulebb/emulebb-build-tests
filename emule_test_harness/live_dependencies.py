@@ -38,7 +38,7 @@ ARR_PORTABLE_DEPENDENCIES: dict[str, dict[str, str]] = {
     "sonarr": {
         "repo": "Sonarr/Sonarr",
         "tag": "v4.0.17.2952",
-        "asset_pattern": r"(?i)windows(?:-core)?-x64\.zip$",
+        "asset_pattern": r"(?i)(?:windows(?:-core)?|win)-x64\.zip$",
         "exe_name": "Sonarr.exe",
     },
 }

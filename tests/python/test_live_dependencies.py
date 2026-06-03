@@ -40,6 +40,20 @@ def test_select_release_asset_uses_windows_x64_zip() -> None:
     assert asset["browser_download_url"] == "https://example.invalid/win"
 
 
+def test_sonarr_pinned_asset_pattern_accepts_win_x64_zip() -> None:
+    asset = live_dependencies.select_release_asset(
+        {
+            "assets": [
+                {"name": "Sonarr.main.4.0.17.2952.win-x64-installer.exe", "browser_download_url": "https://example.invalid/installer"},
+                {"name": "Sonarr.main.4.0.17.2952.win-x64.zip", "browser_download_url": "https://example.invalid/zip"},
+            ]
+        },
+        live_dependencies.ARR_PORTABLE_DEPENDENCIES["sonarr"]["asset_pattern"],
+    )
+
+    assert asset["browser_download_url"] == "https://example.invalid/zip"
+
+
 def test_safe_extract_zip_rejects_path_escape(tmp_path: Path) -> None:
     archive_path = tmp_path / "bad.zip"
     archive_path.write_bytes(zip_payload("../escape.txt"))
