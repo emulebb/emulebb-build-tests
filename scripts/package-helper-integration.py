@@ -344,7 +344,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 
         scripts_root = helper_scripts_root(build_repo_root)
         run_helper(
-            scripts_root / "register-amutorrent.ps1",
+            scripts_root / "Register-aMuTorrent.ps1",
             [
                 "-AmutorrentUrl",
                 amutorrent_base_url,
@@ -374,7 +374,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         # unusable no-client state. The helper is expected to refuse removal of
         # the last enabled client; the suite verifies that guard still fires.
         run_helper(
-            scripts_root / "register-amutorrent.ps1",
+            scripts_root / "Register-aMuTorrent.ps1",
             [
                 "-Action",
                 "Unregister",
@@ -393,7 +393,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         )
 
         run_helper(
-            scripts_root / "register-prowlarr.ps1",
+            scripts_root / "Register-Prowlarr.ps1",
             [
                 "-ProwlarrUrl",
                 prowlarr_base_url,
@@ -423,7 +423,7 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             ("Sonarr", sonarr_base_url, sonarr_api_key, "/api/v3/downloadclient"),
         ):
             run_helper(
-                scripts_root / "register-arr-stack.ps1",
+                scripts_root / "Register-ArrStack.ps1",
                 [
                     "-Target",
                     target,
