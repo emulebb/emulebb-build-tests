@@ -42,11 +42,27 @@ def test_stored_search_startup_stage_closes_progress_dialog_without_extra_queued
     final_block = startup_block[startup_block.index("default:") : startup_block.index("VERIFY(PostMessage(UM_STARTUP_NEXT_STAGE) != 0);")]
 
     assert "theApp.searchlist->LoadSearches();" in stored_search_block
+    assert "IDS_STARTUP_PROGRESS_LOADING_STORED_SEARCHES" not in stored_search_block
+    assert stored_search_block.index("status = 6;") < stored_search_block.index("DestroyStartupProgress();")
     assert stored_search_block.index("DestroyStartupProgress();") < stored_search_block.index("theApp.searchlist->LoadSearches();")
+    assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches%s"), (LPCTSTR)CExceptionStrDash(*ex));' in stored_search_block
+    assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches - Unknown exception"));' in stored_search_block
     assert "[[fallthrough]];" in stored_search_block
     assert "break;" not in stored_search_block
     assert "StopTimer();" in final_block
     assert "DestroyStartupProgress();" in final_block
+
+
+def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -> None:
+    dialog_source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    app_source = (app_source_root() / "Emule.cpp").read_text(encoding="utf-8", errors="ignore")
+    destroy_startup_block = dialog_source[dialog_source.index("void CemuleDlg::DestroyStartupProgress()") : dialog_source.index("BOOL CemuleApp::IsIdleMessage")]
+    destroy_early_block = app_source[app_source.index("void CemuleApp::DestroyEarlyStartupProgress()") : app_source.index("bool CemuleApp::ProcessCommandline")]
+
+    assert "m_pStartupProgressDlg->DestroyWindow();" in destroy_startup_block
+    assert destroy_startup_block.index("m_pStartupProgressDlg = NULL;") < destroy_startup_block.index("PumpLifecycleProgressMessages(NULL);")
+    assert "m_pEarlyStartupProgressDlg->DestroyWindow();" in destroy_early_block
+    assert destroy_early_block.index("m_pEarlyStartupProgressDlg = NULL;") < destroy_early_block.index("PumpLifecycleProgressMessages(NULL);")
 
 
 def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
