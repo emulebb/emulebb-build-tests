@@ -145,6 +145,11 @@ TEST_CASE("Upload queue clears no-request cooldown only once per cooldown window
 	CHECK(ShouldAllowNoRequestCooldownClear(false, true));
 	CHECK(ShouldAllowNoRequestCooldownClear(true, false));
 	CHECK_FALSE(ShouldAllowNoRequestCooldownClear(true, true));
+
+	CHECK(ShouldAllowUploadRetryCooldownClear(false, false));
+	CHECK(ShouldAllowUploadRetryCooldownClear(false, true));
+	CHECK(ShouldAllowUploadRetryCooldownClear(true, false));
+	CHECK_FALSE(ShouldAllowUploadRetryCooldownClear(true, true));
 }
 
 TEST_CASE("Broadband stalled upload recycling requires queued work and replacement pressure")
