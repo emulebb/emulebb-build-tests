@@ -107,12 +107,10 @@ TEST_CASE("Broadband no-request recycling bypasses slow warmup only for drained 
 	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, true, 0u, 10000u));
 }
 
-TEST_CASE("Broadband no-request cooldown keeps productive drained sessions eligible")
+TEST_CASE("Broadband no-request cooldown covers drained sessions")
 {
-	CHECK(ShouldCooldownNoRequestUploadRecycle(false, 0u));
-	CHECK(ShouldCooldownNoRequestUploadRecycle(false, kShortFailedUploadCooldownMaxPayloadBytes));
-	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(true, 0u));
-	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(false, kShortFailedUploadCooldownMaxPayloadBytes + 1u));
+	CHECK(ShouldCooldownNoRequestUploadRecycle(false));
+	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(true));
 
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(10u, false) == 10u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(kNoRequestUploadCooldownMaxSeconds, false) == kNoRequestUploadCooldownMaxSeconds);
