@@ -18,9 +18,14 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "waitingCooldownMinMs=%I64u" in block
     assert "waitingCooldownAvgMs=%I64u" in block
     assert "waitingCooldownMaxMs=%I64u" in block
+    assert "waitingRetryCooldown=%Id" in block
+    assert "waitingNoRequestCooldown=%Id" in block
+    assert "waitingClientOnlyCooldown=%Id" in block
     assert "retryCooldowns=%u" in block
     assert "noRequestCooldowns=%u" in block
     assert "GetSlowUploadCooldownRemaining()" in block
+    assert "GetUploadRetryCooldownIP(pWaitingClient)" in block
+    assert "ullCooldownUntil > curTick" in block
     assert "m_uploadRetryCooldownByIP.size()" in block
     assert "m_noRequestUploadRetryCooldownByIP.size()" in block
     assert block.index("GetSlowUploadCooldownRemaining()") < block.index("waitingCooldownMinMs=%I64u")
