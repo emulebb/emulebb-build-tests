@@ -59,8 +59,7 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     script = windows_vm_guest.profile_smoke_script()
 
     assert "Ensure-GuestInternet" in script
-    assert "Ensure-Certifi" in script
-    assert "pip install --disable-pip-version-check certifi" in script
+    assert "pip install --disable-pip-version-check certifi" not in script
     assert "windows_vm_profile_smoke.py" in script
     assert "vm_guest_profiles.py" in script
     assert "campaign_scenarios.py" in script

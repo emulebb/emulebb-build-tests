@@ -309,14 +309,6 @@ function Invoke-GuestPython($session, $python, $runner, [string[]] $arguments) {
 
 function Ensure-GuestPython($session) {
   return Invoke-Command -Session $session -ScriptBlock {
-    function Ensure-Certifi($python) {
-      & $python -c "import certifi" 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) { return }
-      $output = & $python -m pip install --disable-pip-version-check certifi 2>&1
-      if ($LASTEXITCODE -ne 0) {
-        throw ('certifi install failed with exit code ' + $LASTEXITCODE + ":`n" + (($output | ForEach-Object { $_.ToString() }) -join "`n"))
-      }
-    }
     $candidates = @(
       'C:\Python313\python.exe',
       'C:\Python312\python.exe',
@@ -326,14 +318,12 @@ function Ensure-GuestPython($session) {
     foreach ($candidate in $candidates) {
       if (Test-Path -LiteralPath $candidate -PathType Leaf) {
         & $candidate -m pip --version | Out-Null
-        Ensure-Certifi $candidate
         return $candidate
       }
     }
     $command = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($command) {
       & $command.Source -m pip --version | Out-Null
-      Ensure-Certifi $command.Source
       return $command.Source
     }
     throw 'Python with pip is not installed in the guest. Re-run vm-lab prepare to install the guest baseline.'
@@ -548,14 +538,6 @@ function Wait-GuestSession($vmName) {
 
 function Ensure-GuestPython($session) {
   return Invoke-Command -Session $session -ScriptBlock {
-    function Ensure-Certifi($python) {
-      & $python -c "import certifi" 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) { return }
-      $output = & $python -m pip install --disable-pip-version-check certifi 2>&1
-      if ($LASTEXITCODE -ne 0) {
-        throw ('certifi install failed with exit code ' + $LASTEXITCODE + ":`n" + (($output | ForEach-Object { $_.ToString() }) -join "`n"))
-      }
-    }
     $candidates = @(
       'C:\Python313\python.exe',
       'C:\Python312\python.exe',
@@ -565,14 +547,12 @@ function Ensure-GuestPython($session) {
     foreach ($candidate in $candidates) {
       if (Test-Path -LiteralPath $candidate -PathType Leaf) {
         & $candidate -m pip --version | Out-Null
-        Ensure-Certifi $candidate
         return $candidate
       }
     }
     $command = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($command) {
       & $command.Source -m pip --version | Out-Null
-      Ensure-Certifi $command.Source
       return $command.Source
     }
     throw 'Python with pip is not installed in the guest. Re-run vm-lab prepare to install the guest baseline.'

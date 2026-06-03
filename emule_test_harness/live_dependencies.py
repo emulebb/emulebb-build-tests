@@ -158,7 +158,12 @@ def trusted_https_context() -> ssl.SSLContext:
 
         return ssl.create_default_context(cafile=certifi.where())
     except ImportError:
-        return ssl.create_default_context()
+        try:
+            from pip._vendor import certifi as pip_certifi  # type: ignore[import-not-found]
+
+            return ssl.create_default_context(cafile=pip_certifi.where())
+        except ImportError:
+            return ssl.create_default_context()
 
 
 def open_https_url(request_or_url: Any, *, timeout: int, opener=urllib.request.urlopen) -> Any:
