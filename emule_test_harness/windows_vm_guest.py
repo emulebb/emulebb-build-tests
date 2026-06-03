@@ -3,10 +3,79 @@
 from __future__ import annotations
 
 
+GUEST_INTERNET_CONTRACT_PS = r"""
+function Ensure-GuestInternet($session, $provisioning) {
+  if (-not $provisioning) {
+    throw 'Guest internet preflight requires provisioning details.'
+  }
+  return Invoke-Command -Session $session -ScriptBlock {
+    param($Provisioning)
+    $ErrorActionPreference = 'Stop'
+    $guestIp = [string] $Provisioning.guestIp
+    $prefixLength = [int] $Provisioning.prefixLength
+    $gateway = [string] $Provisioning.gateway
+    $dnsServers = @($Provisioning.dns | ForEach-Object { [string] $_ } | Where-Object { $_ })
+    if (-not $guestIp -or -not $gateway -or $dnsServers.Count -eq 0) {
+      throw 'Guest internet preflight received incomplete provisioning details.'
+    }
+    $adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Sort-Object InterfaceIndex | Select-Object -First 1
+    if (-not $adapter) {
+      $adapter = Get-NetAdapter | Sort-Object InterfaceIndex | Select-Object -First 1
+    }
+    if (-not $adapter) {
+      throw 'Guest internet preflight could not find a network adapter.'
+    }
+    Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+      Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    Get-NetRoute -InterfaceIndex $adapter.InterfaceIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+      Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    New-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -IPAddress $guestIp -PrefixLength $prefixLength -DefaultGateway $gateway | Out-Null
+    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $dnsServers
+
+    $evidence = [ordered]@{
+      adapter = $adapter | Select-Object Name, InterfaceDescription, InterfaceIndex, Status, MacAddress
+      requested = [ordered]@{
+        guestIp = $guestIp
+        prefixLength = $prefixLength
+        gateway = $gateway
+        dns = $dnsServers
+      }
+      ipv4 = $null
+      defaultRoute = $null
+      dns = $null
+      resolveGithub = $null
+      httpsGithub = $null
+    }
+    $deadline = (Get-Date).AddSeconds(60)
+    do {
+      Start-Sleep -Seconds 2
+      $evidence.ipv4 = Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Select-Object IPAddress, PrefixLength, AddressState
+      $evidence.defaultRoute = Get-NetRoute -InterfaceIndex $adapter.InterfaceIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Select-Object DestinationPrefix, NextHop, RouteMetric
+      $evidence.dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Select-Object ServerAddresses
+      try {
+        $resolved = Resolve-DnsName -Name 'github.com' -ErrorAction Stop |
+          Select-Object -First 3 Name, Type, IPAddress
+        $evidence.resolveGithub = [ordered]@{ status = 'passed'; records = $resolved }
+        $response = Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/' -TimeoutSec 20 -ErrorAction Stop
+        $evidence.httpsGithub = [ordered]@{ status = 'passed'; statusCode = [int] $response.StatusCode }
+        return $evidence
+      } catch {
+        $evidence.resolveGithub = [ordered]@{ status = 'failed'; message = $_.Exception.Message }
+      }
+    } while ((Get-Date) -lt $deadline)
+    throw ("Guest internet preflight failed:`n" + ($evidence | ConvertTo-Json -Depth 8))
+  } -ArgumentList $provisioning
+}
+"""
+
+
 def package_smoke_script() -> str:
     """Returns the PowerShell package-smoke script executed inside a Hyper-V guest."""
 
-    return r"""
+    return GUEST_INTERNET_CONTRACT_PS + r"""
 $ErrorActionPreference = 'Stop'
 $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
 $credential = [pscredential]::new($payload.username, $secure)
@@ -33,6 +102,7 @@ do {
     if ((Get-Date) -gt $deadline) { throw }
   }
 } while (-not $session)
+$guestNetwork = Ensure-GuestInternet $session $payload.provisioning
 $guestRoot = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $payload.target
 $guestZip = Join-Path $guestRoot (Split-Path -Leaf $payload.packageZip)
 try {
@@ -149,6 +219,7 @@ EnableUPnP=0
     $guest = @{
       computerName = $env:COMPUTERNAME
       os = (Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber)
+      internet = $using:guestNetwork
     }
     $status = if ($errors.Count -eq 0 -and (@($checks) | Where-Object { $_.status -ne 'passed' }).Count -eq 0) { 'passed' } else { 'failed' }
     $result = [pscustomobject]@{
@@ -182,7 +253,7 @@ finally {
 def local_ed2k_transfer_script() -> str:
     """Returns a minimal PowerShell Direct shim for the Python VM transfer runner."""
 
-    return r"""
+    return GUEST_INTERNET_CONTRACT_PS + r"""
 $ErrorActionPreference = 'Stop'
 $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
 $credential = [pscredential]::new($payload.username, $secure)
@@ -190,6 +261,7 @@ $targets = @($payload.win10, $payload.win11)
 $sessions = @{}
 $roots = @{}
 $results = @{}
+$networks = @{}
 $pythons = @{}
 $runners = @{}
 $packageZips = @{}
@@ -208,11 +280,17 @@ function Wait-GuestSession($vmName) {
 
 function Restore-Guest($target) {
   $vm = Get-VM -Name $target.vmName -ErrorAction Stop
+  if ($payload.switchName) {
+    Connect-VMNetworkAdapter -VMName $target.vmName -SwitchName $payload.switchName
+  }
   if ($vm.State -ne 'Off') {
     Stop-VM -Name $target.vmName -TurnOff -Force
   }
   $snapshot = Get-VMSnapshot -VMName $target.vmName -Name $payload.checkpointName -ErrorAction Stop
   Restore-VMSnapshot -VMSnapshot $snapshot -Confirm:$false
+  if ($payload.switchName) {
+    Connect-VMNetworkAdapter -VMName $target.vmName -SwitchName $payload.switchName
+  }
   Start-VM -Name $target.vmName
   return Wait-GuestSession $target.vmName
 }
@@ -255,6 +333,7 @@ function Ensure-GuestPython($session) {
 try {
   foreach ($target in $targets) {
     $session = Restore-Guest $target
+    $networks[$target.target] = Ensure-GuestInternet $session $target.provisioning
     $sessions[$target.target] = $session
     $root = 'C:\eMuleBBVmTest\' + $payload.runId + '\' + $target.target
     $roots[$target.target] = $root
@@ -296,6 +375,7 @@ try {
       $args += @('--server-exe', (Join-Path $roots[$target.target] 'goed2k-server.exe'), '--admin-token', $payload.adminToken)
     }
     $results[$target.target] = Invoke-GuestPython $sessions[$target.target] $pythons[$target.target] $runners[$target.target] $args
+    $results[$target.target] | Add-Member -NotePropertyName internet -NotePropertyValue $networks[$target.target] -Force
   }
 
   $server = Invoke-GuestPython $sessions['win10'] $pythons['win10'] $runners['win10'] @(
@@ -426,7 +506,7 @@ finally {
 def profile_smoke_script() -> str:
     """Returns a PowerShell Direct shim for single-VM profile smoke runners."""
 
-    return r"""
+    return GUEST_INTERNET_CONTRACT_PS + r"""
 $ErrorActionPreference = 'Stop'
 $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
 $credential = [pscredential]::new($payload.username, $secure)
@@ -617,6 +697,7 @@ $guestToolingRestRoot = Join-Path $guestContractRoot 'rest'
 $guestAppSourceRoot = Join-Path $guestContractRoot 'app-source\srchybrid'
 try {
   $session = Wait-GuestSession $payload.vmName
+  $guestNetwork = Ensure-GuestInternet $session $payload.provisioning
   Invoke-Command -Session $session -ScriptBlock {
     param($root)
     if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
@@ -775,6 +856,7 @@ try {
     } -ArgumentList $guestAmutorrentRoot, $guestAmutorrentNode
   }
   $guestResult = Invoke-GuestPython $session $python $guestRunner $runnerArgs @($guestHarnessRoot, $guestRoot)
+  $guestResult | Add-Member -NotePropertyName internet -NotePropertyValue $guestNetwork -Force
   New-Item -ItemType Directory -Force -Path $payload.hostReportDir | Out-Null
   Stop-GuestRuntime $session
   Copy-GuestArtifacts $session $guestRoot $payload.hostReportDir

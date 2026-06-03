@@ -6,6 +6,9 @@ from emule_test_harness import windows_vm_guest
 def test_package_smoke_script_contains_guest_checks() -> None:
     script = windows_vm_guest.package_smoke_script()
 
+    assert "Ensure-GuestInternet" in script
+    assert "Resolve-DnsName -Name 'github.com'" in script
+    assert "Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/'" in script
     assert "Expand-Archive" in script
     assert "emulebb.exe" in script
     assert "--generate-webserver-cert" in script
@@ -21,6 +24,8 @@ def test_package_smoke_script_contains_guest_checks() -> None:
 def test_local_ed2k_transfer_script_is_minimal_transport_shim() -> None:
     script = windows_vm_guest.local_ed2k_transfer_script()
 
+    assert "Ensure-GuestInternet" in script
+    assert "Connect-VMNetworkAdapter -VMName $target.vmName -SwitchName $payload.switchName" in script
     assert "windows_vm_local_ed2k.py" in script
     assert "vm_guest_profiles.py" in script
     assert "Invoke-GuestPython" in script
@@ -38,6 +43,7 @@ def test_local_ed2k_transfer_script_is_minimal_transport_shim() -> None:
 def test_hideme_live_wire_script_uses_python_guest_runner_and_visible_vpn() -> None:
     script = windows_vm_guest.hideme_live_wire_script()
 
+    assert "Ensure-GuestInternet" not in script
     assert "windows_vm_hideme_live.py" in script
     assert "vm_guest_profiles.py" in script
     assert "Start-HideMe" in script
@@ -52,6 +58,7 @@ def test_hideme_live_wire_script_uses_python_guest_runner_and_visible_vpn() -> N
 def test_profile_smoke_script_uses_shared_python_runner() -> None:
     script = windows_vm_guest.profile_smoke_script()
 
+    assert "Ensure-GuestInternet" in script
     assert "windows_vm_profile_smoke.py" in script
     assert "vm_guest_profiles.py" in script
     assert "campaign_scenarios.py" in script
