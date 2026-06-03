@@ -98,6 +98,7 @@ def test_download_slot_no_data_and_out_of_part_guards_are_conservative() -> None
     assert "GetSessionPayloadDown() == 0" in timeout_block
     assert "GetSessionDown() == 0" in timeout_block
     assert "thePrefs.GetDownloadTimeout() > kDownloadFirstPayloadTimeoutMs" in timeout_block
+    assert "First payload timeout. More than %u seconds since the first requested block without payload." in timeout_block
     assert timeout_block.index("timeout-first-payload") < timeout_block.index('LogDownloadSlotInstrumentation(_T("timeout"))')
     assert "CanAcceptUploadSlotAfterDownloadNoData" in client_header
     assert "NoteDownloadNoDataSlotFailure(pszReason)" in client_source
