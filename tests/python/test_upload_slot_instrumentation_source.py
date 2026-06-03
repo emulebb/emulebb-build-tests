@@ -96,11 +96,17 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "ShouldAdmitQueuedBlockRequestToUploadSlot" in seams_header
     assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in seams_header
     assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in not_uploading_block
-    assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this);" in not_uploading_block
+    assert "LPCTSTR pszCooldownClearInstrumentationReason = NULL;" in not_uploading_block
+    assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this, &pszCooldownClearInstrumentationReason);" in not_uploading_block
     assert "TryAdmitQueuedBlockRequestClient(this, bCooldownCleared)" in not_uploading_block
     assert "accept-queued-request-direct-admit" in not_uploading_block
+    assert "eQueuedRequestAdmissionResult == queuedBlockRequestCooldownNotCleared && pszCooldownClearInstrumentationReason != NULL" in not_uploading_block
     assert "GetQueuedBlockRequestAdmissionInstrumentationReason(eQueuedRequestAdmissionResult)" in not_uploading_block
     assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("GetQueuedBlockRequestAdmissionInstrumentationReason")
+    assert "bool ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason = NULL)" in queue_header
+    assert "bool CUploadQueue::ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason)" in queue_source
+    assert "reject-not-uploading-no-request-clear-used" in queue_source
+    assert "reject-not-uploading-retry-clear-used" in queue_source
     assert "AcceptNewClient(uploadinglist.GetCount())" in direct_admit_block
     assert "ForceNewClient(true)" in direct_admit_block
     assert "AddUpNextClient(_T(\"Direct add after queued block request.\"), client)" in direct_admit_block
