@@ -6,6 +6,7 @@
 
 using PartFileMajorityNameSeams::HasRequiredAgreement;
 using PartFileMajorityNameSeams::SelectMajorityName;
+using PartFileMajorityNameSeams::TryPrepareMajoritySourceFilename;
 
 TEST_SUITE_BEGIN("part_file_majority_name");
 
@@ -92,6 +93,25 @@ TEST_CASE("source names without usable title tokens are ignored")
 	CHECK_FALSE(selection.HasCandidate);
 	CHECK(selection.CandidateVotes == 0);
 	CHECK(selection.TotalVotes == 0);
+}
+
+TEST_CASE("source filename preparation repairs mojibake before majority voting")
+{
+	CString prepared;
+
+	CHECK(TryPrepareMajoritySourceFilename(CString(L"sample-a\u00CC\u0080,.pdf"), prepared));
+	CHECK(prepared == CString(L"sample-\u00E0.pdf"));
+
+	const auto selection = SelectMajorityName(std::vector<CString>{
+		prepared,
+		CString(L"sample-\u00E0.pdf"),
+		_T("other.pdf"),
+	}, 0, 51);
+
+	CHECK(selection.HasCandidate);
+	CHECK(selection.Name == CString(L"sample-\u00E0.pdf"));
+	CHECK(selection.CandidateVotes == 2);
+	CHECK(selection.TotalVotes == 3);
 }
 
 TEST_CASE("required percent is normalized before agreement checks")

@@ -331,6 +331,14 @@ TEST_CASE("Download filename normalization trims trailing Win32-invalid leaf cha
 	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("archive+++cut===final .mkv.."))) == CString(_T("archive cut final.mkv")));
 }
 
+TEST_CASE("Download filename normalization trims stray basename edge punctuation")
+{
+	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("filename,.txt"))) == CString(_T("filename.txt")));
+	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("- title.pdf"))) == CString(_T("title.pdf")));
+	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("title -.txt"))) == CString(_T("title.txt")));
+	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("!!!.txt"))) == CString(_T("download.txt")));
+}
+
 TEST_CASE("Download filename normalization keeps reserved-name protection without destroying the extension")
 {
 	CHECK(FilenameNormalizationPolicy::StripInvalidFilenameChars(CString(_T("AUX.txt... "))) == CString(_T("AUX_.txt")));
@@ -358,6 +366,8 @@ TEST_CASE("Download filename majority candidates reject fallback-only names")
 	CHECK(normalized == CString(_T("download")));
 	CHECK(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T("  bad__name .txt. ")), normalized));
 	CHECK(normalized == CString(_T("bad name.txt")));
+	CHECK(FilenameNormalizationPolicy::TryNormalizeDownloadFilenameCandidate(CString(_T(" filename,.txt ")), normalized));
+	CHECK(normalized == CString(_T("filename.txt")));
 }
 
 TEST_CASE("Always-on download normalization does not strip prettify cleanup tokens")
@@ -371,6 +381,8 @@ TEST_CASE("Incoming filename repair fixes conservative Western UTF-8 mojibake")
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"Espa\u00C3\u00B1a.mp4")) == CString(L"Espa\u00F1a.mp4"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"canci\u00C3\u00B3n.flac")) == CString(L"canci\u00F3n.flac"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"\u00C2\u00BFQu\u00C3\u00A9?.txt")) == CString(L"\u00BFQu\u00E9?.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"sample\u00C3\u0082\u00C2\u00BAfile.pdf")) == CString(L"sample\u00BAfile.pdf"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"sample-a\u00CC\u0080.pdf")) == CString(L"sample-\u00E0.pdf"));
 }
 
 TEST_CASE("Incoming filename repair handles Windows-1252 punctuation mojibake")
@@ -388,6 +400,8 @@ TEST_CASE("Incoming filename repair decodes bounded core and numeric HTML entiti
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"canci&#xF3;n.flac")) == CString(L"canci\u00F3n.flac"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("A&nbsp;B.txt"))) == CString(L"A\u00A0B.txt"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"Espa&amp;#241;a \u00C3\u00A9xito.mp3")) == CString(L"Espa\u00F1a \u00E9xito.mp3"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("sample&rsquo;token &egrave;.pdf"))) == CString(L"sample\u2019token \u00E8.pdf"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("part&ndash;two&hellip;.txt"))) == CString(L"part\u2013two\u2026.txt"));
 }
 
 TEST_CASE("Incoming filename repair leaves low-confidence text unchanged")
@@ -405,6 +419,7 @@ TEST_CASE("Incoming filename repair wrappers match search and eD2K intake contra
 {
 	CHECK(FilenameTextRepairSeams::RepairIncomingSearchFilename(CString(L"The Longest Movie \u00C3\u00A9xito.avi")) == CString(L"The Longest Movie \u00E9xito.avi"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingEd2kLinkFilename(CString(L"Rock &amp; Roll \u00E2\u20AC\u2122live\u00E2\u20AC\u2122.mp3")) == CString(L"Rock & Roll \u2019live\u2019.mp3"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingCollectionFilename(CString(L"collection sample citt\u00C3\u00A0.pdf")) == CString(L"collection sample citt\u00E0.pdf"));
 	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(FilenameTextRepairSeams::RepairIncomingEd2kLinkFilename(CString(_T("&quot;bad&lt;name&gt;&quot;.txt")))) == CString(_T("badname.txt")));
 }
 
