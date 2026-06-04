@@ -24,6 +24,14 @@ namespace
 
 TEST_SUITE_BEGIN("parity");
 
+TEST_CASE("Upload throttler seam expands equal-share rotation to the last queued active slot")
+{
+	CHECK_EQ(UploadBandwidthThrottlerSeams::CalculateEqualShareSlotLimit(8u, 3u, 0u), 3u);
+	CHECK_EQ(UploadBandwidthThrottlerSeams::CalculateEqualShareSlotLimit(8u, 3u, 6u), 6u);
+	CHECK_EQ(UploadBandwidthThrottlerSeams::CalculateEqualShareSlotLimit(8u, 12u, 6u), 8u);
+	CHECK_EQ(UploadBandwidthThrottlerSeams::CalculateEqualShareSlotLimit(0u, 3u, 6u), 0u);
+}
+
 TEST_CASE("Upload throttler seam merges pending control queues without disturbing existing priority order")
 {
 	FakeSocket liveFirstA{1};
