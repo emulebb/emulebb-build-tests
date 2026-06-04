@@ -14,6 +14,7 @@ def read_app_source(name: str) -> str:
 def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     source = read_app_source("UploadQueue.cpp")
     header = read_app_source("UploadQueue.h")
+    seams_header = read_app_source("UploadQueueSeams.h")
     block = source[source.index("void CUploadQueue::LogUploadSlotInstrumentation") : source.index("void CUploadQueue::Process()")]
 
     assert "waitingCooldownMinMs=%I64u" in block
@@ -108,6 +109,26 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "GetProductiveNoRequestCooldownPayloadBytes(GetTargetClientDataRateBroadband())" in no_request_recycle_block
     assert "GetNoRequestUploadRecycleGraceMs(thePrefs.GetZeroUploadRateGraceSeconds())" in source
     assert no_request_recycle_block.index("const bool bProductiveNoRequestRecycle") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
+    assert "const UINT uCooldownSeconds = GetNoRequestUploadRetryCooldownSeconds" in no_request_recycle_block
+    assert "const ULONGLONG ullCooldownUntil = curTick + SEC2MS(uCooldownSeconds);" in no_request_recycle_block
+    assert "const ULONGLONG ullTrackUntil = curTick + SEC2MS(GetNoRequestUploadRetryTrackSeconds(uCooldownSeconds, uConfiguredCooldownSeconds));" in no_request_recycle_block
+    no_request_cooldown_start = no_request_recycle_block.index("const UINT uCooldownSeconds")
+    no_request_cooldown_block = no_request_recycle_block[
+        no_request_cooldown_start :
+        no_request_recycle_block.index("client->SetSlowUploadCooldownUntil", no_request_cooldown_start)
+    ]
+    assert no_request_cooldown_block.index("const UINT uCooldownSeconds") < no_request_cooldown_block.index("const ULONGLONG ullCooldownUntil")
+    assert no_request_cooldown_block.index("const ULONGLONG ullCooldownUntil") < no_request_cooldown_block.index("const ULONGLONG ullTrackUntil")
+    apply_cooldown_block = source[
+        source.index("bool CUploadQueue::ApplyUploadRetryCooldown") :
+        source.index("bool CUploadQueue::HasUploadAdmissionCandidate")
+    ]
+    assert "SelectUploadRetryCooldownUntil" in seams_header
+    assert "m_uploadRetryCooldownByIP.find(dwCooldownIP)" in apply_cooldown_block
+    assert "m_noRequestUploadRetryCooldownByIP.find(dwCooldownIP)" in apply_cooldown_block
+    assert "SelectUploadRetryCooldownUntil" in apply_cooldown_block
+    assert apply_cooldown_block.index("m_uploadRetryCooldownByIP.find(dwCooldownIP)") < apply_cooldown_block.index("SelectUploadRetryCooldownUntil")
+    assert apply_cooldown_block.index("m_noRequestUploadRetryCooldownByIP.find(dwCooldownIP)") < apply_cooldown_block.index("SelectUploadRetryCooldownUntil")
     assert "Broadband productive no-request recycle" in no_request_recycle_block
     assert "Broadband unproductive no-request recycle" in no_request_recycle_block
     assert "_T(\"productive\") : _T(\"unproductive\")" in no_request_recycle_block

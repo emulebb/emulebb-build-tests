@@ -70,11 +70,11 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     assert "client == NULL || client->GetSlowUploadCooldownRemaining() == 0" in cooldown_probe_block
     assert "m_noRequestUploadRetryCooldownByIP.find(dwCooldownIP)" in cooldown_probe_block
     assert "itNoRequest->second.ullCooldownUntil > curTick" in cooldown_probe_block
-    assert "!itNoRequest->second.bProductiveRecycle" in cooldown_probe_block
-    assert "without ever proving block demand" in cooldown_probe_block
+    assert "!itNoRequest->second.bProductiveRecycle" not in cooldown_probe_block
+    assert "stopped asking for blocks" in cooldown_probe_block
+    assert "queued block request can still" in cooldown_probe_block
     assert "const ULONGLONG ullCooldownRemainingMs = itNoRequest->second.ullCooldownUntil - curTick;" in cooldown_probe_block
     assert "ShouldProbeUnproductiveNoRequestCooldownCandidate(true, ullCooldownRemainingMs)" in cooldown_probe_block
-    assert cooldown_probe_block.index("!itNoRequest->second.bProductiveRecycle") < cooldown_probe_block.index("ShouldProbeUnproductiveNoRequestCooldownCandidate")
     assert cooldown_probe_block.index("ShouldProbeUnproductiveNoRequestCooldownCandidate") < cooldown_probe_block.rindex("return true;")
 
     has_probe_block = source[

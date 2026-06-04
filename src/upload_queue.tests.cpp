@@ -104,6 +104,14 @@ TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with liv
 	CHECK_FALSE(ShouldApplyUploadRetryCooldown(false, 0u, 1000u, 2000u));
 	CHECK_FALSE(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 2000u, 2000u));
 	CHECK_FALSE(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 3000u, 2000u));
+
+	CHECK_EQ(SelectUploadRetryCooldownUntil(false, 0x01020304u, 1000u, 2000u, 0u), 2000ui64);
+	CHECK_EQ(SelectUploadRetryCooldownUntil(false, 0x01020304u, 1000u, 0u, 3000u), 3000ui64);
+	CHECK_EQ(SelectUploadRetryCooldownUntil(false, 0x01020304u, 1000u, 2000u, 3000u), 3000ui64);
+	CHECK_EQ(SelectUploadRetryCooldownUntil(false, 0x01020304u, 1000u, 3000u, 2000u), 3000ui64);
+	CHECK_EQ(SelectUploadRetryCooldownUntil(true, 0x01020304u, 1000u, 2000u, 3000u), 0ui64);
+	CHECK_EQ(SelectUploadRetryCooldownUntil(false, 0u, 1000u, 2000u, 3000u), 0ui64);
+	CHECK_EQ(SelectUploadRetryCooldownUntil(false, 0x01020304u, 3000u, 2000u, 3000u), 0ui64);
 }
 
 TEST_CASE("Upload queue cools down failed upload admissions only for non-friend peers with an IP")
@@ -111,7 +119,7 @@ TEST_CASE("Upload queue cools down failed upload admissions only for non-friend 
 	CHECK_EQ(kProductiveNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(10u));
 	CHECK_EQ(kNoRequestUploadRecycleGraceMaxSeconds, static_cast<std::uint32_t>(5u));
 	CHECK_EQ(kUploadChurnRetryCooldownMaxSeconds, static_cast<std::uint32_t>(120u));
-	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, kNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, kUploadChurnRetryCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(30u) == 30u);
 	CHECK(GetUploadChurnRetryCooldownSeconds(120u) == kUploadChurnRetryCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(360u) == kUploadChurnRetryCooldownMaxSeconds);
@@ -171,8 +179,11 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(10u, false) == 10u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(kNoRequestUploadCooldownMaxSeconds, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false) == kNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(30u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryTrackSeconds(30u, 30u) == 60ui64);
+	CHECK(GetNoRequestUploadRetryTrackSeconds(kRepeatedNoRequestUploadCooldownMaxSeconds, 30u) == 150ui64);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(5u, false, true) == 5u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
