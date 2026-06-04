@@ -1,5 +1,6 @@
 #include "../third_party/doctest/doctest.h"
 
+#include "UploadBlockRequestSeams.h"
 #include "UploadQueueSeams.h"
 #if __has_include("UploadDiskIOThreadSeams.h")
 #include "UploadDiskIOThreadSeams.h"
@@ -7,6 +8,25 @@
 #endif
 
 TEST_SUITE_BEGIN("parity");
+
+TEST_CASE("Upload block request seam keys duplicate ranges by file id and byte range")
+{
+	const unsigned char abyFileIdA[UploadBlockRequestSeams::kUploadBlockFileIdBytes] = {1, 2, 3, 4};
+	const unsigned char abyFileIdB[UploadBlockRequestSeams::kUploadBlockFileIdBytes] = {1, 2, 3, 5};
+	const UploadBlockRequestSeams::SUploadBlockRequestKey keyA =
+		UploadBlockRequestSeams::BuildUploadBlockRequestKey(100u, 200u, abyFileIdA);
+	const UploadBlockRequestSeams::SUploadBlockRequestKey sameKeyA =
+		UploadBlockRequestSeams::BuildUploadBlockRequestKey(100u, 200u, abyFileIdA);
+	const UploadBlockRequestSeams::SUploadBlockRequestKey differentRange =
+		UploadBlockRequestSeams::BuildUploadBlockRequestKey(100u, 201u, abyFileIdA);
+	const UploadBlockRequestSeams::SUploadBlockRequestKey differentFile =
+		UploadBlockRequestSeams::BuildUploadBlockRequestKey(100u, 200u, abyFileIdB);
+
+	CHECK_FALSE(keyA < sameKeyA);
+	CHECK_FALSE(sameKeyA < keyA);
+	CHECK(keyA < differentRange);
+	CHECK(keyA < differentFile);
+}
 
 TEST_CASE("Upload queue seam classifies only active non-retired entries with a client as live")
 {
