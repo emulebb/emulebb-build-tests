@@ -45,7 +45,9 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
 
     assert "ShouldProbeUploadCooldownCandidate" in seams
     assert "bool\tHasUploadCooldownProbeCandidate(ULONGLONG curTick);" in header
+    assert "bool\tCanProbeUploadCooldownCandidate(CUpDownClient *client, ULONGLONG curTick) const;" in header
     assert "bool CUploadQueue::HasUploadCooldownProbeCandidate(ULONGLONG curTick)" in source
+    assert "bool CUploadQueue::CanProbeUploadCooldownCandidate(CUpDownClient *client, ULONGLONG curTick) const" in source
 
     find_best_block = source[
         source.index("CUpDownClient* CUploadQueue::FindBestClientInQueue()") :
@@ -54,8 +56,28 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     assert "CUpDownClient *cooldownProbeClient = NULL;" in find_best_block
     assert "const bool bAllowCooldownProbe = ShouldProbeUploadCooldownCandidate" in find_best_block
     assert "const ULONGLONG ullCooldownRemaining = cur_client->GetSlowUploadCooldownRemaining();" in find_best_block
-    assert "ullCooldownRemaining < ullBestCooldownProbeRemaining" in find_best_block
+    assert "CanProbeUploadCooldownCandidate(cur_client, curTick)" in find_best_block
+    assert find_best_block.index("CanProbeUploadCooldownCandidate(cur_client, curTick)") < find_best_block.index("ullCooldownRemaining < ullBestCooldownProbeRemaining")
     assert "return newclient != NULL ? newclient : cooldownProbeClient;" in find_best_block
+
+    cooldown_probe_block = source[
+        source.index("bool CUploadQueue::CanProbeUploadCooldownCandidate") :
+        source.index("void CUploadQueue::SetUploadRetryCooldown")
+    ]
+    assert "client == NULL || client->GetSlowUploadCooldownRemaining() == 0" in cooldown_probe_block
+    assert "m_noRequestUploadRetryCooldownByIP.find(dwCooldownIP)" in cooldown_probe_block
+    assert "itNoRequest->second.ullCooldownUntil > curTick" in cooldown_probe_block
+    assert "!itNoRequest->second.bProductiveRecycle" in cooldown_probe_block
+    assert "without ever proving block demand" in cooldown_probe_block
+    assert "return false;" in cooldown_probe_block
+    assert cooldown_probe_block.index("!itNoRequest->second.bProductiveRecycle") < cooldown_probe_block.rindex("return true;")
+
+    has_probe_block = source[
+        source.index("bool CUploadQueue::HasUploadCooldownProbeCandidate") :
+        source.index("bool CUploadQueue::CanProbeUploadCooldownCandidate")
+    ]
+    assert "CanProbeUploadCooldownCandidate(cur_client, curTick)" in has_probe_block
+    assert "cur_client->GetSlowUploadCooldownRemaining() != 0" not in has_probe_block
 
     force_new_block = source[
         source.index("bool CUploadQueue::ForceNewClient") :
