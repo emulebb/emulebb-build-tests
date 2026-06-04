@@ -186,9 +186,8 @@ def test_duplicate_complete_download_block_retires_stale_pending_request() -> No
     ]
 
     assert "lenWritten == 0" in block
-    assert "nEndPos == cur_block->block->EndOffset" in block
-    assert "m_reqfile->IsComplete(nStartPos, nEndPos)" in block
-    assert block.index("m_reqfile->IsComplete(nStartPos, nEndPos)") < block.index("m_PendingBlocks_list.RemoveAt(posLast);")
+    assert "m_reqfile->IsComplete(cur_block->block->StartOffset, cur_block->block->EndOffset)" in block
+    assert block.index("m_reqfile->IsComplete(cur_block->block->StartOffset, cur_block->block->EndOffset)") < block.index("m_PendingBlocks_list.RemoveAt(posLast);")
     assert "m_nTransferredDown += uTransferredFileDataSize;" in block
     assert block.index("if (lenWritten > 0)") < block.index("m_nTransferredDown += uTransferredFileDataSize;")
     assert 'LogDownloadSlotInstrumentation(_T("block-cleared-duplicate-complete")' in block
