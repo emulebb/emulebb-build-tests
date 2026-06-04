@@ -62,6 +62,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "block-complete",
         "block-advanced-duplicate-complete",
         "block-cleared-duplicate-complete",
+        "block-cleared-duplicate-whole-complete",
         "packet-zero-write",
         "request-empty-nnp",
         "out-of-part-reqs",
@@ -79,6 +80,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert '_T("request-empty-nnp")' in throttle_block
     assert '_T("block-advanced-duplicate-complete")' in throttle_block
     assert '_T("block-cleared-duplicate-complete")' in throttle_block
+    assert '_T("block-cleared-duplicate-whole-complete")' in throttle_block
     assert '_T("disconnect-downloading")' in throttle_block
     assert '_T("state-leave-downloading")' in throttle_block
     assert '_T("state-leave-downloading-nnp")' in throttle_block
@@ -198,12 +200,16 @@ def test_duplicate_complete_download_block_advances_and_retires_stale_pending_re
     assert "lenWritten == 0" in block
     assert "m_reqfile->IsComplete(cur_block->block->StartOffset, nEndPos)" in block
     assert "const bool bCompletedDuplicateBlock = bCompletedDuplicateRange && nEndPos == cur_block->block->EndOffset;" in block
-    assert "if (lenWritten > 0 ? nEndPos == cur_block->block->EndOffset : bCompletedDuplicateBlock)" in block
+    assert "const bool bCompletedDuplicateWholeBlock = !packed" in block
+    assert "m_reqfile->IsComplete(cur_block->block->StartOffset, cur_block->block->EndOffset)" in block
+    assert "if (lenWritten > 0 ? nEndPos == cur_block->block->EndOffset : (bCompletedDuplicateBlock || bCompletedDuplicateWholeBlock))" in block
     assert block.index("m_reqfile->IsComplete(cur_block->block->StartOffset, nEndPos)") < block.index("const uint64 uDuplicateProgressBytes")
+    assert "bCompletedDuplicateWholeBlock" in block
     assert "cur_block->block->transferred = uDuplicateProgressBytes;" in block
     assert 'LogDownloadSlotInstrumentation(_T("block-advanced-duplicate-complete")' in block
     assert "m_nTransferredDown += uTransferredFileDataSize;" in block
     assert block.index("if (lenWritten > 0)") < block.index("m_nTransferredDown += uTransferredFileDataSize;")
-    assert 'LogDownloadSlotInstrumentation(_T("block-cleared-duplicate-complete")' in block
+    assert '_T("block-cleared-duplicate-complete")' in block
+    assert '_T("block-cleared-duplicate-whole-complete")' in block
     assert "ClearPendingBlockRequest(cur_block);" in block
     assert block.index("ClearPendingBlockRequest(cur_block);") < block.index("SendBlockRequests();")
