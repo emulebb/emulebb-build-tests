@@ -233,10 +233,14 @@ def test_duplicate_complete_download_block_advances_and_retires_stale_pending_re
     assert "const bool bCompletedDuplicateBlock = bCompletedDuplicateRange && nEndPos == cur_block->block->EndOffset;" in block
     assert "const bool bCompletedDuplicateWholeBlock = !packed" in block
     assert "m_reqfile->IsComplete(cur_block->block->StartOffset, cur_block->block->EndOffset)" in block
+    assert "const bool bDuplicateZeroWrite = !packed" in block
+    assert "m_reqfile->IsComplete(nStartPos, nEndPos)" in block
+    assert "bool bProgressedPendingBlock = false;" in block
     assert "if (lenWritten > 0 ? nEndPos == cur_block->block->EndOffset : (bCompletedDuplicateBlock || bCompletedDuplicateWholeBlock))" in block
     assert block.index("m_reqfile->IsComplete(cur_block->block->StartOffset, nEndPos)") < block.index("const uint64 uDuplicateProgressBytes")
     assert "bCompletedDuplicateWholeBlock" in block
     assert "cur_block->block->transferred = uDuplicateProgressBytes;" in block
+    assert "bProgressedPendingBlock = true;" in block
     assert 'LogDownloadSlotInstrumentation(_T("block-advanced-duplicate-complete")' in block
     assert "m_nTransferredDown += uTransferredFileDataSize;" in block
     assert block.index("if (lenWritten > 0)") < block.index("m_nTransferredDown += uTransferredFileDataSize;")
@@ -244,6 +248,8 @@ def test_duplicate_complete_download_block_advances_and_retires_stale_pending_re
     assert '_T("block-cleared-duplicate-whole-complete")' in block
     assert "ClearPendingBlockRequest(cur_block);" in block
     assert block.index("ClearPendingBlockRequest(cur_block);") < block.index("SendBlockRequests();")
+    assert "if (bProgressedPendingBlock)\n\t\t\tResetDownloadStaleBlockPacketGuard();" in block
+    assert block.index("SendBlockRequests();") < block.index("if (bProgressedPendingBlock)")
 
 
 def test_stale_block_packets_abort_only_after_conservative_burst() -> None:
@@ -284,9 +290,32 @@ def test_stale_block_packets_abort_only_after_conservative_burst() -> None:
     assert "m_PendingBlocks_list.IsEmpty()" in helper_block
     assert "m_uDownloadStaleBlockPacketWindowCount < kDownloadStaleBlockPacketThreshold" in helper_block
     assert "Sustained stale block packets." in helper_block
+    assert "did not make useful download progress" in helper_block
     assert '_T("stale-block-packet-abort")' in packet_drop_block
     assert "SendCancelTransfer();" in packet_drop_block
     assert "SetDownloadState(DS_ONQUEUE, strReason);" in packet_drop_block
     assert packet_drop_block.index("ShouldAbortAfterStaleBlockPacket(&strReason)") < packet_drop_block.index("SendCancelTransfer();")
     assert packet_drop_block.index("SendCancelTransfer();") < packet_drop_block.index("SetDownloadState(DS_ONQUEUE, strReason);")
     assert "standard cancel returns it to queue while preserving protocol semantics" in packet_drop_block
+
+
+def test_duplicate_zero_write_blocks_feed_stale_packet_guard() -> None:
+    client_source = read_app_source("DownloadClient.cpp")
+    process_block = client_source[
+        client_source.index("void CUpDownClient::ProcessBlockPacket") :
+        client_source.index("int CUpDownClient::unzip")
+    ]
+    duplicate_guard_block = process_block[
+        process_block.index("else if (bDuplicateZeroWrite)") :
+        process_block.index("Stop looping and exit")
+    ]
+
+    assert "ShouldAbortAfterStaleBlockPacket(&strReason)" in duplicate_guard_block
+    assert '_T("stale-duplicate-block-packet-abort")' in duplicate_guard_block
+    assert "SendCancelTransfer();" in duplicate_guard_block
+    assert "SetDownloadState(DS_ONQUEUE, strReason);" in duplicate_guard_block
+    assert "stock transfer control" in duplicate_guard_block
+    assert duplicate_guard_block.index("ShouldAbortAfterStaleBlockPacket(&strReason)") < duplicate_guard_block.index(
+        "SendCancelTransfer();"
+    )
+    assert 'else if (lenWritten == 0)\n\t\t\tResetDownloadStaleBlockPacketGuard();' in process_block
