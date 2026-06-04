@@ -82,7 +82,7 @@ TEST_CASE("Upload queue cools down failed upload admissions only for non-friend 
 	CHECK_EQ(kProductiveNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(10u));
 	CHECK_EQ(kNoRequestUploadRecycleGraceMaxSeconds, static_cast<std::uint32_t>(5u));
 	CHECK_EQ(kUploadChurnRetryCooldownMaxSeconds, static_cast<std::uint32_t>(120u));
-	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, kUploadChurnRetryCooldownMaxSeconds);
+	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(30u) == 30u);
 	CHECK(GetUploadChurnRetryCooldownSeconds(120u) == kUploadChurnRetryCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(360u) == kUploadChurnRetryCooldownMaxSeconds);
@@ -138,7 +138,7 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(10u, false) == 10u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(kNoRequestUploadCooldownMaxSeconds, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false) == kNoRequestUploadCooldownMaxSeconds);
-	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == 120u);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(5u, false, true) == 5u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
