@@ -38,6 +38,9 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "activeNoRequestBufferedPayload=%Id" in block
     assert "activeNoRequestSocketBacklog=%Id" in block
     assert "activeNoRequestNeverAccepted=%Id" in block
+    assert "activeNoRequestRecycleEligible=%Id" in block
+    assert "activeNoRequestRecycleGraceBlocked=%Id" in block
+    assert "activeNoRequestRecycleUnderfillBlocked=%Id" in block
     assert "activeNoRequestAgeAvgMs=%I64u" in block
     assert "activeNoRequestAgeMaxMs=%I64u" in block
     assert "activeNoRequestLastAcceptedAgeMaxMs=%I64u" in block
@@ -60,6 +63,14 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "iActiveNoRequestBufferedPayloadClients" in block
     assert "iActiveNoRequestSocketBacklogClients" in block
     assert "iActiveNoRequestNeverAcceptedClients" in block
+    assert "iActiveNoRequestRecycleEligibleClients" in block
+    assert "iActiveNoRequestRecycleGraceBlockedClients" in block
+    assert "iActiveNoRequestRecycleUnderfillBlockedClients" in block
+    assert "bSustainedBroadbandUnderfill" in block
+    assert "ullNoRequestGraceMs" in block
+    assert "bHasAcceptedReqBlock" in block
+    assert "ullLastAcceptedReqBlockAgeMs" in block
+    assert "ShouldRecycleNoRequestBroadbandUploadSlot(" in block
     assert "ullActiveNoRequestAgeAvgMs" in block
     assert "ullActiveNoRequestAgeMaxMs" in block
     assert "ullActiveNoRequestLastAcceptedAgeMaxMs" in block
