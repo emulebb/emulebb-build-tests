@@ -80,6 +80,7 @@ TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with liv
 TEST_CASE("Upload queue cools down failed upload admissions only for non-friend peers with an IP")
 {
 	CHECK_EQ(kProductiveNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(10u));
+	CHECK_EQ(kNoRequestUploadRecycleGraceMaxSeconds, static_cast<std::uint32_t>(5u));
 	CHECK_EQ(kUploadChurnRetryCooldownMaxSeconds, static_cast<std::uint32_t>(120u));
 	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, kUploadChurnRetryCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(30u) == 30u);
@@ -125,6 +126,10 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 {
 	CHECK(ShouldCooldownNoRequestUploadRecycle(false));
 	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(true));
+
+	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(3u), static_cast<std::uint64_t>(3000u));
+	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(kNoRequestUploadRecycleGraceMaxSeconds), static_cast<std::uint64_t>(5000u));
+	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(10u), static_cast<std::uint64_t>(5000u));
 
 	CHECK_EQ(kProductiveNoRequestCooldownPayloadBytes, static_cast<std::uint64_t>(184320u));
 	CHECK_FALSE(IsProductiveNoRequestUploadRecycle(kProductiveNoRequestCooldownPayloadBytes - 1u));

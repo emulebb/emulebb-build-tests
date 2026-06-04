@@ -54,6 +54,7 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
         source.index("if (!HasCompletedSlowUploadWarmup(client))")
     ]
     assert "const bool bProductiveNoRequestRecycle = IsProductiveNoRequestUploadRecycle(client->GetQueueSessionPayloadUp());" in no_request_recycle_block
+    assert "GetNoRequestUploadRecycleGraceMs(thePrefs.GetZeroUploadRateGraceSeconds())" in source
     assert no_request_recycle_block.index("const bool bProductiveNoRequestRecycle") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
     assert "Broadband productive no-request recycle" in no_request_recycle_block
     assert "Broadband unproductive no-request recycle" in no_request_recycle_block
