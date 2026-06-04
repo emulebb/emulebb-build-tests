@@ -71,6 +71,14 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "Broadband productive no-request recycle" in no_request_recycle_block
     assert "Broadband unproductive no-request recycle" in no_request_recycle_block
     assert "_T(\"productive\") : _T(\"unproductive\")" in no_request_recycle_block
+    check_for_time_over_block = source[
+        source.index("bool CUploadQueue::CheckForTimeOver") :
+        source.index("void CUploadQueue::DeleteAll")
+    ]
+    assert "if (ShouldRecycleIdleUploadSlot(client, curTick, pstrReason))" in check_for_time_over_block
+    assert "!bShouldTrackSlowUploadSlots && ShouldRecycleIdleUploadSlot" not in check_for_time_over_block
+    assert check_for_time_over_block.index("ShouldRecycleIdleUploadSlot(client, curTick, pstrReason)") < check_for_time_over_block.index("if (waitinglist.IsEmpty())")
+    assert check_for_time_over_block.index("ShouldRecycleIdleUploadSlot(client, curTick, pstrReason)") < check_for_time_over_block.index("if (bShouldTrackSlowUploadSlots)")
     assert "UploadRetryCooldownReason eReason" in header
     assert "UploadRetryCooldownReason eReason);" in header
     for reason in (
