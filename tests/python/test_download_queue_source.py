@@ -76,3 +76,37 @@ def test_local_server_source_requests_prefer_starved_files_on_equal_wait() -> No
     assert "ullWaitTime == ullBestWaitTime && iValidSources < iBestValidSources" in block
     assert block.index("const ULONGLONG ullWaitTime") < block.index("const int iValidSources")
     assert block.index("iBestValidSources = iValidSources;") < block.index("posNextRequest = pos2;")
+
+
+def test_download_summary_reports_source_discovery_pressure() -> None:
+    source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CDownloadQueue::LogDownloadSlotInstrumentation") :
+        source.index("//This method is called every 100 ms")
+    ]
+
+    for field in (
+        "localServerQueuedFiles=%Id",
+        "localServerQueuedReadyFiles=%u",
+        "localServerMarkedReadyFiles=%u",
+        "nextTcpSourceRequestWaitMs=%I64u",
+        "udpSearchActive=%u",
+        "udpSearchedServers=%u",
+        "udpRequestsSentToServer=%u",
+        "udpFileReasks=%u",
+        "udpFailedFileReasks=%u",
+        "udpLastSearchAgeMs=%I64u",
+        "kadConnected=%u",
+        "kadTotalFileSearches=%u",
+        "kadSearchingReadyFiles=%u",
+        "kadEligibleReadyFiles=%u",
+        "kadDueReadyFiles=%u",
+        "kadBackoffReadyFiles=%u",
+    ):
+        assert field in block
+
+    assert "m_localServerReqQueue.GetCount()" in block
+    assert "cur_file->m_bLocalSrcReqQueued" in block
+    assert "cur_file->GetKadFileSearchID() != 0" in block
+    assert "cur_file->GetMaxSourcePerFileUDP() > cur_file->GetSourceCount()" in block
+    assert "Kademlia::CKademlia::GetTotalFile()" in block
