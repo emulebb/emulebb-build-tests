@@ -81,6 +81,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert '_T("block-advanced-duplicate-complete")' in throttle_block
     assert '_T("block-cleared-duplicate-complete")' in throttle_block
     assert '_T("block-cleared-duplicate-whole-complete")' in throttle_block
+    assert '_T("packet-dropped-no-pending-block")' in throttle_block
     assert '_T("disconnect-downloading")' in throttle_block
     assert '_T("state-leave-downloading")' in throttle_block
     assert '_T("state-leave-downloading-nnp")' in throttle_block
@@ -213,3 +214,49 @@ def test_duplicate_complete_download_block_advances_and_retires_stale_pending_re
     assert '_T("block-cleared-duplicate-whole-complete")' in block
     assert "ClearPendingBlockRequest(cur_block);" in block
     assert block.index("ClearPendingBlockRequest(cur_block);") < block.index("SendBlockRequests();")
+
+
+def test_stale_block_packets_abort_only_after_conservative_burst() -> None:
+    client_source = read_app_source("DownloadClient.cpp")
+    client_header = read_app_source("UpDownClient.h")
+    base_client_source = read_app_source("BaseClient.cpp")
+
+    process_block = client_source[
+        client_source.index("void CUpDownClient::ProcessBlockPacket") :
+        client_source.index("int CUpDownClient::unzip")
+    ]
+    packet_drop_block = process_block[
+        process_block.index('LogDownloadSlotInstrumentation(_T("packet-dropped-no-pending-block")') :
+        process_block.index("int CUpDownClient::unzip") if "int CUpDownClient::unzip" in process_block else len(process_block)
+    ]
+    helper_block = client_source[
+        client_source.index("bool CUpDownClient::ShouldAbortAfterStaleBlockPacket") :
+        client_source.index("void CUpDownClient::ProcessInboundOutOfPartReqs")
+    ]
+    start_download_block = client_source[
+        client_source.index("void CUpDownClient::StartDownload()") :
+        client_source.index("void CUpDownClient::SendCancelTransfer()")
+    ]
+
+    assert "kDownloadStaleBlockPacketThreshold = 32" in client_source
+    assert "kDownloadStaleBlockPacketWindowMs = SEC2MS(15)" in client_source
+    assert "ResetDownloadStaleBlockPacketGuard();" in start_download_block
+    assert "ResetDownloadStaleBlockPacketGuard();" in base_client_source
+    assert "void\tResetDownloadStaleBlockPacketGuard();" in client_header
+    assert "bool\tShouldAbortAfterStaleBlockPacket(CString *pReason = NULL);" in client_header
+    assert "m_ullDownloadStaleBlockPacketWindowStart" in client_header
+    assert "m_uDownloadStaleBlockPacketWindowCount" in client_header
+    assert process_block.index("ResetDownloadStaleBlockPacketGuard();") < process_block.index(
+        'LogDownloadSlotInstrumentation(_T("packet-dropped-no-pending-block")'
+    )
+    assert "GetDownloadState() != DS_DOWNLOADING" in helper_block
+    assert "m_reqfile == NULL" in helper_block
+    assert "m_PendingBlocks_list.IsEmpty()" in helper_block
+    assert "m_uDownloadStaleBlockPacketWindowCount < kDownloadStaleBlockPacketThreshold" in helper_block
+    assert "Sustained stale block packets." in helper_block
+    assert '_T("stale-block-packet-abort")' in packet_drop_block
+    assert "SendCancelTransfer();" in packet_drop_block
+    assert "SetDownloadState(DS_ONQUEUE, strReason);" in packet_drop_block
+    assert packet_drop_block.index("ShouldAbortAfterStaleBlockPacket(&strReason)") < packet_drop_block.index("SendCancelTransfer();")
+    assert packet_drop_block.index("SendCancelTransfer();") < packet_drop_block.index("SetDownloadState(DS_ONQUEUE, strReason);")
+    assert "standard cancel returns it to queue while preserving protocol semantics" in packet_drop_block
