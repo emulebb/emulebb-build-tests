@@ -118,6 +118,9 @@ def test_download_summary_reports_source_discovery_pressure() -> None:
     for field in (
         "localServerQueuedFiles=%Id",
         "localServerQueuedReadyFiles=%u",
+        "localServerQueuedEligibleFiles=%u",
+        "localServerQueuedSourceStarvedEligibleFiles=%u",
+        "localServerQueuedDueAgeMaxMs=%I64u",
         "localServerMarkedReadyFiles=%u",
         "sourceStarvedLocalQueuedReadyFiles=%u",
         "nextTcpSourceRequestWaitMs=%I64u",
@@ -141,6 +144,12 @@ def test_download_summary_reports_source_discovery_pressure() -> None:
         assert field in block
 
     assert "m_localServerReqQueue.GetCount()" in block
+    assert "uLocalServerQueueEligibleFiles" in block
+    assert "uLocalServerQueueSourceStarvedEligibleFiles" in block
+    assert "ullLocalServerQueueDueAgeMaxMs" in block
+    assert "ShouldSendLocalServerSourceRequest(pQueuedFile, pCurrentServer)" in block
+    assert "pQueuedFile->GetValidSourcesCount() <= 0" in block
+    assert "pQueuedFile->m_LastSearchTime + SERVERREASKTIME" in block
     assert "const bool bSourceStarvedFile = iFileValidSources <= 0;" in block
     assert "cur_file->m_bLocalSrcReqQueued" in block
     assert "bSourceStarvedFile" in block
