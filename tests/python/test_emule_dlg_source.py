@@ -67,9 +67,15 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
     close_if_running_block = dialog_source[dialog_source.index("void CemuleDlg::CloseStartupProgressIfRunning()") : dialog_source.index("BOOL CemuleApp::IsIdleMessage")]
     show_block = dialog_source[dialog_source.index("void CemuleDlg::ShowStartupProgress()") : dialog_source.index("void CemuleDlg::UpdateStartupProgress")]
     update_block = dialog_source[dialog_source.index("void CemuleDlg::UpdateStartupProgress") : dialog_source.index("void CemuleDlg::DestroyStartupProgress")]
+    orphan_cleanup_block = dialog_source[
+        dialog_source.index("static BOOL CALLBACK DestroyOrphanedStartupProgressWindowProc") :
+        dialog_source.index("bool CemuleDlg::ShouldShowLifecycleProgressDialog")
+    ]
 
+    assert destroy_startup_block.index("m_pStartupProgressDlg->ShowWindow(SW_HIDE);") < destroy_startup_block.index("m_pStartupProgressDlg->DestroyWindow();")
     assert "m_pStartupProgressDlg->DestroyWindow();" in destroy_startup_block
     assert destroy_startup_block.index("m_pStartupProgressDlg = NULL;") < destroy_startup_block.index("PumpLifecycleProgressMessages(NULL);")
+    assert destroy_early_block.index("m_pEarlyStartupProgressDlg->ShowWindow(SW_HIDE);") < destroy_early_block.index("m_pEarlyStartupProgressDlg->DestroyWindow();")
     assert "m_pEarlyStartupProgressDlg->DestroyWindow();" in destroy_early_block
     assert destroy_early_block.index("m_pEarlyStartupProgressDlg = NULL;") < destroy_early_block.index("PumpLifecycleProgressMessages(NULL);")
     assert "PM_NOREMOVE" in pump_block
@@ -81,9 +87,14 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
     assert "m_bStartupProgressFinished = true;" in close_if_running_block
     assert "theApp.DestroyEarlyStartupProgress();" in close_if_running_block
     assert "DestroyStartupProgress();" in close_if_running_block
+    assert "DestroyOrphanedStartupProgressWindows(m_hWnd);" in close_if_running_block
     assert "theApp.IsRunning()" in close_if_running_block
     assert "CloseStartupProgressIfRunning();" in dialog_source[dialog_source.index("LRESULT CemuleDlg::OnStartupNextStage") : dialog_source.index("LRESULT CemuleDlg::OnBindInterfaceChanged")]
     assert "CloseStartupProgressIfRunning();" in dialog_source[dialog_source.index("void CemuleDlg::OnTimer") : dialog_source.index("BOOL CemuleDlg::OnDeviceChange")]
+    assert "IDC_SHUTDOWN_STEP" in orphan_cleanup_block
+    assert "IDC_PROGRESS1" in orphan_cleanup_block
+    assert "GetResString(IDS_STARTING_EMULE)" in orphan_cleanup_block
+    assert "EnumThreadWindows(::GetCurrentThreadId()" in orphan_cleanup_block
 
     running_state_block = dialog_source[
         dialog_source.index("theApp.m_app_state = APP_STATE_RUNNING; //initialization completed") :
