@@ -88,6 +88,15 @@ TEST_CASE("Upload queue direct admission bypasses only cooldown-only waiting lis
 	CHECK_FALSE(ShouldDirectAdmitBehindCooldownOnlyWaitingList(true, true));
 }
 
+TEST_CASE("Upload queue probes unproductive no-request cooldowns only at the final edge")
+{
+	CHECK_EQ(kUnproductiveNoRequestCooldownProbeRemainingMs, static_cast<std::uint64_t>(1000u));
+	CHECK(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 0u));
+	CHECK(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 1000u));
+	CHECK_FALSE(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 1001u));
+	CHECK_FALSE(ShouldProbeUnproductiveNoRequestCooldownCandidate(false, 0u));
+}
+
 TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
 {
 	CHECK(ShouldApplyUploadRetryCooldown(false, 0x01020304u, 1000u, 2000u));
