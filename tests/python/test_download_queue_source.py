@@ -61,3 +61,18 @@ def test_startup_part_file_hash_jobs_are_released_after_part_scan() -> None:
     assert init_block.index("CScopedPartFileHashStartupScheduling startupHashScheduling;") < init_block.index("PathHelpers::ForEachMatchingEntry(PathHelpers::AppendPathComponent(strTempDir, _T(\"*.part.met\"))")
     assert "EndPartFileHashStartupScheduling();" not in init_block
     assert init_block.index("CScopedPartFileHashStartupScheduling startupHashScheduling;") < init_block.index("SortByPriority();")
+
+
+def test_local_server_source_requests_prefer_starved_files_on_equal_wait() -> None:
+    source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CDownloadQueue::ProcessLocalRequests()") :
+        source.index("void CDownloadQueue::SendLocalSrcRequest")
+    ]
+
+    assert "int iBestValidSources = (std::numeric_limits<int>::max)();" in block
+    assert "const int iValidSources = cur_file->GetValidSourcesCount();" in block
+    assert "ullWaitTime < ullBestWaitTime" in block
+    assert "ullWaitTime == ullBestWaitTime && iValidSources < iBestValidSources" in block
+    assert block.index("const ULONGLONG ullWaitTime") < block.index("const int iValidSources")
+    assert block.index("iBestValidSources = iValidSources;") < block.index("posNextRequest = pos2;")
