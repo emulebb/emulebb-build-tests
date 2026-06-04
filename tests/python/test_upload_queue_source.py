@@ -44,6 +44,9 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     seams = (app_source_root() / "UploadQueueSeams.h").read_text(encoding="utf-8", errors="ignore")
 
     assert "ShouldProbeUploadCooldownCandidate" in seams
+    assert "kUnproductiveNoRequestCooldownProbeRemainingMs = 5000u" in seams
+    assert "ShouldProbeUnproductiveNoRequestCooldownCandidate" in seams
+    assert "ullCooldownRemainingMs <= ullMaxProbeRemainingMs" in seams
     assert "bool\tHasUploadCooldownProbeCandidate(ULONGLONG curTick);" in header
     assert "bool\tCanProbeUploadCooldownCandidate(CUpDownClient *client, ULONGLONG curTick) const;" in header
     assert "bool CUploadQueue::HasUploadCooldownProbeCandidate(ULONGLONG curTick)" in source
@@ -69,8 +72,10 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     assert "itNoRequest->second.ullCooldownUntil > curTick" in cooldown_probe_block
     assert "!itNoRequest->second.bProductiveRecycle" in cooldown_probe_block
     assert "without ever proving block demand" in cooldown_probe_block
-    assert "return false;" in cooldown_probe_block
-    assert cooldown_probe_block.index("!itNoRequest->second.bProductiveRecycle") < cooldown_probe_block.rindex("return true;")
+    assert "const ULONGLONG ullCooldownRemainingMs = itNoRequest->second.ullCooldownUntil - curTick;" in cooldown_probe_block
+    assert "ShouldProbeUnproductiveNoRequestCooldownCandidate(true, ullCooldownRemainingMs)" in cooldown_probe_block
+    assert cooldown_probe_block.index("!itNoRequest->second.bProductiveRecycle") < cooldown_probe_block.index("ShouldProbeUnproductiveNoRequestCooldownCandidate")
+    assert cooldown_probe_block.index("ShouldProbeUnproductiveNoRequestCooldownCandidate") < cooldown_probe_block.rindex("return true;")
 
     has_probe_block = source[
         source.index("bool CUploadQueue::HasUploadCooldownProbeCandidate") :
