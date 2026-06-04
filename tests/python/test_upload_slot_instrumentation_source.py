@@ -37,12 +37,20 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "activeNoRequestPendingIO=%Id" in block
     assert "activeNoRequestBufferedPayload=%Id" in block
     assert "activeNoRequestSocketBacklog=%Id" in block
+    assert "activeNoRequestNeverAccepted=%Id" in block
+    assert "activeNoRequestAgeAvgMs=%I64u" in block
+    assert "activeNoRequestAgeMaxMs=%I64u" in block
+    assert "activeNoRequestLastAcceptedAgeMaxMs=%I64u" in block
+    assert "activeNoRequestZeroMaxMs=%I64u" in block
     assert "activeQueuedRequests=%Id" in block
     assert "activePendingIO=%Id" in block
     assert "activeBufferedPayload=%Id" in block
     assert "activeSocketBacklog=%Id" in block
     assert "pUploadingClient->m_BlockRequests_queue.GetCount()" in block
     assert "pUploadingClient->m_nPendingIOBlocks.load()" in block
+    assert "pUploadingClient->m_ullLastAcceptedReqBlockTick.load()" in block
+    assert "pActiveClient->GetUpStartTimeDelay()" in block
+    assert "pActiveClient->GetAccumulatedZeroUploadMs()" in block
     assert "pActiveClient->GetPayloadInBuffer()" in block
     assert "pUploadSocket->DbgGetStdQueueCount()" in block
     assert "iActiveNoRequestDrainedClients" in block
@@ -51,6 +59,11 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "iActiveNoRequestPendingIOClients" in block
     assert "iActiveNoRequestBufferedPayloadClients" in block
     assert "iActiveNoRequestSocketBacklogClients" in block
+    assert "iActiveNoRequestNeverAcceptedClients" in block
+    assert "ullActiveNoRequestAgeAvgMs" in block
+    assert "ullActiveNoRequestAgeMaxMs" in block
+    assert "ullActiveNoRequestLastAcceptedAgeMaxMs" in block
+    assert "ullActiveNoRequestZeroMaxMs" in block
     assert "retryCooldowns=%u" in block
     assert "noRequestCooldowns=%u" in block
     assert "sharedFiles=%Id" in block
