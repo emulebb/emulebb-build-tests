@@ -36,3 +36,31 @@ def test_broadband_retained_slot_logs_are_throttled() -> None:
     assert "Suppressed retained-slot logs: %u." in source
     assert source.count("if (!ShouldLogBroadbandRetainedSlot(uSuppressedLogs))\n\t\t\t\t\treturn false;") == 1
     assert source.count("if (!ShouldLogBroadbandRetainedSlot(uSuppressedLogs))\n\t\t\t\treturn false;") == 1
+
+
+def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
+    source = (app_source_root() / "UploadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "UploadQueue.h").read_text(encoding="utf-8", errors="ignore")
+    seams = (app_source_root() / "UploadQueueSeams.h").read_text(encoding="utf-8", errors="ignore")
+
+    assert "ShouldProbeUploadCooldownCandidate" in seams
+    assert "bool\tHasUploadCooldownProbeCandidate(ULONGLONG curTick);" in header
+    assert "bool CUploadQueue::HasUploadCooldownProbeCandidate(ULONGLONG curTick)" in source
+
+    find_best_block = source[
+        source.index("CUpDownClient* CUploadQueue::FindBestClientInQueue()") :
+        source.index("void CUploadQueue::InsertInUploadingList")
+    ]
+    assert "CUpDownClient *cooldownProbeClient = NULL;" in find_best_block
+    assert "const bool bAllowCooldownProbe = ShouldProbeUploadCooldownCandidate" in find_best_block
+    assert "const ULONGLONG ullCooldownRemaining = cur_client->GetSlowUploadCooldownRemaining();" in find_best_block
+    assert "ullCooldownRemaining < ullBestCooldownProbeRemaining" in find_best_block
+    assert "return newclient != NULL ? newclient : cooldownProbeClient;" in find_best_block
+
+    force_new_block = source[
+        source.index("bool CUploadQueue::ForceNewClient") :
+        source.index("uint32 CUploadQueue::GetConfiguredUploadBudgetBytesPerSec")
+    ]
+    assert "const bool bHasAdmissionCandidate = HasUploadAdmissionCandidate(curTick);" in force_new_block
+    assert "const bool bHasCooldownProbeCandidate = !bHasAdmissionCandidate && HasUploadCooldownProbeCandidate(curTick);" in force_new_block
+    assert "bHasAdmissionCandidate || bHasCooldownProbeCandidate" in force_new_block
