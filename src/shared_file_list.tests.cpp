@@ -13,6 +13,10 @@
 #include "SharedStartupCachePolicy.h"
 #define EMULEBB_TESTS_HAS_SHARED_STARTUP_CACHE_POLICY 1
 #endif
+#if __has_include("SharedDuplicatePathCachePolicy.h")
+#include "SharedDuplicatePathCachePolicy.h"
+#define EMULEBB_TESTS_HAS_SHARED_DUPLICATE_PATH_CACHE_POLICY 1
+#endif
 #if __has_include("LongPathSeams.h")
 #include "LongPathSeams.h"
 #define EMULEBB_TESTS_HAS_LONG_PATH_SEAMS 1
@@ -746,6 +750,16 @@ TEST_CASE("Shared startup cache only persists stable directories without pending
 	CHECK_FALSE(SharedStartupCachePolicy::CanPersistDirectorySnapshot(true));
 }
 
+TEST_CASE("Shared startup cache lookup keys are lexical and case-insensitive")
+{
+	CHECK(
+		SharedStartupCachePolicy::MakeDirectoryLookupKey(CString(L"\\\\?\\C:\\Shares\\Alpha"))
+		== CString(L"c:\\shares\\alpha\\"));
+	CHECK(
+		SharedStartupCachePolicy::MakeDirectoryLookupKey(CString(L"C:\\shares\\alpha\\"))
+		== CString(L"c:\\shares\\alpha\\"));
+}
+
 TEST_CASE("Shared startup cache verification requires structural validity and matching directory state")
 {
 	SharedStartupCachePolicy::DirectoryRecord record = {};
@@ -845,6 +859,18 @@ TEST_CASE("Shared startup cache generic inventory validation requires an exact f
 	current = cached;
 	current[0].strLeafName = CString(L"BETA.bin");
 	CHECK_FALSE(SharedStartupCachePolicy::FileRecordSetsMatchForInventoryValidation(cached, current));
+}
+#endif
+
+#ifdef EMULEBB_TESTS_HAS_SHARED_DUPLICATE_PATH_CACHE_POLICY
+TEST_CASE("Shared duplicate-path cache lookup keys are lexical and case-insensitive")
+{
+	CHECK(
+		SharedDuplicatePathCachePolicy::MakePathLookupKey(CString(L"\\\\?\\C:\\Shares\\Alpha\\File.BIN"))
+		== CString(L"c:\\shares\\alpha\\file.bin"));
+	CHECK(
+		SharedDuplicatePathCachePolicy::MakePathLookupKey(CString(L"C:\\shares\\alpha\\file.bin"))
+		== CString(L"c:\\shares\\alpha\\file.bin"));
 }
 #endif
 
