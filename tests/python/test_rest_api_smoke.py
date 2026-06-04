@@ -383,6 +383,7 @@ def test_configure_webserver_profile_can_use_local_rest_only_network(tmp_path: P
     )
     (config_dir / "server.met").write_bytes(b"public server seed")
     (config_dir / "nodes.dat").write_bytes(b"public kad seed")
+    (config_dir / "addresses.dat").write_text("https://upd.emule-security.org/server.met\n", encoding="utf-16")
     app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
 
     module.configure_webserver_profile(
@@ -410,6 +411,9 @@ def test_configure_webserver_profile_can_use_local_rest_only_network(tmp_path: P
     assert "BindAddr=192.0.2.10" in webserver_section
     assert not (config_dir / "server.met").exists()
     assert not (config_dir / "nodes.dat").exists()
+    addresses_text = module.live_common.read_ini_text(config_dir / "addresses.dat")
+    assert "emule-security" not in addresses_text
+    assert addresses_text.strip() == "http://192.0.2.254/server.met"
 
 
 def test_live_server_unavailable_is_inconclusive_exit_code() -> None:

@@ -1735,6 +1735,7 @@ def apply_local_network_profile(config_dir: Path, lan_bind_addr: str) -> None:
     text = live_common.patch_ini_value(text, "CloseUPnPOnExit", "0")
     live_common.write_utf16_ini_text(preferences_path, text)
 
+    live_common.write_utf16_ini_text(config_dir / "addresses.dat", "http://192.0.2.254/server.met\n")
     for seed_name in ("server.met", "nodes.dat"):
         seed_path = config_dir / seed_name
         if seed_path.exists():
