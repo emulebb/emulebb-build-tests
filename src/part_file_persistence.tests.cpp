@@ -247,8 +247,10 @@ TEST_CASE("Part-file persistence seam keeps the non-shutdown flush path intact")
 	CHECK(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, true, true));
 	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, false, false));
 	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, true, false));
-	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(false));
-	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(false, true, true));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true, false, false));
+	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true, true, false));
+	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true, false, true));
 }
 
 TEST_CASE("Part-file persistence seam defers delete while async writes still own file state")
@@ -554,8 +556,10 @@ TEST_CASE("Part-file persistence seam skips destructor flushes only during shutd
 {
 	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, false, false));
 	CHECK_FALSE(PartFilePersistenceSeams::ShouldFlushPartFileOnDestroy(true, true, false));
-	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(false));
-	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(false, true, true));
+	CHECK_FALSE(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true, false, false));
+	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true, true, false));
+	CHECK(PartFilePersistenceSeams::ShouldSavePartMetAfterShutdownFlush(true, false, true));
 }
 
 TEST_CASE("Part-file persistence helper preserves destination content when the atomic replace fails")

@@ -42,6 +42,14 @@ TEST_CASE("MiniUPnP seam accepts zero-port mappings only when both sides truly m
 	CHECK(DoesMiniUPnPMappingMatchRequest("10.54.224.185", "0", "10.54.224.185", 0));
 	CHECK_FALSE(DoesMiniUPnPMappingMatchRequest("10.54.224.185", "1", "10.54.224.185", 0));
 }
+
+TEST_CASE("MiniUPnP deletes only mappings created by the current process")
+{
+	CHECK(ShouldDeleteMiniUPnPPortMapping(27198, true));
+	CHECK_FALSE(ShouldDeleteMiniUPnPPortMapping(27198, false));
+	CHECK_FALSE(ShouldDeleteMiniUPnPPortMapping(0, true));
+	CHECK_FALSE(ShouldDeleteMiniUPnPPortMapping(0, false));
+}
 #endif
 
 TEST_SUITE_END;

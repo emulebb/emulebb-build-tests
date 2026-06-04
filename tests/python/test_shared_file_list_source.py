@@ -94,7 +94,11 @@ def test_hash_workers_use_priority_gate_before_global_hash_mutex() -> None:
     assert "CScopedFileHashJobGate fileHashJobGate(m_eHashJobPriority);" in add_thread_run
     assert add_thread_run.index("CScopedFileHashJobGate fileHashJobGate(m_eHashJobPriority);") < add_thread_run.index("CSingleLock hashingLock(&theApp.hashing_mut, TRUE);")
     assert "CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);" in shared_hash_run
-    assert shared_hash_run.index("CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);") < shared_hash_run.index("CSingleLock hashingLock(&theApp.hashing_mut, TRUE);")
+    assert "CSingleLock hashingLock(&theApp.hashing_mut);" in shared_hash_run
+    assert "while (!hashingLock.Lock(SharedFileListSeams::kSharedHashMutexShutdownPollMs))" in shared_hash_run
+    assert "if (theApp.IsClosing() || IsSharedHashWorkerShuttingDown())" in shared_hash_run
+    assert "AbandonActiveSharedHashJob(rJob);" in shared_hash_run
+    assert shared_hash_run.index("CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);") < shared_hash_run.index("CSingleLock hashingLock(&theApp.hashing_mut);")
 
 
 def test_startup_cache_save_waits_for_file_hash_gate_to_go_idle() -> None:
