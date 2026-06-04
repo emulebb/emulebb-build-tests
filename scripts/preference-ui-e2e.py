@@ -105,7 +105,7 @@ MEM_RESERVE = 0x2000
 MEM_RELEASE = 0x8000
 PAGE_READWRITE = 0x04
 
-TWEAKS_LOGGING_GROUP_LABEL = "Logging & Diagnostics"
+TWEAKS_LOGGING_GROUP_LABEL = "Logging and Diagnostics"
 
 IP_FILTER_UPDATE_URL_DEFAULTS = (
     "https://upd.emule-security.org/ipfilter.zip",
