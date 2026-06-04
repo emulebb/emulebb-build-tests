@@ -32,6 +32,8 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "activeZeroRate=%Id" in block
     assert "activeNoRequest=%Id" in block
     assert "activeNoRequestDrained=%Id" in block
+    assert "activeNoRequestDrainedZeroRate=%Id" in block
+    assert "activeNoRequestDrainedNonzeroRate=%Id" in block
     assert "activeNoRequestPendingIO=%Id" in block
     assert "activeNoRequestBufferedPayload=%Id" in block
     assert "activeNoRequestSocketBacklog=%Id" in block
@@ -44,6 +46,8 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "pActiveClient->GetPayloadInBuffer()" in block
     assert "pUploadSocket->DbgGetStdQueueCount()" in block
     assert "iActiveNoRequestDrainedClients" in block
+    assert "iActiveNoRequestDrainedZeroRateClients" in block
+    assert "iActiveNoRequestDrainedNonzeroRateClients" in block
     assert "iActiveNoRequestPendingIOClients" in block
     assert "iActiveNoRequestBufferedPayloadClients" in block
     assert "iActiveNoRequestSocketBacklogClients" in block
