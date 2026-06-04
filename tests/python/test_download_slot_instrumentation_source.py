@@ -91,8 +91,12 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "LogDownloadSlotInstrumentation(curTick);" in queue_source
     assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION\n\tvoid\tLogDownloadSlotInstrumentation" in queue_header
     assert "m_ullDownloadBlockRequestsReserved" in client_header
+    assert "m_ullDownloadDuplicateZeroWritePackets" in client_header
+    assert "m_ullDownloadDuplicateZeroWriteBytes" in client_header
     assert "m_uDownloadOutOfPartReqsSuppressions" in client_header
     assert "highVolumeSuppressed=%I64u" in client_source
+    assert "duplicateZeroWritePackets=%I64u" in client_source
+    assert "duplicateZeroWriteBytes=%I64u" in client_source
     assert "PartFileBufferedDataStateSnapshot bufferSnapshot" in queue_source
     assert "cur_file->GetBufferedDataStateSnapshot(bufferSnapshot);" in queue_source
     for field in (
@@ -306,6 +310,9 @@ def test_stale_block_packets_abort_only_after_conservative_burst() -> None:
 
 def test_duplicate_zero_write_blocks_feed_stale_packet_guard() -> None:
     client_source = read_app_source("DownloadClient.cpp")
+    part_file_source = read_app_source("PartFile.cpp")
+    base_client_source = read_app_source("BaseClient.cpp")
+    client_header = read_app_source("UpDownClient.h")
     process_block = client_source[
         client_source.index("void CUpDownClient::ProcessBlockPacket") :
         client_source.index("int CUpDownClient::unzip")
@@ -315,6 +322,19 @@ def test_duplicate_zero_write_blocks_feed_stale_packet_guard() -> None:
         process_block.index("Stop looping and exit")
     ]
 
+    assert "m_ullDownloadDuplicateZeroWritePackets" in client_header
+    assert "m_ullDownloadDuplicateZeroWriteBytes" in client_header
+    assert "NoteDownloadDuplicateZeroWrite" in client_header
+    assert "m_ullDownloadDuplicateZeroWritePackets = 0;" in base_client_source
+    assert "m_ullDownloadDuplicateZeroWriteBytes = 0;" in base_client_source
+    assert "++m_ullDownloadDuplicateZeroWritePackets;" in client_source
+    assert "m_ullDownloadDuplicateZeroWriteBytes += uPayloadBytes;" in client_source
+    duplicate_write_block = part_file_source[
+        part_file_source.index("PrcBlkPkt: Already written block") - 220 :
+        part_file_source.index("PrcBlkPkt: Already written block") + 220
+    ]
+    assert "client->NoteDownloadDuplicateZeroWrite(transize);" in duplicate_write_block
+    assert "client == NULL" in duplicate_write_block
     assert "ShouldAbortAfterStaleBlockPacket(&strReason)" in duplicate_guard_block
     assert '_T("stale-duplicate-block-packet-abort")' in duplicate_guard_block
     assert "SendCancelTransfer();" in duplicate_guard_block
