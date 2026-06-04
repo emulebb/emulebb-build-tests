@@ -44,8 +44,8 @@ def test_stored_search_startup_stage_closes_progress_dialog_without_extra_queued
     assert "theApp.searchlist->LoadSearches();" in stored_search_block
     assert "IDS_STARTUP_PROGRESS_LOADING_STORED_SEARCHES" not in stored_search_block
     assert "UpdateStartupProgress(" not in stored_search_block
-    assert stored_search_block.index("status = 6;") < stored_search_block.index("CloseStartupProgressIfRunning();")
-    assert stored_search_block.index("CloseStartupProgressIfRunning();") < stored_search_block.index("theApp.searchlist->LoadSearches();")
+    assert stored_search_block.index("status = 6;") < stored_search_block.index("FinishStartupProgress();")
+    assert stored_search_block.index("FinishStartupProgress();") < stored_search_block.index("theApp.searchlist->LoadSearches();")
     assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches%s"), (LPCTSTR)CExceptionStrDash(*ex));' in stored_search_block
     assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches - Unknown exception"));' in stored_search_block
     assert "[[fallthrough]];" in stored_search_block
@@ -103,7 +103,7 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
         dialog_source.index("theApp.m_app_state = APP_STATE_RUNNING; //initialization completed") :
         dialog_source.index("UpdateBindLossMonitor(false);")
     ]
-    assert "CloseStartupProgressIfRunning();" in running_state_block
+    assert "FinishStartupProgress();" in running_state_block
 
 
 def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
