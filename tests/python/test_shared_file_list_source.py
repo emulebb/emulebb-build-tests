@@ -171,6 +171,49 @@ def test_hash_workers_use_priority_gate_before_global_hash_mutex() -> None:
     assert shared_hash_run.index("CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);") < shared_hash_run.index("CSingleLock hashingLock(&theApp.hashing_mut);")
 
 
+def test_shared_hash_progress_logging_is_aggregate_only() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CSharedFileList::LogSharedHashProgress") :
+        source.index("bool CSharedFileList::IsStartupDeferredHashingActive")
+    ]
+    find_shared_files = source[
+        source.index("void CSharedFileList::FindSharedFiles") :
+        source.index("void CSharedFileList::AddFilesFromDirectory")
+    ]
+    shared_hash_run = source[
+        source.index("void CSharedFileList::RunSharedHashJob") :
+        source.index("bool CSharedFileList::MoveActiveSharedHashToPendingCompletion")
+    ]
+    finished_block = source[
+        source.index("void CSharedFileList::FileHashingFinished(CKnownFile *file)") :
+        source.index("void CSharedFileList::FileHashingFinished(CSharedFileHashResult *pResult)")
+    ]
+    failed_block = source[
+        source.index("void CSharedFileList::HashFailed(UnknownFile_Struct *hashed)") :
+        source.index("void CSharedFileList::UpdateFile")
+    ]
+    process_block = source[
+        source.index("void CSharedFileList::Process") :
+        source.index("void CSharedFileList::Publish")
+    ]
+
+    assert "void\tLogSharedHashProgress(LPCTSTR pszReason, bool bForce = false);" in header
+    assert "ULONGLONG m_ullLastSharedHashProgressLogTick;" in header
+    assert "ULONGLONG m_uLastSharedHashProgressObservedFiles;" in header
+    assert "Shared hash progress: reason=%s waiting=%I64u pending=%I64u deferred=%I64u active=%u total=%I64u completed=%I64u failed=%I64u gateBusy=%u" in block
+    assert "strFilePath" not in block
+    assert "strDirectory" not in block
+    assert "strName" not in block
+    assert "LogSharedHashProgress(_T(\"startup-scan\"), true);" in find_shared_files
+    assert "LogSharedHashProgress(_T(\"start\"));" in shared_hash_run
+    assert "LogSharedHashProgress(_T(\"complete\"));" in finished_block
+    assert failed_block.count("LogSharedHashProgress(_T(\"failed\"));") == 2
+    assert "LogSharedHashProgress(_T(\"drained\"), true);" in source
+    assert "if (HasSharedHashingWork())\n\t\tLogSharedHashProgress(_T(\"heartbeat\"));" in process_block
+
+
 def test_startup_cache_save_waits_for_file_hash_gate_to_go_idle() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[
