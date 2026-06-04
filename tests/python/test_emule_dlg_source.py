@@ -85,6 +85,12 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
     assert "CloseStartupProgressIfRunning();" in dialog_source[dialog_source.index("LRESULT CemuleDlg::OnStartupNextStage") : dialog_source.index("LRESULT CemuleDlg::OnBindInterfaceChanged")]
     assert "CloseStartupProgressIfRunning();" in dialog_source[dialog_source.index("void CemuleDlg::OnTimer") : dialog_source.index("BOOL CemuleDlg::OnDeviceChange")]
 
+    running_state_block = dialog_source[
+        dialog_source.index("theApp.m_app_state = APP_STATE_RUNNING; //initialization completed") :
+        dialog_source.index("UpdateBindLossMonitor(false);")
+    ]
+    assert "CloseStartupProgressIfRunning();" in running_state_block
+
 
 def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
     source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
