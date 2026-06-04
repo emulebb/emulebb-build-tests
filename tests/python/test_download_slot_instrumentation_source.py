@@ -93,12 +93,16 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "m_ullDownloadBlockRequestsReserved" in client_header
     assert "m_ullDownloadDuplicateZeroWritePackets" in client_header
     assert "m_ullDownloadDuplicateZeroWriteBytes" in client_header
+    assert "GetDownloadDuplicateZeroWritePackets" in client_header
+    assert "GetDownloadDuplicateZeroWriteBytes" in client_header
     assert "m_uDownloadOutOfPartReqsSuppressions" in client_header
     assert "highVolumeSuppressed=%I64u" in client_source
     assert "duplicateZeroWritePackets=%I64u" in client_source
     assert "duplicateZeroWriteBytes=%I64u" in client_source
     assert "PartFileBufferedDataStateSnapshot bufferSnapshot" in queue_source
     assert "cur_file->GetBufferedDataStateSnapshot(bufferSnapshot);" in queue_source
+    assert "cur_source->GetDownloadDuplicateZeroWritePackets();" in queue_source
+    assert "cur_source->GetDownloadDuplicateZeroWriteBytes();" in queue_source
     for field in (
         "sourceStarvedReadyFiles=%u",
         "sourceStarvedLocalQueuedReadyFiles=%u",
@@ -116,6 +120,9 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "lowToLowIPSources=%u",
         "bannedSources=%u",
         "idleSources=%u",
+        "duplicateZeroWriteSources=%u",
+        "duplicateZeroWritePackets=%I64u",
+        "duplicateZeroWriteBytes=%I64u",
         "effectiveFileBufferBytes=%I64u",
         "autoBroadbandIO=%u",
         "bufferedReadyBytes=%I64u",
