@@ -5,6 +5,7 @@
 
 #include "PartFileHashSeams.h"
 #include "PartFileNumericSeams.h"
+#include "PartFileWriteThreadSeams.h"
 
 TEST_SUITE_BEGIN("parity");
 
@@ -81,6 +82,30 @@ TEST_CASE("Part file numeric seam shortens active broadband buffer flush cadence
 	CHECK_EQ(
 		PartFileNumericSeams::SelectBufferedDataFlushTimeLimitMs(true, 1000u, 4096u, 1u),
 		static_cast<uint64>(1000u));
+}
+
+TEST_CASE("Part-file write thread seam bounds one IOCP dispatch burst without stranding queued writes")
+{
+#ifdef EMULEBB_TEST_HAVE_PART_FILE_WRITE_DISPATCH_CAP
+	const size_t limit = PartFileWriteThreadSeams::kMaxWriteDispatchesPerWake;
+	REQUIRE(limit > 0u);
+
+	CHECK(PartFileWriteThreadSeams::CanDispatchWriteInCurrentWake(0u, limit));
+	CHECK(PartFileWriteThreadSeams::CanDispatchWriteInCurrentWake(limit - 1u, limit));
+	CHECK_FALSE(PartFileWriteThreadSeams::CanDispatchWriteInCurrentWake(limit, limit));
+	CHECK(PartFileWriteThreadSeams::CanDispatchWriteInCurrentWake(limit, 0u));
+
+	CHECK_FALSE(PartFileWriteThreadSeams::ShouldDeferRemainingWrites(false, false, limit, limit));
+	CHECK_FALSE(PartFileWriteThreadSeams::ShouldDeferRemainingWrites(true, true, limit, limit));
+	CHECK_FALSE(PartFileWriteThreadSeams::ShouldDeferRemainingWrites(true, false, limit - 1u, limit));
+	CHECK(PartFileWriteThreadSeams::ShouldDeferRemainingWrites(true, false, limit, limit));
+
+	CHECK_FALSE(PartFileWriteThreadSeams::ShouldWakeForUndispatchedWrites(false, false));
+	CHECK_FALSE(PartFileWriteThreadSeams::ShouldWakeForUndispatchedWrites(true, true));
+	CHECK(PartFileWriteThreadSeams::ShouldWakeForUndispatchedWrites(true, false));
+#else
+	MESSAGE("Part-file write dispatch cap helpers are not available in this workspace.");
+#endif
 }
 
 TEST_CASE("Part file numeric seam clamps list counts and 32-bit scores before narrowing to uint16")
