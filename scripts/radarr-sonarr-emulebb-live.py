@@ -3945,7 +3945,7 @@ def run_arr_checks(
         arr_url,
         arr_api_key,
         name=temp_client_name,
-        host=bind_addr,
+        host=lan_bind_addr,
         port=port,
         emule_api_key=emule_api_key,
         category_field=category_field,

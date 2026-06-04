@@ -30,6 +30,8 @@ def test_radarr_sonarr_live_report_records_live_network_launch_inputs() -> None:
     assert "run_arr_checks(" in script_text
     assert "lan_bind_addr=bind_addr" in script_text
     assert "\n            bind_addr=bind_addr," not in script_text
+    assert "host=lan_bind_addr" in script_text
+    assert "host=bind_addr" not in script_text
 
 
 def test_local_arr_release_names_are_deterministic_and_searchable() -> None:
