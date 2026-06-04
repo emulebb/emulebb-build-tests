@@ -56,6 +56,37 @@ def test_interrupted_hashing_preserves_duplicate_path_sidecar() -> None:
     assert "persistedRecords.emplace(MakeDuplicatePathCacheKey(record.strFilePath), record);" in persist_block
 
 
+def test_interrupted_hashing_persists_partial_startup_cache_for_stable_directories() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    shutdown_block = source[
+        source.index("void CSharedFileList::SignalSharedHashWorkerShutdown") :
+        source.index("bool CSharedFileList::IsSharedHashWorkerShuttingDown")
+    ]
+    invalidate_block = source[
+        source.index("void CSharedFileList::InvalidateStartupCachesAfterInterruptedHashing") :
+        source.index("bool CSharedFileList::IsSharedHashInFlight")
+    ]
+    persist_block = source[
+        source.index("bool CSharedFileList::PersistStartupCacheAfterInterruptedHashing") :
+        source.index("void CSharedFileList::RememberDuplicateSharedPath")
+    ]
+
+    assert "bool\tPersistStartupCacheAfterInterruptedHashing(const std::unordered_set<std::wstring> &rInterruptedDirectoryKeys);" in header
+    assert "void\tInvalidateStartupCachesAfterInterruptedHashing(const std::unordered_set<std::wstring> &rInterruptedDirectoryKeys = std::unordered_set<std::wstring>());" in header
+    assert "std::unordered_set<std::wstring> interruptedDirectoryKeys;" in shutdown_block
+    assert shutdown_block.index("interruptedDirectoryKeys.insert(MakeStartupCacheSnapshotKey(job.strDirectory));") < shutdown_block.index("m_sharedHashQueue.clear();")
+    assert "InvalidateStartupCachesAfterInterruptedHashing(interruptedDirectoryKeys);" in shutdown_block
+    assert "const bool bPartialStartupCachePersisted = PersistStartupCacheAfterInterruptedHashing(rInterruptedDirectoryKeys);" in invalidate_block
+    assert "bPartialStartupCachePersisted ? false : LongPathSeams::DeleteFileIfExists(GetStartupCachePath())" in invalidate_block
+    assert '"interrupted_hashing_partial"' in invalidate_block
+    assert "if (rInterruptedDirectoryKeys.empty())\n\t\treturn false;" in persist_block
+    assert "CaptureStartupCacheSaveSnapshot(snapshot)" in persist_block
+    assert "directory.bHasPendingHash = true;" in persist_block
+    assert "RunStartupCacheSaveWorker(snapshot, std::shared_ptr<StartupCacheSaveOperation>(), result);" in persist_block
+    assert "if (!result.bWriteSucceeded)\n\t\treturn false;" in persist_block
+
+
 def test_duplicate_path_sidecar_reuse_precedes_known_file_duplicate_reporting() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[
