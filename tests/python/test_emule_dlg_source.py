@@ -80,8 +80,10 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
     assert "msg.message == UM_STARTUP_NEXT_STAGE" in pump_block
     assert "if (m_bStartupProgressFinished)" in show_block
     assert show_block.index("if (m_bStartupProgressFinished)") < show_block.index("if (m_pStartupProgressDlg != NULL)")
+    assert show_block.index("if (theApp.IsRunning())") < show_block.index("if (m_bStartupProgressFinished)")
     assert "if (m_bStartupProgressFinished)" in update_block
     assert update_block.index("if (m_bStartupProgressFinished)") < update_block.index("if (m_pStartupProgressDlg == NULL)")
+    assert update_block.index("if (theApp.IsRunning())") < update_block.index("if (m_bStartupProgressFinished)")
     assert "m_bStartupProgressFinished = true;" in close_if_running_block
     assert "theApp.DestroyEarlyStartupProgress();" in close_if_running_block
     assert "DestroyStartupProgress();" in close_if_running_block
@@ -92,7 +94,10 @@ def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -
     assert "IDC_SHUTDOWN_STEP" in orphan_cleanup_block
     assert "IDC_PROGRESS1" in orphan_cleanup_block
     assert "GetResString(IDS_STARTING_EMULE)" in orphan_cleanup_block
-    assert "EnumThreadWindows(::GetCurrentThreadId()" in orphan_cleanup_block
+    assert "::GetWindowThreadProcessId(hWnd, &dwWindowProcessId);" in orphan_cleanup_block
+    assert "::GetCurrentProcessId()" in orphan_cleanup_block
+    assert "EnumWindows(DestroyOrphanedStartupProgressWindowProc" in orphan_cleanup_block
+    assert "EnumThreadWindows(" not in orphan_cleanup_block
 
     running_state_block = dialog_source[
         dialog_source.index("theApp.m_app_state = APP_STATE_RUNNING; //initialization completed") :
