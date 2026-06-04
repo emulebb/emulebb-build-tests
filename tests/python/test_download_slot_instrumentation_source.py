@@ -60,6 +60,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "block-reserve-empty",
         "request-sent",
         "block-complete",
+        "block-cleared-duplicate-complete",
         "packet-zero-write",
         "request-empty-nnp",
         "out-of-part-reqs",
@@ -75,6 +76,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         client_source.index("bool IsTickInsideWindow")
     ]
     assert '_T("request-empty-nnp")' in throttle_block
+    assert '_T("block-cleared-duplicate-complete")' in throttle_block
     assert '_T("disconnect-downloading")' in throttle_block
     assert '_T("state-leave-downloading")' in throttle_block
     assert '_T("state-leave-downloading-nnp")' in throttle_block
@@ -174,3 +176,21 @@ def test_download_slot_no_data_and_out_of_part_guards_are_conservative() -> None
     assert "NoteDownloadNoDataSlotFailure(pszReason)" in client_source
     assert "Suppressed OP_AcceptUploadReq after repeated no-data download slots" in client_source
     assert "kOutOfPartReqsCooldownThreshold = 3" in client_source
+
+
+def test_duplicate_complete_download_block_retires_stale_pending_request() -> None:
+    client_source = read_app_source("DownloadClient.cpp")
+    block = client_source[
+        client_source.index("const bool bCompletedDuplicateBlock = !packed") :
+        client_source.index("Stop looping and exit")
+    ]
+
+    assert "lenWritten == 0" in block
+    assert "nEndPos == cur_block->block->EndOffset" in block
+    assert "m_reqfile->IsComplete(nStartPos, nEndPos)" in block
+    assert block.index("m_reqfile->IsComplete(nStartPos, nEndPos)") < block.index("m_PendingBlocks_list.RemoveAt(posLast);")
+    assert "m_nTransferredDown += uTransferredFileDataSize;" in block
+    assert block.index("if (lenWritten > 0)") < block.index("m_nTransferredDown += uTransferredFileDataSize;")
+    assert 'LogDownloadSlotInstrumentation(_T("block-cleared-duplicate-complete")' in block
+    assert "ClearPendingBlockRequest(cur_block);" in block
+    assert block.index("ClearPendingBlockRequest(cur_block);") < block.index("SendBlockRequests();")
