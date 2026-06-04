@@ -43,18 +43,16 @@ def test_stored_search_startup_stage_closes_progress_dialog_without_extra_queued
 
     assert "theApp.searchlist->LoadSearches();" in stored_search_block
     assert "IDS_STARTUP_PROGRESS_LOADING_STORED_SEARCHES" not in stored_search_block
-    assert stored_search_block.index("status = 6;") < stored_search_block.index("DestroyStartupProgress();")
-    assert stored_search_block.index("m_bStartupProgressFinished = true;") < stored_search_block.index("DestroyStartupProgress();")
-    assert stored_search_block.index("theApp.DestroyEarlyStartupProgress();") < stored_search_block.index("DestroyStartupProgress();")
-    assert stored_search_block.index("DestroyStartupProgress();") < stored_search_block.index("theApp.searchlist->LoadSearches();")
+    assert "UpdateStartupProgress(" not in stored_search_block
+    assert stored_search_block.index("status = 6;") < stored_search_block.index("CloseStartupProgressIfRunning();")
+    assert stored_search_block.index("CloseStartupProgressIfRunning();") < stored_search_block.index("theApp.searchlist->LoadSearches();")
     assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches%s"), (LPCTSTR)CExceptionStrDash(*ex));' in stored_search_block
     assert 'LogError(LOG_STATUSBAR, _T("Failed to restore stored searches - Unknown exception"));' in stored_search_block
     assert "[[fallthrough]];" in stored_search_block
     assert "break;" not in stored_search_block
-    assert final_block.index("m_bStartupProgressFinished = true;") < final_block.index("UpdateStartupProgress(")
-    assert final_block.index("theApp.DestroyEarlyStartupProgress();") < final_block.index("UpdateStartupProgress(")
+    assert "UpdateStartupProgress(" not in final_block
+    assert "CloseStartupProgressIfRunning();" in final_block
     assert "StopTimer();" in final_block
-    assert "DestroyStartupProgress();" in final_block
 
 
 def test_startup_progress_dialog_destruction_flushes_pending_window_messages() -> None:
