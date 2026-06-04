@@ -91,6 +91,10 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "PartFileBufferedDataStateSnapshot bufferSnapshot" in queue_source
     assert "cur_file->GetBufferedDataStateSnapshot(bufferSnapshot);" in queue_source
     for field in (
+        "sourceStarvedReadyFiles=%u",
+        "sourceThinReadyFiles=%u",
+        "sourceRichReadyFiles=%u",
+        "a4afReadyFiles=%u",
         "connectedSources=%u",
         "connectingSources=%u",
         "callbackSources=%u",
@@ -114,6 +118,10 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     ):
         assert field in queue_source
     for aggregate in (
+        "++uSourceStarvedReadyFiles;",
+        "++uSourceThinReadyFiles;",
+        "++uSourceRichReadyFiles;",
+        "++uA4AFReadyFiles;",
         "uConnectedSources += cur_file->GetSrcStatisticsValue(DS_CONNECTED);",
         "uConnectingSources += cur_file->GetSrcStatisticsValue(DS_CONNECTING);",
         "uCallbackSources += cur_file->GetSrcStatisticsValue(DS_WAITCALLBACK);",
