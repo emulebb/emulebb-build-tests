@@ -1676,17 +1676,19 @@ def configure_webserver_profile(
     https_certificate: str = "",
     https_key: str = "",
     enable_crash_test_endpoint: bool = False,
+    live_network: bool = True,
 ) -> None:
     """Enables the WebServer listener and REST API key inside the temp profile."""
 
+    network_enabled = "1" if live_network else "0"
     live_common.apply_emule_preferences(
         config_dir,
         (
             ("ConfirmExit", "0"),
-            ("Autoconnect", "1"),
-            ("Reconnect", "1"),
-            ("NetworkED2K", "1"),
-            ("NetworkKademlia", "1"),
+            ("Autoconnect", network_enabled),
+            ("Reconnect", network_enabled),
+            ("NetworkED2K", network_enabled),
+            ("NetworkKademlia", network_enabled),
             ("Verbose", "1"),
             ("FullVerbose", "1"),
         ),
@@ -1706,7 +1708,37 @@ def configure_webserver_profile(
             enable_crash_test_endpoint=enable_crash_test_endpoint,
         ),
     )
-    live_common.apply_live_network_policy(config_dir)
+    if live_network:
+        live_common.apply_live_network_policy(config_dir)
+    else:
+        apply_local_network_profile(config_dir, require_lan_bind_addr(lan_bind_addr))
+
+
+def apply_local_network_profile(config_dir: Path, lan_bind_addr: str) -> None:
+    """Pins a REST-only LAN profile without public eD2K/Kad seed state."""
+
+    preferences_path = config_dir / "preferences.ini"
+    text = live_common.read_ini_text(preferences_path)
+    for section, key, value in (
+        ("eMule", "Autoconnect", "0"),
+        ("eMule", "Reconnect", "0"),
+        ("eMule", "NetworkED2K", "0"),
+        ("eMule", "NetworkKademlia", "0"),
+        ("eMule", "BindAddr", lan_bind_addr),
+        ("eMule", "BindInterface", ""),
+        ("eMule", "VpnGuardMode", "Off"),
+        ("eMule", "VpnGuardAllowedPublicIpCidrs", ""),
+        ("eMule", "GeoLocationLookupEnabled", "0"),
+        ("UPnP", "EnableUPnP", "0"),
+    ):
+        text = live_common.upsert_ini_section_value(text, section, key, value)
+    text = live_common.patch_ini_value(text, "CloseUPnPOnExit", "0")
+    live_common.write_utf16_ini_text(preferences_path, text)
+
+    for seed_name in ("server.met", "nodes.dat"):
+        seed_path = config_dir / seed_name
+        if seed_path.exists():
+            seed_path.unlink()
 
 
 def apply_p2p_bind_interface_override(

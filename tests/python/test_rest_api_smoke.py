@@ -26,6 +26,12 @@ def load_rest_api_smoke_module():
     return module
 
 
+def section_text(text: str, section: str) -> str:
+    start = text.index(f"[{section}]")
+    next_section = text.find("\n[", start + 1)
+    return text[start:] if next_section == -1 else text[start:next_section]
+
+
 def test_nat_backend_order_accepts_upnp_first() -> None:
     module = load_rest_api_smoke_module()
 
@@ -352,6 +358,58 @@ def test_configure_webserver_profile_can_enable_crash_endpoint(tmp_path: Path) -
 
     text = module.live_common.read_ini_text(preferences_path)
     assert "EnableDiagnosticRestEndpoints=1" in text
+
+
+def test_configure_webserver_profile_can_use_local_rest_only_network(tmp_path: Path) -> None:
+    module = load_rest_api_smoke_module()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    preferences_path = config_dir / "preferences.ini"
+    preferences_path.write_text(
+        "[eMule]\n"
+        "Autoconnect=1\n"
+        "Reconnect=1\n"
+        "NetworkED2K=1\n"
+        "NetworkKademlia=1\n"
+        "BindAddr=\n"
+        "BindInterface=hide.me\n"
+        "VpnGuardMode=Block\n"
+        "[WebServer]\n"
+        "Enabled=0\n"
+        "BindAddr=127.0.0.1\n"
+        "[UPnP]\n"
+        "EnableUPnP=1\n",
+        encoding="utf-16",
+    )
+    (config_dir / "server.met").write_bytes(b"public server seed")
+    (config_dir / "nodes.dat").write_bytes(b"public kad seed")
+    app_exe = tmp_path / "app" / "emulebb-main" / "srchybrid" / "x64" / "Release" / "emulebb.exe"
+
+    module.configure_webserver_profile(
+        config_dir,
+        app_exe,
+        "api-key",
+        4711,
+        "192.0.2.10",
+        live_network=False,
+    )
+
+    text = module.live_common.read_ini_text(preferences_path)
+    emule_section = section_text(text, "eMule")
+    webserver_section = section_text(text, "WebServer")
+    upnp_section = section_text(text, "UPnP")
+    assert "BindInterface=hide.me" not in emule_section
+    assert "BindInterface=" in emule_section
+    assert "BindAddr=192.0.2.10" in emule_section
+    assert "NetworkED2K=0" in emule_section
+    assert "NetworkKademlia=0" in emule_section
+    assert "Autoconnect=0" in emule_section
+    assert "Reconnect=0" in emule_section
+    assert "VpnGuardMode=Off" in emule_section
+    assert "EnableUPnP=0" in upnp_section
+    assert "BindAddr=192.0.2.10" in webserver_section
+    assert not (config_dir / "server.met").exists()
+    assert not (config_dir / "nodes.dat").exists()
 
 
 def test_live_server_unavailable_is_inconclusive_exit_code() -> None:

@@ -297,7 +297,14 @@ def run_suite(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         sonarr_base_url = f"http://{lan_bind_addr}:{sonarr_port}"
 
         profile = live_common.prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id=SUITE_NAME)
-        rest_smoke.configure_webserver_profile(Path(profile["config_dir"]), paths.app_exe, emule_api_key, emule_port, lan_bind_addr)
+        rest_smoke.configure_webserver_profile(
+            Path(profile["config_dir"]),
+            paths.app_exe,
+            emule_api_key,
+            emule_port,
+            lan_bind_addr,
+            live_network=False,
+        )
         app = live_common.launch_app(paths.app_exe, Path(profile["profile_base"]))
         live_common.wait_for_main_window(app)
         report["checks"]["emule_rest_ready"] = rest_smoke.wait_for_rest_ready(emule_base_url, emule_api_key, args.ready_timeout_seconds)
