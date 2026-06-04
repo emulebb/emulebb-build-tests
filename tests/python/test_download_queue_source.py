@@ -71,11 +71,16 @@ def test_local_server_source_requests_prefer_starved_files_on_equal_wait() -> No
     ]
 
     assert "int iBestValidSources = (std::numeric_limits<int>::max)();" in block
+    assert "UINT uBestSourceCount = _UI32_MAX;" in block
     assert "const int iValidSources = cur_file->GetValidSourcesCount();" in block
+    assert "const UINT uSourceCount = cur_file->GetSourceCount();" in block
     assert "ullWaitTime < ullBestWaitTime" in block
-    assert "ullWaitTime == ullBestWaitTime && iValidSources < iBestValidSources" in block
+    assert "iValidSources < iBestValidSources" in block
+    assert "iValidSources == iBestValidSources && uSourceCount < uBestSourceCount" in block
     assert block.index("const ULONGLONG ullWaitTime") < block.index("const int iValidSources")
+    assert block.index("const int iValidSources") < block.index("const UINT uSourceCount")
     assert block.index("iBestValidSources = iValidSources;") < block.index("posNextRequest = pos2;")
+    assert block.index("uBestSourceCount = uSourceCount;") < block.index("posNextRequest = pos2;")
 
 
 def test_local_server_source_requests_prune_stale_entries_before_spending_credit() -> None:
