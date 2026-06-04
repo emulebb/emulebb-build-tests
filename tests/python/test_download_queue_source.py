@@ -135,3 +135,39 @@ def test_download_summary_reports_source_discovery_pressure() -> None:
     assert "cur_file->GetKadFileSearchID() != 0" in block
     assert "cur_file->GetMaxSourcePerFileUDP() > cur_file->GetSourceCount()" in block
     assert "Kademlia::CKademlia::GetTotalFile()" in block
+
+
+def test_kad_source_searches_prefer_starved_ready_files_without_expanding_kad_budget() -> None:
+    queue_source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    queue_header = (app_source_root() / "DownloadQueue.h").read_text(encoding="utf-8", errors="ignore")
+    part_file_source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    helper_block = queue_source[
+        queue_source.index("bool CDownloadQueue::IsBestKademliaFileRequestCandidate") :
+        queue_source.index("void CDownloadQueue::KademliaSearchFile")
+    ]
+    predicate_block = queue_source[
+        queue_source.index("bool IsKademliaFileRequestCandidate") :
+        queue_source.index("}\n}\n\nCDownloadQueue::CDownloadQueue()")
+    ]
+    part_gate = part_file_source[
+        part_file_source.index("if (GetMaxSourcePerFileUDP() > GetSourceCount())") :
+        part_file_source.index("// check if we want new sources from server")
+    ]
+
+    assert "bool\tIsBestKademliaFileRequestCandidate(const CPartFile *pCandidate, ULONGLONG curTick) const;" in queue_header
+    assert "pFile->GetKadFileSearchID() != 0" in predicate_block
+    assert "pFile->GetMaxSourcePerFileUDP() <= pFile->GetSourceCount()" in predicate_block
+    assert "curTick >= pFile->m_LastSearchTimeKad" in predicate_block
+    assert "const int iCandidateValidSources = pCandidate->GetValidSourcesCount();" in helper_block
+    assert "const UINT uCandidateSourceCount = pCandidate->GetSourceCount();" in helper_block
+    assert "const int iValidSources = cur_file->GetValidSourcesCount();" in helper_block
+    assert "const UINT uSourceCount = cur_file->GetSourceCount();" in helper_block
+    assert "iValidSources < iCandidateValidSources" in helper_block
+    assert "iValidSources == iCandidateValidSources && uSourceCount <= uCandidateSourceCount" in helper_block
+    assert "KADEMLIATOTALFILE" not in helper_block
+    assert "KADEMLIAASKTIME" not in helper_block
+    assert "Kademlia::CSearchManager::PrepareLookup" not in helper_block
+    assert "DoKademliaFileRequest()" in part_gate
+    assert "Kademlia::CKademlia::GetTotalFile() < KADEMLIATOTALFILE" in part_gate
+    assert "IsBestKademliaFileRequestCandidate(this, curTick)" in part_gate
+    assert part_gate.index("DoKademliaFileRequest()") < part_gate.index("IsBestKademliaFileRequestCandidate(this, curTick)")
