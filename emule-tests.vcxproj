@@ -225,7 +225,7 @@
     <ClCompile Include="src\part_file_persistence.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePersistenceSeams.h')" />
     <ClCompile Include="src\part_file_preview.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePreviewSeams.h')" />
     <ClCompile Include="src\part_file_pause_resume.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFilePauseResumeSeams.h')" />
-    <ClCompile Include="src\part_file_numeric.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h')" />
+    <ClCompile Include="src\part_file_numeric.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileNumericSeams.h') and Exists('$(AppRoot)\srchybrid\PartFileHashSeams.h') and Exists('$(AppRoot)\srchybrid\PartFileWriteThreadSeams.h')" />
     <ClCompile Include="src\part_file_source_ownership.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PartFileSourceOwnershipSeams.h')" />
     <ClCompile Include="src\perf_log.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PerfLogSeams.h')" />
     <ClCompile Include="src\preference_validation_seams.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\PreferenceValidationSeams.h')" />
@@ -279,7 +279,7 @@
     <ClCompile Include="src\upload_queue_flow.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueFlowSeams.h')">
       <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">false</WholeProgramOptimization>
     </ClCompile>
-    <ClCompile Include="src\upload_queue.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueSeams.h')">
+    <ClCompile Include="src\upload_queue.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UploadQueueSeams.h') and Exists('$(AppRoot)\srchybrid\UploadBlockRequestSeams.h')">
       <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">false</WholeProgramOptimization>
     </ClCompile>
     <ClCompile Include="src\upnp_impl_minilib.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\UPnPImplMiniLibSeams.h')">
