@@ -112,6 +112,8 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "lowToLowIPSources=%u",
         "bannedSources=%u",
         "idleSources=%u",
+        "effectiveFileBufferBytes=%I64u",
+        "autoBroadbandIO=%u",
         "bufferedReadyBytes=%I64u",
         "bufferedPendingBytes=%I64u",
         "bufferedWrittenBytes=%I64u",
@@ -124,6 +126,14 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "bufferedPendingFiles=%u",
         "bufferedWrittenFiles=%u",
         "bufferedErrorFiles=%u",
+        "maxBufferedReadyBytes=%I64u",
+        "maxBufferedPendingBytes=%I64u",
+        "maxBufferedWrittenBytes=%I64u",
+        "maxBufferedReadyItems=%u",
+        "maxBufferedPendingItems=%u",
+        "maxBufferedWrittenItems=%u",
+        "asyncWriteFiles=%u",
+        "maxAsyncWriteRefsPerFile=%ld",
         "asyncWriteRefs=%Id",
     ):
         assert field in queue_source
@@ -145,8 +155,18 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "uLowToLowIPSources += cur_file->GetSrcStatisticsValue(DS_LOWTOLOWIP);",
         "uBannedSources += cur_file->GetSrcStatisticsValue(DS_BANNED);",
         "uIdleSources += cur_file->GetSrcStatisticsValue(DS_NONE);",
+        "uMaxBufferedReadyBytes = max(uMaxBufferedReadyBytes, bufferSnapshot.uReadyBytes);",
+        "uMaxBufferedPendingBytes = max(uMaxBufferedPendingBytes, bufferSnapshot.uPendingBytes);",
+        "uMaxBufferedWrittenBytes = max(uMaxBufferedWrittenBytes, bufferSnapshot.uWrittenBytes);",
+        "uMaxBufferedReadyItems = max(uMaxBufferedReadyItems, bufferSnapshot.uReadyCount);",
+        "uMaxBufferedPendingItems = max(uMaxBufferedPendingItems, bufferSnapshot.uPendingCount);",
+        "uMaxBufferedWrittenItems = max(uMaxBufferedWrittenItems, bufferSnapshot.uWrittenCount);",
+        "++uAsyncWriteFiles;",
+        "nMaxAsyncWriteRefsPerFile = max(nMaxAsyncWriteRefsPerFile, bufferSnapshot.nAsyncWriteCount);",
     ):
         assert aggregate in queue_source
+    assert "static_cast<uint64>(GetEffectiveFileBufferSizeBytes())," in queue_source
+    assert "static_cast<UINT>(thePrefs.IsAutoBroadbandIOEnabled())," in queue_source
     assert '_tcscmp(pszReason, _T("block-reserve-empty")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("start-download")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("state-enter-downloading")) == 0' in client_source
