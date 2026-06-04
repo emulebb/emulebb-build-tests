@@ -14,6 +14,19 @@ def test_part_file_buffer_errors_do_not_report_success_as_unknown_write_error() 
     assert "CFileException::ThrowOsError((LONG)item->dwError, m_hpartfile.GetFileName());" not in source
 
 
+def test_part_file_flush_retires_written_buffers_before_sizing_unwritten_data() -> None:
+    source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "PartFile.h").read_text(encoding="utf-8", errors="ignore")
+    flush_block = source[source.index("void CPartFile::FlushBuffer") : source.index("void CPartFile::FlushBuffersExceptionHandler")]
+    cleanup_block = source[source.index("void CPartFile::DeleteWrittenItems()") : source.index("void CPartFile::SetCategory")]
+
+    assert "void\tDeleteWrittenItems();" in header
+    assert "DeleteWrittenItems();" in flush_block
+    assert flush_block.index("DeleteWrittenItems();") < flush_block.index("ULONGLONG cursize = m_hpartfile.GetLength();")
+    assert "GetPartFileBufferedDataFlushState(*item) == PB_WRITTEN" in cleanup_block
+    assert "DeleteWrittenItem(posCurrent);" in cleanup_block
+
+
 def test_part_file_shutdown_flush_wait_allows_broadband_write_drain() -> None:
     source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
 
