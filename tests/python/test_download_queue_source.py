@@ -78,6 +78,26 @@ def test_local_server_source_requests_prefer_starved_files_on_equal_wait() -> No
     assert block.index("iBestValidSources = iValidSources;") < block.index("posNextRequest = pos2;")
 
 
+def test_local_server_source_requests_prune_stale_entries_before_spending_credit() -> None:
+    source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
+    predicate = source[
+        source.index("bool ShouldSendLocalServerSourceRequest") :
+        source.index("}\n}\n\nCDownloadQueue::CDownloadQueue()")
+    ]
+    block = source[
+        source.index("void CDownloadQueue::ProcessLocalRequests()") :
+        source.index("void CDownloadQueue::SendLocalSrcRequest")
+    ]
+
+    assert "pFile->GetMaxSourcePerFileSoft() <= pFile->GetSourceCount()" in predicate
+    assert "pCurrentServer != NULL && pCurrentServer->SupportsLargeFilesTCP()" in predicate
+    assert "ShouldSendLocalServerSourceRequest(cur_file, pCurrentServer)" in block
+    assert "cur_file->m_bLocalSrcReqQueued = false;" in block
+    assert "not sent because it is no longer eligible" in block
+    assert "if (iFiles > 0)" in block
+    assert "m_dwNextTCPSrcReq = curTick + SEC2MS(iMaxFilesPerTcpFrame * (16 + 4));" in block
+
+
 def test_download_summary_reports_source_discovery_pressure() -> None:
     source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[
