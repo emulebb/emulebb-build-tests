@@ -119,6 +119,7 @@ def test_download_summary_reports_source_discovery_pressure() -> None:
         "localServerQueuedFiles=%Id",
         "localServerQueuedReadyFiles=%u",
         "localServerMarkedReadyFiles=%u",
+        "sourceStarvedLocalQueuedReadyFiles=%u",
         "nextTcpSourceRequestWaitMs=%I64u",
         "udpSearchActive=%u",
         "udpSearchedServers=%u",
@@ -132,11 +133,17 @@ def test_download_summary_reports_source_discovery_pressure() -> None:
         "kadEligibleReadyFiles=%u",
         "kadDueReadyFiles=%u",
         "kadBackoffReadyFiles=%u",
+        "sourceStarvedKadSearchingReadyFiles=%u",
+        "sourceStarvedKadEligibleReadyFiles=%u",
+        "sourceStarvedKadDueReadyFiles=%u",
+        "sourceStarvedKadBackoffReadyFiles=%u",
     ):
         assert field in block
 
     assert "m_localServerReqQueue.GetCount()" in block
+    assert "const bool bSourceStarvedFile = iFileValidSources <= 0;" in block
     assert "cur_file->m_bLocalSrcReqQueued" in block
+    assert "bSourceStarvedFile" in block
     assert "cur_file->GetKadFileSearchID() != 0" in block
     assert "cur_file->GetMaxSourcePerFileUDP() > cur_file->GetSourceCount()" in block
     assert "Kademlia::CKademlia::GetTotalFile()" in block
