@@ -56,6 +56,22 @@ def test_interrupted_hashing_preserves_duplicate_path_sidecar() -> None:
     assert "persistedRecords.emplace(MakeDuplicatePathCacheKey(record.strFilePath), record);" in persist_block
 
 
+def test_duplicate_path_sidecar_reuse_precedes_known_file_duplicate_reporting() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CSharedFileList::CheckAndAddSingleFileFromNormalizedDirectory") :
+        source.index("bool CSharedFileList::AddKnownSharedFile")
+    ]
+
+    reuse_probe = "TryReuseRememberedDuplicateSharedPath(strFoundFilePath, static_cast<LONGLONG>(fdate), ullFoundFileSize)"
+    known_lookup = "theApp.knownfiles->FindKnownFile(strFoundFileName, fdate, ullFoundFileSize)"
+    assert reuse_probe in block
+    assert known_lookup in block
+    assert block.index(reuse_probe) < block.index(known_lookup)
+    assert "++m_startupScanStats.uDuplicatePathsReused;" in block
+    assert "return;\n\t}\n\n\tCKnownFile *toadd = theApp.knownfiles->FindKnownFile" in block
+
+
 def test_startup_cache_loader_rejects_short_fixed_payload_reads() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
