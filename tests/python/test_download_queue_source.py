@@ -63,24 +63,29 @@ def test_startup_part_file_hash_jobs_are_released_after_part_scan() -> None:
     assert init_block.index("CScopedPartFileHashStartupScheduling startupHashScheduling;") < init_block.index("SortByPriority();")
 
 
-def test_local_server_source_requests_prefer_starved_files_on_equal_wait() -> None:
+def test_local_server_source_requests_prefer_starved_files_before_wait_order() -> None:
     source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[
         source.index("void CDownloadQueue::ProcessLocalRequests()") :
         source.index("void CDownloadQueue::SendLocalSrcRequest")
     ]
 
-    assert "int iBestValidSources = (std::numeric_limits<int>::max)();" in block
-    assert "UINT uBestSourceCount = _UI32_MAX;" in block
     assert "const int iValidSources = cur_file->GetValidSourcesCount();" in block
     assert "const UINT uSourceCount = cur_file->GetSourceCount();" in block
-    assert "ullWaitTime < ullBestWaitTime" in block
     assert "iValidSources < iBestValidSources" in block
-    assert "iValidSources == iBestValidSources && uSourceCount < uBestSourceCount" in block
-    assert block.index("const ULONGLONG ullWaitTime") < block.index("const int iValidSources")
+    assert "uSourceCount < uBestSourceCount" in block
+    assert "uSourceCount == uBestSourceCount && ullWaitTime < ullBestWaitTime" in block
+    assert "spending each" in block
+    assert "frame on files with the fewest usable sources improves" in block
+    assert block.index("int iBestValidSources = (std::numeric_limits<int>::max)();") < block.index("UINT uBestSourceCount = _UI32_MAX;")
+    assert block.index("UINT uBestSourceCount = _UI32_MAX;") < block.index("ULONGLONG ullBestWaitTime = _UI64_MAX;")
     assert block.index("const int iValidSources") < block.index("const UINT uSourceCount")
+    assert block.index("const UINT uSourceCount") < block.index("const ULONGLONG ullWaitTime")
+    assert block.index("iValidSources < iBestValidSources") < block.index("uSourceCount < uBestSourceCount")
+    assert block.index("uSourceCount < uBestSourceCount") < block.index("uSourceCount == uBestSourceCount && ullWaitTime < ullBestWaitTime")
     assert block.index("iBestValidSources = iValidSources;") < block.index("posNextRequest = pos2;")
     assert block.index("uBestSourceCount = uSourceCount;") < block.index("posNextRequest = pos2;")
+    assert block.index("ullBestWaitTime = ullWaitTime;") < block.index("posNextRequest = pos2;")
 
 
 def test_local_server_source_requests_prune_stale_entries_before_spending_credit() -> None:
