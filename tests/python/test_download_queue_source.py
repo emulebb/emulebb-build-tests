@@ -105,7 +105,9 @@ def test_local_server_source_requests_prune_stale_entries_before_spending_credit
     assert "cur_file->m_bLocalSrcReqQueued = false;" in block
     assert "not sent because it is no longer eligible" in block
     assert "if (iFiles > 0)" in block
-    assert "m_dwNextTCPSrcReq = curTick + SEC2MS(iMaxFilesPerTcpFrame * (16 + 4));" in block
+    assert "kLocalServerSourceRequestsPerTcpFrame = 15" in source
+    assert "kLocalServerSourceRequestTcpFrameIntervalMs" in source
+    assert "m_dwNextTCPSrcReq = curTick + kLocalServerSourceRequestTcpFrameIntervalMs;" in block
 
 
 def test_download_summary_reports_source_discovery_pressure() -> None:
@@ -121,6 +123,7 @@ def test_download_summary_reports_source_discovery_pressure() -> None:
         "localServerQueuedEligibleFiles=%u",
         "localServerQueuedSourceStarvedEligibleFiles=%u",
         "localServerQueuedDueAgeMaxMs=%I64u",
+        "localServerQueuedEstimatedDrainMs=%I64u",
         "localServerMarkedReadyFiles=%u",
         "sourceStarvedLocalQueuedReadyFiles=%u",
         "nextTcpSourceRequestWaitMs=%I64u",
@@ -147,6 +150,8 @@ def test_download_summary_reports_source_discovery_pressure() -> None:
     assert "uLocalServerQueueEligibleFiles" in block
     assert "uLocalServerQueueSourceStarvedEligibleFiles" in block
     assert "ullLocalServerQueueDueAgeMaxMs" in block
+    assert "ullLocalServerQueueEstimatedDrainMs" in block
+    assert "EstimateLocalServerSourceRequestQueueDrainMs" in block
     assert "ShouldSendLocalServerSourceRequest(pQueuedFile, pCurrentServer)" in block
     assert "pQueuedFile->GetValidSourcesCount() <= 0" in block
     assert "if (pQueuedFile->m_LastSearchTime != 0)" in block
