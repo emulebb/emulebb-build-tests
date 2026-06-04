@@ -107,3 +107,47 @@ def test_startup_cache_save_waits_for_file_hash_gate_to_go_idle() -> None:
     assert "startup-cache snapshot walks all shared directories and known" in block
     assert "const bool bDeferredHashingActive = m_bStartupDeferredHashingActive || IsFileHashJobGateBusy();" in block
     assert "bDeferredHashingActive," in block
+
+
+def test_shared_publish_instrumentation_reports_server_and_kad_backlog() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CSharedFileList::GetPublishInstrumentationSnapshot") :
+        source.index("void CSharedFileList::Process")
+    ]
+
+    assert "#ifdef EMULEBB_ENABLE_UPLOAD_SLOT_INSTRUMENTATION" in header
+    assert "struct SharedPublishInstrumentationSnapshot" in header
+    for field in (
+        "INT_PTR iSharedFiles",
+        "UINT uED2KPublishedFiles",
+        "UINT uED2KPendingFiles",
+        "UINT uED2KPendingLargeUnsupportedFiles",
+        "UINT uED2KOfferLimit",
+        "UINT uKadPublishReady",
+        "UINT uKadSourceDueFiles",
+        "UINT uKadSourceBackoffFiles",
+        "UINT uKadSourceSearches",
+        "UINT uKadSourceSearchCap",
+        "UINT uKadKeywordSearches",
+        "UINT uKadKeywordSearchCap",
+        "UINT uKadNotesSearches",
+        "UINT uKadNotesSearchCap",
+    ):
+        assert field in header
+
+    assert "void\tGetPublishInstrumentationSnapshot(SharedPublishInstrumentationSnapshot &rSnapshot) const;" in header
+    assert "rSnapshot.iSharedFiles = m_Files_map.GetCount();" in block
+    assert "rSnapshot.uKadSourceSearchCap = KADEMLIATOTALSTORESRC;" in block
+    assert "rSnapshot.uKadKeywordSearchCap = KADEMLIATOTALSTOREKEY;" in block
+    assert "rSnapshot.uKadNotesSearchCap = KADEMLIATOTALSTORENOTES;" in block
+    assert "Kademlia::CKademlia::GetTotalStoreSrc()" in block
+    assert "Kademlia::CKademlia::GetTotalStoreKey()" in block
+    assert "Kademlia::CKademlia::GetTotalStoreNotes()" in block
+    assert "pCurServer->SupportsLargeFilesTCP()" in block
+    assert "Kademlia::CKademlia::GetPublish()" in block
+    assert "Kademlia::CUDPFirewallTester::IsFirewalledUDP(true)" in block
+    assert "IsKadSourcePublishDue(pFile, tNow)" in block
+    assert "++rSnapshot.uKadSourceDueFiles;" in block
+    assert "++rSnapshot.uKadSourceBackoffFiles;" in block

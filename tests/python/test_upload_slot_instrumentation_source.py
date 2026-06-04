@@ -53,6 +53,22 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "iActiveNoRequestSocketBacklogClients" in block
     assert "retryCooldowns=%u" in block
     assert "noRequestCooldowns=%u" in block
+    assert "sharedFiles=%Id" in block
+    assert "ed2kPublishedFiles=%u" in block
+    assert "ed2kPendingFiles=%u" in block
+    assert "ed2kPendingLargeUnsupportedFiles=%u" in block
+    assert "ed2kOfferLimit=%u" in block
+    assert "kadPublishReady=%u" in block
+    assert "kadSourceDueFiles=%u" in block
+    assert "kadSourceBackoffFiles=%u" in block
+    assert "kadSourceSearches=%u" in block
+    assert "kadSourceSearchCap=%u" in block
+    assert "kadKeywordSearches=%u" in block
+    assert "kadKeywordSearchCap=%u" in block
+    assert "kadNotesSearches=%u" in block
+    assert "kadNotesSearchCap=%u" in block
+    assert "CSharedFileList::SharedPublishInstrumentationSnapshot sharedPublish = {};" in block
+    assert "theApp.sharedfiles->GetPublishInstrumentationSnapshot(sharedPublish);" in block
     assert "GetSlowUploadCooldownRemaining()" in block
     assert "GetUploadRetryCooldownIP(pWaitingClient)" in block
     assert "ullCooldownUntil > curTick" in block
