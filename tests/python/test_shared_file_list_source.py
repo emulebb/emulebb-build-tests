@@ -33,6 +33,29 @@ def test_duplicate_path_cache_write_failures_keep_path_and_error_details() -> No
     assert block.index("CExceptionStrDash(*ex)") < block.index("ex->Delete();")
 
 
+def test_interrupted_hashing_preserves_duplicate_path_sidecar() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    invalidate_block = source[
+        source.index("void CSharedFileList::InvalidateStartupCachesAfterInterruptedHashing") :
+        source.index("bool CSharedFileList::IsSharedHashInFlight")
+    ]
+    persist_block = source[
+        source.index("bool CSharedFileList::PersistDuplicatePathCacheAfterInterruptedHashing") :
+        source.index("void CSharedFileList::RememberDuplicateSharedPath")
+    ]
+
+    assert "bool\tPersistDuplicatePathCacheAfterInterruptedHashing();" in header
+    assert "(void)PersistDuplicatePathCacheAfterInterruptedHashing();" in invalidate_block
+    assert "LongPathSeams::DeleteFileIfExists(GetStartupCachePath())" in invalidate_block
+    assert "m_duplicateSharedPathRecords.clear();" not in invalidate_block
+    assert "GetDuplicatePathCachePath()" not in invalidate_block
+    assert "CaptureDuplicatePathCacheSnapshot(snapshot)" in persist_block
+    assert "BuildDuplicatePathCacheRecordsFromSnapshot(snapshot, records);" in persist_block
+    assert "WriteDuplicatePathCacheFile(GetDuplicatePathCachePath(), records)" in persist_block
+    assert "persistedRecords.emplace(MakeDuplicatePathCacheKey(record.strFilePath), record);" in persist_block
+
+
 def test_startup_cache_loader_rejects_short_fixed_payload_reads() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
