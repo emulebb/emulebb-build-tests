@@ -240,6 +240,11 @@ def test_duplicate_complete_download_block_advances_and_retires_stale_pending_re
     assert block.index("m_reqfile->IsComplete(cur_block->block->StartOffset, nEndPos)") < block.index("const uint64 uDuplicateProgressBytes")
     assert "bCompletedDuplicateWholeBlock" in block
     assert "cur_block->block->transferred = uDuplicateProgressBytes;" in block
+    duplicate_progress_block = block[
+        block.index("const uint64 uDuplicateProgressBytes") :
+        block.index('#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION', block.index("const uint64 uDuplicateProgressBytes"))
+    ]
+    assert "bProgressedPendingBlock = true;" not in duplicate_progress_block
     assert "bProgressedPendingBlock = true;" in block
     assert 'LogDownloadSlotInstrumentation(_T("block-advanced-duplicate-complete")' in block
     assert "m_nTransferredDown += uTransferredFileDataSize;" in block
