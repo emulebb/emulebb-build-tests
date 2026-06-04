@@ -4828,7 +4828,7 @@ def main() -> int:
             prowlarr_url=prowlarr_url,
             prowlarr_api_key=prowlarr_api_key,
             prowlarr_indexer_id=int(saved_indexer["id"]),
-            bind_addr=bind_addr,
+            lan_bind_addr=bind_addr,
             port=port,
             emule_api_key=args.emule_api_key,
             indexer_name=indexer_name,
