@@ -84,6 +84,20 @@ TEST_CASE("Part file numeric seam shortens active broadband buffer flush cadence
 		static_cast<uint64>(1000u));
 }
 
+TEST_CASE("Part file numeric seam schedules completed buffered write cleanup only for broadband I/O")
+{
+	const uint64 intervalMs = PartFileNumericSeams::kBroadbandCompletedWriteCleanupTimeLimitMs;
+	REQUIRE(intervalMs > 0u);
+
+	CHECK_FALSE(PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites(false, true, 5000u, 0u, intervalMs));
+	CHECK_FALSE(PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites(true, false, 5000u, 0u, intervalMs));
+	CHECK(PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites(true, true, 5000u, 0u, intervalMs));
+	CHECK_FALSE(PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites(true, true, 5999u, 5000u, intervalMs));
+	CHECK(PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites(true, true, 7000u, 5000u, intervalMs));
+	CHECK(PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites(true, true, 4000u, 5000u, intervalMs));
+	CHECK(PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites(true, true, 5000u, 5000u, 0u));
+}
+
 TEST_CASE("Part-file write thread seam bounds one IOCP dispatch burst without stranding queued writes")
 {
 #ifdef EMULEBB_TEST_HAVE_PART_FILE_WRITE_DISPATCH_CAP

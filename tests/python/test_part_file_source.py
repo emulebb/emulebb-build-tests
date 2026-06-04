@@ -18,13 +18,24 @@ def test_part_file_flush_retires_written_buffers_before_sizing_unwritten_data() 
     source = (app_source_root() / "PartFile.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "PartFile.h").read_text(encoding="utf-8", errors="ignore")
     flush_block = source[source.index("void CPartFile::FlushBuffer") : source.index("void CPartFile::FlushBuffersExceptionHandler")]
+    process_start = source.index("uint32 CPartFile::Process")
+    process_block = source[process_start : source.index("bool CPartFile::CanAddSource", process_start)]
     cleanup_block = source[source.index("void CPartFile::DeleteWrittenItems()") : source.index("void CPartFile::SetCategory")]
+    write_thread = (app_source_root() / "PartFileWriteThread.cpp").read_text(encoding="utf-8", errors="ignore")
 
     assert "void\tDeleteWrittenItems();" in header
+    assert "volatile LONG m_bBufferedWriteCompletionsPending;" in header
+    assert "void\tNoteBufferedWriteCompletion()" in header
+    assert "bool\tHasBufferedWriteCompletionsPending() const;" in header
+    assert "bool\tConsumeBufferedWriteCompletionsPending();" in header
     assert "DeleteWrittenItems();" in flush_block
     assert flush_block.index("DeleteWrittenItems();") < flush_block.index("ULONGLONG cursize = m_hpartfile.GetLength();")
     assert "GetPartFileBufferedDataFlushState(*item) == PB_WRITTEN" in cleanup_block
     assert "DeleteWrittenItem(posCurrent);" in cleanup_block
+    assert "PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites" in process_block
+    assert process_block.index("PartFileNumericSeams::ShouldCleanupCompletedBufferedWrites") < process_block.index("m_nTotalBufferData > uEffectiveFileBufferSize")
+    assert "(void)ConsumeBufferedWriteCompletionsPending();\n\t\tFlushBuffer();" in process_block
+    assert "SetPartFileBufferedDataFlushState(*pBuffer, PB_WRITTEN);\n\t\t\t\tpFile->NoteBufferedWriteCompletion();" in write_thread
 
 
 def test_part_file_shutdown_flush_wait_allows_broadband_write_drain() -> None:
