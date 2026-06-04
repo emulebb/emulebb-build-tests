@@ -4416,6 +4416,7 @@ def main() -> int:
     prowlarr_api_key = env_values["PROWLARR_API_KEY"]
     indexer_name = env_values["EMULEBB_TEST_PROWLARR_INDEXER_NAME"]
     lan_bind_addr = prowlarr_live.resolve_lan_bind_addr(prowlarr_url, args.lan_bind_addr)
+    bind_addr = lan_bind_addr
     port = prowlarr_live.choose_listen_port(lan_bind_addr)
     use_https = args.rest_webserver_scheme == "https"
     emule_base_url = f"{args.rest_webserver_scheme}://{bind_addr}:{port}"

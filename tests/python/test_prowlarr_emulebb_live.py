@@ -62,6 +62,29 @@ def test_parser_defaults_rest_webserver_to_https() -> None:
     assert args.lan_bind_addr == "192.0.2.10"
 
 
+def test_choose_listen_port_probes_explicit_lan_bind_addr(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_prowlarr_module()
+    observed: list[tuple[str, int]] = []
+
+    class FakeSocket:
+        def __enter__(self) -> "FakeSocket":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+        def bind(self, endpoint: tuple[str, int]) -> None:
+            observed.append(endpoint)
+
+        def getsockname(self) -> tuple[str, int]:
+            return ("192.0.2.10", 54123)
+
+    monkeypatch.setattr(module.socket, "socket", lambda *_args, **_kwargs: FakeSocket())
+
+    assert module.choose_listen_port("192.0.2.10") == 54123
+    assert observed == [("192.0.2.10", 0)]
+
+
 def test_upsert_creates_indexer_with_force_save_to_avoid_live_validation(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []

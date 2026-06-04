@@ -1945,7 +1945,7 @@ def choose_listen_port(lan_bind_addr: str) -> int:
     """Returns one free TCP port on the actual eMule web bind address."""
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind((bind_addr, 0))
+        probe.bind((lan_bind_addr, 0))
         return int(probe.getsockname()[1])
 
 
@@ -2337,6 +2337,7 @@ def main() -> int:
     seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     artifacts_dir = paths.source_artifacts_dir
     lan_bind_addr = resolve_lan_bind_addr(prowlarr_url, args.lan_bind_addr)
+    bind_addr = lan_bind_addr
     port = choose_listen_port(lan_bind_addr)
     use_https = args.rest_webserver_scheme == "https"
     emule_base_url = f"{args.rest_webserver_scheme}://{bind_addr}:{port}"
