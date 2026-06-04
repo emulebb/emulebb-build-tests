@@ -89,6 +89,13 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert "PartFileBufferedDataStateSnapshot bufferSnapshot" in queue_source
     assert "cur_file->GetBufferedDataStateSnapshot(bufferSnapshot);" in queue_source
     for field in (
+        "connectedSources=%u",
+        "connectingSources=%u",
+        "callbackSources=%u",
+        "hashsetSources=%u",
+        "lowToLowIPSources=%u",
+        "bannedSources=%u",
+        "idleSources=%u",
         "bufferedReadyBytes=%I64u",
         "bufferedPendingBytes=%I64u",
         "bufferedWrittenBytes=%I64u",
@@ -104,6 +111,17 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
         "asyncWriteRefs=%Id",
     ):
         assert field in queue_source
+    for aggregate in (
+        "uConnectedSources += cur_file->GetSrcStatisticsValue(DS_CONNECTED);",
+        "uConnectingSources += cur_file->GetSrcStatisticsValue(DS_CONNECTING);",
+        "uCallbackSources += cur_file->GetSrcStatisticsValue(DS_WAITCALLBACK);",
+        "uCallbackSources += cur_file->GetSrcStatisticsValue(DS_WAITCALLBACKKAD);",
+        "uHashsetSources += cur_file->GetSrcStatisticsValue(DS_REQHASHSET);",
+        "uLowToLowIPSources += cur_file->GetSrcStatisticsValue(DS_LOWTOLOWIP);",
+        "uBannedSources += cur_file->GetSrcStatisticsValue(DS_BANNED);",
+        "uIdleSources += cur_file->GetSrcStatisticsValue(DS_NONE);",
+    ):
+        assert aggregate in queue_source
     assert '_tcscmp(pszReason, _T("block-reserve-empty")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("start-download")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("state-enter-downloading")) == 0' in client_source
