@@ -217,6 +217,10 @@ TEST_CASE("Broadband stalled upload recycling requires queued work and replaceme
 	CHECK(HasStalledUploadReplacementPressure(false, 11, 12));
 	CHECK_FALSE(HasStalledUploadReplacementPressure(false, 12, 12));
 
+	CHECK_EQ(GetStalledUploadRecycleGraceMs(5u), 5000u);
+	CHECK_EQ(GetStalledUploadRecycleGraceMs(kStalledUploadRecycleGraceMaxSeconds), 15000u);
+	CHECK_EQ(GetStalledUploadRecycleGraceMs(kStalledUploadRecycleGraceMaxSeconds + 1u), 15000u);
+
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 1u, 0, 0, 0, 10000u, 10000u));
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 0u, 1, 0, 0, 10000u, 10000u));
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 0u, 0, 0, 1, 10000u, 10000u));
