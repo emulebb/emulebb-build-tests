@@ -2170,6 +2170,45 @@ def test_ensure_radarr_movie_accepts_explicit_remote_root(monkeypatch: pytest.Mo
     assert not (tmp_path / "media" / "radarr-import-root").exists()
 
 
+def test_ensure_radarr_movie_can_create_synthetic_local_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+    created_payloads: list[dict[str, object]] = []
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        if path == "/api/v3/rootfolder":
+            if kwargs.get("method") == "POST":
+                return {"status": 201, "json": {"id": 5, "path": kwargs["json_body"]["path"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/qualityprofile":
+            return {"status": 200, "json": [{"id": 3, "name": "AnyAnyLang"}], "body_text": "[]"}
+        if path == "/api/v3/movie":
+            if kwargs.get("method") == "POST":
+                created_payloads.append(kwargs["json_body"])
+                return {"status": 201, "json": {"id": 17, **kwargs["json_body"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path.startswith("/api/v3/movie/lookup?term="):
+            return {"status": 200, "json": [], "body_text": "[]"}
+        raise AssertionError(f"Unexpected Radarr request: {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    summary = module.ensure_radarr_movie(
+        "http://radarr.test",
+        "key",
+        "Emulebb Generated Movie Alpha",
+        tmp_path,
+        allow_synthetic_metadata=True,
+    )
+
+    assert summary["id"] == 17
+    assert summary["synthetic_metadata"] is True
+    assert created_payloads[0]["tmdbId"] == module.synthetic_arr_numeric_id("radarr", "Emulebb Generated Movie Alpha")
+    assert created_payloads[0]["titleSlug"] == "emulebb-generated-movie-alpha-2026"
+
+
 def test_ensure_radarr_movie_prefers_named_quality_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     module = load_radarr_sonarr_module()
 
@@ -2350,6 +2389,45 @@ def test_ensure_sonarr_series_realigns_existing_series_root(monkeypatch: pytest.
     assert summary["created"] is False
     assert summary["updated"] is True
     assert summary["series"]["rootFolderPath"] == target_root
+
+
+def test_ensure_sonarr_series_can_create_synthetic_local_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = load_radarr_sonarr_module()
+    created_payloads: list[dict[str, object]] = []
+
+    def fake_arr_request(_arr_url, _api_key, path, **kwargs):
+        if path == "/api/v3/rootfolder":
+            if kwargs.get("method") == "POST":
+                return {"status": 201, "json": {"id": 5, "path": kwargs["json_body"]["path"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path == "/api/v3/qualityprofile":
+            return {"status": 200, "json": [{"id": 3, "name": "AnyAnyLang"}], "body_text": "[]"}
+        if path == "/api/v3/series":
+            if kwargs.get("method") == "POST":
+                created_payloads.append(kwargs["json_body"])
+                return {"status": 201, "json": {"id": 22, **kwargs["json_body"]}, "body_text": "{}"}
+            return {"status": 200, "json": [], "body_text": "[]"}
+        if path.startswith("/api/v3/series/lookup?term="):
+            return {"status": 200, "json": [], "body_text": "[]"}
+        raise AssertionError(f"Unexpected Sonarr request: {path}")
+
+    monkeypatch.setattr(module, "arr_request", fake_arr_request)
+
+    summary = module.ensure_sonarr_series(
+        "http://sonarr.test",
+        "key",
+        "Emulebb Generated Series Alpha",
+        tmp_path,
+        allow_synthetic_metadata=True,
+    )
+
+    assert summary["id"] == 22
+    assert summary["synthetic_metadata"] is True
+    assert created_payloads[0]["tvdbId"] == module.synthetic_arr_numeric_id("sonarr", "Emulebb Generated Series Alpha")
+    assert created_payloads[0]["titleSlug"] == "emulebb-generated-series-alpha"
 
 
 def test_radarr_root_environment_warning_marks_remote_local_roots(tmp_path: Path) -> None:

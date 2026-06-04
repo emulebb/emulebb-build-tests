@@ -1737,6 +1737,57 @@ def lookup_radarr_movie(arr_url: str, api_key: str, title: str) -> dict[str, Any
     raise RuntimeError(f"Radarr movie lookup returned no candidates for {title!r}.")
 
 
+def synthetic_arr_numeric_id(kind: str, title: str) -> int:
+    """Returns a deterministic positive metadata id for fake local Arr fixtures."""
+
+    base = 900_000_000 if kind == "radarr" else 800_000_000
+    total = 0
+    for index, char in enumerate(str(title), start=1):
+        total = (total + index * ord(char)) % 99_999
+    return base + total
+
+
+def synthetic_arr_title_slug(title: str) -> str:
+    """Returns an Arr-safe slug for fake local metadata."""
+
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title).strip().lower()).strip("-")
+    return slug or "emulebb-generated-media"
+
+
+def build_synthetic_radarr_movie_payload(title: str, root_path_text: str, quality_profile_id: int) -> dict[str, object]:
+    """Builds a fake Radarr movie resource for deterministic local ED2K fixtures."""
+
+    folder_name = f"{title.strip() or 'Emulebb Generated Movie'} (2026)"
+    return {
+        "title": title,
+        "originalTitle": title,
+        "sortTitle": title,
+        "sizeOnDisk": 0,
+        "status": "released",
+        "overview": "Synthetic eMuleBB local ED2K fixture.",
+        "inCinemas": "2026-01-01",
+        "physicalRelease": "2026-01-01",
+        "digitalRelease": "2026-01-01",
+        "images": [],
+        "website": "",
+        "year": 2026,
+        "youTubeTrailerId": "",
+        "studio": "eMuleBB",
+        "path": arr_join_root_child(root_path_text, folder_name),
+        "rootFolderPath": root_path_text,
+        "qualityProfileId": quality_profile_id,
+        "monitored": True,
+        "minimumAvailability": "released",
+        "isAvailable": True,
+        "folderName": folder_name,
+        "runtime": 60,
+        "tmdbId": synthetic_arr_numeric_id("radarr", title),
+        "titleSlug": f"{synthetic_arr_title_slug(title)}-2026",
+        "genres": [],
+        "certification": "",
+    }
+
+
 def arr_path_text_equal(left: object, right: object) -> bool:
     """Compares Arr paths across Windows and POSIX separators."""
 
@@ -1818,6 +1869,7 @@ def ensure_radarr_movie(
     *,
     create_local_root_path: bool = True,
     quality_profile_name: str | None = None,
+    allow_synthetic_metadata: bool = False,
 ) -> dict[str, object]:
     """Ensures a temporary Radarr movie exists for the import E2E."""
 
@@ -1861,8 +1913,15 @@ def ensure_radarr_movie(
                     "movie": selected_movie,
                 }
 
-    lookup = lookup_radarr_movie(arr_url, api_key, title)
-    payload = dict(lookup)
+    try:
+        lookup = lookup_radarr_movie(arr_url, api_key, title)
+        payload = dict(lookup)
+        synthetic_metadata = False
+    except RuntimeError:
+        if not allow_synthetic_metadata:
+            raise
+        payload = build_synthetic_radarr_movie_payload(title, root_path_text, quality_profile_id)
+        synthetic_metadata = True
     payload["qualityProfileId"] = quality_profile_id
     payload["rootFolderPath"] = root_path_text
     payload["monitored"] = True
@@ -1881,6 +1940,7 @@ def ensure_radarr_movie(
         "updated": False,
         "root_folder": root_folder,
         "quality_profile": summarize_quality_profile(quality_profile, quality_profile_name),
+        "synthetic_metadata": synthetic_metadata,
         "movie": created,
     }
 
@@ -1953,6 +2013,36 @@ def lookup_sonarr_series(arr_url: str, api_key: str, title: str) -> dict[str, An
     raise RuntimeError(f"Sonarr series lookup returned no candidates for {title!r}.")
 
 
+def build_synthetic_sonarr_series_payload(title: str, root_path_text: str, quality_profile_id: int) -> dict[str, object]:
+    """Builds a fake Sonarr series resource for deterministic local ED2K fixtures."""
+
+    folder_name = title.strip() or "Emulebb Generated Series"
+    return {
+        "title": title,
+        "sortTitle": title,
+        "status": "continuing",
+        "overview": "Synthetic eMuleBB local ED2K fixture.",
+        "network": "eMuleBB",
+        "airTime": "20:00",
+        "images": [],
+        "remotePoster": "",
+        "seasons": [{"seasonNumber": 1, "monitored": True}],
+        "year": 2026,
+        "path": arr_join_root_child(root_path_text, folder_name),
+        "qualityProfileId": quality_profile_id,
+        "monitored": True,
+        "seasonFolder": True,
+        "rootFolderPath": root_path_text,
+        "tvdbId": synthetic_arr_numeric_id("sonarr", title),
+        "titleSlug": synthetic_arr_title_slug(title),
+        "genres": [],
+        "certification": "",
+        "runtime": 60,
+        "seriesType": "standard",
+        "firstAired": "2026-01-01",
+    }
+
+
 def ensure_sonarr_series(
     arr_url: str,
     api_key: str,
@@ -1961,6 +2051,7 @@ def ensure_sonarr_series(
     *,
     create_local_root_path: bool = True,
     quality_profile_name: str | None = None,
+    allow_synthetic_metadata: bool = False,
 ) -> dict[str, object]:
     """Ensures a temporary Sonarr series exists for the import E2E."""
 
@@ -2004,8 +2095,15 @@ def ensure_sonarr_series(
                     "series": selected_series,
                 }
 
-    lookup = lookup_sonarr_series(arr_url, api_key, title)
-    payload = dict(lookup)
+    try:
+        lookup = lookup_sonarr_series(arr_url, api_key, title)
+        payload = dict(lookup)
+        synthetic_metadata = False
+    except RuntimeError:
+        if not allow_synthetic_metadata:
+            raise
+        payload = build_synthetic_sonarr_series_payload(title, root_path_text, quality_profile_id)
+        synthetic_metadata = True
     payload["qualityProfileId"] = quality_profile_id
     payload["rootFolderPath"] = root_path_text
     payload["monitored"] = True
@@ -2024,6 +2122,7 @@ def ensure_sonarr_series(
         "updated": False,
         "root_folder": root_folder,
         "quality_profile": summarize_quality_profile(quality_profile, quality_profile_name),
+        "synthetic_metadata": synthetic_metadata,
         "series": created,
     }
 
@@ -4013,6 +4112,7 @@ def run_radarr_movie_download_e2e(
     download_proof_mode: str = "complete",
     min_release_sources: int = MIN_ARR_RELEASE_SOURCES,
     skip_arr_import: bool = False,
+    allow_synthetic_metadata: bool = False,
 ) -> tuple[dict[str, object], int | None]:
     """Runs the Radarr movie grab-to-eMule-category proof."""
 
@@ -4023,6 +4123,7 @@ def run_radarr_movie_download_e2e(
         movie_root,
         create_local_root_path=movie_root_creates_local_path,
         quality_profile_name=quality_profile_name,
+        allow_synthetic_metadata=allow_synthetic_metadata,
     )
     movie_id = int(movie["id"])
     report: dict[str, object] = {
@@ -4153,6 +4254,7 @@ def run_sonarr_series_download_e2e(
     timeout_seconds: float,
     download_proof_mode: str = "complete",
     skip_arr_import: bool = False,
+    allow_synthetic_metadata: bool = False,
 ) -> tuple[dict[str, object], int | None]:
     """Runs the Sonarr series grab-to-import proof."""
 
@@ -4163,6 +4265,7 @@ def run_sonarr_series_download_e2e(
         series_root,
         create_local_root_path=series_root_creates_local_path,
         quality_profile_name=quality_profile_name,
+        allow_synthetic_metadata=allow_synthetic_metadata,
     )
     series_id = int(series["id"])
     report: dict[str, object] = {
@@ -4876,6 +4979,7 @@ def main() -> int:
                 download_proof_mode=args.download_proof_mode,
                 min_release_sources=1 if args.deterministic_local_ed2k else MIN_ARR_RELEASE_SOURCES,
                 skip_arr_import=args.deterministic_local_ed2k,
+                allow_synthetic_metadata=args.deterministic_local_ed2k,
             )
             if cleanup_media_id is not None:
                 cleanup_radarr_movies.append((arr_url, arr_api_key, cleanup_media_id))
@@ -4900,6 +5004,7 @@ def main() -> int:
                 timeout_seconds=acquisition_timeout_seconds,
                 download_proof_mode=args.download_proof_mode,
                 skip_arr_import=args.deterministic_local_ed2k,
+                allow_synthetic_metadata=args.deterministic_local_ed2k,
             )
             if cleanup_media_id is not None:
                 cleanup_sonarr_series.append((arr_url, arr_api_key, cleanup_media_id))
