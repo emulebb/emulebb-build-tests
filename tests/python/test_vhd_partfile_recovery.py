@@ -102,3 +102,13 @@ def test_build_admin_fixture_config_enforces_minimum_vhd_size(
     config = module.build_admin_fixture_config(paths, args)
 
     assert config.size_mb == module.MIN_VHD_SIZE_MB
+
+
+def test_recovery_rest_listener_uses_explicit_lan_bind_address() -> None:
+    script_text = (Path(__file__).resolve().parents[2] / "scripts" / "vhd-partfile-recovery.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "rest_host = rest_smoke.rest_base_host_for_lan_bind_addr(args.lan_bind_addr)" in script_text
+    assert "port = rest_smoke.choose_listen_port(args.lan_bind_addr)" in script_text
+    assert 'base_url = f"http://{rest_host}:{port}"' in script_text
