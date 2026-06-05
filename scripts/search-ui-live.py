@@ -863,6 +863,8 @@ def run_search_ui_live(
     network_ready_timeout_seconds: float,
     search_observation_timeout_seconds: float,
     transfer_materialization_timeout_seconds: float,
+    vpn_guard_enabled: bool = False,
+    vpn_guard_allowed_public_ip_cidrs: str = "",
 ) -> dict[str, object]:
     """Runs the UI-driven search start scenario and returns the result report."""
 
@@ -881,8 +883,8 @@ def run_search_ui_live(
         rest_port,
         lan_bind_addr,
         p2p_bind_interface_name,
-        vpn_guard_enabled=args.vpn_guard_enabled,
-        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+        vpn_guard_enabled=vpn_guard_enabled,
+        vpn_guard_allowed_public_ip_cidrs=vpn_guard_allowed_public_ip_cidrs,
     )
     seed_refresh = None
     if not skip_live_seed_refresh:
@@ -1115,6 +1117,8 @@ def main(argv: list[str]) -> int:
             live_wire_inputs_file=live_wire_inputs.resolve_inputs_path(paths.repo_root, args.live_wire_inputs_file),
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             lan_bind_addr=args.lan_bind_addr,
+            vpn_guard_enabled=args.vpn_guard_enabled,
+            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
             skip_live_seed_refresh=args.skip_live_seed_refresh,
             ui_search_rounds=args.ui_search_rounds,
             ui_download_lifecycle_count=args.ui_download_lifecycle_count,
