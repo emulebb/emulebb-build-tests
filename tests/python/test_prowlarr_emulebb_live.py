@@ -356,16 +356,27 @@ def test_set_prowlarr_local_certificate_validation_updates_host_config(monkeypat
     def fake_request(prowlarr_url, api_key, path, *, method="GET", json_body=None, timeout_seconds=30.0):
         calls.append({"path": path, "method": method, "json_body": json_body})
         if method == "GET":
-            return {"status": 200, "json": {"id": 1, "certificateValidation": "enabled"}, "body_text": "{}"}
+            return {
+                "status": 200,
+                "json": {"id": 1, "certificateValidation": "enabled", "username": "", "password": ""},
+                "body_text": "{}",
+            }
         assert method == "PUT"
         assert json_body["certificateValidation"] == "disabledForLocalAddresses"
+        assert json_body["username"] == "emulebb-local"
+        assert json_body["password"] == "emulebb-local-password"
         return {"status": 200, "json": dict(json_body), "body_text": "{}"}
 
     monkeypatch.setattr(module, "prowlarr_request", fake_request)
 
     result = module.set_prowlarr_local_certificate_validation("http://prowlarr", "key")
 
-    assert result == {"changed": True, "previous": "enabled", "current": "disabledForLocalAddresses"}
+    assert result == {
+        "changed": True,
+        "previous": "enabled",
+        "current": "disabledForLocalAddresses",
+        "authFieldsFilled": ["username", "password"],
+    }
     assert [call["method"] for call in calls] == ["GET", "PUT"]
 
 

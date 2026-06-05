@@ -285,6 +285,17 @@ def apply_disposable_local_certificate_policy(provider: dict[str, Any]) -> dict[
     }
 
 
+def fill_required_host_auth_fields(host_config: dict[str, Any]) -> list[str]:
+    """Fills Arr host auth fields that newer controllers reject when empty."""
+
+    filled: list[str] = []
+    for key, value in (("username", "emulebb-local"), ("password", "emulebb-local-password")):
+        if key in host_config and not str(host_config.get(key) or "").strip():
+            host_config[key] = value
+            filled.append(key)
+    return filled
+
+
 def set_arr_local_certificate_validation(arr_url: str, api_key: str) -> dict[str, object]:
     """Allows disposable local HTTPS clients through the Arr host config."""
 
@@ -296,13 +307,19 @@ def set_arr_local_certificate_validation(arr_url: str, api_key: str) -> dict[str
         return {"changed": False, "previous": previous, "current": previous}
     updated = json.loads(json.dumps(current))
     updated["certificateValidation"] = ARR_LOCAL_CERTIFICATE_VALIDATION
+    auth_fields_filled = fill_required_host_auth_fields(updated)
     saved = require_success(
         arr_request(arr_url, api_key, "/api/v3/config/host", method="PUT", json_body=updated),
         "Arr host config update",
     )
     if not isinstance(saved, dict):
         raise RuntimeError("Arr host config update did not return an object.")
-    return {"changed": True, "previous": previous, "current": saved.get("certificateValidation")}
+    return {
+        "changed": True,
+        "previous": previous,
+        "current": saved.get("certificateValidation"),
+        "authFieldsFilled": auth_fields_filled,
+    }
 
 
 def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:

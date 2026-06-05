@@ -240,6 +240,17 @@ def public_provider_payload(provider: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in provider.items() if not str(key).startswith("_emulebb")}
 
 
+def fill_required_host_auth_fields(host_config: dict[str, Any]) -> list[str]:
+    """Fills Arr host auth fields that newer controllers reject when empty."""
+
+    filled: list[str] = []
+    for key, value in (("username", "emulebb-local"), ("password", "emulebb-local-password")):
+        if key in host_config and not str(host_config.get(key) or "").strip():
+            host_config[key] = value
+            filled.append(key)
+    return filled
+
+
 def set_prowlarr_local_certificate_validation(
     prowlarr_url: str,
     api_key: str,
@@ -262,6 +273,7 @@ def set_prowlarr_local_certificate_validation(
     # only for this live run, so relaxing local-address cert validation belongs
     # on that controller instance instead of mutating the Windows trust store.
     updated["certificateValidation"] = policy
+    auth_fields_filled = fill_required_host_auth_fields(updated)
     saved = require_success(
         prowlarr_request(prowlarr_url, api_key, "/api/v1/config/host", method="PUT", json_body=updated),
         "Prowlarr host config certificate validation update",
@@ -272,6 +284,7 @@ def set_prowlarr_local_certificate_validation(
         "changed": True,
         "previous": previous,
         "current": saved.get("certificateValidation"),
+        "authFieldsFilled": auth_fields_filled,
     }
 
 
