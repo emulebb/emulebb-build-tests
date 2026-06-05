@@ -280,3 +280,19 @@ def test_reload_interrupt_sidecars_are_allowed_after_fast_convergence() -> None:
     assert module.should_require_absent_sidecars_after_interrupt(
         {"interrupt_mode": "hard-kill", "reload_converged_before_hash_drain": False}
     )
+
+
+def test_clean_close_sidecars_are_allowed_after_hashing_converges() -> None:
+    module = load_shared_hash_module()
+    summary: dict[str, object] = {}
+    startup_summary = {
+        "startup_profile_counters": {
+            "shared.model.hashing_done_shared_files": {"values": {"files": 3}},
+            "shared.model.hashing_done_visible_rows": {"values": {"rows": 3}},
+        }
+    }
+
+    module.record_hashing_convergence_before_interrupt(summary, startup_summary, expected_count=3)
+
+    assert summary["hashing_converged_before_interrupt"] is True
+    assert not module.should_require_absent_sidecars_after_interrupt(summary)

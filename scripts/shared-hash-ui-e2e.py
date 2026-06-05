@@ -590,6 +590,11 @@ def run_interruption_scenario(
             if startup_phases:
                 live_common.enforce_deferred_shared_hashing_boundary(startup_phases, name + ".first_launch")
             summary["first_launch_startup_profile"] = startup_summary
+            record_hashing_convergence_before_interrupt(
+                summary,
+                startup_summary,
+                expected_count=int(fixture["expected_row_count"]),
+            )
         else:
             summary["first_launch_hard_kill_process_id"] = hard_kill_app(app)
             app = None
@@ -607,7 +612,11 @@ def run_interruption_scenario(
         else:
             record_allowed_sidecars_after_interrupt(
                 summary,
-                reason="sidecars_allowed_after_fast_convergence_before_interrupt",
+                reason=(
+                    "sidecars_allowed_after_hashing_converged_before_interrupt"
+                    if summary.get("hashing_converged_before_interrupt")
+                    else "sidecars_allowed_after_fast_convergence_before_interrupt"
+                ),
             )
 
         app = launch_app_with_fresh_startup_trace(app_exe, fixture)
@@ -881,11 +890,42 @@ def record_immediate_reload_convergence(
 
 
 def should_require_absent_sidecars_after_interrupt(summary: dict[str, object]) -> bool:
+    if summary.get("hashing_converged_before_interrupt"):
+        return False
     return not bool(summary.get("reload_converged_before_hash_drain"))
 
 
 def record_allowed_sidecars_after_interrupt(summary: dict[str, object], *, reason: str) -> None:
     summary["post_interrupt_sidecar_policy"] = reason
+
+
+def record_hashing_convergence_before_interrupt(
+    summary: dict[str, object],
+    startup_summary: dict[str, object],
+    *,
+    expected_count: int,
+) -> None:
+    shared_count = shared_files_ui.get_profile_counter_value(
+        startup_summary,
+        "shared.model.hashing_done_shared_files",
+        "files",
+    )
+    visible_count = shared_files_ui.get_profile_counter_value(
+        startup_summary,
+        "shared.model.hashing_done_visible_rows",
+        "rows",
+    )
+    converged = (
+        shared_count is not None
+        and visible_count is not None
+        and shared_count >= expected_count
+        and visible_count >= expected_count
+    )
+    summary["hashing_converged_before_interrupt"] = bool(converged)
+    if converged:
+        summary["hashing_converged_before_interrupt_reason"] = (
+            "Shared hashing completed and the Shared Files UI displayed all expected rows before clean-close interruption evidence was sampled."
+        )
 
 
 def run_reload_then_interrupt_scenario(
@@ -950,6 +990,11 @@ def run_reload_then_interrupt_scenario(
             if startup_phases:
                 live_common.enforce_deferred_shared_hashing_boundary(startup_phases, name + ".first_launch")
             summary["first_launch_startup_profile"] = startup_summary
+            record_hashing_convergence_before_interrupt(
+                summary,
+                startup_summary,
+                expected_count=int(fixture["expected_row_count"]),
+            )
         else:
             summary["first_launch_hard_kill_process_id"] = hard_kill_app(app)
             archive_trace_if_present(
@@ -967,7 +1012,11 @@ def run_reload_then_interrupt_scenario(
         else:
             record_allowed_sidecars_after_interrupt(
                 summary,
-                reason="sidecars_allowed_after_fast_convergence_before_interrupt",
+                reason=(
+                    "sidecars_allowed_after_hashing_converged_before_interrupt"
+                    if summary.get("hashing_converged_before_interrupt")
+                    else "sidecars_allowed_after_fast_convergence_before_interrupt"
+                ),
             )
 
         app = launch_app_with_fresh_startup_trace(app_exe, fixture)
