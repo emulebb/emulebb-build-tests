@@ -1193,6 +1193,10 @@ def test_native_rest_app_identity_uses_public_product_name() -> None:
     assert '{"name", "eMuleBB"}' in app_block
     assert '{"name", "eMule"}' not in app_block
 
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "rest-api-smoke.py").read_text(encoding="utf-8")
+    assert 'version["json"]["name"] == "eMuleBB"' in script
+    assert 'version["json"]["name"] == "eMule"' not in script
+
 
 def test_restart_app_after_churn_tolerates_tray_relaunch_window_absence() -> None:
     module = load_rest_api_smoke_module()

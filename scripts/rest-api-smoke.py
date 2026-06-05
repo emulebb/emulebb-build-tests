@@ -7070,7 +7070,7 @@ def main() -> int:
         version = http_request(base_url, "/api/v1/app", api_key=args.api_key)
         assert version["status"] == 200
         assert isinstance(version["json"], dict)
-        assert version["json"]["name"] == "eMule"
+        assert version["json"]["name"] == "eMuleBB"
         assert "version" in version["json"]
         report["checks"]["app_version"] = compact_http_result(version)
 
