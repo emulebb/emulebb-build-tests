@@ -313,3 +313,18 @@ def test_clean_close_sidecars_are_allowed_after_hashing_done_observed() -> None:
     assert summary["hashing_done_observed_before_interrupt"] is True
     assert summary["hashing_converged_before_interrupt"] is False
     assert not module.should_require_absent_sidecars_after_interrupt(summary)
+
+
+def test_repeated_cycle_hard_kill_archives_partial_startup_profiles_static() -> None:
+    script_text = (Path(__file__).resolve().parents[2] / "scripts" / "shared-hash-ui-e2e.py").read_text(
+        encoding="utf-8"
+    )
+    repeated_cycle_block = script_text[
+        script_text.index("def run_repeated_interruption_cycle_scenario") : script_text.index(
+            "def run_reload_during_hash_scenario"
+        )
+    ]
+
+    assert 'if interrupt_mode == "clean-close":' in repeated_cycle_block
+    assert 'f"startup-profile-cycle-{cycle_index}.partial.trace.json"' in repeated_cycle_block
+    assert '"startup_profile_status": "partial_after_hard_kill"' in repeated_cycle_block

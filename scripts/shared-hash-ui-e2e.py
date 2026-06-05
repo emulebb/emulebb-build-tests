@@ -764,17 +764,29 @@ def run_repeated_interruption_cycle_scenario(
                 summary[f"cycle_{cycle_index}_hard_kill_process_id"] = hard_kill_app(app)
             app = None
 
-            archive_trace_if_present(
-                Path(str(fixture["startup_profile_path"])),
-                scenario_dir / f"startup-profile-cycle-{cycle_index}.trace.json",
-            )
-            startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_profile_bundle(
-                Path(str(fixture["startup_profile_path"])),
-                require_startup_profile=require_startup_profile,
-            )
-            if startup_phases:
-                live_common.enforce_deferred_shared_hashing_boundary(startup_phases, f"{name}.cycle_{cycle_index}")
-            summary[f"cycle_{cycle_index}_startup_profile"] = startup_summary
+            if interrupt_mode == "clean-close":
+                archive_trace_if_present(
+                    Path(str(fixture["startup_profile_path"])),
+                    scenario_dir / f"startup-profile-cycle-{cycle_index}.trace.json",
+                )
+                startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_profile_bundle(
+                    Path(str(fixture["startup_profile_path"])),
+                    require_startup_profile=require_startup_profile,
+                )
+                if startup_phases:
+                    live_common.enforce_deferred_shared_hashing_boundary(startup_phases, f"{name}.cycle_{cycle_index}")
+                summary[f"cycle_{cycle_index}_startup_profile"] = startup_summary
+            else:
+                partial_trace_artifact = scenario_dir / f"startup-profile-cycle-{cycle_index}.partial.trace.json"
+                archive_trace_if_present(Path(str(fixture["startup_profile_path"])), partial_trace_artifact)
+                summary[f"cycle_{cycle_index}_startup_profile"] = {
+                    "startup_profile_path": str(Path(str(fixture["startup_profile_path"]))),
+                    "startup_profile_status": "partial_after_hard_kill",
+                    "startup_profile_artifact": str(partial_trace_artifact),
+                    "startup_profile_size_bytes": partial_trace_artifact.stat().st_size
+                    if partial_trace_artifact.exists()
+                    else 0,
+                }
 
             sidecar_state = capture_sidecar_state(Path(str(fixture["config_dir"])))
             summary[f"cycle_{cycle_index}_post_interrupt_sidecar_state"] = sidecar_state
