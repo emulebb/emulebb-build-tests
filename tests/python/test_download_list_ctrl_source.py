@@ -48,3 +48,15 @@ def test_download_filename_suffix_only_uses_live_thumbnail_cache() -> None:
     assert "ReadVideoThumbnailBitmapFile" not in helper
     assert "PathExists" not in helper
     assert "sText.AppendChar(static_cast<TCHAR>(0x25A3));" in display
+
+
+def test_download_infotip_wraps_long_lines_before_tooltip_suffix() -> None:
+    source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
+    helper = source[source.index("CString WrapDownloadInfoTipLine") : source.index("bool IsSourceCtrlItem")]
+    infotip = source[source.index("void CDownloadListCtrl::OnLvnGetInfoTip") : source.index("void CDownloadListCtrl::ShowFileDialog")]
+
+    assert "const int kDownloadInfoTipMaxLineChars = 120;" in source
+    assert 'rstrLine == _T("<br>")' in helper
+    assert 'rstrLine == _T("<br_head>")' in helper
+    assert "_istspace(ch) != 0 || ch == _T('-') || ch == _T(',') || ch == _T(')')" in helper
+    assert "info = WrapDownloadInfoTipText(info);\n\t\t\tinfo += TOOLTIP_AUTOFORMAT_SUFFIX_CH;" in infotip
