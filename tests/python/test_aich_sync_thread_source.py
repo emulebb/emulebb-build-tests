@@ -21,7 +21,7 @@ def test_aich_sync_thread_is_owned_and_joined_before_shared_file_teardown() -> N
     assert "::WaitForSingleObject(hThread, kAICHSyncThreadShutdownWaitMs)" in source
     assert "::WaitForSingleObject(hThread, INFINITE)" in source
     assert "AfxBeginThread(RUNTIME_CLASS(CAICHSyncThread), THREAD_PRIORITY_IDLE, 0);" not in source
-    assert source.index("WaitForAICHSyncThreadShutdown();") < source.index("const bool bSharedHashingWasActiveOnClose")
+    assert source.index("WaitForAICHSyncThreadShutdown();") < source.index("ShutdownSharedHashWorkerStep")
 
 
 def test_aich_sync_worker_guards_shared_and_known_file_globals() -> None:
