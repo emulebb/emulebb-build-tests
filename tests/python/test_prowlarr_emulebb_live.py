@@ -358,13 +358,20 @@ def test_set_prowlarr_local_certificate_validation_updates_host_config(monkeypat
         if method == "GET":
             return {
                 "status": 200,
-                "json": {"id": 1, "certificateValidation": "enabled", "username": "", "password": ""},
+                "json": {
+                    "id": 1,
+                    "certificateValidation": "enabled",
+                    "username": "",
+                    "password": "",
+                    "passwordConfirmation": "",
+                },
                 "body_text": "{}",
             }
         assert method == "PUT"
         assert json_body["certificateValidation"] == "disabledForLocalAddresses"
         assert json_body["username"] == "emulebb-local"
         assert json_body["password"] == "emulebb-local-password"
+        assert json_body["passwordConfirmation"] == "emulebb-local-password"
         return {"status": 200, "json": dict(json_body), "body_text": "{}"}
 
     monkeypatch.setattr(module, "prowlarr_request", fake_request)
@@ -375,7 +382,7 @@ def test_set_prowlarr_local_certificate_validation_updates_host_config(monkeypat
         "changed": True,
         "previous": "enabled",
         "current": "disabledForLocalAddresses",
-        "authFieldsFilled": ["username", "password"],
+        "authFieldsFilled": ["username", "password", "passwordConfirmation"],
     }
     assert [call["method"] for call in calls] == ["GET", "PUT"]
 

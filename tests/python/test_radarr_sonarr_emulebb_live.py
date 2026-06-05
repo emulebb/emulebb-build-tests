@@ -1896,7 +1896,13 @@ def test_set_arr_local_certificate_validation_updates_host_config(monkeypatch: p
         if path == "/api/v3/config/host" and method == "GET":
             return {
                 "status": 200,
-                "json": {"id": 1, "certificateValidation": "enabled", "username": "", "password": ""},
+                "json": {
+                    "id": 1,
+                    "certificateValidation": "enabled",
+                    "username": "",
+                    "password": "",
+                    "passwordConfirmation": "",
+                },
                 "body_text": "{}",
             }
         if path == "/api/v3/config/host" and method == "PUT":
@@ -1912,11 +1918,12 @@ def test_set_arr_local_certificate_validation_updates_host_config(monkeypatch: p
         "changed": True,
         "previous": "enabled",
         "current": module.ARR_LOCAL_CERTIFICATE_VALIDATION,
-        "authFieldsFilled": ["username", "password"],
+        "authFieldsFilled": ["username", "password", "passwordConfirmation"],
     }
     assert calls[1][2]["certificateValidation"] == module.ARR_LOCAL_CERTIFICATE_VALIDATION
     assert calls[1][2]["username"] == "emulebb-local"
     assert calls[1][2]["password"] == "emulebb-local-password"
+    assert calls[1][2]["passwordConfirmation"] == "emulebb-local-password"
 
 
 def test_temp_qbit_client_is_deleted_when_validation_fails(monkeypatch: pytest.MonkeyPatch) -> None:

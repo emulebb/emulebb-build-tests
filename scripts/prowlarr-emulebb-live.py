@@ -248,6 +248,9 @@ def fill_required_host_auth_fields(host_config: dict[str, Any]) -> list[str]:
         if key in host_config and not str(host_config.get(key) or "").strip():
             host_config[key] = value
             filled.append(key)
+    if "passwordConfirmation" in host_config and not str(host_config.get("passwordConfirmation") or "").strip():
+        host_config["passwordConfirmation"] = str(host_config.get("password") or "emulebb-local-password")
+        filled.append("passwordConfirmation")
     return filled
 
 
