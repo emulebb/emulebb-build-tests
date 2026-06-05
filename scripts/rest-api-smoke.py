@@ -1367,8 +1367,11 @@ def rest_base_host_for_lan_bind_addr(lan_bind_addr: str) -> str:
 def choose_listen_port(lan_bind_addr: str | None = None) -> int:
     """Returns one ephemeral TCP port for the smoke listener bind address."""
 
+    bind_host = rest_base_host_for_lan_bind_addr(lan_bind_addr)
+    if bind_host in {"", "0.0.0.0", "::", "[::]"}:
+        raise ValueError("smoke listener must bind to one explicit LAN address")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind((rest_base_host_for_lan_bind_addr(lan_bind_addr), 0))
+        probe.bind((bind_host, 0))
         return int(probe.getsockname()[1])
 
 
@@ -1474,12 +1477,21 @@ def decode_certificate_metadata(certificate_path: Path) -> dict[str, object]:
     return metadata
 
 
+def _tls12_default_context(*, cafile: str | None = None) -> ssl.SSLContext:
+    """Creates a client TLS context with legacy TLS versions disabled."""
+
+    context = ssl.create_default_context(cafile=cafile)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def require_usable_https_pem_pair(certificate_path: Path, key_path: Path) -> None:
     """Requires the certificate/key pair to be loadable by Python TLS."""
 
     server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.minimum_version = ssl.TLSVersion.TLSv1_2
     server_context.load_cert_chain(certfile=str(certificate_path), keyfile=str(key_path))
-    ssl.create_default_context(cafile=str(certificate_path))
+    _tls12_default_context(cafile=str(certificate_path))
 
 
 def verify_https_pem_readiness(
@@ -1576,8 +1588,8 @@ def build_urlopen_context(base_url: str, *, cafile: str | None | object = DEFAUL
         return None
     trust_file = HTTPS_TRUST_CA_FILE if cafile is DEFAULT_HTTPS_CA_FILE else cafile
     if trust_file:
-        return ssl.create_default_context(cafile=str(trust_file))
-    return ssl.create_default_context()
+        return _tls12_default_context(cafile=str(trust_file))
+    return _tls12_default_context()
 
 
 def is_retryable_rest_transport_error(exc: BaseException) -> bool:
@@ -1635,7 +1647,7 @@ def exercise_https_certificate_validation(
 
     wrong_host_rejected = False
     wrong_host_error = ""
-    context = ssl.create_default_context(cafile=certificate_path)
+    context = _tls12_default_context(cafile=str(certificate_path))
     try:
         with socket.create_connection((str(endpoint["host"]), int(endpoint["port"])), timeout=request_timeout_seconds) as sock:
             with context.wrap_socket(sock, server_hostname="wrong-host.emulebb.invalid"):
