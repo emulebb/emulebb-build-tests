@@ -85,6 +85,36 @@ TEST_CASE("Shared file list accepts part files outside shared directories")
 	CHECK(SharedFileListSeams::CanAddSharedFile(true, false, false));
 }
 
+#ifdef EMULEBB_TESTS_HAS_SHARED_DIRECTORY_OPS
+TEST_CASE("Shared directory response pseudo names use request-local exact roots")
+{
+	SharedDirectoryOps::SharedDirectoryResponseState state;
+	SharedDirectoryOps::AddSharedDirectoryResponseRoot(state, CString(_T("C:\\share\\")));
+	SharedDirectoryOps::AddSharedDirectoryResponseRoot(state, CString(_T("C:\\share\\child\\")));
+	SharedDirectoryOps::AddSharedDirectoryResponseRoot(state, CString(_T("C:\\other\\child\\")));
+
+	CHECK(SharedDirectoryOps::BuildSharedDirectoryResponsePseudoName(state, CString(_T("C:\\share\\child\\"))) == CString(_T("share\\child")));
+	CHECK(SharedDirectoryOps::BuildSharedDirectoryResponsePseudoName(state, CString(_T("C:\\share\\child\\"))).IsEmpty());
+	CHECK_EQ(state.uDuplicateDirectoryCount, 1u);
+
+	CHECK(SharedDirectoryOps::BuildSharedDirectoryResponsePseudoName(state, CString(_T("C:\\share\\missing\\"))).IsEmpty());
+	CHECK_EQ(state.uUnlistedDirectoryCount, 1u);
+
+	CHECK(SharedDirectoryOps::BuildSharedDirectoryResponsePseudoName(state, CString(_T("C:\\other\\child\\"))) == CString(_T("child")));
+}
+
+TEST_CASE("Shared directory response pseudo names keep duplicate names unique")
+{
+	SharedDirectoryOps::SharedDirectoryResponseState state;
+	SharedDirectoryOps::AddSharedDirectoryResponseRoot(state, CString(_T("C:\\alpha\\movie\\")));
+	SharedDirectoryOps::AddSharedDirectoryResponseRoot(state, CString(_T("D:\\beta\\movie\\")));
+
+	CHECK(SharedDirectoryOps::BuildSharedDirectoryResponsePseudoName(state, CString(_T("C:\\alpha\\movie\\"))) == CString(_T("movie")));
+	CHECK(SharedDirectoryOps::BuildSharedDirectoryResponsePseudoName(state, CString(_T("D:\\beta\\movie\\"))) == CString(_T("movie_2")));
+	CHECK_EQ(state.uPseudoNameCollisionCount, 1u);
+}
+#endif
+
 #ifdef EMULEBB_TESTS_HAS_SHARED_FILE_LIST_PUBLISH_BATCH_SEAMS
 TEST_CASE("Shared file list batches eD2K publish UI refreshes only for multiple changed rows")
 {
