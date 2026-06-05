@@ -7,10 +7,22 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+
+class LiveE2EArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that records options whose defaults are profile-sensitive."""
+
+    def parse_args(self, args=None, namespace=None):  # type: ignore[override]
+        parsed = super().parse_args(args, namespace)
+        tokens = list(sys.argv[1:] if args is None else args)
+        parsed._arr_download_proof_mode_explicit = "--arr-download-proof-mode" in tokens
+        return parsed
+
 
 from emule_test_harness.artifact_names import result_file_name
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
@@ -108,6 +120,8 @@ ED2K_SERVER_EXE_SUITE_NAMES = {
     "local-ed2k-chaos-mode",
     "local-ed2k-protocol-combinations",
     "amutorrent-local-ed2k-ui-live",
+    "radarr-emulebb-local",
+    "sonarr-emulebb-local",
 }
 CLIENT2_APP_EXE_SUITE_NAMES = {
     "deterministic-two-client-transfer",
@@ -117,6 +131,8 @@ CLIENT2_APP_EXE_SUITE_NAMES = {
     "local-ed2k-chaos-mode",
     "local-ed2k-protocol-combinations",
     "amutorrent-local-ed2k-ui-live",
+    "radarr-emulebb-local",
+    "sonarr-emulebb-local",
 }
 AMULE_EXE_SUITE_NAMES = {
     "multi-client-p2p-matrix",
@@ -537,7 +553,7 @@ SUITE_SPECS = (
     SuiteSpec(
         name="radarr-emulebb-local",
         script_name="radarr-emulebb-local.py",
-        category="live-wire",
+        category="rest",
         network_scope="lan",
         default_enabled=False,
         is_arr_emulebb=True,
@@ -546,7 +562,7 @@ SUITE_SPECS = (
     SuiteSpec(
         name="sonarr-emulebb-local",
         script_name="sonarr-emulebb-local.py",
-        category="live-wire",
+        category="rest",
         network_scope="lan",
         default_enabled=False,
         is_arr_emulebb=True,
@@ -794,7 +810,11 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
     if args.arr_prowlarr_search_stress_count == DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT:
         args.arr_prowlarr_search_stress_count = BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
 
-    if args.profile == "controller-surface" and args.arr_download_proof_mode == DEFAULT_ARR_DOWNLOAD_PROOF_MODE:
+    if (
+        args.profile == "controller-surface"
+        and args.arr_download_proof_mode == DEFAULT_ARR_DOWNLOAD_PROOF_MODE
+        and not getattr(args, "_arr_download_proof_mode_explicit", False)
+    ):
         args.arr_download_proof_mode = CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
 
     if args.profile == "release-expanded-quick":
@@ -1377,6 +1397,12 @@ def build_suite_command(
             command.extend(["--radarr-movie-root", str(radarr_movie_root)])
         if spec.name in {"sonarr-emulebb", "sonarr-emulebb-local"} and sonarr_series_root is not None:
             command.extend(["--sonarr-series-root", str(sonarr_series_root)])
+        if prowlarr_exe is not None:
+            command.extend(["--prowlarr-exe", str(prowlarr_exe.resolve())])
+        if radarr_exe is not None:
+            command.extend(["--radarr-exe", str(radarr_exe.resolve())])
+        if sonarr_exe is not None:
+            command.extend(["--sonarr-exe", str(sonarr_exe.resolve())])
         command.append("--enable-upnp")
         if p2p_bind_interface_name and spec.name not in {"radarr-emulebb-local", "sonarr-emulebb-local"}:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -1933,7 +1959,7 @@ def campaign_scenario_network_contract(scenario_id: str, key: str) -> dict[str, 
 def build_parser() -> argparse.ArgumentParser:
     """Builds the aggregate live E2E argument parser."""
 
-    parser = argparse.ArgumentParser()
+    parser = LiveE2EArgumentParser()
     parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")

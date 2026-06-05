@@ -48,6 +48,7 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
 
     assert payload["harnessPackage"] == repo_root / "emule_test_harness"
     assert payload["manifests"] == repo_root / "manifests"
+    assert payload["liveWireInputs"] == repo_root / "live-wire-inputs.local.json"
     script_names = {path.name for path in payload["scripts"]}
     assert {
         "godzilla-local-swarm.py",
@@ -55,6 +56,10 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
         "local-kad-swarm.py",
         "amutorrent-local-ed2k-ui-live.py",
         "package-helper-integration.py",
+        "prowlarr-emulebb-live.py",
+        "radarr-emulebb-local.py",
+        "radarr-sonarr-emulebb-live.py",
+        "sonarr-emulebb-local.py",
         "rest-api-smoke.py",
         "harness-cli-common.py",
         "deterministic-two-client-transfer.py",

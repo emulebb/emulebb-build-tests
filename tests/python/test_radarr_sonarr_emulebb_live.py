@@ -58,6 +58,53 @@ def test_local_ed2k_parser_defaults_keep_fixture_in_workspace_control() -> None:
     assert args.rest_webserver_scheme == "https"
 
 
+def test_embedded_controller_parser_accepts_arr_executables() -> None:
+    module = load_radarr_sonarr_module()
+
+    args = module.build_parser().parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--prowlarr-exe",
+            "C:/suite/apps/prowlarr/Prowlarr/Prowlarr.exe",
+            "--radarr-exe",
+            "C:/suite/apps/radarr/Radarr/Radarr.exe",
+            "--sonarr-exe",
+            "C:/suite/apps/sonarr/Sonarr/Sonarr.exe",
+        ]
+    )
+
+    assert args.prowlarr_exe.endswith("Prowlarr.exe")
+    assert args.radarr_exe.endswith("Radarr.exe")
+    assert args.sonarr_exe.endswith("Sonarr.exe")
+
+
+def test_embedded_controller_plan_uses_selected_arr_kind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = load_radarr_sonarr_module()
+    ports = iter([46001, 46002])
+    monkeypatch.setattr(module.prowlarr_live, "choose_listen_port", lambda _addr: next(ports))
+    prowlarr_exe = tmp_path / "prowlarr" / "Prowlarr.exe"
+    sonarr_exe = tmp_path / "sonarr" / "Sonarr.exe"
+    prowlarr_exe.parent.mkdir()
+    sonarr_exe.parent.mkdir()
+    prowlarr_exe.write_text("", encoding="utf-8")
+    sonarr_exe.write_text("", encoding="utf-8")
+    args = types.SimpleNamespace(
+        lan_bind_addr="192.0.2.10",
+        prowlarr_exe=str(prowlarr_exe),
+        radarr_exe=None,
+        sonarr_exe=str(sonarr_exe),
+    )
+
+    plan = module.build_embedded_controller_plan(args, "sonarr", "192.0.2.10", set())
+
+    assert plan["prowlarr"]["base_url"] == "http://192.0.2.10:46001"
+    assert plan["sonarr"]["base_url"] == "http://192.0.2.10:46002"
+    assert "radarr" not in plan
+    assert len(plan["prowlarr"]["api_key"]) == 16
+    assert plan["prowlarr"]["api_key"].isalnum()
+
+
 def test_local_arr_media_folder_is_created_under_owned_root(tmp_path: Path) -> None:
     module = load_radarr_sonarr_module()
     movie_path = tmp_path / "Movie Title (2026)"

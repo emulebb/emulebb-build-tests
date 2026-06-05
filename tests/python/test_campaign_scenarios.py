@@ -31,7 +31,7 @@ def test_reusable_campaign_matrix_defines_local_vm_modes_and_swarm_topology() ->
     }
     assert matrix["localSwarm"]["tierOptions"][1]["stage"] == "launch-scale"
     assert matrix["localSwarm"]["tierOptions"][3]["adverse_kill_cycles"] == 2
-    assert matrix["scenarioCount"] == 5
+    assert matrix["scenarioCount"] == 6
     json.dumps(matrix)
 
 
@@ -43,6 +43,7 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
         "installer-controller-surface",
         "amutorrent-clean-startup",
         "amutorrent-emulebb-ui",
+        "arr-local-acquisition",
         "prowlarr-controller-handoff",
         "search-ui-local-swarm",
     }
@@ -80,6 +81,10 @@ def test_reusable_campaigns_are_local_lan_scenarios_not_live_wire() -> None:
     ]
     assert scenarios["prowlarr-controller-handoff"]["localSuites"] == [
         "package-helper-integration",
+    ]
+    assert scenarios["arr-local-acquisition"]["localSuites"] == [
+        "radarr-emulebb-local",
+        "sonarr-emulebb-local",
     ]
 
 

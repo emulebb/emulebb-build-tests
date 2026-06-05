@@ -79,6 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--client2-app-exe", type=Path)
     parser.add_argument("--amule-daemon-exe", type=Path)
     parser.add_argument("--amule-control-exe", type=Path)
+    parser.add_argument("--prowlarr-exe", type=Path)
+    parser.add_argument("--radarr-exe", type=Path)
+    parser.add_argument("--sonarr-exe", type=Path)
     parser.add_argument("--local-swarm-mode", choices=["plan", "execute"], default="plan")
     parser.add_argument("--lan-bind-addr", default="")
     return parser
@@ -341,6 +344,9 @@ def run_profile_checks(
                 client2_app_exe=args.client2_app_exe,
                 amule_daemon_exe=args.amule_daemon_exe,
                 amule_control_exe=args.amule_control_exe,
+                prowlarr_exe=args.prowlarr_exe,
+                radarr_exe=args.radarr_exe,
+                sonarr_exe=args.sonarr_exe,
                 lan_bind_addr=args.lan_bind_addr,
                 execution_mode=args.local_swarm_mode,
             ),
@@ -507,6 +513,9 @@ def local_swarm_plan_check(
     client2_app_exe: Path | None = None,
     amule_daemon_exe: Path | None = None,
     amule_control_exe: Path | None = None,
+    prowlarr_exe: Path | None = None,
+    radarr_exe: Path | None = None,
+    sonarr_exe: Path | None = None,
     lan_bind_addr: str = "",
     execution_mode: str = "plan",
 ) -> dict[str, Any]:
@@ -588,6 +597,9 @@ def local_swarm_plan_check(
             argv.extend(["--campaign-scenario-local-suite", suite])
         if "package-helper-integration" in suites:
             argv.extend(["--dependency-mode", "auto-download"])
+        if spec.key == "arr-local-acquisition":
+            argv.extend(["--rest-webserver-scheme", "http"])
+            argv.extend(["--arr-download-proof-mode", "complete"])
         if execution_mode == "plan":
             argv.append("--plan-only")
         if bool(tier_options["cpu_profile"]):
@@ -602,6 +614,12 @@ def local_swarm_plan_check(
             argv.extend(["--amule-daemon-exe", str(amule_daemon_exe.resolve())])
         if amule_control_exe is not None:
             argv.extend(["--amule-control-exe", str(amule_control_exe.resolve())])
+        if prowlarr_exe is not None:
+            argv.extend(["--prowlarr-exe", str(prowlarr_exe.resolve())])
+        if radarr_exe is not None:
+            argv.extend(["--radarr-exe", str(radarr_exe.resolve())])
+        if sonarr_exe is not None:
+            argv.extend(["--sonarr-exe", str(sonarr_exe.resolve())])
         for suite in suites:
             argv.extend(["--suite", suite])
         args = live_e2e_suite.build_parser().parse_args(argv)
@@ -680,6 +698,9 @@ def local_swarm_plan_check(
                 "client2AppExe": str(client2_app_exe) if client2_app_exe is not None else "",
                 "amuleDaemonExe": str(amule_daemon_exe) if amule_daemon_exe is not None else "",
                 "amuleControlExe": str(amule_control_exe) if amule_control_exe is not None else "",
+                "prowlarrExe": str(prowlarr_exe) if prowlarr_exe is not None else "",
+                "radarrExe": str(radarr_exe) if radarr_exe is not None else "",
+                "sonarrExe": str(sonarr_exe) if sonarr_exe is not None else "",
             },
         }
     except Exception as exc:

@@ -7,6 +7,7 @@ from dataclasses import asdict
 import importlib.util
 import json
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -108,6 +109,7 @@ live_common = prowlarr_live.live_common
 live_wire_inputs = prowlarr_live.live_wire_inputs
 cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
 dtt = load_local_module("deterministic_two_client_transfer_arr", "deterministic-two-client-transfer.py")
+package_helper = load_local_module("package_helper_integration_arr", "package-helper-integration.py")
 
 QBIT_ROUTE_COMPLETENESS_SCENARIOS: tuple[dict[str, object], ...] = (
     {"name": "public_webapi_version", "method": "GET", "path": "/api/v2/app/webapiVersion", "auth": False, "expected_statuses": (200,)},
@@ -3871,6 +3873,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--client2-app-exe")
+    parser.add_argument("--prowlarr-exe")
+    parser.add_argument("--radarr-exe")
+    parser.add_argument("--sonarr-exe")
     parser.add_argument(
         "--radarr-movie-root",
         help="Optional Radarr-visible root folder path for the import proof. Defaults to a local artifact folder.",
@@ -3892,6 +3897,89 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(live_wire_inputs.get_default_inputs_path(REPO_ROOT)),
     )
     return parser
+
+
+def choose_distinct_controller_ports(lan_bind_addr: str, count: int, avoid_ports: set[int] | None = None) -> list[int]:
+    """Chooses distinct free LAN ports for throwaway embedded controller apps."""
+
+    selected: list[int] = []
+    avoid = set(avoid_ports or set())
+    for _ in range(100):
+        port = prowlarr_live.choose_listen_port(lan_bind_addr)
+        if port not in avoid and port not in selected:
+            selected.append(port)
+            if len(selected) == count:
+                return selected
+    raise RuntimeError(f"Could not allocate {count} distinct controller ports on {lan_bind_addr}.")
+
+
+def build_embedded_controller_plan(args: argparse.Namespace, kind: str, lan_bind_addr: str, avoid_ports: set[int]) -> dict[str, Any] | None:
+    """Returns local Prowlarr/Arr launch settings when executable overrides are supplied."""
+
+    prowlarr_exe = Path(args.prowlarr_exe).resolve() if args.prowlarr_exe else None
+    arr_exe_arg = args.radarr_exe if kind == "radarr" else args.sonarr_exe
+    arr_exe = Path(arr_exe_arg).resolve() if arr_exe_arg else None
+    if prowlarr_exe is None and arr_exe is None:
+        return None
+    if not lan_bind_addr:
+        raise RuntimeError("Embedded Arr controller launch requires --lan-bind-addr.")
+    if prowlarr_exe is None:
+        raise RuntimeError("Embedded Arr controller launch requires --prowlarr-exe.")
+    if arr_exe is None:
+        raise RuntimeError(f"Embedded Arr controller launch requires --{kind}-exe.")
+    ports = choose_distinct_controller_ports(lan_bind_addr, 2, avoid_ports=avoid_ports)
+    prowlarr_api_key = secrets.token_hex(8)
+    arr_api_key = secrets.token_hex(8)
+    return {
+        "enabled": True,
+        "lan_bind_addr": lan_bind_addr,
+        "prowlarr": {
+            "exe": prowlarr_exe,
+            "port": ports[0],
+            "api_key": prowlarr_api_key,
+            "base_url": f"http://{lan_bind_addr}:{ports[0]}",
+            "status_path": "/api/v1/system/status",
+        },
+        kind: {
+            "exe": arr_exe,
+            "port": ports[1],
+            "api_key": arr_api_key,
+            "base_url": f"http://{lan_bind_addr}:{ports[1]}",
+            "status_path": "/api/v3/system/status",
+        },
+    }
+
+
+def start_embedded_controller_apps(
+    plan: dict[str, Any],
+    *,
+    kind: str,
+    artifacts_dir: Path,
+    timeout_seconds: float,
+) -> list[tuple[str, subprocess.Popen[str]]]:
+    """Starts throwaway local Prowlarr and Arr apps from explicit executable paths."""
+
+    processes: list[tuple[str, subprocess.Popen[str]]] = []
+    controller_root = artifacts_dir / "embedded-controller"
+    for name in ("prowlarr", kind):
+        entry = plan[name]
+        process = package_helper.start_arr(
+            name,
+            Path(entry["exe"]),
+            controller_root / name,
+            int(entry["port"]),
+            str(entry["api_key"]),
+            artifacts_dir / f"{name}.log",
+            str(plan["lan_bind_addr"]),
+        )
+        processes.append((name, process))
+        package_helper.wait_for_http(
+            str(entry["base_url"]),
+            str(entry["status_path"]),
+            api_key=str(entry["api_key"]),
+            timeout_seconds=timeout_seconds,
+        )
+    return processes
 
 
 def run_arr_checks(
@@ -4363,18 +4451,36 @@ def main() -> int:
         raise ValueError("--prowlarr-indexer-availability-timeout-seconds must be greater than zero.")
     if args.local_ed2k_fixture_size_bytes <= 0:
         raise ValueError("--local-ed2k-fixture-size-bytes must be greater than zero.")
-    env_values = live_env.load_env_values(
-        (
-            "PROWLARR_URL",
-            "PROWLARR_API_KEY",
-            "RADARR_URL",
-            "RADARR_API_KEY",
-            "SONARR_URL",
-            "SONARR_API_KEY",
-        ),
-        env_file=Path(args.env_file).resolve(),
-        defaults={"EMULEBB_TEST_PROWLARR_INDEXER_NAME": "eMuleBB Local"},
+    explicit_lan_bind_addr = str(args.lan_bind_addr or "").strip()
+    embedded_controller_plan = build_embedded_controller_plan(args, kind, explicit_lan_bind_addr, set())
+    embedded_env_defaults: dict[str, str] = {}
+    if embedded_controller_plan is not None:
+        embedded_env_defaults.update(
+            {
+                "PROWLARR_URL": str(embedded_controller_plan["prowlarr"]["base_url"]),
+                "PROWLARR_API_KEY": str(embedded_controller_plan["prowlarr"]["api_key"]),
+                "RADARR_URL": str(embedded_controller_plan.get("radarr", {}).get("base_url") or ""),
+                "RADARR_API_KEY": str(embedded_controller_plan.get("radarr", {}).get("api_key") or ""),
+                "SONARR_URL": str(embedded_controller_plan.get("sonarr", {}).get("base_url") or ""),
+                "SONARR_API_KEY": str(embedded_controller_plan.get("sonarr", {}).get("api_key") or ""),
+            }
+        )
+    required_env_keys = (
+        "PROWLARR_URL",
+        "PROWLARR_API_KEY",
+        "RADARR_URL" if kind == "radarr" else "SONARR_URL",
+        "RADARR_API_KEY" if kind == "radarr" else "SONARR_API_KEY",
     )
+    env_values = live_env.load_env_values(
+        required_env_keys,
+        env_file=Path(args.env_file).resolve(),
+        defaults={
+            "EMULEBB_TEST_PROWLARR_INDEXER_NAME": "eMuleBB Local",
+            **embedded_env_defaults,
+        },
+    )
+    if embedded_env_defaults:
+        env_values.update(embedded_env_defaults)
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
@@ -4417,7 +4523,16 @@ def main() -> int:
     indexer_name = env_values["EMULEBB_TEST_PROWLARR_INDEXER_NAME"]
     lan_bind_addr = prowlarr_live.resolve_lan_bind_addr(prowlarr_url, args.lan_bind_addr)
     bind_addr = lan_bind_addr
-    port = prowlarr_live.choose_listen_port(lan_bind_addr)
+    embedded_controller_ports = {
+        int(entry["port"])
+        for key, entry in (embedded_controller_plan or {}).items()
+        if key in {"prowlarr", "radarr", "sonarr"} and isinstance(entry, dict)
+    }
+    port = (
+        choose_distinct_controller_ports(lan_bind_addr, 1, avoid_ports=embedded_controller_ports)[0]
+        if embedded_controller_ports
+        else prowlarr_live.choose_listen_port(lan_bind_addr)
+    )
     use_https = args.rest_webserver_scheme == "https"
     emule_base_url = f"{args.rest_webserver_scheme}://{bind_addr}:{port}"
     torznab_base_url = f"{emule_base_url}/indexer/emulebb"
@@ -4537,6 +4652,7 @@ def main() -> int:
     main_window = None
     local_ed2k_server_process: subprocess.Popen | None = None
     local_ed2k_seed_app = None
+    embedded_controller_processes: list[tuple[str, subprocess.Popen[str]]] = []
     cleanup_clients: list[tuple[str, str, int]] = []
     cleanup_radarr_movies: list[tuple[str, str, int]] = []
     cleanup_sonarr_series: list[tuple[str, str, int]] = []
@@ -4570,6 +4686,19 @@ def main() -> int:
             "enabled": bool(args.deterministic_local_ed2k),
             "fixture_size_bytes": args.local_ed2k_fixture_size_bytes,
         },
+        "embedded_controller": {
+            "enabled": embedded_controller_plan is not None,
+            "lan_bind_addr": lan_bind_addr if embedded_controller_plan is not None else "",
+            "apps": {
+                name: {
+                    "exe": str(entry["exe"]),
+                    "port": int(entry["port"]),
+                    "base_url": str(entry["base_url"]),
+                }
+                for name, entry in (embedded_controller_plan or {}).items()
+                if name in {"prowlarr", "radarr", "sonarr"} and isinstance(entry, dict)
+            },
+        },
         "live_wire_search_terms": {
             arr_term_key: live_wire_inputs.summarize_terms(media_terms),
         },
@@ -4598,6 +4727,18 @@ def main() -> int:
         live_common.write_json(result_path, report)
 
     try:
+        if embedded_controller_plan is not None:
+            record_phase("embedded_controller_start")
+            embedded_controller_processes = start_embedded_controller_apps(
+                embedded_controller_plan,
+                kind=kind,
+                artifacts_dir=artifacts_dir,
+                timeout_seconds=args.rest_ready_timeout_seconds,
+            )
+            report["checks"]["embedded_controller_ready"] = {
+                name: {"pid": process.pid, "running": process.poll() is None}
+                for name, process in embedded_controller_processes
+            }
         if args.deterministic_local_ed2k:
             record_phase("local_ed2k_prepare")
             p2p_address = args.p2p_bind_interface_address or dtt.discover_interface_ipv4(args.p2p_bind_interface_name)
@@ -4605,9 +4746,13 @@ def main() -> int:
             local_server_dir = artifacts_dir / "local-ed2k-server"
             local_catalog_path = local_server_dir / "catalog.json"
             local_config_path = local_server_dir / "config.json"
-            ed2k_repo = dtt.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
             ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-            report["checks"]["local_ed2k_server_build"] = dtt.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+            report["checks"]["local_ed2k_server_build"] = dtt.build_or_skip_ed2k_server_binary(
+                paths.workspace_root,
+                ed2k_exe,
+                repo_override=args.ed2k_server_repo,
+                exe_override=args.ed2k_server_exe,
+            )
             dtt.write_empty_catalog(local_catalog_path)
             report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
                 {
@@ -4995,6 +5140,9 @@ def main() -> int:
                 if report.get("status") == "passed":
                     report["status"] = "failed"
         dtt.stop_process(local_ed2k_server_process)
+        for name, process in reversed(embedded_controller_processes):
+            package_helper.stop_process(process)
+            report.setdefault("cleanup", {})[f"stopped_{name}"] = True  # type: ignore[index]
         if fixture_context is not None:
             try:
                 fixture_context.__exit__(None, None, None)

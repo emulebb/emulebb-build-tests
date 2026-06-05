@@ -686,6 +686,9 @@ if ($payload.localSwarmNodeArchivePath) {
 }
 $guestAmutorrentRoot = Join-Path $guestSuiteInstallRoot 'apps\aMuTorrent'
 $guestAmutorrentNode = ''
+$guestProwlarrExe = Join-Path $guestSuiteInstallRoot 'apps\prowlarr\Prowlarr\Prowlarr.exe'
+$guestRadarrExe = Join-Path $guestSuiteInstallRoot 'apps\radarr\Radarr\Radarr.exe'
+$guestSonarrExe = Join-Path $guestSuiteInstallRoot 'apps\sonarr\Sonarr\Sonarr.exe'
 $guestGoed2kServer = Join-Path $guestToolsRoot 'goed2k-server.exe'
 $guestClient2Root = Join-Path $guestToolsRoot 'tracing-harness'
 $guestClient2App = Join-Path $guestClient2Root 'emule.exe'
@@ -737,9 +740,12 @@ try {
     foreach ($assetPath in @($payload.localSwarmReleaseAssetPaths)) {
       Copy-Item -ToSession $session -Path $assetPath -Destination (Join-Path $guestReleaseRoot (Split-Path -Leaf $assetPath)) -Force
     }
+    foreach ($assetPath in @($payload.localSwarmDependencyAssetPaths)) {
+      Copy-Item -ToSession $session -Path $assetPath -Destination (Join-Path $guestReleaseRoot (Split-Path -Leaf $assetPath)) -Force
+    }
     Copy-Item -ToSession $session -Path $payload.localSwarmNodeArchivePath -Destination $guestNodeArchive -Force
     $guestAmutorrentNode = Invoke-Command -Session $session -ScriptBlock {
-      param($packageZip, $installer, $installRoot, $releaseRoot, $dependencyManifest, $nodeArchive, $nodeSha256, $version, $platform, $lanBindAddr)
+      param($packageZip, $installer, $installRoot, $releaseRoot, $dependencyManifest, $nodeArchive, $nodeSha256, $dependencyEntries, $version, $platform, $lanBindAddr)
       if (Test-Path -LiteralPath $installRoot) {
         Remove-Item -LiteralPath $installRoot -Recurse -Force
       }
@@ -756,14 +762,37 @@ try {
       }
       $releaseBaseUrl = ([Uri]$releaseRoot).AbsoluteUri
       $nodeUrl = ([Uri]$nodeArchive).AbsoluteUri
-      @{
+      $manifest = [ordered]@{
         node = @{
           fileName = Split-Path -Leaf $nodeArchive
           sha256 = $nodeSha256
           url = $nodeUrl
         }
-      } | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 -LiteralPath $dependencyManifest
-      & $installer -NonInteractive -Force -NoStart -Bundle Controller -InstallRoot $installRoot -ReleaseBaseUrl $releaseBaseUrl -DependencyManifest $dependencyManifest -Version $version -Platform $platform -InstallKind Development -ControlBindAddress $lanBindAddr -EmulebbBindAddress $lanBindAddr -AmutorrentBindAddress $lanBindAddr -P2PBindInterface ''
+      }
+      foreach ($name in @('prowlarr', 'radarr', 'sonarr')) {
+        $entry = $dependencyEntries.$name
+        if ($null -eq $entry) {
+          throw "Local swarm dependency manifest is missing $name."
+        }
+        $fileName = [string]$entry.fileName
+        if ([string]::IsNullOrWhiteSpace($fileName)) {
+          throw "Local swarm dependency manifest entry $name is missing fileName."
+        }
+        $assetPath = Join-Path $releaseRoot $fileName
+        if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
+          throw "Local swarm dependency asset is missing in guest: $assetPath"
+        }
+        $manifest[$name] = [ordered]@{
+          repo = [string]$entry.repo
+          tag = [string]$entry.tag
+          assetPattern = [string]$entry.assetPattern
+          exeName = [string]$entry.exeName
+          sha256 = [string]$entry.sha256
+          url = ([Uri]$assetPath).AbsoluteUri
+        }
+      }
+      $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 -LiteralPath $dependencyManifest
+      & $installer -NonInteractive -Force -NoStart -Bundle Full -InstallRoot $installRoot -ReleaseBaseUrl $releaseBaseUrl -DependencyManifest $dependencyManifest -Version $version -Platform $platform -InstallKind Development -ControlBindAddress $lanBindAddr -EmulebbBindAddress $lanBindAddr -AmutorrentBindAddress $lanBindAddr -P2PBindInterface ''
       if ($LASTEXITCODE -ne 0) {
         throw "Install-eMuleBBSuite.ps1 failed with exit code $LASTEXITCODE."
       }
@@ -779,7 +808,7 @@ try {
       $env:EMULEBB_TEST_AMUTORRENT_ROOT = $amutorrentRoot
       $env:AMUTORRENT_NODE_EXE = $node.FullName
       $node.FullName
-    } -ArgumentList $guestZip, $guestSuiteInstaller, $guestSuiteInstallRoot, $guestReleaseRoot, $guestSuiteDependencyManifest, $guestNodeArchive, $payload.localSwarmNodeSha256, $payload.releaseVersion, $payload.platform, $payload.localSwarmLanBindAddr
+    } -ArgumentList $guestZip, $guestSuiteInstaller, $guestSuiteInstallRoot, $guestReleaseRoot, $guestSuiteDependencyManifest, $guestNodeArchive, $payload.localSwarmNodeSha256, $payload.localSwarmDependencyManifestEntries, $payload.releaseVersion, $payload.platform, $payload.localSwarmLanBindAddr
   }
   if ($payload.localSwarmRestOpenApiPath) {
     Invoke-Command -Session $session -ScriptBlock {
@@ -842,6 +871,9 @@ try {
   }
   if ($payload.localSwarmAmuleControlExe) {
     $runnerArgs += @('--amule-control-exe', $guestAmuleControl)
+  }
+  if ($payload.localSwarmReleaseAssetPaths) {
+    $runnerArgs += @('--prowlarr-exe', $guestProwlarrExe, '--radarr-exe', $guestRadarrExe, '--sonarr-exe', $guestSonarrExe)
   }
   if ($payload.localSwarmLanBindAddr) {
     $runnerArgs += @('--lan-bind-addr', $payload.localSwarmLanBindAddr)

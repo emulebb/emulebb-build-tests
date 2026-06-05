@@ -617,6 +617,8 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
         workspace_root=tmp_path / "workspace",
         configuration="Release",
         artifacts_dir=tmp_path / "artifacts",
+        ed2k_server_exe=tmp_path / "tools" / "goed2k-server.exe",
+        client2_app_exe=tmp_path / "tools" / "tracing-harness" / "emule.exe",
         p2p_bind_interface_name="hide.me",
         admin_volume_fixtures=True,
         vhd_size_mb=384,
@@ -626,6 +628,8 @@ def test_admin_volume_fixture_options_reach_admin_aware_suites(tmp_path: Path) -
     assert radarr_local_command[1].endswith("radarr-emulebb-local.py")
     assert "--admin-volume-fixtures" in radarr_local_command
     assert option_values(radarr_local_command, "--mount-root") == [str(mount_root.resolve())]
+    assert option_values(radarr_local_command, "--ed2k-server-exe") == [str((tmp_path / "tools" / "goed2k-server.exe").resolve())]
+    assert option_values(radarr_local_command, "--client2-app-exe") == [str((tmp_path / "tools" / "tracing-harness" / "emule.exe").resolve())]
     assert option_values(radarr_local_command, "--p2p-bind-interface-name") == []
     sonarr_command = live_e2e_suite.build_suite_command(
         spec=suite_spec("sonarr-emulebb"),
@@ -1597,6 +1601,32 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     assert option_values(commands[4], "--download-proof-mode") == [
         live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
     ]
+
+
+def test_controller_surface_profile_keeps_explicit_complete_acquisition(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "controller-surface",
+            "--arr-download-proof-mode",
+            "complete",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["arr_download_proof_mode"] == "complete"
+    assert option_values(commands[3], "--download-proof-mode") == ["complete"]
+    assert option_values(commands[4], "--download-proof-mode") == ["complete"]
 
 
 def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: Path, monkeypatch) -> None:

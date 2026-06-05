@@ -47,6 +47,12 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
             "C:/tmp/harness/tools/amule/bin/amuled.exe",
             "--amule-control-exe",
             "C:/tmp/harness/tools/amule/bin/amulecmd.exe",
+            "--prowlarr-exe",
+            "C:/tmp/harness/suite-install/apps/prowlarr/Prowlarr/Prowlarr.exe",
+            "--radarr-exe",
+            "C:/tmp/harness/suite-install/apps/radarr/Radarr/Radarr.exe",
+            "--sonarr-exe",
+            "C:/tmp/harness/suite-install/apps/sonarr/Sonarr/Sonarr.exe",
             "--local-swarm-mode",
             "execute",
             "--lan-bind-addr",
@@ -60,6 +66,9 @@ def test_profile_smoke_parser_accepts_swarm_tier() -> None:
     assert str(args.client2_app_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/tracing-harness/emule.exe")
     assert str(args.amule_daemon_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amuled.exe")
     assert str(args.amule_control_exe).replace("\\", "/").endswith("C:/tmp/harness/tools/amule/bin/amulecmd.exe")
+    assert str(args.prowlarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/prowlarr/Prowlarr/Prowlarr.exe")
+    assert str(args.radarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/radarr/Radarr/Radarr.exe")
+    assert str(args.sonarr_exe).replace("\\", "/").endswith("C:/tmp/harness/suite-install/apps/sonarr/Sonarr/Sonarr.exe")
     assert args.local_swarm_mode == "execute"
     assert args.lan_bind_addr == "192.0.2.10"
 
@@ -207,6 +216,43 @@ def test_local_swarm_plan_check_reuses_staged_live_suite_planner(tmp_path) -> No
             assert "--client2-app-exe" in command
             assert "--amule-daemon-exe" in command
             assert "--amule-control-exe" in command
+
+
+def test_arr_local_acquisition_vm_profile_passes_arr_executables(tmp_path) -> None:
+    repo_root = Path(windows_vm_profile_smoke.__file__).resolve().parents[1]
+    app_root = tmp_path / "expanded" / "eMuleBB"
+    app_root.mkdir(parents=True)
+    (app_root / "emulebb.exe").write_text("", encoding="utf-8")
+    prowlarr_exe = tmp_path / "harness" / "suite-install" / "apps" / "prowlarr" / "Prowlarr" / "Prowlarr.exe"
+    radarr_exe = tmp_path / "harness" / "suite-install" / "apps" / "radarr" / "Radarr" / "Radarr.exe"
+    sonarr_exe = tmp_path / "harness" / "suite-install" / "apps" / "sonarr" / "Sonarr" / "Sonarr.exe"
+    for path in (prowlarr_exe, radarr_exe, sonarr_exe):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+    check = windows_vm_profile_smoke.local_swarm_plan_check(
+        "arr-local-acquisition-vm",
+        1,
+        repo_root,
+        tmp_path / "guest-root",
+        app_root,
+        tmp_path / "artifacts",
+        prowlarr_exe=prowlarr_exe,
+        radarr_exe=radarr_exe,
+        sonarr_exe=sonarr_exe,
+        lan_bind_addr="192.0.2.10",
+    )
+
+    command_by_name = {Path(command[1]).name: command for command in check["details"]["commands"]}
+    assert check["status"] == "passed", check["details"]
+    assert set(check["details"]["suiteNames"]) == {"radarr-emulebb-local", "sonarr-emulebb-local", "godzilla-local-swarm"}
+    for script_name in ("radarr-emulebb-local.py", "sonarr-emulebb-local.py"):
+        command = command_by_name[script_name]
+        assert command[command.index("--prowlarr-exe") + 1] == str(prowlarr_exe)
+        assert command[command.index("--radarr-exe") + 1] == str(radarr_exe)
+        assert command[command.index("--sonarr-exe") + 1] == str(sonarr_exe)
+        assert command[command.index("--rest-webserver-scheme") + 1] == "http"
+        assert command[command.index("--download-proof-mode") + 1] == "complete"
 
 
 def test_all_reusable_campaign_vm_profiles_plan_declared_local_suites(tmp_path) -> None:

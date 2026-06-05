@@ -213,6 +213,17 @@ REUSABLE_CAMPAIGN_SCENARIOS = (
         uses_local_swarm=True,
     ),
     CampaignScenarioSpec(
+        key="arr-local-acquisition",
+        title="Arr local acquisition",
+        release_phase="controller-surface",
+        network_scope="lan",
+        local_profile="controller-surface",
+        local_suites=("radarr-emulebb-local", "sonarr-emulebb-local"),
+        vm_profile="arr-local-acquisition-vm",
+        scenario_id="emulebb.flow.arr.local-acquisition.swarm.v1",
+        uses_local_swarm=True,
+    ),
+    CampaignScenarioSpec(
         key="search-ui-local-swarm",
         title="Search UI local swarm",
         release_phase="ui-resource-depth",

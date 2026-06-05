@@ -69,6 +69,8 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "localSwarmManifestsPath" not in script
     assert "localSwarmScriptPaths" not in script
     assert "localSwarmReleaseAssetPaths" in script
+    assert "localSwarmDependencyAssetPaths" in script
+    assert "localSwarmDependencyManifestEntries" in script
     assert "localSwarmNodeArchivePath" in script
     assert "localSwarmNodeSha256" in script
     assert "localSwarmAmutorrentRoot" not in script
@@ -76,8 +78,10 @@ def test_profile_smoke_script_uses_shared_python_runner() -> None:
     assert "AMUTORRENT_NODE_EXE" in script
     assert "Install-eMuleBBSuite.ps1" in script
     assert "suite-dependencies.json" in script
+    assert "Local swarm dependency manifest is missing $name." in script
+    assert "Local swarm dependency asset is missing in guest" in script
     assert "-DependencyManifest $dependencyManifest" in script
-    assert "-Bundle Controller" in script
+    assert "-Bundle Full" in script
     assert "-ControlBindAddress $lanBindAddr" in script
     assert "-EmulebbBindAddress $lanBindAddr" in script
     assert "-AmutorrentBindAddress $lanBindAddr" in script

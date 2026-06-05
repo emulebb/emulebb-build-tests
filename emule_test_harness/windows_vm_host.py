@@ -73,6 +73,8 @@ LOCAL_SWARM_SUPPORT_SCRIPT_FILES = (
     "amutorrent-resilience-live.py",
     "emule-live-profile-common.py",
     "harness-cli-common.py",
+    "prowlarr-emulebb-live.py",
+    "radarr-sonarr-emulebb-live.py",
     "rest-api-smoke.py",
 )
 GODZILLA_LOCAL_SWARM_HELPER_SCRIPT_FILES = (
@@ -138,6 +140,7 @@ def local_swarm_payload_paths(tests_repo_root: str | Path) -> dict[str, Any]:
         "harnessPackage": root / "emule_test_harness",
         "manifests": root / "manifests",
         "scripts": [root / "scripts" / name for name in LOCAL_SWARM_PAYLOAD_SCRIPT_FILES],
+        "liveWireInputs": root / "live-wire-inputs.local.json",
     }
 
 
