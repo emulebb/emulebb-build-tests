@@ -277,6 +277,9 @@ def test_reload_interrupt_sidecars_are_allowed_after_fast_convergence() -> None:
     assert not module.should_require_absent_sidecars_after_interrupt(
         {"reload_converged_before_hash_drain": True}
     )
+    assert not module.should_require_absent_sidecars_after_interrupt(
+        {"interrupt_mode": "clean-close", "reload_converged_before_hash_drain": False}
+    )
     assert module.should_require_absent_sidecars_after_interrupt(
-        {"reload_converged_before_hash_drain": False}
+        {"interrupt_mode": "hard-kill", "reload_converged_before_hash_drain": False}
     )

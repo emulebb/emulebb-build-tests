@@ -599,10 +599,16 @@ def run_interruption_scenario(
             )
 
         summary["post_interrupt_sidecar_state"] = capture_sidecar_state(Path(str(fixture["config_dir"])))
-        ensure_sidecars_absent(
-            summary["post_interrupt_sidecar_state"],
-            description=f"{name} interruption",
-        )
+        if should_require_absent_sidecars_after_interrupt(summary):
+            ensure_sidecars_absent(
+                summary["post_interrupt_sidecar_state"],
+                description=f"{name} interruption",
+            )
+        else:
+            record_allowed_sidecars_after_interrupt(
+                summary,
+                reason="sidecars_allowed_after_clean_close_partial_startup_cache_policy",
+            )
 
         app = launch_app_with_fresh_startup_trace(app_exe, fixture)
         (
@@ -875,7 +881,13 @@ def record_immediate_reload_convergence(
 
 
 def should_require_absent_sidecars_after_interrupt(summary: dict[str, object]) -> bool:
+    if summary.get("interrupt_mode") == "clean-close":
+        return False
     return not bool(summary.get("reload_converged_before_hash_drain"))
+
+
+def record_allowed_sidecars_after_interrupt(summary: dict[str, object], *, reason: str) -> None:
+    summary["post_interrupt_sidecar_policy"] = reason
 
 
 def run_reload_then_interrupt_scenario(
@@ -955,8 +967,13 @@ def run_reload_then_interrupt_scenario(
                 description=f"{name} interruption after deferred reload",
             )
         else:
-            summary["post_interrupt_sidecar_policy"] = (
-                "sidecars_allowed_after_fast_convergence_before_interrupt"
+            record_allowed_sidecars_after_interrupt(
+                summary,
+                reason=(
+                    "sidecars_allowed_after_fast_convergence_before_interrupt"
+                    if summary.get("reload_converged_before_hash_drain")
+                    else "sidecars_allowed_after_clean_close_partial_startup_cache_policy"
+                ),
             )
 
         app = launch_app_with_fresh_startup_trace(app_exe, fixture)
