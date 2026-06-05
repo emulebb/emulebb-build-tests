@@ -410,8 +410,9 @@ def run_disk_space_guard(args: argparse.Namespace) -> dict[str, object]:
     )
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else paths.seed_config_dir
     config = build_admin_fixture_config(paths, args)
-    port = rest_smoke.choose_listen_port()
-    base_url = f"http://{args.lan_bind_addr}:{port}"
+    rest_host = rest_smoke.rest_base_host_for_lan_bind_addr(args.lan_bind_addr)
+    port = rest_smoke.choose_listen_port(args.lan_bind_addr)
+    base_url = f"http://{rest_host}:{port}"
     guard_size_mb = args.guard_transfer_size_mb or max(args.vhd_size_mb * 2, args.vhd_size_mb + 128)
     guard_size_bytes = guard_size_mb * 1024 * 1024
     cases = build_disk_space_guard_cases()
