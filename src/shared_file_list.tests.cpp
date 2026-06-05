@@ -302,10 +302,11 @@ TEST_CASE("Part-file hash worker drops results during shutdown or missing UI")
 
 TEST_CASE("Shared hash shutdown invalidates warm caches only when hashing work was interrupted")
 {
-	CHECK_FALSE(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, false }));
-	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ true, false, false }));
-	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, true, false }));
-	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, true }));
+	CHECK_FALSE(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, false, false }));
+	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ true, false, false, false }));
+	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, true, false, false }));
+	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, true, false }));
+	CHECK(SharedFileListSeams::ShouldInvalidateStartupCacheAfterSharedHashShutdown({ false, false, false, true }));
 }
 #endif
 

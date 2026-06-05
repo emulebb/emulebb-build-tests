@@ -76,6 +76,9 @@ def test_interrupted_hashing_persists_partial_startup_cache_for_stable_directori
     assert "void\tInvalidateStartupCachesAfterInterruptedHashing(const std::unordered_set<std::wstring> &rInterruptedDirectoryKeys = std::unordered_set<std::wstring>());" in header
     assert "std::unordered_set<std::wstring> interruptedDirectoryKeys;" in shutdown_block
     assert shutdown_block.index("interruptedDirectoryKeys.insert(MakeStartupCacheSnapshotKey(job.strDirectory));") < shutdown_block.index("m_sharedHashQueue.clear();")
+    assert "!m_sharedHashDeferredResults.empty()" in shutdown_block
+    assert "for (const CSharedFileHashResult *pResult : m_sharedHashDeferredResults)" in shutdown_block
+    assert "interruptedDirectoryKeys.insert(MakeStartupCacheSnapshotKey(pResult->strDirectory));" in shutdown_block
     assert "InvalidateStartupCachesAfterInterruptedHashing(interruptedDirectoryKeys);" in shutdown_block
     assert "const bool bPartialStartupCachePersisted = PersistStartupCacheAfterInterruptedHashing(rInterruptedDirectoryKeys);" in invalidate_block
     assert "bPartialStartupCachePersisted ? false : LongPathSeams::DeleteFileIfExists(GetStartupCachePath())" in invalidate_block
