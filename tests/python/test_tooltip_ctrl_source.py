@@ -14,3 +14,7 @@ def test_file_icon_tooltips_initialize_line_height_from_non_colon_lines() -> Non
 
     assert "iTextHeight = max(iTextHeight, siz.cy + iLineHeightOff);" in first_line
     assert "iTextHeight = max(iTextHeight, siz.cy + iLineHeightOff);" in plain_line
+    assert "iCaptionHeight = iCaptionLineCount * iTextHeight;" in source
+    assert "sizText.cy = iTextLineCount * iTextHeight;" in source
+    assert "const int iLineLeft = (bShowFileIcon && iPos <= iCaptionEnd + strLine.GetLength()) ? ptText.x + iIconDrawingWidth : ptText.x;" in source
+    assert "pdc->TabbedTextOut(iLineLeft, ptText.y, strLine" in source
