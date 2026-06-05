@@ -110,6 +110,37 @@ def test_terminate_process_tree_verifies_process_instance_before_termination(mon
     ]
 
 
+def test_terminate_process_tree_allows_empty_root_command_line_when_creation_date_matches(monkeypatch) -> None:
+    processes = [
+        windows_processes.WindowsProcessInfo(
+            pid=10,
+            parent_pid=1,
+            name="emulebb.exe",
+            command_line="",
+            creation_date="20260527010101.000000+000",
+        )
+    ]
+    terminated: list[tuple[int, str]] = []
+
+    def terminate(process_id: int, exit_code: int = 1, expected_creation_date: str = "") -> dict[str, object]:
+        terminated.append((process_id, expected_creation_date))
+        return {"pid": process_id, "terminated": True, "return_code": 0}
+
+    monkeypatch.setattr(windows_processes, "collect_process_tree", lambda _pid: processes)
+    monkeypatch.setattr(windows_processes, "collect_processes", lambda: [])
+    monkeypatch.setattr(windows_processes, "terminate_process", terminate)
+
+    result = windows_processes.terminate_process_tree(
+        10,
+        expected_command_line_markers=[r"C:\tests\profile-base"],
+        expected_root_creation_date="20260527010101.000000+000",
+    )
+
+    assert result["return_code"] == 0
+    assert result["marker_check_bypassed"] is True
+    assert terminated == [(10, "20260527010101.000000+000")]
+
+
 def test_terminate_process_refuses_reused_pid(monkeypatch) -> None:
     class FakeProcess:
         CreationDate = "20260527010202.000000+000"

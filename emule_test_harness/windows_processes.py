@@ -206,7 +206,15 @@ def terminate_process_tree(
     root_creation_mismatch = bool(
         root is not None and expected_root_creation_date and root.creation_date != expected_root_creation_date
     )
-    if root is None or root_creation_mismatch or (markers and not command_line_contains_markers(root.command_line, markers)):
+    marker_mismatch = bool(root is not None and markers and not command_line_contains_markers(root.command_line, markers))
+    marker_check_bypassed = bool(
+        marker_mismatch
+        and not root_creation_mismatch
+        and expected_root_creation_date
+        and root is not None
+        and not root.command_line.strip()
+    )
+    if root is None or root_creation_mismatch or (marker_mismatch and not marker_check_bypassed):
         return {
             "command": "wmi-terminate",
             "pid": process_id,
@@ -242,6 +250,7 @@ def terminate_process_tree(
         "command": "wmi-terminate",
         "pid": process_id,
         "return_code": 0 if not remaining else 1,
+        "marker_check_bypassed": marker_check_bypassed,
         "targets": [process.__dict__ for process in ordered_targets],
         "terminated": terminated,
         "remaining_pids": sorted(remaining),
