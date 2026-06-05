@@ -1619,6 +1619,7 @@ def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monk
     assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [
         str(live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     ]
+    assert "--allow-live-search-availability-gap" not in prowlarr_command
 
 
 def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, monkeypatch) -> None:
@@ -1671,6 +1672,7 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [
         str(live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT)
     ]
+    assert "--allow-live-search-availability-gap" in prowlarr_command
     assert option_values(commands[3], "--download-proof-mode") == [
         live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
     ]

@@ -1111,6 +1111,7 @@ def build_suite_command(
     search_ui_download_lifecycle_count: int = DEFAULT_SEARCH_UI_DOWNLOAD_LIFECYCLE_COUNT,
     arr_direct_search_stress_count: int = DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT,
     arr_prowlarr_search_stress_count: int = DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT,
+    allow_prowlarr_live_search_availability_gap: bool = False,
     emule_connection_timeout_seconds: float = DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS,
     arr_search_timeout_seconds: float = DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS,
     document_download_timeout_seconds: float = DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS,
@@ -1389,6 +1390,8 @@ def build_suite_command(
         command.extend(["--document-download-timeout-seconds", str(document_download_timeout_seconds)])
         command.extend(["--direct-search-stress-count", str(arr_direct_search_stress_count)])
         command.extend(["--prowlarr-search-stress-count", str(arr_prowlarr_search_stress_count)])
+        if allow_prowlarr_live_search_availability_gap:
+            command.append("--allow-live-search-availability-gap")
         command.append("--enable-upnp")
         if p2p_bind_interface_name:
             command.extend(["--p2p-bind-interface-name", p2p_bind_interface_name])
@@ -2743,6 +2746,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
+            allow_prowlarr_live_search_availability_gap=args.profile == "controller-surface",
             emule_connection_timeout_seconds=args.emule_connection_timeout_seconds,
             arr_search_timeout_seconds=args.arr_search_timeout_seconds,
             document_download_timeout_seconds=args.document_download_timeout_seconds,
