@@ -485,6 +485,44 @@
               }
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.arr.local-acquisition.swarm.v1",
+          "title": "Arr local acquisition reusable VM swarm",
+          "phase": "controller-surface",
+          "flowCategory": "local-vm-swarm",
+          "required": false,
+          "blocking": false,
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "executionMode": "vm",
+          "executionModes": [
+            "local",
+            "vm"
+          ],
+          "localProfile": "controller-surface",
+          "localSuites": [
+            "radarr-emulebb-local",
+            "sonarr-emulebb-local"
+          ],
+          "vmProfile": "arr-local-acquisition-vm",
+          "controlBindScope": "lan",
+          "amutorrentBindScope": "lan",
+          "p2pMode": "local-swarm",
+          "p2pBindScope": "lan",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-state",
+              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/profile": "arr-local-acquisition-vm"
+              }
+            }
+          ]
         }
       ]
     },
