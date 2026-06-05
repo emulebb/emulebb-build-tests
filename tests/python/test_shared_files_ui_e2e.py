@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,44 @@ def test_get_rest_shared_file_count_rejects_invalid_rows(monkeypatch) -> None:
         assert "Unexpected shared-files REST row shape" in str(exc)
     else:
         raise AssertionError("Expected invalid shared-files REST row shape to fail.")
+
+
+def test_http_request_retries_transient_local_socket_abort(monkeypatch) -> None:
+    module = load_shared_files_module()
+    attempts = 0
+
+    class Headers:
+        def get(self, _name: str, _default: str = "") -> str:
+            return "application/json"
+
+    class Response:
+        status = 200
+        headers = Headers()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"data":{"ok":true},"meta":{"apiVersion":"v1"}}'
+
+    def fake_urlopen(_request, timeout: float):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.URLError(ConnectionAbortedError(10053, "connection aborted"))
+        return Response()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.http_request("http://127.0.0.1:1", "/api/v1/app", api_key="key")
+
+    assert attempts == 2
+    assert result["json"] == {"ok": True}
+    assert result["transient_errors"]
 
 
 def test_build_tree_stress_cold_cached_metrics_compares_50k_relaunch() -> None:

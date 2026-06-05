@@ -155,6 +155,15 @@ GR_USEROBJECTS = 1
 SHARED_DUPLICATE_PATH_CACHE_MAGIC = 0x50554453
 SHARED_DUPLICATE_PATH_CACHE_VERSION = 1
 TREE_REFRESH_SMOKE_SCENARIO = "tree-refresh-smoke-1k"
+LOCAL_HTTP_TRANSIENT_RETRY_DELAYS_SECONDS = (0.2, 0.5, 1.0)
+LOCAL_HTTP_TRANSIENT_FRAGMENTS = (
+    "10053",
+    "10054",
+    "connection aborted",
+    "connection reset",
+    "forcibly closed",
+    "timed out",
+)
 TREE_REFRESH_STRESS_SCENARIO = "tree-refresh-stress-50k"
 TREE_STRESS_RESOURCE_THRESHOLDS = {
     "handles": {"after_churn_max": 64},
@@ -1556,21 +1565,46 @@ def wait_for_list_name_set(
     return list(result["names"])
 
 
+def is_transient_local_http_exception(exc: BaseException) -> bool:
+    """Returns true for short-lived local REST socket aborts."""
+
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, BaseException):
+            return is_transient_local_http_exception(reason)
+    if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, TimeoutError, OSError)):
+        message = str(exc).lower()
+        return any(fragment in message for fragment in LOCAL_HTTP_TRANSIENT_FRAGMENTS)
+    return False
+
+
 def http_request(base_url: str, path: str, *, api_key: str, request_timeout_seconds: float = 5.0) -> dict[str, object]:
     """Performs one JSON REST GET request against the live WebServer API."""
 
     request = urllib.request.Request(base_url + path, method="GET", headers={"X-API-Key": api_key})
-    with urllib.request.urlopen(request, timeout=request_timeout_seconds) as response:
-        body_text = response.read().decode("utf-8", errors="replace")
-        payload = None
-        if "application/json" in response.headers.get("Content-Type", ""):
-            payload = json.loads(body_text)
-        return {
-            "status": int(response.status),
-            "body_text": body_text,
-            "json": unwrap_rest_payload(payload),
-            "raw_json": payload,
-        }
+    observations: list[str] = []
+    for attempt in range(len(LOCAL_HTTP_TRANSIENT_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=request_timeout_seconds) as response:
+                body_text = response.read().decode("utf-8", errors="replace")
+                payload = None
+                if "application/json" in response.headers.get("Content-Type", ""):
+                    payload = json.loads(body_text)
+                result: dict[str, object] = {
+                    "status": int(response.status),
+                    "body_text": body_text,
+                    "json": unwrap_rest_payload(payload),
+                    "raw_json": payload,
+                }
+                if observations:
+                    result["transient_errors"] = observations[-5:]
+                return result
+        except (urllib.error.URLError, OSError) as exc:
+            if attempt >= len(LOCAL_HTTP_TRANSIENT_RETRY_DELAYS_SECONDS) or not is_transient_local_http_exception(exc):
+                raise
+            observations.append(str(exc))
+            time.sleep(LOCAL_HTTP_TRANSIENT_RETRY_DELAYS_SECONDS[attempt])
+    raise AssertionError("unreachable shared-files REST retry loop")
 
 
 def unwrap_rest_payload(payload: object) -> object:
