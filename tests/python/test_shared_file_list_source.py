@@ -81,6 +81,34 @@ def test_interrupted_hashing_marks_deferred_result_directories_interrupted() -> 
     assert '"interrupted_hashing"' in invalidate_block
 
 
+def test_shared_files_hashing_done_marker_is_not_emitted_during_close() -> None:
+    source = (app_source_root() / "SharedFilesWnd.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CSharedFilesWnd::ReportStartupSharedFilesReadinessIfReady") :
+        source.index("#endif", source.index("void CSharedFilesWnd::ReportStartupSharedFilesReadinessIfReady"))
+    ]
+
+    guard = "!m_bStartupSharedFilesHashingDoneReported && ullPendingHashes == 0 && !theApp.IsClosing()"
+    assert "shutdown can clear shared-hash bookkeeping before the UI has accepted" in block
+    assert guard in block
+    assert block.index(guard) < block.index('_T("ui.shared_files_hashing_done")')
+
+
+def test_close_interrupted_shared_hash_snapshot_precedes_shutdown_state() -> None:
+    dialog = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = dialog[
+        dialog.index("const auto sleepAndPumpSharedShutdownPoll") :
+        dialog.index("TrayHide();")
+    ]
+
+    snapshot = "const bool bSharedHashingWasActiveOnClose = (theApp.sharedfiles != NULL && theApp.sharedfiles->HasSharedHashingWork());"
+    state_change = "theApp.m_app_state = APP_STATE_SHUTTINGDOWN;"
+    assert "setting APP_STATE_SHUTTINGDOWN can make shared-hash workers retire" in block
+    assert snapshot in block
+    assert state_change in block
+    assert block.index(snapshot) < block.index(state_change)
+
+
 def test_duplicate_path_sidecar_reuse_precedes_known_file_duplicate_reporting() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[
