@@ -45,8 +45,11 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
 
     assert "ShouldProbeUploadCooldownCandidate" in seams
     assert "kUnproductiveNoRequestCooldownProbeRemainingMs = 1000u" in seams
+    assert "kProductiveNoRequestCooldownProbeRemainingMs = 5000u" in seams
     assert "ShouldProbeUnproductiveNoRequestCooldownCandidate" in seams
+    assert "ShouldProbeNoRequestCooldownCandidate" in seams
     assert "ullCooldownRemainingMs <= ullMaxProbeRemainingMs" in seams
+    assert "ullCooldownRemainingMs <= ullMaxProductiveProbeRemainingMs" in seams
     assert "bool\tHasUploadCooldownProbeCandidate(ULONGLONG curTick);" in header
     assert "bool\tCanProbeUploadCooldownCandidate(CUpDownClient *client, ULONGLONG curTick) const;" in header
     assert "bool CUploadQueue::HasUploadCooldownProbeCandidate(ULONGLONG curTick)" in source
@@ -70,12 +73,11 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     assert "client == NULL || client->GetSlowUploadCooldownRemaining() == 0" in cooldown_probe_block
     assert "m_noRequestUploadRetryCooldownByIP.find(dwCooldownIP)" in cooldown_probe_block
     assert "itNoRequest->second.ullCooldownUntil > curTick" in cooldown_probe_block
-    assert "!itNoRequest->second.bProductiveRecycle" not in cooldown_probe_block
-    assert "stopped asking for blocks" in cooldown_probe_block
-    assert "queued block request can still" in cooldown_probe_block
+    assert "already contributed payload" in cooldown_probe_block
+    assert "before zero-byte peers" in cooldown_probe_block
     assert "const ULONGLONG ullCooldownRemainingMs = itNoRequest->second.ullCooldownUntil - curTick;" in cooldown_probe_block
-    assert "ShouldProbeUnproductiveNoRequestCooldownCandidate(true, ullCooldownRemainingMs)" in cooldown_probe_block
-    assert cooldown_probe_block.index("ShouldProbeUnproductiveNoRequestCooldownCandidate") < cooldown_probe_block.rindex("return true;")
+    assert "ShouldProbeNoRequestCooldownCandidate(itNoRequest->second.bProductiveRecycle, ullCooldownRemainingMs)" in cooldown_probe_block
+    assert cooldown_probe_block.index("ShouldProbeNoRequestCooldownCandidate") < cooldown_probe_block.rindex("return true;")
 
     has_probe_block = source[
         source.index("bool CUploadQueue::HasUploadCooldownProbeCandidate") :

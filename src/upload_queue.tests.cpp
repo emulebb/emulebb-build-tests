@@ -95,6 +95,12 @@ TEST_CASE("Upload queue probes unproductive no-request cooldowns only at the fin
 	CHECK(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 1000u));
 	CHECK_FALSE(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 1001u));
 	CHECK_FALSE(ShouldProbeUnproductiveNoRequestCooldownCandidate(false, 0u));
+
+	CHECK_EQ(kProductiveNoRequestCooldownProbeRemainingMs, static_cast<std::uint64_t>(5000u));
+	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 5000u));
+	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 5001u));
+	CHECK(ShouldProbeNoRequestCooldownCandidate(false, 1000u));
+	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(false, 1001u));
 }
 
 TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
