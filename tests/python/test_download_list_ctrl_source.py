@@ -34,4 +34,17 @@ def test_thumbnail_completion_resumes_deferred_part_file_delete_after_preview_re
 
     assert "CPartFile *pFileToDelete = bFileStillTracked && pResult->pPartFile->IsDeleting() ? pResult->pPartFile : NULL;" in block
     assert block.index("pResult->pPartFile->m_bPreviewing = false;") < block.index("pFileToDelete->DeletePartFile();")
+    assert block.index("UpdateItem(pResult->pPartFile);") < block.index("delete pResult;")
     assert "delete pResult;\n\tif (pFileToDelete != NULL)\n\t\tpFileToDelete->DeletePartFile();\n\tStartNextVideoThumbnailWorker();" in block
+
+
+def test_download_filename_suffix_only_uses_live_thumbnail_cache() -> None:
+    source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
+    helper = source[source.index("bool CDownloadListCtrl::HasCachedVideoThumbnail") : source.index("bool CDownloadListCtrl::IsVideoThumbnailCandidate")]
+    display = source[source.index("CString CDownloadListCtrl::GetFileItemDisplayText") : source.index("void CDownloadListCtrl::ShowFilesCount")]
+
+    assert "m_videoThumbnailCache.Lookup(strKey, pEntry)" in helper
+    assert "GetCachedVideoThumbnail" not in helper
+    assert "ReadVideoThumbnailBitmapFile" not in helper
+    assert "PathExists" not in helper
+    assert "sText.AppendChar(static_cast<TCHAR>(0x25A3));" in display
