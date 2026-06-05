@@ -188,7 +188,7 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "ShouldAdmitQueuedBlockRequestToUploadSlot" in seams_header
     assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in seams_header
     assert "bool bProductiveNoRequestRecycle" in seams_header
-    assert "|| bProductiveNoRequestRecycle" in seams_header
+    assert "return !bNoRequestCooldownTracked\n\t\t|| !bQueuedRequestClearAlreadyUsed;" in seams_header
     assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in not_uploading_block
     assert "LPCTSTR pszCooldownClearInstrumentationReason = NULL;" in not_uploading_block
     assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this, &pszCooldownClearInstrumentationReason);" in not_uploading_block
@@ -204,8 +204,8 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
         queue_source.index("QueuedBlockRequestAdmissionResult CUploadQueue::TryAdmitQueuedBlockRequestClient")
     ]
     assert "const bool bProductiveNoRequestRecycle = itNoRequest->second.bProductiveRecycle;" in queue_source
-    assert "ShouldAllowNoRequestCooldownClear(true, itNoRequest->second.bQueuedRequestClearUsed, bProductiveNoRequestRecycle)" in queue_source
-    assert "reject-not-uploading-unproductive-no-request-clear-used" in queue_source
+    assert "ShouldAllowNoRequestCooldownClear(true, itNoRequest->second.bQueuedRequestClearUsed)" in queue_source
+    assert "reject-not-uploading-no-request-clear-used" in queue_source
     assert "bClearedProductiveNoRequestCooldown = true;" in queue_source
     assert "bool bClearedUnderfilledNoRequestCooldown = false;" in clear_cooldown_block
     assert "ShouldClearActiveNoRequestCooldownOnQueuedRequest" in seams_header
