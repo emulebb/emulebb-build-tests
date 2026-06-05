@@ -1683,10 +1683,11 @@ TEST_CASE("Web API builds representative REST routes and normalizes query parame
 	CHECK(route.params["_items_envelope"].get<bool>());
 	CHECK(route.params["_paged_items_envelope"].get<bool>());
 
-	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/upload-queue?offset=3&limit=50", "", route, errorCode, errorMessage));
+	CHECK(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/upload-queue?offset=3&limit=50&includeScoreBreakdown=true", "", route, errorCode, errorMessage));
 	CHECK_EQ(route.strCommand, "uploads/queue");
 	CHECK_EQ(route.params["_offset"].get<int>(), 3);
 	CHECK_EQ(route.params["_limit"].get<int>(), 50);
+	CHECK(route.params["includeScoreBreakdown"].get<bool>());
 	CHECK(route.params["_items_envelope"].get<bool>());
 	CHECK(route.params["_paged_items_envelope"].get<bool>());
 
@@ -2023,6 +2024,12 @@ TEST_CASE("Web API rejects unknown body fields and malformed query parameters be
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/logs?limit=10&legacy=1", "", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
 	CHECK_EQ(errorMessage, "unknown query parameter: legacy");
+
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("GET", "/api/v1/upload-queue?includeScoreBreakdown=1", "", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "includeScoreBreakdown must be true or false");
 
 	errorCode.clear();
 	errorMessage.clear();

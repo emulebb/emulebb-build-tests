@@ -2029,6 +2029,13 @@ def test_rest_vocabulary_source_and_openapi_stay_in_sync() -> None:
     for token in schemas["TransferSource"]["properties"]["downloadState"]["enum"]:
         assert f'return "{token}";' in surface_source
 
+    assert 'name: includeScoreBreakdown' in module.OPENAPI_CONTRACT_PATH.read_text(encoding="utf-8")
+    assert '{"GET", "/upload-queue", "", "offset,limit,includeScoreBreakdown"}' in json_seams
+    assert 'TryParseBooleanQueryValue(it->second, "includeScoreBreakdown"' in json_seams
+    assert "CopyUploadQueueQueryParams(query, rRoute.params)" in json_seams
+    assert 'const bool bIncludeScoreBreakdown = rParams.value("includeScoreBreakdown", false);' in json_source
+    assert "BuildUploadsListJson(bWaitingQueue, uLimit, uOffset, &uTotal, bIncludeScoreBreakdown)" in json_source
+
     assert arr_seams.index('methods.push_back("global")') < arr_seams.index('methods.push_back("kad")')
     assert 'return "video";' in arr_seams
 
@@ -2586,7 +2593,7 @@ def test_rest_v1_paging_surface_is_intentionally_narrow() -> None:
     contracts = _openapi_operation_contracts(load_rest_api_smoke_module().OPENAPI_CONTRACT_PATH)
 
     assert contracts[("GET", "/shared-files")]["query"] == {"limit", "offset"}
-    assert contracts[("GET", "/upload-queue")]["query"] == {"limit", "offset"}
+    assert contracts[("GET", "/upload-queue")]["query"] == {"includeScoreBreakdown", "limit", "offset"}
     assert contracts[("GET", "/logs")]["query"] == {"limit"}
     assert contracts[("GET", "/snapshot")]["query"] == {"limit"}
 
