@@ -1212,6 +1212,30 @@ def test_installer_controller_surface_splits_quick_and_soak_profiles() -> None:
     assert set(quick_scripts).isdisjoint(soak_scripts)
 
 
+def test_installer_controller_surface_allows_public_search_availability_gap(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "installer-controller-surface",
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    prowlarr_commands = [command for command in commands if script_name(command) == "prowlarr-emulebb-live.py"]
+    assert summary["status"] == "passed"
+    assert len(prowlarr_commands) == 1
+    assert "--allow-live-search-availability-gap" in prowlarr_commands[0]
+
+
 def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

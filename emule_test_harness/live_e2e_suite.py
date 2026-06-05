@@ -2750,7 +2750,8 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
             arr_prowlarr_search_stress_count=args.arr_prowlarr_search_stress_count,
-            allow_prowlarr_live_search_availability_gap=args.profile == "controller-surface",
+            allow_prowlarr_live_search_availability_gap=args.profile
+            in {"controller-surface", "installer-controller-surface"},
             emule_connection_timeout_seconds=args.emule_connection_timeout_seconds,
             arr_search_timeout_seconds=args.arr_search_timeout_seconds,
             document_download_timeout_seconds=args.document_download_timeout_seconds,
