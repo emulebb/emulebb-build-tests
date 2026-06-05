@@ -615,7 +615,11 @@ def run_interruption_scenario(
                 reason=(
                     "sidecars_allowed_after_hashing_converged_before_interrupt"
                     if summary.get("hashing_converged_before_interrupt")
-                    else "sidecars_allowed_after_fast_convergence_before_interrupt"
+                    else (
+                        "sidecars_allowed_after_hashing_done_observed_before_interrupt"
+                        if summary.get("hashing_done_observed_before_interrupt")
+                        else "sidecars_allowed_after_fast_convergence_before_interrupt"
+                    )
                 ),
             )
 
@@ -892,6 +896,8 @@ def record_immediate_reload_convergence(
 def should_require_absent_sidecars_after_interrupt(summary: dict[str, object]) -> bool:
     if summary.get("hashing_converged_before_interrupt"):
         return False
+    if summary.get("hashing_done_observed_before_interrupt"):
+        return False
     return not bool(summary.get("reload_converged_before_hash_drain"))
 
 
@@ -921,6 +927,7 @@ def record_hashing_convergence_before_interrupt(
         and shared_count >= expected_count
         and visible_count >= expected_count
     )
+    summary["hashing_done_observed_before_interrupt"] = shared_count is not None or visible_count is not None
     summary["hashing_converged_before_interrupt"] = bool(converged)
     if converged:
         summary["hashing_converged_before_interrupt_reason"] = (
@@ -1015,7 +1022,11 @@ def run_reload_then_interrupt_scenario(
                 reason=(
                     "sidecars_allowed_after_hashing_converged_before_interrupt"
                     if summary.get("hashing_converged_before_interrupt")
-                    else "sidecars_allowed_after_fast_convergence_before_interrupt"
+                    else (
+                        "sidecars_allowed_after_hashing_done_observed_before_interrupt"
+                        if summary.get("hashing_done_observed_before_interrupt")
+                        else "sidecars_allowed_after_fast_convergence_before_interrupt"
+                    )
                 ),
             )
 
