@@ -48,3 +48,14 @@ def test_download_filename_suffix_only_uses_live_thumbnail_cache() -> None:
     assert "ReadVideoThumbnailBitmapFile" not in helper
     assert "PathExists" not in helper
     assert "sText.AppendChar(static_cast<TCHAR>(0x25A3));" in display
+
+
+def test_download_infotip_compacts_only_first_filename_line() -> None:
+    source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
+    helper = source[source.index("CString CompactDownloadInfoTipFileName") : source.index("uint32 GetClientGeoIP")]
+    infotip = source[source.index("void CDownloadListCtrl::OnLvnGetInfoTip") : source.index("void CDownloadListCtrl::ShowFileDialog")]
+
+    assert "const int kDownloadInfoTipMaxFileNameChars = 160;" in source
+    assert "strCompacted += szEllipsis;" in helper
+    assert "strCompacted += strExtension;" in helper
+    assert "info.Replace(pPartFile->GetFileName() + _T('\\n'), CompactDownloadInfoTipFileName(pPartFile->GetFileName()) + _T('\\n'));" in infotip
