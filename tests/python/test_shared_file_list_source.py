@@ -33,7 +33,7 @@ def test_duplicate_path_cache_write_failures_keep_path_and_error_details() -> No
     assert block.index("CExceptionStrDash(*ex)") < block.index("ex->Delete();")
 
 
-def test_interrupted_hashing_preserves_duplicate_path_sidecar() -> None:
+def test_interrupted_hashing_removes_startup_cache_sidecars() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
     invalidate_block = source[
@@ -46,17 +46,17 @@ def test_interrupted_hashing_preserves_duplicate_path_sidecar() -> None:
     ]
 
     assert "bool\tPersistDuplicatePathCacheAfterInterruptedHashing();" in header
-    assert "(void)PersistDuplicatePathCacheAfterInterruptedHashing();" in invalidate_block
     assert "LongPathSeams::DeleteFileIfExists(GetStartupCachePath())" in invalidate_block
-    assert "m_duplicateSharedPathRecords.clear();" not in invalidate_block
-    assert "GetDuplicatePathCachePath()" not in invalidate_block
+    assert "m_duplicateSharedPathRecords.clear();" in invalidate_block
+    assert "LongPathSeams::DeleteFileIfExists(GetDuplicatePathCachePath())" in invalidate_block
+    assert "PersistDuplicatePathCacheAfterInterruptedHashing()" not in invalidate_block
     assert "CaptureDuplicatePathCacheSnapshot(snapshot)" in persist_block
     assert "BuildDuplicatePathCacheRecordsFromSnapshot(snapshot, records);" in persist_block
     assert "WriteDuplicatePathCacheFile(GetDuplicatePathCachePath(), records)" in persist_block
     assert "persistedRecords.emplace(MakeDuplicatePathCacheKey(record.strFilePath), record);" in persist_block
 
 
-def test_interrupted_hashing_persists_partial_startup_cache_for_stable_directories() -> None:
+def test_interrupted_hashing_marks_deferred_result_directories_interrupted() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
     shutdown_block = source[
@@ -67,10 +67,6 @@ def test_interrupted_hashing_persists_partial_startup_cache_for_stable_directori
         source.index("void CSharedFileList::InvalidateStartupCachesAfterInterruptedHashing") :
         source.index("bool CSharedFileList::IsSharedHashInFlight")
     ]
-    persist_block = source[
-        source.index("bool CSharedFileList::PersistStartupCacheAfterInterruptedHashing") :
-        source.index("void CSharedFileList::RememberDuplicateSharedPath")
-    ]
 
     assert "bool\tPersistStartupCacheAfterInterruptedHashing(const std::unordered_set<std::wstring> &rInterruptedDirectoryKeys);" in header
     assert "void\tInvalidateStartupCachesAfterInterruptedHashing(const std::unordered_set<std::wstring> &rInterruptedDirectoryKeys = std::unordered_set<std::wstring>());" in header
@@ -80,14 +76,9 @@ def test_interrupted_hashing_persists_partial_startup_cache_for_stable_directori
     assert "for (const CSharedFileHashResult *pResult : m_sharedHashDeferredResults)" in shutdown_block
     assert "interruptedDirectoryKeys.insert(MakeStartupCacheSnapshotKey(pResult->strDirectory));" in shutdown_block
     assert "InvalidateStartupCachesAfterInterruptedHashing(interruptedDirectoryKeys);" in shutdown_block
-    assert "const bool bPartialStartupCachePersisted = PersistStartupCacheAfterInterruptedHashing(rInterruptedDirectoryKeys);" in invalidate_block
-    assert "bPartialStartupCachePersisted ? false : LongPathSeams::DeleteFileIfExists(GetStartupCachePath())" in invalidate_block
-    assert '"interrupted_hashing_partial"' in invalidate_block
-    assert "if (rInterruptedDirectoryKeys.empty())\n\t\treturn false;" in persist_block
-    assert "CaptureStartupCacheSaveSnapshot(snapshot)" in persist_block
-    assert "directory.bHasPendingHash = true;" in persist_block
-    assert "RunStartupCacheSaveWorker(snapshot, std::shared_ptr<StartupCacheSaveOperation>(), result);" in persist_block
-    assert "if (!result.bWriteSucceeded)\n\t\treturn false;" in persist_block
+    assert "PersistStartupCacheAfterInterruptedHashing(rInterruptedDirectoryKeys)" not in invalidate_block
+    assert '"interrupted_hashing_partial"' not in invalidate_block
+    assert '"interrupted_hashing"' in invalidate_block
 
 
 def test_duplicate_path_sidecar_reuse_precedes_known_file_duplicate_reporting() -> None:

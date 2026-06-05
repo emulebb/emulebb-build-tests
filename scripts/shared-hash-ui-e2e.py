@@ -607,7 +607,7 @@ def run_interruption_scenario(
         else:
             record_allowed_sidecars_after_interrupt(
                 summary,
-                reason="sidecars_allowed_after_clean_close_partial_startup_cache_policy",
+                reason="sidecars_allowed_after_fast_convergence_before_interrupt",
             )
 
         app = launch_app_with_fresh_startup_trace(app_exe, fixture)
@@ -881,8 +881,6 @@ def record_immediate_reload_convergence(
 
 
 def should_require_absent_sidecars_after_interrupt(summary: dict[str, object]) -> bool:
-    if summary.get("interrupt_mode") == "clean-close":
-        return False
     return not bool(summary.get("reload_converged_before_hash_drain"))
 
 
@@ -969,11 +967,7 @@ def run_reload_then_interrupt_scenario(
         else:
             record_allowed_sidecars_after_interrupt(
                 summary,
-                reason=(
-                    "sidecars_allowed_after_fast_convergence_before_interrupt"
-                    if summary.get("reload_converged_before_hash_drain")
-                    else "sidecars_allowed_after_clean_close_partial_startup_cache_policy"
-                ),
+                reason="sidecars_allowed_after_fast_convergence_before_interrupt",
             )
 
         app = launch_app_with_fresh_startup_trace(app_exe, fixture)
