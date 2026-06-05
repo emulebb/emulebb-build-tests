@@ -55,7 +55,7 @@ def test_download_infotip_wraps_long_lines_before_tooltip_suffix() -> None:
     helper = source[source.index("CString WrapDownloadInfoTipLine") : source.index("bool IsSourceCtrlItem")]
     infotip = source[source.index("void CDownloadListCtrl::OnLvnGetInfoTip") : source.index("void CDownloadListCtrl::ShowFileDialog")]
 
-    assert "const int kDownloadInfoTipMaxLineChars = 120;" in source
+    assert "const int kDownloadInfoTipMaxLineChars = 240;" in source
     assert 'rstrLine == _T("<br>")' in helper
     assert 'rstrLine == _T("<br_head>")' in helper
     assert "_istspace(ch) != 0 || ch == _T('-') || ch == _T(',') || ch == _T(')')" in helper
