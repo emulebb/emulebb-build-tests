@@ -44,7 +44,7 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     seams = (app_source_root() / "UploadQueueSeams.h").read_text(encoding="utf-8", errors="ignore")
 
     assert "ShouldProbeUploadCooldownCandidate" in seams
-    assert "kUnproductiveNoRequestCooldownProbeRemainingMs = 1000u" in seams
+    assert "kUnproductiveNoRequestCooldownProbeRemainingMs = 30000u" in seams
     assert "kProductiveNoRequestCooldownProbeRemainingMs = 5000u" in seams
     assert "ShouldProbeUnproductiveNoRequestCooldownCandidate" in seams
     assert "ShouldProbeNoRequestCooldownCandidate" in seams

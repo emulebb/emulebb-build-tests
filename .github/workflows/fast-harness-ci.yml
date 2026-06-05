@@ -38,6 +38,12 @@ jobs:
           repository: emulebb/emulebb-tooling
           path: repos/emulebb-tooling
 
+      - name: Checkout build tooling
+        uses: actions/checkout@v6
+        with:
+          repository: emulebb/emulebb-build
+          path: repos/emulebb-build
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
