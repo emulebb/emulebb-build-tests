@@ -924,8 +924,9 @@ TEST_CASE("File reader benchmark reports sampled temp-file throughput")
 	const double dWin32Ms = MeasureDigestPassMs(sample, ComputeWin32Digest, &nWin32Digest);
 	CHECK_EQ(nBufferedDigest, nWin32Digest);
 
-	std::printf("BENCHMARK sample_root=%ls seed=%llu file_count=%zu total_bytes=%llu buffered_ms=%.3f win32_ms=%.3f buffered_mib_s=%.3f win32_mib_s=%.3f"
-		, GetDeterministicSampleRoot().c_str()
+	const std::string sampleRoot = GetDeterministicSampleRoot().string();
+	std::printf("BENCHMARK sample_root=%s seed=%llu file_count=%zu total_bytes=%llu buffered_ms=%.3f win32_ms=%.3f buffered_mib_s=%.3f win32_mib_s=%.3f"
+		, sampleRoot.c_str()
 		, nSeed
 		, sample.size()
 		, nTotalBytes
@@ -979,8 +980,9 @@ TEST_CASE("Full hashing pipeline benchmark reports sampled temp-file parity and 
 	const double dPreferredMs = MeasureFullPipelineMs(sample, ePreferredMode, &nPreferredDigest);
 	CHECK_EQ(nBufferedDigest, nPreferredDigest);
 
-	std::printf("PIPELINE_BENCHMARK sample_root=%ls seed=%llu file_count=%zu total_bytes=%llu buffered_ms=%.3f preferred_ms=%.3f preferred_kind=%ls buffered_mib_s=%.3f preferred_mib_s=%.3f preferred_vs_buffered=%.3fx aggregate_digest=%llu\n"
-		, GetDeterministicSampleRoot().c_str()
+	const std::string sampleRoot = GetDeterministicSampleRoot().string();
+	std::printf("PIPELINE_BENCHMARK sample_root=%s seed=%llu file_count=%zu total_bytes=%llu buffered_ms=%.3f preferred_ms=%.3f preferred_kind=%ls buffered_mib_s=%.3f preferred_mib_s=%.3f preferred_vs_buffered=%.3fx aggregate_digest=%llu\n"
+		, sampleRoot.c_str()
 		, nSeed
 		, sample.size()
 		, nTotalBytes
