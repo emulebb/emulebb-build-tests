@@ -538,6 +538,7 @@ SUITE_SPECS = (
         uses_live_seed_refresh=True,
         is_prowlarr_emulebb=True,
         accepts_vpn_guard_profile=True,
+        default_enabled=False,
     ),
     SuiteSpec(
         name="radarr-emulebb",
@@ -548,6 +549,7 @@ SUITE_SPECS = (
         is_arr_emulebb=True,
         accepts_vpn_guard_profile=True,
         accepts_admin_volume_fixtures=True,
+        default_enabled=False,
     ),
     SuiteSpec(
         name="sonarr-emulebb",
@@ -558,6 +560,7 @@ SUITE_SPECS = (
         is_arr_emulebb=True,
         accepts_vpn_guard_profile=True,
         accepts_admin_volume_fixtures=True,
+        default_enabled=False,
     ),
     SuiteSpec(
         name="radarr-emulebb-local",
@@ -615,13 +618,9 @@ PROFILE_SUITE_NAMES = {
     "beta-green": (
         "shared-directories-rest",
         "rest-api",
-        "prowlarr-emulebb",
     ),
     "controller-surface": (
         "rest-api",
-        "prowlarr-emulebb",
-        "radarr-emulebb",
-        "sonarr-emulebb",
         "amutorrent-browser-smoke",
     ),
     "installer-controller-surface": (
@@ -644,9 +643,6 @@ PROFILE_SUITE_NAMES = {
         "command-line-smoke",
         "shared-directories-rest",
         "rest-api",
-        "prowlarr-emulebb",
-        "radarr-emulebb",
-        "sonarr-emulebb",
         "rest-cold-start-dump-stress",
     ),
     "release-expanded": (

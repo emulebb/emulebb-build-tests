@@ -857,9 +857,6 @@ def test_default_network_run_skips_public_vpn_default_suites(tmp_path: Path, mon
     ]
     assert [row["name"] for row in summary["skipped_suites"]] == [
         "rest-api",
-        "prowlarr-emulebb",
-        "radarr-emulebb",
-        "sonarr-emulebb",
         "auto-browse-live",
     ]
     assert [script_name(command) for command in commands] == [
@@ -890,7 +887,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["live_wire_inputs_file"].endswith("live-wire-inputs.local.json")
     assert summary["shared_files_ui_scenarios"] == list(live_e2e_suite.SHARED_FILES_UI_CORE_SCENARIOS)
     assert summary["rest_contract_completeness_expected"] is True
-    assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-emulebb", "sonarr-emulebb"]
+    assert summary["arr_live_wire_suites"] == []
     assert [suite["name"] for suite in summary["suites"]] == [
         spec.name for spec in live_e2e_suite.SUITE_SPECS if spec.default_enabled
     ]
@@ -902,9 +899,6 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
         "startup-profile-scenarios.py",
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
-        "prowlarr-emulebb-live.py",
-        "radarr-emulebb-live.py",
-        "sonarr-emulebb-live.py",
         "auto-browse-live.py",
     ]
 
@@ -952,45 +946,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     assert summary["radarr_movie_root_present"] is False
     assert summary["suites"][6]["rest_contract_completeness_expected"] is True
 
-    prowlarr_command = commands[7]
-    assert script_name(prowlarr_command) == "prowlarr-emulebb-live.py"
-    assert "--enable-upnp" in prowlarr_command
-    assert option_values(prowlarr_command, "--p2p-bind-interface-name") == ["hide.me"]
-    assert option_values(prowlarr_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
-    assert option_values(prowlarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
-    assert option_values(prowlarr_command, "--rest-webserver-scheme") == ["https"]
-    assert option_values(prowlarr_command, "--direct-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT)]
-    assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [str(live_e2e_suite.DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT)]
-    assert "--skip-live-seed-refresh" not in prowlarr_command
-    assert summary["suites"][7]["arr_integration"] is True
-    assert summary["suites"][7]["arr_direct_search_stress_count"] == live_e2e_suite.DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT
-
-    arr_command = commands[8]
-    assert script_name(arr_command) == "radarr-emulebb-live.py"
-    assert "--enable-upnp" in arr_command
-    assert option_values(arr_command, "--p2p-bind-interface-name") == ["hide.me"]
-    assert option_values(arr_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
-    assert option_values(arr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
-    assert option_values(arr_command, "--rest-webserver-scheme") == ["https"]
-    assert "--qbit-live-wire-rounds" not in arr_command
-    assert "--radarr-movie-root" not in arr_command
-    assert "--skip-live-seed-refresh" not in arr_command
-    assert summary["suites"][8]["arr_integration"] is True
-    assert summary["suites"][8]["radarr_movie_root_configured"] is False
-
-    sonarr_command = commands[9]
-    assert script_name(sonarr_command) == "sonarr-emulebb-live.py"
-    assert "--enable-upnp" in sonarr_command
-    assert option_values(sonarr_command, "--p2p-bind-interface-name") == ["hide.me"]
-    assert option_values(sonarr_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
-    assert option_values(sonarr_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
-    assert option_values(sonarr_command, "--rest-webserver-scheme") == ["https"]
-    assert "--sonarr-series-root" not in sonarr_command
-    assert "--skip-live-seed-refresh" not in sonarr_command
-    assert summary["suites"][9]["arr_integration"] is True
-    assert summary["suites"][9]["sonarr_series_root_configured"] is False
-
-    auto_browse_command = commands[10]
+    auto_browse_command = commands[7]
     assert option_values(auto_browse_command, "--live-wire-inputs-file") == [summary["live_wire_inputs_file"]]
     assert option_values(auto_browse_command, "--p2p-bind-interface-name") == ["hide.me"]
     assert option_values(auto_browse_command, "--vpn-guard-allowed-public-ip-cidrs") == ["8.8.8.8/32"]
@@ -1596,14 +1552,12 @@ def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monk
     assert [script_name(command) for command in commands] == [
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
-        "prowlarr-emulebb-live.py",
     ]
     assert [suite["name"] for suite in summary["suites"]] == [
         "shared-directories-rest",
         "rest-api",
-        "prowlarr-emulebb",
     ]
-    assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb"]
+    assert summary["arr_live_wire_suites"] == []
     assert summary["arr_direct_search_stress_count"] == live_e2e_suite.BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT
     assert summary["arr_prowlarr_search_stress_count"] == live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
 
@@ -1611,15 +1565,6 @@ def test_beta_green_profile_runs_short_api_resilience_suite(tmp_path: Path, monk
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract"]
     assert option_values(rest_command, "--rest-stress-budget") == ["smoke"]
     assert option_values(rest_command, "--live-download-trigger-count") == [str(live_e2e_suite.DEFAULT_REST_DOWNLOAD_TRIGGER_COUNT)]
-
-    prowlarr_command = commands[2]
-    assert option_values(prowlarr_command, "--direct-search-stress-count") == [
-        str(live_e2e_suite.BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT)
-    ]
-    assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [
-        str(live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT)
-    ]
-    assert "--allow-live-search-availability-gap" not in prowlarr_command
 
 
 def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, monkeypatch) -> None:
@@ -1642,18 +1587,12 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
     assert [script_name(command) for command in commands] == [
         "rest-api-smoke.py",
         "amutorrent-browser-smoke.py",
-        "prowlarr-emulebb-live.py",
-        "radarr-emulebb-live.py",
-        "sonarr-emulebb-live.py",
     ]
     assert [suite["name"] for suite in summary["suites"]] == [
         "rest-api",
         "amutorrent-browser-smoke",
-        "prowlarr-emulebb",
-        "radarr-emulebb",
-        "sonarr-emulebb",
     ]
-    assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-emulebb", "sonarr-emulebb"]
+    assert summary["arr_live_wire_suites"] == []
     assert summary["arr_download_proof_mode"] == live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
     assert summary["arr_direct_search_stress_count"] == live_e2e_suite.BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT
     assert summary["arr_prowlarr_search_stress_count"] == live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
@@ -1664,21 +1603,6 @@ def test_controller_surface_profile_runs_controller_api_surface(tmp_path: Path, 
 
     browser_command = commands[1]
     assert option_values(browser_command, "--p2p-bind-interface-name") == ["hide.me"]
-
-    prowlarr_command = commands[2]
-    assert option_values(prowlarr_command, "--direct-search-stress-count") == [
-        str(live_e2e_suite.BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT)
-    ]
-    assert option_values(prowlarr_command, "--prowlarr-search-stress-count") == [
-        str(live_e2e_suite.BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT)
-    ]
-    assert "--allow-live-search-availability-gap" in prowlarr_command
-    assert option_values(commands[3], "--download-proof-mode") == [
-        live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
-    ]
-    assert option_values(commands[4], "--download-proof-mode") == [
-        live_e2e_suite.CONTROLLER_SURFACE_ARR_DOWNLOAD_PROOF_MODE
-    ]
 
 
 def test_controller_surface_profile_keeps_explicit_complete_acquisition(tmp_path: Path, monkeypatch) -> None:
@@ -1703,8 +1627,11 @@ def test_controller_surface_profile_keeps_explicit_complete_acquisition(tmp_path
 
     assert summary["status"] == "passed"
     assert summary["arr_download_proof_mode"] == "complete"
-    assert option_values(commands[3], "--download-proof-mode") == ["complete"]
-    assert option_values(commands[4], "--download-proof-mode") == ["complete"]
+    assert summary["arr_live_wire_suites"] == []
+    assert [script_name(command) for command in commands] == [
+        "rest-api-smoke.py",
+        "amutorrent-browser-smoke.py",
+    ]
 
 
 def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: Path, monkeypatch) -> None:
@@ -1735,11 +1662,8 @@ def test_beta_release_profile_adds_acquisition_and_cold_start_stress(tmp_path: P
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "rest-cold-start-dump-stress.py",
-        "prowlarr-emulebb-live.py",
-        "radarr-emulebb-live.py",
-        "sonarr-emulebb-live.py",
     ]
-    assert summary["arr_live_wire_suites"] == ["prowlarr-emulebb", "radarr-emulebb", "sonarr-emulebb"]
+    assert summary["arr_live_wire_suites"] == []
     assert "auto-browse-live.py" not in [script_name(command) for command in commands]
     assert "shared-files-ui-e2e.py" not in [script_name(command) for command in commands]
 

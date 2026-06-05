@@ -239,8 +239,8 @@
           "flowCategory": "rest-api",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
-          "liveE2eProfile": "controller-surface",
+          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
+          "liveE2eProfile": "installer-controller-surface",
           "evidence": [
             {
               "kind": "json-status",
@@ -249,7 +249,7 @@
               "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
-                "/profile": "controller-surface"
+                "/profile": "installer-controller-surface"
               }
             },
             {
@@ -293,8 +293,8 @@
           "flowCategory": "arr",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
-          "liveE2eProfile": "controller-surface",
+          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
+          "liveE2eProfile": "installer-controller-surface",
           "liveE2eSuite": "prowlarr-emulebb",
           "localInputs": [
             "live-wire-inputs.local.json"
@@ -316,8 +316,8 @@
           "flowCategory": "arr",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
-          "liveE2eProfile": "controller-surface",
+          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
+          "liveE2eProfile": "installer-controller-surface",
           "liveE2eSuite": "radarr-emulebb",
           "localInputs": [
             "live-wire-inputs.local.json",
@@ -340,8 +340,8 @@
           "flowCategory": "arr",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
-          "liveE2eProfile": "controller-surface",
+          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
+          "liveE2eProfile": "installer-controller-surface",
           "liveE2eSuite": "sonarr-emulebb",
           "localInputs": [
             "live-wire-inputs.local.json",
@@ -364,8 +364,8 @@
           "flowCategory": "amutorrent",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test live-e2e --profile controller-surface",
-          "liveE2eProfile": "controller-surface",
+          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
+          "liveE2eProfile": "installer-controller-surface",
           "liveE2eSuite": "amutorrent-browser-smoke",
           "evidence": [
             {
