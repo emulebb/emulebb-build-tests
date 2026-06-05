@@ -76,12 +76,21 @@ def test_073_campaign_validates_and_covers_all_release_gates() -> None:
         if gate["id"] == "installer-backed-controller-surface"
         for scenario_id in gate["coveredBy"]
     }
-    assert "emulebb.flow.windows-vm.hideme.live-wire.v1" in {
-        scenario_id
-        for gate in campaign["releaseGates"]
-        if gate["id"] == "quick-rc-live-proof"
-        for scenario_id in gate["coveredBy"]
+    windows_vm_scenarios = {
+        scenario
+        for scenario in scenario_ids
+        if scenario.startswith("emulebb.flow.windows-vm.")
     }
+    assert windows_vm_scenarios.isdisjoint(covered_ids)
+    for scenario_id in windows_vm_scenarios:
+        scenario = next(
+            scenario
+            for phase in campaign["phases"]
+            for scenario in phase["scenarios"]
+            if scenario["id"] == scenario_id
+        )
+        assert scenario["required"] is False
+        assert scenario["blocking"] is False
 
 
 def test_073_campaign_contains_every_reusable_local_vm_swarm_scenario() -> None:

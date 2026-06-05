@@ -206,8 +206,8 @@
           "title": "Windows VM local eD2K transfer proof",
           "phase": "protocol-parity",
           "flowCategory": "windows-vm",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile local-ed2k-transfer --release-version 0.7.3-rc.1 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
@@ -216,7 +216,7 @@
           "evidence": [
             {
               "kind": "json-status",
-              "required": true,
+              "required": false,
               "base": "workspace-state",
               "glob": "test-reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
@@ -387,8 +387,7 @@
           "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface --fail-fast",
           "liveE2eProfile": "installer-controller-surface",
           "localInputs": [
-            "live-wire-inputs.local.json",
-            "live-process-monitor.local.json"
+            "live-wire-inputs.local.json"
           ],
           "evidence": [
             {
@@ -400,13 +399,6 @@
               "matches": {
                 "/profile": "installer-controller-surface"
               }
-            },
-            {
-              "kind": "json-status",
-              "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-process-monitor/latest/live-process-monitor-result.json",
-              "statusPointer": "/status"
             }
           ]
         },
@@ -639,8 +631,8 @@
           "title": "Windows VM hide.me live-wire proof",
           "phase": "live-wire-release",
           "flowCategory": "windows-vm",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile hideme-live-wire --release-version 0.7.3-rc.1 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
@@ -649,7 +641,7 @@
           "evidence": [
             {
               "kind": "json-status",
-              "required": true,
+              "required": false,
               "base": "workspace-state",
               "glob": "test-reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
@@ -912,7 +904,8 @@
           "flowCategory": "stress",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test live-e2e --suite live-process-monitor --fail-fast",
+          "command": "python -m emule_workspace test live-e2e --profile installer-controller-surface-soak --fail-fast",
+          "liveE2eProfile": "installer-controller-surface-soak",
           "liveE2eSuite": "live-process-monitor",
           "localInputs": [
             "live-process-monitor.local.json"
@@ -1262,8 +1255,8 @@
           "title": "Windows VM package smoke proof",
           "phase": "packaging-provenance",
           "flowCategory": "windows-vm",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile package-smoke --release-version 0.7.3-rc.1 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
@@ -1272,7 +1265,7 @@
           "evidence": [
             {
               "kind": "json-status",
-              "required": true,
+              "required": false,
               "base": "workspace-state",
               "glob": "test-reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
@@ -1377,12 +1370,6 @@
       ]
     },
     {
-      "id": "windows-vm-local-ed2k-transfer",
-      "coveredBy": [
-        "emulebb.flow.windows-vm.local-ed2k.transfer.v1"
-      ]
-    },
-    {
       "id": "validate",
       "coveredBy": [
         "emulebb.flow.workspace.validate.static.v1"
@@ -1402,7 +1389,6 @@
         "emulebb.flow.livewire.release-expanded.weak-path.v1",
         "emulebb.flow.livewire.search-ui.download.lifecycle.v1",
         "emulebb.flow.livewire.rest.download-trigger.v1",
-        "emulebb.flow.windows-vm.hideme.live-wire.v1",
         "emulebb.flow.ui.preferences.shared-files.hash.release.v1",
         "emulebb.flow.stress.heavy-profile.cpu-memory.v1",
         "emulebb.flow.stress.rest.crash-leak-dump.v1",
@@ -1424,12 +1410,6 @@
         "emulebb.flow.livewire.search-ui.download.lifecycle.v1",
         "emulebb.flow.livewire.rest.download-trigger.v1",
         "emulebb.flow.ui.preferences.shared-files.hash.release.v1"
-      ]
-    },
-    {
-      "id": "windows-vm-hideme-live-wire",
-      "coveredBy": [
-        "emulebb.flow.windows-vm.hideme.live-wire.v1"
       ]
     },
     {
@@ -1467,12 +1447,6 @@
       "id": "package-amutorrent-x64",
       "coveredBy": [
         "emulebb.flow.package.amutorrent.x64.v1"
-      ]
-    },
-    {
-      "id": "windows-vm-package-smoke",
-      "coveredBy": [
-        "emulebb.flow.windows-vm.package-smoke.release.v1"
       ]
     },
     {

@@ -1203,6 +1203,15 @@ def test_diagnostics_soak_profile_owns_live_process_monitor(tmp_path: Path, monk
     assert [script_name(command) for command in commands] == ["live-process-monitor.py"]
 
 
+def test_installer_controller_surface_splits_quick_and_soak_profiles() -> None:
+    quick_scripts = live_e2e_suite.PROFILE_SUITE_NAMES["installer-controller-surface"]
+    soak_scripts = live_e2e_suite.PROFILE_SUITE_NAMES["installer-controller-surface-soak"]
+
+    assert "live-process-monitor" not in quick_scripts
+    assert soak_scripts == ("live-process-monitor",)
+    assert set(quick_scripts).isdisjoint(soak_scripts)
+
+
 def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(

@@ -630,6 +630,8 @@ PROFILE_SUITE_NAMES = {
         "radarr-emulebb",
         "sonarr-emulebb",
         "amutorrent-browser-smoke",
+    ),
+    "installer-controller-surface-soak": (
         "live-process-monitor",
     ),
     "controller-local": (
@@ -723,7 +725,13 @@ PROFILE_SUITE_NAMES = {
     ),
 }
 LIVE_E2E_PROFILES = ("default", *PROFILE_SUITE_NAMES.keys())
-BROAD_DIAGNOSTIC_PROFILE_NAMES = {"release-expanded", "stabilization-stress", "cpu-heavy", "diagnostics-soak"}
+BROAD_DIAGNOSTIC_PROFILE_NAMES = {
+    "release-expanded",
+    "stabilization-stress",
+    "cpu-heavy",
+    "diagnostics-soak",
+    "installer-controller-surface-soak",
+}
 CPU_PROFILED_SUITE_NAMES = {
     "preference-ui",
     "shared-files-ui",
