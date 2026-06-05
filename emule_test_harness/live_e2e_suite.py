@@ -824,7 +824,7 @@ def apply_profile_defaults(args: argparse.Namespace) -> None:
         args.arr_prowlarr_search_stress_count = BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT
 
     if (
-        args.profile == "controller-surface"
+        args.profile in {"controller-surface", "installer-controller-surface"}
         and args.arr_download_proof_mode == DEFAULT_ARR_DOWNLOAD_PROOF_MODE
         and not getattr(args, "_arr_download_proof_mode_explicit", False)
     ):

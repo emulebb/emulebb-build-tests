@@ -1231,9 +1231,24 @@ def test_installer_controller_surface_allows_public_search_availability_gap(tmp_
     )
 
     prowlarr_commands = [command for command in commands if script_name(command) == "prowlarr-emulebb-live.py"]
+    radarr_commands = [
+        command
+        for command in commands
+        if script_name(command) == "radarr-emulebb-live.py"
+    ]
+    sonarr_commands = [
+        command
+        for command in commands
+        if script_name(command) == "sonarr-emulebb-live.py"
+    ]
     assert summary["status"] == "passed"
+    assert summary["arr_download_proof_mode"] == "handoff"
     assert len(prowlarr_commands) == 1
     assert "--allow-live-search-availability-gap" in prowlarr_commands[0]
+    assert len(radarr_commands) == 1
+    assert option_values(radarr_commands[0], "--download-proof-mode") == ["handoff"]
+    assert len(sonarr_commands) == 1
+    assert option_values(sonarr_commands[0], "--download-proof-mode") == ["handoff"]
 
 
 def test_godzilla_local_swarm_is_explicit_local_protocol_suite(tmp_path: Path, monkeypatch) -> None:
