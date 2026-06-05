@@ -41,8 +41,8 @@
     ]
   },
   "local_package_install": {
-    "target_path": "C:\\tools\\emulebb",
-    "import_profile_dir": "F:\\M\\H06T01\\dldz\\EMULE_BIN",
+    "target_path": "%EMULEBB_LOCAL_INSTALL_PATH%",
+    "import_profile_dir": "%EMULEBB_LOCAL_TEST_PROFILE_PATH%",
     "lan_bind_address": "192.0.2.10",
     "emulebb_port": 4711,
     "amutorrent_port": 4000,
