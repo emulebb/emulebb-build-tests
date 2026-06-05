@@ -8,10 +8,11 @@ from types import ModuleType
 from typing import Any
 
 try:
-    from emule_test_harness import live_e2e_suite
+    from emule_test_harness import live_e2e_suite, local_swarm_media
     from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
 except ModuleNotFoundError:
     import live_e2e_suite  # type: ignore[no-redef]
+    import local_swarm_media  # type: ignore[no-redef]
     from campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
 
 
@@ -140,8 +141,22 @@ def local_swarm_payload_paths(tests_repo_root: str | Path) -> dict[str, Any]:
         "harnessPackage": root / "emule_test_harness",
         "manifests": root / "manifests",
         "scripts": [root / "scripts" / name for name in LOCAL_SWARM_PAYLOAD_SCRIPT_FILES],
-        "liveWireInputs": root / "live-wire-inputs.local.json",
+        "operatorLiveWireInputs": root / "live-wire-inputs.local.json",
+        "archiveLiveWireInputsName": local_swarm_media.ARCHIVE_INPUTS_FILE_NAME,
     }
+
+
+def write_local_swarm_payload_inputs(tests_repo_root: str | Path, destination: str | Path) -> Path:
+    """Writes deterministic Arr media inputs for reusable local-swarm VM payloads."""
+
+    root = Path(tests_repo_root)
+    local_package_install = local_swarm_media.load_local_package_install_from_live_wire(
+        root / "live-wire-inputs.local.json",
+    )
+    return local_swarm_media.write_generated_local_swarm_inputs(
+        Path(destination),
+        local_package_install=local_package_install,
+    )
 
 
 def build_local_ed2k_target_payloads(vm_names: dict[str, str]) -> dict[str, dict[str, Any]]:

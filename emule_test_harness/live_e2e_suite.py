@@ -21,12 +21,20 @@ class LiveE2EArgumentParser(argparse.ArgumentParser):
         parsed = super().parse_args(args, namespace)
         tokens = list(sys.argv[1:] if args is None else args)
         parsed._arr_download_proof_mode_explicit = "--arr-download-proof-mode" in tokens
+        parsed._live_wire_inputs_file_explicit = "--live-wire-inputs-file" in tokens
         return parsed
 
 
 from emule_test_harness.artifact_names import result_file_name
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
-from emule_test_harness import campaign_scenarios, cpu_profile, live_wire_inputs, vpn_guard_live, windows_processes
+from emule_test_harness import (
+    campaign_scenarios,
+    cpu_profile,
+    live_wire_inputs,
+    local_swarm_media,
+    vpn_guard_live,
+    windows_processes,
+)
 
 SHARED_FILES_UI_CORE_SCENARIOS = (
     "fixture-three-files",
@@ -73,6 +81,7 @@ DEFAULT_ARR_DIRECT_SEARCH_STRESS_COUNT = 6
 DEFAULT_ARR_PROWLARR_SEARCH_STRESS_COUNT = 4
 BETA_GREEN_ARR_DIRECT_SEARCH_STRESS_COUNT = 2
 BETA_GREEN_ARR_PROWLARR_SEARCH_STRESS_COUNT = 1
+LOCAL_SWARM_ARR_SUITE_NAMES = ("radarr-emulebb-local", "sonarr-emulebb-local")
 DEFAULT_EMULE_CONNECTION_TIMEOUT_SECONDS = 60.0
 DEFAULT_ARR_SEARCH_TIMEOUT_SECONDS = 90.0
 DEFAULT_DOCUMENT_DOWNLOAD_TIMEOUT_SECONDS = 300.0
@@ -2387,6 +2396,13 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         Path(__file__).resolve().parent.parent,
         args.live_wire_inputs_file,
     )
+    explicit_live_wire_inputs_file = bool(getattr(args, "_live_wire_inputs_file_explicit", False))
+    selected_local_swarm_arr = any(spec.name in LOCAL_SWARM_ARR_SUITE_NAMES for spec in selected_specs)
+    local_swarm_live_wire_inputs_file: Path | None = None
+    if selected_local_swarm_arr and not explicit_live_wire_inputs_file:
+        local_swarm_live_wire_inputs_file = local_swarm_media.write_generated_local_swarm_inputs(
+            paths.source_artifacts_dir / local_swarm_media.GENERATED_INPUTS_FILE_NAME,
+        )
 
     summary: dict[str, object] = {
         "generated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -2426,6 +2442,16 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         "live_seed_source_url": EMULE_SECURITY_HOME_URL,
         "live_seed_refresh_enabled": not args.skip_live_seed_refresh,
         "live_wire_inputs_file": str(live_wire_inputs_file),
+        "live_wire_inputs_file_explicit": explicit_live_wire_inputs_file,
+        "local_swarm_live_wire_inputs_file": (
+            str(local_swarm_live_wire_inputs_file) if local_swarm_live_wire_inputs_file is not None else None
+        ),
+        "local_swarm_media": {
+            "enabled": local_swarm_live_wire_inputs_file is not None,
+            "radarr_movie": local_swarm_media.DEFAULT_RADARR_MOVIE_TITLE,
+            "sonarr_series": local_swarm_media.DEFAULT_SONARR_SERIES_TITLE,
+            "sonarr_series_year": local_swarm_media.DEFAULT_SONARR_SERIES_YEAR,
+        },
         "search_ui": {
             "search_rounds": args.search_ui_search_rounds,
             "download_lifecycle_count": args.search_ui_download_lifecycle_count,
@@ -2646,6 +2672,11 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             p2p_lan_address,
             vpn_bind_interface_address,
         )
+        child_live_wire_inputs_file = (
+            local_swarm_live_wire_inputs_file
+            if spec.name in LOCAL_SWARM_ARR_SUITE_NAMES and local_swarm_live_wire_inputs_file is not None
+            else live_wire_inputs_file
+        )
         command = build_suite_command(
             spec=spec,
             scripts_dir=scripts_dir,
@@ -2701,7 +2732,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             godzilla_adverse_kill_cycles=args.godzilla_adverse_kill_cycles,
             godzilla_adverse_kill_warmup_seconds=args.godzilla_adverse_kill_warmup_seconds,
             godzilla_adverse_recovery_timeout_seconds=args.godzilla_adverse_recovery_timeout_seconds,
-            live_wire_inputs_file=live_wire_inputs_file,
+            live_wire_inputs_file=child_live_wire_inputs_file,
             search_ui_search_rounds=args.search_ui_search_rounds,
             search_ui_download_lifecycle_count=args.search_ui_download_lifecycle_count,
             arr_direct_search_stress_count=args.arr_direct_search_stress_count,
@@ -2867,7 +2898,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         if spec.is_search_ui_live:
             result.update(
                 {
-                    "live_wire_inputs_file": str(live_wire_inputs_file),
+                    "live_wire_inputs_file": str(child_live_wire_inputs_file),
                     "search_ui_search_rounds": args.search_ui_search_rounds,
                     "search_ui_download_lifecycle_count": args.search_ui_download_lifecycle_count,
                 }
@@ -2875,7 +2906,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         if spec.is_prowlarr_emulebb or spec.is_arr_emulebb:
             arr_result = {
                 "arr_integration": True,
-                "live_wire_inputs_file": str(live_wire_inputs_file),
+                "live_wire_inputs_file": str(child_live_wire_inputs_file),
                 "emule_connection_timeout_seconds": args.emule_connection_timeout_seconds,
                 "arr_search_timeout_seconds": args.arr_search_timeout_seconds,
             }
@@ -2897,7 +2928,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         if spec.is_rest_cold_start_dump_stress:
             result.update(
                 {
-                    "live_wire_inputs_file": str(live_wire_inputs_file),
+                    "live_wire_inputs_file": str(child_live_wire_inputs_file),
                     "rest_cold_start_dump_stress": dict(summary["rest_cold_start_dump_stress"]),  # type: ignore[arg-type]
                 }
             )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from emule_test_harness import live_e2e_suite
+from emule_test_harness import live_e2e_suite, local_swarm_media
 from emule_test_harness.live_seed_sources import EMULE_SECURITY_HOME_URL
 from emule_test_harness import vpn_guard_live
 
@@ -1145,6 +1146,68 @@ def test_controller_local_profile_owns_lan_arr_lanes(tmp_path: Path, monkeypatch
         "sonarr-emulebb-local.py",
     ]
     assert summary["arr_live_wire_suites"] == ["radarr-emulebb-local", "sonarr-emulebb-local"]
+    assert summary["live_wire_inputs_file_explicit"] is False
+    assert summary["local_swarm_media"]["enabled"] is True
+    local_inputs_path = Path(str(summary["local_swarm_live_wire_inputs_file"]))
+    local_inputs = json.loads(local_inputs_path.read_text(encoding="utf-8"))
+    assert local_inputs["search_terms"]["radarr_movies"] == [local_swarm_media.DEFAULT_RADARR_MOVIE_TITLE]
+    assert local_inputs["search_terms"]["sonarr_series"] == [local_swarm_media.DEFAULT_SONARR_SERIES_TITLE]
+    assert option_values(commands[0], "--live-wire-inputs-file") == [str(local_inputs_path)]
+    assert option_values(commands[1], "--live-wire-inputs-file") == [str(local_inputs_path)]
+
+
+def test_controller_local_profile_honors_explicit_live_wire_inputs_file(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    explicit_inputs = tmp_path / "operator-inputs.json"
+    explicit_inputs.write_text(
+        json.dumps(
+            {
+                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "search_terms": {
+                    "generic_open": ["operator generic"],
+                    "documents": ["operator document"],
+                    "radarr_movies": ["Operator Movie"],
+                    "sonarr_series": ["Operator Series"],
+                },
+                "auto_browse": {
+                    "bootstrap_transfer_hashes": ["0123456789abcdef0123456789abcdef"],
+                    "direct_bootstrap_transfers": [
+                        {
+                            "hash": "0123456789abcdef0123456789abcdef",
+                            "name": "operator.bin",
+                            "size": 1,
+                            "method": "direct_ed2k",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        live_e2e_suite,
+        "run_suite_command",
+        lambda command: commands.append(command) or 0,
+    )
+
+    summary = live_e2e_suite.run_live_e2e_suite(
+        parse_args(
+            "--workspace-root",
+            str(tmp_path / "workspaces" / "workspace"),
+            "--profile",
+            "controller-local",
+            "--live-wire-inputs-file",
+            str(explicit_inputs),
+        ),
+        FakeHarnessCliCommon(tmp_path),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["live_wire_inputs_file_explicit"] is True
+    assert summary["local_swarm_live_wire_inputs_file"] is None
+    assert summary["local_swarm_media"]["enabled"] is False
+    assert option_values(commands[0], "--live-wire-inputs-file") == [str(explicit_inputs.resolve())]
+    assert option_values(commands[1], "--live-wire-inputs-file") == [str(explicit_inputs.resolve())]
 
 
 def test_diagnostics_soak_profile_owns_live_process_monitor(tmp_path: Path, monkeypatch) -> None:

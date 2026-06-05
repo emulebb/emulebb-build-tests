@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 
 import pytest
 
-from emule_test_harness import live_e2e_suite, windows_vm_host
+from emule_test_harness import live_e2e_suite, local_swarm_media, windows_vm_host
 from emule_test_harness.campaign_scenarios import REUSABLE_CAMPAIGN_SCENARIO_BY_VM_PROFILE
 
 
@@ -48,7 +49,8 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
 
     assert payload["harnessPackage"] == repo_root / "emule_test_harness"
     assert payload["manifests"] == repo_root / "manifests"
-    assert payload["liveWireInputs"] == repo_root / "live-wire-inputs.local.json"
+    assert payload["operatorLiveWireInputs"] == repo_root / "live-wire-inputs.local.json"
+    assert payload["archiveLiveWireInputsName"] == "live-wire-inputs.local.json"
     script_names = {path.name for path in payload["scripts"]}
     assert {
         "godzilla-local-swarm.py",
@@ -66,6 +68,44 @@ def test_local_swarm_payload_paths_are_harness_owned() -> None:
         "deterministic-amule-transfer.py",
         "local-ed2k-protocol-combinations.py",
     } <= script_names
+
+
+def test_local_swarm_payload_inputs_are_generated_from_fixture(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "live-wire-inputs.local.json").write_text(
+        json.dumps(
+            {
+                "schema": "emulebb-build-tests.live-wire-inputs.v1",
+                "local_package_install": {
+                    "dependency_manifest": "suite-dependencies.json",
+                },
+                "search_terms": {
+                    "radarr_movies": ["Operator Movie"],
+                    "sonarr_series": ["Operator Series"],
+                },
+                "auto_browse": {
+                    "bootstrap_transfer_hashes": ["0123456789abcdef0123456789abcdef"],
+                    "direct_bootstrap_transfers": [
+                        {
+                            "hash": "0123456789abcdef0123456789abcdef",
+                            "name": "operator.bin",
+                            "size": 1,
+                            "method": "direct_ed2k",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_path = windows_vm_host.write_local_swarm_payload_inputs(repo_root, tmp_path / "generated.json")
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert payload["search_terms"]["radarr_movies"] == [local_swarm_media.DEFAULT_RADARR_MOVIE_TITLE]
+    assert payload["search_terms"]["sonarr_series"] == [local_swarm_media.DEFAULT_SONARR_SERIES_TITLE]
+    assert payload["local_package_install"] == {"dependency_manifest": "suite-dependencies.json"}
 
 
 def test_local_swarm_payload_scripts_cover_reusable_campaign_suites() -> None:
