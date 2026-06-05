@@ -32,6 +32,24 @@ TEST_CASE("Upload throttler seam expands equal-share rotation to the last queued
 	CHECK_EQ(UploadBandwidthThrottlerSeams::CalculateEqualShareSlotLimit(0u, 3u, 6u), 0u);
 }
 
+TEST_CASE("Upload throttler seam rotates surplus slot selection across loops")
+{
+	std::size_t nextSlot = 0;
+
+	CHECK_EQ(UploadBandwidthThrottlerSeams::PopRotatingSlotIndex(nextSlot, 3u), 0u);
+	CHECK_EQ(nextSlot, 1u);
+	CHECK_EQ(UploadBandwidthThrottlerSeams::PopRotatingSlotIndex(nextSlot, 3u), 1u);
+	CHECK_EQ(UploadBandwidthThrottlerSeams::PopRotatingSlotIndex(nextSlot, 3u), 2u);
+	CHECK_EQ(nextSlot, 0u);
+	CHECK_EQ(UploadBandwidthThrottlerSeams::PopRotatingSlotIndex(nextSlot, 3u), 0u);
+
+	nextSlot = 7u;
+	CHECK_EQ(UploadBandwidthThrottlerSeams::PopRotatingSlotIndex(nextSlot, 3u), 0u);
+	CHECK_EQ(nextSlot, 1u);
+	CHECK_EQ(UploadBandwidthThrottlerSeams::PopRotatingSlotIndex(nextSlot, 0u), 0u);
+	CHECK_EQ(nextSlot, 0u);
+}
+
 TEST_CASE("Upload throttler seam merges pending control queues without disturbing existing priority order")
 {
 	FakeSocket liveFirstA{1};
