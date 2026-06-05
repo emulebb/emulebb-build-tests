@@ -93,3 +93,21 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     assert "const bool bHasAdmissionCandidate = HasUploadAdmissionCandidate(curTick);" in force_new_block
     assert "const bool bHasCooldownProbeCandidate = !bHasAdmissionCandidate && HasUploadCooldownProbeCandidate(curTick);" in force_new_block
     assert "bHasAdmissionCandidate || bHasCooldownProbeCandidate" in force_new_block
+
+
+def test_queued_upload_wait_time_uses_current_tick_until_slot_starts() -> None:
+    header = (app_source_root() / "UpdownClient.h").read_text(encoding="utf-8", errors="ignore")
+    source = (app_source_root() / "UploadClient.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    assert "ULONGLONG\t\tGetWaitTime() const;" in header
+    assert "m_dwUploadTime - GetWaitStartTime()" not in header
+
+    wait_time_block = source[
+        source.index("ULONGLONG CUpDownClient::GetWaitTime() const") :
+        source.index("void CUpDownClient::SetWaitStartTime")
+    ]
+    assert "const ULONGLONG ullWaitStart = GetWaitStartTime();" in wait_time_block
+    assert "if (ullWaitStart == 0)\n\t\treturn 0;" in wait_time_block
+    assert "const ULONGLONG ullWaitEnd = IsDownloading() ? m_dwUploadTime : ::GetTickCount64();" in wait_time_block
+    assert "queued clients do not have an upload-start timestamp yet" in wait_time_block
+    assert "return ullWaitEnd >= ullWaitStart ? ullWaitEnd - ullWaitStart : 0;" in wait_time_block
