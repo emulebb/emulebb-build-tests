@@ -362,6 +362,19 @@ def test_vpn_public_ip_check_detects_mismatch(tmp_path: Path) -> None:
     assert result["actual"]["ip"] == "203.0.113.4"
 
 
+def test_vpn_public_ip_check_skips_bind_only_guard_without_public_cidrs(tmp_path: Path) -> None:
+    result = live_e2e_suite.build_vpn_public_ip_check(
+        child_artifacts_dir=tmp_path / "artifacts",
+        p2p_bind_interface_name="hide.me",
+        network_scope="vpn",
+        allowed_public_ip_cidrs="",
+        probe_wait_seconds=0.0,
+    )
+
+    assert result["enabled"] is False
+    assert "bind-interface guard" in result["reason"]
+
+
 def test_vpn_public_ip_check_waits_for_delayed_emulebb_probe(tmp_path: Path, monkeypatch) -> None:
     appdata = tmp_path / "appdata"
     logs = appdata / "Hide.me" / "Logs"

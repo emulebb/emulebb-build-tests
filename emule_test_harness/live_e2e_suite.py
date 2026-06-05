@@ -1867,6 +1867,7 @@ def build_vpn_public_ip_check(
     child_artifacts_dir: Path,
     p2p_bind_interface_name: str,
     network_scope: str,
+    allowed_public_ip_cidrs: str | None = None,
     appdata_dir: str | None = None,
     emulebb_probe_roots: Iterable[Path] = (),
     probe_wait_seconds: float = 15.0,
@@ -1877,6 +1878,11 @@ def build_vpn_public_ip_check(
         return {
             "enabled": False,
             "reason": f"network_scope={network_scope}, p2p_bind_interface_name={p2p_bind_interface_name}",
+        }
+    if allowed_public_ip_cidrs is not None and not allowed_public_ip_cidrs.strip():
+        return {
+            "enabled": False,
+            "reason": "allowed_public_ip_cidrs is empty; bind-interface guard does not run public IPv4 probe",
         }
 
     appdata = Path(appdata_dir or os.environ.get("APPDATA", ""))
@@ -2943,6 +2949,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
             child_artifacts_dir=child_artifacts_dir,
             p2p_bind_interface_name=child_p2p_bind_interface_name,
             network_scope=spec.network_scope,
+            allowed_public_ip_cidrs=effective_vpn_guard_allowed_public_ip_cidrs,
             emulebb_probe_roots=emulebb_probe_roots,
         )
         result["vpn_public_ip_check"] = vpn_public_ip_check
