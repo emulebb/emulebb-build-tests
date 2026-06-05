@@ -18,3 +18,4 @@ def test_file_icon_tooltips_initialize_line_height_from_non_colon_lines() -> Non
     assert "sizText.cy = iTextLineCount * iTextHeight;" in source
     assert "const int iLineLeft = (bShowFileIcon && iPos <= iCaptionEnd + strLine.GetLength()) ? ptText.x + iIconDrawingWidth : ptText.x;" in source
     assert "pdc->TabbedTextOut(iLineLeft, ptText.y, strLine" in source
+    assert "ptText.y += siz.cy + iLineHeightOff;" not in source
