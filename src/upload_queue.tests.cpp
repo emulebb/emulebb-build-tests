@@ -212,6 +212,10 @@ TEST_CASE("Upload queue lets productive no-request peers prove renewed demand")
 	CHECK_FALSE(ShouldAllowNoRequestCooldownClear(true, true, false));
 	CHECK(ShouldAllowNoRequestCooldownClear(true, true, true));
 
+	CHECK_FALSE(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(false, false));
+	CHECK(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(true, false));
+	CHECK_FALSE(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(true, true));
+
 	CHECK(ShouldAllowUploadRetryCooldownClear(false, false));
 	CHECK(ShouldAllowUploadRetryCooldownClear(false, true));
 	CHECK(ShouldAllowUploadRetryCooldownClear(true, false));

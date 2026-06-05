@@ -199,10 +199,18 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("GetQueuedBlockRequestAdmissionInstrumentationReason")
     assert "bool ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason = NULL)" in queue_header
     assert "bool CUploadQueue::ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason)" in queue_source
+    clear_cooldown_block = queue_source[
+        queue_source.index("bool CUploadQueue::ClearUploadRetryCooldown") :
+        queue_source.index("QueuedBlockRequestAdmissionResult CUploadQueue::TryAdmitQueuedBlockRequestClient")
+    ]
     assert "const bool bProductiveNoRequestRecycle = itNoRequest->second.bProductiveRecycle;" in queue_source
     assert "ShouldAllowNoRequestCooldownClear(true, itNoRequest->second.bQueuedRequestClearUsed, bProductiveNoRequestRecycle)" in queue_source
     assert "reject-not-uploading-unproductive-no-request-clear-used" in queue_source
     assert "bClearedProductiveNoRequestCooldown = true;" in queue_source
+    assert "ShouldBlockQueuedRequestRetryClearForActiveNoRequest" in seams_header
+    assert "ShouldBlockQueuedRequestRetryClearForActiveNoRequest(bHadNoRequestCooldown, bClearedProductiveNoRequestCooldown)" in clear_cooldown_block
+    assert "reject-not-uploading-unproductive-no-request-active" in clear_cooldown_block
+    assert clear_cooldown_block.index("ShouldBlockQueuedRequestRetryClearForActiveNoRequest(bHadNoRequestCooldown, bClearedProductiveNoRequestCooldown)") < clear_cooldown_block.index("m_uploadRetryCooldownByIP.find(dwCooldownIP)")
     assert "bHadClientCooldown || bHadIPCooldown || bClearedProductiveNoRequestCooldown" in queue_source
     assert "reject-not-uploading-retry-clear-used" in queue_source
     assert "reject-not-uploading-no-request-only-cooldown" in queue_source
