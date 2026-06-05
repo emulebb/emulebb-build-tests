@@ -119,7 +119,7 @@ TEST_CASE("Upload queue cools down failed upload admissions only for non-friend 
 	CHECK_EQ(kProductiveNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(10u));
 	CHECK_EQ(kNoRequestUploadRecycleGraceMaxSeconds, static_cast<std::uint32_t>(5u));
 	CHECK_EQ(kUploadChurnRetryCooldownMaxSeconds, static_cast<std::uint32_t>(120u));
-	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, kUploadChurnRetryCooldownMaxSeconds);
+	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(360u));
 	CHECK(GetUploadChurnRetryCooldownSeconds(30u) == 30u);
 	CHECK(GetUploadChurnRetryCooldownSeconds(120u) == kUploadChurnRetryCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(360u) == kUploadChurnRetryCooldownMaxSeconds);
@@ -163,6 +163,7 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 {
 	CHECK(ShouldCooldownNoRequestUploadRecycle(false));
 	CHECK_FALSE(ShouldCooldownNoRequestUploadRecycle(true));
+	CHECK_EQ(kNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(60u));
 
 	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(3u), static_cast<std::uint64_t>(3000u));
 	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(kNoRequestUploadRecycleGraceMaxSeconds), static_cast<std::uint64_t>(5000u));
@@ -177,13 +178,16 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(IsProductiveNoRequestUploadRecycle(768u * 1024u, GetProductiveNoRequestCooldownPayloadBytes(768u * 1024u)));
 
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(10u, false) == 10u);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(30u, false) == 30u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(kNoRequestUploadCooldownMaxSeconds, false) == kNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(90u, false) == kNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false) == kNoRequestUploadCooldownMaxSeconds);
-	CHECK(GetNoRequestUploadRetryCooldownSeconds(30u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
-	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(30u, true) == 30u);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true) == 120u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
+	CHECK(GetNoRequestUploadRetryCooldownSeconds(600u, true) == kRepeatedNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryTrackSeconds(30u, 30u) == 60ui64);
-	CHECK(GetNoRequestUploadRetryTrackSeconds(kRepeatedNoRequestUploadCooldownMaxSeconds, 30u) == 150ui64);
+	CHECK(GetNoRequestUploadRetryTrackSeconds(kRepeatedNoRequestUploadCooldownMaxSeconds, 30u) == 390ui64);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(5u, false, true) == 5u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
