@@ -5019,7 +5019,7 @@ def main() -> int:
                 release_search_timeout_seconds=args.radarr_release_timeout_seconds,
                 timeout_seconds=acquisition_timeout_seconds,
                 download_proof_mode=args.download_proof_mode,
-                min_release_sources=1 if args.deterministic_local_ed2k else MIN_ARR_RELEASE_SOURCES,
+                min_release_sources=1 if args.deterministic_local_ed2k or args.download_proof_mode == "handoff" else MIN_ARR_RELEASE_SOURCES,
                 skip_arr_import=args.deterministic_local_ed2k,
             )
             if cleanup_media_id is not None:
