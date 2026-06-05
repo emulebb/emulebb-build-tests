@@ -83,6 +83,16 @@ def test_runtime_log_paths_include_profile_config_logs(tmp_path: Path) -> None:
     assert live_process_monitor.runtime_log_paths(profile) == [log_path]
 
 
+def test_resolve_profile_config_dir_accepts_profile_root_or_config_dir(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    config = profile / "config"
+    config.mkdir(parents=True)
+    (config / "preferences.ini").write_text("[eMule]\n", encoding="utf-8")
+
+    assert live_process_monitor.resolve_profile_config_dir(profile) == config.resolve()
+    assert live_process_monitor.resolve_profile_config_dir(config) == config.resolve()
+
+
 def test_scan_log_markers_reads_only_appended_text(tmp_path: Path) -> None:
     log_path = tmp_path / "emulebb.log"
     log_path.write_text("startup ok\n", encoding="utf-8")
@@ -264,6 +274,8 @@ def test_live_process_monitor_copies_profile_before_policy_mutation() -> None:
     assert "source_profile_dir = config.profile_dir.resolve()" in source
     assert 'profile_under_test_dir = artifacts_dir / "profile-under-test"' in source
     assert "config = live_process_monitor.merge_config(config, profile_dir=profile_under_test_dir)" in source
+    assert "live_process_monitor.resolve_profile_config_dir(config.profile_dir)" in source
     assert '"profile_dir_source": str(source_profile_dir)' in source
+    assert '"profile_config_dir": str(live_process_monitor.resolve_profile_config_dir(config.profile_dir))' in source
     assert '"profile_dir_copied": True' in source
     assert copy_index < policy_index

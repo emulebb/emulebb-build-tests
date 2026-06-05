@@ -156,6 +156,16 @@ def parse_config_payload(payload: dict[str, object], *, path: Path | None = None
     )
 
 
+def resolve_profile_config_dir(profile_dir: Path) -> Path:
+    """Returns the directory containing preferences.ini for a profile root or config dir."""
+
+    profile_root = profile_dir.resolve()
+    nested_config = profile_root / "config"
+    if (nested_config / "preferences.ini").is_file():
+        return nested_config
+    return profile_root
+
+
 def load_config(path: Path) -> LiveProcessMonitorConfig:
     """Loads one ignored local live-process monitor configuration file."""
 

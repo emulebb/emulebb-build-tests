@@ -150,7 +150,7 @@ def main() -> int:
     config = live_process_monitor.merge_config(config, profile_dir=profile_under_test_dir)
     if args.p2p_bind_interface_name:
         live_profiles.apply_live_network_policy(
-            config.profile_dir,
+            live_process_monitor.resolve_profile_config_dir(config.profile_dir),
             p2p_bind_interface_name=args.p2p_bind_interface_name,
             vpn_guard_enabled=args.vpn_guard_enabled,
             vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
@@ -171,6 +171,7 @@ def main() -> int:
         "profile_dir_configured": True,
         "profile_dir_source": str(source_profile_dir),
         "profile_dir": str(config.profile_dir),
+        "profile_config_dir": str(live_process_monitor.resolve_profile_config_dir(config.profile_dir)),
         "profile_dir_copied": True,
         "duration_seconds": config.duration_seconds,
         "sample_interval_seconds": config.sample_interval_seconds,
