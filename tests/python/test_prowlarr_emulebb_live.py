@@ -425,6 +425,15 @@ def test_first_live_wire_term_keeps_only_primary_operator_term() -> None:
     assert module.first_live_wire_term(("primary", "fallback"), "search_terms.radarr_movies") == ("primary",)
 
 
+def test_require_live_wire_terms_keeps_operator_fallbacks() -> None:
+    module = load_prowlarr_module()
+
+    assert module.require_live_wire_terms(("primary", "fallback"), "search_terms.generic_open") == (
+        "primary",
+        "fallback",
+    )
+
+
 def test_temp_qbit_download_client_creates_and_tests(monkeypatch) -> None:
     module = load_prowlarr_module()
     requests: list[dict[str, Any]] = []

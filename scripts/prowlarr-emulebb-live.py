@@ -1292,6 +1292,14 @@ def first_live_wire_term(terms: tuple[str, ...], field_name: str) -> tuple[str, 
     return (terms[0],)
 
 
+def require_live_wire_terms(terms: tuple[str, ...], field_name: str) -> tuple[str, ...]:
+    """Returns all operator-provided terms for live checks that can tolerate fallback queries."""
+
+    if not terms:
+        raise RuntimeError(f"live-wire inputs field {field_name!r} must include at least one term.")
+    return terms
+
+
 def redact_term_result(result: dict[str, object], *, source: str, term_count: int) -> dict[str, object]:
     """Redacts exact search terms and titles from one live-wire result."""
 
@@ -2314,7 +2322,7 @@ def main() -> int:
     inputs = live_wire_inputs.load_live_wire_inputs(
         live_wire_inputs.resolve_inputs_path(REPO_ROOT, args.live_wire_inputs_file)
     )
-    generic_terms = first_live_wire_term(inputs.generic_open_terms, "search_terms.generic_open")
+    generic_terms = require_live_wire_terms(inputs.generic_open_terms, "search_terms.generic_open")
     env_values = live_env.load_env_values(
         ("PROWLARR_URL", "PROWLARR_API_KEY"),
         env_file=Path(args.env_file).resolve(),
