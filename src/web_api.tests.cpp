@@ -1135,6 +1135,12 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK(WebServerArrCompatSeams::IsArrIndexerValidationProbe(request));
 	CHECK(WebServerArrCompatSeams::BuildNativeQueries(request).empty());
 
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search", request, error));
+	CHECK(request.strQuery.empty());
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Any);
+	CHECK(WebServerArrCompatSeams::IsArrIndexerValidationProbe(request));
+	CHECK(WebServerArrCompatSeams::BuildNativeQueries(request).empty());
+
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&cat=2000&offset=100", request, error));
 	CHECK_FALSE(WebServerArrCompatSeams::IsArrIndexerValidationProbe(request));
 
