@@ -1127,6 +1127,16 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK_EQ(WebServerArrCompatSeams::BuildCacheKey(request), pagedCacheKey);
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Feature&cat=2000&limit=0", request, error));
 	CHECK_EQ(request.uLimit, WebServerArrCompatSeams::kDefaultTorznabLimit);
+	CHECK_FALSE(WebServerArrCompatSeams::IsArrIndexerValidationProbe(request));
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&cat=2000", request, error));
+	CHECK(request.strQuery.empty());
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Movie);
+	CHECK(WebServerArrCompatSeams::IsArrIndexerValidationProbe(request));
+	CHECK(WebServerArrCompatSeams::BuildNativeQueries(request).empty());
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&cat=2000&offset=100", request, error));
+	CHECK_FALSE(WebServerArrCompatSeams::IsArrIndexerValidationProbe(request));
 
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Album&cat=3000", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
