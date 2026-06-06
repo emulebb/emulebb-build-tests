@@ -201,6 +201,38 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(0u), static_cast<std::uint32_t>(1024u));
 	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(1000u), static_cast<std::uint32_t>(1024u));
 	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(1000u, 100u), static_cast<std::uint32_t>(1024u));
+	CHECK_FALSE(ShouldUseBroadbandNoRequestCooldownCaps(4096u * 1024u - 1u));
+	CHECK(ShouldUseBroadbandNoRequestCooldownCaps(4096u * 1024u));
+	CHECK_EQ(GetNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u), kBroadbandNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(GetProductiveNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u), kBroadbandProductiveNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(GetRepeatedNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u), kBroadbandRepeatedNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(
+		GetNoRequestUploadRetryCooldownSeconds(
+			360u,
+			false,
+			false,
+			GetNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u),
+			GetProductiveNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u),
+			GetRepeatedNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u)),
+		kBroadbandNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(
+		GetNoRequestUploadRetryCooldownSeconds(
+			360u,
+			true,
+			false,
+			GetNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u),
+			GetProductiveNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u),
+			GetRepeatedNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u)),
+		kBroadbandRepeatedNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(
+		GetNoRequestUploadRetryCooldownSeconds(
+			360u,
+			false,
+			true,
+			GetNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u),
+			GetProductiveNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u),
+			GetRepeatedNoRequestUploadCooldownMaxSecondsForBudget(6200u * 1024u)),
+		kBroadbandProductiveNoRequestUploadCooldownMaxSeconds);
 
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(10u, false) == 10u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(30u, false) == 30u);
