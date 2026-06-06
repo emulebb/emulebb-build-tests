@@ -275,6 +275,30 @@ def test_upload_list_membership_honors_queued_refresh_timing() -> None:
     assert "SyncLiveClientItems();" in refresh_block
 
 
+def test_queue_list_membership_honors_queued_refresh_timing() -> None:
+    queue_source = read_app_source("UploadQueue.cpp")
+    list_source = read_app_source("QueueListCtrl.cpp")
+    sync_block = list_source[
+        list_source.index("bool CQueueListCtrl::SyncLiveClientItems") :
+        list_source.index("CObject* CQueueListCtrl::WalkToLiveClientItem")
+    ]
+    refresh_block = list_source[
+        list_source.index("void CQueueListCtrl::RefreshVisibleItems") :
+        list_source.index("void CQueueListCtrl::ShowSelectedUserDetails")
+    ]
+
+    assert "QueueWaitingListDisplayRefresh()" in queue_source
+    assert "QueueDisplayRefresh(DISPLAY_REFRESH_QUEUE_LIST)" in queue_source
+    assert "GetQueueList()->AddClient" not in queue_source
+    assert "GetQueueList()->RemoveClient" not in queue_source
+    assert "client->SetWaitStartTime();" in queue_source
+    assert "client->SetAskedCount(1);" in queue_source
+    assert "GetNextClient(client)" in sync_block
+    assert "InsertItem(LVIF_TEXT | LVIF_PARAM" in sync_block
+    assert "PruneStaleClientItems()" in sync_block
+    assert "SyncLiveClientItems();" in refresh_block
+
+
 def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     upload_list_source = read_app_source("UploadListCtrl.cpp")
     queue_list_source = read_app_source("QueueListCtrl.cpp")
