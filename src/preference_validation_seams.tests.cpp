@@ -85,7 +85,7 @@ TEST_CASE("Preference validation seam centralizes broadband upload policy ranges
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(PreferenceValidationSeams::kDefaultMaxUploadSlots) == PreferenceValidationSeams::kDefaultMaxUploadSlots);
 
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.01f) == PreferenceValidationSeams::kMinSlowUploadThresholdFactor);
-	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.33f) == 0.33f);
+	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.70f) == 0.70f);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(2.0f) == PreferenceValidationSeams::kMaxSlowUploadThresholdFactor);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(std::numeric_limits<float>::quiet_NaN()) == PreferenceValidationSeams::kDefaultSlowUploadThresholdFactor);
 
@@ -97,6 +97,7 @@ TEST_CASE("Preference validation seam centralizes broadband upload policy ranges
 	CHECK(PreferenceValidationSeams::NormalizeZeroUploadRateGraceSeconds(0u) == PreferenceValidationSeams::kMinZeroUploadRateGraceSeconds);
 	CHECK(PreferenceValidationSeams::NormalizeZeroUploadRateGraceSeconds(121u) == PreferenceValidationSeams::kMaxZeroUploadRateGraceSeconds);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadCooldownSeconds(0u) == PreferenceValidationSeams::kMinSlowUploadCooldownSeconds);
+	CHECK(PreferenceValidationSeams::kDefaultSlowUploadCooldownSeconds == 60u);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadCooldownSeconds(3601u) == PreferenceValidationSeams::kMaxSlowUploadCooldownSeconds);
 
 	CHECK(PreferenceValidationSeams::NormalizeLowRatioThreshold(-1.0f) == PreferenceValidationSeams::kMinLowRatioThreshold);
