@@ -3026,7 +3026,8 @@ def test_qbit_compat_uses_shared_native_validation_and_bridge_commands() -> None
     assert "WebServerJsonSeams::TryParseUrlEncodedFields" in seams
     assert "WebServerJsonSeams::TryNormalizeCategoryNameText" in seams
     assert "TryValidateAddRequestUrl" in seams
-    assert "magnet URLs are not supported" in seams
+    assert "x.emulebb-ed2k" in seams
+    assert "eMuleBB BTIH magnet does not match its eD2K hash" in seams
     assert "only eD2K URLs are supported" in seams
 
 

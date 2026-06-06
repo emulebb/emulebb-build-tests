@@ -546,10 +546,10 @@ TEST_CASE("Web API shares strict bounded unsigned parsing across native REST and
 	std::string addUrl;
 	error.clear();
 	CHECK_FALSE(WebServerQBitCompatSeams::TryValidateAddRequestUrl(
-		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=x&xl=+42",
+		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=x&xl=+42&x.emulebb-ed2k=0123456789abcdef0123456789abcdef",
 		addUrl,
 		error));
-	CHECK_EQ(error, "magnet URLs are not supported");
+	CHECK_EQ(error, "xl must be a positive unsigned decimal size");
 }
 
 TEST_CASE("Web API only allows shared-file removal for files that are shared and not mandatory")
@@ -1222,7 +1222,7 @@ TEST_CASE("Web API exposes deterministic Torznab eD2K links and safe XML text")
 		"ed2k://|file|A%26B.mkv|42|0123456789abcdef0123456789abcdef|/");
 	CHECK_EQ(
 		WebServerArrCompatSeams::BuildEd2kMagnetDownloadLink("0123456789ABCDEF0123456789ABCDEF", "A&B.mkv", 42),
-		"magnet:?xt=urn:ed2k:0123456789abcdef0123456789abcdef&dn=A%26B.mkv&xl=42");
+		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=A%26B.mkv&xl=42&x.emulebb-ed2k=0123456789abcdef0123456789abcdef");
 	CHECK_EQ(std::string(WebServerArrCompatSeams::kTorznabTorrentContentMimeType), "application/x-bittorrent");
 	CHECK_NE(std::string(WebServerArrCompatSeams::kTorznabTorrentContentMimeType), "application/x-ed2k-link");
 	CHECK(WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789abcdef0123456789abcdef", "", 42).empty());
@@ -1506,8 +1506,8 @@ TEST_CASE("Web API shares strict percent decoding across native and Arr adapters
 
 	error.clear();
 	std::string addUrl;
-	CHECK_FALSE(WebServerQBitCompatSeams::TryValidateAddRequestUrl("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=%2x&xl=42", addUrl, error));
-	CHECK_EQ(error, "magnet URLs are not supported");
+	CHECK_FALSE(WebServerQBitCompatSeams::TryValidateAddRequestUrl("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=%2x&xl=42&x.emulebb-ed2k=0123456789abcdef0123456789abcdef", addUrl, error));
+	CHECK_EQ(error, "malformed percent escape");
 	CHECK(addUrl.empty());
 }
 
@@ -1539,8 +1539,17 @@ TEST_CASE("Web API accepts qBittorrent add forms only for native eD2K links")
 	CHECK_EQ(request.strUrl, "ed2k://|file|La%20Dolce%20Vita.mkv|42|0123456789abcdef0123456789abcdef|/");
 
 	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=RADARR_ENG&urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3DLa%2520Dolce%2520Vita.mkv%26xl%3D42%26x.emulebb-ed2k%3D0123456789abcdef0123456789abcdef", request, error));
+	CHECK_EQ(request.strCategory, "RADARR_ENG");
+	CHECK_EQ(request.strUrl, "ed2k://|file|La%20Dolce%20Vita.mkv|42|0123456789abcdef0123456789abcdef|/");
+
+	error.clear();
 	std::string normalizedUrl;
 	CHECK(WebServerQBitCompatSeams::TryNormalizeControlledEd2kMagnetUrl("magnet:?xt=urn:ed2k:0123456789ABCDEF0123456789ABCDEF&dn=A%26B.mkv&xl=42", normalizedUrl, error));
+	CHECK_EQ(normalizedUrl, "ed2k://|file|A%26B.mkv|42|0123456789abcdef0123456789abcdef|/");
+
+	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryNormalizeControlledEd2kMagnetUrl("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef00000000&dn=A%26B.mkv&xl=42&x.emulebb-ed2k=0123456789abcdef0123456789abcdef", normalizedUrl, error));
 	CHECK_EQ(normalizedUrl, "ed2k://|file|A%26B.mkv|42|0123456789abcdef0123456789abcdef|/");
 }
 
@@ -1553,7 +1562,11 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	CHECK_EQ(error, "only eD2K URLs are supported");
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
-	CHECK_EQ(error, "only eMuleBB ED2K magnets are supported");
+	CHECK_EQ(error, "eMuleBB BTIH magnets require x.emulebb-ed2k");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42%26x.emulebb-ed2k%3Dfedcba9876543210fedcba9876543210", request, error));
+	CHECK_EQ(error, "eMuleBB BTIH magnet does not match its eD2K hash");
 
 	error.clear();
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Aed2k%3A0123456789abcdef0123456789abcdef%26dn%3Dx%26xl%3D0", request, error));
