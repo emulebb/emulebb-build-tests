@@ -331,6 +331,12 @@ TEST_CASE("Download filename normalization trims trailing Win32-invalid leaf cha
 	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("archive+++cut===final .mkv.."))) == CString(_T("archive cut final.mkv")));
 }
 
+TEST_CASE("Download filename cleanup collapses repeated whitespace runs")
+{
+	CHECK(FilenameNormalizationPolicy::CollapseFilenameWhitespace(CString(_T("alpha    beta\t\tgamma")), false) == CString(_T("alpha beta gamma")));
+	CHECK(FilenameNormalizationPolicy::CollapseFilenameWhitespace(CString(L"alpha\u00A0\u00A0beta\u2003\u2003gamma"), false) == CString(_T("alpha beta gamma")));
+}
+
 TEST_CASE("Download filename normalization trims stray basename edge punctuation")
 {
 	CHECK(FilenameNormalizationPolicy::NormalizeDownloadFilename(CString(_T("filename,.txt"))) == CString(_T("filename.txt")));
