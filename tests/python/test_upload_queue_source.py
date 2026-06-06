@@ -122,9 +122,10 @@ def test_broadband_upload_buffer_depth_scales_with_per_slot_target() -> None:
 def test_auto_broadband_io_diagnostics_distinguish_download_and_upload_buffers() -> None:
     source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
 
-    assert '{"autoBroadbandIoScope", "downloadDiskWriteBufferOnly"}' in source
+    assert '{"downloadAutoBroadbandIo", thePrefs.IsDownloadAutoBroadbandIOEnabled()}' in source
+    assert '{"downloadAutoBroadbandIoScope", "downloadDiskWriteBufferOnly"}' in source
     assert '{"uploadSendPipeline", nlohmann::json{' in source
-    assert '{"controlledByAutoBroadbandIo", false}' in source
+    assert '{"controlledByDownloadAutoBroadbandIo", false}' in source
 
 
 def test_nonzero_slow_slots_keep_accumulated_slow_tracking_for_recycle_path() -> None:

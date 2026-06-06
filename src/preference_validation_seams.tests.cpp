@@ -106,6 +106,8 @@ TEST_CASE("Preference validation seam centralizes broadband upload policy ranges
 	CHECK(PreferenceValidationSeams::NormalizeLowIDDivisor(0u) == PreferenceValidationSeams::kMinLowIDDivisor);
 	CHECK(PreferenceValidationSeams::NormalizeLowIDDivisor(9u) == PreferenceValidationSeams::kMaxLowIDDivisor);
 
+	CHECK(PreferenceValidationSeams::kDefaultSessionTransferPercent == 90u);
+	CHECK(PreferenceValidationSeams::kDefaultSessionTimeLimitSeconds == 7200u);
 	CHECK(PreferenceValidationSeams::NormalizeSessionTransferLimitMode(9) == PreferenceValidationSeams::kSessionTransferModePercentOfFile);
 	CHECK(PreferenceValidationSeams::NormalizeSessionTransferLimitValue(PreferenceValidationSeams::kSessionTransferModePercentOfFile, 0u) == PreferenceValidationSeams::kMinSessionTransferPercent);
 	CHECK(PreferenceValidationSeams::NormalizeSessionTransferLimitValue(PreferenceValidationSeams::kSessionTransferModeAbsoluteMiB, 4097u) == PreferenceValidationSeams::kMaxSessionTransferMiB);

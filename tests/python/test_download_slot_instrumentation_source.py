@@ -177,7 +177,7 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     ):
         assert aggregate in queue_source
     assert "static_cast<uint64>(GetEffectiveFileBufferSizeBytes())," in queue_source
-    assert "static_cast<UINT>(thePrefs.IsAutoBroadbandIOEnabled())," in queue_source
+    assert "static_cast<UINT>(thePrefs.IsDownloadAutoBroadbandIOEnabled())," in queue_source
     assert '_tcscmp(pszReason, _T("block-reserve-empty")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("start-download")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("state-enter-downloading")) == 0' in client_source
