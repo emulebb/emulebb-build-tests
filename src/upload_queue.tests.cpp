@@ -130,6 +130,11 @@ TEST_CASE("Upload queue cools down failed upload admissions only for non-friend 
 	CHECK(GetUploadChurnRetryCooldownSeconds(30u) == 30u);
 	CHECK(GetUploadChurnRetryCooldownSeconds(120u) == kUploadChurnRetryCooldownMaxSeconds);
 	CHECK(GetUploadChurnRetryCooldownSeconds(360u) == kUploadChurnRetryCooldownMaxSeconds);
+	CHECK(GetSlowUploadRetryCooldownSecondsForBudget(360u, 512u * 1024u) == 360u);
+	CHECK(GetSlowUploadRetryCooldownSecondsForBudget(60u, 6200u * 1024u) == 60u);
+	CHECK(GetSlowUploadRetryCooldownSecondsForBudget(360u, 6200u * 1024u) == kBroadbandSlowUploadRetryCooldownMaxSeconds);
+	CHECK(GetUploadChurnRetryCooldownSecondsForBudget(360u, 512u * 1024u) == kUploadChurnRetryCooldownMaxSeconds);
+	CHECK(GetUploadChurnRetryCooldownSecondsForBudget(360u, 6200u * 1024u) == kBroadbandSlowUploadRetryCooldownMaxSeconds);
 	CHECK(ShouldCooldownFailedUploadAdmission(true, false, 0x01020304u));
 	CHECK_FALSE(ShouldCooldownFailedUploadAdmission(false, false, 0x01020304u));
 	CHECK_FALSE(ShouldCooldownFailedUploadAdmission(true, true, 0x01020304u));
