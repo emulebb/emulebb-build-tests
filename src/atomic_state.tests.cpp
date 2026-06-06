@@ -134,22 +134,22 @@ TEST_CASE("Unified desktop presentation timer uses selected cadence and paused t
 
 TEST_CASE("Transfer display refresh state pauses when the UI should not present updates")
 {
-	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_RUNNING);
-	CHECK(ResolveTransferDisplayRefreshState(true, false, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, true, true, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, false, false, true, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, false, true, false, false, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, true, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
-	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, false, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, false) == TRANSFER_DISPLAY_REFRESH_RUNNING);
+	CHECK(ResolveTransferDisplayRefreshState(true, false, true, true, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, true, true, true, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, false, true, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, false, false) == TRANSFER_DISPLAY_REFRESH_PAUSED);
+	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, true) == TRANSFER_DISPLAY_REFRESH_PAUSED);
 }
 
 TEST_CASE("Unified desktop presentation pauses routine updates but keeps title cadence")
 {
-	CHECK(ShouldRefreshRoutineDesktopPresentation(false, true, 500u));
-	CHECK(ShouldRefreshRoutineDesktopPresentation(false, true, 2000u));
-	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(false, true, 0u));
-	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(true, true, 500u));
-	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(false, false, 500u));
+	CHECK(ShouldRefreshRoutineDesktopPresentation(false, true, false, 500u));
+	CHECK(ShouldRefreshRoutineDesktopPresentation(false, true, false, 2000u));
+	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(false, true, false, 0u));
+	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(true, true, false, 500u));
+	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(false, false, false, 500u));
+	CHECK_FALSE(ShouldRefreshRoutineDesktopPresentation(false, true, true, 500u));
 
 	CHECK(ShouldRefreshPausedTitlePresentation(false, true, 0u));
 	CHECK_FALSE(ShouldRefreshPausedTitlePresentation(false, true, 500u));
