@@ -178,7 +178,8 @@ def test_stalled_upload_retry_cooldown_is_bounded() -> None:
         source.index("if (thePrefs.GetLogUlDlEvents())", source.index("const bool bShouldRecycleIdle = ShouldRecycleIdleBroadbandUploadSlot"))
     ]
 
-    assert "GetUploadChurnRetryCooldownSeconds(thePrefs.GetSlowUploadCooldownSeconds())" in stalled_block
+    assert "GetUploadChurnRetryCooldownSecondsForBudget(" in stalled_block
+    assert "GetConfiguredUploadBudgetBytesPerSec()" in stalled_block
     assert "uploadRetryCooldownIdle : uploadRetryCooldownStalled" in stalled_block
     assert "bStalledRecycleWarmupComplete" not in stalled_block
     assert "ShouldRecycleStalledBroadbandUploadSlot(\n\t\ttrue,\n\t\tbSlowUploadWarmupComplete," in stalled_block
