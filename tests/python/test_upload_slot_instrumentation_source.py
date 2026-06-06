@@ -268,6 +268,14 @@ def test_upload_list_membership_honors_queued_refresh_timing() -> None:
 def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     upload_list_source = read_app_source("UploadListCtrl.cpp")
     queue_list_source = read_app_source("QueueListCtrl.cpp")
+    upload_localize = upload_list_source[
+        upload_list_source.index("void CUploadListCtrl::Localize") :
+        upload_list_source.index("void CUploadListCtrl::OnSysColorChange")
+    ]
+    queue_localize = queue_list_source[
+        queue_list_source.index("void CQueueListCtrl::Localize") :
+        queue_list_source.index("void CQueueListCtrl::OnSysColorChange")
+    ]
     upload_draw = upload_list_source[
         upload_list_source.index("void CUploadListCtrl::DrawItem") :
         upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText")
@@ -284,6 +292,9 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
         assert new_column in source
         assert "case 22:" in source
 
+    assert "IDS_EFFECTIVE_SCORE, IDS_DL_PROGRESS, IDS_GEOLOCATION" in upload_localize
+    assert "IDS_CLIENT_HASH, IDS_PERCENTAGE, IDS_FILE_SIZE" in upload_localize
+    assert "IDS_COOLDOWN, IDS_DL_PROGRESS, IDS_GEOLOCATION" in queue_localize
     assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in upload_draw
     assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in queue_draw
     assert "DrawCenteredBarText" not in upload_list_source
