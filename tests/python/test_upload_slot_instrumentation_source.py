@@ -11,6 +11,16 @@ def read_app_source(name: str) -> str:
     return (app_source_root() / name).read_text(encoding="utf-8", errors="ignore")
 
 
+def test_transfer_bar_percentage_preference_uses_transfer_wide_text() -> None:
+    resources = read_app_source("emule.rc")
+    preferences_source = read_app_source("Preferences.cpp")
+
+    assert 'IDS_SHOWDWLPERCENTAGE   "Show transfer percentages in progress bars"' in resources
+    assert "Shows download and upload progress percentages inside transfer progress bars." in resources
+    assert 'ini.WriteBool(_T("ShowDwlPercentage"), m_bShowDwlPercentage);' in preferences_source
+    assert 'ini.GetBool(_T("ShowDwlPercentage"), true);' in preferences_source
+
+
 def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     source = read_app_source("UploadQueue.cpp")
     header = read_app_source("UploadQueue.h")
