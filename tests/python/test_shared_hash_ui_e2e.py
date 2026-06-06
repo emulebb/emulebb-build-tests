@@ -103,6 +103,23 @@ def test_partial_hash_progress_rejects_completed_hashing(tmp_path: Path) -> None
         module.wait_for_partial_hash_progress(trace_path, expected_count=3, timeout=0.1)
 
 
+def test_records_fast_hash_completion_before_reload_interruption() -> None:
+    module = load_shared_hash_module()
+    summary: dict[str, object] = {}
+
+    recorded = module.record_hashing_completed_before_interruption_target(
+        summary,
+        {"row_count": 6},
+        expected_count=6,
+        error_message="Hashing completed before the interruption target was reached.",
+    )
+
+    assert recorded is True
+    assert summary["hashing_done_observed_before_interrupt"] is True
+    assert summary["hashing_converged_before_interrupt"] is True
+    assert summary["hashing_active"]["status"] == "completed_before_interruption_target"
+
+
 def test_shared_hash_drain_accepts_completed_worker_counters(tmp_path: Path) -> None:
     module = load_shared_hash_module()
     trace_path = tmp_path / "startup-profile.trace.json"
