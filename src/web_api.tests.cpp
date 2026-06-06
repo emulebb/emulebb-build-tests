@@ -1220,9 +1220,17 @@ TEST_CASE("Web API exposes deterministic Torznab eD2K links and safe XML text")
 	CHECK_EQ(
 		WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789ABCDEF0123456789ABCDEF", "A&B.mkv", 42),
 		"ed2k://|file|A%26B.mkv|42|0123456789abcdef0123456789abcdef|/");
+	CHECK_EQ(
+		WebServerArrCompatSeams::BuildEd2kMagnetDownloadLink("0123456789ABCDEF0123456789ABCDEF", "A&B.mkv", 42),
+		"magnet:?xt=urn:ed2k:0123456789abcdef0123456789abcdef&dn=A%26B.mkv&xl=42");
+	CHECK_EQ(std::string(WebServerArrCompatSeams::kTorznabTorrentContentMimeType), "application/x-bittorrent");
+	CHECK_NE(std::string(WebServerArrCompatSeams::kTorznabTorrentContentMimeType), "application/x-ed2k-link");
 	CHECK(WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789abcdef0123456789abcdef", "", 42).empty());
 	CHECK(WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789abcdef0123456789abcdef", "bad\x01name.mkv", 42).empty());
 	CHECK(WebServerArrCompatSeams::BuildEd2kDownloadLink("0123456789abcdef0123456789abcdef", "A&B.mkv", 0).empty());
+	CHECK(WebServerArrCompatSeams::BuildEd2kMagnetDownloadLink("0123456789abcdef0123456789abcdef", "", 42).empty());
+	CHECK(WebServerArrCompatSeams::BuildEd2kMagnetDownloadLink("0123456789abcdef0123456789abcdef", "bad\x01name.mkv", 42).empty());
+	CHECK(WebServerArrCompatSeams::BuildEd2kMagnetDownloadLink("0123456789abcdef0123456789abcdef", "A&B.mkv", 0).empty());
 	CHECK_EQ(WebServerArrCompatSeams::XmlEscape("<tag attr=\"x\">A&B</tag>"), "&lt;tag attr=&quot;x&quot;&gt;A&amp;B&lt;/tag&gt;");
 	CHECK_EQ(WebServerJsonSeams::UrlEncodeUtf8("A B+100%"), "A%20B%2B100%25");
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "release.mkv", 10));
@@ -1524,6 +1532,16 @@ TEST_CASE("Web API accepts qBittorrent add forms only for native eD2K links")
 	error.clear();
 	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("paused=false&urls=ed2k%3A%2F%2F%7Cfile%7Cx%7C42%7C0123456789abcdef0123456789abcdef%7C%2F", request, error));
 	CHECK_FALSE(request.bPaused);
+
+	error.clear();
+	CHECK(WebServerQBitCompatSeams::TryParseTorrentAddRequest("category=RADARR_ENG&urls=magnet%3A%3Fxt%3Durn%3Aed2k%3A0123456789abcdef0123456789abcdef%26dn%3DLa%2520Dolce%2520Vita.mkv%26xl%3D42", request, error));
+	CHECK_EQ(request.strCategory, "RADARR_ENG");
+	CHECK_EQ(request.strUrl, "ed2k://|file|La%20Dolce%20Vita.mkv|42|0123456789abcdef0123456789abcdef|/");
+
+	error.clear();
+	std::string normalizedUrl;
+	CHECK(WebServerQBitCompatSeams::TryNormalizeControlledEd2kMagnetUrl("magnet:?xt=urn:ed2k:0123456789ABCDEF0123456789ABCDEF&dn=A%26B.mkv&xl=42", normalizedUrl, error));
+	CHECK_EQ(normalizedUrl, "ed2k://|file|A%26B.mkv|42|0123456789abcdef0123456789abcdef|/");
 }
 
 TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
@@ -1535,7 +1553,11 @@ TEST_CASE("Web API rejects unsafe qBittorrent add forms before native dispatch")
 	CHECK_EQ(error, "only eD2K URLs are supported");
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A0123456789abcdef0123456789abcdef00000000%26dn%3Dx%26xl%3D42", request, error));
-	CHECK_EQ(error, "magnet URLs are not supported");
+	CHECK_EQ(error, "only eMuleBB ED2K magnets are supported");
+
+	error.clear();
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseTorrentAddRequest("urls=magnet%3A%3Fxt%3Durn%3Aed2k%3A0123456789abcdef0123456789abcdef%26dn%3Dx%26xl%3D0", request, error));
+	CHECK_EQ(error, "xl must be a positive unsigned decimal size");
 
 	CHECK_FALSE(WebServerQBitCompatSeams::TryParseFormBody("category=a&category=b", form, error));
 	CHECK_EQ(error, "duplicate form field: category");
