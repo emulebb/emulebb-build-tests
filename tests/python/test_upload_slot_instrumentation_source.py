@@ -107,9 +107,9 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
         source.index("if (!HasCompletedSlowUploadWarmup(client))")
     ]
     assert "GetProductiveNoRequestCooldownPayloadBytes(GetTargetClientDataRateBroadband())" in no_request_recycle_block
-    assert "GetNoRequestUploadRecycleGraceMs(thePrefs.GetZeroUploadRateGraceSeconds())" in source
+    assert "GetNoRequestUploadRecycleGraceMs(GetZeroUploadGraceSecondsForBudget(thePrefs.GetZeroUploadRateGraceSeconds(), uBudgetBytesPerSec))" in source
     assert "ShouldDeferProductiveNoRequestUploadRecycle(" in no_request_recycle_block
-    assert "SEC2MS(thePrefs.GetSlowUploadWarmupSeconds())" in no_request_recycle_block
+    assert "SEC2MS(GetSlowUploadWarmupSecondsForBudget(thePrefs.GetSlowUploadWarmupSeconds(), uBudgetBytesPerSec))" in no_request_recycle_block
     assert "fast\n\t\t\t// clients can keep carrying upload bandwidth" in no_request_recycle_block
     assert no_request_recycle_block.index("const bool bProductiveNoRequestRecycle") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
     assert no_request_recycle_block.index("ShouldDeferProductiveNoRequestUploadRecycle(") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")

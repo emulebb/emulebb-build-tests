@@ -142,7 +142,8 @@ def test_nonzero_slow_slots_keep_accumulated_slow_tracking_for_recycle_path() ->
     assert "nonzero but slow slots are evaluated by the broader slow-rate" in idle_recycle_block
     assert "client->UpdateSlowUploadTracking(curTick, GetSlowUploadRateThreshold());\n\telse\n\t\tclient->ResetSlowUploadTracking();" not in idle_recycle_block
     assert "client->UpdateSlowUploadTracking(curTick, GetSlowUploadRateThreshold());" in check_for_time_over_block
-    assert "client->ShouldRecycleSlowUpload(SEC2MS(thePrefs.GetSlowUploadGraceSeconds()), SEC2MS(thePrefs.GetZeroUploadRateGraceSeconds()))" in check_for_time_over_block
+    assert "GetSlowUploadGraceSecondsForBudget(thePrefs.GetSlowUploadGraceSeconds(), uBudgetBytesPerSec)" in check_for_time_over_block
+    assert "GetZeroUploadGraceSecondsForBudget(thePrefs.GetZeroUploadRateGraceSeconds(), uBudgetBytesPerSec)" in check_for_time_over_block
 
 
 def test_queued_upload_wait_time_uses_current_tick_until_slot_starts() -> None:

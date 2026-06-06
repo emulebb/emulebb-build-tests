@@ -152,18 +152,19 @@ TEST_CASE("Broadband idle upload recycling requires an empty local send pipeline
 
 TEST_CASE("Broadband no-request recycling bypasses slow warmup only for drained slots")
 {
-	CHECK(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
-	CHECK(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, false, 0u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(false, false, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, true, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 1u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 1u, 0, 0, 0, 10000u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 1, 0, 0, 10000u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 1, 0, 10000u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 1, 10000u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 9999u, true, 10000u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, true, 9999u, 10000u));
-	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0, 0, 0, 10000u, true, 0u, 10000u));
+	CHECK(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 0, 0, 0, 10000u, false, 0u, 10000u));
+	CHECK(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 64u * 1024u, 128u * 1024u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(false, false, 0u, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, true, 0u, 0u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 129u * 1024u, 128u * 1024u, 0u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 1u, 0, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 1, 0, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 0, 1, 0, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 0, 0, 1, 10000u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 0, 0, 0, 9999u, true, 10000u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 0, 0, 0, 10000u, true, 9999u, 10000u));
+	CHECK_FALSE(ShouldRecycleNoRequestBroadbandUploadSlot(true, false, 0u, 0u, 0u, 0, 0, 0, 10000u, true, 0u, 10000u));
 }
 
 TEST_CASE("Broadband no-request cooldown covers drained sessions")
@@ -175,6 +176,14 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(3u), static_cast<std::uint64_t>(3000u));
 	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(10u), static_cast<std::uint64_t>(10000u));
 	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(60u), static_cast<std::uint64_t>(60000u));
+	CHECK_FALSE(ShouldUseBroadbandAggressiveUploadPolicy(4096u * 1024u - 1u));
+	CHECK(ShouldUseBroadbandAggressiveUploadPolicy(4096u * 1024u));
+	CHECK_EQ(GetSlowUploadWarmupSecondsForBudget(90u, 6200u * 1024u), static_cast<std::uint32_t>(30u));
+	CHECK_EQ(GetSlowUploadGraceSecondsForBudget(90u, 6200u * 1024u), static_cast<std::uint32_t>(30u));
+	CHECK_EQ(GetZeroUploadGraceSecondsForBudget(10u, 6200u * 1024u), static_cast<std::uint32_t>(5u));
+	CHECK_EQ(GetSlowUploadWarmupSecondsForBudget(90u, 1024u * 1024u), static_cast<std::uint32_t>(90u));
+	CHECK_EQ(GetSlowUploadGraceSecondsForBudget(90u, 1024u * 1024u), static_cast<std::uint32_t>(90u));
+	CHECK_EQ(GetZeroUploadGraceSecondsForBudget(10u, 1024u * 1024u), static_cast<std::uint32_t>(10u));
 
 	CHECK_EQ(kProductiveNoRequestCooldownPayloadBytes, static_cast<std::uint64_t>(184320u));
 	CHECK_FALSE(IsProductiveNoRequestUploadRecycle(kProductiveNoRequestCooldownPayloadBytes - 1u));
