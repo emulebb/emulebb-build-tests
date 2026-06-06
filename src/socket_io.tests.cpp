@@ -18,10 +18,14 @@ TEST_CASE("Socket IO seam accepts bounded receive results and rejects impossible
 TEST_CASE("Socket IO seam exposes broadband socket buffer targets")
 {
 	CHECK_EQ(kBroadbandUdpReceiveBufferBytes, static_cast<std::uint32_t>(1024u * 1024u));
+#ifdef EMULEBB_SOCKET_IO_SEAMS_HAS_BROADBAND_TCP_UPLOAD_BUFFER_HELPER
 	CHECK_EQ(kBroadbandTcpUploadSendBufferBytes, static_cast<std::uint32_t>(32u * 1024u * 1024u));
 	CHECK_EQ(GetBroadbandTcpUploadSendBufferBytes(0u), static_cast<std::uint32_t>(1024u * 1024u));
 	CHECK_EQ(GetBroadbandTcpUploadSendBufferBytes(6200u * 1024u / 8u), static_cast<std::uint32_t>(6200u * 1024u));
 	CHECK_EQ(GetBroadbandTcpUploadSendBufferBytes(128u * 1024u * 1024u / 8u), kBroadbandTcpUploadSendBufferBytes);
+#else
+	CHECK_EQ(kBroadbandTcpUploadSendBufferBytes, static_cast<std::uint32_t>(1024u * 1024u));
+#endif
 }
 
 TEST_CASE("Socket IO seam clamps receive-budget accounting without unsigned underflow")

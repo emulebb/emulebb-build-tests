@@ -91,7 +91,8 @@ TEST_CASE("Mule list view preset profiles are complete and scoped to main grids"
 	CHECK(download->iColumnCount == 20);
 	CHECK(download->iStockHiddenColumnCount == 4);
 	CHECK(download->iExtendedHiddenColumnCount == 0);
-	CHECK(download->piExtendedOrder[9] == 9);
+	CHECK(download->piExtendedOrder[9] == 8);
+	CHECK(download->piExtendedOrder[10] == 9);
 	CHECK(download->piExtendedOrder[19] == 18);
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *queue = MuleListCtrlViewPresets::FindProfile(_T("QueueListCtrl"));
