@@ -2210,10 +2210,15 @@ def test_rest_contract_docs_define_adapter_subset_and_legacy_compile_only_bounda
 
     normalized_adapter_doc = re.sub(r"\s+", " ", adapter_doc_lower)
     assert "not a full qbittorrent web api clone" in normalized_adapter_doc
+    assert "paths are matched case-insensitively" in normalized_adapter_doc
     assert "adapter_contract_routes" in normalized_adapter_doc
 
     for required_text in (
         "/indexer/emulebb/api",
+        "webapiversion",
+        "createcategory",
+        "setcategory",
+        "setforcestart",
         "https://github.com/qbittorrent/qbittorrent/wiki/webui-api-%28qbittorrent-4.1%29",
         "https://torznab.github.io/spec-1.3-draft/",
         "save_path",
@@ -2370,6 +2375,20 @@ def test_rest_contract_registry_matches_openapi() -> None:
     assert summary["missing_from_registry"] == []
     assert summary["missing_from_openapi"] == []
     assert summary["unknown_execution_models"] == []
+
+
+def test_rest_preference_contract_matches_openapi_and_native_sources() -> None:
+    module = load_rest_api_smoke_module()
+
+    summary = module.assert_preference_contract_matches_sources()
+
+    assert summary["ok"], summary
+    assert "downloadAutoBroadbandIo" in summary["openapi_preferences"]
+    assert "downloadAutoBroadbandIo" in summary["openapi_patch"]
+    assert "downloadAutoBroadbandIo" in summary["native_response"]
+    assert "downloadAutoBroadbandIo" in summary["native_mutable"]
+    assert "autoBroadbandIo" not in summary["openapi_preferences"]
+    assert "autoBroadbandIo" not in summary["openapi_patch"]
 
 
 def _csv_fields(value: str) -> set[str]:

@@ -292,6 +292,8 @@ NATIVE_CONTRACT_SOURCE_ROOT = Path(
     )
 ).resolve()
 NATIVE_ROUTE_HEADER_PATH = NATIVE_CONTRACT_SOURCE_ROOT / "WebServerJsonSeams.h"
+NATIVE_SURFACE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebApiSurfaceSeams.h")
+NATIVE_JSON_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerJson.cpp")
 QBIT_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerQBitCompatSeams.h")
 TORZNAB_ROUTE_HEADER_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompatSeams.h")
 TORZNAB_HANDLER_SOURCE_PATH = NATIVE_ROUTE_HEADER_PATH.with_name("WebServerArrCompat.cpp")
@@ -503,6 +505,71 @@ def validate_openapi_response_payload(response_name: str, payload: object, opena
     schema = get_openapi_response_schema(response_name, openapi_path)
     validator = jsonschema.Draft202012Validator(document).evolve(schema=schema)
     validator.validate(payload)
+
+
+def get_openapi_schema_properties(schema_name: str, openapi_path: Path = OPENAPI_CONTRACT_PATH) -> tuple[str, ...]:
+    """Returns the declared top-level properties for one OpenAPI component schema."""
+
+    document = load_openapi_document(openapi_path)
+    schema = (((document.get("components") or {}).get("schemas") or {}).get(schema_name) or {})
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict):
+        raise RuntimeError(f"OpenAPI schema is missing object properties: {schema_name}")
+    return tuple(sorted(str(name) for name in properties))
+
+
+def load_native_mutable_preference_fields(surface_header_path: Path = NATIVE_SURFACE_HEADER_PATH) -> tuple[str, ...]:
+    """Extracts the mutable preference field names from the native REST surface seam."""
+
+    source = surface_header_path.read_text(encoding="utf-8")
+    match = re.search(r"kMutablePreferenceFieldListCsv\s*=\s*((?:\s*\"[^\"]*\")+)\s*;", source)
+    if match is None:
+        raise RuntimeError(f"Mutable preference field list is missing from {surface_header_path}")
+    csv_text = "".join(re.findall(r'"([^"]*)"', match.group(1)))
+    return tuple(sorted(field for field in csv_text.split(",") if field))
+
+
+def load_native_preference_response_fields(json_source_path: Path = NATIVE_JSON_SOURCE_PATH) -> tuple[str, ...]:
+    """Extracts the preference response field names returned by BuildPreferencesJson."""
+
+    source = json_source_path.read_text(encoding="utf-8")
+    function_start = source.index("json BuildPreferencesJson()")
+    function_end = source.index("/**", function_start)
+    block = source[function_start:function_end]
+    fields = re.findall(r'\{\s*"([^"]+)"\s*,', block)
+    if not fields:
+        raise RuntimeError(f"BuildPreferencesJson fields are missing from {json_source_path}")
+    return tuple(sorted(fields))
+
+
+def assert_preference_contract_matches_sources() -> dict[str, object]:
+    """Verifies OpenAPI preference fields match native response and mutation seams."""
+
+    openapi_preferences = get_openapi_schema_properties("Preferences")
+    openapi_patch = get_openapi_schema_properties("PreferencesPatch")
+    native_mutable = load_native_mutable_preference_fields()
+    native_response = load_native_preference_response_fields()
+    patch_missing_from_openapi = sorted(set(native_mutable) - set(openapi_patch))
+    patch_extra_in_openapi = sorted(set(openapi_patch) - set(native_mutable))
+    response_missing_from_openapi = sorted(set(native_response) - set(openapi_preferences))
+    response_extra_in_openapi = sorted(set(openapi_preferences) - set(native_response))
+    response_mutation_mismatch = sorted(set(native_response) ^ set(native_mutable))
+    return {
+        "openapi_preferences": openapi_preferences,
+        "openapi_patch": openapi_patch,
+        "native_mutable": native_mutable,
+        "native_response": native_response,
+        "patch_missing_from_openapi": patch_missing_from_openapi,
+        "patch_extra_in_openapi": patch_extra_in_openapi,
+        "response_missing_from_openapi": response_missing_from_openapi,
+        "response_extra_in_openapi": response_extra_in_openapi,
+        "response_mutation_mismatch": response_mutation_mismatch,
+        "ok": not patch_missing_from_openapi
+        and not patch_extra_in_openapi
+        and not response_missing_from_openapi
+        and not response_extra_in_openapi
+        and not response_mutation_mismatch,
+    }
 
 
 def _commit_openapi_operation(
