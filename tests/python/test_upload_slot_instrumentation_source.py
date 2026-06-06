@@ -354,3 +354,27 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     assert "GetUploadPartProgressPercent(item2)" in upload_percent_sort
     assert "GetSessionUp()" not in upload_percent_display
     assert "GetSessionUp()" not in upload_percent_sort
+
+
+def test_upload_eta_uses_peer_missing_parts_not_session_upload() -> None:
+    upload_list_source = read_app_source("UploadListCtrl.cpp")
+    upload_eta_display = upload_list_source[
+        upload_list_source.index("case 20:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText")) :
+        upload_list_source.index("case 21:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText"))
+    ]
+    upload_eta_sort = upload_list_source[
+        upload_list_source.index("case 20:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc")) :
+        upload_list_source.index("case 21:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc"))
+    ]
+
+    assert "uint64 GetUploadClientMissingPartBytes" in upload_list_source
+    assert "client->IsUpPartAvailable(uPart)" in upload_list_source
+    assert "static_cast<uint64>(uPart) * PARTSIZE" in upload_list_source
+    assert "min(static_cast<uint64>(PARTSIZE), uFileSize - uPartStart)" in upload_list_source
+    assert "uint64 GetUploadClientCompletionEtaSeconds" in upload_list_source
+    assert "(uMissingBytes + uDataRate - 1) / uDataRate" in upload_list_source
+    assert "GetUploadClientCompletionEtaSeconds(client, file)" in upload_eta_display
+    assert "GetUploadClientCompletionEtaSeconds(item1, file1)" in upload_eta_sort
+    assert "GetUploadClientCompletionEtaSeconds(item2, file2)" in upload_eta_sort
+    assert "GetSessionUp()" not in upload_eta_display
+    assert "GetSessionUp()" not in upload_eta_sort
