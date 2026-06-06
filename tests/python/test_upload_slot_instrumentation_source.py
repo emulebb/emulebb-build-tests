@@ -343,6 +343,17 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
         assert "if (thePrefs.GetUseDwlPercentage())" in draw
         assert "DrawCenteredTransferBarPercent(dc, rcItem, client);" in draw
 
+    upload_percent_formatter = upload_list_source[
+        upload_list_source.index("CString FormatUploadPartProgressPercentText") :
+        upload_list_source.index("uint64 GetUploadClientMissingPartBytes")
+    ]
+    queue_percent_formatter = queue_list_source[
+        queue_list_source.index("CString FormatUploadPartProgressPercentText") :
+        queue_list_source.index("void DrawCenteredTransferBarPercent")
+    ]
+    assert "if (fPercent > 0.0)" in upload_percent_formatter
+    assert "if (uAvailablePartCount > 0)" in queue_percent_formatter
+
     upload_percent_display = upload_list_source[
         upload_list_source.index("case 18:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText")) :
         upload_list_source.index("case 19:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText"))
