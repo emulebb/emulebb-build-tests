@@ -31,3 +31,14 @@ def test_shadow_param_list_resyncs_before_position_access() -> None:
     assert "m_Params.InsertAfter(m_Params.FindIndex(lResult - 1)" not in source
     assert "bool EnsureParamSnapshot(bool bForce = false);" in header
     assert "if (pos == NULL)\n\t\t\treturn (iPos >= 0 && iPos < GetItemCount())" in header
+
+
+def test_view_preset_command_pairs_live_lists_with_explicit_profiles() -> None:
+    source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("void CemuleDlg::ApplyViewPresetCommand") : source.index("void CemuleDlg::ShowToolPopupAt")]
+
+    assert "{transferwnd != NULL ? transferwnd->GetUploadList() : NULL, _T(\"UploadListCtrl\")}" in block
+    assert "{transferwnd != NULL ? transferwnd->GetQueueList() : NULL, _T(\"QueueListCtrl\")}" in block
+    assert "MuleListCtrlViewPresets::FindProfile(liveList.pszProfileName)" in block
+    assert "liveList.pList->SetViewPresetProfile(*profile);" in block
+    assert "liveList.pList->ApplyViewPreset(ePreset, eWidthMode);" in block

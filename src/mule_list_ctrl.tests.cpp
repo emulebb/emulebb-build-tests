@@ -88,11 +88,24 @@ TEST_CASE("Mule list view preset profiles are complete and scoped to main grids"
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *download = MuleListCtrlViewPresets::FindProfile(_T("DownloadListCtrl"));
 	REQUIRE(download != nullptr);
-	CHECK(download->iColumnCount == 19);
+	CHECK(download->iColumnCount == 20);
 	CHECK(download->iStockHiddenColumnCount == 4);
 	CHECK(download->iExtendedHiddenColumnCount == 0);
 	CHECK(download->piExtendedOrder[9] == 9);
-	CHECK(download->piExtendedOrder[18] == 18);
+	CHECK(download->piExtendedOrder[19] == 18);
+
+	const MuleListCtrlViewPresets::SListControlViewPresetProfile *queue = MuleListCtrlViewPresets::FindProfile(_T("QueueListCtrl"));
+	REQUIRE(queue != nullptr);
+	CHECK(queue->iColumnCount == 23);
+	CHECK(queue->piExtendedOrder[2] == 13);
+	CHECK(queue->piExtendedOrder[3] == 22);
+
+	const MuleListCtrlViewPresets::SListControlViewPresetProfile *upload = MuleListCtrlViewPresets::FindProfile(_T("UploadListCtrl"));
+	REQUIRE(upload != nullptr);
+	CHECK(upload->iColumnCount == 23);
+	CHECK(upload->piExtendedOrder[4] == 18);
+	CHECK(upload->piExtendedOrder[7] == 11);
+	CHECK(upload->piExtendedOrder[8] == 22);
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *search = MuleListCtrlViewPresets::FindProfile(_T("SearchListCtrl"));
 	REQUIRE(search != nullptr);
