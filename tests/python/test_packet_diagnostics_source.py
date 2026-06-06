@@ -7,10 +7,15 @@ import xml.etree.ElementTree as ET
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 APP_ROOT = WORKSPACE_ROOT / "workspaces" / "workspace" / "app" / "emulebb-main"
 SRC_ROOT = APP_ROOT / "srchybrid"
+BUILD_ROOT = WORKSPACE_ROOT / "repos" / "emulebb-build"
 
 
 def read_source(name: str) -> str:
     return (SRC_ROOT / name).read_text(encoding="utf-8", errors="ignore")
+
+
+def read_build_source(name: str) -> str:
+    return (BUILD_ROOT / name).read_text(encoding="utf-8", errors="ignore")
 
 
 def test_packet_diagnostics_compile_flag_is_opt_in() -> None:
@@ -38,6 +43,13 @@ def test_packet_diagnostics_compile_flag_is_opt_in() -> None:
     ]
     assert len(release_definitions) == 1
     assert "$(StartupProfilingPreprocessorDefinition)" in release_definitions[0]
+
+
+def test_packet_diagnostics_build_env_override_is_available() -> None:
+    build_source = read_build_source("emule_workspace/build.py")
+
+    assert 'env_override("EMULEBB_ENABLE_PACKET_DIAGNOSTICS")' in build_source
+    assert "/p:EnablePacketDiagnostics=" in build_source
 
 
 def test_startup_profiling_compile_flag_is_opt_in() -> None:
