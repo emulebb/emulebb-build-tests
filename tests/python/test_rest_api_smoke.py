@@ -3958,7 +3958,7 @@ def test_rest_stress_retry_classification_is_limited_to_transient_resets() -> No
         {
             "status": 503,
             "content_type": "text/plain; charset=utf-8",
-            "body_text": "Web interface is busy: accepted-client thread limit reached.",
+            "body_text": "eMuleBB web API is busy\n",
         }
     )
     assert not module.is_retryable_rest_stress_response(

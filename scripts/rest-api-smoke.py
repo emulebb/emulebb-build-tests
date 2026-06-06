@@ -233,6 +233,7 @@ REST_STRESS_ACCEPTED_CLIENT_THREAD_LIMIT = 1
 REST_STRESS_BUSY_STATUS = 503
 REST_STRESS_BUSY_BODY_FRAGMENTS = (
     "accepted-client",
+    "emulebb web api is busy",
     "service unavailable",
     "web interface is busy",
 )
@@ -2079,7 +2080,7 @@ def http_request(
             payload = None
             if "application/json" in content_type and body_text:
                 payload = json.loads(body_text)
-            return {
+            result = {
                 "status": int(exc.code),
                 "content_type": content_type,
                 "headers": dict(exc.headers.items()),
@@ -2087,6 +2088,10 @@ def http_request(
                 "json": unwrap_rest_payload(payload),
                 "raw_json": payload,
             }
+            if attempt < len(retry_delays) and is_retryable_rest_stress_response(result):
+                time.sleep(retry_delays[attempt])
+                continue
+            return result
         except urllib.error.URLError as exc:
             if attempt < len(retry_delays) and is_retryable_rest_transport_error(exc):
                 time.sleep(retry_delays[attempt])

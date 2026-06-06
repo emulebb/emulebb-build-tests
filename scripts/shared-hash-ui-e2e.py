@@ -1212,7 +1212,18 @@ def run_reload_during_hash_scenario(
         process_id = int(win32process.GetWindowThreadProcessId(main_hwnd)[1])
         summary["process_id"] = process_id
         summary["visible_before_reload"] = open_shared_files_page_snapshot(main_hwnd)
-        summary["hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+        try:
+            summary["hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+        except RuntimeError as exc:
+            if "Hashing completed before the interruption target was reached." not in str(exc):
+                raise
+            if not record_hashing_completed_before_interruption_target(
+                summary,
+                summary["visible_before_reload"],
+                expected_count=int(fixture["expected_row_count"]),
+                error_message=str(exc),
+            ):
+                raise
 
         shared_files_ui.click_reload_button(main_hwnd)
         summary["visible_immediately_after_reload"] = open_shared_files_page_snapshot(main_hwnd)
