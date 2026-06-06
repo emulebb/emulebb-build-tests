@@ -26,6 +26,7 @@ TEST_CASE("Preference validation seam centralizes core numeric ranges")
 
 	CHECK(PreferenceValidationSeams::NormalizeConfiguredUploadLimitKiB(0u) == PreferenceValidationSeams::kDefaultConfiguredUploadLimitKiB);
 	CHECK(PreferenceValidationSeams::NormalizeConfiguredUploadLimitKiB(PreferenceValidationSeams::kUnlimitedBandwidthSentinelKiB) == PreferenceValidationSeams::kDefaultConfiguredUploadLimitKiB);
+	CHECK(PreferenceValidationSeams::kDefaultConfiguredUploadLimitKiB == 6200u);
 	CHECK(PreferenceValidationSeams::NormalizeConfiguredUploadLimitKiB(512u) == 512u);
 	CHECK(PreferenceValidationSeams::NormalizeConfiguredDownloadLimitKiB(0u) == 1u);
 	CHECK(PreferenceValidationSeams::NormalizeConfiguredDownloadLimitKiB(4096u) == 4096u);
@@ -35,6 +36,7 @@ TEST_CASE("Preference validation seam centralizes core numeric ranges")
 	CHECK(PreferenceValidationSeams::NormalizeQueueSize(20000) == static_cast<std::int64_t>(PreferenceValidationSeams::kMaxQueueSize));
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(0u) == static_cast<std::uint32_t>(PreferenceValidationSeams::kMinUploadSlots));
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(99u) == static_cast<std::uint32_t>(PreferenceValidationSeams::kMaxUploadSlots));
+	CHECK(PreferenceValidationSeams::kDefaultMaxUploadSlots == 10u);
 }
 
 TEST_CASE("Preference validation seam centralizes public REST preference ranges")
@@ -93,8 +95,10 @@ TEST_CASE("Preference validation seam centralizes broadband upload policy ranges
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadGraceSeconds(30u) == 30u);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadGraceSeconds(301u) == PreferenceValidationSeams::kMaxSlowUploadGraceSeconds);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadWarmupSeconds(0u) == 0u);
+	CHECK(PreferenceValidationSeams::kDefaultSlowUploadWarmupSeconds == 30u);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadWarmupSeconds(3601u) == PreferenceValidationSeams::kMaxSlowUploadWarmupSeconds);
 	CHECK(PreferenceValidationSeams::NormalizeZeroUploadRateGraceSeconds(0u) == PreferenceValidationSeams::kMinZeroUploadRateGraceSeconds);
+	CHECK(PreferenceValidationSeams::kDefaultZeroUploadRateGraceSeconds == 5u);
 	CHECK(PreferenceValidationSeams::NormalizeZeroUploadRateGraceSeconds(121u) == PreferenceValidationSeams::kMaxZeroUploadRateGraceSeconds);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadCooldownSeconds(0u) == PreferenceValidationSeams::kMinSlowUploadCooldownSeconds);
 	CHECK(PreferenceValidationSeams::kDefaultSlowUploadCooldownSeconds == 60u);
