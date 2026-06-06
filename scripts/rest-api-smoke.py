@@ -230,6 +230,12 @@ REST_STRESS_RETRYABLE_ERROR_FRAGMENTS = (
 )
 REST_STRESS_REQUEST_MAX_ATTEMPTS = 6
 REST_STRESS_ACCEPTED_CLIENT_THREAD_LIMIT = 1
+REST_STRESS_BUSY_STATUS = 503
+REST_STRESS_BUSY_BODY_FRAGMENTS = (
+    "accepted-client",
+    "service unavailable",
+    "web interface is busy",
+)
 DEFAULT_HTTPS_CA_FILE = object()
 HTTPS_TRUST_CA_FILE: str | None = None
 REST_LEAK_CHURN_RESOURCE_THRESHOLDS = {
@@ -3296,6 +3302,19 @@ def is_retryable_rest_stress_exception(exc: Exception) -> bool:
     return any(fragment in message for fragment in REST_STRESS_RETRYABLE_ERROR_FRAGMENTS)
 
 
+def is_retryable_rest_stress_response(result: dict[str, object]) -> bool:
+    """Reports whether one REST stress response is a transient web-worker busy reply."""
+
+    try:
+        status = int(result.get("status") or 0)
+    except (TypeError, ValueError):
+        return False
+    if status != REST_STRESS_BUSY_STATUS:
+        return False
+    body = str(result.get("body_text") or "").lower()
+    return any(fragment in body for fragment in REST_STRESS_BUSY_BODY_FRAGMENTS)
+
+
 def build_rest_stress_operation_key(method: object, path: object, scenario: object) -> str:
     """Builds a stable operation identity for stress scheduler coverage accounting."""
 
@@ -3783,6 +3802,10 @@ def exercise_rest_stress(
                     body_match=body_match,
                     native_rest_json=native_rest_json,
                 )
+                if error and is_retryable_rest_stress_response(result) and attempt_index < REST_STRESS_REQUEST_MAX_ATTEMPTS - 1:
+                    retry_count += 1
+                    time.sleep(0.05 * retry_count)
+                    continue
                 return {
                     "operation_key": operation_key,
                     "method": method,

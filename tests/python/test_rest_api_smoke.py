@@ -3954,6 +3954,20 @@ def test_rest_stress_retry_classification_is_limited_to_transient_resets() -> No
         RuntimeError("<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>")
     )
     assert not module.is_retryable_rest_stress_exception(TimeoutError("timed out"))
+    assert module.is_retryable_rest_stress_response(
+        {
+            "status": 503,
+            "content_type": "text/plain; charset=utf-8",
+            "body_text": "Web interface is busy: accepted-client thread limit reached.",
+        }
+    )
+    assert not module.is_retryable_rest_stress_response(
+        {
+            "status": 503,
+            "content_type": "application/json; charset=utf-8",
+            "body_text": '{"error":"EMULE_UNAVAILABLE"}',
+        }
+    )
 
 
 def test_rest_stress_caps_inflight_workers_to_accepted_client_limit(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -71,6 +71,7 @@ QBIT_CLIENT_TRANSIENT_ERROR_FRAGMENTS = (
     "software in your host machine",
     "accepted-client",
     "web interface rejected",
+    "read operation timed out",
 )
 PROWLARR_INDEXER_TRANSIENT_ERROR_FRAGMENTS = (
     "too many requests",
