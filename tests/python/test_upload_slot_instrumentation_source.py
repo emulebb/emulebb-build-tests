@@ -323,6 +323,8 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     for source, new_column in ((upload_list_source, "InsertColumn(22"), (queue_list_source, "InsertColumn(22")):
         assert "CString FormatUploadPartProgressText" in source
         assert '"%u / %u"' in source
+        assert "client->HasUpPartStatusReported()" in source
+        assert 'strText = _T("-");' in source
         assert "GetUpAvailablePartCount()" in source
         assert new_column in source
         assert "case 22:" in source
@@ -368,6 +370,7 @@ def test_upload_eta_uses_peer_missing_parts_not_session_upload() -> None:
     ]
 
     assert "uint64 GetUploadClientMissingPartBytes" in upload_list_source
+    assert "!client->HasUpPartStatusReported()" in upload_list_source
     assert "client->IsUpPartAvailable(uPart)" in upload_list_source
     assert "static_cast<uint64>(uPart) * PARTSIZE" in upload_list_source
     assert "min(static_cast<uint64>(PARTSIZE), uFileSize - uPartStart)" in upload_list_source
@@ -378,3 +381,33 @@ def test_upload_eta_uses_peer_missing_parts_not_session_upload() -> None:
     assert "GetUploadClientCompletionEtaSeconds(item2, file2)" in upload_eta_sort
     assert "GetSessionUp()" not in upload_eta_display
     assert "GetSessionUp()" not in upload_eta_sort
+
+
+def test_upload_part_status_report_flag_tracks_protocol_bitmap_presence() -> None:
+    client_header = read_app_source("UpDownClient.h")
+    base_client_source = read_app_source("BaseClient.cpp")
+    upload_client_source = read_app_source("UploadClient.cpp")
+    process_extended_info = upload_client_source[
+        upload_client_source.index("bool CUpDownClient::ProcessExtendedInfo") :
+        upload_client_source.index("void CUpDownClient::SetUploadFileID")
+    ]
+    set_upload_file_id = upload_client_source[
+        upload_client_source.index("void CUpDownClient::SetUploadFileID") :
+        upload_client_source.index("void CUpDownClient::AddReqBlock")
+    ]
+
+    assert "HasUpPartStatusReported() const" in client_header
+    assert "m_bUpPartStatusReported;" in client_header
+    assert "m_bUpPartStatusReported = false;" in base_client_source
+    assert "m_bUpPartStatusReported = false;" in process_extended_info
+    no_bitmap_block = process_extended_info[
+        process_extended_info.index("if (!nED2KUpPartCount)") :
+        process_extended_info.index("} else {")
+    ]
+    bitmap_block = process_extended_info[
+        process_extended_info.index("} else {") :
+        process_extended_info.index("if (GetExtendedRequestsVersion() > 1)")
+    ]
+    assert "m_bUpPartStatusReported = true;" not in no_bitmap_block
+    assert "m_bUpPartStatusReported = true;" in bitmap_block
+    assert "m_bUpPartStatusReported = false;" in set_upload_file_id
