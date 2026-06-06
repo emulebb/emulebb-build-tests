@@ -62,13 +62,17 @@ def test_download_infotip_wraps_long_lines_before_tooltip_suffix() -> None:
     assert "info = WrapDownloadInfoTipText(info);\n\t\t\tinfo += TOOLTIP_AUTOFORMAT_SUFFIX_CH;" in infotip
 
 
-def test_download_progress_column_reports_completed_parts() -> None:
+def test_download_obtained_parts_are_a_distinct_text_column() -> None:
     source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
-    helper = source[source.index("CString FormatDownloadPartProgressText") : source.index("CString WrapDownloadInfoTipLine")]
+    helper = source[source.index("CString FormatDownloadObtainedPartsText") : source.index("CString WrapDownloadInfoTipLine")]
     draw = source[source.index("void CDownloadListCtrl::DrawFileItem") : source.index("CString CDownloadListCtrl::GetSourceItemDisplayText")]
     display = source[source.index("CString CDownloadListCtrl::GetFileItemDisplayText") : source.index("void CDownloadListCtrl::ShowFilesCount")]
+    localize = source[source.index("void CDownloadListCtrl::Localize") : source.index("void CDownloadListCtrl::AddFile")]
 
     assert "GetCompletedPartCount()" in helper
-    assert '"%.1f%% (%u / %u)"' in helper
-    assert "FormatDownloadPartProgressText(pPartFile)" in draw
-    assert "FormatDownloadPartProgressText(lpPartFile)" in display
+    assert '"%u / %u"' in helper
+    assert "InsertColumn(19" in source
+    assert "IDS_UPSTATUS" in localize
+    assert "FormatDownloadObtainedPartsText(pPartFile)" not in draw
+    assert "FormatDownloadObtainedPartsText(lpPartFile)" in display
+    assert '"%s: %.1f%%"' in display

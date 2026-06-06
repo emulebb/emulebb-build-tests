@@ -265,12 +265,26 @@ def test_upload_list_membership_honors_queued_refresh_timing() -> None:
     assert "SyncLiveClientItems();" in refresh_block
 
 
-def test_upload_part_status_columns_report_requester_parts() -> None:
+def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     upload_list_source = read_app_source("UploadListCtrl.cpp")
     queue_list_source = read_app_source("QueueListCtrl.cpp")
+    upload_draw = upload_list_source[
+        upload_list_source.index("void CUploadListCtrl::DrawItem") :
+        upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText")
+    ]
+    queue_draw = queue_list_source[
+        queue_list_source.index("void CQueueListCtrl::DrawItem") :
+        queue_list_source.index("CString CQueueListCtrl::GetItemDisplayText")
+    ]
 
-    for source in (upload_list_source, queue_list_source):
+    for source, new_column in ((upload_list_source, "InsertColumn(22"), (queue_list_source, "InsertColumn(22")):
         assert "CString FormatUploadPartProgressText" in source
         assert '"%u / %u"' in source
         assert "GetUpAvailablePartCount()" in source
-        assert "DrawCenteredBarText(dc, FormatUploadPartProgressText(client), rcItem)" in source
+        assert new_column in source
+        assert "case 22:" in source
+
+    assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in upload_draw
+    assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in queue_draw
+    assert "DrawCenteredBarText" not in upload_list_source
+    assert "DrawCenteredBarText" not in queue_list_source
