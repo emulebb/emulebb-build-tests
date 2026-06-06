@@ -197,7 +197,7 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(ShouldUseBroadbandBigSendBuffer(6200u * 1024u / 8u, 0u));
 	CHECK_FALSE(ShouldUseBroadbandBigSendBuffer(6200u * 1024u / 14u, 0u));
 	CHECK(ShouldUseBroadbandBigSendBuffer(6200u * 1024u / 14u, 240u * 1024u));
-	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(6200u * 1024u), static_cast<std::uint32_t>(620u * 1024u));
+	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(6200u * 1024u), static_cast<std::uint32_t>(124u * 1024u));
 	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(0u), static_cast<std::uint32_t>(1024u));
 	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(1000u), static_cast<std::uint32_t>(1024u));
 	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(1000u, 100u), static_cast<std::uint32_t>(1024u));

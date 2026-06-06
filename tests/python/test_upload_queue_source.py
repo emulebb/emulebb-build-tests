@@ -109,7 +109,7 @@ def test_broadband_upload_buffer_depth_scales_with_per_slot_target() -> None:
     assert "ShouldUseBroadbandBigSendBuffer(" in seams
     assert "uHighTargetBytesPerSec = 512u * 1024u" in seams
     assert "GetBroadbandUnderfillMarginBytesPerSec(" in seams
-    assert "uTargetFillPercent = 90u" in seams
+    assert "uTargetFillPercent = 98u" in seams
     assert "return GetBroadbandUploadBufferBlockCount(uTargetPerSlot, uClientDatarate);" in source
     assert "return ShouldUseBroadbandBigSendBuffer(uTargetPerSlot, uClientDatarate);" in source
     assert "return GetBroadbandTcpUploadSendBufferBytes(GetTargetClientDataRateBroadband());" in source
