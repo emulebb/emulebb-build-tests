@@ -372,6 +372,13 @@ TEST_CASE("Web API shares bounded transfer progress ratios across native and Arr
 	CHECK_EQ(WebApiSurfaceSeams::BuildTransferProgressRatio(2, 3), 0.6667);
 }
 
+TEST_CASE("Web API formats compact part progress counts")
+{
+	CHECK(WebApiSurfaceSeams::BuildPartProgressText(0, 0) == "0 / 0");
+	CHECK(WebApiSurfaceSeams::BuildPartProgressText(3, 9) == "3 / 9");
+	CHECK(WebApiSurfaceSeams::BuildPartProgressText(65535, 65535) == "65535 / 65535");
+}
+
 TEST_CASE("Web API parses the final transfer priority vocabulary")
 {
 	CHECK_EQ(WebApiSurfaceSeams::ParseTransferPriorityName("auto"), WebApiSurfaceSeams::ETransferPriority::Auto);

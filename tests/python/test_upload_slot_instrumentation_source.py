@@ -241,3 +241,36 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
         "reject-not-uploading-direct-add-failed",
     ):
         assert reason in client_source
+
+
+def test_upload_list_membership_honors_queued_refresh_timing() -> None:
+    queue_source = read_app_source("UploadQueue.cpp")
+    list_source = read_app_source("UploadListCtrl.cpp")
+    sync_block = list_source[
+        list_source.index("bool CUploadListCtrl::SyncLiveClientItems") :
+        list_source.index("CObject* CUploadListCtrl::WalkToLiveClientItem")
+    ]
+    refresh_block = list_source[
+        list_source.index("void CUploadListCtrl::RefreshVisibleItems") :
+        list_source.index("void CUploadListCtrl::ShowSelectedUserDetails")
+    ]
+
+    assert "QueueUploadListDisplayRefresh()" in queue_source
+    assert "QueueDisplayRefresh(DISPLAY_REFRESH_UPLOAD_LIST)" in queue_source
+    assert "GetUploadList()->AddClient" not in queue_source
+    assert "GetUploadList()->RemoveClient" not in queue_source
+    assert "GetFirstFromUploadList()" in sync_block
+    assert "InsertItem(LVIF_TEXT | LVIF_PARAM" in sync_block
+    assert "PruneStaleClientItems()" in sync_block
+    assert "SyncLiveClientItems();" in refresh_block
+
+
+def test_upload_part_status_columns_report_requester_parts() -> None:
+    upload_list_source = read_app_source("UploadListCtrl.cpp")
+    queue_list_source = read_app_source("QueueListCtrl.cpp")
+
+    for source in (upload_list_source, queue_list_source):
+        assert "CString FormatUploadPartProgressText" in source
+        assert '"%u / %u"' in source
+        assert "GetUpAvailablePartCount()" in source
+        assert "DrawCenteredBarText(dc, FormatUploadPartProgressText(client), rcItem)" in source

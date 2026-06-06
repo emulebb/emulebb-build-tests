@@ -60,3 +60,15 @@ def test_download_infotip_wraps_long_lines_before_tooltip_suffix() -> None:
     assert 'rstrLine == _T("<br_head>")' in helper
     assert "_istspace(ch) != 0 || ch == _T('-') || ch == _T(',') || ch == _T(')')" in helper
     assert "info = WrapDownloadInfoTipText(info);\n\t\t\tinfo += TOOLTIP_AUTOFORMAT_SUFFIX_CH;" in infotip
+
+
+def test_download_progress_column_reports_completed_parts() -> None:
+    source = (app_source_root() / "DownloadListCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
+    helper = source[source.index("CString FormatDownloadPartProgressText") : source.index("CString WrapDownloadInfoTipLine")]
+    draw = source[source.index("void CDownloadListCtrl::DrawFileItem") : source.index("CString CDownloadListCtrl::GetSourceItemDisplayText")]
+    display = source[source.index("CString CDownloadListCtrl::GetFileItemDisplayText") : source.index("void CDownloadListCtrl::ShowFilesCount")]
+
+    assert "GetCompletedPartCount()" in helper
+    assert '"%.1f%% (%u / %u)"' in helper
+    assert "FormatDownloadPartProgressText(pPartFile)" in draw
+    assert "FormatDownloadPartProgressText(lpPartFile)" in display
