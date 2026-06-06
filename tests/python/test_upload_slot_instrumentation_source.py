@@ -297,5 +297,11 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     assert "IDS_COOLDOWN, IDS_DL_PROGRESS, IDS_GEOLOCATION" in queue_localize
     assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in upload_draw
     assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in queue_draw
-    assert "DrawCenteredBarText" not in upload_list_source
-    assert "DrawCenteredBarText" not in queue_list_source
+    for source, draw in ((upload_list_source, upload_draw), (queue_list_source, queue_draw)):
+        assert "CString FormatUploadPartProgressPercentText" in source
+        assert '"%.1f%%"' in source
+        assert "GetUpAvailablePartCount()" in source
+        assert "DrawCenteredTransferBarPercent" in source
+        assert '"TransferBarPercentFg"' in source
+        assert "if (thePrefs.GetUseDwlPercentage())" in draw
+        assert "DrawCenteredTransferBarPercent(dc, rcItem, client);" in draw
