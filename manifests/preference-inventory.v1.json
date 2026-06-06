@@ -448,14 +448,14 @@
       "notes": ""
     },
     {
-      "id": "AutoBroadbandIO",
+      "id": "DownloadAutoBroadbandIO",
       "storageFile": "preferences.ini",
       "sections": [
         "<default>"
       ],
-      "key": "AutoBroadbandIO",
-      "sourceExpression": "_T(\"AutoBroadbandIO\")",
-      "kind": "literal",
+      "key": "DownloadAutoBroadbandIO",
+      "sourceExpression": "prefini::DownloadIoKeys::DownloadAutoBroadbandIO",
+      "kind": "constant",
       "access": [
         "read",
         "write"

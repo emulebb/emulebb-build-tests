@@ -37,7 +37,7 @@ REST_FIELD_TO_SCHEMA_ID = {
     "safeServerConnect": "SafeServerConnect",
     "networkKademlia": "NetworkKademlia",
     "networkEd2k": "NetworkED2K",
-    "autoBroadbandIo": "AutoBroadbandIO",
+    "downloadAutoBroadbandIo": "DownloadAutoBroadbandIO",
 }
 
 
@@ -83,7 +83,7 @@ OWNER_TOKEN_TO_SCHEMA_ID = {
     "networked2k": "NetworkED2K",
     "networkkademlia": "NetworkKademlia",
     "safeserverconnect": "SafeServerConnect",
-    "autobroadbandioenabled": "AutoBroadbandIO",
+    "downloadautobroadbandioenabled": "DownloadAutoBroadbandIO",
     "exitonbindinterfaceloss": "ExitOnBindInterfaceLoss",
     "exitonbindinterfacelossenabled": "ExitOnBindInterfaceLoss",
     "startupprogressdialogmode": "StartupProgressDialog",
