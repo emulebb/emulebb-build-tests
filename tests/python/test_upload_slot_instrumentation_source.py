@@ -303,6 +303,8 @@ def test_queue_list_membership_honors_queued_refresh_timing() -> None:
 def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     upload_list_source = read_app_source("UploadListCtrl.cpp")
     queue_list_source = read_app_source("QueueListCtrl.cpp")
+    progress_seams = read_app_source("UploadPartProgressSeams.h")
+    project_source = read_app_source("emule.vcxproj")
     upload_localize = upload_list_source[
         upload_list_source.index("void CUploadListCtrl::Localize") :
         upload_list_source.index("void CUploadListCtrl::OnSysColorChange")
@@ -334,25 +336,26 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
     assert "IDS_COOLDOWN, IDS_DL_PROGRESS, IDS_GEOLOCATION" in queue_localize
     assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in upload_draw
     assert "client->DrawUpStatusBar(dc, &rcItem, false, thePrefs.UseFlatBar());" in queue_draw
+    assert '<ClInclude Include="UploadPartProgressSeams.h" />' in project_source
+    assert "inline uint64 GetEstimatedProgressBytes" in progress_seams
+    assert "inline double GetProgressPercent" in progress_seams
+    assert "inline CString FormatProgressPercentText" in progress_seams
+    assert "inline uint64 GetMissingBytes" in progress_seams
+    assert "const uint64 uBaseline = min(client->GetUpPartStatusSessionUpBaseline(), uSessionBytes);" in progress_seams
+    assert "uEstimatedBytes += uSessionBytes - uBaseline;" in progress_seams
+    assert "if (fPercent > 0.0)" in progress_seams
     for source, draw in ((upload_list_source, upload_draw), (queue_list_source, queue_draw)):
-        assert "CString FormatUploadPartProgressPercentText" in source
-        assert '"%.1f%%"' in source
         assert "GetUpAvailablePartCount()" in source
+        assert '#include "UploadPartProgressSeams.h"' in source
+        assert "UploadPartProgressSeams::FormatProgressPercentText" in source
         assert "DrawCenteredTransferBarPercent" in source
         assert '"TransferBarPercentFg"' in source
         assert "if (thePrefs.GetUseDwlPercentage())" in draw
-        assert "DrawCenteredTransferBarPercent(dc, rcItem, client);" in draw
-
-    upload_percent_formatter = upload_list_source[
-        upload_list_source.index("CString FormatUploadPartProgressPercentText") :
-        upload_list_source.index("uint64 GetUploadClientMissingPartBytes")
-    ]
-    queue_percent_formatter = queue_list_source[
-        queue_list_source.index("CString FormatUploadPartProgressPercentText") :
-        queue_list_source.index("void DrawCenteredTransferBarPercent")
-    ]
-    assert "if (fPercent > 0.0)" in upload_percent_formatter
-    assert "if (uAvailablePartCount > 0)" in queue_percent_formatter
+        assert "DrawCenteredTransferBarPercent(dc, rcItem, client, file);" in draw
+        assert "GetUploadPartBytesForPart" not in source
+        assert "GetReportedUploadPartProgressBytes" not in source
+        assert "GetEstimatedUploadPartProgressBytes" not in source
+        assert "FormatUploadPartProgressPercentText" not in source
 
     upload_percent_display = upload_list_source[
         upload_list_source.index("case 18:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText")) :
@@ -362,15 +365,31 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
         upload_list_source.index("case 18:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc")) :
         upload_list_source.index("case 19:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc"))
     ]
-    assert "sText = FormatUploadPartProgressPercentText(client);" in upload_percent_display
-    assert "GetUploadPartProgressPercent(item1)" in upload_percent_sort
-    assert "GetUploadPartProgressPercent(item2)" in upload_percent_sort
+    upload_progress_sort = upload_list_source[
+        upload_list_source.index("case 11:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc")) :
+        upload_list_source.index("case 22:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc"))
+    ]
+    queue_progress_sort = queue_list_source[
+        queue_list_source.index("case 13:", queue_list_source.index("int CALLBACK CQueueListCtrl::SortProc")) :
+        queue_list_source.index("case 22:", queue_list_source.index("int CALLBACK CQueueListCtrl::SortProc"))
+    ]
+    assert "sText = UploadPartProgressSeams::FormatProgressPercentText(client, GetUploadClientFile(client));" in upload_percent_display
+    assert "inline int GetProgressPercentSortValue" in progress_seams
+    assert "inline int CompareProgressPercent" in progress_seams
+    assert "return static_cast<int>(fPercent * 10.0 + 0.5);" in progress_seams
+    assert "UploadPartProgressSeams::CompareProgressPercent(item1, GetUploadClientFile(item1), item2, GetUploadClientFile(item2))" in upload_progress_sort
+    assert "UploadPartProgressSeams::CompareProgressPercent(item1, GetUploadClientFile(item1), item2, GetUploadClientFile(item2))" in upload_percent_sort
+    assert "CompareUnsigned(item1->GetUpPartCount(), item2->GetUpPartCount())" not in upload_progress_sort
+    assert "GetProgressPercent(item1" not in upload_percent_sort
+    assert "GetProgressPercent(item2" not in upload_percent_sort
+    assert "UploadPartProgressSeams::CompareProgressPercent(item1, GetQueueClientFile(item1), item2, GetQueueClientFile(item2))" in queue_progress_sort
+    assert "CompareUnsigned(item1->GetUpPartCount(), item2->GetUpPartCount())" not in queue_progress_sort
     assert "GetSessionUp()" not in upload_percent_display
-    assert "GetSessionUp()" not in upload_percent_sort
 
 
-def test_upload_eta_uses_peer_missing_parts_not_session_upload() -> None:
+def test_upload_eta_and_percent_use_same_estimated_obtained_bytes() -> None:
     upload_list_source = read_app_source("UploadListCtrl.cpp")
+    progress_seams = read_app_source("UploadPartProgressSeams.h")
     upload_eta_display = upload_list_source[
         upload_list_source.index("case 20:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText")) :
         upload_list_source.index("case 21:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText"))
@@ -380,18 +399,19 @@ def test_upload_eta_uses_peer_missing_parts_not_session_upload() -> None:
         upload_list_source.index("case 21:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc"))
     ]
 
-    assert "uint64 GetUploadClientMissingPartBytes" in upload_list_source
-    assert "!client->HasUpPartStatusReported()" in upload_list_source
-    assert "client->IsUpPartAvailable(uPart)" in upload_list_source
-    assert "static_cast<uint64>(uPart) * PARTSIZE" in upload_list_source
-    assert "min(static_cast<uint64>(PARTSIZE), uFileSize - uPartStart)" in upload_list_source
+    assert "inline uint64 GetEstimatedProgressBytes" in progress_seams
+    assert "inline uint64 GetMissingBytes" in progress_seams
+    assert "const uint64 uEstimatedBytes = GetEstimatedProgressBytes(client, file);" in progress_seams
+    assert "return uEstimatedBytes < uFileSize ? uFileSize - uEstimatedBytes : 0;" in progress_seams
+    assert "client->IsUpPartAvailable(uPart)" in progress_seams
+    assert "uint64 GetMissingBytes" not in upload_list_source
+    assert "UploadPartProgressSeams::GetMissingBytes(client, file)" in upload_list_source
     assert "uint64 GetUploadClientCompletionEtaSeconds" in upload_list_source
     assert "(uMissingBytes + uDataRate - 1) / uDataRate" in upload_list_source
     assert "GetUploadClientCompletionEtaSeconds(client, file)" in upload_eta_display
     assert "GetUploadClientCompletionEtaSeconds(item1, file1)" in upload_eta_sort
     assert "GetUploadClientCompletionEtaSeconds(item2, file2)" in upload_eta_sort
     assert "GetSessionUp()" not in upload_eta_display
-    assert "GetSessionUp()" not in upload_eta_sort
 
 
 def test_upload_part_status_report_flag_tracks_protocol_bitmap_presence() -> None:
@@ -408,9 +428,13 @@ def test_upload_part_status_report_flag_tracks_protocol_bitmap_presence() -> Non
     ]
 
     assert "HasUpPartStatusReported() const" in client_header
+    assert "GetUpPartStatusSessionUpBaseline() const" in client_header
     assert "m_bUpPartStatusReported;" in client_header
+    assert "m_nUpPartStatusSessionUpBaseline;" in client_header
     assert "m_bUpPartStatusReported = false;" in base_client_source
+    assert "m_nUpPartStatusSessionUpBaseline = 0;" in base_client_source
     assert "m_bUpPartStatusReported = false;" in process_extended_info
+    assert "m_nUpPartStatusSessionUpBaseline = 0;" in process_extended_info
     no_bitmap_block = process_extended_info[
         process_extended_info.index("if (!nED2KUpPartCount)") :
         process_extended_info.index("} else {")
@@ -421,4 +445,6 @@ def test_upload_part_status_report_flag_tracks_protocol_bitmap_presence() -> Non
     ]
     assert "m_bUpPartStatusReported = true;" not in no_bitmap_block
     assert "m_bUpPartStatusReported = true;" in bitmap_block
+    assert "m_nUpPartStatusSessionUpBaseline = GetSessionUp();" in bitmap_block
     assert "m_bUpPartStatusReported = false;" in set_upload_file_id
+    assert "m_nUpPartStatusSessionUpBaseline = 0;" in set_upload_file_id
