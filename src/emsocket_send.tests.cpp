@@ -48,6 +48,13 @@ TEST_CASE("EMSocket overlapped cleanup retry helper retries only for incomplete 
 TEST_CASE("EMSocket send queue budget helpers bound packet counts and bytes")
 {
 #ifdef EMULEBB_HAS_EMSOCKET_SEND_BUDGET_SEAMS
+	CHECK_EQ(kMinEMSocketQueuedStandardBytes, static_cast<uint64>(16ull * 1024ull * 1024ull));
+	CHECK_EQ(kMaxEMSocketQueuedStandardBytes, static_cast<uint64>(256ull * 1024ull * 1024ull));
+	CHECK_EQ(GetBroadbandEMSocketQueuedStandardBytes(0u), kMinEMSocketQueuedStandardBytes);
+	CHECK_EQ(GetBroadbandEMSocketQueuedStandardBytes(6200u * 1024u / 8u), kMinEMSocketQueuedStandardBytes);
+	CHECK_EQ(GetBroadbandEMSocketQueuedStandardBytes(128u * 1024u * 1024u / 8u), static_cast<uint64>(128ull * 1024ull * 1024ull));
+	CHECK_EQ(GetBroadbandEMSocketQueuedStandardBytes(256u * 1024u * 1024u / 8u), kMaxEMSocketQueuedStandardBytes);
+
 	CHECK(CanQueueEMSocketControlPacket(0u, 0u, 128u));
 	CHECK(CanQueueEMSocketControlPacket(kMaxEMSocketQueuedControlPackets - 1u, kMaxEMSocketQueuedControlBytes - 128u, 128u));
 	CHECK_FALSE(CanQueueEMSocketControlPacket(kMaxEMSocketQueuedControlPackets, 0u, 128u));
@@ -56,8 +63,10 @@ TEST_CASE("EMSocket send queue budget helpers bound packet counts and bytes")
 
 	CHECK(CanQueueEMSocketStandardPacket(0u, 0u, 1024u));
 	CHECK(CanQueueEMSocketStandardPacket(kMaxEMSocketQueuedStandardPackets - 1u, kMaxEMSocketQueuedStandardBytes - 1024u, 1024u));
+	CHECK(CanQueueEMSocketStandardPacket(0u, kMinEMSocketQueuedStandardBytes - 1024u, 1024u, kMinEMSocketQueuedStandardBytes));
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(kMaxEMSocketQueuedStandardPackets, 0u, 1024u));
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, kMaxEMSocketQueuedStandardBytes, 1u));
+	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, kMinEMSocketQueuedStandardBytes, 1u, kMinEMSocketQueuedStandardBytes));
 	CHECK_FALSE(CanQueueEMSocketStandardPacket(0u, 0u, static_cast<uint32>(kMaxEMSocketQueuedStandardBytes + 1u)));
 #else
 	MESSAGE("EMSocket send budget helpers are not available in this workspace.");

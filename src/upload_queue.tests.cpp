@@ -101,6 +101,8 @@ TEST_CASE("Upload queue probes unproductive no-request cooldowns only near expir
 	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 5001u));
 	CHECK(ShouldProbeNoRequestCooldownCandidate(false, 30000u));
 	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(false, 30001u));
+	CHECK(ShouldProbeNoRequestCooldownCandidate(false, 180000u, kProductiveNoRequestCooldownProbeRemainingMs, kUnproductiveNoRequestCooldownProbeRemainingMs, true));
+	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 180000u, kProductiveNoRequestCooldownProbeRemainingMs, kUnproductiveNoRequestCooldownProbeRemainingMs, true));
 }
 
 TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
@@ -123,7 +125,6 @@ TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with liv
 TEST_CASE("Upload queue cools down failed upload admissions only for non-friend peers with an IP")
 {
 	CHECK_EQ(kProductiveNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(10u));
-	CHECK_EQ(kNoRequestUploadRecycleGraceMaxSeconds, static_cast<std::uint32_t>(5u));
 	CHECK_EQ(kUploadChurnRetryCooldownMaxSeconds, static_cast<std::uint32_t>(120u));
 	CHECK_EQ(kRepeatedNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(180u));
 	CHECK(GetUploadChurnRetryCooldownSeconds(30u) == 30u);
@@ -172,8 +173,8 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK_EQ(kNoRequestUploadCooldownMaxSeconds, static_cast<std::uint32_t>(60u));
 
 	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(3u), static_cast<std::uint64_t>(3000u));
-	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(kNoRequestUploadRecycleGraceMaxSeconds), static_cast<std::uint64_t>(5000u));
-	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(10u), static_cast<std::uint64_t>(5000u));
+	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(10u), static_cast<std::uint64_t>(10000u));
+	CHECK_EQ(GetNoRequestUploadRecycleGraceMs(60u), static_cast<std::uint64_t>(60000u));
 
 	CHECK_EQ(kProductiveNoRequestCooldownPayloadBytes, static_cast<std::uint64_t>(184320u));
 	CHECK_FALSE(IsProductiveNoRequestUploadRecycle(kProductiveNoRequestCooldownPayloadBytes - 1u));
@@ -182,6 +183,24 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK_EQ(GetProductiveNoRequestCooldownPayloadBytes(768u * 1024u), static_cast<std::uint64_t>(768u * 1024u));
 	CHECK_FALSE(IsProductiveNoRequestUploadRecycle(180u * 1024u, GetProductiveNoRequestCooldownPayloadBytes(768u * 1024u)));
 	CHECK(IsProductiveNoRequestUploadRecycle(768u * 1024u, GetProductiveNoRequestCooldownPayloadBytes(768u * 1024u)));
+	CHECK(ShouldDeferProductiveNoRequestUploadRecycle(true, 59999u, 60000u));
+	CHECK_FALSE(ShouldDeferProductiveNoRequestUploadRecycle(true, 60000u, 60000u));
+	CHECK_FALSE(ShouldDeferProductiveNoRequestUploadRecycle(false, 10000u, 60000u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(6200u * 1024u / 8u, 0u), static_cast<std::uint32_t>(35u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(6200u * 1024u / 14u, 0u), static_cast<std::uint32_t>(20u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(64u * 1024u, 64u * 1024u), static_cast<std::uint32_t>(5u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(16u * 1024u, 8u * 1024u), static_cast<std::uint32_t>(3u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(4u * 1024u, 0u), static_cast<std::uint32_t>(1u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(4u * 1024u * 1024u, 0u), static_cast<std::uint32_t>(183u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(128u * 1024u * 1024u / 8u, 0u), static_cast<std::uint32_t>(729u));
+	CHECK_EQ(GetBroadbandUploadBufferBlockCount(256u * 1024u * 1024u / 8u, 0u), static_cast<std::uint32_t>(768u));
+	CHECK(ShouldUseBroadbandBigSendBuffer(6200u * 1024u / 8u, 0u));
+	CHECK_FALSE(ShouldUseBroadbandBigSendBuffer(6200u * 1024u / 14u, 0u));
+	CHECK(ShouldUseBroadbandBigSendBuffer(6200u * 1024u / 14u, 240u * 1024u));
+	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(6200u * 1024u), static_cast<std::uint32_t>(620u * 1024u));
+	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(0u), static_cast<std::uint32_t>(1024u));
+	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(1000u), static_cast<std::uint32_t>(1024u));
+	CHECK_EQ(GetBroadbandUnderfillMarginBytesPerSec(1000u, 100u), static_cast<std::uint32_t>(1024u));
 
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(10u, false) == 10u);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(30u, false) == 30u);
@@ -262,8 +281,8 @@ TEST_CASE("Broadband stalled upload recycling requires queued work and replaceme
 	CHECK_FALSE(HasStalledUploadReplacementPressure(false, 12, 12));
 
 	CHECK_EQ(GetStalledUploadRecycleGraceMs(5u), 5000u);
-	CHECK_EQ(GetStalledUploadRecycleGraceMs(kStalledUploadRecycleGraceMaxSeconds), 15000u);
-	CHECK_EQ(GetStalledUploadRecycleGraceMs(kStalledUploadRecycleGraceMaxSeconds + 1u), 15000u);
+	CHECK_EQ(GetStalledUploadRecycleGraceMs(10u), 10000u);
+	CHECK_EQ(GetStalledUploadRecycleGraceMs(60u), 60000u);
 
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 1u, 0, 0, 0, 10000u, 10000u));
 	CHECK(ShouldRecycleStalledBroadbandUploadSlot(true, true, false, true, 0u, 0u, 1, 0, 0, 10000u, 10000u));
@@ -327,6 +346,16 @@ TEST_CASE("Upload queue presentation cadence is owned by the unified desktop tim
 TEST_CASE("Upload disk IO seam bounds pending overlapped reads before Windows quota failure")
 {
 #ifdef EMULEBB_TEST_HAVE_UPLOAD_DISK_IO_PENDING_READ_SEAMS
+	CHECK_EQ(UploadDiskIOThreadSeams::kMinPendingReadBlocksPerClient, 8);
+	CHECK_EQ(UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerClient, 256);
+	CHECK_EQ(UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerThread, static_cast<INT_PTR>(4096));
+	CHECK_EQ(UploadDiskIOThreadSeams::GetBroadbandPendingReadBlocksPerClient(0u), 8);
+	CHECK_EQ(UploadDiskIOThreadSeams::GetBroadbandPendingReadBlocksPerClient(6200u * 1024u / 8u), 35);
+	CHECK_EQ(UploadDiskIOThreadSeams::GetBroadbandPendingReadBlocksPerClient(128u * 1024u * 1024u / 8u), 256);
+	CHECK_EQ(UploadDiskIOThreadSeams::GetBroadbandPendingReadBlocksPerThread(35, 8), static_cast<INT_PTR>(280));
+	CHECK_EQ(UploadDiskIOThreadSeams::GetBroadbandPendingReadBlocksPerThread(256, 8), static_cast<INT_PTR>(2048));
+	CHECK_EQ(UploadDiskIOThreadSeams::GetBroadbandPendingReadBlocksPerThread(256, 32), static_cast<INT_PTR>(4096));
+
 	CHECK(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(0, 0));
 	CHECK(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(
 		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerClient - 1,
@@ -337,6 +366,9 @@ TEST_CASE("Upload disk IO seam bounds pending overlapped reads before Windows qu
 	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(
 		0,
 		UploadDiskIOThreadSeams::kMaxPendingReadBlocksPerThread));
+	CHECK(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(7, 7, 8, 8));
+	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(8, 7, 8, 8));
+	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(7, 8, 8, 8));
 	CHECK_FALSE(UploadDiskIOThreadSeams::CanIssuePendingUploadRead(-1, 0));
 #else
 	MESSAGE("Upload disk IO pending-read helpers are not available in this workspace.");

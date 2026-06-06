@@ -108,7 +108,11 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     ]
     assert "GetProductiveNoRequestCooldownPayloadBytes(GetTargetClientDataRateBroadband())" in no_request_recycle_block
     assert "GetNoRequestUploadRecycleGraceMs(thePrefs.GetZeroUploadRateGraceSeconds())" in source
+    assert "ShouldDeferProductiveNoRequestUploadRecycle(" in no_request_recycle_block
+    assert "SEC2MS(thePrefs.GetSlowUploadWarmupSeconds())" in no_request_recycle_block
+    assert "fast\n\t\t\t// clients can keep carrying upload bandwidth" in no_request_recycle_block
     assert no_request_recycle_block.index("const bool bProductiveNoRequestRecycle") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
+    assert no_request_recycle_block.index("ShouldDeferProductiveNoRequestUploadRecycle(") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
     assert "const UINT uCooldownSeconds = GetNoRequestUploadRetryCooldownSeconds" in no_request_recycle_block
     assert "const ULONGLONG ullCooldownUntil = curTick + SEC2MS(uCooldownSeconds);" in no_request_recycle_block
     assert "const ULONGLONG ullTrackUntil = curTick + SEC2MS(GetNoRequestUploadRetryTrackSeconds(uCooldownSeconds, uConfiguredCooldownSeconds));" in no_request_recycle_block
@@ -166,6 +170,9 @@ def test_stalled_upload_retry_cooldown_is_bounded() -> None:
 
     assert "GetUploadChurnRetryCooldownSeconds(thePrefs.GetSlowUploadCooldownSeconds())" in stalled_block
     assert "uploadRetryCooldownIdle : uploadRetryCooldownStalled" in stalled_block
+    assert "bStalledRecycleWarmupComplete" not in stalled_block
+    assert "ShouldRecycleStalledBroadbandUploadSlot(\n\t\ttrue,\n\t\tbSlowUploadWarmupComplete," in stalled_block
+    assert "normal\n\t// broadband warmup" in source
 
 
 def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> None:
