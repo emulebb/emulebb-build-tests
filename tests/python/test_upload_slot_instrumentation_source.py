@@ -340,3 +340,17 @@ def test_upload_part_counts_are_distinct_text_columns_and_bars_remain() -> None:
         assert '"TransferBarPercentFg"' in source
         assert "if (thePrefs.GetUseDwlPercentage())" in draw
         assert "DrawCenteredTransferBarPercent(dc, rcItem, client);" in draw
+
+    upload_percent_display = upload_list_source[
+        upload_list_source.index("case 18:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText")) :
+        upload_list_source.index("case 19:", upload_list_source.index("CString  CUploadListCtrl::GetItemDisplayText"))
+    ]
+    upload_percent_sort = upload_list_source[
+        upload_list_source.index("case 18:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc")) :
+        upload_list_source.index("case 19:", upload_list_source.index("int CALLBACK CUploadListCtrl::SortProc"))
+    ]
+    assert "sText = FormatUploadPartProgressPercentText(client);" in upload_percent_display
+    assert "GetUploadPartProgressPercent(item1)" in upload_percent_sort
+    assert "GetUploadPartProgressPercent(item2)" in upload_percent_sort
+    assert "GetSessionUp()" not in upload_percent_display
+    assert "GetSessionUp()" not in upload_percent_sort
