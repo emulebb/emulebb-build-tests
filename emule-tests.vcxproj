@@ -159,6 +159,7 @@
     <ClCompile Include="src\corruption_black_box.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CorruptionBlackBoxSeams.h')" />
     <ClCompile Include="src\comment_dialog.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CommentDialogSeams.h')" />
     <ClCompile Include="src\client_credits.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientCreditsSeams.h')" />
+    <ClCompile Include="src\client_library_browse_display.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientLibraryBrowseDisplaySeams.h')" />
     <ClCompile Include="src\client_socket_lifetime.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientSocketLifetimeSeams.h')" />
     <ClCompile Include="src\client_udp_socket.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\ClientUDPSocketSeams.h')" />
     <ClCompile Include="src\category_dialog.tests.cpp" Condition="Exists('$(AppRoot)\srchybrid\CategoryDialogSeams.h')" />
