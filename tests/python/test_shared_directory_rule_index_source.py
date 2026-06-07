@@ -44,6 +44,9 @@ def test_shared_files_tree_uses_shared_directory_rule_index() -> None:
     assert "m_sharedDirectoryIndex.Rebuild(m_strliSharedDirs);" in source
     assert "m_sharedDirectoryIndex.ContainsExactPathKey(strDir);" in source
     assert "m_sharedDirectoryIndex.HasDescendant(strDir);" in source
+    tree_builder = source[source.index("void BuildSharedDirectoryTree") : source.index("bool CSharedDirsTreeCtrl::IsSharedTreeDirectoryAccessible")]
+    assert "const CString strParentKey(BuildSharedTreePathKey(strParent));" in tree_builder
+    assert "strParentKey.MakeLower();" not in tree_builder
     assert "m_mapSharedDirectoryKeys" not in header
     assert "m_aSortedSharedDirectoryKeys" not in header
 
