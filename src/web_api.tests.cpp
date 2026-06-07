@@ -1148,6 +1148,18 @@ TEST_CASE("Web API maps Torznab requests to native eMule search hints")
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(request.eFamily)), "audio");
 
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=music&q=Album&cat=3000", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Audio);
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(request.eFamily)), "audio");
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=book&q=Novel&cat=7000", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Book);
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(request.eFamily)), "doc");
+
+	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Adult&cat=6000", request, error));
+	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Adult);
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(request.eFamily)), "video");
+
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=search&q=Unknown&cat=9999", request, error));
 	CHECK_EQ(request.eFamily, WebServerArrCompatSeams::ETorznabFamily::Unknown);
 
@@ -1240,11 +1252,13 @@ TEST_CASE("Web API exposes deterministic Torznab eD2K links and safe XML text")
 	CHECK_EQ(WebServerArrCompatSeams::XmlEscape("<tag attr=\"x\">A&B</tag>"), "&lt;tag attr=&quot;x&quot;&gt;A&amp;B&lt;/tag&gt;");
 	CHECK_EQ(WebServerJsonSeams::UrlEncodeUtf8("A B+100%"), "A%20B%2B100%25");
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "release.mkv", 10));
+	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Adult, "release.mkv", 10));
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Audio, "release.mkv", 10));
 	CHECK(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Book, "manual.pdf", 10));
 	CHECK_FALSE(WebServerArrCompatSeams::DoesResultMatchFamily(WebServerArrCompatSeams::ETorznabFamily::Movie, "manual.pdf", 10));
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(WebServerArrCompatSeams::ETorznabFamily::Movie)), "video");
 	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(WebServerArrCompatSeams::ETorznabFamily::Tv)), "video");
+	CHECK_EQ(std::string(WebServerArrCompatSeams::GetRestSearchType(WebServerArrCompatSeams::ETorznabFamily::Adult)), "video");
 	CHECK_EQ(WebServerArrCompatSeams::BuildRestSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"video"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildRestSearchTypeNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"doc"});
 	const std::vector<std::pair<WebServerArrCompatSeams::ETorznabFamily, std::string>> familySearchTypes = {
@@ -1252,6 +1266,7 @@ TEST_CASE("Web API exposes deterministic Torznab eD2K links and safe XML text")
 		{WebServerArrCompatSeams::ETorznabFamily::Tv, "video"},
 		{WebServerArrCompatSeams::ETorznabFamily::Audio, "audio"},
 		{WebServerArrCompatSeams::ETorznabFamily::Book, "doc"},
+		{WebServerArrCompatSeams::ETorznabFamily::Adult, "video"},
 		{WebServerArrCompatSeams::ETorznabFamily::Other, ""},
 		{WebServerArrCompatSeams::ETorznabFamily::Any, ""},
 		{WebServerArrCompatSeams::ETorznabFamily::Unknown, ""}
@@ -1265,6 +1280,7 @@ TEST_CASE("Web API exposes deterministic Torznab eD2K links and safe XML text")
 	}
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Tv), std::vector<std::string>{"global", "kad"});
+	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Adult), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Book), std::vector<std::string>{"automatic"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildAvailableNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie, true, true), std::vector<std::string>{"global", "kad"});
 	CHECK_EQ(WebServerArrCompatSeams::BuildAvailableNativeSearchMethodNames(WebServerArrCompatSeams::ETorznabFamily::Movie, true, false), std::vector<std::string>{"global"});
@@ -1281,6 +1297,7 @@ TEST_CASE("Web API exposes deterministic Torznab eD2K links and safe XML text")
 	CHECK(WebServerArrCompatSeams::TryParseTorznabRequest("/indexer/emulebb/api?t=movie&q=Feature&cat=2000", cacheRequest, cacheError));
 	CHECK(WebServerArrCompatSeams::BuildCacheKey(cacheRequest, std::vector<std::string>{"global"}) != WebServerArrCompatSeams::BuildCacheKey(cacheRequest, std::vector<std::string>{"kad"}));
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs);
+	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Adult), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs);
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Book), WebServerArrCompatSeams::kTorznabDefaultSearchTimeoutMs);
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchMethodProbeTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Movie, 2), WebServerArrCompatSeams::kTorznabMediaSearchTimeoutMs / 2);
 	CHECK_EQ(WebServerArrCompatSeams::GetNativeSearchMethodProbeTimeoutMilliseconds(WebServerArrCompatSeams::ETorznabFamily::Book, 1), WebServerArrCompatSeams::kTorznabDefaultSearchTimeoutMs);
