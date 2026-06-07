@@ -2257,6 +2257,13 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
                 category_id=category_id,
                 min_sources=min_sources,
             )
+        except TimeoutError as exc:
+            direct_error = f"{kind} Arr release acquisition timed out: {exc}"
+        except RuntimeError as exc:
+            direct_error = str(exc)
+            if not arr_release_search_error_can_fallback(direct_error):
+                raise RuntimeError(f"{kind} manual Arr release acquisition failed: {direct_error}") from exc
+        else:
             release_grab["source"] = "arr_release_search"
             release_grab["arr_indexer_unavailable_due_to_failures"] = False
             try:
@@ -2274,10 +2281,6 @@ def grab_first_arr_release_or_fallback_to_prowlarr(
                 if not str(release_grab.get("hash") or ""):
                     raise
             return release_grab
-        except RuntimeError as exc:
-            direct_error = str(exc)
-            if not arr_release_search_error_can_fallback(direct_error):
-                raise RuntimeError(f"{kind} manual Arr release acquisition failed: {direct_error}") from exc
     else:
         direct_error = "Arr health reports the eMuleBB indexer unavailable due to failures."
 
