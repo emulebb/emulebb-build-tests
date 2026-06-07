@@ -75,9 +75,44 @@ def test_request_directory_files_decodes_response(monkeypatch) -> None:
     requested_directory, offset = module.decode_ed2k_string(sent_packets[0][6:], 0)
     assert requested_directory == "Folder_1"
     assert offset == len(sent_packets[0]) - 6
+    assert result["mode"] == "directory"
     assert result["directory"] == "Folder_1"
     assert result["file_count"] == 12
     assert result["payload_bytes"] == len(payload)
+
+
+def test_request_full_shared_files_decodes_response(monkeypatch) -> None:
+    module = load_suite_module()
+    sent_packets: list[bytes] = []
+
+    class FakeSocket:
+        def sendall(self, payload: bytes) -> None:
+            sent_packets.append(payload)
+
+    payload = struct.pack("<I", 42) + b"file-data"
+    monkeypatch.setattr(module, "wait_for_opcode", lambda _sock, _opcode, *, timeout_seconds: payload)
+
+    result = module.request_full_shared_files(FakeSocket(), timeout_seconds=1.0)
+
+    protocol, size = struct.unpack("<BI", sent_packets[0][:5])
+    assert protocol == module.ED2K_PROTOCOL
+    assert size == 1
+    assert sent_packets[0][5] == module.OP_ASKSHAREDFILES
+    assert result["mode"] == "full-list"
+    assert result["file_count"] == 42
+
+
+def test_build_request_plan_supports_other_full_and_mixed_modes() -> None:
+    module = load_suite_module()
+
+    assert module.build_request_plan(["Dir_1"], 0, 3, "other") == [module.OP_OTHER_SHARED_FILES] * 3
+    assert module.build_request_plan(["Dir_1"], 0, 2, "full-list") == ["", ""]
+    mixed = module.build_request_plan(["Dir_1", "Dir_2"], 0, 8, "mixed")
+
+    assert len(mixed) == 8
+    assert module.OP_OTHER_SHARED_FILES in mixed
+    assert "" in mixed
+    assert {"Dir_1", "Dir_2"}.intersection(mixed)
 
 
 def test_assert_thresholds_reports_latency_and_cpu_failures() -> None:

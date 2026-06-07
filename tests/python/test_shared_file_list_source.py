@@ -193,6 +193,77 @@ def test_hash_workers_use_priority_gate_before_global_hash_mutex() -> None:
     assert shared_hash_run.index("CScopedFileHashJobGate fileHashJobGate(FHJP_SHARED_FILE);") < shared_hash_run.index("CSingleLock hashingLock(&theApp.hashing_mut);")
 
 
+def test_shared_file_hot_path_indexes_are_maintained_together() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    add_indexes = source[source.index("void CSharedFileList::AddFileToSharedFileIndexes") : source.index("void CSharedFileList::RemoveFileFromSharedFileIndexes")]
+    remove_indexes = source[source.index("void CSharedFileList::RemoveFileFromSharedFileIndexes") : source.index("void CSharedFileList::RebuildSharedFileIndexes")]
+    get_by_path = source[source.index("CKnownFile* CSharedFileList::GetFileByPath") : source.index("bool CSharedFileList::EnsureSharedHashWorkerStarted")]
+    page = source[source.index("void CSharedFileList::CopySharedFilePage") : source.index("CKnownFile* CSharedFileList::GetFileByPath")]
+    rebuild = source[source.index("void CSharedFileList::RebuildSharedFileIndexes") : source.index("void CSharedFileList::CopySharedFilesForDirectory")]
+
+    assert "struct SharedFileIndexSet" in header
+    assert "std::vector<CKnownFile*> m_allSharedFiles;" in header
+    assert "std::unordered_map<std::wstring, CKnownFile*> m_filesByPathKey;" in header
+    assert "std::vector<CKnownFile*> m_singleSharedFiles;" in header
+    assert "SSharedFilesSummarySnapshot m_sharedFilesSummary;" in header
+    assert "uint64 m_uSharedFileIndexGeneration" in header
+    assert "uint64 m_uKadPublishStateGeneration" in header
+    assert "m_allSharedFiles.push_back(pFile);" in add_indexes
+    assert "m_filesBySharedDirectoryKey[MakeSharedDirectoryIndexKey(pFile->GetSharedDirectory())].push_back(pFile);" in add_indexes
+    assert "m_filesByPathKey[MakeSharedFileIndexKey(pFile->GetFilePath())] = pFile;" in add_indexes
+    assert "m_singleSharedFiles.push_back(pFile);" in add_indexes
+    assert "UpdateSharedFileSummaryForAdd(pFile);" in add_indexes
+    assert "++m_uSharedFileIndexGeneration;" in add_indexes
+    assert "removeFromVector(m_allSharedFiles);" in remove_indexes
+    assert "removeFromVector(m_singleSharedFiles);" in remove_indexes
+    assert "m_filesByPathKey.erase(MakeSharedFileIndexKey(pFile->GetFilePath()));" in remove_indexes
+    assert "UpdateSharedFileSummaryForRemove(pFile);" in remove_indexes
+    assert "++m_uSharedFileIndexGeneration;" in remove_indexes
+    assert "m_filesByPathKey.find(MakeSharedFileIndexKey(strFilePath))" in get_by_path
+    assert "m_Files_map.PGetFirstAssoc" not in get_by_path
+    assert "m_allSharedFiles.size()" in page
+    assert "m_Files_map.PGetFirstAssoc" not in page
+    assert "SharedFileIndexSet indexes;" in rebuild
+    assert "uObservedGeneration != m_uSharedFileIndexGeneration" in rebuild
+    assert "m_allSharedFiles.swap(indexes.allSharedFiles);" in rebuild
+    assert "readers never see the transient clear-and-repopulate state" in rebuild
+
+
+def test_shared_file_path_index_is_updated_after_in_place_rename() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    ctrl = (app_source_root() / "SharedFilesCtrl.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[source.index("void CSharedFileList::UpdateSharedFilePath") : source.index("bool CSharedFileList::EnsureSharedHashWorkerStarted")]
+    rename = ctrl[ctrl.index("case MP_RENAME:") : ctrl.index("case MP_REMOVE:")]
+
+    assert "void\tUpdateSharedFilePath(CKnownFile *pFile, const CString &strOldFilePath, const CString &strNewFilePath);" in header
+    assert "m_filesByPathKey.erase(itOld);" in block
+    assert "m_filesByPathKey[MakeSharedFileIndexKey(strNewFilePath)] = pFile;" in block
+    assert "REST remove-by-path" in block
+    assert "const CString oldpath(pKnownFile->GetFilePath());" in rename
+    assert "pKnownFile->SetFilePath(newpath);" in rename
+    assert "theApp.sharedfiles->UpdateSharedFilePath(pKnownFile, oldpath, newpath);" in rename
+
+
+def test_shared_publish_summary_recounts_after_publish_state_batches() -> None:
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
+    refresh = source[source.index("void CSharedFileList::RefreshSharedFilePublishedED2KSummary") : source.index("void CSharedFileList::MarkKadPublishStateChanged")]
+    send_list = source[source.index("void CSharedFileList::SendListToServer") : source.index("void CSharedFileList::ClearED2KPublishInfo")]
+    clear_ed2k = source[source.index("void CSharedFileList::ClearED2KPublishInfo") : source.index("void CSharedFileList::ClearKadSourcePublishInfo")]
+    clear_kad = source[source.index("void CSharedFileList::ClearKadSourcePublishInfo") : source.index("void CSharedFileList::CreateOfferedFilePacket")]
+
+    assert "void\tRefreshSharedFilePublishedED2KSummary();" in header
+    assert "void\tMarkKadPublishStateChanged();" in header
+    assert "CSingleLock listlock(&m_mutWriteList, TRUE);" in refresh
+    assert "for (const CKnownFile *pFile : m_allSharedFiles)" in refresh
+    assert "cached UI summary out of sync" in refresh
+    assert "RefreshSharedFilePublishedED2KSummary();" in send_list
+    assert "RefreshSharedFilePublishedED2KSummary();" in clear_ed2k
+    assert "MarkKadPublishStateChanged();" in clear_kad
+
+
 def test_shared_hash_progress_logging_is_aggregate_only() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")

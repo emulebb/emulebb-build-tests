@@ -45,10 +45,13 @@ ED2K_PROTOCOL = 0xE3
 EMULE_PROTOCOL = 0xC5
 OP_HELLO = 0x01
 OP_HELLOANSWER = 0x4C
+OP_ASKSHAREDFILES = 0x4A
+OP_ASKSHAREDFILESANSWER = 0x4B
 OP_ASKSHAREDDIRS = 0x5D
 OP_ASKSHAREDFILESDIR = 0x5E
 OP_ASKSHAREDDIRSANS = 0x5F
 OP_ASKSHAREDFILESDIRANS = 0x60
+OP_OTHER_SHARED_FILES = "!Other"
 DEFAULT_REQUEST_COUNT = 1000
 DEFAULT_MAX_AVG_MS = 50.0
 DEFAULT_MAX_P95_MS = 150.0
@@ -70,6 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--shared-root")
     parser.add_argument("--fixture-size", choices=["full", "smoke"], default="full")
     parser.add_argument("--request-count", type=int, default=DEFAULT_REQUEST_COUNT)
+    parser.add_argument("--request-mode", choices=["directory", "other", "full-list", "mixed"], default="directory")
     parser.add_argument("--directory-sample-count", type=int, default=0)
     parser.add_argument("--startup-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--request-timeout-seconds", type=float, default=20.0)
@@ -244,7 +248,20 @@ def request_directory_files(sock: socket.socket, directory: str, *, timeout_seco
     if len(payload) < offset + 4:
         raise RuntimeError("Short OP_ASKSHAREDFILESDIRANS file count.")
     file_count = struct.unpack_from("<I", payload, offset)[0]
-    return {"directory": response_dir, "elapsed_ms": elapsed_ms, "file_count": file_count, "payload_bytes": len(payload)}
+    return {"mode": "other" if directory == OP_OTHER_SHARED_FILES else "directory", "directory": response_dir, "elapsed_ms": elapsed_ms, "file_count": file_count, "payload_bytes": len(payload)}
+
+
+def request_full_shared_files(sock: socket.socket, *, timeout_seconds: float) -> dict[str, object]:
+    """Requests the legacy full shared-file list and returns response timing and count."""
+
+    started = time.perf_counter()
+    sock.sendall(build_packet(OP_ASKSHAREDFILES))
+    payload = wait_for_opcode(sock, OP_ASKSHAREDFILESANSWER, timeout_seconds=timeout_seconds)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    if len(payload) < 4:
+        raise RuntimeError("Short OP_ASKSHAREDFILESANSWER file count.")
+    file_count = struct.unpack_from("<I", payload, 0)[0]
+    return {"mode": "full-list", "directory": "", "elapsed_ms": elapsed_ms, "file_count": file_count, "payload_bytes": len(payload)}
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -285,7 +302,29 @@ def process_cpu_seconds(process_id: int) -> float | None:
         kernel32.CloseHandle(handle)
 
 
-def run_browse_probe(host: str, port: int, directories_to_request: int, request_count: int, timeout_seconds: float) -> dict[str, object]:
+def build_request_plan(directories: list[str], directories_to_request: int, request_count: int, request_mode: str) -> list[str]:
+    """Builds the repeatable request plan for one stress probe."""
+
+    candidates = directories if directories_to_request <= 0 else directories[:directories_to_request]
+    if request_mode == "full-list":
+        return [""] * request_count
+    if request_mode == "other":
+        return [OP_OTHER_SHARED_FILES] * request_count
+    if not candidates:
+        raise RuntimeError("Target returned no shared directories.")
+    if request_mode == "directory":
+        requested = [candidates[index % len(candidates)] for index in range(request_count)]
+    elif request_mode == "mixed":
+        base = candidates + [OP_OTHER_SHARED_FILES, ""]
+        requested = [base[index % len(base)] for index in range(request_count)]
+    else:
+        raise ValueError(f"Unknown request mode: {request_mode}")
+    rng = random.Random(0xED2B144)
+    rng.shuffle(requested)
+    return requested
+
+
+def run_browse_probe(host: str, port: int, directories_to_request: int, request_count: int, request_mode: str, timeout_seconds: float) -> dict[str, object]:
     """Runs the direct eD2K browse-directory stress probe."""
 
     with socket.create_connection((host, port), timeout=timeout_seconds) as sock:
@@ -293,19 +332,21 @@ def run_browse_probe(host: str, port: int, directories_to_request: int, request_
         sock.sendall(build_packet(OP_HELLO, build_hello_payload()))
         wait_for_opcode(sock, OP_HELLOANSWER, timeout_seconds=timeout_seconds)
         directories = request_shared_directories(sock, timeout_seconds=timeout_seconds)
-        if not directories:
-            raise RuntimeError("Target returned no shared directories.")
         candidates = directories if directories_to_request <= 0 else directories[:directories_to_request]
-        rng = random.Random(0xED2B144)
-        requested = [candidates[index % len(candidates)] for index in range(request_count)]
-        rng.shuffle(requested)
-        responses = [request_directory_files(sock, directory, timeout_seconds=timeout_seconds) for directory in requested]
+        requested = build_request_plan(directories, directories_to_request, request_count, request_mode)
+        responses = [
+            request_full_shared_files(sock, timeout_seconds=timeout_seconds)
+            if directory == ""
+            else request_directory_files(sock, directory, timeout_seconds=timeout_seconds)
+            for directory in requested
+        ]
 
     elapsed_values = [float(row["elapsed_ms"]) for row in responses]
     total_file_rows = sum(int(row["file_count"]) for row in responses)
     return {
         "directory_count": len(directories),
         "candidate_directory_count": len(candidates),
+        "request_mode": request_mode,
         "request_count": len(responses),
         "total_file_rows": total_file_rows,
         "latency_ms": {
@@ -473,6 +514,7 @@ def main(argv: list[str] | None = None) -> int:
             tcp_port,
             args.directory_sample_count,
             args.request_count,
+            args.request_mode,
             args.request_timeout_seconds,
         )
         wall_elapsed = time.perf_counter() - wall_start
