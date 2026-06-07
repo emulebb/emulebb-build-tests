@@ -13,7 +13,7 @@ TEST_CASE("App web links expose canonical eMuleBB documentation URLs")
 	const AppWebLinksSeams::SWebLink *pLinks = AppWebLinksSeams::GetDocumentationLinks(uLinkCount);
 
 	REQUIRE(pLinks != NULL);
-	REQUIRE(uLinkCount == 8u);
+	REQUIRE(uLinkCount == 9u);
 
 	const LPCTSTR apszExpectedUrls[] = {
 		_T("https://emulebb.github.io/faq/"),
@@ -22,6 +22,7 @@ TEST_CASE("App web links expose canonical eMuleBB documentation URLs")
 		_T("https://emulebb.github.io/emulebb-tooling/reference/GUIDE-SHARING/"),
 		_T("https://emulebb.github.io/emulebb-tooling/reference/GUIDE-DOWNLOADS-SEARCH/"),
 		_T("https://emulebb.github.io/emulebb-tooling/reference/GUIDE-TOOLS-MENU/"),
+		_T("https://emulebb.github.io/emulebb-tooling/reference/KEYBOARD-SHORTCUTS/"),
 		_T("https://emulebb.github.io/emulebb-tooling/reference/GUIDE-CONTROLLERS-REST/"),
 		_T("https://emulebb.github.io/emulebb-tooling/reference/GUIDE-TROUBLESHOOTING/")
 	};
@@ -31,9 +32,9 @@ TEST_CASE("App web links expose canonical eMuleBB documentation URLs")
 	for (size_t i = 0; i < uLinkCount; ++i) {
 		CHECK(CString(pLinks[i].pszUrl) == CString(apszExpectedUrls[i]));
 		CHECK(pLinks[i].uCommandID >= MP_HM_LINK_DOC_FAQ);
-		CHECK(pLinks[i].uCommandID <= MP_HM_LINK_DOC_TROUBLESHOOTING);
+		CHECK(pLinks[i].uCommandID <= MP_HM_LINK_DOC_KEYBOARD_SHORTCUTS);
 		CHECK(pLinks[i].uLabelStringID >= IDS_HM_LINK_DOC_FAQ);
-		CHECK(pLinks[i].uLabelStringID <= IDS_HM_LINK_DOC_TROUBLESHOOTING);
+		CHECK(pLinks[i].uLabelStringID <= IDS_HM_LINK_DOC_KEYBOARD_SHORTCUTS);
 		CHECK(commandIDs.insert(pLinks[i].uCommandID).second);
 		CHECK(labelIDs.insert(pLinks[i].uLabelStringID).second);
 	}
