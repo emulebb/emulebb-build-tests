@@ -107,6 +107,12 @@ TREE_STRESS_MIN_FILE_COUNT = 50000
 TREE_STRESS_MIN_OBSERVABLE_NODES = 10000
 TREE_STRESS_SMOKE_MIN_FILE_COUNT = 1000
 TREE_STRESS_SMOKE_MIN_OBSERVABLE_NODES = 1000
+BROWSE_STRESS_BUCKET_COUNT = 2500
+BROWSE_STRESS_FILES_PER_BUCKET = 16
+BROWSE_STRESS_SMOKE_BUCKET_COUNT = 80
+BROWSE_STRESS_SMOKE_FILES_PER_BUCKET = 8
+BROWSE_STRESS_MIN_FILE_COUNT = 40000
+BROWSE_STRESS_SMOKE_MIN_FILE_COUNT = 640
 
 
 def to_windows_long_path(path: Path) -> str:
@@ -401,11 +407,77 @@ def build_shared_files_tree_stress(
     return summary
 
 
+def make_browse_stress_file_name(bucket_index: int, file_index: int) -> str:
+    """Returns one deterministic file name for direct shared-directory browse stress."""
+
+    stem = [
+        "browse alpha",
+        "browse_beta_[set]",
+        "browse.gamma.multi.part",
+        "browse-delta_symbols#plus+percent%25",
+        "browse epsilon caps MIX",
+        "browse zeta spaces",
+        "browse eta comma,semi;",
+        "browse theta unicode_\u03bb_\u4f8b",
+    ][file_index % 8]
+    return f"{bucket_index:05d}_{file_index:03d}_{stem}.bin"
+
+
+def build_shared_directory_browse_stress(
+    root: Path,
+    *,
+    bucket_count: int = BROWSE_STRESS_BUCKET_COUNT,
+    files_per_bucket: int = BROWSE_STRESS_FILES_PER_BUCKET,
+    min_file_count: int = BROWSE_STRESS_MIN_FILE_COUNT,
+    subtree_name: str = "shared_directory_browse_stress",
+) -> dict[str, object]:
+    """Builds a bucketed fake shared tree for eD2K directory-browse stress."""
+
+    ensure_directory(root)
+    directories = [root]
+    files: list[dict[str, object]] = []
+    sample_directories: list[str] = [str(root.resolve())]
+
+    for bucket_index in range(bucket_count):
+        group_dir = root / f"group_{bucket_index // 100:03d}_browse buckets"
+        if group_dir not in directories:
+            ensure_directory(group_dir)
+            directories.append(group_dir)
+
+        bucket_dir = group_dir / f"bucket_{bucket_index:05d}"
+        ensure_directory(bucket_dir)
+        directories.append(bucket_dir)
+        if len(sample_directories) < 64:
+            sample_directories.append(str(bucket_dir.resolve()))
+
+        for file_index in range(files_per_bucket):
+            size_bytes = 512 + ((bucket_index * 37 + file_index * 101) % 8192)
+            seed = 0xE20000 + (bucket_index * 4099) + file_index
+            file_path = bucket_dir / make_browse_stress_file_name(bucket_index, file_index)
+            materialization = write_deterministic_file(file_path, size_bytes, seed)
+            files.append(build_file_entry(root, file_path, size_bytes, seed, materialization, True))
+
+    summary = summarize_generated_subtree(root, directories, files)
+    summary["subtree_name"] = subtree_name
+    summary["bucket_count"] = bucket_count
+    summary["files_per_bucket"] = files_per_bucket
+    summary["min_file_count"] = min_file_count
+    summary["sample_directories"] = sample_directories
+    if int(summary["expected_visible_file_count"]) < min_file_count:
+        raise RuntimeError(
+            "Shared-directory browse stress fixture has too few shared files: "
+            f"{summary['expected_visible_file_count']} < {min_file_count}"
+        )
+    return summary
+
+
 def ensure_fixture(
     shared_root: Path | str = DEFAULT_SHARED_ROOT,
     *,
     include_tree_stress: bool = False,
     include_tree_stress_smoke: bool = False,
+    include_browse_stress: bool = False,
+    include_browse_stress_smoke: bool = False,
 ) -> dict[str, object]:
     """Ensures the deterministic generated long-path fixture tree exists and returns its manifest."""
 
@@ -430,6 +502,18 @@ def ensure_fixture(
             min_file_count=TREE_STRESS_SMOKE_MIN_FILE_COUNT,
             min_observable_node_count=TREE_STRESS_SMOKE_MIN_OBSERVABLE_NODES,
             subtree_name="shared_files_tree_stress_1k",
+        )
+    if include_browse_stress:
+        subtrees["shared_directory_browse_stress"] = build_shared_directory_browse_stress(
+            resolved_root / "shared_directory_browse_stress_40k"
+        )
+    if include_browse_stress_smoke:
+        subtrees["shared_directory_browse_stress_smoke"] = build_shared_directory_browse_stress(
+            resolved_root / "shared_directory_browse_stress_smoke",
+            bucket_count=BROWSE_STRESS_SMOKE_BUCKET_COUNT,
+            files_per_bucket=BROWSE_STRESS_SMOKE_FILES_PER_BUCKET,
+            min_file_count=BROWSE_STRESS_SMOKE_MIN_FILE_COUNT,
+            subtree_name="shared_directory_browse_stress_smoke",
         )
 
     manifest_path = resolved_root / MANIFEST_FILENAME
@@ -466,12 +550,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also materialize the 1k-file Shared Files tree-refresh smoke subtree.",
     )
+    parser.add_argument(
+        "--include-browse-stress",
+        action="store_true",
+        help="Also materialize the 40k-file bucketed direct shared-directory browse stress subtree.",
+    )
+    parser.add_argument(
+        "--include-browse-stress-smoke",
+        action="store_true",
+        help="Also materialize the small bucketed direct shared-directory browse smoke subtree.",
+    )
     args = parser.parse_args(argv)
 
     manifest = ensure_fixture(
         args.root,
         include_tree_stress=args.include_tree_stress,
         include_tree_stress_smoke=args.include_tree_stress_smoke,
+        include_browse_stress=args.include_browse_stress,
+        include_browse_stress_smoke=args.include_browse_stress_smoke,
     )
     print(f"Generated fixture root: {manifest['shared_root']}")
     print(f"Manifest: {manifest['manifest_path']}")

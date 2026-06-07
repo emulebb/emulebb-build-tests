@@ -152,6 +152,14 @@ def test_tree_refresh_stress_fixture_estimate_exceeds_r1_node_floor() -> None:
     assert module.TREE_STRESS_BRANCH_COUNT * module.TREE_STRESS_FILES_PER_BRANCH >= module.TREE_STRESS_MIN_FILE_COUNT
 
 
+def test_browse_stress_fixture_defaults_match_large_shared_file_regression_scale() -> None:
+    module = load_generated_fixture_module()
+
+    assert module.BROWSE_STRESS_BUCKET_COUNT * module.BROWSE_STRESS_FILES_PER_BUCKET >= 40000
+    assert module.BROWSE_STRESS_BUCKET_COUNT * module.BROWSE_STRESS_FILES_PER_BUCKET >= module.BROWSE_STRESS_MIN_FILE_COUNT
+    assert module.BROWSE_STRESS_SMOKE_BUCKET_COUNT * module.BROWSE_STRESS_SMOKE_FILES_PER_BUCKET >= module.BROWSE_STRESS_SMOKE_MIN_FILE_COUNT
+
+
 def test_get_rest_shared_file_count_validates_row_shape(monkeypatch) -> None:
     module = load_shared_files_module()
 

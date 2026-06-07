@@ -223,6 +223,7 @@ LAN_BIND_ADDR_SUITE_NAMES = frozenset(
         "local-ed2k-chaos-mode",
         "local-ed2k-protocol-combinations",
         "local-ed2k-search-soak",
+        "shared-directory-browse-stress",
         "local-kad-mixed-client-swarm",
         "local-kad-swarm",
         "multi-client-p2p-matrix",
@@ -340,6 +341,14 @@ SUITE_SPECS = (
         network_scope="lan",
         default_enabled=False,
         requires_admin_volume_fixtures=True,
+    ),
+    SuiteSpec(
+        name="shared-directory-browse-stress",
+        script_name="shared-directory-browse-stress.py",
+        category="protocol",
+        network_scope="lan",
+        accepts_shared_root=True,
+        default_enabled=False,
     ),
     SuiteSpec(
         name="local-ed2k-search-soak",

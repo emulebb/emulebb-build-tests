@@ -219,6 +219,17 @@ def test_test_network_vpn_keeps_only_public_network_scope() -> None:
     assert [row["name"] for row in skipped] == ["preference-ui", "deterministic-two-client-transfer"]
 
 
+def test_shared_directory_browse_stress_is_registered_as_lan_shared_root_suite() -> None:
+    spec = suite_spec("shared-directory-browse-stress")
+
+    assert spec.script_name == "shared-directory-browse-stress.py"
+    assert spec.category == "protocol"
+    assert spec.network_scope == "lan"
+    assert spec.accepts_shared_root is True
+    assert spec.default_enabled is False
+    assert "shared-directory-browse-stress" in live_e2e_suite.LAN_BIND_ADDR_SUITE_NAMES
+
+
 def test_all_public_vpn_suites_are_vpn_guard_profiles() -> None:
     assert [
         spec.name
