@@ -93,11 +93,17 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     assert "contract" in command
     assert "--rest-stress-budget" in command
     assert "smoke" in command
+    assert command[command.index("--server-search-count") + 1] == "6"
+    assert command[command.index("--kad-search-count") + 1] == "6"
+    assert command[command.index("--search-observation-timeout-seconds") + 1] == "120.0"
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["EMULEBB_WORKSPACE_ROOT"] == str(tmp_path)
     assert summary["rest_coverage_budget"] == "contract"
     assert summary["rest_stress_budget"] == "smoke"
+    assert summary["server_search_count"] == 6
+    assert summary["kad_search_count"] == 6
+    assert summary["search_observation_timeout_seconds"] == 120.0
 
 
 def test_optional_live_rest_e2e_uses_lan_bind_when_available(tmp_path: Path, monkeypatch) -> None:

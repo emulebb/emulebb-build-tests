@@ -34,6 +34,9 @@ class CommunityCoreCoverageConfig:
     rest_coverage_budget: str = "contract"
     rest_stress_budget: str = "off"
     rest_app_scope: str = "main-only"
+    live_rest_server_search_count: int = 6
+    live_rest_kad_search_count: int = 6
+    live_rest_search_observation_timeout_seconds: float = 120.0
 
 
 def get_latest_coverage_summary_path(workspace_root: Path) -> Path:
@@ -138,6 +141,9 @@ def build_config(
     rest_coverage_budget: str = "contract",
     rest_stress_budget: str = "off",
     rest_app_scope: str = "main-only",
+    live_rest_server_search_count: int = 6,
+    live_rest_kad_search_count: int = 6,
+    live_rest_search_observation_timeout_seconds: float = 120.0,
 ) -> CommunityCoreCoverageConfig:
     """Builds a resolved community-core coverage config from CLI inputs."""
 
@@ -176,6 +182,9 @@ def build_config(
         rest_coverage_budget=rest_coverage_budget,
         rest_stress_budget=rest_stress_budget,
         rest_app_scope=rest_app_scope,
+        live_rest_server_search_count=live_rest_server_search_count,
+        live_rest_kad_search_count=live_rest_kad_search_count,
+        live_rest_search_observation_timeout_seconds=live_rest_search_observation_timeout_seconds,
     )
 
 
@@ -201,6 +210,12 @@ def run_live_rest_e2e_for_community_summary(
         config.rest_coverage_budget,
         "--rest-stress-budget",
         config.rest_stress_budget,
+        "--server-search-count",
+        str(config.live_rest_server_search_count),
+        "--kad-search-count",
+        str(config.live_rest_kad_search_count),
+        "--search-observation-timeout-seconds",
+        str(config.live_rest_search_observation_timeout_seconds),
     ]
     env = os.environ.copy()
     env["EMULEBB_WORKSPACE_ROOT"] = str(config.workspace_root.parent.parent)
@@ -215,6 +230,9 @@ def run_live_rest_e2e_for_community_summary(
         "app_scope": config.rest_app_scope,
         "rest_coverage_budget": config.rest_coverage_budget,
         "rest_stress_budget": config.rest_stress_budget,
+        "server_search_count": config.live_rest_server_search_count,
+        "kad_search_count": config.live_rest_kad_search_count,
+        "search_observation_timeout_seconds": config.live_rest_search_observation_timeout_seconds,
         "lan_bind_address": lan_bind_addr or "",
         "command": command,
     }
@@ -247,6 +265,9 @@ def invoke_script(argv: list[str]) -> int:
     parser.add_argument("--rest-coverage-budget", choices=("smoke", "contract", "contract-stress"), default="contract")
     parser.add_argument("--rest-stress-budget", choices=("off", "smoke", "soak"), default="off")
     parser.add_argument("--rest-app-scope", choices=("main-only",), default="main-only")
+    parser.add_argument("--live-rest-server-search-count", type=int, default=6)
+    parser.add_argument("--live-rest-kad-search-count", type=int, default=6)
+    parser.add_argument("--live-rest-search-observation-timeout-seconds", type=float, default=120.0)
     args = parser.parse_args(argv)
     return run_community_core_coverage(
         build_config(
@@ -261,6 +282,9 @@ def invoke_script(argv: list[str]) -> int:
             rest_coverage_budget=args.rest_coverage_budget,
             rest_stress_budget=args.rest_stress_budget,
             rest_app_scope=args.rest_app_scope,
+            live_rest_server_search_count=args.live_rest_server_search_count,
+            live_rest_kad_search_count=args.live_rest_kad_search_count,
+            live_rest_search_observation_timeout_seconds=args.live_rest_search_observation_timeout_seconds,
         )
     )
 
