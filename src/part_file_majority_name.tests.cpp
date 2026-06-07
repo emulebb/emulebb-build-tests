@@ -101,11 +101,13 @@ TEST_CASE("source filename preparation repairs mojibake before majority voting")
 
 	CHECK(TryPrepareMajoritySourceFilename(CString(L"sample-a\u00CC\u0080,.pdf"), prepared));
 	CHECK(prepared == CString(L"sample-\u00E0.pdf"));
+	CHECK(TryPrepareMajoritySourceFilename(CString(L"Tama\u00E3\u00B1o.avi"), prepared));
+	CHECK(prepared == CString(L"Tama\u00F1o.avi"));
 
 	const auto selection = SelectMajorityName(std::vector<CString>{
-		prepared,
 		CString(L"sample-\u00E0.pdf"),
-		_T("other.pdf"),
+		CString(L"sample-\u00E0.pdf"),
+		CString(L"Tama\u00F1o.avi"),
 	}, 0, 51);
 
 	CHECK(selection.HasCandidate);

@@ -389,6 +389,26 @@ TEST_CASE("Incoming filename repair fixes conservative Western UTF-8 mojibake")
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"\u00C2\u00BFQu\u00C3\u00A9?.txt")) == CString(L"\u00BFQu\u00E9?.txt"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"sample\u00C3\u0082\u00C2\u00BAfile.pdf")) == CString(L"sample\u00BAfile.pdf"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"sample-a\u00CC\u0080.pdf")) == CString(L"sample-\u00E0.pdf"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"Tama\u00E3\u00B1O.avi")) == CString(L"Tama\u00F1O.avi"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"caf\u00E3\u00A9.mp3")) == CString(L"caf\u00E9.mp3"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"M\u00E3\u00BCnchen.iso")) == CString(L"M\u00FCnchen.iso"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"informa\u00E3\u00A7\u00E3\u00A3o.pdf")) == CString(L"informa\u00E7\u00E3o.pdf"));
+}
+
+TEST_CASE("Incoming filename repair handles complete CJK UTF-8 mojibake")
+{
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"master\u00E6\u00B7\u00B1\u00E5\u00A4\u00A7.bin")) == CString(L"master\u6DF1\u5927.bin"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"\u00E4\u00B8\u00AD\u00E6\u0096\u0087.txt")) == CString(L"\u4E2D\u6587.txt"));
+}
+
+TEST_CASE("Incoming filename repair decodes high-byte percent UTF-8 only")
+{
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("caf%C3%A9.mp3"))) == CString(L"caf\u00E9.mp3"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("Tama%C3%B1o.avi"))) == CString(L"Tama\u00F1o.avi"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("master%E6%B7%B1%E5%A4%A7.bin"))) == CString(L"master\u6DF1\u5927.bin"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("file%20name.txt"))) == CString(_T("file%20name.txt")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("100%25 complete.txt"))) == CString(_T("100%25 complete.txt")));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("bad%E0%80%80.txt"))) == CString(_T("bad%E0%80%80.txt")));
 }
 
 TEST_CASE("Incoming filename repair handles Windows-1252 punctuation mojibake")
@@ -414,11 +434,14 @@ TEST_CASE("Incoming filename repair leaves low-confidence text unchanged")
 {
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("plain ascii.txt"))) == CString(_T("plain ascii.txt")));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"already caf\u00E9.txt")) == CString(L"already caf\u00E9.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"S\u00E3o Jo\u00E3o.txt")) == CString(L"S\u00E3o Jo\u00E3o.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"ma\u00E7\u00E3.txt")) == CString(L"ma\u00E7\u00E3.txt"));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("AT&T.txt"))) == CString(_T("AT&T.txt")));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("unknown &notanentity;.txt"))) == CString(_T("unknown &notanentity;.txt")));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("bad &#xD800;.txt"))) == CString(_T("bad &#xD800;.txt")));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(_T("bad &#1;.txt"))) == CString(_T("bad &#1;.txt")));
 	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"broken \u00C3.txt")) == CString(L"broken \u00C3.txt"));
+	CHECK(FilenameTextRepairSeams::RepairIncomingFilenameText(CString(L"master\u00E6\u00B7\u00E5\u00A4.bin")) == CString(L"master\u00E6\u00B7\u00E5\u00A4.bin"));
 }
 
 TEST_CASE("Incoming filename repair wrappers match search and eD2K intake contracts")
