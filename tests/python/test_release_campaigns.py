@@ -126,11 +126,11 @@ def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
             assert scenario["flowCategory"] == "local-vm-swarm"
             assert scenario["command"] == (
                 "python -m emule_workspace test campaign-scenario "
-                f"--scenario {spec.scenario_id} --mode vm --release-version 0.7.3-rc.1 "
+                f"--scenario {spec.scenario_id} --mode vm --release-version 0.7.3-rc.2 "
                 "--skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run"
             )
             assert scenario["localCommand"] == shared.command_for_mode("local")
-            assert scenario["vmCommand"] == shared.command_for_mode("vm", release_version="0.7.3-rc.1")
+            assert scenario["vmCommand"] == shared.command_for_mode("vm", release_version="0.7.3-rc.2")
             assert scenario["command"] == scenario["vmCommand"]
             assert scenario["executionMode"] == "vm"
             assert scenario["executionModes"] == ["local", "vm"]

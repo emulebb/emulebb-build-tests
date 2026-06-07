@@ -3,8 +3,8 @@
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
   "campaignId": "emulebb-0.7.3",
-  "releaseVersion": "0.7.3-rc.1",
-  "title": "eMuleBB 0.7.3-rc.1 quick release campaign",
+  "releaseVersion": "0.7.3-rc.2",
+  "title": "eMuleBB 0.7.3-rc.2 quick release campaign",
   "description": "Repeatable RC-blocking campaign for package readiness. Uses bounded quick live/stress profiles plus targeted controller and aMuTorrent proof; full overnight soak is tracked by emulebb-0.7.3-overnight.",
   "proofTier": "rc-blocking-quick",
   "phases": [
@@ -208,7 +208,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile local-ed2k-transfer --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile local-ed2k-transfer --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -268,7 +268,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile rest-smoke-stress --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile rest-smoke-stress --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -409,9 +409,9 @@
           "flowCategory": "local-vm-swarm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.controller.installer-swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -448,9 +448,9 @@
           "flowCategory": "local-vm-swarm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.prowlarr-handoff.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -485,9 +485,9 @@
           "flowCategory": "local-vm-swarm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.arr.local-acquisition.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -633,7 +633,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile hideme-live-wire --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile hideme-live-wire --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "visible hide.me guest session"
@@ -658,7 +658,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile release-expanded-ui --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile release-expanded-ui --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -719,7 +719,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile resource-ui-smoke --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile resource-ui-smoke --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -744,7 +744,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile shared-cache-filesystem --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile shared-cache-filesystem --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -769,7 +769,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile ui-shared-files-depth --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile ui-shared-files-depth --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -794,9 +794,9 @@
           "flowCategory": "local-vm-swarm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.ui.search.local-swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -963,7 +963,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile crash-dump-smoke --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile crash-dump-smoke --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -988,7 +988,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile vhd-profile-isolation --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile vhd-profile-isolation --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -1013,7 +1013,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile diagnostics-local-dumps --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile diagnostics-local-dumps --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -1038,7 +1038,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile cpu-heavy-quick --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile cpu-heavy-quick --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -1105,9 +1105,9 @@
           "flowCategory": "local-vm-swarm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.clean-startup.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -1142,9 +1142,9 @@
           "flowCategory": "local-vm-swarm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "command": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "localCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode local --swarm-tier 1 --local-swarm-mode execute",
-          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.1 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
+          "vmCommand": "python -m emule_workspace test campaign-scenario --scenario emulebb.flow.amutorrent.emulebb-ui.swarm.v1 --mode vm --release-version 0.7.3-rc.2 --skip-build --swarm-tier 1 --local-swarm-mode plan --dry-run",
           "executionMode": "vm",
           "executionModes": [
             "local",
@@ -1206,13 +1206,13 @@
           "flowCategory": "packaging",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace package-release --config Release --platform x64",
+          "command": "python -m emule_workspace package-release --config Release --platform x64 --release-version 0.7.3-rc.2",
           "evidence": [
             {
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emulebb-v0.7.3-rc.1/emulebb-0.7.3-rc.1-x64.manifest.json"
+              "path": "release/emulebb-v0.7.3-rc.2/emulebb-0.7.3-rc.2-x64.manifest.json"
             }
           ]
         },
@@ -1223,13 +1223,13 @@
           "flowCategory": "packaging",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace package-release --config Release --platform ARM64",
+          "command": "python -m emule_workspace package-release --config Release --platform ARM64 --release-version 0.7.3-rc.2",
           "evidence": [
             {
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emulebb-v0.7.3-rc.1/emulebb-0.7.3-rc.1-arm64.manifest.json"
+              "path": "release/emulebb-v0.7.3-rc.2/emulebb-0.7.3-rc.2-arm64.manifest.json"
             }
           ]
         },
@@ -1240,13 +1240,13 @@
           "flowCategory": "packaging",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace package-amutorrent --config Release --platform x64",
+          "command": "python -m emule_workspace package-amutorrent --config Release --platform x64 --release-version 0.7.3-rc.2",
           "evidence": [
             {
               "kind": "json-status",
               "required": true,
               "base": "workspace-state",
-              "path": "release/emulebb-v0.7.3-rc.1/emulebb-0.7.3-rc.1-amutorrent-x64.manifest.json"
+              "path": "release/emulebb-v0.7.3-rc.2/emulebb-0.7.3-rc.2-amutorrent-x64.manifest.json"
             }
           ]
         },
@@ -1257,7 +1257,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile package-smoke --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile package-smoke --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
@@ -1282,7 +1282,7 @@
           "flowCategory": "windows-vm",
           "required": false,
           "blocking": false,
-          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile package-helper-install --release-version 0.7.3-rc.1 --skip-build",
+          "command": "python -m emule_workspace test windows-vm --matrix win10,win11 --profile package-helper-install --release-version 0.7.3-rc.2 --skip-build",
           "localInputs": [
             "vm-lab.local.json",
             "Windows 10/11 Hyper-V clean checkpoints"
