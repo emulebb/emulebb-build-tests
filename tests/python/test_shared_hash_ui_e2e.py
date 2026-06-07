@@ -120,6 +120,24 @@ def test_records_fast_hash_completion_before_reload_interruption() -> None:
     assert summary["hashing_active"]["status"] == "completed_before_interruption_target"
 
 
+def test_records_fast_hash_completion_under_custom_summary_key() -> None:
+    module = load_shared_hash_module()
+    summary: dict[str, object] = {}
+
+    recorded = module.record_hashing_completed_before_interruption_target(
+        summary,
+        {"row_count": 6},
+        expected_count=6,
+        error_message="Hashing completed before the interruption target was reached.",
+        summary_key="first_launch_hashing_active",
+    )
+
+    assert recorded is True
+    assert "hashing_active" not in summary
+    assert summary["first_launch_hashing_active"]["status"] == "completed_before_interruption_target"
+    assert summary["hashing_converged_before_interrupt"] is True
+
+
 def test_shared_hash_drain_accepts_completed_worker_counters(tmp_path: Path) -> None:
     module = load_shared_hash_module()
     trace_path = tmp_path / "startup-profile.trace.json"

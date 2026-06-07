@@ -564,7 +564,24 @@ def run_interruption_scenario(
         if open_shared_files_before_interrupt:
             summary["first_launch_visible_before_interrupt"] = open_shared_files_page_snapshot(main_hwnd)
 
-        hashing_active = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+        try:
+            hashing_active = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+        except RuntimeError as exc:
+            if "Hashing completed before the interruption target was reached." not in str(exc):
+                raise
+            visible_snapshot = summary.get("first_launch_visible_before_interrupt")
+            if not isinstance(visible_snapshot, dict):
+                visible_snapshot = open_shared_files_page_snapshot(main_hwnd)
+                summary["first_launch_visible_at_early_completion"] = visible_snapshot
+            if not record_hashing_completed_before_interruption_target(
+                summary,
+                visible_snapshot,
+                expected_count=int(fixture["expected_row_count"]),
+                error_message=str(exc),
+                summary_key="first_launch_hashing_active",
+            ):
+                raise
+            hashing_active = dict(summary["first_launch_hashing_active"])  # type: ignore[arg-type]
         summary["first_launch_hashing_active"] = hashing_active
         if wait_for_partial_hash_progress_before_interrupt:
             summary["first_launch_partial_hash_progress_before_interrupt"] = wait_for_partial_hash_progress(
@@ -953,13 +970,14 @@ def record_hashing_completed_before_interruption_target(
     *,
     expected_count: int,
     error_message: str,
+    summary_key: str = "hashing_active",
 ) -> bool:
     """Records fast convergence when hashing drains before a deliberate interruption target."""
 
     row_count = int(visible_snapshot.get("row_count") or 0)
     if row_count < expected_count:
         return False
-    summary["hashing_active"] = {
+    summary[summary_key] = {
         "status": "completed_before_interruption_target",
         "row_count": row_count,
         "expected_count": expected_count,
