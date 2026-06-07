@@ -8,16 +8,17 @@ TEST_SUITE_BEGIN("parity");
 
 TEST_CASE("Client library browse marker follows View Shared Files availability")
 {
-	CHECK(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(true, true));
-	CHECK_FALSE(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(true, false));
-	CHECK_FALSE(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(false, true));
-	CHECK_FALSE(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(false, false));
+	CHECK(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(true, true, true));
+	CHECK_FALSE(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(false, true, true));
+	CHECK_FALSE(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(true, true, false));
+	CHECK_FALSE(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(true, false, true));
+	CHECK_FALSE(ClientLibraryBrowseDisplaySeams::ShouldShowLibraryBrowseMarker(false, false, false));
 }
 
 TEST_CASE("Client library browse marker appends after display name only when available")
 {
 	CString strName(_T("peer"));
-	ClientLibraryBrowseDisplaySeams::AppendLibraryBrowseMarker(strName, true, true);
+	ClientLibraryBrowseDisplaySeams::AppendLibraryBrowseMarker(strName, true, true, true);
 
 #ifdef _UNICODE
 	REQUIRE(strName.GetLength() == 7);
@@ -30,11 +31,11 @@ TEST_CASE("Client library browse marker appends after display name only when ava
 #endif
 
 	CString strBlocked(_T("peer"));
-	ClientLibraryBrowseDisplaySeams::AppendLibraryBrowseMarker(strBlocked, true, false);
+	ClientLibraryBrowseDisplaySeams::AppendLibraryBrowseMarker(strBlocked, true, true, false);
 	CHECK(strBlocked == _T("peer"));
 
 	CString strUnknown(_T("(Unknown)"));
-	ClientLibraryBrowseDisplaySeams::AppendLibraryBrowseMarker(strUnknown, false, true);
+	ClientLibraryBrowseDisplaySeams::AppendLibraryBrowseMarker(strUnknown, false, true, true);
 	CHECK(strUnknown == _T("(Unknown)"));
 }
 
