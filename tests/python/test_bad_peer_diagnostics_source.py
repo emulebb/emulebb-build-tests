@@ -69,7 +69,8 @@ def test_bad_peer_diagnostics_logger_is_compile_gated() -> None:
     assert "TrackUploadFileBehavior" in source
     assert "bad_peer_event_v1" in source
     assert "InitializeDiagnosticsLog(g_badPeerDiagnosticsLog, pszLogPath, uMaxLogFileSize)" in source
-    assert "WriteDiagnosticsLogLine(g_badPeerDiagnosticsLog, g_badPeerDiagnosticsLogLock, strJson)" in source
+    assert "WriteDiagnosticsJsonEvent(" in source
+    assert "g_badPeerDiagnosticsLogLock" in source
     assert "BadPeerDiagnosticsLogFileName" in artifact_names
     assert 'return _T("emulebb-diagnostics-bad-peer.log");' in artifact_names
     assert "BadPeerDiagnosticsSeams::InitializeLog" in app_source
