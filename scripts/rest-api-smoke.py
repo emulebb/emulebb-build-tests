@@ -201,6 +201,7 @@ REST_PREFERENCE_KEYS = {
     "maxSourcesPerFile",
     "uploadClientDataRate",
     "maxUploadSlots",
+    "uploadSlotElasticPercent",
     "queueSize",
     "autoConnect",
     "newAutoUp",
@@ -4098,7 +4099,7 @@ def exercise_rest_surface_smoke(base_url: str, api_key: str) -> dict[str, object
             invalid_preference_value,
             400,
             "INVALID_ARGUMENT",
-            message_contains="maxUploadSlots must be an unsigned number in the range 1..32",
+            message_contains="maxUploadSlots must be an unsigned number in the range 1..64",
         ),
         "bad_boolean": require_error_response(
             invalid_preference_boolean,

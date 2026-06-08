@@ -36,7 +36,14 @@ TEST_CASE("Preference validation seam centralizes core numeric ranges")
 	CHECK(PreferenceValidationSeams::NormalizeQueueSize(20000) == static_cast<std::int64_t>(PreferenceValidationSeams::kMaxQueueSize));
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(0u) == static_cast<std::uint32_t>(PreferenceValidationSeams::kMinUploadSlots));
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(99u) == static_cast<std::uint32_t>(PreferenceValidationSeams::kMaxUploadSlots));
-	CHECK(PreferenceValidationSeams::kDefaultMaxUploadSlots == 10u);
+	CHECK(PreferenceValidationSeams::kMaxUploadSlots == 64u);
+	CHECK(PreferenceValidationSeams::kMaxEffectiveUploadSlots == 128u);
+	CHECK(PreferenceValidationSeams::kDefaultMaxUploadSlots == 12u);
+	CHECK(PreferenceValidationSeams::kDefaultUploadSlotElasticPercent == 50u);
+	CHECK(PreferenceValidationSeams::NormalizeUploadSlotElasticPercent(101u) == PreferenceValidationSeams::kMaxUploadSlotElasticPercent);
+	CHECK(PreferenceValidationSeams::GetElasticUploadSlotCap(10u, 50u) == 15u);
+	CHECK(PreferenceValidationSeams::GetElasticUploadSlotCap(63u, 1u) == 64u);
+	CHECK(PreferenceValidationSeams::GetElasticUploadSlotCap(64u, 100u) == PreferenceValidationSeams::kMaxEffectiveUploadSlots);
 }
 
 TEST_CASE("Preference validation seam centralizes public REST preference ranges")
@@ -65,6 +72,8 @@ TEST_CASE("Preference validation seam centralizes public REST preference ranges"
 	CHECK(WebApiSurfaceSeams::IsFiniteKiBpsPreferenceValue(PreferenceValidationSeams::kMaxFiniteBandwidthLimitKiB));
 	CHECK(WebApiSurfaceSeams::IsQueueSizePreferenceValue(PreferenceValidationSeams::kDefaultQueueSize));
 	CHECK(WebApiSurfaceSeams::IsUploadSlotPreferenceValue(PreferenceValidationSeams::kMaxUploadSlots));
+	CHECK(WebApiSurfaceSeams::IsUploadSlotElasticPercentPreferenceValue(PreferenceValidationSeams::kMaxUploadSlotElasticPercent));
+	CHECK_FALSE(WebApiSurfaceSeams::IsUploadSlotElasticPercentPreferenceValue(PreferenceValidationSeams::kMaxUploadSlotElasticPercent + 1u));
 }
 
 TEST_CASE("Preference validation seam centralizes random listener port range")
@@ -85,8 +94,10 @@ TEST_CASE("Preference validation seam centralizes random listener port range")
 TEST_CASE("Preference validation seam centralizes broadband upload policy ranges")
 {
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlots(PreferenceValidationSeams::kDefaultMaxUploadSlots) == PreferenceValidationSeams::kDefaultMaxUploadSlots);
+	CHECK(PreferenceValidationSeams::NormalizeUploadSlotElasticPercent(PreferenceValidationSeams::kDefaultUploadSlotElasticPercent) == PreferenceValidationSeams::kDefaultUploadSlotElasticPercent);
 
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.01f) == PreferenceValidationSeams::kMinSlowUploadThresholdFactor);
+	CHECK(PreferenceValidationSeams::kDefaultSlowUploadThresholdFactor == 0.55f);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.70f) == 0.70f);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(2.0f) == PreferenceValidationSeams::kMaxSlowUploadThresholdFactor);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(std::numeric_limits<float>::quiet_NaN()) == PreferenceValidationSeams::kDefaultSlowUploadThresholdFactor);

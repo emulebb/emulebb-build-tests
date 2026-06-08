@@ -88,21 +88,13 @@ TEST_CASE("Upload queue direct admission bypasses only cooldown-only waiting lis
 	CHECK_FALSE(ShouldDirectAdmitBehindCooldownOnlyWaitingList(true, true));
 }
 
-TEST_CASE("Upload queue probes unproductive no-request cooldowns only near expiry")
+TEST_CASE("Upload queue probes productive no-request cooldowns only near expiry")
 {
-	CHECK_EQ(kUnproductiveNoRequestCooldownProbeRemainingMs, static_cast<std::uint64_t>(30000u));
-	CHECK(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 0u));
-	CHECK(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 30000u));
-	CHECK_FALSE(ShouldProbeUnproductiveNoRequestCooldownCandidate(true, 30001u));
-	CHECK_FALSE(ShouldProbeUnproductiveNoRequestCooldownCandidate(false, 0u));
-
 	CHECK_EQ(kProductiveNoRequestCooldownProbeRemainingMs, static_cast<std::uint64_t>(5000u));
-	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 5000u));
-	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 5001u));
-	CHECK(ShouldProbeNoRequestCooldownCandidate(false, 30000u));
-	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(false, 30001u));
-	CHECK(ShouldProbeNoRequestCooldownCandidate(false, 180000u, kProductiveNoRequestCooldownProbeRemainingMs, kUnproductiveNoRequestCooldownProbeRemainingMs, true));
-	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 180000u, kProductiveNoRequestCooldownProbeRemainingMs, kUnproductiveNoRequestCooldownProbeRemainingMs, true));
+	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 5000u, kProductiveNoRequestCooldownProbeRemainingMs, true));
+	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 5001u, kProductiveNoRequestCooldownProbeRemainingMs, true));
+	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(false, 0u, kProductiveNoRequestCooldownProbeRemainingMs, true));
+	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 0u));
 }
 
 TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
@@ -263,6 +255,12 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, false, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(120u, true, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
 	CHECK(GetNoRequestUploadRetryCooldownSeconds(360u, true, true) == kProductiveNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 0u), 0u);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 1u), 60u);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 2u), 120u);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 3u), 240u);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 7u), kNoRequestRepeatCooldownMaxSeconds);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(600u, 4u), kNoRequestRepeatCooldownMaxSeconds);
 }
 
 TEST_CASE("Upload queue clears retry cooldown only when queued peers request valid blocks")
@@ -290,16 +288,9 @@ TEST_CASE("Upload queue lets productive no-request peers prove renewed demand")
 	CHECK(ShouldAllowNoRequestCooldownClear(true, false));
 	CHECK_FALSE(ShouldAllowNoRequestCooldownClear(true, true));
 
-	CHECK(ShouldClearActiveNoRequestCooldownOnQueuedRequest(true, false, true, 11, 12));
-	CHECK(ShouldClearActiveNoRequestCooldownOnQueuedRequest(true, false, true, 12, 12));
-	CHECK_FALSE(ShouldClearActiveNoRequestCooldownOnQueuedRequest(false, false, true, 11, 12));
-	CHECK_FALSE(ShouldClearActiveNoRequestCooldownOnQueuedRequest(true, true, true, 11, 12));
-	CHECK_FALSE(ShouldClearActiveNoRequestCooldownOnQueuedRequest(true, false, false, 11, 12));
-
 	CHECK_FALSE(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(false, false));
 	CHECK(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(true, false));
 	CHECK_FALSE(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(true, true));
-	CHECK_FALSE(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(true, false, true));
 
 	CHECK(ShouldAllowUploadRetryCooldownClear(false, false));
 	CHECK(ShouldAllowUploadRetryCooldownClear(false, true));

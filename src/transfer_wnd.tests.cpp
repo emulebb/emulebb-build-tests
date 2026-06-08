@@ -35,6 +35,37 @@ TEST_CASE("Transfer window seam validates primary list ids")
 	CHECK_EQ(TransferWndSeams::NormalizePrimaryListId(IDC_CLIENTLIST), static_cast<std::uint32_t>(IDC_CLIENTLIST));
 }
 
+TEST_CASE("Transfer window seam formats broadband queue footer")
+{
+	CHECK_EQ(
+		TransferWndSeams::FormatQueueCountText(
+			42u,
+			0u,
+			L"banned",
+			10,
+			12,
+			18,
+			50u,
+			6000u * 1024u,
+			6200u * 1024u),
+		std::wstring(L"42 (0 banned) | UL 10/12-18 +50% | 5.9/6.1 MB/s 97%"));
+	CHECK_EQ(
+		TransferWndSeams::FormatQueueCountText(
+			2u,
+			1u,
+			L"blocked",
+			0,
+			0,
+			0,
+			0u,
+			0u,
+			0u),
+		std::wstring(L"2 (1 blocked) | UL 0/0-0 +0% | 0.0/0.0 MB/s 0%"));
+	CHECK_EQ(TransferWndSeams::CalculateUploadUtilizationPercent(994u, 1000u), 99u);
+	CHECK_EQ(TransferWndSeams::CalculateUploadUtilizationPercent(995u, 1000u), 100u);
+	CHECK_EQ(TransferWndSeams::CalculateUploadUtilizationPercent(20000u, 1000u), TransferWndSeams::kUploadUtilizationDisplayPercentMax);
+}
+
 TEST_CASE("Transfer window seam keeps detail routing off invalid states")
 {
 	CHECK_FALSE(TransferWndSeams::IsUserDetailPrimaryListId(TransferWndSeams::kPrimaryListSplit));

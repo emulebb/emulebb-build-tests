@@ -135,7 +135,7 @@ def test_upload_slot_diagnostics_reports_cooldown_pressure() -> None:
     assert no_request_recycle_block.index("const bool bProductiveNoRequestRecycle") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
     assert no_request_recycle_block.index("ShouldDeferProductiveNoRequestUploadRecycle(") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
     assert "const UINT uProductiveCooldownSeconds = GetNoRequestUploadRetryCooldownSeconds" in no_request_recycle_block
-    assert "const UINT uBaseCooldownSeconds = GetNoRequestRepeatBaseCooldownSeconds" in no_request_recycle_block
+    assert "const UINT uBaseCooldownSeconds = uConfiguredCooldownSeconds;" in no_request_recycle_block
     assert "NoRequestRepeatPenalty repeatPenalty = {};" in no_request_recycle_block
     assert "repeatPenalty = TrackNoRequestRepeatOffender(client, curTick, uBaseCooldownSeconds);" in no_request_recycle_block
     assert "uCooldownSeconds = repeatPenalty.uCooldownSeconds;" in no_request_recycle_block
@@ -261,7 +261,7 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "reject-not-uploading-retry-clear-used" in queue_source
     assert "reject-not-uploading-no-request-only-cooldown" in queue_source
     assert "reject-not-uploading-no-active-cooldown" in queue_source
-    assert "AcceptNewClient(uploadinglist.GetCount())" in direct_admit_block
+    assert "AcceptNewClient(uploadinglist.GetCount(), ::GetTickCount64())" in direct_admit_block
     assert "ForceNewClient(true)" in direct_admit_block
     assert "AddUpNextClient(_T(\"Direct add after queued block request.\"), client)" in direct_admit_block
     for reason in (

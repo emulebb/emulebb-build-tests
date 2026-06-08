@@ -95,6 +95,15 @@ def test_underfilled_upload_queue_only_probes_productive_no_request_cooldowns() 
     assert "const bool bHasAdmissionCandidate = HasUploadAdmissionCandidate(curTick);" in force_new_block
     assert "const bool bHasCooldownProbeCandidate = !bHasAdmissionCandidate && HasUploadCooldownProbeCandidate(curTick);" in force_new_block
     assert "bHasAdmissionCandidate || bHasCooldownProbeCandidate" in force_new_block
+    assert "AcceptNewClient(curUploadSlots, curTick)" in force_new_block
+
+    accept_block = source[
+        source.index("bool CUploadQueue::AcceptNewClient") :
+        source.index("uint32 CUploadQueue::GetTargetClientDataRate")
+    ]
+    assert "GetSoftMaxUploadSlots()" in accept_block
+    assert "GetElasticMaxUploadSlots()" in accept_block
+    assert "HasSustainedElasticBroadbandUnderfill(curTick)" in accept_block
 
 
 def test_broadband_upload_buffer_depth_scales_with_per_slot_target() -> None:

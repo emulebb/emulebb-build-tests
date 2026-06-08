@@ -37,7 +37,6 @@ def test_repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> No
     assert "kNoRequestRepeatHashRotationStrikeThreshold = 5u" in seams
     assert "kNoRequestRepeatCooldownMaxSeconds = 60u * 60u" in seams
     assert "kNoRequestRepeatCleanupIntervalSeconds = 60u" in seams
-    assert "GetNoRequestRepeatBaseCooldownSeconds(" in seams
     assert "GetNoRequestRepeatCooldownSeconds(" in seams
     assert "ullCooldownSeconds = uBaseCooldownSeconds;" in seams
     assert "ullCooldownSeconds *= 2u;" in seams
@@ -64,7 +63,8 @@ def test_repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> No
     assert "penalty.bShouldBan = ShouldBanNoRequestRepeatOffender(penalty.uStrikes);" in queue_source
     assert "client->Ban(repeatPenalty.bShouldIPBan" in queue_source
     assert "repeatPenalty.bShouldIPBan ? clientBanScopeBoth : clientBanScopeHash" in queue_source
-    assert "GetNoRequestRepeatBaseCooldownSeconds(\n\t\t\t\tuConfiguredCooldownSeconds" in queue_source
+    assert "GetNoRequestRepeatBaseCooldownSeconds(" not in seams
+    assert "const UINT uBaseCooldownSeconds = uConfiguredCooldownSeconds;" in queue_source
     assert "GetNoRequestRepeatCooldownSeconds(uBaseCooldownSeconds, penalty.uStrikes)" in queue_source
     assert "m_ullLastNoRequestRepeatCleanup + SEC2MS(kNoRequestRepeatCleanupIntervalSeconds)" in queue_source
     assert "m_ullLastNoRequestRepeatCleanup = curTick;" in queue_source

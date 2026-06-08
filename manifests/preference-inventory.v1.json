@@ -4979,6 +4979,28 @@
       "notes": ""
     },
     {
+      "id": "UploadSlotElasticPercent",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "UploadPolicy"
+      ],
+      "key": "UploadSlotElasticPercent",
+      "sourceExpression": "prefini::UploadPolicyKeys::UploadSlotElasticPercent",
+      "kind": "constant",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Int"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "PreferenceValidationSeams::NormalizeUploadSlotElasticPercent",
+      "classification": "active-roundtrip",
+      "notes": "Elastic upload-slot overflow percentage above MaxUploadClientsAllowed."
+    },
+    {
       "id": "MediaInfo_MediaInfoDllPath",
       "storageFile": "preferences.ini",
       "sections": [

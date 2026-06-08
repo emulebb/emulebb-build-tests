@@ -163,6 +163,7 @@ TEST_CASE("Preference INI map uses dedicated upload-policy sections without lega
 	CHECK(CString(PreferenceIniMap::DownloadIoKeys::DownloadAutoBroadbandIO) == CString(_T("DownloadAutoBroadbandIO")));
 
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::MaxUploadClientsAllowed) == CString(_T("MaxUploadClientsAllowed")));
+	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::UploadSlotElasticPercent) == CString(_T("UploadSlotElasticPercent")));
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SlowUploadThresholdFactor) == CString(_T("SlowUploadThresholdFactor")));
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::ZeroUploadRateGraceSeconds) == CString(_T("ZeroUploadRateGraceSeconds")));
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::LowRatioScoreBonus) == CString(_T("LowRatioScoreBonus")));
@@ -171,6 +172,7 @@ TEST_CASE("Preference INI map uses dedicated upload-policy sections without lega
 	CHECK(CString(PreferenceIniMap::UploadPolicyKeys::SessionTimeLimitSeconds) == CString(_T("SessionTimeLimitSeconds")));
 
 	CHECK_FALSE(CString(PreferenceIniMap::UploadPolicyKeys::MaxUploadClientsAllowed).Left(2) == CString(_T("BB")));
+	CHECK_FALSE(CString(PreferenceIniMap::UploadPolicyKeys::UploadSlotElasticPercent).Left(2) == CString(_T("BB")));
 	CHECK_FALSE(CString(PreferenceIniMap::UploadPolicyKeys::SessionTransferLimitMode).Left(2) == CString(_T("BB")));
 	CHECK_FALSE(CString(PreferenceIniMap::VideoThumbnailKeys::FfmpegPath).Left(2) == CString(_T("BB")));
 	CHECK_FALSE(CString(PreferenceIniMap::VideoThumbnailKeys::AllowPeerPreview).Left(2) == CString(_T("BB")));

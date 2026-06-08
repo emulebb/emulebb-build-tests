@@ -2387,6 +2387,10 @@ def test_rest_preference_contract_matches_openapi_and_native_sources() -> None:
     assert "downloadAutoBroadbandIo" in summary["openapi_patch"]
     assert "downloadAutoBroadbandIo" in summary["native_response"]
     assert "downloadAutoBroadbandIo" in summary["native_mutable"]
+    assert "uploadSlotElasticPercent" in summary["openapi_preferences"]
+    assert "uploadSlotElasticPercent" in summary["openapi_patch"]
+    assert "uploadSlotElasticPercent" in summary["native_response"]
+    assert "uploadSlotElasticPercent" in summary["native_mutable"]
     assert "autoBroadbandIo" not in summary["openapi_preferences"]
     assert "autoBroadbandIo" not in summary["openapi_patch"]
 

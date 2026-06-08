@@ -412,6 +412,7 @@ TEST_CASE("Web API parses the expanded mutable preference vocabulary")
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxSourcesPerFile"), WebApiSurfaceSeams::EMutablePreference::MaxSourcesPerFile);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("uploadClientDataRate"), WebApiSurfaceSeams::EMutablePreference::UploadClientDataRate);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("maxUploadSlots"), WebApiSurfaceSeams::EMutablePreference::MaxUploadSlots);
+	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("uploadSlotElasticPercent"), WebApiSurfaceSeams::EMutablePreference::UploadSlotElasticPercent);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("queueSize"), WebApiSurfaceSeams::EMutablePreference::QueueSize);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("autoConnect"), WebApiSurfaceSeams::EMutablePreference::AutoConnect);
 	CHECK_EQ(WebApiSurfaceSeams::ParseMutablePreferenceName("newAutoUp"), WebApiSurfaceSeams::EMutablePreference::NewAutoUp);
@@ -2409,7 +2410,12 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/app/preferences", R"({"maxUploadSlots":0})", route, errorCode, errorMessage));
 	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
-	CHECK_EQ(errorMessage, "maxUploadSlots must be an unsigned number in the range 1..32");
+	CHECK_EQ(errorMessage, "maxUploadSlots must be an unsigned number in the range 1..64");
+	errorCode.clear();
+	errorMessage.clear();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/app/preferences", R"({"uploadSlotElasticPercent":101})", route, errorCode, errorMessage));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(errorMessage, "uploadSlotElasticPercent must be an unsigned number in the range 0..100");
 	errorCode.clear();
 	errorMessage.clear();
 	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute("PATCH", "/api/v1/app/preferences", R"({"safeServerConnect":"true"})", route, errorCode, errorMessage));
