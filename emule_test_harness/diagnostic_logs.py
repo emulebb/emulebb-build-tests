@@ -20,7 +20,8 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
     if not logs_dir.is_dir():
         raise RuntimeError(f"Diagnostics log directory does not exist: {logs_dir}")
 
-    bad_peer_events = _read_bad_peer_events(logs_dir / BAD_PEER_LOG_NAME)
+    bad_peer_paths = _diagnostic_log_paths(logs_dir, BAD_PEER_LOG_NAME)
+    bad_peer_events = _read_bad_peer_events(bad_peer_paths)
     latest = max((_parse_utc(event.get("ts_utc")) for event in bad_peer_events), default=None)
     cutoff = latest - timedelta(minutes=window_minutes) if latest else None
     recent_events = [
@@ -45,6 +46,7 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
         "logs_dir": str(logs_dir),
         "bad_peer": {
             "total_events": len(bad_peer_events),
+            "log_files": len(bad_peer_paths),
             "latest_utc": latest.isoformat().replace("+00:00", "Z") if latest else None,
             "window_start_utc": cutoff.isoformat().replace("+00:00", "Z") if cutoff else None,
             "window_minutes": window_minutes,
@@ -86,8 +88,14 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
             "top_banned_peers": _top_banned_peer_rows(recent_events, top_count),
             "max_strikes": _max_strike_rows(recent_events, top_count),
         },
-        "upload_slot": _analyze_summary_log(logs_dir / UPLOAD_SLOT_LOG_NAME, "UploadSlotDiagnostics: summary "),
-        "download_slot": _analyze_summary_log(logs_dir / DOWNLOAD_SLOT_LOG_NAME, "DownloadSlotDiagnostics: summary "),
+        "upload_slot": _analyze_summary_log(
+            _diagnostic_log_paths(logs_dir, UPLOAD_SLOT_LOG_NAME),
+            "UploadSlotDiagnostics: summary ",
+        ),
+        "download_slot": _analyze_summary_log(
+            _diagnostic_log_paths(logs_dir, DOWNLOAD_SLOT_LOG_NAME),
+            "DownloadSlotDiagnostics: summary ",
+        ),
     }
 
 
@@ -127,34 +135,44 @@ def format_diagnostic_log_analysis(analysis: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _read_bad_peer_events(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
+def _diagnostic_log_paths(logs_dir: Path, log_name: str) -> list[Path]:
+    active_path = logs_dir / log_name
+    stem = active_path.stem
+    suffix = active_path.suffix
+    paths = [path for path in logs_dir.glob(f"{stem}-*{suffix}") if path.is_file()]
+    if active_path.is_file():
+        paths.append(active_path)
+    return sorted(paths, key=lambda path: (path.stat().st_mtime, path.name))
+
+
+def _read_bad_peer_events(paths: list[Path]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                events.append(payload)
+    for path in paths:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    events.append(payload)
     return events
 
 
-def _analyze_summary_log(path: Path, prefix: str) -> dict[str, Any]:
-    if not path.exists():
-        return {"exists": False, "last_summary": None}
+def _analyze_summary_log(paths: list[Path], prefix: str) -> dict[str, Any]:
+    if not paths:
+        return {"exists": False, "last_summary": None, "log_files": 0}
     last_summary: dict[str, Any] | None = None
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            line = line.strip()
-            if line.startswith(prefix):
-                last_summary = _parse_key_value_summary(line.removeprefix(prefix))
-    return {"exists": True, "last_summary": last_summary}
+    for path in paths:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if line.startswith(prefix):
+                    last_summary = _parse_key_value_summary(line.removeprefix(prefix))
+    return {"exists": True, "last_summary": last_summary, "log_files": len(paths)}
 
 
 def _parse_key_value_summary(text: str) -> dict[str, Any]:

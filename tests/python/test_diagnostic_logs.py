@@ -10,6 +10,21 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     write_json_lines(
+        logs_dir / "emulebb-diagnostics-bad-peer-20260608-090000.log",
+        [
+            bad_peer_event(
+                ts="2026-06-08T09:09:30.000Z",
+                event="upload_failed_admission_cooldown",
+                reason="Failed upload admission",
+                action="cooldown",
+                user_hash="hash-old",
+                address="192.0.2.40",
+                strikes=None,
+                productive=False,
+            ),
+        ],
+    )
+    write_json_lines(
         logs_dir / diagnostic_logs.BAD_PEER_LOG_NAME,
         [
             bad_peer_event(
@@ -108,8 +123,10 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
 
     analysis = diagnostic_logs.analyze_diagnostic_logs(logs_dir, window_minutes=15, top_count=5)
 
-    assert analysis["bad_peer"]["recent_events"] == 8
-    assert analysis["bad_peer"]["cooldowns"] == 2
+    assert analysis["bad_peer"]["total_events"] == 9
+    assert analysis["bad_peer"]["log_files"] == 2
+    assert analysis["bad_peer"]["recent_events"] == 9
+    assert analysis["bad_peer"]["cooldowns"] == 3
     assert analysis["bad_peer"]["bans"] == 2
     assert analysis["bad_peer"]["ban_events"] == 2
     assert analysis["bad_peer"]["ban_decisions"] == 2
@@ -132,7 +149,7 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
     assert analysis["download_slot"]["last_summary"]["duplicateZeroWritePackets"] == 12
 
     formatted = diagnostic_logs.format_diagnostic_log_analysis(analysis)
-    assert "Bad peer window: 8 events" in formatted
+    assert "Bad peer window: 9 events" in formatted
     assert "ban_events=2, ban_decisions=2" in formatted
     assert "hash_bans=1, ip_bans=1" in formatted
     assert "repeat_block_requests=1, repeat_file_churn=1" in formatted
