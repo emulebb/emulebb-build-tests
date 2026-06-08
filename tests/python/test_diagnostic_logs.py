@@ -23,6 +23,16 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
                 productive=False,
             ),
             bad_peer_event(
+                ts="2026-06-08T09:10:30.000Z",
+                event="upload_queued_request_rejected",
+                reason="Queued block request could not reopen upload slot",
+                action="reject_block_request",
+                user_hash="hash-a",
+                address="192.0.2.10",
+                strikes=None,
+                productive=False,
+            ),
+            bad_peer_event(
                 ts="2026-06-08T09:11:00.000Z",
                 event="upload_no_request_repeat_ban",
                 reason="Repeated zero-request upload slot abuse",
@@ -31,6 +41,7 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
                 address="192.0.2.10",
                 strikes=8,
                 productive=False,
+                scope="hash",
             ),
             bad_peer_event(
                 ts="2026-06-08T09:12:00.000Z",
@@ -41,6 +52,17 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
                 address="192.0.2.20",
                 strikes=None,
                 productive=True,
+            ),
+            bad_peer_event(
+                ts="2026-06-08T09:12:15.000Z",
+                event="client_ban",
+                reason="Repeated zero-request upload slot abuse with rotating hashes",
+                action="ban",
+                user_hash="hash-c",
+                address="192.0.2.30",
+                strikes=None,
+                productive=False,
+                scope="ip",
             ),
             {
                 "schema": "bad_peer_event_v1",
@@ -66,18 +88,28 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
 
     analysis = diagnostic_logs.analyze_diagnostic_logs(logs_dir, window_minutes=15, top_count=5)
 
-    assert analysis["bad_peer"]["recent_events"] == 4
+    assert analysis["bad_peer"]["recent_events"] == 6
     assert analysis["bad_peer"]["cooldowns"] == 2
-    assert analysis["bad_peer"]["bans"] == 1
+    assert analysis["bad_peer"]["bans"] == 2
+    assert analysis["bad_peer"]["hash_bans"] == 1
+    assert analysis["bad_peer"]["ip_bans"] == 1
     assert analysis["bad_peer"]["productive_no_request"] == 1
     assert analysis["bad_peer"]["unproductive_no_request"] == 2
     assert analysis["bad_peer"]["top_peers"][0]["name"].startswith("hash-a 192.0.2.10")
+    assert analysis["bad_peer"]["top_cooldown_rejections"][0]["count"] == 1
+    assert analysis["bad_peer"]["top_unproductive_no_request_peers"][0]["name"].startswith("hash-a 192.0.2.10")
+    assert analysis["bad_peer"]["top_productive_no_request_peers"][0]["name"].startswith("hash-b 192.0.2.20")
+    assert analysis["bad_peer"]["top_banned_peers"][0]["files_touched"] == 1
+    assert analysis["bad_peer"]["top_banned_peers"][0]["ever_uploaded_payload"] is False
     assert analysis["bad_peer"]["max_strikes"][0]["strikes"] == 8
     assert analysis["upload_slot"]["last_summary"]["waitingCooldown"] == 5
     assert analysis["download_slot"]["last_summary"]["duplicateZeroWritePackets"] == 12
 
     formatted = diagnostic_logs.format_diagnostic_log_analysis(analysis)
-    assert "Bad peer window: 4 events" in formatted
+    assert "Bad peer window: 6 events" in formatted
+    assert "hash_bans=1, ip_bans=1" in formatted
+    assert "Cooldown re-entry rejections:" in formatted
+    assert "Top banned peers:" in formatted
     assert "Latest upload summary:" in formatted
 
 
@@ -95,10 +127,13 @@ def bad_peer_event(
     address: str,
     strikes: int | None,
     productive: bool,
+    scope: str | None = None,
 ) -> dict[str, object]:
     evidence: dict[str, object] = {"productive": productive}
     if strikes is not None:
         evidence.update({"strikes": strikes, "threshold": 8, "cooldown_seconds": 15})
+    if scope is not None:
+        evidence["scope"] = scope
     return {
         "schema": "bad_peer_event_v1",
         "ts_utc": ts,
@@ -111,5 +146,6 @@ def bad_peer_event(
             "client_software": "eMule v0.70b",
             "user_name": "test",
         },
+        "file": {"hash": "file-hash-1", "name": "fixture.bin"},
         "evidence": evidence,
     }

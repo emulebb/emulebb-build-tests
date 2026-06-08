@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,8 +29,10 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
         if cutoff is None or (_parse_utc(event.get("ts_utc")) or datetime.min.replace(tzinfo=UTC)) >= cutoff
     ]
 
-    peer_events = [event for event in recent_events if _mapping(event.get("peer")).get("user_hash")]
     no_request_events = [event for event in recent_events if str(event.get("event", "")).startswith("upload_no_request")]
+    ban_events = [event for event in recent_events if _is_ban_event(event)]
+    ban_scope_counts = Counter(_ban_scope(event) for event in ban_events)
+    ban_scope_counts.pop("", None)
 
     return {
         "logs_dir": str(logs_dir),
@@ -44,6 +46,9 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
             "bans": sum(
                 1 for event in recent_events if event.get("action") == "ban" or "ban" in str(event.get("event", ""))
             ),
+            "hash_bans": ban_scope_counts.get("hash", 0),
+            "ip_bans": ban_scope_counts.get("ip", 0) + ban_scope_counts.get("both", 0),
+            "cooldown_only": sum(1 for event in recent_events if event.get("action") == "cooldown"),
             "productive_no_request": sum(
                 1 for event in no_request_events if _mapping(event.get("evidence")).get("productive") is True
             ),
@@ -52,7 +57,20 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
             ),
             "top_events": _counter_rows(Counter(str(event.get("event", "")) for event in recent_events), top_count),
             "top_reasons": _counter_rows(Counter(str(event.get("reason", "")) for event in recent_events), top_count),
-            "top_peers": _counter_rows(Counter(_peer_key(event) for event in peer_events), top_count),
+            "top_peers": _counter_rows(Counter(_peer_key(event) for event in recent_events if _peer_key(event)), top_count),
+            "ban_scopes": _counter_rows(ban_scope_counts, top_count),
+            "top_cooldown_rejections": _peer_event_rows(recent_events, top_count, "upload_queued_request_rejected"),
+            "top_unproductive_no_request_peers": _peer_event_rows(
+                no_request_events,
+                top_count,
+                productive=False,
+            ),
+            "top_productive_no_request_peers": _peer_event_rows(
+                no_request_events,
+                top_count,
+                productive=True,
+            ),
+            "top_banned_peers": _top_banned_peer_rows(recent_events, top_count),
             "max_strikes": _max_strike_rows(recent_events, top_count),
         },
         "upload_slot": _analyze_summary_log(logs_dir / UPLOAD_SLOT_LOG_NAME, "UploadSlotDiagnostics: summary "),
@@ -69,7 +87,9 @@ def format_diagnostic_log_analysis(analysis: dict[str, Any]) -> str:
         (
             "Bad peer window: "
             f"{bad_peer['recent_events']} events in {bad_peer['window_minutes']:g} min "
-            f"(cooldowns={bad_peer['cooldowns']}, bans={bad_peer['bans']}, "
+            f"(cooldowns={bad_peer['cooldowns']}, cooldown_only={bad_peer['cooldown_only']}, "
+            f"bans={bad_peer['bans']}, "
+            f"hash_bans={bad_peer['hash_bans']}, ip_bans={bad_peer['ip_bans']}, "
             f"productive_no_request={bad_peer['productive_no_request']}, "
             f"unproductive_no_request={bad_peer['unproductive_no_request']})"
         ),
@@ -79,6 +99,11 @@ def format_diagnostic_log_analysis(analysis: dict[str, Any]) -> str:
     lines.extend(_format_rows("Top bad-peer events", bad_peer["top_events"]))
     lines.extend(_format_rows("Top bad-peer reasons", bad_peer["top_reasons"]))
     lines.extend(_format_rows("Top bad-peer identities", bad_peer["top_peers"]))
+    lines.extend(_format_rows("Ban scopes", bad_peer["ban_scopes"]))
+    lines.extend(_format_peer_event_rows("Cooldown re-entry rejections", bad_peer["top_cooldown_rejections"]))
+    lines.extend(_format_peer_event_rows("Top unproductive no-request peers", bad_peer["top_unproductive_no_request_peers"]))
+    lines.extend(_format_peer_event_rows("Top productive no-request peers", bad_peer["top_productive_no_request_peers"]))
+    lines.extend(_format_banned_peer_rows(bad_peer["top_banned_peers"]))
     lines.extend(_format_strike_rows(bad_peer["max_strikes"]))
     lines.extend(_format_summary("Latest upload summary", analysis["upload_slot"]))
     lines.extend(_format_summary("Latest download summary", analysis["download_slot"]))
@@ -162,6 +187,93 @@ def _peer_key(event: dict[str, Any]) -> str:
     )
 
 
+def _is_ban_event(event: dict[str, Any]) -> bool:
+    event_name = str(event.get("event", ""))
+    return event.get("action") == "ban" or event_name.endswith("_ban") or event_name == "client_ban"
+
+
+def _ban_scope(event: dict[str, Any]) -> str:
+    evidence = _mapping(event.get("evidence"))
+    for value in (event.get("scope"), evidence.get("scope"), evidence.get("ban_scope"), evidence.get("key_type")):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"hash", "ip", "both"}:
+                return normalized
+    return ""
+
+
+def _peer_event_rows(
+    events: list[dict[str, Any]],
+    top_count: int,
+    event_name: str | None = None,
+    *,
+    productive: bool | None = None,
+) -> list[dict[str, Any]]:
+    counter: Counter[str] = Counter()
+    for event in events:
+        if event_name is not None and event.get("event") != event_name:
+            continue
+        if productive is not None and _mapping(event.get("evidence")).get("productive") is not productive:
+            continue
+        peer_key = _peer_key(event)
+        if peer_key:
+            counter[peer_key] += 1
+    return _counter_rows(counter, top_count)
+
+
+def _file_key(event: dict[str, Any]) -> str:
+    file_payload = _mapping(event.get("file"))
+    file_hash = str(file_payload.get("hash") or "").strip()
+    file_name = str(file_payload.get("name") or "").strip()
+    return file_hash or file_name
+
+
+def _top_banned_peer_rows(events: list[dict[str, Any]], top_count: int) -> list[dict[str, Any]]:
+    rows_by_peer: dict[str, dict[str, Any]] = {}
+    events_by_peer: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in events:
+        peer_key = _peer_key(event)
+        if peer_key:
+            events_by_peer[peer_key].append(event)
+
+    for peer_key, peer_events in events_by_peer.items():
+        peer_bans = [event for event in peer_events if _is_ban_event(event)]
+        if not peer_bans:
+            continue
+
+        timestamps = [_parse_utc(event.get("ts_utc")) for event in peer_events]
+        timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+        strikes = [
+            evidence["strikes"]
+            for evidence in (_mapping(event.get("evidence")) for event in peer_events)
+            if isinstance(evidence.get("strikes"), int)
+        ]
+        file_keys = {_file_key(event) for event in peer_events if _file_key(event)}
+        ban_scopes = Counter(_ban_scope(event) for event in peer_bans)
+        ban_scopes.pop("", None)
+        ever_uploaded_payload = any(
+            int(_mapping(event.get("peer")).get("session_up") or 0) > 0
+            or _mapping(event.get("evidence")).get("productive") is True
+            for event in peer_events
+        )
+        rows_by_peer[peer_key] = {
+            "count": len(peer_bans),
+            "name": peer_key,
+            "first_strike_utc": min(timestamps).isoformat().replace("+00:00", "Z") if timestamps else None,
+            "last_strike_utc": max(timestamps).isoformat().replace("+00:00", "Z") if timestamps else None,
+            "max_strikes": max(strikes) if strikes else None,
+            "files_touched": len(file_keys),
+            "ever_uploaded_payload": ever_uploaded_payload,
+            "scope": ban_scopes.most_common(1)[0][0] if ban_scopes else "",
+        }
+
+    return sorted(
+        rows_by_peer.values(),
+        key=lambda row: (int(row["count"]), int(row["max_strikes"] or 0)),
+        reverse=True,
+    )[:top_count]
+
+
 def _max_strike_rows(events: list[dict[str, Any]], top_count: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for event in events:
@@ -189,6 +301,33 @@ def _format_rows(title: str, rows: list[dict[str, Any]]) -> list[str]:
     if not rows:
         return [*lines, "  none"]
     lines.extend(f"  {row['count']:>5}  {row['name']}" for row in rows)
+    return lines
+
+
+def _format_peer_event_rows(title: str, rows: list[dict[str, Any]]) -> list[str]:
+    lines = [f"{title}:"]
+    if not rows:
+        return [*lines, "  none"]
+    lines.extend(f"  {row['count']:>5}  {row['name']}" for row in rows)
+    return lines
+
+
+def _format_banned_peer_rows(rows: list[dict[str, Any]]) -> list[str]:
+    lines = ["Top banned peers:"]
+    if not rows:
+        return [*lines, "  none"]
+    for row in rows:
+        lines.append(
+            "  "
+            f"{row['count']:>5} bans "
+            f"scope={row['scope'] or 'unknown'} "
+            f"max_strikes={row['max_strikes'] if row['max_strikes'] is not None else 'n/a'} "
+            f"files={row['files_touched']} "
+            f"uploaded_payload={str(row['ever_uploaded_payload']).lower()} "
+            f"first={row['first_strike_utc'] or 'n/a'} "
+            f"last={row['last_strike_utc'] or 'n/a'} "
+            f"{row['name']}"
+        )
     return lines
 
 
