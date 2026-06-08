@@ -96,12 +96,13 @@ def collect_durability_file_states(profile: dict[str, object]) -> dict[str, dict
     """Collects the critical config/cache files that must survive remount."""
 
     config_dir = Path(str(profile["config_dir"]))
+    startup_profile_path = Path(str(profile["startup_profile_path"]))
     paths = {
         "preferences_ini": config_dir / "preferences.ini",
         "preferences_dat": config_dir / "preferences.dat",
         "shareddir_dat": config_dir / "shareddir.dat",
         "sharedcache_dat": config_dir / "sharedcache.dat",
-        "startup_profile": config_dir / live_common.STARTUP_PROFILE_TRACE_FILE_NAME,
+        "startup_profile": startup_profile_path,
     }
     return {name: file_state(path) for name, path in paths.items()}
 

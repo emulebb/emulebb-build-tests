@@ -42,26 +42,39 @@ def test_packet_diagnostics_compile_flag_is_opt_in() -> None:
         config_definitions for config_definitions in preprocessor_definitions if "NDEBUG" in config_definitions
     ]
     assert len(release_definitions) == 1
-    assert "$(StartupProfilingPreprocessorDefinition)" in release_definitions[0]
+    assert "$(StartupDiagnosticsPreprocessorDefinition)" in release_definitions[0]
 
 
 def test_packet_diagnostics_build_env_override_is_available() -> None:
     build_source = read_build_source("emule_workspace/build.py")
 
-    assert 'env_override("EMULEBB_ENABLE_PACKET_DIAGNOSTICS")' in build_source
-    assert "/p:EnablePacketDiagnostics=" in build_source
+    assert '"EMULEBB_ENABLE_PACKET_DIAGNOSTICS", "EnablePacketDiagnostics"' in build_source
+    assert 'extra_properties.append(f"/p:{property_name}=' in build_source
 
 
 def test_startup_profiling_compile_flag_is_opt_in() -> None:
     project = read_source("emule.vcxproj")
     root = ET.fromstring(project)
     namespace = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
-    definitions = root.findall(".//msb:StartupProfilingPreprocessorDefinition", namespace)
+    definitions = root.findall(".//msb:StartupDiagnosticsPreprocessorDefinition", namespace)
 
-    assert "<EnableStartupProfiling Condition=\"'$(EnableStartupProfiling)'==''\">false</EnableStartupProfiling>" in project
+    assert "<EnableStartupDiagnostics Condition=\"'$(EnableStartupDiagnostics)'==''\">false</EnableStartupDiagnostics>" in project
     assert len(definitions) == 1
-    assert definitions[0].attrib["Condition"] == "'$(EnableStartupProfiling)'=='true'"
-    assert definitions[0].text == "EMULEBB_ENABLE_STARTUP_PROFILING;"
+    assert definitions[0].attrib["Condition"] == "'$(EnableStartupDiagnostics)'=='true'"
+    assert definitions[0].text == "EMULEBB_ENABLE_STARTUP_DIAGNOSTICS;"
+
+
+def test_startup_profile_trace_uses_log_artifact_name() -> None:
+    emule_source = read_source("Emule.cpp")
+    artifacts = read_source("LogArtifactNames.h")
+
+    assert "inline LPCTSTR StartupProfileTraceFileName()" in artifacts
+    assert 'return _T("emulebb-diagnostics-startup.trace.json");' in artifacts
+    assert (
+        "m_strStartupProfilePath = thePrefs.GetMuleDirectory(EMULE_LOGDIR, false) + "
+        "LogArtifactNames::StartupProfileTraceFileName();"
+    ) in emule_source
+    assert '"startup-profile.trace.json"' not in emule_source
 
 
 def test_retired_diagnostic_flags_are_rejected_at_feature_header_only() -> None:
@@ -106,10 +119,13 @@ def test_packet_diagnostics_logging_api_is_compile_guarded() -> None:
     assert '\\"schema\\":\\"ed2k_invalid_sub_opcode_v1\\"' in log_source
     assert '\\"context_hex\\":\\"%s\\",\\"payload_hex_truncated\\":%s,\\"payload_hex\\":\\"%s\\"' in log_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\nCLogFile thePacketDiagnosticsLog;" in emule_source
-    assert "thePacketDiagnosticsLog.SetFlushOnWrite(false)" in emule_source
-    assert "thePacketDiagnosticsLog.SetFileFormat(Utf8);" in emule_source
+    assert "InitializeDiagnosticsLog(thePacketDiagnosticsLog, strDiagnosticsLogDir + LogArtifactNames::PacketDiagnosticsLogFileName(), thePrefs.GetMaxLogFileSize())" in emule_source
+    assert "WriteDiagnosticsLogLine(thePacketDiagnosticsLog, g_packetDiagnosticsLogLock, strJson)" in log_source
+    assert "bool InitializeDiagnosticsLog(CLogFile &rLog, LPCTSTR pszLogPath, UINT uMaxLogFileSize)" in log_header
+    assert "void WriteDiagnosticsLogLine(CLogFile &rLog, CCriticalSection &rLock, const CString &rstrLine)" in log_header
     assert "LogArtifactNames::PacketDiagnosticsLogFileName()" in emule_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\ninline LPCTSTR PacketDiagnosticsLogFileName()" in artifacts
+    assert 'return _T("emulebb-diagnostics-packet.log");' in artifacts
 
 
 def test_rest_recent_log_ring_is_bounded_and_clearable() -> None:
@@ -135,7 +151,7 @@ def test_invalid_sub_opcode_diagnostics_call_sites_are_guarded() -> None:
     request_block = source[source.index("case OP_MULTIPACKET_EXT2:") : source.index("case OP_MULTIPACKETANSWER:")]
     answer_block = source[source.index("case OP_MULTIPACKETANSWER:") : source.index("case OP_EMULEINFO:")]
 
-    shared_guard = "#if defined(EMULEBB_ENABLE_PACKET_DIAGNOSTICS) || EMULEBB_HAS_BAD_PEER_INSTRUMENTATION\n\t\t\tint iPreviousSubOpcode = -1;\n#endif"
+    shared_guard = "#if defined(EMULEBB_ENABLE_PACKET_DIAGNOSTICS) || EMULEBB_HAS_BAD_PEER_DIAGNOSTICS\n\t\t\tint iPreviousSubOpcode = -1;\n#endif"
     assert shared_guard in request_block
     assert shared_guard in answer_block
     assert "LogInvalidMultipacketSubOpcode(_T(\"multipacket_request\"), client, opcode, packet, size, opcode_in, data_in, iPreviousSubOpcode);" in request_block

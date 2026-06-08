@@ -57,7 +57,7 @@ def phase_event(timestamp_us: int, phase_id: str) -> dict[str, object]:
 
 def test_partial_hash_progress_uses_trace_counters(tmp_path: Path) -> None:
     module = load_shared_hash_module()
-    trace_path = tmp_path / "startup-profile.trace.json"
+    trace_path = tmp_path / "emulebb-diagnostics-startup.trace.json"
     write_startup_trace(
         trace_path,
         [
@@ -90,7 +90,7 @@ def test_write_json_recreates_parent_directory(tmp_path: Path) -> None:
 
 def test_partial_hash_progress_rejects_completed_hashing(tmp_path: Path) -> None:
     module = load_shared_hash_module()
-    trace_path = tmp_path / "startup-profile.trace.json"
+    trace_path = tmp_path / "emulebb-diagnostics-startup.trace.json"
     write_startup_trace(
         trace_path,
         [
@@ -140,7 +140,7 @@ def test_records_fast_hash_completion_under_custom_summary_key() -> None:
 
 def test_shared_hash_drain_accepts_completed_worker_counters(tmp_path: Path) -> None:
     module = load_shared_hash_module()
-    trace_path = tmp_path / "startup-profile.trace.json"
+    trace_path = tmp_path / "emulebb-diagnostics-startup.trace.json"
     write_startup_trace(
         trace_path,
         [
@@ -160,7 +160,7 @@ def test_shared_hash_drain_accepts_completed_worker_counters(tmp_path: Path) -> 
 
 def test_shared_hash_drain_rejects_hashing_done_with_short_rows(tmp_path: Path) -> None:
     module = load_shared_hash_module()
-    trace_path = tmp_path / "startup-profile.trace.json"
+    trace_path = tmp_path / "emulebb-diagnostics-startup.trace.json"
     write_startup_trace(
         trace_path,
         [
@@ -199,7 +199,8 @@ def test_launch_app_with_fresh_startup_trace_removes_stale_trace(monkeypatch, tm
     profile_base = tmp_path / "profile-base"
     config_dir = profile_base / "config"
     config_dir.mkdir(parents=True)
-    trace_path = config_dir / "startup-profile.trace.json"
+    trace_path = profile_base / "logs" / "emulebb-diagnostics-startup.trace.json"
+    trace_path.parent.mkdir()
     trace_path.write_text('{"traceEvents":[]}', encoding="utf-8")
     launched: list[Path] = []
 

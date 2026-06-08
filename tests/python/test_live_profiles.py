@@ -76,7 +76,7 @@ def test_build_profile_base_creates_fresh_isolated_profile(tmp_path: Path) -> No
     assert user_hash[5] == 14
     assert user_hash[14] == 111
     assert live_profiles.read_ini_text(config_dir / "shareddir.dat") == shared_dir + "\r\n"
-    assert profile["startup_profile_path"] == config_dir / live_profiles.STARTUP_PROFILE_TRACE_FILE_NAME
+    assert profile["startup_profile_path"] == scenario_dir / "profile-base" / "logs" / live_profiles.STARTUP_PROFILE_TRACE_FILE_NAME
 
 
 def test_build_profile_base_uses_distinct_stable_client_hashes(tmp_path: Path) -> None:

@@ -25,8 +25,17 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     source = read_app_source("UploadQueue.cpp")
     header = read_app_source("UploadQueue.h")
     seams_header = read_app_source("UploadQueueSeams.h")
+    log_header = read_app_source("Log.h")
+    artifacts = read_app_source("LogArtifactNames.h")
+    app_source = read_app_source("Emule.cpp")
     block = source[source.index("void CUploadQueue::LogUploadSlotInstrumentation") : source.index("void CUploadQueue::Process()")]
 
+    assert "UploadSlotDiagnosticsLogLine(" in block
+    assert "AddDebugLogLine(DLP_DEFAULT, false," not in block
+    assert "extern CLogFile theUploadSlotDiagnosticsLog;" in log_header
+    assert "void UploadSlotDiagnosticsLogLine(LPCTSTR pszFmt, ...);" in log_header
+    assert 'return _T("emulebb-diagnostics-upload-slot.log");' in artifacts
+    assert "LogArtifactNames::UploadSlotDiagnosticsLogFileName()" in app_source
     assert "waitingCooldownMinMs=%I64u" in block
     assert "waitingCooldownAvgMs=%I64u" in block
     assert "waitingCooldownMaxMs=%I64u" in block

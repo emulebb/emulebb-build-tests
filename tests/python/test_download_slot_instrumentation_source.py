@@ -18,23 +18,23 @@ def test_download_slot_instrumentation_compile_flag_is_opt_in() -> None:
     project = read_app_source("emule.vcxproj")
     root = ET.fromstring(project)
     namespace = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
-    definitions = root.findall(".//msb:DownloadSlotInstrumentationPreprocessorDefinition", namespace)
+    definitions = root.findall(".//msb:DownloadSlotDiagnosticsPreprocessorDefinition", namespace)
     preprocessor_definitions = [
         element.text or ""
         for element in root.findall(".//msb:PreprocessorDefinitions", namespace)
     ]
 
     assert len(definitions) == 1
-    assert definitions[0].attrib["Condition"] == "'$(EnableDownloadSlotInstrumentation)'=='true'"
-    assert definitions[0].text == "EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION;"
+    assert definitions[0].attrib["Condition"] == "'$(EnableDownloadSlotDiagnostics)'=='true'"
+    assert definitions[0].text == "EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS;"
     assert preprocessor_definitions
     for config_definitions in preprocessor_definitions:
-        assert "$(UploadSlotInstrumentationPreprocessorDefinition)" in config_definitions
-        assert "$(DownloadSlotInstrumentationPreprocessorDefinition)" in config_definitions
-        assert config_definitions.index("$(UploadSlotInstrumentationPreprocessorDefinition)") < config_definitions.index(
-            "$(DownloadSlotInstrumentationPreprocessorDefinition)"
+        assert "$(UploadSlotDiagnosticsPreprocessorDefinition)" in config_definitions
+        assert "$(DownloadSlotDiagnosticsPreprocessorDefinition)" in config_definitions
+        assert config_definitions.index("$(UploadSlotDiagnosticsPreprocessorDefinition)") < config_definitions.index(
+            "$(DownloadSlotDiagnosticsPreprocessorDefinition)"
         )
-        assert config_definitions.index("$(DownloadSlotInstrumentationPreprocessorDefinition)") < config_definitions.index(
+        assert config_definitions.index("$(DownloadSlotDiagnosticsPreprocessorDefinition)") < config_definitions.index(
             "MBEDTLS_ALLOW_PRIVATE_ACCESS"
         )
 
@@ -42,19 +42,28 @@ def test_download_slot_instrumentation_compile_flag_is_opt_in() -> None:
 def test_download_slot_instrumentation_build_env_override_is_plumbed() -> None:
     build_source = (BUILD_ROOT / "emule_workspace" / "build.py").read_text(encoding="utf-8")
 
-    assert 'env_override("EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION")' in build_source
-    assert "/p:EnableDownloadSlotInstrumentation=" in build_source
+    assert '"EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS", "EnableDownloadSlotDiagnostics"' in build_source
+    assert 'extra_properties.append(f"/p:{property_name}=' in build_source
 
 
 def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     client_source = read_app_source("DownloadClient.cpp")
     queue_source = read_app_source("DownloadQueue.cpp")
     queue_header = read_app_source("DownloadQueue.h")
+    log_header = read_app_source("Log.h")
+    artifacts = read_app_source("LogArtifactNames.h")
+    app_source = read_app_source("Emule.cpp")
     client_header = read_app_source("UpDownClient.h")
     base_client_source = read_app_source("BaseClient.cpp")
 
-    assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION\nvoid CUpDownClient::LogDownloadSlotInstrumentation" in client_source
-    assert "DownloadSlotInstrumentation: client reason=%s" in client_source
+    assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS\nvoid CUpDownClient::LogDownloadSlotInstrumentation" in client_source
+    assert "DownloadSlotDiagnostics: client reason=%s" in client_source
+    assert "DownloadSlotDiagnosticsLogLine(" in client_source
+    assert "DownloadSlotDiagnosticsLogLine(" in queue_source
+    assert "extern CLogFile theDownloadSlotDiagnosticsLog;" in log_header
+    assert "void DownloadSlotDiagnosticsLogLine(LPCTSTR pszFmt, ...);" in log_header
+    assert 'return _T("emulebb-diagnostics-download-slot.log");' in artifacts
+    assert "LogArtifactNames::DownloadSlotDiagnosticsLogFileName()" in app_source
     for anchor in (
         "block-reserved",
         "block-reserve-empty",
@@ -86,10 +95,10 @@ def test_download_slot_instrumentation_logs_queue_and_client_state() -> None:
     assert '_T("state-leave-downloading")' in throttle_block
     assert '_T("state-leave-downloading-nnp")' in throttle_block
 
-    assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION\nvoid CDownloadQueue::LogDownloadSlotInstrumentation" in queue_source
-    assert "DownloadSlotInstrumentation: summary" in queue_source
+    assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS\nvoid CDownloadQueue::LogDownloadSlotInstrumentation" in queue_source
+    assert "DownloadSlotDiagnostics: summary" in queue_source
     assert "LogDownloadSlotInstrumentation(curTick);" in queue_source
-    assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION\n\tvoid\tLogDownloadSlotInstrumentation" in queue_header
+    assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS\n\tvoid\tLogDownloadSlotInstrumentation" in queue_header
     assert "m_ullDownloadBlockRequestsReserved" in client_header
     assert "m_ullDownloadDuplicateZeroWritePackets" in client_header
     assert "m_ullDownloadDuplicateZeroWriteBytes" in client_header
@@ -253,7 +262,7 @@ def test_duplicate_complete_download_block_advances_and_retires_stale_pending_re
     assert "cur_block->block->transferred = uDuplicateProgressBytes;" in block
     duplicate_progress_block = block[
         block.index("const uint64 uDuplicateProgressBytes") :
-        block.index('#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_INSTRUMENTATION', block.index("const uint64 uDuplicateProgressBytes"))
+        block.index('#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS', block.index("const uint64 uDuplicateProgressBytes"))
     ]
     assert "bProgressedPendingBlock = true;" not in duplicate_progress_block
     assert "bProgressedPendingBlock = true;" in block

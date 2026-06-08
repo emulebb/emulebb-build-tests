@@ -206,7 +206,7 @@ Live Arr environment:
 Terminology:
 
 - live profile seed: the tracked deterministic eMule config baseline under `manifests\live-profile-seed\config`
-- startup profile: runtime Chrome Trace output named `startup-profile.trace.json`
+- startup profile: runtime Chrome Trace output named `emulebb-diagnostics-startup.trace.json`
 - REST coverage/stress budget: a test-budget preset selected with `--rest-coverage-budget` or `--rest-stress-budget`
 
 Canonical live REST E2E lane:
@@ -391,7 +391,7 @@ Preferences live UI regression:
 
 Startup-profile scenarios:
 
-- `scripts\startup-profile-scenarios.py` builds deterministic Chrome Trace `startup-profile.trace.json` artifacts for multiple live-profile scenarios without changing app behavior
+- `scripts\startup-profile-scenarios.py` builds deterministic Chrome Trace `emulebb-diagnostics-startup.trace.json` artifacts for multiple live-profile scenarios without changing app behavior
 - the trace includes stable readiness, Shared Files hashing, Statistics dialog, and broadband lifecycle phase ids so Perfetto and the JSON summaries can separate startup, UI setup, queue wait, worker-thread bring-up costs, and final shared-hash drain time
 - the default run covers `baseline-no-shares`, `fixture-three-files`, `long-paths-root-only`, `long-paths-recursive`, `long-path-output-root-only`, `long-path-output-recursive`, `long-path-emule-fixture-root-only`, `long-path-emule-fixture-recursive`, `shared-files-robustness-root-only`, and `shared-files-robustness-recursive`
 - `--scenario` can be repeated on the Python entrypoint to run only the scenarios you want

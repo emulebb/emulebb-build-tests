@@ -327,7 +327,7 @@ def test_shared_publish_instrumentation_reports_server_and_kad_backlog() -> None
         source.index("void CSharedFileList::Process")
     ]
 
-    assert "#ifdef EMULEBB_ENABLE_UPLOAD_SLOT_INSTRUMENTATION" in header
+    assert "#ifdef EMULEBB_ENABLE_UPLOAD_SLOT_DIAGNOSTICS" in header
     assert "struct SharedPublishInstrumentationSnapshot" in header
     for field in (
         "INT_PTR iSharedFiles",
