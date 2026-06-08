@@ -132,7 +132,8 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "fast\n\t\t\t// clients can keep carrying upload bandwidth" in no_request_recycle_block
     assert no_request_recycle_block.index("const bool bProductiveNoRequestRecycle") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
     assert no_request_recycle_block.index("ShouldDeferProductiveNoRequestUploadRecycle(") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
-    assert "const UINT uBaseCooldownSeconds = GetNoRequestUploadRetryCooldownSeconds" in no_request_recycle_block
+    assert "const UINT uProductiveCooldownSeconds = GetNoRequestUploadRetryCooldownSeconds" in no_request_recycle_block
+    assert "const UINT uBaseCooldownSeconds = GetNoRequestRepeatBaseCooldownSeconds" in no_request_recycle_block
     assert "NoRequestRepeatPenalty repeatPenalty = {};" in no_request_recycle_block
     assert "repeatPenalty = TrackNoRequestRepeatOffender(client, curTick, uBaseCooldownSeconds);" in no_request_recycle_block
     assert "uCooldownSeconds = repeatPenalty.uCooldownSeconds;" in no_request_recycle_block
@@ -148,8 +149,9 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
         no_request_cooldown_start :
         no_request_recycle_block.index("client->SetSlowUploadCooldownUntil", no_request_cooldown_start)
     ]
-    assert no_request_cooldown_block.index("const UINT uBaseCooldownSeconds") < no_request_cooldown_block.index("UINT uCooldownSeconds = uBaseCooldownSeconds;")
-    assert no_request_cooldown_block.index("UINT uCooldownSeconds = uBaseCooldownSeconds;") < no_request_cooldown_block.index("const ULONGLONG ullCooldownUntil")
+    assert no_request_cooldown_block.index("const UINT uBaseCooldownSeconds") < no_request_cooldown_block.index("const UINT uInitialCooldownSeconds")
+    assert no_request_cooldown_block.index("const UINT uInitialCooldownSeconds") < no_request_cooldown_block.index("UINT uCooldownSeconds = uInitialCooldownSeconds;")
+    assert no_request_cooldown_block.index("UINT uCooldownSeconds = uInitialCooldownSeconds;") < no_request_cooldown_block.index("const ULONGLONG ullCooldownUntil")
     assert no_request_cooldown_block.index("const ULONGLONG ullCooldownUntil") < no_request_cooldown_block.index("const ULONGLONG ullTrackUntil")
     apply_cooldown_block = source[
         source.index("bool CUploadQueue::ApplyUploadRetryCooldown") :
