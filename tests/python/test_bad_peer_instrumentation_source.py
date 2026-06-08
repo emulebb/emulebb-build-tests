@@ -60,7 +60,13 @@ def test_bad_peer_instrumentation_logger_is_compile_gated() -> None:
     assert "inline void LogClientEvent" in header
     assert "inline void LogIpEvent" in header
     assert "inline void LogSearchEvent" in header
+    assert "inline void LogUploadBlockRequestBehavior" in header
+    assert "inline void TrackUploadFileBehavior" in header
     assert "CLogFile g_badPeerInstrumentationLog;" in source
+    assert "g_badPeerBehaviorLedger" in source
+    assert "kBadPeerBehaviorLedgerWindowMs = MIN2MS(60)" in source
+    assert "LogUploadBlockRequestBehavior" in source
+    assert "TrackUploadFileBehavior" in source
     assert "bad_peer_event_v1" in source
     assert "InitializeDiagnosticsLog(g_badPeerInstrumentationLog, pszLogPath, uMaxLogFileSize)" in source
     assert "WriteDiagnosticsLogLine(g_badPeerInstrumentationLog, g_badPeerInstrumentationLogLock, strJson)" in source
@@ -80,6 +86,7 @@ def test_bad_peer_instrumentation_covers_evidence_categories() -> None:
             "DownloadQueue.cpp",
             "ListenSocket.cpp",
             "UploadQueue.cpp",
+            "BadPeerInstrumentationSeams.cpp",
             "SearchList.cpp",
             "FakeFileDetector.cpp",
         )
@@ -108,6 +115,10 @@ def test_bad_peer_instrumentation_covers_evidence_categories() -> None:
         "packet_unknown_client_tcp_packet",
         "upload_queued_request_direct_admit",
         "upload_queued_request_rejected",
+        "upload_duplicate_done_block_rejected",
+        "upload_duplicate_queued_block_rejected",
+        "upload_repeat_block_request_observed",
+        "upload_repeat_file_request_observed",
         "upload_no_request_recycle",
         "upload_short_failed_slot_cooldown",
         "upload_zero_rate_recycle",
@@ -116,3 +127,26 @@ def test_bad_peer_instrumentation_covers_evidence_categories() -> None:
         "fake_file_part_detected",
     ):
         assert event in joined
+
+
+def test_bad_peer_instrumentation_tracks_upload_clog_patterns() -> None:
+    upload_client = read_app_source("UploadClient.cpp")
+    upload_queue = read_app_source("UploadQueue.cpp")
+
+    assert "reject-duplicate-done-block" in upload_client
+    assert "_T(\"upload_duplicate_done_block_rejected\")" in upload_client
+    assert "reject-duplicate-queued-block" in upload_client
+    assert "_T(\"upload_duplicate_queued_block_rejected\")" in upload_client
+    assert "BadPeerInstrumentationSeams::LogUploadBlockRequestBehavior" in upload_client
+    assert upload_queue.count("BadPeerInstrumentationSeams::TrackUploadFileBehavior") >= 6
+    for behavior in (
+        "failed_admission",
+        "no_socket",
+        "no_request",
+        "idle_no_request",
+        "stalled_zero_rate",
+        "short_failed_slot",
+        "zero_rate",
+        "slow_rate",
+    ):
+        assert f'_T("{behavior}")' in upload_queue

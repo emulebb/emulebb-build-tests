@@ -30,6 +30,12 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
     ]
 
     no_request_events = [event for event in recent_events if str(event.get("event", "")).startswith("upload_no_request")]
+    repeat_block_events = [
+        event for event in recent_events if event.get("event") == "upload_repeat_block_request_observed"
+    ]
+    repeat_file_events = [
+        event for event in recent_events if event.get("event") == "upload_repeat_file_request_observed"
+    ]
     ban_events = [event for event in recent_events if _is_ban_event(event)]
     ban_decisions = _ban_decision_events(ban_events)
     ban_scope_counts = Counter(_ban_scope(event) for event in ban_decisions)
@@ -58,11 +64,15 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
             "unproductive_no_request": sum(
                 1 for event in no_request_events if _mapping(event.get("evidence")).get("productive") is False
             ),
+            "repeat_block_requests": len(repeat_block_events),
+            "repeat_file_churn": len(repeat_file_events),
             "top_events": _counter_rows(Counter(str(event.get("event", "")) for event in recent_events), top_count),
             "top_reasons": _counter_rows(Counter(str(event.get("reason", "")) for event in recent_events), top_count),
             "top_peers": _counter_rows(Counter(_peer_key(event) for event in recent_events if _peer_key(event)), top_count),
             "ban_scopes": _counter_rows(ban_scope_counts, top_count),
             "top_cooldown_rejections": _peer_event_rows(recent_events, top_count, "upload_queued_request_rejected"),
+            "top_repeat_block_peers": _peer_event_rows(repeat_block_events, top_count),
+            "top_repeat_file_peers": _peer_event_rows(repeat_file_events, top_count),
             "top_unproductive_no_request_peers": _peer_event_rows(
                 no_request_events,
                 top_count,
@@ -94,7 +104,9 @@ def format_diagnostic_log_analysis(analysis: dict[str, Any]) -> str:
             f"ban_events={bad_peer['ban_events']}, ban_decisions={bad_peer['ban_decisions']}, "
             f"hash_bans={bad_peer['hash_bans']}, ip_bans={bad_peer['ip_bans']}, "
             f"productive_no_request={bad_peer['productive_no_request']}, "
-            f"unproductive_no_request={bad_peer['unproductive_no_request']})"
+            f"unproductive_no_request={bad_peer['unproductive_no_request']}, "
+            f"repeat_block_requests={bad_peer['repeat_block_requests']}, "
+            f"repeat_file_churn={bad_peer['repeat_file_churn']})"
         ),
     ]
     if bad_peer["latest_utc"]:
@@ -104,6 +116,8 @@ def format_diagnostic_log_analysis(analysis: dict[str, Any]) -> str:
     lines.extend(_format_rows("Top bad-peer identities", bad_peer["top_peers"]))
     lines.extend(_format_rows("Ban scopes", bad_peer["ban_scopes"]))
     lines.extend(_format_peer_event_rows("Cooldown re-entry rejections", bad_peer["top_cooldown_rejections"]))
+    lines.extend(_format_peer_event_rows("Top repeated upload block requests", bad_peer["top_repeat_block_peers"]))
+    lines.extend(_format_peer_event_rows("Top repeated same-file upload churn", bad_peer["top_repeat_file_peers"]))
     lines.extend(_format_peer_event_rows("Top unproductive no-request peers", bad_peer["top_unproductive_no_request_peers"]))
     lines.extend(_format_peer_event_rows("Top productive no-request peers", bad_peer["top_productive_no_request_peers"]))
     lines.extend(_format_banned_peer_rows(bad_peer["top_banned_peers"]))

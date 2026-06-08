@@ -64,6 +64,26 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
                 productive=False,
                 scope="ip",
             ),
+            bad_peer_event(
+                ts="2026-06-08T09:12:20.000Z",
+                event="upload_repeat_block_request_observed",
+                reason="Repeated same upload block request",
+                action="observe",
+                user_hash="hash-a",
+                address="192.0.2.10",
+                strikes=None,
+                productive=False,
+            ),
+            bad_peer_event(
+                ts="2026-06-08T09:12:25.000Z",
+                event="upload_repeat_file_request_observed",
+                reason="Repeated same-file no-request upload churn",
+                action="observe",
+                user_hash="hash-a",
+                address="192.0.2.10",
+                strikes=None,
+                productive=False,
+            ),
             {
                 "schema": "bad_peer_event_v1",
                 "ts_utc": "2026-06-08T09:12:30.000Z",
@@ -88,7 +108,7 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
 
     analysis = diagnostic_logs.analyze_diagnostic_logs(logs_dir, window_minutes=15, top_count=5)
 
-    assert analysis["bad_peer"]["recent_events"] == 6
+    assert analysis["bad_peer"]["recent_events"] == 8
     assert analysis["bad_peer"]["cooldowns"] == 2
     assert analysis["bad_peer"]["bans"] == 2
     assert analysis["bad_peer"]["ban_events"] == 2
@@ -97,8 +117,12 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
     assert analysis["bad_peer"]["ip_bans"] == 1
     assert analysis["bad_peer"]["productive_no_request"] == 1
     assert analysis["bad_peer"]["unproductive_no_request"] == 2
+    assert analysis["bad_peer"]["repeat_block_requests"] == 1
+    assert analysis["bad_peer"]["repeat_file_churn"] == 1
     assert analysis["bad_peer"]["top_peers"][0]["name"].startswith("hash-a 192.0.2.10")
     assert analysis["bad_peer"]["top_cooldown_rejections"][0]["count"] == 1
+    assert analysis["bad_peer"]["top_repeat_block_peers"][0]["name"].startswith("hash-a 192.0.2.10")
+    assert analysis["bad_peer"]["top_repeat_file_peers"][0]["name"].startswith("hash-a 192.0.2.10")
     assert analysis["bad_peer"]["top_unproductive_no_request_peers"][0]["name"].startswith("hash-a 192.0.2.10")
     assert analysis["bad_peer"]["top_productive_no_request_peers"][0]["name"].startswith("hash-b 192.0.2.20")
     assert analysis["bad_peer"]["top_banned_peers"][0]["files_touched"] == 1
@@ -108,10 +132,13 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
     assert analysis["download_slot"]["last_summary"]["duplicateZeroWritePackets"] == 12
 
     formatted = diagnostic_logs.format_diagnostic_log_analysis(analysis)
-    assert "Bad peer window: 6 events" in formatted
+    assert "Bad peer window: 8 events" in formatted
     assert "ban_events=2, ban_decisions=2" in formatted
     assert "hash_bans=1, ip_bans=1" in formatted
+    assert "repeat_block_requests=1, repeat_file_churn=1" in formatted
     assert "Cooldown re-entry rejections:" in formatted
+    assert "Top repeated upload block requests:" in formatted
+    assert "Top repeated same-file upload churn:" in formatted
     assert "Top banned peers:" in formatted
     assert "Latest upload summary:" in formatted
 
