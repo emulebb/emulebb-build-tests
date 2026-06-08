@@ -31,6 +31,9 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
 
     no_request_events = [event for event in recent_events if str(event.get("event", "")).startswith("upload_no_request")]
     ban_events = [event for event in recent_events if _is_ban_event(event)]
+    ban_decisions = [event for event in ban_events if event.get("event") != "client_ban"]
+    if not ban_decisions:
+        ban_decisions = ban_events
     ban_scope_counts = Counter(_ban_scope(event) for event in ban_events)
     ban_scope_counts.pop("", None)
 
@@ -46,6 +49,8 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
             "bans": sum(
                 1 for event in recent_events if event.get("action") == "ban" or "ban" in str(event.get("event", ""))
             ),
+            "ban_events": len(ban_events),
+            "ban_decisions": len(ban_decisions),
             "hash_bans": ban_scope_counts.get("hash", 0),
             "ip_bans": ban_scope_counts.get("ip", 0) + ban_scope_counts.get("both", 0),
             "cooldown_only": sum(1 for event in recent_events if event.get("action") == "cooldown"),
@@ -88,7 +93,7 @@ def format_diagnostic_log_analysis(analysis: dict[str, Any]) -> str:
             "Bad peer window: "
             f"{bad_peer['recent_events']} events in {bad_peer['window_minutes']:g} min "
             f"(cooldowns={bad_peer['cooldowns']}, cooldown_only={bad_peer['cooldown_only']}, "
-            f"bans={bad_peer['bans']}, "
+            f"ban_events={bad_peer['ban_events']}, ban_decisions={bad_peer['ban_decisions']}, "
             f"hash_bans={bad_peer['hash_bans']}, ip_bans={bad_peer['ip_bans']}, "
             f"productive_no_request={bad_peer['productive_no_request']}, "
             f"unproductive_no_request={bad_peer['unproductive_no_request']})"
