@@ -92,7 +92,7 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
     assert analysis["bad_peer"]["cooldowns"] == 2
     assert analysis["bad_peer"]["bans"] == 2
     assert analysis["bad_peer"]["ban_events"] == 2
-    assert analysis["bad_peer"]["ban_decisions"] == 1
+    assert analysis["bad_peer"]["ban_decisions"] == 2
     assert analysis["bad_peer"]["hash_bans"] == 1
     assert analysis["bad_peer"]["ip_bans"] == 1
     assert analysis["bad_peer"]["productive_no_request"] == 1
@@ -109,7 +109,7 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
 
     formatted = diagnostic_logs.format_diagnostic_log_analysis(analysis)
     assert "Bad peer window: 6 events" in formatted
-    assert "ban_events=2, ban_decisions=1" in formatted
+    assert "ban_events=2, ban_decisions=2" in formatted
     assert "hash_bans=1, ip_bans=1" in formatted
     assert "Cooldown re-entry rejections:" in formatted
     assert "Top banned peers:" in formatted

@@ -31,10 +31,8 @@ def analyze_diagnostic_logs(logs_dir: Path, *, window_minutes: float = 15.0, top
 
     no_request_events = [event for event in recent_events if str(event.get("event", "")).startswith("upload_no_request")]
     ban_events = [event for event in recent_events if _is_ban_event(event)]
-    ban_decisions = [event for event in ban_events if event.get("event") != "client_ban"]
-    if not ban_decisions:
-        ban_decisions = ban_events
-    ban_scope_counts = Counter(_ban_scope(event) for event in ban_events)
+    ban_decisions = _ban_decision_events(ban_events)
+    ban_scope_counts = Counter(_ban_scope(event) for event in ban_decisions)
     ban_scope_counts.pop("", None)
 
     return {
@@ -205,6 +203,17 @@ def _ban_scope(event: dict[str, Any]) -> str:
             if normalized in {"hash", "ip", "both"}:
                 return normalized
     return ""
+
+
+def _ban_decision_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    policy_bans = [event for event in events if event.get("event") != "client_ban"]
+    policy_ban_peers = {_peer_key(event) for event in policy_bans if _peer_key(event)}
+    standalone_client_bans = [
+        event
+        for event in events
+        if event.get("event") == "client_ban" and _peer_key(event) not in policy_ban_peers
+    ]
+    return [*policy_bans, *standalone_client_bans]
 
 
 def _peer_event_rows(
