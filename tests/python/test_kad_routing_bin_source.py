@@ -20,5 +20,5 @@ def test_routing_bin_rejects_null_contact_inputs_before_deref() -> None:
 def test_routing_bin_skips_stale_null_entries_while_checking_duplicates() -> None:
     source = (app_source_root() / "kademlia" / "routing" / "RoutingBin.cpp").read_text(encoding="utf-8", errors="ignore")
 
-    assert "const CContact *pExistingContact = *itContact;\n\t\tif (pExistingContact == NULL)\n\t\t\tcontinue;" in source
+    assert "const CContact *pExistingContact = *itContact;\n\t\tif (pExistingContact == NULL || pExistingContact == pIgnoredContact)\n\t\t\tcontinue;" in source
     assert "if (pContact->GetClientID() == pExistingContact->m_uClientID)\n\t\t\treturn false;" in source
