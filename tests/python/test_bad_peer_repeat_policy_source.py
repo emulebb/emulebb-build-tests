@@ -100,6 +100,8 @@ def test_repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> No
     assert "theApp.clientlist->IsBannedClient(this) || theApp.clientlist->IsBannedClient(uClientIP)" in base_client_source
     assert "return theApp.clientlist->IsBannedClient(this);" in base_client_source
     assert "void CUpDownClient::Ban(LPCTSTR pszReason, ClientBanScope eScope)" in upload_client_source
+    assert "LPCTSTR GetClientBanScopeInstrumentationToken(const CUpDownClient *pClient, ClientBanScope eScope)" in upload_client_source
+    assert "strBanEvidence.Format(_T(\"{\\\"scope\\\":\\\"%s\\\"}\"), GetClientBanScopeInstrumentationToken(this, eScope));" in upload_client_source
     assert "const bool bRequestedScopeAlreadyBanned = theApp.clientlist->IsBannedClient(this, eScope);" in upload_client_source
     assert "if (!bRequestedScopeAlreadyBanned)" in upload_client_source
     assert "theApp.clientlist->AddBannedClient(this, eScope);" in upload_client_source

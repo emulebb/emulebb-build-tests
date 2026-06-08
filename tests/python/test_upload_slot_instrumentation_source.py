@@ -140,6 +140,8 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "GetNoRequestRepeatCooldownSeconds(uBaseCooldownSeconds, penalty.uStrikes)" in source
     assert "upload_no_request_repeat_cooldown" in no_request_recycle_block
     assert "upload_no_request_repeat_ban" in no_request_recycle_block
+    assert '\\"key_type\\":\\"%s\\",\\"scope\\":\\"%s\\"' in no_request_recycle_block
+    assert "LPCTSTR pszRepeatScope = repeatPenalty.bShouldIPBan || !repeatPenalty.bHashScoped ? _T(\"ip\") : _T(\"hash\");" in no_request_recycle_block
     assert "Repeated zero-request upload slot abuse" in no_request_recycle_block
     assert "if (pbRequeue != NULL && client->IsBanned())" in source
     assert "const ULONGLONG ullCooldownUntil = curTick + SEC2MS(uCooldownSeconds);" in no_request_recycle_block
