@@ -13,6 +13,8 @@ TEST_CASE("download list shortcut seam maps selected transfer actions")
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'P', true, false, true) == MP_PAUSE_CATEGORY);
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'S', true, false, true) == MP_RESUME_CATEGORY);
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'T', true, false, true) == MP_STOP_CATEGORY);
+	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'R', true, false, false) == MP_CLEARCOMPLETED);
+	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'L', true, false, false) == MP_GETED2KLINK);
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, VK_DELETE, false, false, true) == MP_CANCEL_NO_CONFIRM);
 }
 
@@ -42,7 +44,8 @@ TEST_CASE("download list shortcut seam leaves unrelated and modified keys alone"
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, VK_DELETE, false, true, true) == 0);
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'P', false, false, false) == 0);
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'P', true, true, false) == 0);
-	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'R', true, false, false) == 0);
+	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'R', true, false, true) == 0);
+	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, 'R', true, true, false) == 0);
 	CHECK(DownloadListKeyboardShortcutsSeams::ClassifyKeyMessage(WM_KEYDOWN, VK_OEM_PLUS, true, true, false) == 0);
 }
 

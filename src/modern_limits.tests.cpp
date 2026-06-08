@@ -92,22 +92,47 @@ TEST_CASE("File buffer slider preserves small KiB values and reaches the larger 
 	CHECK_EQ(FileBufferSlider::PositionToBytes(FileBufferSlider::kMaxPosition), FileBufferSlider::kMaxFileBufferSizeBytes);
 }
 
-TEST_CASE("Broadband IO auto mode caps aggregate download buffers without raising manual limits")
+TEST_CASE("Broadband IO auto mode derives adaptive global download budget from available memory")
+{
+	CHECK_EQ(
+		BroadbandIoSeams::BuildAdaptiveGlobalDownloadBufferBudgetBytes(0u),
+		BroadbandIoSeams::kMinAdaptiveGlobalDownloadBufferBudgetBytes);
+	CHECK_EQ(
+		BroadbandIoSeams::BuildAdaptiveGlobalDownloadBufferBudgetBytes(1024ull * 1024ull * 1024ull),
+		BroadbandIoSeams::kMinAdaptiveGlobalDownloadBufferBudgetBytes);
+	CHECK_EQ(
+		BroadbandIoSeams::BuildAdaptiveGlobalDownloadBufferBudgetBytes(8ull * 1024ull * 1024ull * 1024ull),
+		2ull * 1024ull * 1024ull * 1024ull);
+	CHECK_EQ(
+		BroadbandIoSeams::BuildAdaptiveGlobalDownloadBufferBudgetBytes(64ull * 1024ull * 1024ull * 1024ull),
+		BroadbandIoSeams::kMaxAdaptiveGlobalDownloadBufferBudgetBytes);
+}
+
+TEST_CASE("Broadband IO auto mode allocates file buffer allowance by demand")
 {
 	constexpr std::uint64_t configured = 64ull * 1024ull * 1024ull;
-	constexpr std::uint64_t budget = BroadbandIoSeams::kDefaultGlobalDownloadBufferBudgetBytes;
+	constexpr std::uint64_t budget = 1024ull * 1024ull * 1024ull;
 
-	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(false, configured, budget, 16u), configured);
-	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 0u), configured);
-	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 1u), configured);
-	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 8u), configured);
-	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, budget, 16u), 32ull * 1024ull * 1024ull);
+	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(false, configured, budget, 0u, 8u, 0u), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 0u, 1u, 0u), budget);
+	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 128ull * 1024ull * 1024ull, 8u, 4ull * 1024ull * 1024ull), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 512ull * 1024ull * 1024ull, 8u, 256ull * 1024ull * 1024ull), 768ull * 1024ull * 1024ull);
+	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, budget, 8u, 512ull * 1024ull * 1024ull), 512ull * 1024ull * 1024ull);
 }
 
 TEST_CASE("Broadband IO auto mode treats zero global budget as no adaptive cap")
 {
 	constexpr std::uint64_t configured = 64ull * 1024ull * 1024ull;
-	CHECK_EQ(BroadbandIoSeams::BuildEffectiveFileBufferSizeBytes(true, configured, 0u, 64u), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, 0u, 0u, 64u, 0u), configured);
+}
+
+TEST_CASE("Broadband IO auto mode selects largest buffered file when global budget is exhausted")
+{
+	constexpr std::uint64_t budget = 1024ull * 1024ull * 1024ull;
+	CHECK_FALSE(BroadbandIoSeams::ShouldFlushLargestFileForAdaptiveGlobalBudget(false, budget, budget + 1u, budget + 1u, budget + 1u));
+	CHECK_FALSE(BroadbandIoSeams::ShouldFlushLargestFileForAdaptiveGlobalBudget(true, budget, budget, budget, budget));
+	CHECK_FALSE(BroadbandIoSeams::ShouldFlushLargestFileForAdaptiveGlobalBudget(true, budget, budget + 1u, 128ull * 1024ull * 1024ull, 256ull * 1024ull * 1024ull));
+	CHECK(BroadbandIoSeams::ShouldFlushLargestFileForAdaptiveGlobalBudget(true, budget, budget + 1u, 256ull * 1024ull * 1024ull, 256ull * 1024ull * 1024ull));
 }
 
 TEST_CASE("Broadband IO seam exposes legacy metadata file buffer sizes")

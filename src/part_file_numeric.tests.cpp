@@ -63,7 +63,7 @@ TEST_CASE("Part file numeric seam preflights buffered writes without overflowing
 #endif
 }
 
-TEST_CASE("Part file numeric seam shortens active broadband buffer flush cadence conservatively")
+TEST_CASE("Part file numeric seam extends active broadband buffer flush cadence for throughput")
 {
 	const uint64 legacyFlushLimitMs = 120u * 1000u;
 
@@ -81,7 +81,10 @@ TEST_CASE("Part file numeric seam shortens active broadband buffer flush cadence
 		PartFileNumericSeams::kBroadbandActiveBufferFlushTimeLimitMs);
 	CHECK_EQ(
 		PartFileNumericSeams::SelectBufferedDataFlushTimeLimitMs(true, 1000u, 4096u, 1u),
-		static_cast<uint64>(1000u));
+		PartFileNumericSeams::kBroadbandActiveBufferFlushTimeLimitMs);
+	CHECK_EQ(
+		PartFileNumericSeams::kBroadbandActiveBufferFlushTimeLimitMs,
+		static_cast<uint64>(15u * 60u * 1000u));
 }
 
 TEST_CASE("Part file numeric seam schedules completed buffered write cleanup only for broadband I/O")

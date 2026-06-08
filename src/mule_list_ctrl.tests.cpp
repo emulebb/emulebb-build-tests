@@ -52,6 +52,52 @@ TEST_CASE("Mule list column order validation requires a complete permutation")
 	CHECK_FALSE(MuleListCtrlSeams::IsCompleteColumnOrder(valid, 0));
 }
 
+TEST_CASE("Mule list column menu follows intended visual order")
+{
+	const int locations[] = {0, 3, 1, 4, 2};
+	const std::vector<int> menuOrder = MuleListCtrlSeams::BuildColumnMenuOrder(locations, _countof(locations));
+
+	REQUIRE(menuOrder.size() == 4);
+	CHECK(menuOrder[0] == 2);
+	CHECK(menuOrder[1] == 4);
+	CHECK(menuOrder[2] == 1);
+	CHECK(menuOrder[3] == 3);
+}
+
+TEST_CASE("Mule list column menu omits fixed first column")
+{
+	const int locations[] = {0, 1, 2};
+	const std::vector<int> menuOrder = MuleListCtrlSeams::BuildColumnMenuOrder(locations, _countof(locations));
+
+	REQUIRE(menuOrder.size() == 2);
+	CHECK(menuOrder[0] == 1);
+	CHECK(menuOrder[1] == 2);
+}
+
+TEST_CASE("Mule list column menu keeps hidden columns at their restore location")
+{
+	const int locations[] = {0, 4, 1, 3, 2};
+	const std::vector<int> menuOrder = MuleListCtrlSeams::BuildColumnMenuOrder(locations, _countof(locations));
+
+	REQUIRE(menuOrder.size() == 4);
+	CHECK(menuOrder[0] == 2);
+	CHECK(menuOrder[1] == 4);
+	CHECK(menuOrder[2] == 3);
+	CHECK(menuOrder[3] == 1);
+}
+
+TEST_CASE("Mule list column menu falls back deterministically for bad locations")
+{
+	const int locations[] = {0, 2, 2, -1, 8};
+	const std::vector<int> menuOrder = MuleListCtrlSeams::BuildColumnMenuOrder(locations, _countof(locations));
+
+	REQUIRE(menuOrder.size() == 4);
+	CHECK(menuOrder[0] == 1);
+	CHECK(menuOrder[1] == 2);
+	CHECK(menuOrder[2] == 3);
+	CHECK(menuOrder[3] == 4);
+}
+
 TEST_CASE("Mule list view preset commands map every Tools menu action")
 {
 	MuleListCtrlViewPresets::ETableViewPreset preset = MuleListCtrlViewPresets::ETableViewPreset::Stock;
