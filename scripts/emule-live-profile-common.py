@@ -32,7 +32,7 @@ from emule_test_harness.live_profiles import (
     PREFERENCES_DAT_VERSION,
     PRIVATE_HARNESS_RATE_LIMIT_BITS_PER_SEC,
     PRIVATE_HARNESS_RATE_LIMIT_KIB_PER_SEC,
-    STARTUP_PROFILE_TRACE_FILE_NAME,
+    STARTUP_DIAGNOSTICS_TRACE_FILE_NAME,
     WINDOW_PLACEMENT_LENGTH,
     WINDOW_SHOW_MAXIMIZED,
     LiveNetworkProfileSpec,
@@ -68,17 +68,17 @@ PATH_SAMPLE_LIMIT = 5
 MAIN_WINDOW_TITLE_PREFIXES = ("eMule v", "eMuleBB", "eMule harness v")
 MAIN_WINDOW_TITLE_MARKERS = (" eMule v", " eMuleBB", " eMule harness v")
 NON_MAIN_WINDOW_TITLE_PREFIXES = ("Starting eMule", "Shutting down eMule")
-STARTUP_PROFILE_COMPLETE_PHASE_ID = "startup.complete"
-STARTUP_PROFILE_COMPLETE_PHASE_NAME = "StartupTimer complete"
-STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
-STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID = "shared.tree.populated"
-STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID = "shared.model.populated"
-STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID = "ui.shared_files_ready"
-STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID = "ui.shared_files_hashing_done"
-STARTUP_PROFILE_SHARED_LIST_RELOAD_PHASE_NAME = "CSharedFilesCtrl::ReloadFileList total"
-STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID = "shared.hashing.deferred_start"
-STARTUP_PROFILE_DEFERRED_SHARED_HASHING_MAX_LEAD_MS = 250.0
-STARTUP_PROFILE_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN = 1
+STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID = "startup.complete"
+STARTUP_DIAGNOSTICS_COMPLETE_PHASE_NAME = "StartupTimer complete"
+STARTUP_DIAGNOSTICS_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
+STARTUP_DIAGNOSTICS_SHARED_TREE_POPULATED_PHASE_ID = "shared.tree.populated"
+STARTUP_DIAGNOSTICS_SHARED_MODEL_POPULATED_PHASE_ID = "shared.model.populated"
+STARTUP_DIAGNOSTICS_SHARED_FILES_READY_PHASE_ID = "ui.shared_files_ready"
+STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID = "ui.shared_files_hashing_done"
+STARTUP_DIAGNOSTICS_SHARED_LIST_RELOAD_PHASE_NAME = "CSharedFilesCtrl::ReloadFileList total"
+STARTUP_DIAGNOSTICS_DEFERRED_SHARED_HASHING_START_PHASE_ID = "shared.hashing.deferred_start"
+STARTUP_DIAGNOSTICS_DEFERRED_SHARED_HASHING_MAX_LEAD_MS = 250.0
+STARTUP_DIAGNOSTICS_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN = 1
 
 def require_pywinauto() -> None:
     """Raises one actionable error when the live/UI runtime dependency is missing."""
@@ -156,7 +156,7 @@ def summarize_shared_directories(shared_dirs: list[str]) -> dict[str, object]:
 
 
 def summarize_existing_tree(root: Path, excluded_dir_prefixes: tuple[str, ...] = ()) -> dict[str, object]:
-    """Summarizes an existing filesystem tree for startup-profile reporting."""
+    """Summarizes an existing filesystem tree for startup-diagnostics reporting."""
 
     resolved_root = root.resolve()
     directories = [resolved_root]
@@ -572,8 +572,8 @@ def _terminate_process_without_window(app: Application, process_id: int, process
         win32api.CloseHandle(process_handle)
 
 
-def load_startup_profile_trace_events(text: str) -> list[dict[str, object]]:
-    """Parses one Chrome Trace startup-profile payload and returns its trace-event rows."""
+def load_startup_diagnostics_trace_events(text: str) -> list[dict[str, object]]:
+    """Parses one Chrome Trace startup-diagnostics payload and returns its trace-event rows."""
 
     payload = json.loads(text)
     if not isinstance(payload, dict):
@@ -584,52 +584,52 @@ def load_startup_profile_trace_events(text: str) -> list[dict[str, object]]:
     return [event for event in trace_events if isinstance(event, dict)]
 
 
-def wait_for_startup_profile_complete(startup_profile_path: Path, *, timeout: float = 120.0) -> str:
-    """Waits until the finalized Chrome Trace startup profile becomes readable."""
+def wait_for_startup_diagnostics_complete(startup_diagnostics_path: Path, *, timeout: float = 120.0) -> str:
+    """Waits until the finalized Chrome Trace startup diagnostics becomes readable."""
 
     def resolve():
-        if not startup_profile_path.exists():
+        if not startup_diagnostics_path.exists():
             return None
-        text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
-        trace_events = load_startup_profile_trace_events(text)
+        text = startup_diagnostics_path.read_text(encoding="utf-8", errors="ignore")
+        trace_events = load_startup_diagnostics_trace_events(text)
         for event in trace_events:
-            if str(event.get("name") or "") == STARTUP_PROFILE_COMPLETE_PHASE_NAME:
+            if str(event.get("name") or "") == STARTUP_DIAGNOSTICS_COMPLETE_PHASE_NAME:
                 return text
             args = event.get("args")
-            if isinstance(args, dict) and str(args.get("phase_id") or "") == STARTUP_PROFILE_COMPLETE_PHASE_ID:
+            if isinstance(args, dict) and str(args.get("phase_id") or "") == STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID:
                 return text
         return None
 
-    return wait_for(resolve, timeout=timeout, interval=0.5, description="startup profile completion")
+    return wait_for(resolve, timeout=timeout, interval=0.5, description="startup diagnostics completion")
 
 
-def startup_profile_has_phase(text: str, phase_id: str) -> bool:
-    """Returns whether one startup-profile trace payload contains a stable phase id."""
+def startup_diagnostics_has_phase(text: str, phase_id: str) -> bool:
+    """Returns whether one startup-diagnostics trace payload contains a stable phase id."""
 
-    for event in load_startup_profile_trace_events(text):
+    for event in load_startup_diagnostics_trace_events(text):
         args = event.get("args")
         if isinstance(args, dict) and str(args.get("phase_id") or "") == phase_id:
             return True
     return False
 
 
-def wait_for_startup_profile_phase(startup_profile_path: Path, phase_id: str, *, timeout: float = 120.0) -> str:
-    """Waits until the startup profile contains one stable phase id and returns the trace text."""
+def wait_for_startup_diagnostics_phase(startup_diagnostics_path: Path, phase_id: str, *, timeout: float = 120.0) -> str:
+    """Waits until the startup diagnostics contains one stable phase id and returns the trace text."""
 
     def resolve():
-        if not startup_profile_path.exists():
+        if not startup_diagnostics_path.exists():
             return None
-        text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
-        return text if startup_profile_has_phase(text, phase_id) else None
+        text = startup_diagnostics_path.read_text(encoding="utf-8", errors="ignore")
+        return text if startup_diagnostics_has_phase(text, phase_id) else None
 
-    return wait_for(resolve, timeout=timeout, interval=0.5, description=f"startup profile phase {phase_id}")
+    return wait_for(resolve, timeout=timeout, interval=0.5, description=f"startup diagnostics phase {phase_id}")
 
 
-def parse_startup_profile(text: str) -> list[dict[str, object]]:
-    """Parses one Chrome Trace startup-profile payload into structured phase rows."""
+def parse_startup_diagnostics(text: str) -> list[dict[str, object]]:
+    """Parses one Chrome Trace startup-diagnostics payload into structured phase rows."""
 
     phases: list[dict[str, object]] = []
-    for event in load_startup_profile_trace_events(text):
+    for event in load_startup_diagnostics_trace_events(text):
         phase_type = str(event.get("ph") or "")
         if phase_type not in {"X", "i"}:
             continue
@@ -654,11 +654,11 @@ def parse_startup_profile(text: str) -> list[dict[str, object]]:
     return phases
 
 
-def parse_startup_profile_counters(text: str) -> list[dict[str, object]]:
-    """Parses one Chrome Trace startup-profile payload into structured counter rows."""
+def parse_startup_diagnostics_counters(text: str) -> list[dict[str, object]]:
+    """Parses one Chrome Trace startup-diagnostics payload into structured counter rows."""
 
     counters: list[dict[str, object]] = []
-    for event in load_startup_profile_trace_events(text):
+    for event in load_startup_diagnostics_trace_events(text):
         if str(event.get("ph") or "") != "C":
             continue
         args = event.get("args")
@@ -690,8 +690,8 @@ def parse_startup_profile_counters(text: str) -> list[dict[str, object]]:
     return counters
 
 
-def summarize_startup_profile(phases: list[dict[str, object]], interesting_names: list[str]) -> dict[str, object]:
-    """Extracts highlighted timings for selected phase names from parsed startup-profile rows."""
+def summarize_startup_diagnostics(phases: list[dict[str, object]], interesting_names: list[str]) -> dict[str, object]:
+    """Extracts highlighted timings for selected phase names from parsed startup-diagnostics rows."""
 
     by_name = {str(phase["name"]): phase for phase in phases}
     highlights = {}
@@ -712,7 +712,7 @@ def summarize_startup_profile(phases: list[dict[str, object]], interesting_names
 
 
 def get_top_slowest_phases(phases: list[dict[str, object]], limit: int = 10) -> list[dict[str, object]]:
-    """Returns the slowest startup-profile phases ordered by descending duration and absolute time."""
+    """Returns the slowest startup-diagnostics phases ordered by descending duration and absolute time."""
 
     ranked = sorted(
         phases,
@@ -733,8 +733,8 @@ def get_top_slowest_phases(phases: list[dict[str, object]], limit: int = 10) -> 
     ]
 
 
-def summarize_startup_profile_counters(counters: list[dict[str, object]]) -> dict[str, object]:
-    """Collapses startup-profile counters to the latest value per stable counter id."""
+def summarize_startup_diagnostics_counters(counters: list[dict[str, object]]) -> dict[str, object]:
+    """Collapses startup-diagnostics counters to the latest value per stable counter id."""
 
     summarized: dict[str, object] = {}
     for counter in counters:
@@ -792,32 +792,32 @@ def summarize_shared_files_readiness(
 ) -> dict[str, object]:
     """Validates the Shared Files startup-readiness contract and returns compact derived metrics."""
 
-    startup_complete = get_phase_by_id(phases, STARTUP_PROFILE_COMPLETE_PHASE_ID)
+    startup_complete = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID)
     if startup_complete is None:
         raise RuntimeError("Startup profile is missing the startup.complete milestone.")
 
-    shared_scan_complete = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID)
+    shared_scan_complete = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_SHARED_SCAN_COMPLETE_PHASE_ID)
     if shared_scan_complete is None:
         raise RuntimeError("Startup profile is missing the shared.scan.complete milestone.")
 
-    shared_tree_populated = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID)
+    shared_tree_populated = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_SHARED_TREE_POPULATED_PHASE_ID)
     if shared_tree_populated is None:
         raise RuntimeError("Startup profile is missing the shared.tree.populated milestone.")
 
-    shared_model_populated = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID)
+    shared_model_populated = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_SHARED_MODEL_POPULATED_PHASE_ID)
     if shared_model_populated is None:
         raise RuntimeError("Startup profile is missing the shared.model.populated milestone.")
 
-    shared_files_ready = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID)
+    shared_files_ready = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_SHARED_FILES_READY_PHASE_ID)
     if shared_files_ready is None:
         raise RuntimeError("Startup profile is missing the ui.shared_files_ready milestone.")
     if int(shared_files_ready["absolute_us"]) < int(startup_complete["absolute_us"]):
         raise RuntimeError("Startup profile reached ui.shared_files_ready before startup.complete.")
 
     for phase_id, phase in (
-        (STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID, shared_scan_complete),
-        (STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID, shared_tree_populated),
-        (STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID, shared_model_populated),
+        (STARTUP_DIAGNOSTICS_SHARED_SCAN_COMPLETE_PHASE_ID, shared_scan_complete),
+        (STARTUP_DIAGNOSTICS_SHARED_TREE_POPULATED_PHASE_ID, shared_tree_populated),
+        (STARTUP_DIAGNOSTICS_SHARED_MODEL_POPULATED_PHASE_ID, shared_model_populated),
     ):
         if int(phase["absolute_us"]) > int(shared_files_ready["absolute_us"]):
             raise RuntimeError(
@@ -826,19 +826,19 @@ def summarize_shared_files_readiness(
 
     pending_hashes_at_readiness = get_counter_by_id(counters, "shared.model.pending_hashes")
     pending_hash_count = int(pending_hashes_at_readiness["value"]) if pending_hashes_at_readiness is not None else 0
-    shared_files_hashing_done = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID)
+    shared_files_hashing_done = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID)
     if shared_files_hashing_done is not None and int(shared_files_hashing_done["absolute_us"]) < int(shared_files_ready["absolute_us"]):
         raise RuntimeError("Startup profile reached ui.shared_files_hashing_done before ui.shared_files_ready.")
     shared_list_reloads_during_hash_drain = count_phases_between(
         phases,
-        STARTUP_PROFILE_SHARED_LIST_RELOAD_PHASE_NAME,
+        STARTUP_DIAGNOSTICS_SHARED_LIST_RELOAD_PHASE_NAME,
         int(shared_files_ready["absolute_us"]),
         int(shared_files_hashing_done["absolute_us"]) if shared_files_hashing_done is not None else None,
     )
     if (
         pending_hash_count > 0
         and shared_files_hashing_done is not None
-        and shared_list_reloads_during_hash_drain > STARTUP_PROFILE_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN
+        and shared_list_reloads_during_hash_drain > STARTUP_DIAGNOSTICS_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN
     ):
         raise RuntimeError(
             "Startup profile reloaded the Shared Files list "
@@ -897,11 +897,11 @@ def summarize_shared_files_readiness(
     return {
         "phases": {
             "startup.complete": dict(startup_complete),
-            STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID: dict(shared_scan_complete),
-            STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID: dict(shared_tree_populated),
-            STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID: dict(shared_model_populated),
-            STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID: dict(shared_files_ready),
-            STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID: dict(shared_files_hashing_done) if shared_files_hashing_done is not None else None,
+            STARTUP_DIAGNOSTICS_SHARED_SCAN_COMPLETE_PHASE_ID: dict(shared_scan_complete),
+            STARTUP_DIAGNOSTICS_SHARED_TREE_POPULATED_PHASE_ID: dict(shared_tree_populated),
+            STARTUP_DIAGNOSTICS_SHARED_MODEL_POPULATED_PHASE_ID: dict(shared_model_populated),
+            STARTUP_DIAGNOSTICS_SHARED_FILES_READY_PHASE_ID: dict(shared_files_ready),
+            STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID: dict(shared_files_hashing_done) if shared_files_hashing_done is not None else None,
         },
         "counters": {
             "shared.model.pending_hashes": dict(pending_hashes_at_readiness) if pending_hashes_at_readiness is not None else None,
@@ -922,8 +922,8 @@ def enforce_deferred_shared_hashing_boundary(
 ) -> None:
     """Fails when deferred shared hashing starts well before startup finalization."""
 
-    startup_complete = get_phase_by_id(phases, STARTUP_PROFILE_COMPLETE_PHASE_ID)
-    deferred_start = get_phase_by_id(phases, STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID)
+    startup_complete = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID)
+    deferred_start = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_DEFERRED_SHARED_HASHING_START_PHASE_ID)
     if startup_complete is None or deferred_start is None:
         return
 
@@ -935,7 +935,7 @@ def enforce_deferred_shared_hashing_boundary(
         )
 
     lead_ms = lead_us / 1000.0
-    if lead_ms > STARTUP_PROFILE_DEFERRED_SHARED_HASHING_MAX_LEAD_MS:
+    if lead_ms > STARTUP_DIAGNOSTICS_DEFERRED_SHARED_HASHING_MAX_LEAD_MS:
         raise RuntimeError(
             f"Deferred shared hashing boundary regression in '{scenario_name}': "
             f"shared.hashing.deferred_start occurred {lead_ms:.3f} ms before startup.complete."

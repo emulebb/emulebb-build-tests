@@ -863,7 +863,7 @@ def test_default_network_run_skips_public_vpn_default_suites(tmp_path: Path, mon
         "shared-files-ui",
         "config-stability-ui",
         "shared-hash-ui",
-        "startup-profile",
+        "startup-diagnostics",
         "shared-directories-rest",
     ]
     assert [row["name"] for row in summary["skipped_suites"]] == [
@@ -875,7 +875,7 @@ def test_default_network_run_skips_public_vpn_default_suites(tmp_path: Path, mon
         "shared-files-ui-e2e.py",
         "config-stability-ui-e2e.py",
         "shared-hash-ui-e2e.py",
-        "startup-profile-scenarios.py",
+        "startup-diagnostics-scenarios.py",
         "shared-directories-rest-e2e.py",
     ]
 
@@ -907,7 +907,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
         "shared-files-ui-e2e.py",
         "config-stability-ui-e2e.py",
         "shared-hash-ui-e2e.py",
-        "startup-profile-scenarios.py",
+        "startup-diagnostics-scenarios.py",
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "auto-browse-live.py",
@@ -922,7 +922,7 @@ def test_default_suite_commands_cover_ui_rest_and_live_wire(tmp_path: Path, monk
     config_command = commands[2]
     assert option_values(config_command, "--scenario") == list(live_e2e_suite.CONFIG_STABILITY_UI_SCENARIOS)
     startup_command = commands[4]
-    assert option_values(startup_command, "--scenario") == list(live_e2e_suite.STARTUP_PROFILE_SCENARIOS)
+    assert option_values(startup_command, "--scenario") == list(live_e2e_suite.STARTUP_DIAGNOSTICS_SCENARIOS)
 
     rest_command = commands[6]
     assert "--enable-upnp" in rest_command
@@ -1894,7 +1894,7 @@ def test_release_expanded_profile_requires_100_live_download_triggers_and_advers
         "deterministic-two-client-transfer.py",
         "godzilla-local-swarm.py",
         "shared-hash-ui-e2e.py",
-        "startup-profile-scenarios.py",
+        "startup-diagnostics-scenarios.py",
         "shared-directories-rest-e2e.py",
         "shared-cache-volume-identity.py",
         "shared-cache-invalidation.py",

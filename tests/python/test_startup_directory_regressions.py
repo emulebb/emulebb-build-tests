@@ -8,7 +8,7 @@ def _app_source_root() -> Path:
     return workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
 
 
-def test_startup_profile_directory_errors_are_non_modal() -> None:
+def test_startup_diagnostics_directory_errors_are_non_modal() -> None:
     preferences = (_app_source_root() / "Preferences.cpp").read_text(encoding="utf-8")
     start = preferences.index("Startup must never block on profile folder errors")
     end = preferences.index("void CPreferences::Uninit", start)

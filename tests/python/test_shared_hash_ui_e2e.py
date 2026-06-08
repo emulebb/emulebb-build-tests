@@ -23,7 +23,7 @@ def load_shared_hash_module():
 
 
 def write_startup_trace(path: Path, events: list[dict[str, object]]) -> None:
-    """Writes one compact Chrome Trace payload for startup-profile parser tests."""
+    """Writes one compact Chrome Trace payload for startup-diagnostics parser tests."""
 
     path.write_text(json.dumps({"traceEvents": events}), encoding="utf-8")
 
@@ -95,7 +95,7 @@ def test_partial_hash_progress_rejects_completed_hashing(tmp_path: Path) -> None
         trace_path,
         [
             counter_event(1000, "shared.hash.completed_files", "files", 3),
-            phase_event(1001, module.live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID),
+            phase_event(1001, module.live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID),
         ],
     )
 
@@ -166,7 +166,7 @@ def test_shared_hash_drain_rejects_hashing_done_with_short_rows(tmp_path: Path) 
         [
             counter_event(1000, "shared.model.hashing_done_shared_files", "files", 2),
             counter_event(1001, "shared.model.hashing_done_visible_rows", "rows", 2),
-            phase_event(1002, module.live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID),
+            phase_event(1002, module.live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID),
         ],
     )
 
@@ -223,7 +223,7 @@ def test_launch_app_with_fresh_startup_trace_removes_stale_trace(monkeypatch, tm
         tmp_path / "emulebb.exe",
         {
             "profile_base": profile_base,
-            "startup_profile_path": trace_path,
+            "startup_diagnostics_path": trace_path,
         },
     )
 
@@ -236,11 +236,11 @@ def test_deferred_hashing_boundary_allows_startup_complete_jitter() -> None:
     live_common = module.live_common
     phases = [
         {
-            "phase_id": live_common.STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID,
+            "phase_id": live_common.STARTUP_DIAGNOSTICS_DEFERRED_SHARED_HASHING_START_PHASE_ID,
             "absolute_us": 1_000_000,
         },
         {
-            "phase_id": live_common.STARTUP_PROFILE_COMPLETE_PHASE_ID,
+            "phase_id": live_common.STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID,
             "absolute_us": 1_080_000,
         },
     ]
@@ -253,11 +253,11 @@ def test_deferred_hashing_boundary_rejects_large_startup_lead() -> None:
     live_common = module.live_common
     phases = [
         {
-            "phase_id": live_common.STARTUP_PROFILE_DEFERRED_SHARED_HASHING_START_PHASE_ID,
+            "phase_id": live_common.STARTUP_DIAGNOSTICS_DEFERRED_SHARED_HASHING_START_PHASE_ID,
             "absolute_us": 1_000_000,
         },
         {
-            "phase_id": live_common.STARTUP_PROFILE_COMPLETE_PHASE_ID,
+            "phase_id": live_common.STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID,
             "absolute_us": 1_300_000,
         },
     ]
@@ -322,7 +322,7 @@ def test_clean_close_sidecars_are_allowed_after_hashing_converges() -> None:
     module = load_shared_hash_module()
     summary: dict[str, object] = {}
     startup_summary = {
-        "startup_profile_counters": {
+        "startup_diagnostics_counters": {
             "shared.model.hashing_done_shared_files": {"values": {"files": 3}},
             "shared.model.hashing_done_visible_rows": {"values": {"rows": 3}},
         }
@@ -338,7 +338,7 @@ def test_clean_close_sidecars_are_allowed_after_hashing_done_observed() -> None:
     module = load_shared_hash_module()
     summary: dict[str, object] = {}
     startup_summary = {
-        "startup_profile_counters": {
+        "startup_diagnostics_counters": {
             "shared.model.hashing_done_shared_files": {"values": {"files": 2}},
             "shared.model.hashing_done_visible_rows": {"values": {"rows": 2}},
         }
@@ -351,7 +351,7 @@ def test_clean_close_sidecars_are_allowed_after_hashing_done_observed() -> None:
     assert not module.should_require_absent_sidecars_after_interrupt(summary)
 
 
-def test_repeated_cycle_hard_kill_archives_partial_startup_profiles_static() -> None:
+def test_repeated_cycle_hard_kill_archives_partial_startup_diagnostics_static() -> None:
     script_text = (Path(__file__).resolve().parents[2] / "scripts" / "shared-hash-ui-e2e.py").read_text(
         encoding="utf-8"
     )
@@ -362,5 +362,5 @@ def test_repeated_cycle_hard_kill_archives_partial_startup_profiles_static() -> 
     ]
 
     assert 'if interrupt_mode == "clean-close":' in repeated_cycle_block
-    assert 'f"startup-profile-cycle-{cycle_index}.partial.trace.json"' in repeated_cycle_block
-    assert '"startup_profile_status": "partial_after_hard_kill"' in repeated_cycle_block
+    assert 'f"startup-diagnostics-cycle-{cycle_index}.partial.trace.json"' in repeated_cycle_block
+    assert '"startup_diagnostics_status": "partial_after_hard_kill"' in repeated_cycle_block

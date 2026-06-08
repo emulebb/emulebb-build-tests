@@ -63,7 +63,7 @@ CONFIG_STABILITY_UI_SCENARIOS = (
     "long-config-settings-roundtrip",
     "long-config-shared-stress",
 )
-STARTUP_PROFILE_SCENARIOS = (
+STARTUP_DIAGNOSTICS_SCENARIOS = (
     "baseline-no-shares",
     "fixture-three-files",
     "long-paths-root-only",
@@ -400,10 +400,10 @@ SUITE_SPECS = (
         accepts_startup_trace_mode=True,
     ),
     SuiteSpec(
-        name="startup-profile",
-        script_name="startup-profile-scenarios.py",
+        name="startup-diagnostics",
+        script_name="startup-diagnostics-scenarios.py",
         category="ui",
-        scenarios=STARTUP_PROFILE_SCENARIOS,
+        scenarios=STARTUP_DIAGNOSTICS_SCENARIOS,
         accepts_startup_trace_mode=True,
         accepts_shared_root=True,
     ),
@@ -662,7 +662,7 @@ PROFILE_SUITE_NAMES = {
         "shared-files-ui",
         "config-stability-ui",
         "shared-hash-ui",
-        "startup-profile",
+        "startup-diagnostics",
         "search-ui-live",
         "deterministic-two-client-transfer",
         "godzilla-local-swarm",
@@ -689,7 +689,7 @@ PROFILE_SUITE_NAMES = {
         "shared-files-ui",
         "config-stability-ui",
         "shared-hash-ui",
-        "startup-profile",
+        "startup-diagnostics",
         "search-ui-live",
         "shared-directories-rest",
         "shared-cache-invalidation",

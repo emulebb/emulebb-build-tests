@@ -26,7 +26,7 @@ PREFERENCES_DAT_VERSION = 0x14
 WINDOW_PLACEMENT_LENGTH = 44
 WINDOW_SHOW_MAXIMIZED = 3
 DEFAULT_WINDOW_RECT = (10, 10, 700, 500)
-STARTUP_PROFILE_TRACE_FILE_NAME = "emulebb-diagnostics-startup.trace.json"
+STARTUP_DIAGNOSTICS_TRACE_FILE_NAME = "emulebb-diagnostics-startup.trace.json"
 DEFAULT_P2P_BIND_INTERFACE_NAME = "hide.me"
 DEFAULT_PROFILE_SCENARIO_ID = "default"
 PROFILE_ARTIFACTS_DIR_NAME = "profiles"
@@ -517,5 +517,5 @@ def build_profile_base(spec: ProfileBuildSpec) -> dict[str, object]:
         "log_dir": log_dir,
         "incoming_dir": incoming_dir,
         "temp_dir": temp_dir,
-        "startup_profile_path": log_dir / STARTUP_PROFILE_TRACE_FILE_NAME,
+        "startup_diagnostics_path": log_dir / STARTUP_DIAGNOSTICS_TRACE_FILE_NAME,
     }

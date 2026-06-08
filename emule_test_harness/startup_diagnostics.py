@@ -1,20 +1,20 @@
-"""Pure startup-profile parsing and readiness validation helpers."""
+"""Pure startup-diagnostics parsing and readiness validation helpers."""
 
 from __future__ import annotations
 
 import json
 
-STARTUP_PROFILE_COMPLETE_PHASE_ID = "startup.complete"
-STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
-STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID = "shared.tree.populated"
-STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID = "shared.model.populated"
-STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID = "ui.shared_files_ready"
-STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID = "ui.shared_files_hashing_done"
-STARTUP_PROFILE_SHARED_LIST_RELOAD_PHASE_NAME = "CSharedFilesCtrl::ReloadFileList total"
-STARTUP_PROFILE_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN = 1
+STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID = "startup.complete"
+STARTUP_DIAGNOSTICS_SHARED_SCAN_COMPLETE_PHASE_ID = "shared.scan.complete"
+STARTUP_DIAGNOSTICS_SHARED_TREE_POPULATED_PHASE_ID = "shared.tree.populated"
+STARTUP_DIAGNOSTICS_SHARED_MODEL_POPULATED_PHASE_ID = "shared.model.populated"
+STARTUP_DIAGNOSTICS_SHARED_FILES_READY_PHASE_ID = "ui.shared_files_ready"
+STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID = "ui.shared_files_hashing_done"
+STARTUP_DIAGNOSTICS_SHARED_LIST_RELOAD_PHASE_NAME = "CSharedFilesCtrl::ReloadFileList total"
+STARTUP_DIAGNOSTICS_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN = 1
 
 
-def load_startup_profile_trace_events(text: str) -> list[dict[str, object]]:
+def load_startup_diagnostics_trace_events(text: str) -> list[dict[str, object]]:
     """Parses a Chrome Trace payload and returns trace-event dictionaries."""
 
     payload = json.loads(text)
@@ -26,11 +26,11 @@ def load_startup_profile_trace_events(text: str) -> list[dict[str, object]]:
     return [event for event in trace_events if isinstance(event, dict)]
 
 
-def parse_startup_profile(text: str) -> list[dict[str, object]]:
-    """Parses Chrome Trace phase rows used by startup-profile summaries."""
+def parse_startup_diagnostics(text: str) -> list[dict[str, object]]:
+    """Parses Chrome Trace phase rows used by startup-diagnostics summaries."""
 
     phases: list[dict[str, object]] = []
-    for event in load_startup_profile_trace_events(text):
+    for event in load_startup_diagnostics_trace_events(text):
         phase_type = str(event.get("ph") or "")
         if phase_type not in {"X", "i"}:
             continue
@@ -55,11 +55,11 @@ def parse_startup_profile(text: str) -> list[dict[str, object]]:
     return phases
 
 
-def parse_startup_profile_counters(text: str) -> list[dict[str, object]]:
-    """Parses Chrome Trace counter rows used by startup-profile summaries."""
+def parse_startup_diagnostics_counters(text: str) -> list[dict[str, object]]:
+    """Parses Chrome Trace counter rows used by startup-diagnostics summaries."""
 
     counters: list[dict[str, object]] = []
-    for event in load_startup_profile_trace_events(text):
+    for event in load_startup_diagnostics_trace_events(text):
         if str(event.get("ph") or "") != "C":
             continue
         args = event.get("args")
@@ -131,37 +131,37 @@ def summarize_shared_files_readiness(
 ) -> dict[str, object]:
     """Validates the Shared Files startup-readiness contract and returns metrics."""
 
-    startup_complete = _require_phase(phases, STARTUP_PROFILE_COMPLETE_PHASE_ID)
-    shared_scan_complete = _require_phase(phases, STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID)
-    shared_tree_populated = _require_phase(phases, STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID)
-    shared_model_populated = _require_phase(phases, STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID)
-    shared_files_ready = _require_phase(phases, STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID)
+    startup_complete = _require_phase(phases, STARTUP_DIAGNOSTICS_COMPLETE_PHASE_ID)
+    shared_scan_complete = _require_phase(phases, STARTUP_DIAGNOSTICS_SHARED_SCAN_COMPLETE_PHASE_ID)
+    shared_tree_populated = _require_phase(phases, STARTUP_DIAGNOSTICS_SHARED_TREE_POPULATED_PHASE_ID)
+    shared_model_populated = _require_phase(phases, STARTUP_DIAGNOSTICS_SHARED_MODEL_POPULATED_PHASE_ID)
+    shared_files_ready = _require_phase(phases, STARTUP_DIAGNOSTICS_SHARED_FILES_READY_PHASE_ID)
     if int(shared_files_ready["absolute_us"]) < int(startup_complete["absolute_us"]):
         raise RuntimeError("Startup profile reached ui.shared_files_ready before startup.complete.")
     for phase_id, phase in (
-        (STARTUP_PROFILE_SHARED_SCAN_COMPLETE_PHASE_ID, shared_scan_complete),
-        (STARTUP_PROFILE_SHARED_TREE_POPULATED_PHASE_ID, shared_tree_populated),
-        (STARTUP_PROFILE_SHARED_MODEL_POPULATED_PHASE_ID, shared_model_populated),
+        (STARTUP_DIAGNOSTICS_SHARED_SCAN_COMPLETE_PHASE_ID, shared_scan_complete),
+        (STARTUP_DIAGNOSTICS_SHARED_TREE_POPULATED_PHASE_ID, shared_tree_populated),
+        (STARTUP_DIAGNOSTICS_SHARED_MODEL_POPULATED_PHASE_ID, shared_model_populated),
     ):
         if int(phase["absolute_us"]) > int(shared_files_ready["absolute_us"]):
             raise RuntimeError(f"Startup profile milestone {phase_id} occurs after ui.shared_files_ready.")
 
     pending_hashes_at_readiness = get_counter_by_id(counters, "shared.model.pending_hashes")
     pending_hash_count = int(pending_hashes_at_readiness["value"]) if pending_hashes_at_readiness is not None else 0
-    shared_files_hashing_done = get_phase_by_id(phases, STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID)
+    shared_files_hashing_done = get_phase_by_id(phases, STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID)
     if shared_files_hashing_done is not None and int(shared_files_hashing_done["absolute_us"]) < int(shared_files_ready["absolute_us"]):
         raise RuntimeError("Startup profile reached ui.shared_files_hashing_done before ui.shared_files_ready.")
 
     shared_list_reloads_during_hash_drain = count_phases_between(
         phases,
-        STARTUP_PROFILE_SHARED_LIST_RELOAD_PHASE_NAME,
+        STARTUP_DIAGNOSTICS_SHARED_LIST_RELOAD_PHASE_NAME,
         int(shared_files_ready["absolute_us"]),
         int(shared_files_hashing_done["absolute_us"]) if shared_files_hashing_done is not None else None,
     )
     if (
         pending_hash_count > 0
         and shared_files_hashing_done is not None
-        and shared_list_reloads_during_hash_drain > STARTUP_PROFILE_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN
+        and shared_list_reloads_during_hash_drain > STARTUP_DIAGNOSTICS_MAX_SHARED_LIST_RELOADS_DURING_HASH_DRAIN
     ):
         raise RuntimeError(
             "Startup profile reloaded the Shared Files list "

@@ -122,7 +122,7 @@ Script inventory:
 | `scripts\preference-ui-e2e.py` | operator-facing Python E2E | maintained | real Preferences dialog coverage for WebServer fields and Tweaks tree controls |
 | `scripts\config-stability-ui-e2e.py` | operator-facing Python E2E | maintained | long `-c` config path, settings save, relaunch, and stability regression |
 | `scripts\shared-files-ui-e2e.py` | operator-facing Python E2E | maintained | real Win32 Shared Files regression |
-| `scripts\startup-profile-scenarios.py` | operator-facing Python E2E | maintained | Chrome Trace startup-profile scenarios |
+| `scripts\startup-diagnostics-scenarios.py` | operator-facing Python E2E | maintained | Chrome Trace startup-diagnostics scenarios |
 | `scripts\create-long-paths-tree.py` | fixture generator | maintained | deterministic long-path tree materialization |
 | `scripts\diag-hash-launch.py` | targeted diagnostic | maintained | seeded profile + procdump launcher for hash stall investigations |
 | `scripts\parse-dump.py` | targeted diagnostic | maintained | parses `diag-hash-launch` dumps, defaults to `diag-hash-launch\latest` |
@@ -180,7 +180,7 @@ Deterministic live-profile seed:
 - the seed is intentionally minimal and vendors only the config files the live harness truly depends on: `preferences.ini`, `preferences.dat`, `nodes.dat`, and `server.met`
 - the harness validates that exact file allowlist before copying the seed; runtime files such as logs, `shareddir.dat`, caches, and history files belong only in per-run artifacts
 - `preferences.ini` is an initialized UTF-16LE-with-BOM profile seed; it must already carry the startup-silencing keys needed to avoid first-run UI such as the language prompt and runtime wizard
-- `preferences.dat` carries the deterministic maximized main-window placement used by the live UI and startup-profile harnesses
+- `preferences.dat` carries the deterministic maximized main-window placement used by the live UI and startup-diagnostics harnesses
 - importable profile generation lives in `emule_test_harness.live_profiles`; scenario scripts should use that module's typed profile and WebServer specs instead of open-coded `preferences.ini` patch loops
 - product-family private/local eMule harness profiles should also use `emule_test_harness.live_profiles`; the shared builder owns UTF-16 `preferences.ini` writing, identity-file preservation, transient cleanup, and private harness defaults
 - the builder injects only runtime-specific transport, logging, bind, temp, working-folder, WebServer, and shared-directory settings per run
@@ -206,7 +206,7 @@ Live Arr environment:
 Terminology:
 
 - live profile seed: the tracked deterministic eMule config baseline under `manifests\live-profile-seed\config`
-- startup profile: runtime Chrome Trace output named `emulebb-diagnostics-startup.trace.json`
+- startup diagnostics: runtime Chrome Trace output named `emulebb-diagnostics-startup.trace.json`
 - REST coverage/stress budget: a test-budget preset selected with `--rest-coverage-budget` or `--rest-stress-budget`
 
 Canonical live REST E2E lane:
@@ -289,7 +289,7 @@ Fake/Kad trust soak lane:
 Aggregate live E2E lane:
 
 - `scripts\run-live-e2e-suite.py` is the operator-facing aggregate runner for the maintained UI, REST API, and live-wire scenarios
-- the default run sequences Preferences UI, Shared Files UI, config-stability UI, shared-hash UI, startup-profile scenarios, REST live smoke, and auto-browse live coverage
+- the default run sequences Preferences UI, Shared Files UI, config-stability UI, shared-hash UI, startup-diagnostics scenarios, REST live smoke, and auto-browse live coverage
 - `--profile release-expanded` is the bounded weak-path release gate: it runs
   Preferences with directory-tree stress, Shared Files, shared-hash shutdown,
   Search UI, shared-directories REST, REST API adversity, cold-start telemetry,
@@ -318,7 +318,7 @@ Aggregate live E2E lane:
   UI shell coverage: it runs `resource-ui-smoke` across the canonical stock
   language manifest, hard-fails missing release language DLLs, then runs the
   Preferences UI roundtrip
-- Shared Files UI is always expanded to include `fixture-three-files`, `generated-robustness-recursive`, and `duplicate-startup-reuse`; config-stability and startup-profile scenarios are also passed explicitly
+- Shared Files UI is always expanded to include `fixture-three-files`, `generated-robustness-recursive`, and `duplicate-startup-reuse`; config-stability and startup-diagnostics scenarios are also passed explicitly
 - REST live smoke defaults to six server searches and six Kad searches using the configured live-wire open-term list, and enables UPnP in the isolated profile so current NAT-mapping behavior is exercised through the live lane
 - aggregate reports mark whether REST contract completeness was expected and
   which Arr/Prowlarr live-wire suites were included; expanded/stress reports
@@ -391,7 +391,7 @@ Preferences live UI regression:
 
 Startup-profile scenarios:
 
-- `scripts\startup-profile-scenarios.py` builds deterministic Chrome Trace `emulebb-diagnostics-startup.trace.json` artifacts for multiple live-profile scenarios without changing app behavior
+- `scripts\startup-diagnostics-scenarios.py` builds deterministic Chrome Trace `emulebb-diagnostics-startup.trace.json` artifacts for multiple live-profile scenarios without changing app behavior
 - the trace includes stable readiness, Shared Files hashing, Statistics dialog, and broadband lifecycle phase ids so Perfetto and the JSON summaries can separate startup, UI setup, queue wait, worker-thread bring-up costs, and final shared-hash drain time
 - the default run covers `baseline-no-shares`, `fixture-three-files`, `long-paths-root-only`, `long-paths-recursive`, `long-path-output-root-only`, `long-path-output-recursive`, `long-path-emule-fixture-root-only`, `long-path-emule-fixture-recursive`, `shared-files-robustness-root-only`, and `shared-files-robustness-recursive`
 - `--scenario` can be repeated on the Python entrypoint to run only the scenarios you want
@@ -400,12 +400,12 @@ Startup-profile scenarios:
 - each scenario summary now also records shareddir payload metrics plus tree-shape metrics such as depth, longest paths, and counts beyond the Windows path thresholds
 - each scenario summary includes highlighted timings, normalized derived timings, and the top slowest startup phases, and the combined summary adds direct delta comparisons between the main long-path, generated output, and Shared Files robustness root-only vs recursive variants
 - each run publishes scenario artifacts plus
-  `startup-profile-scenarios-result.json` and
-  `startup-profile-scenarios-summary.json` under
-  `state\test-reports\startup-profile-scenarios\...` and refreshes
-  `state\test-reports\startup-profile-scenarios\latest`
+  `startup-diagnostics-scenarios-result.json` and
+  `startup-diagnostics-scenarios-summary.json` under
+  `state\test-reports\startup-diagnostics-scenarios\...` and refreshes
+  `state\test-reports\startup-diagnostics-scenarios\latest`
 - the shared `state\test-reports\harness-summary-result.json` now includes a
-  `startup_profiles` section when that runner is used
+  `startup_diagnostics` section when that runner is used
 
 Tracked-file privacy guard:
 
@@ -420,4 +420,4 @@ Native seam coverage and shared reports:
 - `scripts\run-community-core-coverage.py` chains the canonical `main` and `community` native-coverage runs with the workspace live-diff pass and writes a combined summary under `state\test-reports\community-core-coverage`
 - Python OpenCppCoverage resolution uses an explicit install root when provided, otherwise discovers `OpenCppCoverage.exe` from `PATH`, and finally falls back to a repo-managed pinned install under `tools\OpenCppCoverage`
 - `scripts\run-live-diff.py` writes both text and JSON parity/divergence summaries under `state\test-reports`
-- `scripts\publish-harness-summary.py` combines native coverage, parity, optional live-harness manifest data, optional live UI status, and optional startup-profile scenario status into one shared summary under `state\test-reports`
+- `scripts\publish-harness-summary.py` combines native coverage, parity, optional live-harness manifest data, optional live UI status, and optional startup-diagnostics scenario status into one shared summary under `state\test-reports`

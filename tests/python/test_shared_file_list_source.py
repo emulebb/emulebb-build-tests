@@ -319,16 +319,16 @@ def test_startup_cache_save_waits_for_file_hash_gate_to_go_idle() -> None:
     assert "bDeferredHashingActive," in block
 
 
-def test_shared_publish_instrumentation_reports_server_and_kad_backlog() -> None:
+def test_shared_publish_diagnostics_reports_server_and_kad_backlog() -> None:
     source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "SharedFileList.h").read_text(encoding="utf-8", errors="ignore")
     block = source[
-        source.index("void CSharedFileList::GetPublishInstrumentationSnapshot") :
+        source.index("void CSharedFileList::GetPublishDiagnosticsSnapshot") :
         source.index("void CSharedFileList::Process")
     ]
 
     assert "#ifdef EMULEBB_ENABLE_UPLOAD_SLOT_DIAGNOSTICS" in header
-    assert "struct SharedPublishInstrumentationSnapshot" in header
+    assert "struct SharedPublishDiagnosticsSnapshot" in header
     for field in (
         "INT_PTR iSharedFiles",
         "UINT uED2KPublishedFiles",
@@ -347,7 +347,7 @@ def test_shared_publish_instrumentation_reports_server_and_kad_backlog() -> None
     ):
         assert field in header
 
-    assert "void\tGetPublishInstrumentationSnapshot(SharedPublishInstrumentationSnapshot &rSnapshot) const;" in header
+    assert "void\tGetPublishDiagnosticsSnapshot(SharedPublishDiagnosticsSnapshot &rSnapshot) const;" in header
     assert "rSnapshot.iSharedFiles = m_Files_map.GetCount();" in block
     assert "rSnapshot.uKadSourceSearchCap = KADEMLIATOTALSTORESRC;" in block
     assert "rSnapshot.uKadKeywordSearchCap = KADEMLIATOTALSTOREKEY;" in block

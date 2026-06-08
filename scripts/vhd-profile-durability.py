@@ -41,7 +41,7 @@ def load_local_module(module_name: str, filename: str):
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
 rest_smoke = load_local_module("rest_api_smoke_for_vhd_profile_durability", "rest-api-smoke.py")
-startup_profiles = load_local_module("startup_profile_scenarios", "startup-profile-scenarios.py")
+startup_diagnostics = load_local_module("startup_diagnostics_scenarios", "startup-diagnostics-scenarios.py")
 crash_smoke = load_local_module("local_dumps_crash_smoke_for_vhd_profile_durability", "local-dumps-crash-smoke.py")
 cleanup_audit = load_local_module("admin_volume_cleanup_audit_for_vhd_profile_durability", "admin-volume-cleanup-audit.py")
 
@@ -96,13 +96,13 @@ def collect_durability_file_states(profile: dict[str, object]) -> dict[str, dict
     """Collects the critical config/cache files that must survive remount."""
 
     config_dir = Path(str(profile["config_dir"]))
-    startup_profile_path = Path(str(profile["startup_profile_path"]))
+    startup_diagnostics_path = Path(str(profile["startup_diagnostics_path"]))
     paths = {
         "preferences_ini": config_dir / "preferences.ini",
         "preferences_dat": config_dir / "preferences.dat",
         "shareddir_dat": config_dir / "shareddir.dat",
         "sharedcache_dat": config_dir / "sharedcache.dat",
-        "startup_profile": startup_profile_path,
+        "startup_diagnostics": startup_diagnostics_path,
     }
     return {name: file_state(path) for name, path in paths.items()}
 
@@ -174,7 +174,7 @@ def run_first_launch_and_crash(
         )
 
     base_url = f"http://{lan_bind_addr}:{port}"
-    startup_profile_path = Path(str(profile["startup_profile_path"]))
+    startup_diagnostics_path = Path(str(profile["startup_diagnostics_path"]))
     shared_cache_path = Path(str(profile["config_dir"])) / "sharedcache.dat"
     summary: dict[str, object] = {
         "phase": "first_launch_crash",
@@ -192,13 +192,13 @@ def run_first_launch_and_crash(
         process_id = rest_smoke.get_app_process_id(app)
         summary["process_id"] = process_id
         summary["ready"] = rest_smoke.compact_http_result(rest_smoke.wait_for_rest_ready(base_url, API_KEY, args.rest_ready_timeout_seconds))
-        startup_profiles.collect_startup_profile_metrics(
-            startup_profile_path,
+        startup_diagnostics.collect_startup_diagnostics_metrics(
+            startup_diagnostics_path,
             summary,
-            require_startup_profile=True,
+            require_startup_diagnostics=True,
             wait_for_shared_hashing_done=True,
         )
-        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+        summary["shared_cache_ready"] = startup_diagnostics.wait_for_shared_cache(
             shared_cache_path,
             expected_known_records=int(shared_tree.get("file_count", 0) or 0),
             base_url=base_url,
@@ -236,7 +236,7 @@ def run_remounted_relaunch(
 ) -> dict[str, object]:
     """Relaunches the same profile after VHD reattach and verifies persisted files."""
 
-    startup_profile_path = Path(str(profile["startup_profile_path"]))
+    startup_diagnostics_path = Path(str(profile["startup_diagnostics_path"]))
     shared_cache_path = Path(str(profile["config_dir"])) / "sharedcache.dat"
     summary: dict[str, object] = {
         "phase": "remounted_relaunch",
@@ -252,15 +252,15 @@ def run_remounted_relaunch(
             summary["missing_before_relaunch"] = missing_before
             summary["preference_mismatches"] = preference_mismatches
             return summary
-        startup_profile_path.unlink(missing_ok=True)
+        startup_diagnostics_path.unlink(missing_ok=True)
         app = rest_smoke.launch_app(paths.app_exe, Path(str(profile["profile_base"])))
-        startup_profiles.collect_startup_profile_metrics(
-            startup_profile_path,
+        startup_diagnostics.collect_startup_diagnostics_metrics(
+            startup_diagnostics_path,
             summary,
-            require_startup_profile=True,
+            require_startup_diagnostics=True,
             wait_for_shared_hashing_done=True,
         )
-        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+        summary["shared_cache_ready"] = startup_diagnostics.wait_for_shared_cache(
             shared_cache_path,
             expected_known_records=int(profile.get("expected_shared_files", 0) or 0),
         )

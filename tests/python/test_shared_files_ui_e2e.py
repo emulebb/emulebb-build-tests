@@ -96,7 +96,7 @@ def test_vhd_monitored_scenario_requires_admin_monitor_root(tmp_path: Path) -> N
             artifacts_dir=tmp_path / "artifacts",
             shared_root=tmp_path / "shared",
             scenario_names=[module.VHD_MONITORED_FOLDER_SCENARIO],
-            require_startup_profile=False,
+            require_startup_diagnostics=False,
             tree_stress_churn_cycles=1,
             vhd_monitor_root=None,
     )
@@ -110,12 +110,12 @@ def test_vhd_monitored_scenario_dispatches_with_explicit_root(tmp_path: Path, mo
     module = load_shared_files_module()
     calls = []
 
-    def fake_run(app_exe, seed_config_dir, artifacts_dir, *, require_startup_profile, monitor_root_override=None, scenario_name=""):
+    def fake_run(app_exe, seed_config_dir, artifacts_dir, *, require_startup_diagnostics, monitor_root_override=None, scenario_name=""):
         calls.append(
             {
                 "monitor_root_override": monitor_root_override,
                 "scenario_name": scenario_name,
-                "require_startup_profile": require_startup_profile,
+                "require_startup_diagnostics": require_startup_diagnostics,
             }
         )
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -129,7 +129,7 @@ def test_vhd_monitored_scenario_dispatches_with_explicit_root(tmp_path: Path, mo
         artifacts_dir=tmp_path / "artifacts",
         shared_root=tmp_path / "shared",
         scenario_names=[module.VHD_MONITORED_FOLDER_SCENARIO],
-        require_startup_profile=False,
+        require_startup_diagnostics=False,
         tree_stress_churn_cycles=1,
         vhd_monitor_root=tmp_path / "vhd-mounted",
     )
@@ -138,7 +138,7 @@ def test_vhd_monitored_scenario_dispatches_with_explicit_root(tmp_path: Path, mo
         {
             "monitor_root_override": tmp_path / "vhd-mounted" / "monitored-share-root",
             "scenario_name": module.VHD_MONITORED_FOLDER_SCENARIO,
-            "require_startup_profile": False,
+            "require_startup_diagnostics": False,
         }
     ]
 
@@ -293,13 +293,13 @@ def test_build_tree_stress_cold_cached_metrics_compares_50k_relaunch() -> None:
         "initial_rest_row_count": 50000,
         "cached_relaunch_rest_row_count": 50000,
         "first_launch_hashing_done": {"hashing_done_absolute_ms": 194704.1},
-        "startup_profile_highlights": {
+        "startup_diagnostics_highlights": {
             "ui.shared_files_ready": {"absolute_ms": 16092.885},
             "Construct CSharedFileList (share cache/scan)": {"duration_ms": 15455.467},
             "CSharedFilesWnd::OnInitDialog total": {"duration_ms": 120.847},
         },
         "cached_relaunch_startup": {
-            "startup_profile_highlights": {
+            "startup_diagnostics_highlights": {
                 "ui.shared_files_ready": {"absolute_ms": 8022.788},
                 "Construct CSharedFileList (share cache/scan)": {"duration_ms": 2216.584},
                 "CSharedFilesWnd::OnInitDialog total": {"duration_ms": 3903.437},

@@ -113,7 +113,7 @@ def test_local_server_source_requests_prune_stale_entries_before_spending_credit
 def test_download_summary_reports_source_discovery_pressure() -> None:
     source = (app_source_root() / "DownloadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
     block = source[
-        source.index("void CDownloadQueue::LogDownloadSlotInstrumentation") :
+        source.index("void CDownloadQueue::LogDownloadSlotDiagnostics") :
         source.index("//This method is called every 100 ms")
     ]
 

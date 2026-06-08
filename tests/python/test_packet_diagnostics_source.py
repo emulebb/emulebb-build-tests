@@ -64,17 +64,17 @@ def test_startup_profiling_compile_flag_is_opt_in() -> None:
     assert definitions[0].text == "EMULEBB_ENABLE_STARTUP_DIAGNOSTICS;"
 
 
-def test_startup_profile_trace_uses_log_artifact_name() -> None:
+def test_startup_diagnostics_trace_uses_log_artifact_name() -> None:
     emule_source = read_source("Emule.cpp")
     artifacts = read_source("LogArtifactNames.h")
 
-    assert "inline LPCTSTR StartupProfileTraceFileName()" in artifacts
+    assert "inline LPCTSTR StartupDiagnosticsTraceFileName()" in artifacts
     assert 'return _T("emulebb-diagnostics-startup.trace.json");' in artifacts
     assert (
-        "m_strStartupProfilePath = thePrefs.GetMuleDirectory(EMULE_LOGDIR, false) + "
-        "LogArtifactNames::StartupProfileTraceFileName();"
+        "m_strStartupDiagnosticsPath = thePrefs.GetMuleDirectory(EMULE_LOGDIR, false) + "
+        "LogArtifactNames::StartupDiagnosticsTraceFileName();"
     ) in emule_source
-    assert '"startup-profile.trace.json"' not in emule_source
+    assert '"startup-diagnostics.trace.json"' not in emule_source
 
 
 def test_retired_diagnostic_flags_are_rejected_at_feature_header_only() -> None:
@@ -102,7 +102,7 @@ def test_retired_diagnostic_flags_are_rejected_at_feature_header_only() -> None:
         assert f"#if defined({flag})" in feature_header
         assert flag not in combined_sources
 
-    assert "EMULEBB_STARTUP_PROFILE" not in combined_sources
+    assert "EMULEBB_STARTUP_DIAGNOSTICS" not in combined_sources
 
 
 def test_packet_diagnostics_logging_api_is_compile_guarded() -> None:

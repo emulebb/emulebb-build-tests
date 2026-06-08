@@ -14,7 +14,7 @@ def read_app_source(name: str) -> str:
     return (SRC_ROOT / name).read_text(encoding="utf-8", errors="ignore")
 
 
-def test_bad_peer_instrumentation_compile_flag_is_opt_in() -> None:
+def test_bad_peer_diagnostics_compile_flag_is_opt_in() -> None:
     project = read_app_source("emule.vcxproj")
     root = ET.fromstring(project)
     namespace = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -38,7 +38,7 @@ def test_bad_peer_instrumentation_compile_flag_is_opt_in() -> None:
         )
 
 
-def test_bad_peer_instrumentation_build_and_release_plumbing() -> None:
+def test_bad_peer_diagnostics_build_and_release_plumbing() -> None:
     build_source = (BUILD_ROOT / "emule_workspace" / "build.py").read_text(encoding="utf-8")
     release_source = (BUILD_ROOT / "emule_workspace" / "release.py").read_text(encoding="utf-8")
 
@@ -49,9 +49,9 @@ def test_bad_peer_instrumentation_build_and_release_plumbing() -> None:
     assert "enable_bad_peer_diagnostics" in release_source
 
 
-def test_bad_peer_instrumentation_logger_is_compile_gated() -> None:
-    header = read_app_source("BadPeerInstrumentationSeams.h")
-    source = read_app_source("BadPeerInstrumentationSeams.cpp")
+def test_bad_peer_diagnostics_logger_is_compile_gated() -> None:
+    header = read_app_source("BadPeerDiagnosticsSeams.h")
+    source = read_app_source("BadPeerDiagnosticsSeams.cpp")
     artifact_names = read_app_source("LogArtifactNames.h")
     app_source = read_app_source("Emule.cpp")
 
@@ -62,20 +62,20 @@ def test_bad_peer_instrumentation_logger_is_compile_gated() -> None:
     assert "inline void LogSearchEvent" in header
     assert "inline void LogUploadBlockRequestBehavior" in header
     assert "inline void TrackUploadFileBehavior" in header
-    assert "CLogFile g_badPeerInstrumentationLog;" in source
+    assert "CLogFile g_badPeerDiagnosticsLog;" in source
     assert "g_badPeerBehaviorLedger" in source
     assert "kBadPeerBehaviorLedgerWindowMs = MIN2MS(60)" in source
     assert "LogUploadBlockRequestBehavior" in source
     assert "TrackUploadFileBehavior" in source
     assert "bad_peer_event_v1" in source
-    assert "InitializeDiagnosticsLog(g_badPeerInstrumentationLog, pszLogPath, uMaxLogFileSize)" in source
-    assert "WriteDiagnosticsLogLine(g_badPeerInstrumentationLog, g_badPeerInstrumentationLogLock, strJson)" in source
+    assert "InitializeDiagnosticsLog(g_badPeerDiagnosticsLog, pszLogPath, uMaxLogFileSize)" in source
+    assert "WriteDiagnosticsLogLine(g_badPeerDiagnosticsLog, g_badPeerDiagnosticsLogLock, strJson)" in source
     assert "BadPeerDiagnosticsLogFileName" in artifact_names
     assert 'return _T("emulebb-diagnostics-bad-peer.log");' in artifact_names
-    assert "BadPeerInstrumentationSeams::InitializeLog" in app_source
+    assert "BadPeerDiagnosticsSeams::InitializeLog" in app_source
 
 
-def test_bad_peer_instrumentation_covers_evidence_categories() -> None:
+def test_bad_peer_diagnostics_covers_evidence_categories() -> None:
     joined = "\n".join(
         read_app_source(name)
         for name in (
@@ -86,7 +86,7 @@ def test_bad_peer_instrumentation_covers_evidence_categories() -> None:
             "DownloadQueue.cpp",
             "ListenSocket.cpp",
             "UploadQueue.cpp",
-            "BadPeerInstrumentationSeams.cpp",
+            "BadPeerDiagnosticsSeams.cpp",
             "SearchList.cpp",
             "FakeFileDetector.cpp",
         )
@@ -129,7 +129,7 @@ def test_bad_peer_instrumentation_covers_evidence_categories() -> None:
         assert event in joined
 
 
-def test_bad_peer_instrumentation_tracks_upload_clog_patterns() -> None:
+def test_bad_peer_diagnostics_tracks_upload_clog_patterns() -> None:
     upload_client = read_app_source("UploadClient.cpp")
     upload_queue = read_app_source("UploadQueue.cpp")
 
@@ -137,8 +137,8 @@ def test_bad_peer_instrumentation_tracks_upload_clog_patterns() -> None:
     assert "_T(\"upload_duplicate_done_block_rejected\")" in upload_client
     assert "reject-duplicate-queued-block" in upload_client
     assert "_T(\"upload_duplicate_queued_block_rejected\")" in upload_client
-    assert "BadPeerInstrumentationSeams::LogUploadBlockRequestBehavior" in upload_client
-    assert upload_queue.count("BadPeerInstrumentationSeams::TrackUploadFileBehavior") >= 6
+    assert "BadPeerDiagnosticsSeams::LogUploadBlockRequestBehavior" in upload_client
+    assert upload_queue.count("BadPeerDiagnosticsSeams::TrackUploadFileBehavior") >= 6
     for behavior in (
         "failed_admission",
         "no_socket",

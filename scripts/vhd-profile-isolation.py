@@ -39,7 +39,7 @@ def load_local_module(module_name: str, filename: str):
 
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-startup_profiles = load_local_module("startup_profile_scenarios", "startup-profile-scenarios.py")
+startup_diagnostics = load_local_module("startup_diagnostics_scenarios", "startup-diagnostics-scenarios.py")
 cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
 
 PROFILE_ROLE_VHD_DRIVE = "vhd-drive-letter"
@@ -113,7 +113,7 @@ def profile_path_rows(profile: dict[str, object], extra_paths: dict[str, Path]) 
     """Builds normalized path rows for profile isolation assertions."""
 
     rows: list[dict[str, object]] = []
-    for key in ("profile_base", "config_dir", "log_dir", "incoming_dir", "temp_dir", "startup_profile_path"):
+    for key in ("profile_base", "config_dir", "log_dir", "incoming_dir", "temp_dir", "startup_diagnostics_path"):
         value = profile.get(key)
         if isinstance(value, Path):
             rows.append({"name": key, "path": str(value), "resolved_path": str(value.resolve()), "exists": value.exists()})
@@ -152,7 +152,7 @@ def run_profile_case(
         shared_dirs=[live_common.win_path(shared_dir, trailing_slash=True)],
         scenario_id=case.name,
     )
-    startup_profile_path = Path(str(profile["startup_profile_path"]))
+    startup_diagnostics_path = Path(str(profile["startup_diagnostics_path"]))
     shared_cache_path = Path(str(profile["config_dir"])) / "sharedcache.dat"
     extra_paths = {
         "preferences_ini": Path(str(profile["config_dir"])) / "preferences.ini",
@@ -173,13 +173,13 @@ def run_profile_case(
     app = None
     try:
         app = live_common.launch_app(paths.app_exe, Path(str(profile["profile_base"])), minimized_to_tray=True)
-        startup_profiles.collect_startup_profile_metrics(
-            startup_profile_path,
+        startup_diagnostics.collect_startup_diagnostics_metrics(
+            startup_diagnostics_path,
             summary,
-            require_startup_profile=True,
+            require_startup_diagnostics=True,
             wait_for_shared_hashing_done=True,
         )
-        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+        summary["shared_cache_ready"] = startup_diagnostics.wait_for_shared_cache(
             shared_cache_path,
             expected_known_records=int(tree_summary.get("file_count", 0) or 0),
         )

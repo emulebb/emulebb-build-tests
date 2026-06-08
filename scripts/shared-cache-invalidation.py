@@ -39,7 +39,7 @@ def load_local_module(module_name: str, filename: str):
 
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-startup_profiles = load_local_module("startup_profile_scenarios", "startup-profile-scenarios.py")
+startup_diagnostics = load_local_module("startup_diagnostics_scenarios", "startup-diagnostics-scenarios.py")
 cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
 
 SUITE_NAME = "shared-cache-invalidation"
@@ -109,7 +109,7 @@ def mutate_shared_fixture(root: Path) -> dict[str, object]:
 def get_counter_value(summary: dict[str, object], counter_id: str) -> int | None:
     """Returns the integer value for one summarized startup counter."""
 
-    value = startup_profiles.get_counter_metric(summary, counter_id)
+    value = startup_diagnostics.get_counter_metric(summary, counter_id)
     return int(value) if isinstance(value, (int, float)) else None
 
 
@@ -163,7 +163,7 @@ def run_launch_phase(
     *,
     app_exe: Path,
     profile_base: Path,
-    startup_profile_path: Path,
+    startup_diagnostics_path: Path,
     shared_cache_path: Path,
     phase: str,
     expected_shared_files: int,
@@ -174,7 +174,7 @@ def run_launch_phase(
 ) -> dict[str, object]:
     """Runs one eMule launch, captures startup counters, and validates cache behavior."""
 
-    startup_profile_path.unlink(missing_ok=True)
+    startup_diagnostics_path.unlink(missing_ok=True)
     summary: dict[str, object] = {
         "phase": phase,
         "status": "failed",
@@ -189,13 +189,13 @@ def run_launch_phase(
     app = None
     try:
         app = live_common.launch_app(app_exe, profile_base, minimized_to_tray=True)
-        startup_profiles.collect_startup_profile_metrics(
-            startup_profile_path,
+        startup_diagnostics.collect_startup_diagnostics_metrics(
+            startup_diagnostics_path,
             summary,
-            require_startup_profile=True,
+            require_startup_diagnostics=True,
             wait_for_shared_hashing_done=True,
         )
-        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+        summary["shared_cache_ready"] = startup_diagnostics.wait_for_shared_cache(
             shared_cache_path,
             expected_known_records=expected_shared_files,
         )
@@ -245,7 +245,7 @@ def run_invalidation_probe(*, fixture: AdminVolumeFixture, paths, seed_config_di
         scenario_id=SUITE_NAME,
     )
     profile_base = Path(str(profile["profile_base"]))
-    startup_profile_path = Path(str(profile["startup_profile_path"]))
+    startup_diagnostics_path = Path(str(profile["startup_diagnostics_path"]))
     shared_cache_path = Path(str(profile["config_dir"])) / "sharedcache.dat"
     phases: list[dict[str, object]] = []
     summary: dict[str, object] = {
@@ -253,7 +253,7 @@ def run_invalidation_probe(*, fixture: AdminVolumeFixture, paths, seed_config_di
         "shared_root": str(shared_root),
         "shared_dir": str(shared_dir),
         "profile_base": str(profile_base),
-        "startup_profile_path": str(startup_profile_path),
+        "startup_diagnostics_path": str(startup_diagnostics_path),
         "shared_cache_path": str(shared_cache_path),
         "volume_identity": asdict(fixture.mount_identity),
         "shared_directories": [live_common.win_path(shared_dir, trailing_slash=True)],
@@ -266,7 +266,7 @@ def run_invalidation_probe(*, fixture: AdminVolumeFixture, paths, seed_config_di
         run_launch_phase(
             app_exe=paths.app_exe,
             profile_base=profile_base,
-            startup_profile_path=startup_profile_path,
+            startup_diagnostics_path=startup_diagnostics_path,
             shared_cache_path=shared_cache_path,
             phase="cold-cache-create",
             expected_shared_files=int(base_tree["file_count"]),
@@ -279,7 +279,7 @@ def run_invalidation_probe(*, fixture: AdminVolumeFixture, paths, seed_config_di
         run_launch_phase(
             app_exe=paths.app_exe,
             profile_base=profile_base,
-            startup_profile_path=startup_profile_path,
+            startup_diagnostics_path=startup_diagnostics_path,
             shared_cache_path=shared_cache_path,
             phase="unchanged-warm-cache-reuse",
             expected_shared_files=int(base_tree["file_count"]),
@@ -294,7 +294,7 @@ def run_invalidation_probe(*, fixture: AdminVolumeFixture, paths, seed_config_di
         run_launch_phase(
             app_exe=paths.app_exe,
             profile_base=profile_base,
-            startup_profile_path=startup_profile_path,
+            startup_diagnostics_path=startup_diagnostics_path,
             shared_cache_path=shared_cache_path,
             phase="mutated-cache-invalidation",
             expected_shared_files=int(mutated_tree["file_count"]),

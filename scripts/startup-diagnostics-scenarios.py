@@ -1,4 +1,4 @@
-"""Builds startup-profile artifacts for deterministic live-profile scenarios."""
+"""Builds startup-diagnostics artifacts for deterministic live-profile scenarios."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def create_fixture_shared_dirs(artifacts_dir: Path) -> tuple[list[str], dict[str
 
 
 def build_scenario_definition(name: str, artifacts_dir: Path, shared_root: Path) -> dict[str, object]:
-    """Resolves one named startup-profile scenario into concrete shared roots and metadata."""
+    """Resolves one named startup-diagnostics scenario into concrete shared roots and metadata."""
 
     resolved_root = shared_root.resolve()
     emule_fixture_root = resolved_root / "emule-longpath-tests"
@@ -186,13 +186,13 @@ def build_scenario_definition(name: str, artifacts_dir: Path, shared_root: Path)
             "shared_dirs": shared_dirs,
             "tree_summary": tree_summary,
         }
-    raise RuntimeError(f"Unknown startup-profile scenario: {name}")
+    raise RuntimeError(f"Unknown startup-diagnostics scenario: {name}")
 
 
 def get_highlight_metric(summary: dict[str, object], name: str, field: str) -> float | None:
     """Returns one highlighted startup metric from a scenario result when present."""
 
-    highlights = summary.get("startup_profile_highlights")
+    highlights = summary.get("startup_diagnostics_highlights")
     if not isinstance(highlights, dict):
         return None
     phase = highlights.get(name)
@@ -203,9 +203,9 @@ def get_highlight_metric(summary: dict[str, object], name: str, field: str) -> f
 
 
 def get_derived_metric(summary: dict[str, object], key: str) -> float | int | None:
-    """Returns one derived startup-profile metric from a scenario result when present."""
+    """Returns one derived startup-diagnostics metric from a scenario result when present."""
 
-    metrics = summary.get("startup_profile_derived_metrics")
+    metrics = summary.get("startup_diagnostics_derived_metrics")
     if not isinstance(metrics, dict):
         return None
     value = metrics.get(key)
@@ -215,9 +215,9 @@ def get_derived_metric(summary: dict[str, object], key: str) -> float | int | No
 
 
 def get_counter_metric(summary: dict[str, object], counter_id: str, field: str = "value") -> float | int | None:
-    """Returns one summarized startup-profile counter value from a scenario result when present."""
+    """Returns one summarized startup-diagnostics counter value from a scenario result when present."""
 
-    counters = summary.get("startup_profile_counters")
+    counters = summary.get("startup_diagnostics_counters")
     if not isinstance(counters, dict):
         return None
     counter = counters.get(counter_id)
@@ -230,7 +230,7 @@ def get_counter_metric(summary: dict[str, object], counter_id: str, field: str =
 
 
 def build_derived_metrics(summary: dict[str, object]) -> dict[str, object]:
-    """Adds normalized startup-profile metrics that are easier to compare between scenarios."""
+    """Adds normalized startup-diagnostics metrics that are easier to compare between scenarios."""
 
     metrics: dict[str, object] = {}
     tree_summary = summary.get("tree_summary")
@@ -271,7 +271,7 @@ def build_derived_metrics(summary: dict[str, object]) -> dict[str, object]:
     if broadband_budget is not None:
         metrics["broadband_upload_budget_bytes_per_sec"] = int(broadband_budget)
 
-    readiness = summary.get("startup_profile_readiness")
+    readiness = summary.get("startup_diagnostics_readiness")
     if isinstance(readiness, dict):
         readiness_metrics = readiness.get("metrics")
         if isinstance(readiness_metrics, dict):
@@ -453,70 +453,70 @@ def wait_for_shared_cache(
         raise RuntimeError(f"{exc} Last shared cache dependency state: {last_state!r}") from exc
 
 
-def collect_startup_profile_metrics(
-    startup_profile_path: Path,
+def collect_startup_diagnostics_metrics(
+    startup_diagnostics_path: Path,
     summary: dict[str, object],
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     wait_for_shared_hashing_done: bool,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Reads startup profile metrics or records a missing trace for non-instrumented baselines."""
+    """Reads startup diagnostics metrics or records a missing trace for non-instrumented baselines."""
 
     try:
-        startup_profile_text = live_common.wait_for_startup_profile_complete(
-            startup_profile_path,
-            timeout=120.0 if require_startup_profile else 5.0,
+        startup_diagnostics_text = live_common.wait_for_startup_diagnostics_complete(
+            startup_diagnostics_path,
+            timeout=120.0 if require_startup_diagnostics else 5.0,
         )
     except Exception as exc:
-        if require_startup_profile:
+        if require_startup_diagnostics:
             raise
-        summary["startup_profile_status"] = "missing"
-        summary["startup_profile_error"] = str(exc)
-        summary["startup_profile_phase_count"] = 0
-        summary["startup_profile_counter_count"] = 0
-        summary["startup_profile_counters"] = {}
-        summary["startup_profile_readiness"] = {}
-        summary["startup_profile_highlights"] = {}
-        summary["startup_profile_top_slowest_phases"] = []
-        summary["startup_profile_derived_metrics"] = {}
+        summary["startup_diagnostics_status"] = "missing"
+        summary["startup_diagnostics_error"] = str(exc)
+        summary["startup_diagnostics_phase_count"] = 0
+        summary["startup_diagnostics_counter_count"] = 0
+        summary["startup_diagnostics_counters"] = {}
+        summary["startup_diagnostics_readiness"] = {}
+        summary["startup_diagnostics_highlights"] = {}
+        summary["startup_diagnostics_top_slowest_phases"] = []
+        summary["startup_diagnostics_derived_metrics"] = {}
         return [], []
 
-    startup_profile_phases = live_common.parse_startup_profile(startup_profile_text)
-    startup_profile_counters = live_common.parse_startup_profile_counters(startup_profile_text)
+    startup_diagnostics_phases = live_common.parse_startup_diagnostics(startup_diagnostics_text)
+    startup_diagnostics_counters = live_common.parse_startup_diagnostics_counters(startup_diagnostics_text)
     if wait_for_shared_hashing_done:
         pending_hashes_at_readiness = live_common.get_counter_by_id(
-            startup_profile_counters,
+            startup_diagnostics_counters,
             "shared.model.pending_hashes",
         )
         pending_hash_count = int(pending_hashes_at_readiness["value"]) if pending_hashes_at_readiness is not None else 0
         shared_files_hashing_done = live_common.get_phase_by_id(
-            startup_profile_phases,
-            live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID,
+            startup_diagnostics_phases,
+            live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID,
         )
         if pending_hash_count > 0 and shared_files_hashing_done is None:
-            startup_profile_text = live_common.wait_for_startup_profile_phase(
-                startup_profile_path,
-                live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID,
+            startup_diagnostics_text = live_common.wait_for_startup_diagnostics_phase(
+                startup_diagnostics_path,
+                live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID,
                 timeout=120.0,
             )
-            startup_profile_phases = live_common.parse_startup_profile(startup_profile_text)
-            startup_profile_counters = live_common.parse_startup_profile_counters(startup_profile_text)
+            startup_diagnostics_phases = live_common.parse_startup_diagnostics(startup_diagnostics_text)
+            startup_diagnostics_counters = live_common.parse_startup_diagnostics_counters(startup_diagnostics_text)
 
-    summary["startup_profile_status"] = "present"
-    summary["startup_profile_phase_count"] = len(startup_profile_phases)
-    summary["startup_profile_counter_count"] = len(startup_profile_counters)
-    summary["startup_profile_counters"] = live_common.summarize_startup_profile_counters(startup_profile_counters)
-    summary["startup_profile_readiness"] = live_common.summarize_shared_files_readiness(
-        startup_profile_phases,
-        startup_profile_counters,
+    summary["startup_diagnostics_status"] = "present"
+    summary["startup_diagnostics_phase_count"] = len(startup_diagnostics_phases)
+    summary["startup_diagnostics_counter_count"] = len(startup_diagnostics_counters)
+    summary["startup_diagnostics_counters"] = live_common.summarize_startup_diagnostics_counters(startup_diagnostics_counters)
+    summary["startup_diagnostics_readiness"] = live_common.summarize_shared_files_readiness(
+        startup_diagnostics_phases,
+        startup_diagnostics_counters,
     )
-    summary["startup_profile_highlights"] = live_common.summarize_startup_profile(
-        startup_profile_phases,
+    summary["startup_diagnostics_highlights"] = live_common.summarize_startup_diagnostics(
+        startup_diagnostics_phases,
         HIGHLIGHTED_PHASES,
     )
-    summary["startup_profile_top_slowest_phases"] = live_common.get_top_slowest_phases(startup_profile_phases, limit=8)
-    summary["startup_profile_derived_metrics"] = build_derived_metrics(summary)
-    return startup_profile_phases, startup_profile_counters
+    summary["startup_diagnostics_top_slowest_phases"] = live_common.get_top_slowest_phases(startup_diagnostics_phases, limit=8)
+    summary["startup_diagnostics_derived_metrics"] = build_derived_metrics(summary)
+    return startup_diagnostics_phases, startup_diagnostics_counters
 
 
 def run_scenario(
@@ -526,10 +526,10 @@ def run_scenario(
     shared_root: Path,
     name: str,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     warm_relaunch: bool,
 ) -> dict[str, object]:
-    """Executes one startup-profile scenario and returns its machine-readable result."""
+    """Executes one startup-diagnostics scenario and returns its machine-readable result."""
 
     scenario = build_scenario_definition(name=name, artifacts_dir=scenario_dir, shared_root=shared_root)
     fixture = live_common.prepare_profile_base(
@@ -545,7 +545,7 @@ def run_scenario(
         "status": "failed",
         "artifact_dir": str(scenario_dir),
         "profile_base": str(fixture["profile_base"]),
-        "startup_profile_path": str(fixture["startup_profile_path"]),
+        "startup_diagnostics_path": str(fixture["startup_diagnostics_path"]),
         "command_line": subprocess.list2cmdline(
             [str(app_exe), "-ignoreinstances", "-c", str(fixture["profile_base"])]
         ),
@@ -575,14 +575,14 @@ def run_scenario(
         if not summary["main_window_is_maximized"]:
             raise RuntimeError(f"Expected scenario '{name}' to start maximized, got showCmd={summary['main_window_show_cmd']}.")
 
-        startup_profile_phases, _startup_profile_counters = collect_startup_profile_metrics(
-            fixture["startup_profile_path"],
+        startup_diagnostics_phases, _startup_diagnostics_counters = collect_startup_diagnostics_metrics(
+            fixture["startup_diagnostics_path"],
             summary,
-            require_startup_profile=require_startup_profile,
-            wait_for_shared_hashing_done=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
+            wait_for_shared_hashing_done=require_startup_diagnostics,
         )
-        if startup_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, scenario["name"])
+        if startup_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_diagnostics_phases, scenario["name"])
 
         if warm_relaunch:
             shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
@@ -592,10 +592,10 @@ def run_scenario(
                 expected_known_records=int(scenario["tree_summary"].get("file_count", 0) or 0),
             )
 
-            first_launch_trace_artifact = scenario_dir / "startup-profile-first-launch.trace.json"
-            first_launch_trace_artifact.write_bytes(Path(str(fixture["startup_profile_path"])).read_bytes())
+            first_launch_trace_artifact = scenario_dir / "startup-diagnostics-first-launch.trace.json"
+            first_launch_trace_artifact.write_bytes(Path(str(fixture["startup_diagnostics_path"])).read_bytes())
             summary["first_launch_trace_artifact"] = str(first_launch_trace_artifact)
-            Path(str(fixture["startup_profile_path"])).unlink(missing_ok=True)
+            Path(str(fixture["startup_diagnostics_path"])).unlink(missing_ok=True)
 
             live_common.close_app_cleanly(app)
             app = None
@@ -625,27 +625,27 @@ def run_scenario(
                     f"got showCmd={relaunch_summary['main_window_show_cmd']}."
                 )
 
-            relaunch_profile_phases, _relaunch_profile_counters = collect_startup_profile_metrics(
-                fixture["startup_profile_path"],
+            relaunch_diagnostics_phases, _relaunch_diagnostics_counters = collect_startup_diagnostics_metrics(
+                fixture["startup_diagnostics_path"],
                 relaunch_summary,
-                require_startup_profile=require_startup_profile,
-                wait_for_shared_hashing_done=require_startup_profile,
+                require_startup_diagnostics=require_startup_diagnostics,
+                wait_for_shared_hashing_done=require_startup_diagnostics,
             )
-            if relaunch_profile_phases:
+            if relaunch_diagnostics_phases:
                 live_common.enforce_deferred_shared_hashing_boundary(
-                    relaunch_profile_phases,
+                    relaunch_diagnostics_phases,
                     scenario["name"] + ".warm-relaunch",
                 )
 
-            relaunch_trace_artifact = scenario_dir / "startup-profile-warm-relaunch.trace.json"
-            relaunch_trace_artifact.write_bytes(Path(str(fixture["startup_profile_path"])).read_bytes())
+            relaunch_trace_artifact = scenario_dir / "startup-diagnostics-warm-relaunch.trace.json"
+            relaunch_trace_artifact.write_bytes(Path(str(fixture["startup_diagnostics_path"])).read_bytes())
             relaunch_summary["trace_artifact"] = str(relaunch_trace_artifact)
             summary["warm_relaunch"] = relaunch_summary
             summary["warm_relaunch_comparison"] = build_comparison(summary, relaunch_summary)
 
         summary["status"] = "passed"
         summary["error"] = None
-        live_common.write_json(scenario_dir / "startup-profile-scenarios-result.json", summary)
+        live_common.write_json(scenario_dir / "startup-diagnostics-scenarios-result.json", summary)
         return summary
     except Exception as exc:
         summary["error"] = str(exc)
@@ -660,7 +660,7 @@ def run_scenario(
                     pass
             except Exception:
                 pass
-        live_common.write_json(scenario_dir / "startup-profile-scenarios-result.json", summary)
+        live_common.write_json(scenario_dir / "startup-diagnostics-scenarios-result.json", summary)
         return summary
     finally:
         if app is not None:
@@ -709,7 +709,7 @@ def main(argv: list[str]) -> int:
     live_common.require_pywinauto()
     paths = harness_cli_common.prepare_run_paths(
         script_file=__file__,
-        suite_name="startup-profile-scenarios",
+        suite_name="startup-diagnostics-scenarios",
         configuration=args.configuration,
         workspace_root=args.workspace_root,
         app_root=args.app_root,
@@ -773,7 +773,7 @@ def main(argv: list[str]) -> int:
             scenario_dir=scenario_dir,
             shared_root=shared_root,
             name=name,
-            require_startup_profile=(args.startup_trace_mode == "required"),
+            require_startup_diagnostics=(args.startup_trace_mode == "required"),
             warm_relaunch=args.warm_relaunch,
         )
         combined["scenarios"].append(result)
@@ -802,18 +802,18 @@ def main(argv: list[str]) -> int:
     if failures:
         combined["status"] = "failed"
 
-    live_common.write_json(artifacts_dir / "startup-profile-scenarios-result.json", combined)
+    live_common.write_json(artifacts_dir / "startup-diagnostics-scenarios-result.json", combined)
     harness_cli_common.publish_run_artifacts(paths)
-    summary_payload = harness_cli_common.build_startup_profiles_summary(
+    summary_payload = harness_cli_common.build_startup_diagnostics_summary(
         status=str(combined["status"]),
         paths=paths,
         shared_root=shared_root,
         error_message="" if not failures else "Startup-profile scenarios failed: " + ", ".join(failures),
     )
-    summary_path = paths.run_report_dir / "startup-profile-scenarios-summary.json"
+    summary_path = paths.run_report_dir / "startup-diagnostics-scenarios-summary.json"
     harness_cli_common.write_json_file(summary_path, summary_payload)
     harness_cli_common.publish_latest_report(paths)
-    harness_cli_common.update_harness_summary(paths.repo_root, startup_profile_summary_path=summary_path)
+    harness_cli_common.update_harness_summary(paths.repo_root, startup_diagnostics_summary_path=summary_path)
     harness_cli_common.cleanup_source_artifacts(paths)
     if failures:
         raise RuntimeError("Startup-profile scenarios failed: " + ", ".join(failures))

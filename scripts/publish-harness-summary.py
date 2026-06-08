@@ -29,12 +29,12 @@ def build_combined_summary(
     live_diff_summary,
     live_session_manifest,
     live_ui_summary,
-    startup_profile_summary,
+    startup_diagnostics_summary,
 ) -> dict[str, object]:
     """Builds the stable combined summary payload under the workspace test report root."""
 
     live_ui_result = live_ui_summary.get("result") if isinstance(live_ui_summary, dict) else None
-    startup_profile_result = startup_profile_summary.get("result") if isinstance(startup_profile_summary, dict) else None
+    startup_diagnostics_result = startup_diagnostics_summary.get("result") if isinstance(startup_diagnostics_summary, dict) else None
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "coverage": (
@@ -83,18 +83,18 @@ def build_combined_summary(
             if isinstance(live_ui_summary, dict)
             else None
         ),
-        "startup_profiles": (
+        "startup_diagnostics": (
             {
-                "status": startup_profile_summary.get("status"),
-                "artifact_dir": startup_profile_summary.get("artifact_dir"),
-                "latest_report_dir": startup_profile_summary.get("latest_report_dir"),
-                "app_exe": startup_profile_summary.get("app_exe"),
-                "configuration": startup_profile_summary.get("configuration"),
-                "shared_root": startup_profile_summary.get("shared_root"),
-                "scenario_count": len(startup_profile_result.get("scenarios", [])) if isinstance(startup_profile_result, dict) else 0,
-                "error": startup_profile_summary.get("error"),
+                "status": startup_diagnostics_summary.get("status"),
+                "artifact_dir": startup_diagnostics_summary.get("artifact_dir"),
+                "latest_report_dir": startup_diagnostics_summary.get("latest_report_dir"),
+                "app_exe": startup_diagnostics_summary.get("app_exe"),
+                "configuration": startup_diagnostics_summary.get("configuration"),
+                "shared_root": startup_diagnostics_summary.get("shared_root"),
+                "scenario_count": len(startup_diagnostics_result.get("scenarios", [])) if isinstance(startup_diagnostics_result, dict) else 0,
+                "error": startup_diagnostics_summary.get("error"),
             }
-            if isinstance(startup_profile_summary, dict)
+            if isinstance(startup_diagnostics_summary, dict)
             else None
         ),
     }
@@ -107,19 +107,19 @@ def build_text_summary(combined_summary: dict[str, object]) -> list[str]:
     parity = combined_summary.get("parity")
     live_harness = combined_summary.get("live_harness")
     live_ui = combined_summary.get("live_ui")
-    startup_profiles = combined_summary.get("startup_profiles")
+    startup_diagnostics = combined_summary.get("startup_diagnostics")
     return [
         "Harness summary",
         f"coverage_available: {coverage is not None}",
         f"parity_available: {parity is not None}",
         f"live_harness_available: {live_harness is not None}",
         f"live_ui_available: {live_ui is not None}",
-        f"startup_profiles_available: {startup_profiles is not None}",
+        f"startup_diagnostics_available: {startup_diagnostics is not None}",
         f"coverage_line_rate_percent: {coverage.get('line_rate_percent', '') if isinstance(coverage, dict) else ''}",
         f"parity_failed: {parity.get('failed', '') if isinstance(parity, dict) else ''}",
         f"live_cleanup_success: {live_harness.get('cleanup_success', '') if isinstance(live_harness, dict) else ''}",
         f"live_ui_status: {live_ui.get('status', '') if isinstance(live_ui, dict) else ''}",
-        f"startup_profiles_status: {startup_profiles.get('status', '') if isinstance(startup_profiles, dict) else ''}",
+        f"startup_diagnostics_status: {startup_diagnostics.get('status', '') if isinstance(startup_diagnostics, dict) else ''}",
     ]
 
 
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--live-diff-summary-path", default="")
     parser.add_argument("--live-session-manifest-path", default="")
     parser.add_argument("--live-ui-summary-path", default="")
-    parser.add_argument("--startup-profile-summary-path", default="")
+    parser.add_argument("--startup-diagnostics-summary-path", default="")
     args = parser.parse_args(argv)
 
     test_repo_root = Path(args.test_repo_root).resolve()
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     coverage_summary_path = Path(args.coverage_summary_path).resolve() if args.coverage_summary_path else report_root / "native-coverage" / "latest" / "coverage-summary.json"
     live_diff_summary_path = Path(args.live_diff_summary_path).resolve() if args.live_diff_summary_path else report_root / "live-diff-summary.json"
     live_ui_summary_path = Path(args.live_ui_summary_path).resolve() if args.live_ui_summary_path else report_root / "shared-files-ui-e2e" / "latest" / "shared-files-ui-e2e-summary.json"
-    startup_profile_summary_path = Path(args.startup_profile_summary_path).resolve() if args.startup_profile_summary_path else report_root / "startup-profile-scenarios" / "latest" / "startup-profile-scenarios-summary.json"
+    startup_diagnostics_summary_path = Path(args.startup_diagnostics_summary_path).resolve() if args.startup_diagnostics_summary_path else report_root / "startup-diagnostics-scenarios" / "latest" / "startup-diagnostics-scenarios-summary.json"
     live_session_manifest_path = Path(args.live_session_manifest_path).resolve() if args.live_session_manifest_path else None
 
     combined_summary = build_combined_summary(
@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         live_diff_summary=read_json_file(live_diff_summary_path),
         live_session_manifest=read_json_file(live_session_manifest_path),
         live_ui_summary=read_json_file(live_ui_summary_path),
-        startup_profile_summary=read_json_file(startup_profile_summary_path),
+        startup_diagnostics_summary=read_json_file(startup_diagnostics_summary_path),
     )
     json_path = report_root / "harness-summary-result.json"
     text_path = report_root / "harness-summary.txt"

@@ -56,7 +56,7 @@ def test_assert_warm_cache_reuse_reports_path_class_failures() -> None:
 
     errors = module.assert_warm_cache_reuse(
         {
-            "startup_profile_counters": {
+            "startup_diagnostics_counters": {
                 "shared.scan.directories_from_cache": {"value": 0},
                 "shared.scan.files_queued_for_hash": {"value": 1},
                 "shared.model.hashing_done_shared_files": {"value": 2},

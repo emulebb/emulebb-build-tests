@@ -40,7 +40,7 @@ def load_local_module(module_name: str, filename: str):
 
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-startup_profiles = load_local_module("startup_profile_scenarios", "startup-profile-scenarios.py")
+startup_diagnostics = load_local_module("startup_diagnostics_scenarios", "startup-diagnostics-scenarios.py")
 generated_fixture = load_local_module("create_long_paths_tree", "create-long-paths-tree.py")
 cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
 
@@ -119,7 +119,7 @@ def enumerate_recursive_shared_dirs(root: Path) -> list[str]:
 def get_counter_value(summary: dict[str, object], counter_id: str) -> int | None:
     """Returns the integer value for one summarized startup counter."""
 
-    value = startup_profiles.get_counter_metric(summary, counter_id)
+    value = startup_diagnostics.get_counter_metric(summary, counter_id)
     return int(value) if isinstance(value, (int, float)) else None
 
 
@@ -253,7 +253,7 @@ def run_launch_phase(
     *,
     app_exe: Path,
     profile_base: Path,
-    startup_profile_path: Path,
+    startup_diagnostics_path: Path,
     shared_cache_path: Path,
     phase: str,
     expected_files: int,
@@ -261,7 +261,7 @@ def run_launch_phase(
 ) -> dict[str, object]:
     """Runs one eMule launch and validates Shared Files counters."""
 
-    startup_profile_path.unlink(missing_ok=True)
+    startup_diagnostics_path.unlink(missing_ok=True)
     summary: dict[str, object] = {
         "phase": phase,
         "status": "failed",
@@ -273,13 +273,13 @@ def run_launch_phase(
     app = None
     try:
         app = live_common.launch_app(app_exe, profile_base, minimized_to_tray=True)
-        startup_profiles.collect_startup_profile_metrics(
-            startup_profile_path,
+        startup_diagnostics.collect_startup_diagnostics_metrics(
+            startup_diagnostics_path,
             summary,
-            require_startup_profile=True,
+            require_startup_diagnostics=True,
             wait_for_shared_hashing_done=True,
         )
-        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+        summary["shared_cache_ready"] = startup_diagnostics.wait_for_shared_cache(
             shared_cache_path,
             expected_known_records=expected_files,
         )
@@ -322,13 +322,13 @@ def run_cache_probe(
         scenario_id=name,
     )
     profile_base = Path(str(profile["profile_base"]))
-    startup_profile_path = Path(str(profile["startup_profile_path"]))
+    startup_diagnostics_path = Path(str(profile["startup_diagnostics_path"]))
     shared_cache_path = Path(str(profile["config_dir"])) / "sharedcache.dat"
     phases = [
         run_launch_phase(
             app_exe=app_exe,
             profile_base=profile_base,
-            startup_profile_path=startup_profile_path,
+            startup_diagnostics_path=startup_diagnostics_path,
             shared_cache_path=shared_cache_path,
             phase="cold-cache-create",
             expected_files=expected_files,
@@ -337,7 +337,7 @@ def run_cache_probe(
         run_launch_phase(
             app_exe=app_exe,
             profile_base=profile_base,
-            startup_profile_path=startup_profile_path,
+            startup_diagnostics_path=startup_diagnostics_path,
             shared_cache_path=shared_cache_path,
             phase="warm-cache-reuse",
             expected_files=expected_files,

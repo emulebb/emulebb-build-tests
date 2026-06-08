@@ -6,21 +6,21 @@ import sys
 from pathlib import Path
 
 
-def load_startup_profile_module():
-    """Loads the hyphenated startup-profile script for pure helper tests."""
+def load_startup_diagnostics_module():
+    """Loads the hyphenated startup-diagnostics script for pure helper tests."""
 
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "startup-profile-scenarios.py"
-    spec = importlib.util.spec_from_file_location("startup_profile_scenarios_for_tests", script_path)
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "startup-diagnostics-scenarios.py"
+    spec = importlib.util.spec_from_file_location("startup_diagnostics_scenarios_for_tests", script_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules["startup_profile_scenarios_for_tests"] = module
+    sys.modules["startup_diagnostics_scenarios_for_tests"] = module
     spec.loader.exec_module(module)
     return module
 
 
 def test_long_paths_recursive_excludes_persisted_shared_files_stress_fixture(tmp_path: Path) -> None:
-    module = load_startup_profile_module()
+    module = load_startup_diagnostics_module()
 
     long_path_leaf = tmp_path / "long_path_output" / "deep"
     long_path_leaf.mkdir(parents=True)
@@ -46,7 +46,7 @@ def test_long_paths_recursive_excludes_persisted_shared_files_stress_fixture(tmp
 
 
 def test_long_paths_root_only_metrics_exclude_persisted_shared_files_stress_fixture(tmp_path: Path) -> None:
-    module = load_startup_profile_module()
+    module = load_startup_diagnostics_module()
 
     long_path_leaf = tmp_path / "long_path_output" / "deep"
     long_path_leaf.mkdir(parents=True)
@@ -71,7 +71,7 @@ def test_long_paths_root_only_metrics_exclude_persisted_shared_files_stress_fixt
 
 
 def test_wait_for_shared_cache_requires_known_met_records(tmp_path: Path) -> None:
-    module = load_startup_profile_module()
+    module = load_startup_diagnostics_module()
 
     shared_cache = tmp_path / "sharedcache.dat"
     known_met = tmp_path / "known.met"
@@ -85,7 +85,7 @@ def test_wait_for_shared_cache_requires_known_met_records(tmp_path: Path) -> Non
 
 
 def test_wait_for_shared_cache_rejects_incomplete_known_met(tmp_path: Path) -> None:
-    module = load_startup_profile_module()
+    module = load_startup_diagnostics_module()
 
     shared_cache = tmp_path / "sharedcache.dat"
     known_met = tmp_path / "known.met"
@@ -101,7 +101,7 @@ def test_wait_for_shared_cache_rejects_incomplete_known_met(tmp_path: Path) -> N
 
 
 def test_wait_for_shared_cache_can_require_rest_idle_clean(tmp_path: Path, monkeypatch) -> None:
-    module = load_startup_profile_module()
+    module = load_startup_diagnostics_module()
 
     shared_cache = tmp_path / "sharedcache.dat"
     known_met = tmp_path / "known.met"

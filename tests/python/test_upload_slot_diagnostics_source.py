@@ -21,14 +21,14 @@ def test_transfer_bar_percentage_preference_uses_transfer_wide_text() -> None:
     assert 'ini.GetBool(_T("ShowDwlPercentage"), true);' in preferences_source
 
 
-def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
+def test_upload_slot_diagnostics_reports_cooldown_pressure() -> None:
     source = read_app_source("UploadQueue.cpp")
     header = read_app_source("UploadQueue.h")
     seams_header = read_app_source("UploadQueueSeams.h")
     log_header = read_app_source("Log.h")
     artifacts = read_app_source("LogArtifactNames.h")
     app_source = read_app_source("Emule.cpp")
-    block = source[source.index("void CUploadQueue::LogUploadSlotInstrumentation") : source.index("void CUploadQueue::Process()")]
+    block = source[source.index("void CUploadQueue::LogUploadSlotDiagnostics") : source.index("void CUploadQueue::Process()")]
 
     assert "UploadSlotDiagnosticsLogLine(" in block
     assert "AddDebugLogLine(DLP_DEFAULT, false," not in block
@@ -111,8 +111,8 @@ def test_upload_slot_instrumentation_reports_cooldown_pressure() -> None:
     assert "kadKeywordSearchCap=%u" in block
     assert "kadNotesSearches=%u" in block
     assert "kadNotesSearchCap=%u" in block
-    assert "CSharedFileList::SharedPublishInstrumentationSnapshot sharedPublish = {};" in block
-    assert "theApp.sharedfiles->GetPublishInstrumentationSnapshot(sharedPublish);" in block
+    assert "CSharedFileList::SharedPublishDiagnosticsSnapshot sharedPublish = {};" in block
+    assert "theApp.sharedfiles->GetPublishDiagnosticsSnapshot(sharedPublish);" in block
     assert "GetSlowUploadCooldownRemaining()" in block
     assert "GetUploadRetryCooldownIP(pWaitingClient)" in block
     assert "ullCooldownUntil > curTick" in block
@@ -230,15 +230,15 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "bool bProductiveNoRequestRecycle" in seams_header
     assert "return !bNoRequestCooldownTracked\n\t\t|| !bQueuedRequestClearAlreadyUsed;" in seams_header
     assert "ShouldAttemptUploadRetryCooldownClearOnQueuedRequest" in not_uploading_block
-    assert "LPCTSTR pszCooldownClearInstrumentationReason = NULL;" in not_uploading_block
-    assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this, &pszCooldownClearInstrumentationReason);" in not_uploading_block
+    assert "LPCTSTR pszCooldownClearDiagnosticsReason = NULL;" in not_uploading_block
+    assert "const bool bCooldownCleared = theApp.uploadqueue->ClearUploadRetryCooldown(this, &pszCooldownClearDiagnosticsReason);" in not_uploading_block
     assert "TryAdmitQueuedBlockRequestClient(this, bCooldownCleared)" in not_uploading_block
     assert "accept-queued-request-direct-admit" in not_uploading_block
-    assert "eQueuedRequestAdmissionResult == queuedBlockRequestCooldownNotCleared && pszCooldownClearInstrumentationReason != NULL" in not_uploading_block
-    assert "GetQueuedBlockRequestAdmissionInstrumentationReason(eQueuedRequestAdmissionResult)" in not_uploading_block
-    assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("GetQueuedBlockRequestAdmissionInstrumentationReason")
-    assert "bool ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason = NULL)" in queue_header
-    assert "bool CUploadQueue::ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszInstrumentationReason)" in queue_source
+    assert "eQueuedRequestAdmissionResult == queuedBlockRequestCooldownNotCleared && pszCooldownClearDiagnosticsReason != NULL" in not_uploading_block
+    assert "GetQueuedBlockRequestAdmissionDiagnosticsReason(eQueuedRequestAdmissionResult)" in not_uploading_block
+    assert not_uploading_block.index("accept-queued-request-direct-admit") < not_uploading_block.index("GetQueuedBlockRequestAdmissionDiagnosticsReason")
+    assert "bool ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszDiagnosticsReason = NULL)" in queue_header
+    assert "bool CUploadQueue::ClearUploadRetryCooldown(CUpDownClient *client, LPCTSTR *ppszDiagnosticsReason)" in queue_source
     clear_cooldown_block = queue_source[
         queue_source.index("bool CUploadQueue::ClearUploadRetryCooldown") :
         queue_source.index("QueuedBlockRequestAdmissionResult CUploadQueue::TryAdmitQueuedBlockRequestClient")

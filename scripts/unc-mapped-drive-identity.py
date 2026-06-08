@@ -43,7 +43,7 @@ def load_local_module(module_name: str, filename: str):
 
 live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
 harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-startup_profiles = load_local_module("startup_profile_scenarios", "startup-profile-scenarios.py")
+startup_diagnostics = load_local_module("startup_diagnostics_scenarios", "startup-diagnostics-scenarios.py")
 cleanup_audit = load_local_module("admin_volume_cleanup_audit", "admin-volume-cleanup-audit.py")
 
 SUITE_NAME = "unc-mapped-drive-identity"
@@ -232,7 +232,7 @@ def cache_file_state(path: Path) -> dict[str, object]:
 def get_counter_value(summary: dict[str, object], counter_id: str) -> int | None:
     """Returns the integer value for one summarized startup counter."""
 
-    value = startup_profiles.get_counter_metric(summary, counter_id)
+    value = startup_diagnostics.get_counter_metric(summary, counter_id)
     return int(value) if isinstance(value, (int, float)) else None
 
 
@@ -269,7 +269,7 @@ def run_cache_probe(
         shared_dirs=[shared_dir_text],
         scenario_id=name,
     )
-    startup_profile_path = Path(str(fixture["startup_profile_path"]))
+    startup_diagnostics_path = Path(str(fixture["startup_diagnostics_path"]))
     shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
     summary: dict[str, object] = {
         "name": name,
@@ -284,13 +284,13 @@ def run_cache_probe(
     try:
         app = live_common.launch_app(app_exe, Path(str(fixture["profile_base"])), minimized_to_tray=True)
         first_summary: dict[str, object] = {"name": name + ".first-launch"}
-        startup_profiles.collect_startup_profile_metrics(
-            startup_profile_path,
+        startup_diagnostics.collect_startup_diagnostics_metrics(
+            startup_diagnostics_path,
             first_summary,
-            require_startup_profile=True,
+            require_startup_diagnostics=True,
             wait_for_shared_hashing_done=True,
         )
-        summary["shared_cache_ready"] = startup_profiles.wait_for_shared_cache(
+        summary["shared_cache_ready"] = startup_diagnostics.wait_for_shared_cache(
             shared_cache_path,
             expected_known_records=expected_files,
         )
@@ -298,14 +298,14 @@ def run_cache_probe(
         summary["shared_cache_first_launch"] = cache_file_state(shared_cache_path)
         live_common.close_app_cleanly(app)
         app = None
-        startup_profile_path.unlink(missing_ok=True)
+        startup_diagnostics_path.unlink(missing_ok=True)
 
         app = live_common.launch_app(app_exe, Path(str(fixture["profile_base"])), minimized_to_tray=True)
         warm_summary: dict[str, object] = {"name": name + ".warm-relaunch"}
-        startup_profiles.collect_startup_profile_metrics(
-            startup_profile_path,
+        startup_diagnostics.collect_startup_diagnostics_metrics(
+            startup_diagnostics_path,
             warm_summary,
-            require_startup_profile=True,
+            require_startup_diagnostics=True,
             wait_for_shared_hashing_done=True,
         )
         errors = assert_warm_cache_reuse(warm_summary, expected_files, "warm-relaunch")

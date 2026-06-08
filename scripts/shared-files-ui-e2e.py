@@ -698,10 +698,10 @@ def wait_for_duplicate_cache_records(path: Path, *, minimum_records: int, timeou
     return last_header
 
 
-def get_profile_counter_value(summary: dict[str, object], counter_name: str, value_key: str) -> int | None:
-    """Returns one integer startup-profile counter value from the summarized live result."""
+def get_diagnostics_counter_value(summary: dict[str, object], counter_name: str, value_key: str) -> int | None:
+    """Returns one integer startup-diagnostics counter value from the summarized live result."""
 
-    counters = summary.get("startup_profile_counters")
+    counters = summary.get("startup_diagnostics_counters")
     if not isinstance(counters, dict):
         return None
     counter = counters.get(counter_name)
@@ -715,7 +715,7 @@ def get_profile_counter_value(summary: dict[str, object], counter_name: str, val
 
 
 def get_trace_counter_int(counters: list[dict[str, object]], counter_id: str) -> int | None:
-    """Returns one integer counter value from a raw startup-profile counter list."""
+    """Returns one integer counter value from a raw startup-diagnostics counter list."""
 
     counter = live_common.get_counter_by_id(counters, counter_id)
     if not isinstance(counter, dict):
@@ -754,9 +754,9 @@ def startup_highlight_number(
     highlight_name: str,
     value_key: str,
 ) -> float | None:
-    """Reads one numeric startup-profile highlight field from a summarized trace."""
+    """Reads one numeric startup-diagnostics highlight field from a summarized trace."""
 
-    highlights = startup_summary.get("startup_profile_highlights")
+    highlights = startup_summary.get("startup_diagnostics_highlights")
     if not isinstance(highlights, dict):
         return None
     highlight = highlights.get(highlight_name)
@@ -836,7 +836,7 @@ def build_tree_stress_cold_cached_metrics(summary: dict[str, object], expected_c
 
 
 def wait_for_shared_hashing_done_profile(
-    startup_profile_path: Path,
+    startup_diagnostics_path: Path,
     *,
     expected_count: int,
     timeout: float = 7200.0,
@@ -847,15 +847,15 @@ def wait_for_shared_hashing_done_profile(
 
     def resolve() -> dict[str, object] | None:
         nonlocal last_state
-        if not startup_profile_path.exists():
+        if not startup_diagnostics_path.exists():
             last_state = {"trace_exists": False}
             return None
-        text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
-        phases = live_common.parse_startup_profile(text)
-        counters = live_common.parse_startup_profile_counters(text)
+        text = startup_diagnostics_path.read_text(encoding="utf-8", errors="ignore")
+        phases = live_common.parse_startup_diagnostics(text)
+        counters = live_common.parse_startup_diagnostics_counters(text)
         hashing_done_phase = live_common.get_phase_by_id(
             phases,
-            live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID,
+            live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID,
         )
         hashing_done_shared_files = get_trace_counter_int(counters, "shared.model.hashing_done_shared_files")
         hashing_done_visible_rows = get_trace_counter_int(counters, "shared.model.hashing_done_visible_rows")
@@ -1299,52 +1299,52 @@ def launch_app(app_exe: Path, profile_base: Path) -> Application:
     return Application(backend="win32").start(command_line, wait_for_idle=False)
 
 
-def collect_startup_profile_bundle(
-    startup_profile_path: Path,
+def collect_startup_diagnostics_bundle(
+    startup_diagnostics_path: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
-    """Collects startup-profile diagnostics or records an expected omission for baseline runs."""
+    """Collects startup diagnostics or records an expected omission for baseline runs."""
 
     try:
-        startup_profile_text = live_common.wait_for_startup_profile_complete(
-            startup_profile_path,
-            timeout=120.0 if require_startup_profile else 5.0,
+        startup_diagnostics_text = live_common.wait_for_startup_diagnostics_complete(
+            startup_diagnostics_path,
+            timeout=120.0 if require_startup_diagnostics else 5.0,
         )
     except Exception as exc:
-        if require_startup_profile:
+        if require_startup_diagnostics:
             raise
         return (
             {
-                "startup_profile_path": str(startup_profile_path),
-                "startup_profile_status": "missing",
-                "startup_profile_error": str(exc),
-                "startup_profile_size_bytes": startup_profile_path.stat().st_size
-                if startup_profile_path.exists()
+                "startup_diagnostics_path": str(startup_diagnostics_path),
+                "startup_diagnostics_status": "missing",
+                "startup_diagnostics_error": str(exc),
+                "startup_diagnostics_size_bytes": startup_diagnostics_path.stat().st_size
+                if startup_diagnostics_path.exists()
                 else None,
-                "startup_profile_phase_count": 0,
-                "startup_profile_counter_count": 0,
-                "startup_profile_counters": {},
+                "startup_diagnostics_phase_count": 0,
+                "startup_diagnostics_counter_count": 0,
+                "startup_diagnostics_counters": {},
             },
             [],
             [],
         )
 
-    startup_profile_phases = live_common.parse_startup_profile(startup_profile_text)
-    startup_profile_counters = live_common.parse_startup_profile_counters(startup_profile_text)
+    startup_diagnostics_phases = live_common.parse_startup_diagnostics(startup_diagnostics_text)
+    startup_diagnostics_counters = live_common.parse_startup_diagnostics_counters(startup_diagnostics_text)
     return (
         {
-            "startup_profile_path": str(startup_profile_path),
-            "startup_profile_status": "present",
-            "startup_profile_phase_count": len(startup_profile_phases),
-            "startup_profile_counter_count": len(startup_profile_counters),
-            "startup_profile_counters": live_common.summarize_startup_profile_counters(startup_profile_counters),
-            "startup_profile_readiness": live_common.summarize_shared_files_readiness(
-                startup_profile_phases,
-                startup_profile_counters,
+            "startup_diagnostics_path": str(startup_diagnostics_path),
+            "startup_diagnostics_status": "present",
+            "startup_diagnostics_phase_count": len(startup_diagnostics_phases),
+            "startup_diagnostics_counter_count": len(startup_diagnostics_counters),
+            "startup_diagnostics_counters": live_common.summarize_startup_diagnostics_counters(startup_diagnostics_counters),
+            "startup_diagnostics_readiness": live_common.summarize_shared_files_readiness(
+                startup_diagnostics_phases,
+                startup_diagnostics_counters,
             ),
-            "startup_profile_highlights": live_common.summarize_startup_profile(
-                startup_profile_phases,
+            "startup_diagnostics_highlights": live_common.summarize_startup_diagnostics(
+                startup_diagnostics_phases,
                 [
                     "Construct CSharedFileList (share cache/scan)",
                     "CSharedFilesWnd::OnInitDialog total",
@@ -1355,10 +1355,10 @@ def collect_startup_profile_bundle(
                     "StartupTimer complete",
                 ],
             ),
-            "startup_profile_top_slowest_phases": live_common.get_top_slowest_phases(startup_profile_phases, limit=8),
+            "startup_diagnostics_top_slowest_phases": live_common.get_top_slowest_phases(startup_diagnostics_phases, limit=8),
         },
-        startup_profile_phases,
-        startup_profile_counters,
+        startup_diagnostics_phases,
+        startup_diagnostics_counters,
     )
 
 
@@ -2113,7 +2113,7 @@ def run_shared_files_e2e(
     seed_config_dir: Path,
     artifacts_dir: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> None:
     """Executes the real Shared Files Win32 regression against an isolated fixture profile."""
 
@@ -2151,13 +2151,13 @@ def run_shared_files_e2e(
         if not summary["main_window_is_maximized"]:
             raise RuntimeError(f"Expected the seeded profile to start maximized, got showCmd={summary['main_window_show_cmd']}.")
 
-        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+        startup_diagnostics_summary, startup_diagnostics_phases, _startup_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary.update(startup_profile_summary)
-        if startup_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+        summary.update(startup_diagnostics_summary)
+        if startup_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_diagnostics_phases, summary["name"])
         process_handle = open_process(process_id)
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
@@ -2330,7 +2330,7 @@ def run_dynamic_folder_lifecycle_e2e(
     seed_config_dir: Path,
     artifacts_dir: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> None:
     """Exercises live share, rescan, file removal, and unshare through the Shared Files UI."""
 
@@ -2369,13 +2369,13 @@ def run_dynamic_folder_lifecycle_e2e(
         summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
         summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
 
-        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+        startup_diagnostics_summary, startup_diagnostics_phases, _startup_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary.update(startup_profile_summary)
-        if startup_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+        summary.update(startup_diagnostics_summary)
+        if startup_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_diagnostics_phases, summary["name"])
 
         process_handle = open_process(process_id)
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
@@ -2499,7 +2499,7 @@ def run_monitored_folder_events_e2e(
     seed_config_dir: Path,
     artifacts_dir: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     monitor_root_override: Path | None = None,
     scenario_name: str = "monitored-folder-events",
 ) -> None:
@@ -2555,13 +2555,13 @@ def run_monitored_folder_events_e2e(
         summary["main_window_show_cmd"] = live_common.get_window_show_cmd(main_hwnd)
         summary["main_window_is_maximized"] = summary["main_window_show_cmd"] == win32con.SW_SHOWMAXIMIZED
 
-        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+        startup_diagnostics_summary, startup_diagnostics_phases, _startup_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary.update(startup_profile_summary)
-        if startup_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+        summary.update(startup_diagnostics_summary)
+        if startup_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_diagnostics_phases, summary["name"])
 
         process_handle = open_process(process_id)
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
@@ -2742,7 +2742,7 @@ def run_generated_robustness_e2e(
     artifacts_dir: Path,
     shared_root: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> None:
     """Executes a larger Shared Files regression against the generated robustness subtree."""
 
@@ -2785,13 +2785,13 @@ def run_generated_robustness_e2e(
         if not summary["main_window_is_maximized"]:
             raise RuntimeError(f"Expected the seeded profile to start maximized, got showCmd={summary['main_window_show_cmd']}.")
 
-        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+        startup_diagnostics_summary, startup_diagnostics_phases, _startup_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary.update(startup_profile_summary)
-        if startup_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+        summary.update(startup_diagnostics_summary)
+        if startup_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_diagnostics_phases, summary["name"])
         process_handle = open_process(process_id)
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
@@ -2913,7 +2913,7 @@ def run_tree_refresh_stress_e2e(
     artifacts_dir: Path,
     shared_root: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     churn_cycles: int,
     scenario_name: str = TREE_REFRESH_STRESS_SCENARIO,
 ) -> None:
@@ -2968,14 +2968,14 @@ def run_tree_refresh_stress_e2e(
         process_id = resolve_launched_process_id(app, main_hwnd)
         summary["process_id"] = process_id
 
-        summary["startup_profile_required"] = bool(require_startup_profile)
-        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=False,
+        summary["startup_diagnostics_required"] = bool(require_startup_diagnostics)
+        startup_diagnostics_summary, startup_diagnostics_phases, _startup_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=False,
         )
-        summary.update(startup_profile_summary)
-        if startup_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"])
+        summary.update(startup_diagnostics_summary)
+        if startup_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_diagnostics_phases, summary["name"])
         process_handle = open_process(process_id)
 
         dump_window_tree(main_hwnd, artifacts_dir / "window-tree-initial.json")
@@ -3041,15 +3041,15 @@ def run_tree_refresh_stress_e2e(
         if not summary["resource_thresholds"]["ok"]:
             raise RuntimeError(f"{scenario_name} resource thresholds exceeded: {summary['resource_thresholds']!r}")
 
-        if require_startup_profile:
+        if require_startup_diagnostics:
             summary["first_launch_hashing_done"] = wait_for_shared_hashing_done_profile(
-                fixture["startup_profile_path"],
+                fixture["startup_diagnostics_path"],
                 expected_count=fixture["expected_row_count"],
             )
-        first_launch_trace_artifact = artifacts_dir / "first-launch-startup-profile.trace.json"
-        if Path(str(fixture["startup_profile_path"])).exists():
-            shutil.copy2(fixture["startup_profile_path"], first_launch_trace_artifact)
-            summary["first_launch_startup_profile_artifact"] = str(first_launch_trace_artifact)
+        first_launch_trace_artifact = artifacts_dir / "first-launch-startup-diagnostics.trace.json"
+        if Path(str(fixture["startup_diagnostics_path"])).exists():
+            shutil.copy2(fixture["startup_diagnostics_path"], first_launch_trace_artifact)
+            summary["first_launch_startup_diagnostics_artifact"] = str(first_launch_trace_artifact)
 
         shared_cache_path = Path(str(fixture["config_dir"])) / "sharedcache.dat"
         known_met_path = Path(str(fixture["config_dir"])) / "known.met"
@@ -3077,7 +3077,7 @@ def run_tree_refresh_stress_e2e(
         close_app_after_cache_warmup(app, summary, "first_launch")
         app = None
 
-        Path(str(fixture["startup_profile_path"])).unlink(missing_ok=True)
+        Path(str(fixture["startup_diagnostics_path"])).unlink(missing_ok=True)
 
         app = live_common.launch_app(
             app_exe,
@@ -3098,29 +3098,29 @@ def run_tree_refresh_stress_e2e(
             str(fixture["rest_api_key"]),
         )
 
-        relaunch_profile_summary, relaunch_profile_phases, _relaunch_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+        relaunch_diagnostics_summary, relaunch_diagnostics_phases, _relaunch_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary["cached_relaunch_startup"] = relaunch_profile_summary
-        if relaunch_profile_phases:
+        summary["cached_relaunch_startup"] = relaunch_diagnostics_summary
+        if relaunch_diagnostics_phases:
             live_common.enforce_deferred_shared_hashing_boundary(
-                relaunch_profile_phases,
+                relaunch_diagnostics_phases,
                 summary["name"] + ".cached_relaunch",
             )
 
-        cached_files_queued_for_hash = get_profile_counter_value(
-            relaunch_profile_summary,
+        cached_files_queued_for_hash = get_diagnostics_counter_value(
+            relaunch_diagnostics_summary,
             "shared.scan.files_queued_for_hash",
             "files",
         )
-        cached_pending_hashes = get_profile_counter_value(
-            relaunch_profile_summary,
+        cached_pending_hashes = get_diagnostics_counter_value(
+            relaunch_diagnostics_summary,
             "shared.scan.pending_hashes",
             "files",
         )
-        cached_shared_files_after_scan = get_profile_counter_value(
-            relaunch_profile_summary,
+        cached_shared_files_after_scan = get_diagnostics_counter_value(
+            relaunch_diagnostics_summary,
             "shared.scan.shared_files_after_scan",
             "files",
         )
@@ -3128,7 +3128,7 @@ def run_tree_refresh_stress_e2e(
         summary["cached_relaunch_pending_hashes"] = cached_pending_hashes
         summary["cached_relaunch_shared_files_after_scan"] = cached_shared_files_after_scan
 
-        if require_startup_profile:
+        if require_startup_diagnostics:
             if cached_files_queued_for_hash != 0:
                 raise RuntimeError(
                     f"Expected files_queued_for_hash=0 on cached {scenario_name} relaunch, "
@@ -3205,7 +3205,7 @@ def run_duplicate_startup_reuse_e2e(
     seed_config_dir: Path,
     artifacts_dir: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> None:
     """Executes a duplicate-content relaunch regression and proves the second startup skips rehashing."""
 
@@ -3239,13 +3239,13 @@ def run_duplicate_startup_reuse_e2e(
         summary["first_launch_process_id"] = process_id
         process_handle = open_process(process_id)
 
-        startup_profile_summary, startup_profile_phases, _startup_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+        startup_diagnostics_summary, startup_diagnostics_phases, _startup_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary["first_launch_startup"] = startup_profile_summary
-        if startup_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(startup_profile_phases, summary["name"] + ".first_launch")
+        summary["first_launch_startup"] = startup_diagnostics_summary
+        if startup_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(startup_diagnostics_phases, summary["name"] + ".first_launch")
 
         list_hwnd, _static_hwnd = open_shared_files_page(main_hwnd)
         first_launch_row_count = wait_for_exact_list_count(list_hwnd, 1)
@@ -3299,24 +3299,24 @@ def run_duplicate_startup_reuse_e2e(
         summary["relaunch_process_id"] = process_id
         process_handle = open_process(process_id)
 
-        relaunch_profile_summary, relaunch_profile_phases, _relaunch_profile_counters = collect_startup_profile_bundle(
-            fixture["startup_profile_path"],
-            require_startup_profile=require_startup_profile,
+        relaunch_diagnostics_summary, relaunch_diagnostics_phases, _relaunch_diagnostics_counters = collect_startup_diagnostics_bundle(
+            fixture["startup_diagnostics_path"],
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary["relaunch_startup"] = relaunch_profile_summary
-        if relaunch_profile_phases:
-            live_common.enforce_deferred_shared_hashing_boundary(relaunch_profile_phases, summary["name"] + ".relaunch")
+        summary["relaunch_startup"] = relaunch_diagnostics_summary
+        if relaunch_diagnostics_phases:
+            live_common.enforce_deferred_shared_hashing_boundary(relaunch_diagnostics_phases, summary["name"] + ".relaunch")
 
-        duplicate_paths_reused = get_profile_counter_value(relaunch_profile_summary, "shared.scan.duplicate_paths_reused", "files")
-        files_queued_for_hash = get_profile_counter_value(relaunch_profile_summary, "shared.scan.files_queued_for_hash", "files")
-        pending_hashes = get_profile_counter_value(relaunch_profile_summary, "shared.scan.pending_hashes", "files")
-        shared_files_after_scan = get_profile_counter_value(relaunch_profile_summary, "shared.scan.shared_files_after_scan", "files")
+        duplicate_paths_reused = get_diagnostics_counter_value(relaunch_diagnostics_summary, "shared.scan.duplicate_paths_reused", "files")
+        files_queued_for_hash = get_diagnostics_counter_value(relaunch_diagnostics_summary, "shared.scan.files_queued_for_hash", "files")
+        pending_hashes = get_diagnostics_counter_value(relaunch_diagnostics_summary, "shared.scan.pending_hashes", "files")
+        shared_files_after_scan = get_diagnostics_counter_value(relaunch_diagnostics_summary, "shared.scan.shared_files_after_scan", "files")
         summary["relaunch_duplicate_paths_reused"] = duplicate_paths_reused
         summary["relaunch_files_queued_for_hash"] = files_queued_for_hash
         summary["relaunch_pending_hashes"] = pending_hashes
         summary["relaunch_shared_files_after_scan"] = shared_files_after_scan
 
-        if require_startup_profile:
+        if require_startup_diagnostics:
             if duplicate_paths_reused != 1:
                 raise RuntimeError(f"Expected duplicate_paths_reused=1 on relaunch, got {duplicate_paths_reused!r}.")
             if files_queued_for_hash != 0:
@@ -3372,7 +3372,7 @@ def run_shared_files_ui_suite(
     shared_root: Path,
     scenario_names: list[str],
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     tree_stress_churn_cycles: int,
     vhd_monitor_root: Path | None = None,
 ) -> None:
@@ -3399,7 +3399,7 @@ def run_shared_files_ui_suite(
                     app_exe,
                     seed_config_dir,
                     scenario_dir,
-                    require_startup_profile=require_startup_profile,
+                    require_startup_diagnostics=require_startup_diagnostics,
                 )
             elif scenario_name == "generated-robustness-recursive":
                 run_generated_robustness_e2e(
@@ -3407,7 +3407,7 @@ def run_shared_files_ui_suite(
                     seed_config_dir,
                     scenario_dir,
                     shared_root,
-                    require_startup_profile=require_startup_profile,
+                    require_startup_diagnostics=require_startup_diagnostics,
                 )
             elif scenario_name in (TREE_REFRESH_SMOKE_SCENARIO, TREE_REFRESH_STRESS_SCENARIO):
                 run_tree_refresh_stress_e2e(
@@ -3415,7 +3415,7 @@ def run_shared_files_ui_suite(
                     seed_config_dir,
                     scenario_dir,
                     shared_root,
-                    require_startup_profile=require_startup_profile,
+                    require_startup_diagnostics=require_startup_diagnostics,
                     churn_cycles=tree_stress_churn_cycles,
                     scenario_name=scenario_name,
                 )
@@ -3424,21 +3424,21 @@ def run_shared_files_ui_suite(
                     app_exe,
                     seed_config_dir,
                     scenario_dir,
-                    require_startup_profile=require_startup_profile,
+                    require_startup_diagnostics=require_startup_diagnostics,
                 )
             elif scenario_name == "dynamic-folder-lifecycle":
                 run_dynamic_folder_lifecycle_e2e(
                     app_exe,
                     seed_config_dir,
                     scenario_dir,
-                    require_startup_profile=require_startup_profile,
+                    require_startup_diagnostics=require_startup_diagnostics,
                 )
             elif scenario_name == "monitored-folder-events":
                 run_monitored_folder_events_e2e(
                     app_exe,
                     seed_config_dir,
                     scenario_dir,
-                    require_startup_profile=require_startup_profile,
+                    require_startup_diagnostics=require_startup_diagnostics,
                 )
             elif scenario_name == VHD_MONITORED_FOLDER_SCENARIO:
                 if vhd_monitor_root is None:
@@ -3447,7 +3447,7 @@ def run_shared_files_ui_suite(
                     app_exe,
                     seed_config_dir,
                     scenario_dir,
-                    require_startup_profile=require_startup_profile,
+                    require_startup_diagnostics=require_startup_diagnostics,
                     monitor_root_override=vhd_monitor_root / "monitored-share-root",
                     scenario_name=VHD_MONITORED_FOLDER_SCENARIO,
                 )
@@ -3544,7 +3544,7 @@ def main(argv: list[str]) -> int:
             artifacts_dir=artifacts_dir,
             shared_root=Path(args.shared_root).resolve(),
             scenario_names=scenario_names,
-            require_startup_profile=(args.startup_trace_mode == "required"),
+            require_startup_diagnostics=(args.startup_trace_mode == "required"),
             tree_stress_churn_cycles=args.tree_stress_churn_cycles,
             vhd_monitor_root=vhd_monitor_root,
         )

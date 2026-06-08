@@ -311,40 +311,40 @@ def prepare_stress_fixture(seed_config_dir: Path, scenario_dir: Path, shared_roo
     return fixture
 
 
-def collect_startup_profile_summary(
-    startup_profile_path: Path,
+def collect_startup_diagnostics_summary(
+    startup_diagnostics_path: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> dict[str, object]:
-    """Collects startup-profile diagnostics or records an expected omission for baseline runs."""
+    """Collects startup diagnostics or records an expected omission for baseline runs."""
 
     try:
-        startup_profile_text = live_common.wait_for_startup_profile_complete(
-            startup_profile_path,
-            timeout=120.0 if require_startup_profile else 5.0,
+        startup_diagnostics_text = live_common.wait_for_startup_diagnostics_complete(
+            startup_diagnostics_path,
+            timeout=120.0 if require_startup_diagnostics else 5.0,
         )
     except Exception as exc:
-        if require_startup_profile:
+        if require_startup_diagnostics:
             raise
         return {
-            "startup_profile_path": str(startup_profile_path),
-            "startup_profile_status": "missing",
-            "startup_profile_error": str(exc),
-            "startup_profile_phase_count": 0,
-            "startup_profile_counter_count": 0,
-            "startup_profile_counters": {},
+            "startup_diagnostics_path": str(startup_diagnostics_path),
+            "startup_diagnostics_status": "missing",
+            "startup_diagnostics_error": str(exc),
+            "startup_diagnostics_phase_count": 0,
+            "startup_diagnostics_counter_count": 0,
+            "startup_diagnostics_counters": {},
         }
 
-    phases = live_common.parse_startup_profile(startup_profile_text)
-    counters = live_common.parse_startup_profile_counters(startup_profile_text)
+    phases = live_common.parse_startup_diagnostics(startup_diagnostics_text)
+    counters = live_common.parse_startup_diagnostics_counters(startup_diagnostics_text)
     return {
-        "startup_profile_path": str(startup_profile_path),
-        "startup_profile_status": "present",
-        "startup_profile_phase_count": len(phases),
-        "startup_profile_counter_count": len(counters),
-        "startup_profile_counters": live_common.summarize_startup_profile_counters(counters),
-        "startup_profile_readiness": live_common.summarize_shared_files_readiness(phases, counters),
-        "startup_profile_highlights": live_common.summarize_startup_profile(
+        "startup_diagnostics_path": str(startup_diagnostics_path),
+        "startup_diagnostics_status": "present",
+        "startup_diagnostics_phase_count": len(phases),
+        "startup_diagnostics_counter_count": len(counters),
+        "startup_diagnostics_counters": live_common.summarize_startup_diagnostics_counters(counters),
+        "startup_diagnostics_readiness": live_common.summarize_shared_files_readiness(phases, counters),
+        "startup_diagnostics_highlights": live_common.summarize_startup_diagnostics(
             phases,
             [
                 "CemuleDlg::OnInitDialog total",
@@ -354,7 +354,7 @@ def collect_startup_profile_summary(
                 "StartupTimer complete",
             ],
         ),
-        "startup_profile_top_slowest_phases": live_common.get_top_slowest_phases(phases, limit=8),
+        "startup_diagnostics_top_slowest_phases": live_common.get_top_slowest_phases(phases, limit=8),
     }
 
 
@@ -362,7 +362,7 @@ def launch_and_capture_startup(
     app_exe: Path,
     fixture: dict[str, object],
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> tuple[Application, int, int, dict[str, object]]:
     """Launches the app, waits for readiness, and returns startup diagnostics."""
 
@@ -376,9 +376,9 @@ def launch_and_capture_startup(
     main_hwnd = int(main_window.handle)
     live_common.bring_window_to_front(main_window)
     process_id = get_main_process_id(app)
-    startup_summary = collect_startup_profile_summary(
-        Path(str(fixture["startup_profile_path"])),
-        require_startup_profile=require_startup_profile,
+    startup_summary = collect_startup_diagnostics_summary(
+        Path(str(fixture["startup_diagnostics_path"])),
+        require_startup_diagnostics=require_startup_diagnostics,
     )
     return app, main_hwnd, process_id, startup_summary
 
@@ -388,7 +388,7 @@ def run_roundtrip_scenario(
     seed_config_dir: Path,
     scenario_dir: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> dict[str, object]:
     """Runs one long-config settings roundtrip and relaunch persistence regression."""
 
@@ -411,7 +411,7 @@ def run_roundtrip_scenario(
         app, main_hwnd, process_id, startup_summary = launch_and_capture_startup(
             app_exe,
             fixture,
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
         summary.update(startup_summary)
         initial_ini_value = get_ini_value(Path(str(fixture["preferences_path"])), "OnlineSignature")
@@ -431,9 +431,9 @@ def run_roundtrip_scenario(
         app, main_hwnd, process_id, relaunch_startup_summary = launch_and_capture_startup(
             app_exe,
             fixture,
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
-        summary["relaunch_startup_profile"] = relaunch_startup_summary
+        summary["relaunch_startup_diagnostics"] = relaunch_startup_summary
         verify_preferences_value(main_hwnd, process_id, True)
 
         dialog_hwnd = open_preferences(main_hwnd, process_id)
@@ -476,7 +476,7 @@ def run_stress_scenario(
     scenario_dir: Path,
     shared_root: Path,
     *,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> dict[str, object]:
     """Runs repeated long-config startup/save/shutdown cycles against a heavier shared tree."""
 
@@ -507,7 +507,7 @@ def run_stress_scenario(
             app, main_hwnd, process_id, startup_summary = launch_and_capture_startup(
                 app_exe,
                 fixture,
-                require_startup_profile=require_startup_profile,
+                require_startup_diagnostics=require_startup_diagnostics,
             )
             desired_state = not desired_state
             cycle = {
@@ -548,7 +548,7 @@ def run_stress_scenario(
         app, main_hwnd, process_id, final_startup_summary = launch_and_capture_startup(
             app_exe,
             fixture,
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
         summary["final_relaunch_startup"] = final_startup_summary
         summary["final_last_step"] = "verify_preferences_value"
@@ -598,7 +598,7 @@ def run_scenario(
     scenario_dir: Path,
     shared_root: Path,
     name: str,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> dict[str, object]:
     """Dispatches one named config-stability scenario."""
 
@@ -607,7 +607,7 @@ def run_scenario(
             app_exe,
             seed_config_dir,
             scenario_dir,
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
     if name == "long-config-shared-stress":
         return run_stress_scenario(
@@ -615,7 +615,7 @@ def run_scenario(
             seed_config_dir,
             scenario_dir,
             shared_root,
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
     raise RuntimeError(f"Unknown config-stability scenario '{name}'.")
 
@@ -686,7 +686,7 @@ def main(argv: list[str]) -> int:
             scenario_dir=scenario_dir,
             shared_root=shared_root,
             name=name,
-            require_startup_profile=(args.startup_trace_mode == "required"),
+            require_startup_diagnostics=(args.startup_trace_mode == "required"),
         )
         combined["scenarios"].append(result)
         if result["status"] != "passed":

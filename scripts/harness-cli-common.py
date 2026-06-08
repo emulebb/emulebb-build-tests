@@ -841,7 +841,7 @@ def build_live_ui_summary(
     }
 
 
-def build_startup_profiles_summary(
+def build_startup_diagnostics_summary(
     *,
     status: str,
     paths: HarnessRunPaths,
@@ -849,7 +849,7 @@ def build_startup_profiles_summary(
     result_filename: str | None = None,
     error_message: str = "",
 ) -> dict[str, object]:
-    """Builds the startup-profile wrapper summary consumed by the shared harness summary."""
+    """Builds the startup-diagnostics wrapper summary consumed by the shared harness summary."""
 
     return {
         "generated_utc": utc_generated_timestamp(),
@@ -904,7 +904,7 @@ def update_harness_summary(
     repo_root: Path,
     *,
     live_ui_summary_path: Path | None = None,
-    startup_profile_summary_path: Path | None = None,
+    startup_diagnostics_summary_path: Path | None = None,
 ) -> None:
     """Refreshes the shared harness summary using the canonical Python publisher."""
 
@@ -921,6 +921,6 @@ def update_harness_summary(
     )
     if live_ui_summary_path is not None:
         command.extend(["--live-ui-summary-path", str(live_ui_summary_path.resolve())])
-    if startup_profile_summary_path is not None:
-        command.extend(["--startup-profile-summary-path", str(startup_profile_summary_path.resolve())])
+    if startup_diagnostics_summary_path is not None:
+        command.extend(["--startup-diagnostics-summary-path", str(startup_diagnostics_summary_path.resolve())])
     subprocess.run(command, check=True)

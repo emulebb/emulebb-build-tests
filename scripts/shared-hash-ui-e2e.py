@@ -169,8 +169,8 @@ def archive_trace_if_present(source_path: Path, destination_path: Path) -> None:
 def launch_app_with_fresh_startup_trace(app_exe: Path, fixture: dict[str, object]) -> Application:
     """Starts eMule after removing any trace left by an earlier launch on the same profile."""
 
-    startup_profile_path = Path(str(fixture["startup_profile_path"]))
-    startup_profile_path.unlink(missing_ok=True)
+    startup_diagnostics_path = Path(str(fixture["startup_diagnostics_path"]))
+    startup_diagnostics_path.unlink(missing_ok=True)
     return live_common.launch_app(
         app_exe,
         Path(str(fixture["profile_base"])),
@@ -213,9 +213,9 @@ def ensure_startup_cache_present(sidecar_state: dict[str, dict[str, object]], *,
 
 
 def get_readiness_metric(summary: dict[str, object], metric_name: str) -> float | int | None:
-    """Returns one shared readiness metric from the summarized startup-profile bundle."""
+    """Returns one shared readiness metric from the summarized startup-diagnostics bundle."""
 
-    readiness = summary.get("startup_profile_readiness")
+    readiness = summary.get("startup_diagnostics_readiness")
     if not isinstance(readiness, dict):
         return None
     metrics = readiness.get("metrics")
@@ -227,29 +227,29 @@ def get_readiness_metric(summary: dict[str, object], metric_name: str) -> float 
     return None
 
 
-def wait_for_hashing_active(startup_profile_path: Path, *, timeout: float = 90.0) -> dict[str, object]:
+def wait_for_hashing_active(startup_diagnostics_path: Path, *, timeout: float = 90.0) -> dict[str, object]:
     """Waits until startup reached Shared Files readiness with queued hashing still in flight."""
 
     def resolve() -> dict[str, object] | None:
-        if not startup_profile_path.exists():
+        if not startup_diagnostics_path.exists():
             return None
         try:
-            text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
-            phases = live_common.parse_startup_profile(text)
-            counters = live_common.parse_startup_profile_counters(text)
+            text = startup_diagnostics_path.read_text(encoding="utf-8", errors="ignore")
+            phases = live_common.parse_startup_diagnostics(text)
+            counters = live_common.parse_startup_diagnostics_counters(text)
         except Exception:
             return None
 
         ready_phase = live_common.get_phase_by_id(
             phases,
-            live_common.STARTUP_PROFILE_SHARED_FILES_READY_PHASE_ID,
+            live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_READY_PHASE_ID,
         )
         if ready_phase is None:
             return None
 
         hashing_done_phase = live_common.get_phase_by_id(
             phases,
-            live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID,
+            live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID,
         )
         if hashing_done_phase is not None:
             raise RuntimeError("Hashing completed before the interruption target was reached.")
@@ -272,14 +272,14 @@ def wait_for_expected_shared_files(
     process_id: int,
     expected_names: list[str],
     *,
-    startup_profile_path: Path | None = None,
+    startup_diagnostics_path: Path | None = None,
 ) -> dict[str, object]:
     """Opens the Shared Files page and waits until the expected visible rows converge."""
 
     hash_drain_state: dict[str, object] | None = None
-    if startup_profile_path is not None:
+    if startup_diagnostics_path is not None:
         hash_drain_state = wait_for_shared_hash_drain(
-            startup_profile_path,
+            startup_diagnostics_path,
             expected_count=len(expected_names),
         )
 
@@ -311,24 +311,24 @@ def open_shared_files_page_snapshot(main_hwnd: int) -> dict[str, object]:
 
 
 def get_counter_int(counters: list[dict[str, object]], counter_id: str) -> int:
-    """Returns the latest integer value for one startup-profile counter."""
+    """Returns the latest integer value for one startup-diagnostics counter."""
 
     counter = live_common.get_counter_by_id(counters, counter_id)
     return int(counter["value"]) if counter is not None else 0
 
 
-def read_shared_hash_drain_state(startup_profile_path: Path, *, expected_count: int) -> dict[str, object] | None:
-    """Reads the current startup-profile counters needed to judge shared-hash drain."""
+def read_shared_hash_drain_state(startup_diagnostics_path: Path, *, expected_count: int) -> dict[str, object] | None:
+    """Reads the current startup-diagnostics counters needed to judge shared-hash drain."""
 
-    if not startup_profile_path.exists():
+    if not startup_diagnostics_path.exists():
         return None
 
-    text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
-    phases = live_common.parse_startup_profile(text)
-    counters = live_common.parse_startup_profile_counters(text)
+    text = startup_diagnostics_path.read_text(encoding="utf-8", errors="ignore")
+    phases = live_common.parse_startup_diagnostics(text)
+    counters = live_common.parse_startup_diagnostics_counters(text)
     hashing_done_phase = live_common.get_phase_by_id(
         phases,
-        live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID,
+        live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID,
     )
     state: dict[str, object] = {
         "expected_count": expected_count,
@@ -347,7 +347,7 @@ def read_shared_hash_drain_state(startup_profile_path: Path, *, expected_count: 
 
 
 def wait_for_shared_hash_drain(
-    startup_profile_path: Path,
+    startup_diagnostics_path: Path,
     *,
     expected_count: int,
     timeout: float = SHARED_HASH_DRAIN_TIMEOUT_SECONDS,
@@ -358,14 +358,14 @@ def wait_for_shared_hash_drain(
     last_state: dict[str, object] | str | None = None
     while time.time() < deadline:
         try:
-            state = read_shared_hash_drain_state(startup_profile_path, expected_count=expected_count)
+            state = read_shared_hash_drain_state(startup_diagnostics_path, expected_count=expected_count)
         except Exception as exc:
             last_state = f"{type(exc).__name__}: {exc}"
             time.sleep(0.5)
             continue
 
         if state is None:
-            last_state = "startup profile not created yet"
+            last_state = "startup diagnostics not created yet"
             time.sleep(0.5)
             continue
 
@@ -393,7 +393,7 @@ def wait_for_shared_hash_drain(
 
 
 def wait_for_partial_hash_progress(
-    startup_profile_path: Path,
+    startup_diagnostics_path: Path,
     *,
     expected_count: int,
     timeout: float = 90.0,
@@ -403,15 +403,15 @@ def wait_for_partial_hash_progress(
     deadline = time.time() + timeout
     last_state: dict[str, object] | str | None = None
     while time.time() < deadline:
-        if not startup_profile_path.exists():
-            last_state = "startup profile not created yet"
+        if not startup_diagnostics_path.exists():
+            last_state = "startup diagnostics not created yet"
             time.sleep(0.25)
             continue
 
         try:
-            text = startup_profile_path.read_text(encoding="utf-8", errors="ignore")
-            phases = live_common.parse_startup_profile(text)
-            counters = live_common.parse_startup_profile_counters(text)
+            text = startup_diagnostics_path.read_text(encoding="utf-8", errors="ignore")
+            phases = live_common.parse_startup_diagnostics(text)
+            counters = live_common.parse_startup_diagnostics_counters(text)
         except Exception as exc:
             last_state = f"{type(exc).__name__}: {exc}"
             time.sleep(0.25)
@@ -419,7 +419,7 @@ def wait_for_partial_hash_progress(
 
         hashing_done_phase = live_common.get_phase_by_id(
             phases,
-            live_common.STARTUP_PROFILE_SHARED_FILES_HASHING_DONE_PHASE_ID,
+            live_common.STARTUP_DIAGNOSTICS_SHARED_FILES_HASHING_DONE_PHASE_ID,
         )
         completed_count = get_counter_int(counters, "shared.hash.completed_files")
         waiting_queue_depth = get_counter_int(counters, "shared.hash.waiting_queue_depth")
@@ -493,7 +493,7 @@ def wait_for_expected_shared_files_with_summary(
     scenario_dir: Path,
     *,
     summary_prefix: str,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> tuple[int, dict[str, object], dict[str, object]]:
     """Waits until the Shared Files page converges and returns the process id, visible rows, and startup bundle."""
 
@@ -504,18 +504,18 @@ def wait_for_expected_shared_files_with_summary(
         main_hwnd,
         process_id,
         list(fixture["expected_visible_names"]),
-        startup_profile_path=Path(str(fixture["startup_profile_path"])),
+        startup_diagnostics_path=Path(str(fixture["startup_diagnostics_path"])),
     )
     archive_trace_if_present(
-        Path(str(fixture["startup_profile_path"])),
-        scenario_dir / f"startup-profile-{summary_prefix}.trace.json",
+        Path(str(fixture["startup_diagnostics_path"])),
+        scenario_dir / f"startup-diagnostics-{summary_prefix}.trace.json",
     )
-    startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_profile_bundle(
-        Path(str(fixture["startup_profile_path"])),
-        require_startup_profile=require_startup_profile,
+    startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_diagnostics_bundle(
+        Path(str(fixture["startup_diagnostics_path"])),
+        require_startup_diagnostics=require_startup_diagnostics,
     )
     if startup_phases:
-        live_common.enforce_deferred_shared_hashing_boundary(startup_phases, f"{summary_prefix}.startup_profile")
+        live_common.enforce_deferred_shared_hashing_boundary(startup_phases, f"{summary_prefix}.startup_diagnostics")
     return process_id, visible_shared_files, startup_summary
 
 
@@ -527,7 +527,7 @@ def run_interruption_scenario(
     name: str,
     open_shared_files_before_interrupt: bool,
     interrupt_mode: str,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     perform_warm_relaunch_after_recovery: bool = False,
     wait_for_partial_hash_progress_before_interrupt: bool = False,
 ) -> dict[str, object]:
@@ -565,7 +565,7 @@ def run_interruption_scenario(
             summary["first_launch_visible_before_interrupt"] = open_shared_files_page_snapshot(main_hwnd)
 
         try:
-            hashing_active = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+            hashing_active = wait_for_hashing_active(Path(str(fixture["startup_diagnostics_path"])))
         except RuntimeError as exc:
             if "Hashing completed before the interruption target was reached." not in str(exc):
                 raise
@@ -585,7 +585,7 @@ def run_interruption_scenario(
         summary["first_launch_hashing_active"] = hashing_active
         if wait_for_partial_hash_progress_before_interrupt:
             summary["first_launch_partial_hash_progress_before_interrupt"] = wait_for_partial_hash_progress(
-                Path(str(fixture["startup_profile_path"])),
+                Path(str(fixture["startup_diagnostics_path"])),
                 expected_count=int(fixture["expected_row_count"]),
             )
 
@@ -597,16 +597,16 @@ def run_interruption_scenario(
             summary["first_launch_close_duration_ms"] = close_duration_ms
             app = None
             archive_trace_if_present(
-                Path(str(fixture["startup_profile_path"])),
-                scenario_dir / "startup-profile-first-launch.trace.json",
+                Path(str(fixture["startup_diagnostics_path"])),
+                scenario_dir / "startup-diagnostics-first-launch.trace.json",
             )
-            startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_profile_bundle(
-                Path(str(fixture["startup_profile_path"])),
-                require_startup_profile=require_startup_profile,
+            startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_diagnostics_bundle(
+                Path(str(fixture["startup_diagnostics_path"])),
+                require_startup_diagnostics=require_startup_diagnostics,
             )
             if startup_phases:
                 live_common.enforce_deferred_shared_hashing_boundary(startup_phases, name + ".first_launch")
-            summary["first_launch_startup_profile"] = startup_summary
+            summary["first_launch_startup_diagnostics"] = startup_summary
             record_hashing_convergence_before_interrupt(
                 summary,
                 startup_summary,
@@ -616,8 +616,8 @@ def run_interruption_scenario(
             summary["first_launch_hard_kill_process_id"] = hard_kill_app(app)
             app = None
             archive_trace_if_present(
-                Path(str(fixture["startup_profile_path"])),
-                scenario_dir / "startup-profile-first-launch.partial.trace.json",
+                Path(str(fixture["startup_diagnostics_path"])),
+                scenario_dir / "startup-diagnostics-first-launch.partial.trace.json",
             )
 
         summary["post_interrupt_sidecar_state"] = capture_sidecar_state(Path(str(fixture["config_dir"])))
@@ -644,13 +644,13 @@ def run_interruption_scenario(
         (
             summary["relaunch_process_id"],
             summary["relaunch_visible_shared_files"],
-            summary["relaunch_startup_profile"],
+            summary["relaunch_startup_diagnostics"],
         ) = wait_for_expected_shared_files_with_summary(
             fixture,
             app,
             scenario_dir,
             summary_prefix="relaunch",
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
 
         close_started = time.perf_counter()
@@ -671,21 +671,21 @@ def run_interruption_scenario(
             (
                 summary["warm_relaunch_process_id"],
                 summary["warm_relaunch_visible_shared_files"],
-                summary["warm_relaunch_startup_profile"],
+                summary["warm_relaunch_startup_diagnostics"],
             ) = wait_for_expected_shared_files_with_summary(
                 fixture,
                 app,
                 scenario_dir,
                 summary_prefix="warm-relaunch",
-                require_startup_profile=require_startup_profile,
+                require_startup_diagnostics=require_startup_diagnostics,
             )
             warm_dirs_from_cache = shared_files_ui.get_profile_counter_value(
-                summary["warm_relaunch_startup_profile"],
+                summary["warm_relaunch_startup_diagnostics"],
                 "shared.scan.directories_from_cache",
                 "directories",
             )
             warm_files_queued = shared_files_ui.get_profile_counter_value(
-                summary["warm_relaunch_startup_profile"],
+                summary["warm_relaunch_startup_diagnostics"],
                 "shared.scan.files_queued_for_hash",
                 "files",
             )
@@ -738,7 +738,7 @@ def run_repeated_interruption_cycle_scenario(
     scenario_dir: Path,
     *,
     name: str,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     interrupt_mode: str,
 ) -> dict[str, object]:
     """Runs two interrupted cycles on the same profile, then verifies warm recovery."""
@@ -770,7 +770,7 @@ def run_repeated_interruption_cycle_scenario(
             main_hwnd = main_window.handle
             process_id = int(win32process.GetWindowThreadProcessId(main_hwnd)[1])
             summary[f"cycle_{cycle_index}_process_id"] = process_id
-            summary[f"cycle_{cycle_index}_hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+            summary[f"cycle_{cycle_index}_hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_diagnostics_path"])))
             if interrupt_mode == "clean-close":
                 close_started = time.perf_counter()
                 live_common.close_app_cleanly(app, window_timeout=30.0, process_timeout=30.0)
@@ -783,24 +783,24 @@ def run_repeated_interruption_cycle_scenario(
 
             if interrupt_mode == "clean-close":
                 archive_trace_if_present(
-                    Path(str(fixture["startup_profile_path"])),
-                    scenario_dir / f"startup-profile-cycle-{cycle_index}.trace.json",
+                    Path(str(fixture["startup_diagnostics_path"])),
+                    scenario_dir / f"startup-diagnostics-cycle-{cycle_index}.trace.json",
                 )
-                startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_profile_bundle(
-                    Path(str(fixture["startup_profile_path"])),
-                    require_startup_profile=require_startup_profile,
+                startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_diagnostics_bundle(
+                    Path(str(fixture["startup_diagnostics_path"])),
+                    require_startup_diagnostics=require_startup_diagnostics,
                 )
                 if startup_phases:
                     live_common.enforce_deferred_shared_hashing_boundary(startup_phases, f"{name}.cycle_{cycle_index}")
-                summary[f"cycle_{cycle_index}_startup_profile"] = startup_summary
+                summary[f"cycle_{cycle_index}_startup_diagnostics"] = startup_summary
             else:
-                partial_trace_artifact = scenario_dir / f"startup-profile-cycle-{cycle_index}.partial.trace.json"
-                archive_trace_if_present(Path(str(fixture["startup_profile_path"])), partial_trace_artifact)
-                summary[f"cycle_{cycle_index}_startup_profile"] = {
-                    "startup_profile_path": str(Path(str(fixture["startup_profile_path"]))),
-                    "startup_profile_status": "partial_after_hard_kill",
-                    "startup_profile_artifact": str(partial_trace_artifact),
-                    "startup_profile_size_bytes": partial_trace_artifact.stat().st_size
+                partial_trace_artifact = scenario_dir / f"startup-diagnostics-cycle-{cycle_index}.partial.trace.json"
+                archive_trace_if_present(Path(str(fixture["startup_diagnostics_path"])), partial_trace_artifact)
+                summary[f"cycle_{cycle_index}_startup_diagnostics"] = {
+                    "startup_diagnostics_path": str(Path(str(fixture["startup_diagnostics_path"]))),
+                    "startup_diagnostics_status": "partial_after_hard_kill",
+                    "startup_diagnostics_artifact": str(partial_trace_artifact),
+                    "startup_diagnostics_size_bytes": partial_trace_artifact.stat().st_size
                     if partial_trace_artifact.exists()
                     else 0,
                 }
@@ -813,13 +813,13 @@ def run_repeated_interruption_cycle_scenario(
         (
             summary["recovery_relaunch_process_id"],
             summary["recovery_relaunch_visible_shared_files"],
-            summary["recovery_relaunch_startup_profile"],
+            summary["recovery_relaunch_startup_diagnostics"],
         ) = wait_for_expected_shared_files_with_summary(
             fixture,
             app,
             scenario_dir,
             summary_prefix="recovery-relaunch",
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
         close_started = time.perf_counter()
         live_common.close_app_cleanly(app, window_timeout=45.0, process_timeout=45.0)
@@ -838,21 +838,21 @@ def run_repeated_interruption_cycle_scenario(
         (
             summary["warm_recovery_relaunch_process_id"],
             summary["warm_recovery_relaunch_visible_shared_files"],
-            summary["warm_recovery_relaunch_startup_profile"],
+            summary["warm_recovery_relaunch_startup_diagnostics"],
         ) = wait_for_expected_shared_files_with_summary(
             fixture,
             app,
             scenario_dir,
             summary_prefix="warm-recovery-relaunch",
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
         warm_dirs_from_cache = shared_files_ui.get_profile_counter_value(
-            summary["warm_recovery_relaunch_startup_profile"],
+            summary["warm_recovery_relaunch_startup_diagnostics"],
             "shared.scan.directories_from_cache",
             "directories",
         )
         warm_files_queued = shared_files_ui.get_profile_counter_value(
-            summary["warm_recovery_relaunch_startup_profile"],
+            summary["warm_recovery_relaunch_startup_diagnostics"],
             "shared.scan.files_queued_for_hash",
             "files",
         )
@@ -997,7 +997,7 @@ def run_reload_then_interrupt_scenario(
     scenario_dir: Path,
     *,
     name: str,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
     interrupt_mode: str,
 ) -> dict[str, object]:
     """Triggers Reload during hash drain, then interrupts before the deferred reload can complete."""
@@ -1030,7 +1030,7 @@ def run_reload_then_interrupt_scenario(
         summary["first_launch_process_id"] = process_id
         summary["visible_before_reload"] = open_shared_files_page_snapshot(main_hwnd)
         try:
-            summary["hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+            summary["hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_diagnostics_path"])))
         except RuntimeError as exc:
             if "Hashing completed before the interruption target was reached." not in str(exc):
                 raise
@@ -1054,16 +1054,16 @@ def run_reload_then_interrupt_scenario(
             validate_clean_shutdown_duration(close_duration_ms)
             summary["first_launch_close_duration_ms"] = close_duration_ms
             archive_trace_if_present(
-                Path(str(fixture["startup_profile_path"])),
-                scenario_dir / "startup-profile-first-launch.trace.json",
+                Path(str(fixture["startup_diagnostics_path"])),
+                scenario_dir / "startup-diagnostics-first-launch.trace.json",
             )
-            startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_profile_bundle(
-                Path(str(fixture["startup_profile_path"])),
-                require_startup_profile=require_startup_profile,
+            startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_diagnostics_bundle(
+                Path(str(fixture["startup_diagnostics_path"])),
+                require_startup_diagnostics=require_startup_diagnostics,
             )
             if startup_phases:
                 live_common.enforce_deferred_shared_hashing_boundary(startup_phases, name + ".first_launch")
-            summary["first_launch_startup_profile"] = startup_summary
+            summary["first_launch_startup_diagnostics"] = startup_summary
             record_hashing_convergence_before_interrupt(
                 summary,
                 startup_summary,
@@ -1072,8 +1072,8 @@ def run_reload_then_interrupt_scenario(
         else:
             summary["first_launch_hard_kill_process_id"] = hard_kill_app(app)
             archive_trace_if_present(
-                Path(str(fixture["startup_profile_path"])),
-                scenario_dir / "startup-profile-first-launch.partial.trace.json",
+                Path(str(fixture["startup_diagnostics_path"])),
+                scenario_dir / "startup-diagnostics-first-launch.partial.trace.json",
             )
         app = None
 
@@ -1101,13 +1101,13 @@ def run_reload_then_interrupt_scenario(
         (
             summary["relaunch_process_id"],
             summary["relaunch_visible_shared_files"],
-            summary["relaunch_startup_profile"],
+            summary["relaunch_startup_diagnostics"],
         ) = wait_for_expected_shared_files_with_summary(
             fixture,
             app,
             scenario_dir,
             summary_prefix="relaunch",
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
 
         close_started = time.perf_counter()
@@ -1127,21 +1127,21 @@ def run_reload_then_interrupt_scenario(
         (
             summary["warm_relaunch_process_id"],
             summary["warm_relaunch_visible_shared_files"],
-            summary["warm_relaunch_startup_profile"],
+            summary["warm_relaunch_startup_diagnostics"],
         ) = wait_for_expected_shared_files_with_summary(
             fixture,
             app,
             scenario_dir,
             summary_prefix="warm-relaunch",
-            require_startup_profile=require_startup_profile,
+            require_startup_diagnostics=require_startup_diagnostics,
         )
         warm_dirs_from_cache = shared_files_ui.get_profile_counter_value(
-            summary["warm_relaunch_startup_profile"],
+            summary["warm_relaunch_startup_diagnostics"],
             "shared.scan.directories_from_cache",
             "directories",
         )
         warm_files_queued = shared_files_ui.get_profile_counter_value(
-            summary["warm_relaunch_startup_profile"],
+            summary["warm_relaunch_startup_diagnostics"],
             "shared.scan.files_queued_for_hash",
             "files",
         )
@@ -1200,7 +1200,7 @@ def run_reload_during_hash_scenario(
     scenario_dir: Path,
     *,
     name: str,
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> dict[str, object]:
     """Runs the Shared Files reload button while startup hashing is still draining."""
 
@@ -1231,7 +1231,7 @@ def run_reload_during_hash_scenario(
         summary["process_id"] = process_id
         summary["visible_before_reload"] = open_shared_files_page_snapshot(main_hwnd)
         try:
-            summary["hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_profile_path"])))
+            summary["hashing_active"] = wait_for_hashing_active(Path(str(fixture["startup_diagnostics_path"])))
         except RuntimeError as exc:
             if "Hashing completed before the interruption target was reached." not in str(exc):
                 raise
@@ -1256,7 +1256,7 @@ def run_reload_during_hash_scenario(
             main_hwnd,
             process_id,
             list(fixture["expected_visible_names"]),
-            startup_profile_path=Path(str(fixture["startup_profile_path"])),
+            startup_diagnostics_path=Path(str(fixture["startup_diagnostics_path"])),
         )
 
         close_started = time.perf_counter()
@@ -1267,16 +1267,16 @@ def run_reload_during_hash_scenario(
         app = None
 
         archive_trace_if_present(
-            Path(str(fixture["startup_profile_path"])),
-            scenario_dir / "startup-profile-reload.trace.json",
+            Path(str(fixture["startup_diagnostics_path"])),
+            scenario_dir / "startup-diagnostics-reload.trace.json",
         )
-        startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_profile_bundle(
-            Path(str(fixture["startup_profile_path"])),
-            require_startup_profile=require_startup_profile,
+        startup_summary, startup_phases, _startup_counters = shared_files_ui.collect_startup_diagnostics_bundle(
+            Path(str(fixture["startup_diagnostics_path"])),
+            require_startup_diagnostics=require_startup_diagnostics,
         )
         if startup_phases:
             live_common.enforce_deferred_shared_hashing_boundary(startup_phases, name)
-        summary["startup_profile"] = startup_summary
+        summary["startup_diagnostics"] = startup_summary
         reloads_during_hash_drain = get_readiness_metric(startup_summary, "shared_list_reloads_during_hash_drain")
         summary["shared_list_reloads_during_hash_drain"] = reloads_during_hash_drain
         if (
@@ -1328,7 +1328,7 @@ def run_shared_hash_ui_suite(
     artifacts_dir: Path,
     *,
     scenario_names: list[str],
-    require_startup_profile: bool,
+    require_startup_diagnostics: bool,
 ) -> None:
     """Runs the requested shared-hash interruption scenarios."""
 
@@ -1352,7 +1352,7 @@ def run_shared_hash_ui_suite(
                 seed_config_dir,
                 scenario_dir,
                 name=name,
-                require_startup_profile=require_startup_profile,
+                require_startup_diagnostics=require_startup_diagnostics,
             )
         elif name.startswith("reload-then-clean-close-during-hash-files-page") or name.startswith("reload-then-hard-kill-during-hash-files-page"):
             result = run_reload_then_interrupt_scenario(
@@ -1360,7 +1360,7 @@ def run_shared_hash_ui_suite(
                 seed_config_dir,
                 scenario_dir,
                 name=name,
-                require_startup_profile=require_startup_profile,
+                require_startup_diagnostics=require_startup_diagnostics,
                 interrupt_mode="hard-kill" if name.startswith("reload-then-hard-kill") else "clean-close",
             )
         elif name.startswith("clean-close-during-hash-repeated-cycle") or name.startswith("hard-kill-during-hash-repeated-cycle"):
@@ -1369,7 +1369,7 @@ def run_shared_hash_ui_suite(
                 seed_config_dir,
                 scenario_dir,
                 name=name,
-                require_startup_profile=require_startup_profile,
+                require_startup_diagnostics=require_startup_diagnostics,
                 interrupt_mode="hard-kill" if name.startswith("hard-kill") else "clean-close",
             )
         else:
@@ -1382,7 +1382,7 @@ def run_shared_hash_ui_suite(
                 name=name,
                 open_shared_files_before_interrupt=open_shared_files_before_interrupt,
                 interrupt_mode=interrupt_mode,
-                require_startup_profile=require_startup_profile,
+                require_startup_diagnostics=require_startup_diagnostics,
                 perform_warm_relaunch_after_recovery="warm-relaunch" in name,
                 wait_for_partial_hash_progress_before_interrupt="partial-results" in name,
             )
@@ -1435,7 +1435,7 @@ def main(argv: list[str]) -> int:
             seed_config_dir=seed_config_dir,
             artifacts_dir=artifacts_dir,
             scenario_names=scenario_names,
-            require_startup_profile=(args.startup_trace_mode == "required"),
+            require_startup_diagnostics=(args.startup_trace_mode == "required"),
         )
         harness_cli_common.publish_run_artifacts(paths)
         summary_payload = harness_cli_common.build_live_ui_summary(status="passed", paths=paths)
