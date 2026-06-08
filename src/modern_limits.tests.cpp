@@ -115,9 +115,25 @@ TEST_CASE("Broadband IO auto mode allocates file buffer allowance by demand")
 
 	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(false, configured, budget, 0u, 8u, 0u), configured);
 	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 0u, 1u, 0u), budget);
-	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 128ull * 1024ull * 1024ull, 8u, 4ull * 1024ull * 1024ull), configured);
+	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 128ull * 1024ull * 1024ull, 8u, 4ull * 1024ull * 1024ull), BroadbandIoSeams::kMinimumAdaptiveFileBufferShareBytes);
 	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 512ull * 1024ull * 1024ull, 8u, 256ull * 1024ull * 1024ull), 768ull * 1024ull * 1024ull);
 	CHECK_EQ(BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, budget, 8u, 512ull * 1024ull * 1024ull), 512ull * 1024ull * 1024ull);
+}
+
+TEST_CASE("Broadband IO auto mode treats manual file buffer as target not floor")
+{
+	constexpr std::uint64_t configured = 512ull * 1024ull * 1024ull;
+	constexpr std::uint64_t budget = 1024ull * 1024ull * 1024ull;
+
+	CHECK_EQ(
+		BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 900ull * 1024ull * 1024ull, 8u, 8ull * 1024ull * 1024ull),
+		BroadbandIoSeams::kMinimumAdaptiveFileBufferShareBytes);
+	CHECK_EQ(
+		BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 900ull * 1024ull * 1024ull, 8u, 96ull * 1024ull * 1024ull),
+		220ull * 1024ull * 1024ull);
+	CHECK_EQ(
+		BroadbandIoSeams::BuildDemandBasedFileBufferSizeBytes(true, configured, budget, 256ull * 1024ull * 1024ull, 8u, 512ull * 1024ull * 1024ull),
+		1280ull * 1024ull * 1024ull);
 }
 
 TEST_CASE("Broadband IO auto mode treats zero global budget as no adaptive cap")
