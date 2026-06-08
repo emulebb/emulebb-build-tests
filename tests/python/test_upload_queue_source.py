@@ -38,17 +38,17 @@ def test_broadband_retained_slot_logs_are_throttled() -> None:
     assert source.count("if (!ShouldLogBroadbandRetainedSlot(uSuppressedLogs))\n\t\t\t\treturn false;") == 1
 
 
-def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
+def test_underfilled_upload_queue_only_probes_productive_no_request_cooldowns() -> None:
     source = (app_source_root() / "UploadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "UploadQueue.h").read_text(encoding="utf-8", errors="ignore")
     seams = (app_source_root() / "UploadQueueSeams.h").read_text(encoding="utf-8", errors="ignore")
 
     assert "ShouldProbeUploadCooldownCandidate" in seams
-    assert "kUnproductiveNoRequestCooldownProbeRemainingMs = 30000u" in seams
     assert "kProductiveNoRequestCooldownProbeRemainingMs = 5000u" in seams
-    assert "ShouldProbeUnproductiveNoRequestCooldownCandidate" in seams
+    assert "ShouldProbeUnproductiveNoRequestCooldownCandidate" not in seams
     assert "ShouldProbeNoRequestCooldownCandidate" in seams
-    assert "ullCooldownRemainingMs <= ullMaxProbeRemainingMs" in seams
+    assert "kUnproductiveNoRequestCooldownProbeRemainingMs" not in seams
+    assert "bProductiveNoRequestCooldown\n\t\t&& bOpenCapUnderfill" in seams
     assert "ullCooldownRemainingMs <= ullMaxProductiveProbeRemainingMs" in seams
     assert "bool\tHasUploadCooldownProbeCandidate(ULONGLONG curTick);" in header
     assert "bool\tCanProbeUploadCooldownCandidate(CUpDownClient *client, ULONGLONG curTick) const;" in header
@@ -74,11 +74,10 @@ def test_underfilled_upload_queue_can_probe_cooldown_only_waiters() -> None:
     assert "m_noRequestUploadRetryCooldownByIP.find(dwCooldownIP)" in cooldown_probe_block
     assert "itNoRequest->second.ullCooldownUntil > curTick" in cooldown_probe_block
     assert "already contributed payload" in cooldown_probe_block
-    assert "before zero-byte peers" in cooldown_probe_block
+    assert "hard admission gates" in cooldown_probe_block
     assert "const ULONGLONG ullCooldownRemainingMs = itNoRequest->second.ullCooldownUntil - curTick;" in cooldown_probe_block
     assert "ShouldProbeNoRequestCooldownCandidate(" in cooldown_probe_block
     assert "kProductiveNoRequestCooldownProbeRemainingMs" in cooldown_probe_block
-    assert "kUnproductiveNoRequestCooldownProbeRemainingMs" in cooldown_probe_block
     assert "ShouldProbeUploadCooldownCandidate(HasSustainedBroadbandUnderfill(curTick), uploadinglist.GetCount(), GetSoftMaxUploadSlots())" in cooldown_probe_block
     assert cooldown_probe_block.index("ShouldProbeNoRequestCooldownCandidate") < cooldown_probe_block.rindex("return true;")
 
