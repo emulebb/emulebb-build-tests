@@ -267,7 +267,7 @@ def estimate_shared_files_tree_stress_observable_nodes(
 
 
 def build_long_path_output(root: Path) -> dict[str, object]:
-    """Builds the large recursive long-path subtree used for startup profiling."""
+    """Builds the large recursive long-path subtree used for startup diagnostics."""
 
     ensure_directory(root)
     directories = [root]

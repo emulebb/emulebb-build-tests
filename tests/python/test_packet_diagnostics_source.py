@@ -52,7 +52,7 @@ def test_packet_diagnostics_build_env_override_is_available() -> None:
     assert 'extra_properties.append(f"/p:{property_name}=' in build_source
 
 
-def test_startup_profiling_compile_flag_is_opt_in() -> None:
+def test_startup_diagnostics_compile_flag_is_opt_in() -> None:
     project = read_source("emule.vcxproj")
     root = ET.fromstring(project)
     namespace = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
