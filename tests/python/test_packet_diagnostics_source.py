@@ -123,6 +123,11 @@ def test_packet_diagnostics_logging_api_is_compile_guarded() -> None:
     assert "WriteDiagnosticsLogLine(thePacketDiagnosticsLog, g_packetDiagnosticsLogLock, strJson)" in log_source
     assert "bool InitializeDiagnosticsLog(CLogFile &rLog, LPCTSTR pszLogPath, UINT uMaxLogFileSize)" in log_header
     assert "void WriteDiagnosticsLogLine(CLogFile &rLog, CCriticalSection &rLock, const CString &rstrLine)" in log_header
+    assert "void WriteDiagnosticsLogLineV(CLogFile &rLog, CCriticalSection &rLock, LPCTSTR pszFmt, va_list argp)" in log_header
+    assert "void WriteDiagnosticsLogLineF(CLogFile &rLog, CCriticalSection &rLock, LPCTSTR pszFmt, ...)" in log_header
+    assert "VERIFY(rLog.SetFlushOnWrite(true));" in log_source
+    assert "WriteDiagnosticsLogLineV(theUploadSlotDiagnosticsLog, g_uploadSlotDiagnosticsLogLock, pszFmt, argp)" in log_source
+    assert "WriteDiagnosticsLogLineV(theDownloadSlotDiagnosticsLog, g_downloadSlotDiagnosticsLogLock, pszFmt, argp)" in log_source
     assert "LogArtifactNames::PacketDiagnosticsLogFileName()" in emule_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\ninline LPCTSTR PacketDiagnosticsLogFileName()" in artifacts
     assert 'return _T("emulebb-diagnostics-packet.log");' in artifacts
