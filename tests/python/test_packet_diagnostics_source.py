@@ -135,8 +135,9 @@ def test_invalid_sub_opcode_diagnostics_call_sites_are_guarded() -> None:
     request_block = source[source.index("case OP_MULTIPACKET_EXT2:") : source.index("case OP_MULTIPACKETANSWER:")]
     answer_block = source[source.index("case OP_MULTIPACKETANSWER:") : source.index("case OP_EMULEINFO:")]
 
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\n\t\t\tint iPreviousSubOpcode = -1;\n#endif" in request_block
-    assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\n\t\t\tint iPreviousSubOpcode = -1;\n#endif" in answer_block
+    shared_guard = "#if defined(EMULEBB_ENABLE_PACKET_DIAGNOSTICS) || EMULEBB_HAS_BAD_PEER_INSTRUMENTATION\n\t\t\tint iPreviousSubOpcode = -1;\n#endif"
+    assert shared_guard in request_block
+    assert shared_guard in answer_block
     assert "LogInvalidMultipacketSubOpcode(_T(\"multipacket_request\"), client, opcode, packet, size, opcode_in, data_in, iPreviousSubOpcode);" in request_block
     assert "LogInvalidMultipacketSubOpcode(_T(\"multipacket_answer\"), client, opcode, packet, size, opcode_in, data_in, iPreviousSubOpcode);" in answer_block
     assert request_block.index("LogInvalidMultipacketSubOpcode(_T(\"multipacket_request\")") < request_block.index("strError.Format(_T(\"Invalid sub opcode 0x%02x received\"), opcode_in);")
