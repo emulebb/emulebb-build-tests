@@ -97,6 +97,8 @@ def test_download_slot_diagnostics_logs_queue_and_client_state() -> None:
 
     assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS\nvoid CDownloadQueue::LogDownloadSlotDiagnostics" in queue_source
     assert "DownloadSlotDiagnostics: summary" in queue_source
+    assert 'CDiagnosticsKeyValueLineBuilder summary(_T("DownloadSlotDiagnostics: summary"));' in queue_source
+    assert 'DownloadSlotDiagnosticsLogLine(_T("%s"), (LPCTSTR)summary.GetLine());' in queue_source
     assert "LogDownloadSlotDiagnostics(curTick);" in queue_source
     assert "#ifdef EMULEBB_ENABLE_DOWNLOAD_SLOT_DIAGNOSTICS\n\tvoid\tLogDownloadSlotDiagnostics" in queue_header
     assert "m_ullDownloadBlockRequestsReserved" in client_header
@@ -185,8 +187,8 @@ def test_download_slot_diagnostics_logs_queue_and_client_state() -> None:
         "nMaxAsyncWriteRefsPerFile = max(nMaxAsyncWriteRefsPerFile, bufferSnapshot.nAsyncWriteCount);",
     ):
         assert aggregate in queue_source
-    assert "static_cast<uint64>(GetEffectiveFileBufferSizeBytes())," in queue_source
-    assert "static_cast<UINT>(thePrefs.IsDownloadAutoBroadbandIOEnabled())," in queue_source
+    assert 'summary.AppendFormat(_T("effectiveFileBufferBytes=%I64u"), static_cast<uint64>(GetEffectiveFileBufferSizeBytes()))' in queue_source
+    assert 'summary.AppendFormat(_T("autoBroadbandIO=%u"), static_cast<UINT>(thePrefs.IsDownloadAutoBroadbandIOEnabled()))' in queue_source
     assert '_tcscmp(pszReason, _T("block-reserve-empty")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("start-download")) == 0' in client_source
     assert '_tcscmp(pszReason, _T("state-enter-downloading")) == 0' in client_source

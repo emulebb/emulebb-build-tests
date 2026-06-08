@@ -125,6 +125,9 @@ def test_packet_diagnostics_logging_api_is_compile_guarded() -> None:
     assert "void WriteDiagnosticsLogLine(CLogFile &rLog, CCriticalSection &rLock, const CString &rstrLine)" in log_header
     assert "void WriteDiagnosticsLogLineV(CLogFile &rLog, CCriticalSection &rLock, LPCTSTR pszFmt, va_list argp)" in log_header
     assert "void WriteDiagnosticsLogLineF(CLogFile &rLog, CCriticalSection &rLock, LPCTSTR pszFmt, ...)" in log_header
+    assert "class CDiagnosticsKeyValueLineBuilder" in log_header
+    assert "void AppendFormat(LPCTSTR pszKeyValueFmt, ...);" in log_header
+    assert "CDiagnosticsKeyValueLineBuilder::AppendFormat" in log_source
     assert "VERIFY(rLog.SetFlushOnWrite(true));" in log_source
     assert "WriteDiagnosticsLogLineV(theUploadSlotDiagnosticsLog, g_uploadSlotDiagnosticsLogLock, pszFmt, argp)" in log_source
     assert "WriteDiagnosticsLogLineV(theDownloadSlotDiagnosticsLog, g_downloadSlotDiagnosticsLogLock, pszFmt, argp)" in log_source

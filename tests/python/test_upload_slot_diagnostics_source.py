@@ -31,6 +31,8 @@ def test_upload_slot_diagnostics_reports_cooldown_pressure() -> None:
     block = source[source.index("void CUploadQueue::LogUploadSlotDiagnostics") : source.index("void CUploadQueue::Process()")]
 
     assert "UploadSlotDiagnosticsLogLine(" in block
+    assert 'CDiagnosticsKeyValueLineBuilder summary(_T("UploadSlotDiagnostics: summary"));' in block
+    assert 'UploadSlotDiagnosticsLogLine(_T("%s"), (LPCTSTR)summary.GetLine());' in block
     assert "AddDebugLogLine(DLP_DEFAULT, false," not in block
     assert "extern CLogFile theUploadSlotDiagnosticsLog;" in log_header
     assert "void UploadSlotDiagnosticsLogLine(LPCTSTR pszFmt, ...);" in log_header
