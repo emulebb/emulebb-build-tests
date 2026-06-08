@@ -352,7 +352,7 @@ def wait_for_shared_hash_drain(
     expected_count: int,
     timeout: float = SHARED_HASH_DRAIN_TIMEOUT_SECONDS,
 ) -> dict[str, object]:
-    """Waits until startup profiling shows shared hashing drained for the expected files."""
+    """Waits until startup diagnostics shows shared hashing drained for the expected files."""
 
     deadline = time.time() + timeout
     last_state: dict[str, object] | str | None = None
@@ -679,12 +679,12 @@ def run_interruption_scenario(
                 summary_prefix="warm-relaunch",
                 require_startup_diagnostics=require_startup_diagnostics,
             )
-            warm_dirs_from_cache = shared_files_ui.get_profile_counter_value(
+            warm_dirs_from_cache = shared_files_ui.get_diagnostics_counter_value(
                 summary["warm_relaunch_startup_diagnostics"],
                 "shared.scan.directories_from_cache",
                 "directories",
             )
-            warm_files_queued = shared_files_ui.get_profile_counter_value(
+            warm_files_queued = shared_files_ui.get_diagnostics_counter_value(
                 summary["warm_relaunch_startup_diagnostics"],
                 "shared.scan.files_queued_for_hash",
                 "files",
@@ -846,12 +846,12 @@ def run_repeated_interruption_cycle_scenario(
             summary_prefix="warm-recovery-relaunch",
             require_startup_diagnostics=require_startup_diagnostics,
         )
-        warm_dirs_from_cache = shared_files_ui.get_profile_counter_value(
+        warm_dirs_from_cache = shared_files_ui.get_diagnostics_counter_value(
             summary["warm_recovery_relaunch_startup_diagnostics"],
             "shared.scan.directories_from_cache",
             "directories",
         )
-        warm_files_queued = shared_files_ui.get_profile_counter_value(
+        warm_files_queued = shared_files_ui.get_diagnostics_counter_value(
             summary["warm_recovery_relaunch_startup_diagnostics"],
             "shared.scan.files_queued_for_hash",
             "files",
@@ -940,12 +940,12 @@ def record_hashing_convergence_before_interrupt(
     *,
     expected_count: int,
 ) -> None:
-    shared_count = shared_files_ui.get_profile_counter_value(
+    shared_count = shared_files_ui.get_diagnostics_counter_value(
         startup_summary,
         "shared.model.hashing_done_shared_files",
         "files",
     )
-    visible_count = shared_files_ui.get_profile_counter_value(
+    visible_count = shared_files_ui.get_diagnostics_counter_value(
         startup_summary,
         "shared.model.hashing_done_visible_rows",
         "rows",
@@ -1135,12 +1135,12 @@ def run_reload_then_interrupt_scenario(
             summary_prefix="warm-relaunch",
             require_startup_diagnostics=require_startup_diagnostics,
         )
-        warm_dirs_from_cache = shared_files_ui.get_profile_counter_value(
+        warm_dirs_from_cache = shared_files_ui.get_diagnostics_counter_value(
             summary["warm_relaunch_startup_diagnostics"],
             "shared.scan.directories_from_cache",
             "directories",
         )
-        warm_files_queued = shared_files_ui.get_profile_counter_value(
+        warm_files_queued = shared_files_ui.get_diagnostics_counter_value(
             summary["warm_relaunch_startup_diagnostics"],
             "shared.scan.files_queued_for_hash",
             "files",
