@@ -1312,6 +1312,65 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
             source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
             for source in persisted_sources
         )
+        persisted_source = next(
+            source
+            for source in persisted_sources
+            if source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
+        )
+        assert persisted_source["clientId"] == f"{lan_host}:{seeder_ed2k_port}"
+        assert int(persisted_source["port"]) == seeder_ed2k_port
+        assert int(persisted_source["tcpPort"]) == seeder_ed2k_port
+        single_source = request_json(
+            leecher_base_url,
+            "GET",
+            f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}",
+        )["data"]
+        assert single_source["clientId"] == persisted_source["clientId"]
+        assert single_source["address"] == lan_host
+        browse_status, browse_error = request_json_status(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}/operations/browse",
+        )
+        assert browse_status == 400
+        assert "shared-file browsing" in browse_error["error"]["message"]
+        banned_source = request_json(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}/operations/ban",
+        )["data"]
+        assert banned_source == {"ok": True, "banned": True}
+        source_after_ban = request_json(
+            leecher_base_url,
+            "GET",
+            f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}",
+        )["data"]
+        assert source_after_ban["banned"] is True
+        unbanned_source = request_json(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}/operations/unban",
+        )["data"]
+        assert unbanned_source == {"ok": True, "banned": False}
+        release_status, release_error = request_json_status(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}/operations/release-slot",
+        )
+        assert release_status == 400
+        assert "upload slot" in release_error["error"]["message"]
+        removed_source = request_json(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}/operations/remove",
+        )["data"]
+        assert removed_source["ok"] is True
+        sources_after_remove = request_json(
+            leecher_base_url,
+            "GET",
+            f"/api/v1/transfers/{result['hash']}/sources",
+        )["data"]["items"]
+        assert not any(source["clientId"] == persisted_source["clientId"] for source in sources_after_remove)
 
         delete_row = request_json(
             leecher_base_url,
