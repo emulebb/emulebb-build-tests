@@ -551,6 +551,42 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
 
         servers = request_json(base_url, "GET", "/api/v1/servers")["data"]["items"]
         assert [server["endpoint"] for server in servers] == ["192.0.2.20:4661"]
+        configured_server = request_json(base_url, "GET", "/api/v1/servers/192.0.2.20:4661")["data"]
+        assert configured_server["address"] == "192.0.2.20"
+        assert configured_server["port"] == 4661
+
+        created_server = request_json(
+            base_url,
+            "POST",
+            "/api/v1/servers",
+            {
+                "address": "192.0.2.21",
+                "port": 4661,
+                "name": "dynamic",
+                "priority": "low",
+                "static": False,
+            },
+        )["data"]
+        assert created_server["endpoint"] == "192.0.2.21:4661"
+        assert created_server["priority"] == "low"
+        updated_server = request_json(
+            base_url,
+            "PATCH",
+            "/api/v1/servers/192.0.2.21:4661",
+            {"name": "dynamic-updated", "priority": "high", "static": True},
+        )["data"]
+        assert updated_server["name"] == "dynamic-updated"
+        assert updated_server["priority"] == "high"
+        assert updated_server["static"] is True
+        deleted_server = request_json(base_url, "DELETE", "/api/v1/servers/192.0.2.21:4661")["data"]
+        assert deleted_server["endpoint"] == "192.0.2.21:4661"
+        missing_server_status, missing_server_error = request_json_status(
+            base_url,
+            "GET",
+            "/api/v1/servers/192.0.2.21:4661",
+        )
+        assert missing_server_status == 404
+        assert missing_server_error["error"]["code"] == "NOT_FOUND"
 
         connected = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
         assert connected["running"] is True
