@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .paths import get_workspace_output_root
+
 
 CLIENT01_EMULEBB = "cl-emulebb-001"
 CLIENT02_HARNESS = "cl-harness-002"
@@ -115,7 +117,7 @@ def long_path_capability_report(client_keys: tuple[str, ...] | list[str]) -> dic
 
 
 def workspace_parent_root(workspace_root: Path) -> Path:
-    """Returns the root that owns `repos`, `workspaces`, `analysis`, and `state`."""
+    """Returns the root that owns `repos`, `workspaces`, and `analysis`."""
 
     override = os.environ.get("EMULEBB_WORKSPACE_ROOT")
     if override:
@@ -258,7 +260,7 @@ def resolve_amule_client(
         [Path(override_daemon)]
         if override_daemon
         else [
-            workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amuled.exe",
+            get_workspace_output_root() / "tools" / "amule" / "bin" / "amuled.exe",
             root / "packaging" / "windows" / "dist" / "bin" / "amuled.exe",
             root / "amule-portable-x64" / "bin" / "amuled.exe",
             root / "build" / "bin" / "amuled.exe",
@@ -270,7 +272,7 @@ def resolve_amule_client(
         [Path(override_control)]
         if override_control
         else [
-            workspace_root.resolve() / "state" / "tools" / "amule" / "bin" / "amulecmd.exe",
+            get_workspace_output_root() / "tools" / "amule" / "bin" / "amulecmd.exe",
             root / "packaging" / "windows" / "dist" / "bin" / "amulecmd.exe",
             root / "amule-portable-x64" / "bin" / "amulecmd.exe",
             root / "build" / "bin" / "amulecmd.exe",
@@ -287,7 +289,7 @@ def resolve_amule_client(
         reason = (
             "no built aMule daemon/control binaries found in overrides"
             if override_daemon or override_control
-            else f"no built aMule daemon/control binaries found under {root} or workspace state"
+            else f"no built aMule daemon/control binaries found under {root} or output tools"
         )
     elif daemon is None:
         reason = "missing amuled.exe"
