@@ -625,6 +625,53 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             f"/api/v1/shared-files/{top_shared_file['hash']}/comments",
         )["data"]
         assert comments["items"] == []
+        empty_shared_patch_status, empty_shared_patch_error = request_json_status(
+            base_url,
+            "PATCH",
+            f"/api/v1/shared-files/{top_shared_file['hash']}",
+            {},
+        )
+        assert empty_shared_patch_status == 400
+        assert "shared-file PATCH" in empty_shared_patch_error["error"]["message"]
+        rating_only_status, rating_only_error = request_json_status(
+            base_url,
+            "PATCH",
+            f"/api/v1/shared-files/{top_shared_file['hash']}",
+            {"rating": 5},
+        )
+        assert rating_only_status == 400
+        assert "comment" in rating_only_error["error"]["message"]
+        updated_shared_file = request_json(
+            base_url,
+            "PATCH",
+            f"/api/v1/shared-files/{top_shared_file['hash']}",
+            {"priority": "release", "comment": "Harness share comment", "rating": 4},
+        )["data"]
+        assert updated_shared_file["priority"] == "release"
+        assert updated_shared_file["autoUploadPriority"] is False
+        assert updated_shared_file["comment"] == "Harness share comment"
+        assert updated_shared_file["rating"] == 4
+        assert updated_shared_file["hasComment"] is True
+        assert updated_shared_file["userRating"] == 4
+        comments = request_json(
+            base_url,
+            "GET",
+            f"/api/v1/shared-files/{top_shared_file['hash']}/comments",
+        )["data"]
+        assert comments["items"] == [
+            {
+                "source": "local",
+                "userName": None,
+                "fileName": top_shared_file["name"],
+                "comment": "Harness share comment",
+                "rating": 4,
+            }
+        ]
+        top_manifest_path = runtime_dir / "transfers" / top_shared_file["hash"] / "resume-manifest.json"
+        top_manifest = json.loads(top_manifest_path.read_text(encoding="utf-8"))
+        assert top_manifest["upload_priority"] == "release"
+        assert top_manifest["comment"] == "Harness share comment"
+        assert top_manifest["rating"] == 4
         unshared = request_json(
             base_url,
             "DELETE",
