@@ -529,6 +529,15 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )["data"]
         assert deleted_shared_file["ok"] is True
         assert deleted_shared_file["deletedFiles"] is True
+        snapshot = request_json(base_url, "GET", "/api/v1/snapshot?limit=1")["data"]
+        assert snapshot["app"]["name"] == "eMuleBB Rust"
+        assert snapshot["status"]["lifecycle"]["state"] == "running"
+        assert len(snapshot["transfers"]) <= 1
+        assert len(snapshot["sharedFiles"]) <= 1
+        assert len(snapshot["uploads"]) <= 1
+        assert len(snapshot["uploadQueue"]) <= 1
+        assert "ed2k" in snapshot["network"]
+        assert "kad" in snapshot["network"]
 
         search = request_json(
             base_url,
