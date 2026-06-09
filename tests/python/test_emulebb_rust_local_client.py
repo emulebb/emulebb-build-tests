@@ -448,6 +448,33 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         app = request_json(base_url, "GET", "/api/v1/app")
         assert app["data"]["name"] == "eMuleBB Rust"
         assert "rest.emulebb.v1" in app["data"]["capabilities"]
+        preferences = request_json(base_url, "GET", "/api/v1/app/preferences")["data"]
+        assert preferences["uploadLimitKiBps"] > 0
+        assert preferences["downloadAutoBroadbandIo"] is True
+        updated_preferences = request_json(
+            base_url,
+            "PATCH",
+            "/api/v1/app/preferences",
+            {
+                "uploadLimitKiBps": 2048,
+                "uploadClientDataRate": 64,
+                "queueSize": 3000,
+                "networkEd2k": False,
+                "downloadAutoBroadbandIo": False,
+            },
+        )["data"]
+        assert updated_preferences["uploadLimitKiBps"] == 2048
+        assert updated_preferences["uploadClientDataRate"] == 64
+        assert updated_preferences["queueSize"] == 3000
+        assert updated_preferences["networkEd2k"] is False
+        assert updated_preferences["downloadAutoBroadbandIo"] is False
+        empty_preferences_status, _ = request_json_status(
+            base_url,
+            "PATCH",
+            "/api/v1/app/preferences",
+            {},
+        )
+        assert empty_preferences_status == 400
         categories = request_json(base_url, "GET", "/api/v1/categories")["data"]["items"]
         assert categories[0]["id"] == 0
         created_category = request_json(
