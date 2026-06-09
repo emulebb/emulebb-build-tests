@@ -107,7 +107,7 @@ def test_resolve_optional_clients_accepts_output_root_amule_tools(tmp_path: Path
     assert amule.deterministic_transfer_adapter is True
 
 
-def test_resolve_amule_client_accepts_portable_workspace_build(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_amule_client_ignores_repo_local_portable_build(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "root"
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(root))
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
@@ -121,9 +121,10 @@ def test_resolve_amule_client_accepts_portable_workspace_build(tmp_path: Path, m
 
     amule = multi_client.resolve_amule_client(workspace)
 
-    assert amule.available is True
-    assert amule.executable == daemon.resolve()
-    assert amule.control_executable == control.resolve()
+    assert amule.available is False
+    assert amule.executable is None
+    assert amule.control_executable is None
+    assert "output tools" in amule.reason
 
 
 def test_resolve_amule_client_accepts_explicit_vm_staged_binaries_without_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -144,8 +145,10 @@ def test_resolve_amule_client_accepts_explicit_vm_staged_binaries_without_manife
 
 
 def test_optional_clients_report_unavailable_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
-    workspace = tmp_path / "workspaces" / "workspace"
+    root = tmp_path / "root"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "output"))
+    workspace = root / "workspaces" / "workspace"
 
     emuleai = multi_client.resolve_emuleai_client(workspace, "Release")
     amule = multi_client.resolve_amule_client(workspace)
@@ -153,7 +156,7 @@ def test_optional_clients_report_unavailable_when_manifest_is_missing(tmp_path: 
     assert emuleai.available is False
     assert amule.available is False
     assert "workspace manifest repo 'emuleai' is unavailable" in emuleai.reason
-    assert "workspace manifest repo 'amule' is unavailable" in amule.reason
+    assert "output tools" in amule.reason
 
 
 def write_workspace_manifest(workspace: Path, root: Path) -> None:
