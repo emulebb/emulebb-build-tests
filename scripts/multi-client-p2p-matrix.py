@@ -114,8 +114,6 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
             str(args.fixture_size_bytes),
         ]
     )
-    if args.workspace_root:
-        command.extend(["--workspace-root", str(Path(args.workspace_root).resolve())])
     if args.app_root:
         command.extend(["--app-root", str(Path(args.app_root).resolve())])
     if args.app_exe:

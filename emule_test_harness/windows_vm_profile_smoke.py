@@ -547,8 +547,6 @@ def local_swarm_plan_check(
         test_network = str(getattr(spec, "local_test_network", "default"))
         plan_artifacts = artifacts / "local-swarm-plan"
         argv = [
-            "--workspace-root",
-            str(workspace_root.resolve()),
             "--app-root",
             str(app_root.resolve()),
             "--app-exe",

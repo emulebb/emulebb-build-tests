@@ -1194,8 +1194,6 @@ def build_suite_command(
             str((artifacts_dir / spec.name).resolve()),
         ]
     )
-    if not env_workspace_root_matches(workspace_root):
-        command.extend(["--workspace-root", str(workspace_root.resolve())])
     if app_root is not None:
         command.extend(["--app-root", str(app_root.resolve())])
     if app_exe is not None:

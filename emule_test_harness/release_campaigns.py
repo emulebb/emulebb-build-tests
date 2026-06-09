@@ -49,7 +49,7 @@ class ReleaseCampaignPaths:
 
     tests_repo_root: Path
     emule_workspace_root: Path | None = None
-    workspace_state_root: Path | None = None
+    workspace_output_root: Path | None = None
 
     def base_path(self, base: str) -> Path:
         """Returns the filesystem base for one manifest evidence entry."""
@@ -60,12 +60,10 @@ class ReleaseCampaignPaths:
             if self.emule_workspace_root is None:
                 raise ReleaseCampaignError("Evidence requires an eMule workspace root.")
             return self.emule_workspace_root
-        if base == "workspace-state":
-            if self.workspace_state_root is not None:
-                return self.workspace_state_root
-            if self.emule_workspace_root is None:
-                raise ReleaseCampaignError("Evidence requires a workspace state root.")
-            return self.emule_workspace_root / "workspaces" / "workspace" / "state"
+        if base == "workspace-output":
+            if self.workspace_output_root is None:
+                raise ReleaseCampaignError("Evidence requires a workspace output root.")
+            return self.workspace_output_root
         raise ReleaseCampaignError(f"Unsupported release campaign evidence base: {base}")
 
 

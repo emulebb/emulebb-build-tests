@@ -42,9 +42,10 @@ TEST_RUNNER_MARKERS = (
     "godzilla-local-swarm.py",
 )
 TEST_HELPER_MARKERS = (
-    "\\state\\test-reports\\",
-    "\\state\\test-artifacts\\",
-    "\\state\\test-installs\\",
+    "\\reports\\",
+    "\\artifacts\\",
+    "\\tmp\\test-installs\\",
+    "\\tools\\",
     "\\profile-base",
     "\\profile-work",
     "cpu-profile",
@@ -62,7 +63,17 @@ class ProcessInfo:
 
 
 def default_workspace_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    value = os.environ.get("EMULEBB_WORKSPACE_ROOT", "").strip()
+    if not value:
+        raise RuntimeError("EMULEBB_WORKSPACE_ROOT must be set.")
+    return Path(value).resolve()
+
+
+def default_output_root() -> Path:
+    value = os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT", "").strip()
+    if not value:
+        raise RuntimeError("EMULEBB_WORKSPACE_OUTPUT_ROOT must be set.")
+    return Path(value).resolve()
 
 
 def normalize(text: str | Path) -> str:
@@ -71,6 +82,12 @@ def normalize(text: str | Path) -> str:
 
 def command_mentions_workspace(command_line: str, workspace_root: Path) -> bool:
     return normalize(workspace_root) in normalize(command_line)
+
+
+def command_mentions_scope(command_line: str, workspace_root: Path, output_root: Path | None) -> bool:
+    if command_mentions_workspace(command_line, workspace_root):
+        return True
+    return output_root is not None and normalize(output_root) in normalize(command_line)
 
 
 def is_self_helper(process: ProcessInfo, current_pid: int) -> bool:
@@ -92,24 +109,35 @@ def is_test_runner_process(process: ProcessInfo, workspace_root: Path, current_p
     return any(marker in command for marker in TEST_RUNNER_MARKERS)
 
 
-def is_orphaned_test_helper_process(process: ProcessInfo, workspace_root: Path, current_pid: int) -> bool:
+def is_orphaned_test_helper_process(
+    process: ProcessInfo,
+    workspace_root: Path,
+    current_pid: int,
+    output_root: Path | None = None,
+) -> bool:
     if is_self_helper(process, current_pid):
         return False
     command = normalize(process.command_line)
-    if not command_mentions_workspace(process.command_line, workspace_root):
+    if not command_mentions_scope(process.command_line, workspace_root, output_root):
         return False
     if process.name.lower() not in TEST_HELPER_PROCESS_NAMES:
         return False
     return any(marker in command for marker in TEST_HELPER_MARKERS)
 
 
-def is_workspace_test_descendant(process: ProcessInfo, workspace_root: Path, current_pid: int) -> bool:
+def is_workspace_test_descendant(
+    process: ProcessInfo,
+    workspace_root: Path,
+    current_pid: int,
+    output_root: Path | None = None,
+) -> bool:
     """Returns true when a child process has its own workspace test evidence."""
 
     return is_test_runner_process(process, workspace_root, current_pid) or is_orphaned_test_helper_process(
         process,
         workspace_root,
         current_pid,
+        output_root,
     )
 
 
@@ -138,6 +166,7 @@ def select_test_processes(
     workspace_root: Path,
     *,
     current_pid: int | None = None,
+    output_root: Path | None = None,
 ) -> tuple[set[int], dict[int, str]]:
     current_pid = os.getpid() if current_pid is None else current_pid
     children_by_parent = build_children_by_parent(processes)
@@ -150,10 +179,12 @@ def select_test_processes(
             reasons[process.pid] = "workspace test runner command line"
             for child_pid in collect_descendant_pids(process.pid, children_by_parent):
                 child = next((item for item in processes if item.pid == child_pid), None)
-                if child is not None and is_workspace_test_descendant(child, workspace_root, current_pid):
+                if child is not None and is_workspace_test_descendant(child, workspace_root, current_pid, output_root):
                     selected.add(child_pid)
                     reasons.setdefault(child_pid, f"scoped descendant of workspace test runner {process.pid}")
-        elif process.pid not in selected and is_orphaned_test_helper_process(process, workspace_root, current_pid):
+        elif process.pid not in selected and is_orphaned_test_helper_process(
+            process, workspace_root, current_pid, output_root
+        ):
             selected.add(process.pid)
             reasons[process.pid] = "orphaned workspace test helper command line"
 
@@ -185,11 +216,21 @@ def collect_windows_processes() -> list[ProcessInfo]:
     ]
 
 
-def current_stop_targets(root_pid: int, workspace_root: Path, current_pid: int) -> tuple[list[ProcessInfo], str]:
+def current_stop_targets(
+    root_pid: int,
+    workspace_root: Path,
+    current_pid: int,
+    output_root: Path | None = None,
+) -> tuple[list[ProcessInfo], str]:
     """Returns the currently verified process tree to stop for one selected root."""
 
     processes = collect_windows_processes()
-    selected_pids, reasons = select_test_processes(processes, workspace_root, current_pid=current_pid)
+    selected_pids, reasons = select_test_processes(
+        processes,
+        workspace_root,
+        current_pid=current_pid,
+        output_root=output_root,
+    )
     if root_pid not in selected_pids:
         return [], "root is no longer a selected workspace test process"
     children_by_parent = build_children_by_parent(processes)
@@ -223,12 +264,17 @@ def stop_process_tree(
     root_pid: int,
     *,
     workspace_root: Path | None = None,
+    output_root: Path | None = None,
     current_pid: int | None = None,
     timeout_seconds: float = 15.0,
 ) -> dict[str, object]:
+    env_scoped = workspace_root is None
     workspace_root = default_workspace_root().resolve() if workspace_root is None else workspace_root.resolve()
+    output_root = default_output_root().resolve() if output_root is None and env_scoped else (
+        output_root.resolve() if output_root is not None else None
+    )
     current_pid = os.getpid() if current_pid is None else current_pid
-    targets, root_reason = current_stop_targets(root_pid, workspace_root, current_pid)
+    targets, root_reason = current_stop_targets(root_pid, workspace_root, current_pid, output_root)
     if not targets:
         return {
             "pid": root_pid,
@@ -309,8 +355,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--workspace-root",
         type=Path,
-        default=default_workspace_root(),
-        help="Workspace root used to scope process command-line matching.",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--dry-run", action="store_true", help="Only print selected processes; do not stop them.")
     parser.add_argument("--json", action="store_true", help="Print a machine-readable JSON report.")
@@ -319,16 +365,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    workspace_root = args.workspace_root.resolve()
+    workspace_root = default_workspace_root() if args.workspace_root is None else args.workspace_root.resolve()
+    output_root = default_output_root()
     processes = collect_windows_processes()
-    selected_pids, reasons = select_test_processes(processes, workspace_root)
+    selected_pids, reasons = select_test_processes(processes, workspace_root, output_root=output_root)
     report = build_report(processes, selected_pids, reasons)
 
     if args.dry_run:
         report["stopped"] = []
     else:
         report["stopped"] = [
-            stop_process_tree(pid, workspace_root=workspace_root, current_pid=os.getpid())
+            stop_process_tree(pid, workspace_root=workspace_root, output_root=output_root, current_pid=os.getpid())
             for pid in report["termination_roots"]
         ]
 

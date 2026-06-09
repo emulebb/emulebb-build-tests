@@ -146,7 +146,7 @@ def test_073_campaign_windows_vm_rows_match_profile_catalog() -> None:
             assert f"test windows-vm --matrix {','.join(spec.required_targets)}" in scenario["command"]
             assert f"--profile {spec.name}" in scenario["command"]
         evidence = scenario["evidence"][0]
-        assert evidence["glob"] == "test-reports/windows-vm/*/windows-vm-result.json"
+        assert evidence["glob"] == "reports/windows-vm/*/windows-vm-result.json"
         assert evidence["matches"] == {"/profile": spec.name}
 
 
@@ -311,25 +311,25 @@ def test_campaign_validation_rejects_local_vm_swarm_network_contract_drift() -> 
 
 def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
     tests_root = tmp_path / "tests"
-    state_root = tmp_path / "state"
+    output_root = tmp_path / "output"
     manifest_root = tests_root / "manifests" / "release-campaigns"
     manifest_root.mkdir(parents=True)
     for path in (repo_root() / "manifests" / "release-campaigns").glob("*.json"):
         (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    latest = state_root / "test-reports" / "live-e2e-suite" / "latest"
+    latest = output_root / "reports" / "live-e2e-suite" / "latest"
     latest.mkdir(parents=True)
     (latest / "live-e2e-suite-result.json").write_text(
         json.dumps({"status": "passed", "profile": "release-expanded-quick"}),
         encoding="utf-8",
     )
-    fast = state_root / "certification" / "20260517-010203-fast"
+    fast = output_root / "reports" / "certification" / "20260517-010203-fast"
     fast.mkdir(parents=True)
     (fast / "certification-result.json").write_text(json.dumps({"status": "inconclusive"}), encoding="utf-8")
 
     report = release_campaigns.build_release_campaign_report(
         release_campaigns.ReleaseCampaignPaths(
             tests_repo_root=tests_root,
-            workspace_state_root=state_root,
+            workspace_output_root=output_root,
         ),
         campaign_id="emulebb-0.7.3",
     )
@@ -342,14 +342,14 @@ def test_campaign_report_reads_latest_json_status(tmp_path: Path) -> None:
 
 def test_campaign_report_glob_selects_matching_vm_profile(tmp_path: Path) -> None:
     tests_root = tmp_path / "tests"
-    state_root = tmp_path / "state"
+    output_root = tmp_path / "output"
     manifest_root = tests_root / "manifests" / "release-campaigns"
     manifest_root.mkdir(parents=True)
     for path in (repo_root() / "manifests" / "release-campaigns").glob("*.json"):
         (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
 
-    matching = state_root / "test-reports" / "windows-vm" / "20260602T010000Z" / "windows-vm-result.json"
-    newer_other = state_root / "test-reports" / "windows-vm" / "20260602T020000Z" / "windows-vm-result.json"
+    matching = output_root / "reports" / "windows-vm" / "20260602T010000Z" / "windows-vm-result.json"
+    newer_other = output_root / "reports" / "windows-vm" / "20260602T020000Z" / "windows-vm-result.json"
     matching.parent.mkdir(parents=True)
     newer_other.parent.mkdir(parents=True)
     matching.write_text(json.dumps({"status": "passed", "profile": "package-smoke"}), encoding="utf-8")
@@ -360,7 +360,7 @@ def test_campaign_report_glob_selects_matching_vm_profile(tmp_path: Path) -> Non
     report = release_campaigns.build_release_campaign_report(
         release_campaigns.ReleaseCampaignPaths(
             tests_repo_root=tests_root,
-            workspace_state_root=state_root,
+            workspace_output_root=output_root,
         ),
         campaign_id="emulebb-0.7.3",
         phase_id="packaging-provenance",
@@ -383,7 +383,7 @@ def test_terminal_report_contains_phase_status_and_warning(tmp_path: Path) -> No
         (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
 
     report = release_campaigns.build_release_campaign_report(
-        release_campaigns.ReleaseCampaignPaths(tests_repo_root=tests_root, workspace_state_root=tmp_path / "state"),
+        release_campaigns.ReleaseCampaignPaths(tests_repo_root=tests_root, workspace_output_root=tmp_path / "output"),
         campaign_id="emulebb-0.7.3",
         phase_id="packaging-provenance",
     )
@@ -403,7 +403,7 @@ def test_terminal_report_shows_local_vm_swarm_commands(tmp_path: Path) -> None:
         (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
 
     report = release_campaigns.build_release_campaign_report(
-        release_campaigns.ReleaseCampaignPaths(tests_repo_root=tests_root, workspace_state_root=tmp_path / "state"),
+        release_campaigns.ReleaseCampaignPaths(tests_repo_root=tests_root, workspace_output_root=tmp_path / "output"),
         campaign_id="emulebb-0.7.3",
         phase_id="controller-surface",
     )

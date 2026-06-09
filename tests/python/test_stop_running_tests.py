@@ -24,6 +24,7 @@ def proc(pid: int, parent: int, name: str, command_line: str):
 def test_selects_workspace_test_runner_tree_and_orphaned_helpers() -> None:
     module = load_module()
     workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")
+    output_root = Path(r"C:\var\emulebb-output")
     processes = [
         module.ProcessInfo(
             10,
@@ -41,24 +42,24 @@ def test_selects_workspace_test_runner_tree_and_orphaned_helpers() -> None:
             12,
             11,
             "emulebb.exe",
-            rf"{workspace_root}\workspaces\workspace\app\emulebb-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {workspace_root}\workspaces\workspace\state\test-reports\run\profile-base",
+            rf"{workspace_root}\workspaces\workspace\app\emulebb-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {output_root}\reports\run\profile-base",
         ),
         module.ProcessInfo(20, 1, "python.exe", r"C:\Python313\python.exe C:\tools\unrelated.py"),
         module.ProcessInfo(
             30,
             1,
             "emulebb.exe",
-            rf"{workspace_root}\workspaces\workspace\app\emulebb-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {workspace_root}\workspaces\workspace\state\test-artifacts\orphan\profile-base",
+            rf"{workspace_root}\workspaces\workspace\app\emulebb-main\srchybrid\x64\Release\emulebb.exe -ignoreinstances -c {output_root}\artifacts\orphan\profile-base",
         ),
         module.ProcessInfo(
             40,
             1,
             "xperf.exe",
-            rf"xperf.exe -d {workspace_root}\workspaces\workspace\state\test-reports\run\analysis\cpu-profile.etl",
+            rf"xperf.exe -d {output_root}\reports\run\analysis\cpu-profile.etl",
         ),
     ]
 
-    selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999)
+    selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999, output_root=output_root)
 
     assert selected == {10, 11, 12, 30, 40}
     assert reasons[10] == "workspace test runner command line"
@@ -70,7 +71,8 @@ def test_selects_workspace_test_runner_tree_and_orphaned_helpers() -> None:
 def test_selects_stale_materialized_arr_services() -> None:
     module = load_module()
     workspace_root = Path(r"C:\prj\p2p\emulebb-workspace")
-    install_root = workspace_root / "workspaces" / "workspace" / "state" / "test-installs" / "run"
+    output_root = Path(r"C:\var\emulebb-output")
+    install_root = output_root / "tmp" / "test-installs" / "run"
     processes = [
         module.ProcessInfo(
             50,
@@ -98,7 +100,7 @@ def test_selects_stale_materialized_arr_services() -> None:
         ),
     ]
 
-    selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999)
+    selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999, output_root=output_root)
 
     assert selected == {50, 51, 52}
     assert all(reasons[pid] == "orphaned workspace test helper command line" for pid in selected)
@@ -108,7 +110,8 @@ def test_selects_stale_materialized_arr_services() -> None:
 def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
     module = load_module()
     workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")
-    run_root = workspace_root / "workspaces" / "workspace" / "state" / "test-artifacts" / "godzilla-local-swarm" / "run"
+    output_root = Path(r"C:\var\emulebb-output")
+    run_root = output_root / "artifacts" / "godzilla-local-swarm" / "run"
     processes = [
         module.ProcessInfo(
             200,
@@ -120,13 +123,13 @@ def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
             201,
             200,
             "goed2k-server.exe",
-            rf"{workspace_root}\workspaces\workspace\state\tools\goed2k-server\goed2k-server.exe -config {run_root}\ed2k-server\config.json",
+            rf"{output_root}\tools\goed2k-server\goed2k-server.exe -config {run_root}\ed2k-server\config.json",
         ),
         module.ProcessInfo(
             202,
             200,
             "amuled.exe",
-            rf"{workspace_root}\workspaces\workspace\state\tools\amule\bin\amuled.exe --config-dir={run_root}\clients\cl-amule-004\config",
+            rf"{output_root}\tools\amule\bin\amuled.exe --config-dir={run_root}\clients\cl-amule-004\config",
         ),
         module.ProcessInfo(
             203,
@@ -136,7 +139,7 @@ def test_selects_godzilla_relative_runner_and_local_swarm_helpers() -> None:
         ),
     ]
 
-    selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999)
+    selected, reasons = module.select_test_processes(processes, workspace_root, current_pid=999, output_root=output_root)
 
     assert selected == {200, 201, 202, 203}
     assert reasons[200] == "workspace test runner command line"
@@ -187,13 +190,13 @@ def test_stop_targets_are_revalidated_against_current_processes(monkeypatch) -> 
             11,
             10,
             "emulebb.exe",
-            rf"emulebb.exe -c {workspace_root}\workspaces\workspace\state\test-reports\run\profile-base",
+            rf"emulebb.exe -c C:\var\emulebb-output\reports\run\profile-base",
         ),
         module.ProcessInfo(20, 10, "notepad.exe", r"C:\Windows\notepad.exe"),
     ]
     monkeypatch.setattr(module, "collect_windows_processes", lambda: processes)
 
-    targets, reason = module.current_stop_targets(10, workspace_root, current_pid=999)
+    targets, reason = module.current_stop_targets(10, workspace_root, current_pid=999, output_root=Path(r"C:\var\emulebb-output"))
 
     assert reason == "workspace test runner command line"
     assert [process.pid for process in targets] == [10, 11]
@@ -220,6 +223,7 @@ def test_stop_process_tree_refuses_reused_unscoped_root(monkeypatch) -> None:
 def test_stop_process_tree_verifies_process_instance_before_termination(monkeypatch) -> None:
     module = load_module()
     workspace_root = Path(r"C:\prj\p2p\eMule\eMulebb-workspace")
+    output_root = Path(r"C:\var\emulebb-output")
     processes = [
         module.ProcessInfo(
             10,
@@ -232,7 +236,7 @@ def test_stop_process_tree_verifies_process_instance_before_termination(monkeypa
             11,
             10,
             "emulebb.exe",
-            rf"emulebb.exe -c {workspace_root}\workspaces\workspace\state\test-reports\run\profile-base",
+            rf"emulebb.exe -c C:\var\emulebb-output\reports\run\profile-base",
             creation_date="20260527020102.000000+000",
         ),
     ]
@@ -245,7 +249,13 @@ def test_stop_process_tree_verifies_process_instance_before_termination(monkeypa
     monkeypatch.setattr(module, "collect_windows_processes", lambda: processes if not terminated else [])
     monkeypatch.setattr(module, "terminate_windows_process", terminate)
 
-    result = module.stop_process_tree(10, workspace_root=workspace_root, current_pid=999, timeout_seconds=0)
+    result = module.stop_process_tree(
+        10,
+        workspace_root=workspace_root,
+        output_root=output_root,
+        current_pid=999,
+        timeout_seconds=0,
+    )
 
     assert result["return_code"] == 0
     assert terminated == [

@@ -29,8 +29,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "certification/*-overnight/certification-result.json",
+              "base": "workspace-output",
+              "glob": "reports/certification/*-overnight/certification-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -73,8 +73,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "cpu-heavy"
@@ -83,8 +83,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
+              "base": "workspace-output",
+              "path": "reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -104,8 +104,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-process-monitor/latest/live-process-monitor-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-process-monitor/latest/live-process-monitor-result.json",
               "statusPointer": "/status"
             }
           ]

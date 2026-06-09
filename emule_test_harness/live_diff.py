@@ -174,8 +174,6 @@ def publish_harness_summary(test_repo_root: Path, workspace_root: Path, summary_
             str((test_repo_root / "scripts" / "publish-harness-summary.py").resolve()),
             "--test-repo-root",
             str(test_repo_root.resolve()),
-            "--workspace-root",
-            str(workspace_root.resolve()),
             "--live-diff-summary-path",
             str(summary_json_path.resolve()),
         ),

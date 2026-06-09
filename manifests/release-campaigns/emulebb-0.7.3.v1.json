@@ -40,8 +40,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "certification/*-fast/certification-result.json",
+              "base": "workspace-output",
+              "glob": "reports/certification/*-fast/certification-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -112,8 +112,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/community-core-coverage/latest/community-core-coverage-summary.json",
+              "base": "workspace-output",
+              "path": "reports/community-core-coverage/latest/community-core-coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -135,8 +135,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/native-coverage/latest/coverage-summary.json",
+              "base": "workspace-output",
+              "path": "reports/native-coverage/latest/coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -158,8 +158,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/native-coverage/latest/coverage-summary.json",
+              "base": "workspace-output",
+              "path": "reports/native-coverage/latest/coverage-summary.json",
               "statusPointer": "/status"
             },
             {
@@ -217,8 +217,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "local-ed2k-transfer"
@@ -245,8 +245,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "installer-controller-surface"
@@ -255,8 +255,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/rest-api-smoke/latest/rest-api-smoke-result.json",
+              "base": "workspace-output",
+              "path": "reports/rest-api-smoke/latest/rest-api-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -277,8 +277,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "rest-smoke-stress"
@@ -303,8 +303,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/prowlarr-emulebb-live/latest/prowlarr-emulebb-live-result.json",
+              "base": "workspace-output",
+              "path": "reports/prowlarr-emulebb-live/latest/prowlarr-emulebb-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -327,8 +327,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/radarr-emulebb-live/latest/radarr-emulebb-live-result.json",
+              "base": "workspace-output",
+              "path": "reports/radarr-emulebb-live/latest/radarr-emulebb-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -351,8 +351,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/sonarr-emulebb-live/latest/sonarr-emulebb-live-result.json",
+              "base": "workspace-output",
+              "path": "reports/sonarr-emulebb-live/latest/sonarr-emulebb-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -371,8 +371,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/amutorrent-browser-smoke/latest/amutorrent-browser-smoke-result.json",
+              "base": "workspace-output",
+              "path": "reports/amutorrent-browser-smoke/latest/amutorrent-browser-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -393,8 +393,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "installer-controller-surface"
@@ -432,8 +432,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "installer-controller-surface-vm"
@@ -469,8 +469,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "prowlarr-controller-handoff-vm"
@@ -507,8 +507,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "arr-local-acquisition-vm"
@@ -538,8 +538,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "release-expanded-quick"
@@ -564,8 +564,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/search-ui-live/latest/search-ui-live-result.json",
+              "base": "workspace-output",
+              "path": "reports/search-ui-live/latest/search-ui-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -587,8 +587,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/rest-api-smoke/latest/rest-api-smoke-result.json",
+              "base": "workspace-output",
+              "path": "reports/rest-api-smoke/latest/rest-api-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -606,22 +606,22 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/preference-ui-e2e/latest/preference-ui-e2e-summary.json",
+              "base": "workspace-output",
+              "path": "reports/preference-ui-e2e/latest/preference-ui-e2e-summary.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
+              "base": "workspace-output",
+              "path": "reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/shared-hash-ui-e2e/latest/shared-hash-ui-e2e-result.json",
+              "base": "workspace-output",
+              "path": "reports/shared-hash-ui-e2e/latest/shared-hash-ui-e2e-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -642,8 +642,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "hideme-live-wire"
@@ -667,8 +667,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "release-expanded-ui"
@@ -696,8 +696,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "ui-resource-depth"
@@ -706,8 +706,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/resource-ui-smoke/latest/resource-ui-smoke-summary.json",
+              "base": "workspace-output",
+              "path": "reports/resource-ui-smoke/latest/resource-ui-smoke-summary.json",
               "statusPointer": "/status"
             }
           ]
@@ -728,8 +728,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "resource-ui-smoke"
@@ -753,8 +753,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "shared-cache-filesystem"
@@ -778,8 +778,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "ui-shared-files-depth"
@@ -816,8 +816,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "search-ui-local-swarm-vm"
@@ -839,8 +839,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/preference-ui-e2e/latest/preference-ui-e2e-summary.json",
+              "base": "workspace-output",
+              "path": "reports/preference-ui-e2e/latest/preference-ui-e2e-summary.json",
               "statusPointer": "/status"
             }
           ]
@@ -881,8 +881,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "cpu-heavy-quick"
@@ -891,8 +891,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
+              "base": "workspace-output",
+              "path": "reports/shared-files-ui-e2e/latest/shared-files-ui-e2e-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -914,8 +914,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/live-process-monitor/latest/live-process-monitor-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-process-monitor/latest/live-process-monitor-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -933,8 +933,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/live-e2e-suite/latest/live-e2e-suite-result.json",
+              "base": "workspace-output",
+              "path": "reports/live-e2e-suite/latest/live-e2e-suite-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "stabilization-stress-quick"
@@ -943,15 +943,15 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/rest-cold-start-dump-stress/latest/rest-cold-start-dump-stress-result.json",
+              "base": "workspace-output",
+              "path": "reports/rest-cold-start-dump-stress/latest/rest-cold-start-dump-stress-result.json",
               "statusPointer": "/status"
             },
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "path": "test-reports/local-dumps-crash-smoke/latest/local-dumps-crash-smoke-result.json",
+              "base": "workspace-output",
+              "path": "reports/local-dumps-crash-smoke/latest/local-dumps-crash-smoke-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -972,8 +972,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "crash-dump-smoke"
@@ -997,8 +997,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "vhd-profile-isolation"
@@ -1022,8 +1022,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "diagnostics-local-dumps"
@@ -1047,8 +1047,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "cpu-heavy-quick"
@@ -1071,8 +1071,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/amutorrent-clean-startup/latest/amutorrent-clean-startup-result.json",
+              "base": "workspace-output",
+              "path": "reports/amutorrent-clean-startup/latest/amutorrent-clean-startup-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -1092,8 +1092,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/amutorrent-emulebb-ui-live/latest/amutorrent-emulebb-ui-live-result.json",
+              "base": "workspace-output",
+              "path": "reports/amutorrent-emulebb-ui-live/latest/amutorrent-emulebb-ui-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -1126,8 +1126,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "amutorrent-clean-startup-vm"
@@ -1163,8 +1163,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "amutorrent-emulebb-ui-vm"
@@ -1187,8 +1187,8 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
-              "path": "test-reports/amutorrent-resilience-live/latest/amutorrent-resilience-live-result.json",
+              "base": "workspace-output",
+              "path": "reports/amutorrent-resilience-live/latest/amutorrent-resilience-live-result.json",
               "statusPointer": "/status"
             }
           ]
@@ -1211,7 +1211,7 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
+              "base": "workspace-output",
               "path": "release/emulebb-v0.7.3-rc.2/emulebb-0.7.3-rc.2-x64.manifest.json"
             }
           ]
@@ -1228,7 +1228,7 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
+              "base": "workspace-output",
               "path": "release/emulebb-v0.7.3-rc.2/emulebb-0.7.3-rc.2-arm64.manifest.json"
             }
           ]
@@ -1245,7 +1245,7 @@
             {
               "kind": "json-status",
               "required": true,
-              "base": "workspace-state",
+              "base": "workspace-output",
               "path": "release/emulebb-v0.7.3-rc.2/emulebb-0.7.3-rc.2-amutorrent-x64.manifest.json"
             }
           ]
@@ -1266,8 +1266,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "package-smoke"
@@ -1291,8 +1291,8 @@
             {
               "kind": "json-status",
               "required": false,
-              "base": "workspace-state",
-              "glob": "test-reports/windows-vm/*/windows-vm-result.json",
+              "base": "workspace-output",
+              "glob": "reports/windows-vm/*/windows-vm-result.json",
               "statusPointer": "/status",
               "matches": {
                 "/profile": "package-helper-install"

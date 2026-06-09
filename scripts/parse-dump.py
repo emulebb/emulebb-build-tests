@@ -10,24 +10,25 @@ from pathlib import Path
 from minidump.minidumpfile import MinidumpFile
 
 
-def default_workspace_root() -> Path:
-    script_dir = Path(__file__).resolve().parent
-    test_repo_root = script_dir.parent
-    return Path(os.environ.get("EMULEBB_WORKSPACE_ROOT", test_repo_root.parent.parent)).resolve()
+def default_output_root() -> Path:
+    value = os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT", "").strip()
+    if not value:
+        raise RuntimeError("EMULEBB_WORKSPACE_OUTPUT_ROOT must be set.")
+    return Path(value).resolve()
 
 
-def default_dump_path(workspace_root: Path) -> Path:
-    return workspace_root / "workspaces" / "workspace" / "state" / "test-reports" / "diag-hash-launch" / "latest" / "emule-cpu.dmp"
+def default_dump_path(output_root: Path) -> Path:
+    return output_root / "reports" / "diag-hash-launch" / "latest" / "emule-cpu.dmp"
 
 
 def parse_args() -> argparse.Namespace:
-    workspace_root = default_workspace_root()
+    output_root = default_output_root()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "dump_path",
         nargs="?",
-        default=str(default_dump_path(workspace_root)),
-        help="Minidump path to inspect. Defaults to workspaces/workspace/state/test-reports/diag-hash-launch/latest/emule-cpu.dmp.",
+        default=str(default_dump_path(output_root)),
+        help="Minidump path to inspect. Defaults to EMULEBB_WORKSPACE_OUTPUT_ROOT/reports/diag-hash-launch/latest/emule-cpu.dmp.",
     )
     return parser.parse_args()
 

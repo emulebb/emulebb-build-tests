@@ -399,8 +399,6 @@ def build_language_child_command(
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
-        "--workspace-root",
-        str(paths.workspace_root),
         "--app-root",
         str(paths.app_root),
         "--app-exe",

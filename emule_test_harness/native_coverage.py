@@ -348,8 +348,6 @@ def publish_harness_summary(test_repo_root: Path, workspace_root: Path, coverage
             str((test_repo_root / "scripts" / "publish-harness-summary.py").resolve()),
             "--test-repo-root",
             str(test_repo_root.resolve()),
-            "--workspace-root",
-            str(workspace_root.resolve()),
             "--coverage-summary-path",
             str(coverage_summary_path.resolve()),
         ),

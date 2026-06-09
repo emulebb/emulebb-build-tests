@@ -244,7 +244,7 @@
           "enum": [
             "tests-repo",
             "emule-workspace-root",
-            "workspace-state"
+            "workspace-output"
           ]
         },
         "path": {

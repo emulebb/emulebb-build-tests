@@ -432,7 +432,7 @@ def test_child_suite_command_omits_workspace_root_when_env_matches(tmp_path: Pat
     assert "--workspace-root" not in command
 
 
-def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, monkeypatch) -> None:
+def test_child_suite_command_omits_workspace_root_without_env(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
     monkeypatch.delenv("EMULEBB_WORKSPACE_ROOT", raising=False)
 
@@ -445,7 +445,7 @@ def test_child_suite_command_keeps_workspace_root_without_env(tmp_path: Path, mo
         artifacts_dir=tmp_path / "artifacts",
     )
 
-    assert option_values(command, "--workspace-root") == [str(workspace_root.resolve())]
+    assert "--workspace-root" not in command
 
 
 def test_child_suite_command_passes_mounted_shared_root_only_to_shared_directories_rest(tmp_path: Path) -> None:
