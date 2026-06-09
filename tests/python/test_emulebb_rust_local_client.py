@@ -660,6 +660,12 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
 
         seeder_base_url = f"http://{lan_host}:{seeder_rest_port}"
         wait_for_rest(seeder_base_url, seeder_process, seeder_output_path)
+        request_json(seeder_base_url, "POST", "/api/v1/servers/operations/connect")["data"]
+        wait_for_condition(
+            "seeder ED2K server connection",
+            30,
+            lambda: request_json(seeder_base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
+        )
         share = request_json(
             seeder_base_url,
             "POST",
@@ -669,12 +675,6 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         )["data"]
         assert share["name"] == payload_path.name
         assert int(share["sizeBytes"]) == len(payload)
-        request_json(seeder_base_url, "POST", "/api/v1/servers/operations/connect")["data"]
-        wait_for_condition(
-            "seeder ED2K server connection",
-            30,
-            lambda: request_json(seeder_base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
-        )
 
         def server_has_dynamic_share() -> object:
             files = admin_json(admin_base_url, f"/api/files?search={share['hash']}", admin_token)["data"]
