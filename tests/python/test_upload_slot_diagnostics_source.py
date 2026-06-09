@@ -291,9 +291,13 @@ def test_upload_list_membership_honors_queued_refresh_timing() -> None:
     assert "QueueDisplayRefresh(DISPLAY_REFRESH_UPLOAD_LIST)" in queue_source
     assert "GetUploadList()->AddClient" not in queue_source
     assert "GetUploadList()->RemoveClient" not in queue_source
+    assert "m_pendingAutoAddTicks" in list_source
+    assert "m_pendingAutoRemoveTicks" in list_source
+    assert "ShouldCommitTransferListMembershipChange" in sync_block
+    assert "PruneStaleClientItems(true, ullNowTick)" in sync_block
+    assert "IsTrackedClientPointer(client)" in list_source
     assert "GetFirstFromUploadList()" in sync_block
     assert "InsertItem(LVIF_TEXT | LVIF_PARAM" in sync_block
-    assert "PruneStaleClientItems()" in sync_block
     assert "SyncLiveClientItems();" in refresh_block
 
 
@@ -315,9 +319,13 @@ def test_queue_list_membership_honors_queued_refresh_timing() -> None:
     assert "GetQueueList()->RemoveClient" not in queue_source
     assert "client->SetWaitStartTime();" in queue_source
     assert "client->SetAskedCount(1);" in queue_source
+    assert "m_pendingAutoAddTicks" in list_source
+    assert "m_pendingAutoRemoveTicks" in list_source
+    assert "ShouldCommitTransferListMembershipChange" in sync_block
+    assert "PruneStaleClientItems(true, ullNowTick)" in sync_block
+    assert "IsTrackedClientPointer(client)" in list_source
     assert "GetNextClient(client)" in sync_block
     assert "InsertItem(LVIF_TEXT | LVIF_PARAM" in sync_block
-    assert "PruneStaleClientItems()" in sync_block
     assert "SyncLiveClientItems();" in refresh_block
 
 

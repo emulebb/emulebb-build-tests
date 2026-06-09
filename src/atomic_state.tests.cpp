@@ -132,6 +132,19 @@ TEST_CASE("Unified desktop presentation timer uses selected cadence and paused t
 	CHECK(GetDesktopPresentationTimerDelayMs(750u) == 2000u);
 }
 
+TEST_CASE("Transfer list membership changes wait for a stable presentation window")
+{
+	CHECK(TRANSFER_LIST_MEMBERSHIP_STABILIZATION_MS == 2000ull);
+	CHECK_FALSE(ShouldCommitTransferListMembershipChange(1000u, 1000u));
+	CHECK_FALSE(ShouldCommitTransferListMembershipChange(2999u, 1000u));
+	CHECK(ShouldCommitTransferListMembershipChange(3000u, 1000u));
+	CHECK(ShouldCommitTransferListMembershipChange(3001u, 1000u));
+	CHECK_FALSE(ShouldCommitTransferListMembershipChange(999u, 1000u));
+
+	CHECK_FALSE(ShouldCommitTransferListMembershipChange(1499u, 1000u, 500u));
+	CHECK(ShouldCommitTransferListMembershipChange(1500u, 1000u, 500u));
+}
+
 TEST_CASE("Transfer display refresh state pauses when the UI should not present updates")
 {
 	CHECK(ResolveTransferDisplayRefreshState(false, false, true, true, false) == TRANSFER_DISPLAY_REFRESH_RUNNING);
