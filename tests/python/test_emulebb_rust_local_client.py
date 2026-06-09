@@ -511,6 +511,43 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert deleted_category["ok"] is True
         missing_category_status, _ = request_json_status(base_url, "GET", "/api/v1/categories/1")
         assert missing_category_status == 404
+        friends = request_json(base_url, "GET", "/api/v1/friends")["data"]["items"]
+        assert friends == []
+        friend_hash = "00112233445566778899aabbccddeeff"
+        created_friend = request_json(
+            base_url,
+            "POST",
+            "/api/v1/friends",
+            {"userHash": friend_hash, "name": "Harness Peer"},
+        )["data"]
+        assert created_friend["userHash"] == friend_hash
+        assert created_friend["name"] == "Harness Peer"
+        assert created_friend["lastSeen"] is None
+        assert created_friend["address"] is None
+        assert created_friend["port"] == 0
+        duplicate_friend = request_json(
+            base_url,
+            "POST",
+            "/api/v1/friends",
+            {"userHash": friend_hash, "name": "Ignored Rename"},
+        )["data"]
+        assert duplicate_friend["name"] == "Harness Peer"
+        invalid_friend_status, invalid_friend_error = request_json_status(
+            base_url,
+            "POST",
+            "/api/v1/friends",
+            {"userHash": friend_hash.upper()},
+        )
+        assert invalid_friend_status == 400
+        assert "userHash" in invalid_friend_error["error"]["message"]
+        deleted_friend = request_json(base_url, "DELETE", f"/api/v1/friends/{friend_hash}")["data"]
+        assert deleted_friend["ok"] is True
+        missing_friend_status, _ = request_json_status(
+            base_url,
+            "DELETE",
+            f"/api/v1/friends/{friend_hash}",
+        )
+        assert missing_friend_status == 404
         assert request_json(base_url, "GET", "/api/v1/uploads")["data"]["items"] == []
         upload_queue = request_json(base_url, "GET", "/api/v1/upload-queue")["data"]
         assert upload_queue["items"] == []
