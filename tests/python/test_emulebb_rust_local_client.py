@@ -686,6 +686,17 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )["data"]
         assert search["status"] == "completed"
         assert search["results"][0]["hash"] == SEED_HASH
+        paged_search = request_json(
+            base_url,
+            "GET",
+            f"/api/v1/searches/{search['id']}?offset=0&limit=1&includeEvidence=false&exactTotal=true",
+        )["data"]
+        assert paged_search["id"] == search["id"]
+        assert paged_search["total"] >= 1
+        assert paged_search["offset"] == 0
+        assert paged_search["limit"] == 1
+        assert len(paged_search["results"]) == 1
+        assert paged_search["results"][0]["hash"] == SEED_HASH
 
         search_id = search["id"]
         download = request_json(
