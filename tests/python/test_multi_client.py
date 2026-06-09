@@ -14,6 +14,8 @@ def test_client_identities_use_stable_workspace_names() -> None:
     assert multi_client.CLIENT_IDENTITIES["harness"].nick == "cl-harness-002"
     assert multi_client.CLIENT_IDENTITIES["emuleai"].profile_id == "cl-emuleai-003"
     assert multi_client.CLIENT_IDENTITIES["amule"].profile_id == "cl-amule-004"
+    assert multi_client.CLIENT_IDENTITIES["emulebb_rust"].profile_id == "cl-emulebb-rust-005"
+    assert multi_client.CLIENT_IDENTITIES["emulebb_rust_peer"].profile_id == "cl-emulebb-rust-006"
 
 
 def test_client_long_path_capabilities_are_explicit() -> None:
@@ -61,10 +63,14 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     assert inventory["harness"].available is True
     assert inventory["emuleai"].available is False
     assert inventory["amule"].available is False
+    assert inventory["emulebb_rust"].available is False
+    assert inventory["emulebb_rust_peer"].available is False
     assert "no built eMuleAI executable" in inventory["emuleai"].reason
     assert "no built aMule daemon/control binaries" in inventory["amule"].reason
+    assert "missing Cargo.toml" in inventory["emulebb_rust"].reason
     assert inventory["emuleai"].launch_adapter == "emuleai-gui-profile"
     assert inventory["amule"].launch_adapter == "amuled-amulecmd"
+    assert inventory["emulebb_rust"].launch_adapter == "cargo-pytest-local-client"
 
 
 def test_resolve_harness_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
@@ -105,6 +111,25 @@ def test_resolve_optional_clients_accepts_output_root_amule_tools(tmp_path: Path
     assert amule.executable == amule_daemon.resolve()
     assert amule.control_executable == amule_control.resolve()
     assert amule.deterministic_transfer_adapter is True
+
+
+def test_resolve_emulebb_rust_client_accepts_manifest_repo(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "root"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(root))
+    workspace = root / "workspaces" / "workspace"
+    write_workspace_manifest(workspace, root)
+    cargo_manifest = root / "repos" / "emulebb-rust" / "Cargo.toml"
+    cargo_manifest.parent.mkdir(parents=True)
+    cargo_manifest.write_text("[workspace]\n", encoding="utf-8")
+
+    rust = multi_client.resolve_emulebb_rust_client(workspace)
+    rust_peer = multi_client.resolve_emulebb_rust_client(workspace, identity_key="emulebb_rust_peer")
+
+    assert rust.available is True
+    assert rust.executable == cargo_manifest.resolve()
+    assert rust.deterministic_transfer_adapter is True
+    assert rust_peer.available is True
+    assert rust_peer.identity.profile_id == "cl-emulebb-rust-006"
 
 
 def test_resolve_amule_client_ignores_repo_local_portable_build(tmp_path: Path, monkeypatch) -> None:
@@ -151,11 +176,14 @@ def test_optional_clients_report_unavailable_when_manifest_is_missing(tmp_path: 
     workspace = root / "workspaces" / "workspace"
 
     emuleai = multi_client.resolve_emuleai_client(workspace, "Release")
+    rust = multi_client.resolve_emulebb_rust_client(workspace)
     amule = multi_client.resolve_amule_client(workspace)
 
     assert emuleai.available is False
+    assert rust.available is False
     assert amule.available is False
     assert "workspace manifest repo 'emuleai' is unavailable" in emuleai.reason
+    assert "workspace manifest repo 'emulebb_rust' is unavailable" in rust.reason
     assert "output tools" in amule.reason
 
 
@@ -170,6 +198,7 @@ def write_workspace_manifest(workspace: Path, root: Path) -> None:
                     "repos": {
                         "amule": os.path.relpath(root / "repos" / "amule", workspace),
                         "emuleai": os.path.relpath(root / "repos" / "eMuleAI", workspace),
+                        "emulebb_rust": os.path.relpath(root / "repos" / "emulebb-rust", workspace),
                     }
                 }
             }

@@ -45,13 +45,30 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
             executable=None,
             reason="missing",
         ),
+        "emulebb_rust": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
+        "emulebb_rust_peer": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust_peer"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
     }
 
     rows = module.build_optional_scenario_rows(inventory, require_optional_clients=False)
+    rows_by_id = {row["id"]: row for row in rows}
 
     assert {row["status"] for row in rows} == {"skipped"}
-    assert rows[0]["missing_clients"] == ["cl-emuleai-003"]
-    assert rows[1]["missing_clients"] == ["cl-amule-004"]
+    assert rows_by_id["cl-emulebb-001-downloads-from-cl-emuleai-003"]["missing_clients"] == ["cl-emuleai-003"]
+    assert rows_by_id[module.AMULE_TRANSFER_SCENARIO_ID]["missing_clients"] == ["cl-amule-004"]
+    assert rows_by_id[module.RUST_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == [
+        "cl-emulebb-rust-005",
+        "cl-emulebb-rust-006",
+    ]
 
 
 def test_matrix_defaults_to_132_mib_fixture() -> None:
@@ -68,7 +85,9 @@ def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path:
     emuleai_exe = tmp_path / "eMuleAI.exe"
     amule_daemon = tmp_path / "amuled.exe"
     amule_control = tmp_path / "amulecmd.exe"
-    for executable in (emuleai_exe, amule_daemon, amule_control):
+    rust_manifest = tmp_path / "emulebb-rust" / "Cargo.toml"
+    rust_manifest.parent.mkdir()
+    for executable in (emuleai_exe, amule_daemon, amule_control, rust_manifest):
         executable.write_bytes(b"")
     inventory = {
         "emuleai": multi_client.ClientAvailability(
@@ -82,6 +101,18 @@ def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path:
             available=True,
             executable=amule_daemon,
             control_executable=amule_control,
+            reason="available",
+        ),
+        "emulebb_rust": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust"],
+            available=True,
+            executable=rust_manifest,
+            reason="available",
+        ),
+        "emulebb_rust_peer": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust_peer"],
+            available=True,
+            executable=rust_manifest,
             reason="available",
         ),
     }
@@ -115,6 +146,18 @@ def test_optional_rows_omit_completed_amule_scenario(tmp_path: Path) -> None:
             reason="available",
             deterministic_transfer_adapter=True,
         ),
+        "emulebb_rust": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
+        "emulebb_rust_peer": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust_peer"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
     }
 
     rows = module.build_optional_scenario_rows(
@@ -127,6 +170,7 @@ def test_optional_rows_omit_completed_amule_scenario(tmp_path: Path) -> None:
     assert {row["id"] for row in rows} == {
         "cl-emulebb-001-downloads-from-cl-emuleai-003",
         module.THREE_CLIENT_SWARM_SCENARIO_ID,
+        module.RUST_BIDIRECTIONAL_SCENARIO_ID,
         "cl-emuleai-003-and-cl-amule-004-discovery",
     }
 
@@ -256,3 +300,33 @@ def test_three_client_swarm_scenario_forwards_harness_and_amule(monkeypatch, tmp
     assert "--client2-app-exe" in command
     assert "--amule-daemon-exe" in command
     assert "--amule-control-exe" in command
+
+
+def test_emulebb_rust_exchange_scenario_uses_existing_local_client_pytest(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
+    args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+
+    result = module.run_emulebb_rust_exchange_scenario(paths, args)
+
+    assert result["status"] == "passed"
+    assert result["id"] == module.RUST_BIDIRECTIONAL_SCENARIO_ID
+    assert result["clients"] == ["cl-emulebb-rust-005", "cl-emulebb-rust-006"]
+    assert captured["command"] == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/python/test_emulebb_rust_local_client.py",
+        "--quiet",
+        "-k",
+        "peers_exchange",
+    ]
+    assert captured["env"]["X_LOCAL_IP"] == "192.0.2.10"

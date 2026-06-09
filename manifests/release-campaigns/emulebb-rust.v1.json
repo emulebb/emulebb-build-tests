@@ -73,8 +73,8 @@
       "title": "Controller surface",
       "scenarios": [
         {
-          "id": "emulebb.flow.rust.rest.transfer-search-subset.v1",
-          "title": "Rust REST transfer and search subset",
+          "id": "emulebb.flow.rust.rest.emulebb-contract.v1",
+          "title": "Rust REST eMuleBB contract",
           "phase": "controller-surface",
           "flowCategory": "rest-api",
           "required": true,
@@ -84,7 +84,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Focused pytest coverage exercises the eMuleBB-owned /api/v1 server, search, transfer create, transfer control, and transfer file deletion envelopes implemented by emulebb-rust."
+              "description": "Focused pytest coverage exercises the eMuleBB-owned /api/v1 server, search, transfer create, transfer control, diagnostic, and transfer file deletion envelopes implemented by emulebb-rust."
             }
           ]
         }
@@ -203,9 +203,9 @@
       ]
     },
     {
-      "id": "emulebb-rust-rest-subset",
+      "id": "emulebb-rust-rest-contract",
       "coveredBy": [
-        "emulebb.flow.rust.rest.transfer-search-subset.v1"
+        "emulebb.flow.rust.rest.emulebb-contract.v1"
       ]
     }
   ]

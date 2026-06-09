@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ API_KEY = "multi-client-p2p-matrix-key"
 HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
 AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
 THREE_CLIENT_SWARM_SCENARIO_ID = "cl-emulebb-001-cl-harness-002-cl-amule-004-concurrent-swarm"
+RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -236,6 +238,43 @@ def run_three_client_swarm_scenario(paths, args: argparse.Namespace) -> dict[str
     }
 
 
+def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the existing Rust local-client pytest for bidirectional peer exchange."""
+
+    scenario_artifacts = paths.source_artifacts_dir / "r5"
+    scenario_artifacts.mkdir(parents=True, exist_ok=True)
+    command = build_python_command()
+    command.extend(
+        [
+            "-m",
+            "pytest",
+            "tests/python/test_emulebb_rust_local_client.py",
+            "--quiet",
+            "-k",
+            "peers_exchange",
+        ]
+    )
+
+    child_env = os.environ.copy()
+    child_env["X_LOCAL_IP"] = args.lan_bind_addr
+    started = time.monotonic()
+    completed = subprocess.run(command, cwd=REPO_ROOT, env=child_env, text=True, capture_output=True, check=False)
+    return {
+        "id": RUST_BIDIRECTIONAL_SCENARIO_ID,
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "clients": [
+            CLIENT_IDENTITIES["emulebb_rust"].profile_id,
+            CLIENT_IDENTITIES["emulebb_rust_peer"].profile_id,
+        ],
+        "command": command,
+        "return_code": completed.returncode,
+        "duration_seconds": round(time.monotonic() - started, 3),
+        "stdout_tail": completed.stdout[-4000:],
+        "stderr_tail": completed.stderr[-4000:],
+        "artifacts_dir": str(scenario_artifacts),
+    }
+
+
 def build_optional_scenario_rows(
     inventory: dict[str, object],
     *,
@@ -250,6 +289,7 @@ def build_optional_scenario_rows(
         ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
         (AMULE_TRANSFER_SCENARIO_ID, "amule"),
         (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
+        (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
         ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
     )
     for definition in definitions:
@@ -354,6 +394,11 @@ def main(argv: list[str] | None = None) -> int:
             completed_optional_ids.add(AMULE_TRANSFER_SCENARIO_ID)
             scenarios.append(run_three_client_swarm_scenario(paths, args))
             completed_optional_ids.add(THREE_CLIENT_SWARM_SCENARIO_ID)
+        rust = inventory["emulebb_rust"]
+        rust_peer = inventory["emulebb_rust_peer"]
+        if rust.available and rust_peer.available and rust.deterministic_transfer_adapter and rust_peer.deterministic_transfer_adapter:
+            scenarios.append(run_emulebb_rust_exchange_scenario(paths, args))
+            completed_optional_ids.add(RUST_BIDIRECTIONAL_SCENARIO_ID)
         scenarios.extend(
             build_optional_scenario_rows(
                 inventory,

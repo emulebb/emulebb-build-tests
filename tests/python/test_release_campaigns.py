@@ -218,7 +218,7 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
 
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
-    assert "emulebb.flow.rust.rest.transfer-search-subset.v1" in scenario_ids
+    assert "emulebb.flow.rust.rest.emulebb-contract.v1" in scenario_ids
     assert sum(
         1
         for phase in campaign["phases"]

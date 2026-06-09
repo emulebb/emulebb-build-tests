@@ -14,11 +14,15 @@ CLIENT01_EMULEBB = "cl-emulebb-001"
 CLIENT02_HARNESS = "cl-harness-002"
 CLIENT03_EMULEAI = "cl-emuleai-003"
 CLIENT04_AMULE = "cl-amule-004"
+CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
+CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
 
 NICK_CLIENT01_EMULEBB = "cl-emulebb-001"
 NICK_CLIENT02_HARNESS = "cl-harness-002"
 NICK_CLIENT03_EMULEAI = "cl-emuleai-003"
 NICK_CLIENT04_AMULE = "cl-amule-004"
+NICK_CLIENT05_EMULEBB_RUST_A = "cl-emulebb-rust-005"
+NICK_CLIENT06_EMULEBB_RUST_B = "cl-emulebb-rust-006"
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,22 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT04_AMULE,
         product="aMule",
         role="optional Windows aMule daemon/control comparison client",
+        supports_long_paths=False,
+    ),
+    "emulebb_rust": ClientIdentity(
+        key="emulebb_rust",
+        profile_id=CLIENT05_EMULEBB_RUST_A,
+        nick=NICK_CLIENT05_EMULEBB_RUST_A,
+        product="eMuleBB Rust",
+        role="headless Rust eMuleBB-compatible client",
+        supports_long_paths=False,
+    ),
+    "emulebb_rust_peer": ClientIdentity(
+        key="emulebb_rust_peer",
+        profile_id=CLIENT06_EMULEBB_RUST_B,
+        nick=NICK_CLIENT06_EMULEBB_RUST_B,
+        product="eMuleBB Rust",
+        role="second headless Rust eMuleBB-compatible client",
         supports_long_paths=False,
     ),
 }
@@ -290,6 +310,30 @@ def resolve_amule_client(
     )
 
 
+def resolve_emulebb_rust_client(
+    workspace_root: Path,
+    repo_key: str = "emulebb_rust",
+    identity_key: str = "emulebb_rust",
+) -> ClientAvailability:
+    """Resolves the Rust client repository used by the local swarm pytest adapter."""
+
+    identity = CLIENT_IDENTITIES[identity_key]
+    try:
+        root = resolve_manifest_repo(workspace_root, repo_key)
+    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+        return unavailable_manifest_client(identity, repo_key, "cargo-pytest-local-client", exc)
+    manifest = root / "Cargo.toml"
+    available = manifest.is_file()
+    return ClientAvailability(
+        identity=identity,
+        available=available,
+        executable=manifest if available else None,
+        reason="available" if available else f"missing Cargo.toml under {root}",
+        launch_adapter="cargo-pytest-local-client",
+        deterministic_transfer_adapter=available,
+    )
+
+
 def resolve_windows_client_inventory(
     *,
     workspace_root: Path,
@@ -307,4 +351,6 @@ def resolve_windows_client_inventory(
         "harness": resolve_harness_client(workspace_root, configuration, harness_exe),
         "emuleai": resolve_emuleai_client(workspace_root, configuration, emuleai_exe),
         "amule": resolve_amule_client(workspace_root, amule_daemon_exe, amule_control_exe),
+        "emulebb_rust": resolve_emulebb_rust_client(workspace_root),
+        "emulebb_rust_peer": resolve_emulebb_rust_client(workspace_root, identity_key="emulebb_rust_peer"),
     }
