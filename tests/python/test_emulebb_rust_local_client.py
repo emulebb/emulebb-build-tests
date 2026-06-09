@@ -729,6 +729,8 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
                 else None,
             )
         assert transfer["state"] == "completed"
+        assert int(transfer["completedBytes"]) == len(payload)
+        assert float(transfer["progress"]) == pytest.approx(1.0)
         downloaded_payload = leecher_runtime_dir / "transfers" / str(result["hash"]) / "pieces.bin"
         assert downloaded_payload.read_bytes() == payload
     finally:
