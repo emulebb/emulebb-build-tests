@@ -282,6 +282,14 @@ def admin_json(base_url: str, path: str, token: str) -> dict[str, object]:
         return json.loads(response.read().decode("utf-8"))
 
 
+def has_endpoint(file: dict[str, object], host: str, port: int) -> bool:
+    return any(
+        endpoint.get("host") == host and int(endpoint.get("port", 0)) == port
+        for endpoint in file.get("endpoints", [])
+        if isinstance(endpoint, dict)
+    )
+
+
 def process_output(output_path: Path) -> str:
     return output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
 
@@ -1103,7 +1111,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         terminate_process(server_process)
 
 
-def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path: Path) -> None:
+def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")
     if shutil.which("go") is None:
@@ -1119,6 +1127,9 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
     payload_path = tmp_path / "Rust.Peer.Download.Fixture.bin"
     payload = (b"emulebb-rust-ed2k-download-fixture\n" * 256) + b"tail"
     payload_path.write_bytes(payload)
+    reverse_payload_path = tmp_path / "Rust.Peer.Reverse.Download.Fixture.bin"
+    reverse_payload = (b"emulebb-rust-ed2k-reverse-download-fixture\n" * 256) + b"tail"
+    reverse_payload_path.write_bytes(reverse_payload)
 
     server_root = tmp_path / "goed2k"
     server_root.mkdir()
@@ -1273,9 +1284,7 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         def server_has_dynamic_share() -> object:
             files = admin_json(admin_base_url, f"/api/files?search={share_file['hash']}", admin_token)["data"]
             for file in files:
-                if file["hash"].lower() == str(share_file["hash"]).lower() and file["endpoints"]:
-                    assert file["endpoints"][0]["host"] == lan_host
-                    assert int(file["endpoints"][0]["port"]) == seeder_ed2k_port
+                if file["hash"].lower() == str(share_file["hash"]).lower() and has_endpoint(file, lan_host, seeder_ed2k_port):
                     return file
             return None
 
@@ -1392,6 +1401,88 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         )
         downloaded_payload = leecher_runtime_dir / "transfers" / str(result["hash"]) / "pieces.bin"
         assert downloaded_payload.read_bytes() == payload
+
+        reverse_share = request_json(
+            leecher_base_url,
+            "POST",
+            "/api/v1/shared-files",
+            {"path": str(reverse_payload_path)},
+            timeout=30,
+        )["data"]
+        assert reverse_share["ok"] is True
+        assert reverse_share["queued"] is False
+        assert reverse_share["file"]["name"] == reverse_payload_path.name
+        assert int(reverse_share["file"]["sizeBytes"]) == len(reverse_payload)
+        reverse_share_file = reverse_share["file"]
+
+        def server_has_reverse_dynamic_share() -> object:
+            files = admin_json(admin_base_url, f"/api/files?search={reverse_share_file['hash']}", admin_token)["data"]
+            for file in files:
+                if file["hash"].lower() == str(reverse_share_file["hash"]).lower() and has_endpoint(file, lan_host, leecher_ed2k_port):
+                    return file
+            return None
+
+        reverse_published = wait_for_condition(
+            "goed2k reverse dynamic file published by Rust OP_OFFERFILES",
+            30,
+            server_has_reverse_dynamic_share,
+        )
+        assert reverse_published["name"] == reverse_payload_path.name
+
+        reverse_search = request_json(
+            seeder_base_url,
+            "POST",
+            "/api/v1/searches",
+            {"query": "Rust.Peer.Reverse.Download.Fixture", "method": "server", "type": ""},
+            timeout=30,
+        )["data"]
+        reverse_result = next(
+            result
+            for result in reverse_search["results"]
+            if result["hash"] == reverse_share_file["hash"]
+        )
+        reverse_download = request_json(
+            seeder_base_url,
+            "POST",
+            f"/api/v1/searches/{reverse_search['id']}/results/{reverse_result['hash']}/operations/download",
+        )["data"]
+        assert reverse_download == {
+            "ok": True,
+            "searchId": reverse_search["id"],
+            "hash": reverse_result["hash"],
+        }
+        reverse_resume = request_json(
+            seeder_base_url,
+            "POST",
+            f"/api/v1/transfers/{reverse_result['hash']}/operations/resume",
+            timeout=30,
+        )["data"]
+        assert reverse_resume["items"][0]["ok"] is True
+        reverse_transfer = request_json(seeder_base_url, "GET", f"/api/v1/transfers/{reverse_result['hash']}")["data"]
+        if reverse_transfer["state"] != "completed":
+            reverse_transfer = wait_for_condition(
+                "reverse seeder transfer completion",
+                30,
+                lambda: request_json(seeder_base_url, "GET", f"/api/v1/transfers/{reverse_result['hash']}")["data"]
+                if request_json(seeder_base_url, "GET", f"/api/v1/transfers/{reverse_result['hash']}")["data"]["state"] == "completed"
+                else None,
+            )
+        assert reverse_transfer["state"] == "completed"
+        assert int(reverse_transfer["completedBytes"]) == len(reverse_payload)
+        assert float(reverse_transfer["progress"]) == pytest.approx(1.0)
+        reverse_sources = request_json(
+            seeder_base_url,
+            "GET",
+            f"/api/v1/transfers/{reverse_result['hash']}/sources",
+        )["data"]["items"]
+        assert any(
+            source["ip"] == lan_host
+            and int(source["tcpPort"]) == leecher_ed2k_port
+            and source["endpoint"] == f"{lan_host}:{leecher_ed2k_port}"
+            for source in reverse_sources
+        )
+        reverse_downloaded_payload = seeder_runtime_dir / "transfers" / str(reverse_result["hash"]) / "pieces.bin"
+        assert reverse_downloaded_payload.read_bytes() == reverse_payload
 
         terminate_process(leecher_process)
         with leecher_output_path.open("a", encoding="utf-8") as leecher_output:
