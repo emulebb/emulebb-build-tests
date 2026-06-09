@@ -19,6 +19,7 @@ API_KEY = "test-api-key"
 SEED_HASH = "00112233445566778899aabbccddeeff"
 SERVER_SEARCH_HASH = "31d6cfe0d16ae931b73c59d7e0c089c0"
 SERVER_SEARCH_NAME = "Rust.Live.Search.Fixture.bin"
+ED2K_PART_SIZE = 9_728_000
 
 
 def workspace_root() -> Path:
@@ -94,6 +95,52 @@ def write_config(
         )
     path.write_text(
         "\n".join(lines),
+        encoding="utf-8",
+    )
+
+
+def write_remembered_source_manifest(
+    runtime_dir: Path,
+    file_hash: str,
+    name: str,
+    size_bytes: int,
+    source_host: str,
+    source_port: int,
+) -> None:
+    transfer_dir = runtime_dir / "transfers" / file_hash
+    transfer_dir.mkdir(parents=True, exist_ok=True)
+    piece_count = (size_bytes + ED2K_PART_SIZE - 1) // ED2K_PART_SIZE
+    pieces = [
+        {
+            "piece_index": piece_index,
+            "state": "Missing",
+            "bytes_written": 0,
+        }
+        for piece_index in range(piece_count)
+    ]
+    manifest = {
+        "file_hash": file_hash,
+        "canonical_name": name,
+        "file_size": size_bytes,
+        "piece_size": ED2K_PART_SIZE,
+        "completed": False,
+        "md4_hashset_acquired": False,
+        "md4_hashset": [],
+        "aich_hashset_acquired": False,
+        "aich_root": None,
+        "aich_hashset": [],
+        "verified_ranges": [],
+        "pieces": pieces,
+        "sources": [
+            {
+                "ip": source_host,
+                "tcp_port": source_port,
+                "user_hash": None,
+            }
+        ],
+    }
+    (transfer_dir / "resume-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -617,6 +664,23 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         kad_listen_port=leecher_kad_port,
     )
 
+    remembered_runtime_dir = tmp_path / "remembered-leecher-runtime"
+    remembered_config_path = tmp_path / "remembered-leecher.toml"
+    remembered_output_path = tmp_path / "remembered-leecher.out"
+    remembered_rest_port = free_lan_port_not(lan_host, forbidden_ports)
+    remembered_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
+    remembered_kad_port = free_lan_port_not(lan_host, forbidden_ports)
+    dead_server_port = free_lan_port_not(lan_host, forbidden_ports)
+    write_config(
+        remembered_config_path,
+        remembered_runtime_dir,
+        lan_host,
+        remembered_rest_port,
+        ed2k_server_endpoint=f"{lan_host}:{dead_server_port}",
+        ed2k_listen_port=remembered_ed2k_port,
+        kad_listen_port=remembered_kad_port,
+    )
+
     with seeder_output_path.open("w", encoding="utf-8") as seeder_output:
         seeder_process = subprocess.Popen(
             [
@@ -654,6 +718,7 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
             text=True,
         )
 
+    remembered_leecher_process: subprocess.Popen[str] | None = None
     try:
         admin_base_url = f"http://{lan_host}:{admin_port}"
         wait_for_goed2k_admin(admin_base_url, admin_token, server_process, server_output_path)
@@ -691,6 +756,55 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
             server_has_dynamic_share,
         )
         assert published["name"] == payload_path.name
+
+        write_remembered_source_manifest(
+            remembered_runtime_dir,
+            str(share["hash"]).lower(),
+            payload_path.name,
+            len(payload),
+            lan_host,
+            seeder_ed2k_port,
+        )
+        with remembered_output_path.open("w", encoding="utf-8") as remembered_output:
+            remembered_leecher_process = subprocess.Popen(
+                [
+                    "cargo",
+                    "run",
+                    "-p",
+                    "emulebb-daemon",
+                    "--bin",
+                    "emulebb-rust",
+                    "--",
+                    "--config",
+                    str(remembered_config_path),
+                ],
+                cwd=rust_repo,
+                stdout=remembered_output,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        remembered_base_url = f"http://{lan_host}:{remembered_rest_port}"
+        wait_for_rest(remembered_base_url, remembered_leecher_process, remembered_output_path)
+        remembered_transfers = request_json(remembered_base_url, "GET", "/api/v1/transfers")["data"]["items"]
+        assert any(transfer["hash"] == str(share["hash"]).lower() for transfer in remembered_transfers)
+        remembered_transfer = request_json(
+            remembered_base_url,
+            "POST",
+            f"/api/v1/transfers/{share['hash']}/operations/resume",
+            timeout=45,
+        )["data"]
+        if remembered_transfer["state"] != "completed":
+            remembered_transfer = wait_for_condition(
+                "remembered-source leecher transfer completion",
+                45,
+                lambda: request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share['hash']}")["data"]
+                if request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share['hash']}")["data"]["state"] == "completed"
+                else None,
+            )
+        assert remembered_transfer["state"] == "completed"
+        assert int(remembered_transfer["completedBytes"]) == len(payload)
+        remembered_payload = remembered_runtime_dir / "transfers" / str(share["hash"]).lower() / "pieces.bin"
+        assert remembered_payload.read_bytes() == payload
 
         leecher_base_url = f"http://{lan_host}:{leecher_rest_port}"
         wait_for_rest(leecher_base_url, leecher_process, leecher_output_path)
@@ -775,6 +889,8 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
             for source in persisted_sources
         )
     finally:
+        if remembered_leecher_process is not None:
+            terminate_process(remembered_leecher_process)
         terminate_process(leecher_process)
         terminate_process(seeder_process)
         terminate_process(server_process)
