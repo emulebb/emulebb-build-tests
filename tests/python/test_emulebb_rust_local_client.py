@@ -638,6 +638,23 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert len(snapshot["uploadQueue"]) <= 1
         assert "ed2k" in snapshot["network"]
         assert "kad" in snapshot["network"]
+        logs = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
+        assert logs == []
+        denied_log_clear_status, denied_log_clear_error = request_json_status(
+            base_url,
+            "POST",
+            "/api/v1/logs/operations/clear",
+            {"confirmClearLogs": False},
+        )
+        assert denied_log_clear_status == 400
+        assert "confirmClearLogs" in denied_log_clear_error["error"]["message"]
+        cleared_logs = request_json(
+            base_url,
+            "POST",
+            "/api/v1/logs/operations/clear",
+            {"confirmClearLogs": True},
+        )["data"]
+        assert cleared_logs["ok"] is True
 
         search = request_json(
             base_url,
