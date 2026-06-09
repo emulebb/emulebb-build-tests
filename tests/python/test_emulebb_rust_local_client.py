@@ -29,6 +29,21 @@ def workspace_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def workspace_output_root() -> Path:
+    override = os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT")
+    if override:
+        return Path(override).resolve()
+    return workspace_root() / "output"
+
+
+def rust_cargo_env() -> dict[str, str]:
+    env = os.environ.copy()
+    target_dir = Path(env.get("CARGO_TARGET_DIR") or workspace_output_root() / "builds" / "rust" / "target")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    env["CARGO_TARGET_DIR"] = str(target_dir)
+    return env
+
+
 def free_lan_port(host: str) -> int:
     return free_lan_port_not(host, set())
 
@@ -397,6 +412,19 @@ def write_goed2k_config(
 
 
 def terminate_process(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        return
     if process.poll() is not None:
         return
     process.terminate()
@@ -405,6 +433,17 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
+
+
+def terminate_goed2k_server_processes() -> None:
+    if os.name != "nt":
+        return
+    subprocess.run(
+        ["taskkill", "/IM", "goed2k-server.exe", "/T", "/F"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
 
 
 def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
@@ -445,6 +484,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
                 str(config_path),
             ],
             cwd=repo,
+            env=rust_cargo_env(),
             stdout=output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -930,6 +970,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
                 str(config_path),
             ],
             cwd=repo,
+            env=rust_cargo_env(),
             stdout=output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1077,6 +1118,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
                 str(rust_config_path),
             ],
             cwd=rust_repo,
+            env=rust_cargo_env(),
             stdout=rust_output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1109,6 +1151,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
     finally:
         terminate_process(rust_process)
         terminate_process(server_process)
+        terminate_goed2k_server_processes()
 
 
 def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Path) -> None:
@@ -1222,6 +1265,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                 str(seeder_config_path),
             ],
             cwd=rust_repo,
+            env=rust_cargo_env(),
             stdout=seeder_output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1240,6 +1284,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                 str(leecher_config_path),
             ],
             cwd=rust_repo,
+            env=rust_cargo_env(),
             stdout=leecher_output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1317,6 +1362,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                     str(remembered_config_path),
                 ],
                 cwd=rust_repo,
+                env=rust_cargo_env(),
                 stdout=remembered_output,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1499,6 +1545,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                     str(leecher_config_path),
                 ],
                 cwd=rust_repo,
+                env=rust_cargo_env(),
                 stdout=leecher_output,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1595,3 +1642,4 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         terminate_process(leecher_process)
         terminate_process(seeder_process)
         terminate_process(server_process)
+        terminate_goed2k_server_processes()

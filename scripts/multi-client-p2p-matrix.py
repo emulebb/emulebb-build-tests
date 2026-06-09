@@ -23,6 +23,7 @@ HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
 AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
 THREE_CLIENT_SWARM_SCENARIO_ID = "cl-emulebb-001-cl-harness-002-cl-amule-004-concurrent-swarm"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
+RUST_EMULEBB_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-emulebb-rust-005"
 
 
 def load_local_module(module_name: str, filename: str):
@@ -275,6 +276,36 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
     }
 
 
+def run_emulebb_rust_to_emulebb_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the REST-controlled Rust seeder to eMuleBB downloader scenario."""
+
+    scenario_artifacts = paths.source_artifacts_dir / "r5-e1"
+    command = build_python_command()
+    command.extend(
+        [
+            str((Path(__file__).resolve().with_name("emulebb-rust-emulebb-cross-client.py"))),
+            "--artifacts-dir",
+            str(scenario_artifacts),
+        ]
+    )
+    add_common_child_args(command, args)
+
+    started = time.monotonic()
+    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
+    child_report = compact_child_report(scenario_artifacts / "emulebb-rust-emulebb-cross-client-result.json")
+    return {
+        "id": RUST_EMULEBB_TRANSFER_SCENARIO_ID,
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["emulebb_rust"].profile_id],
+        "command": command,
+        "return_code": completed.returncode,
+        "duration_seconds": round(time.monotonic() - started, 3),
+        "stdout_tail": completed.stdout[-4000:],
+        "stderr_tail": completed.stderr[-4000:],
+        "report": child_report,
+    }
+
+
 def build_optional_scenario_rows(
     inventory: dict[str, object],
     *,
@@ -290,6 +321,7 @@ def build_optional_scenario_rows(
         (AMULE_TRANSFER_SCENARIO_ID, "amule"),
         (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
         (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
+        (RUST_EMULEBB_TRANSFER_SCENARIO_ID, "emulebb_rust"),
         ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
     )
     for definition in definitions:
@@ -399,6 +431,9 @@ def main(argv: list[str] | None = None) -> int:
         if rust.available and rust_peer.available and rust.deterministic_transfer_adapter and rust_peer.deterministic_transfer_adapter:
             scenarios.append(run_emulebb_rust_exchange_scenario(paths, args))
             completed_optional_ids.add(RUST_BIDIRECTIONAL_SCENARIO_ID)
+        if rust.available and rust.deterministic_transfer_adapter:
+            scenarios.append(run_emulebb_rust_to_emulebb_scenario(paths, args))
+            completed_optional_ids.add(RUST_EMULEBB_TRANSFER_SCENARIO_ID)
         scenarios.extend(
             build_optional_scenario_rows(
                 inventory,
