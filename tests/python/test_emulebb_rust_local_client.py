@@ -707,6 +707,54 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert len(snapshot["uploadQueue"]) <= 1
         assert "ed2k" in snapshot["network"]
         assert "kad" in snapshot["network"]
+        kad_status = request_json(base_url, "GET", "/api/v1/kad")["data"]
+        assert kad_status["running"] is False
+        assert kad_status["connected"] is False
+        assert kad_status["bootstrapping"] is False
+        assert kad_status["bootstrapProgress"] == 0
+        import_empty_status, import_empty_error = request_json_status(
+            base_url,
+            "POST",
+            "/api/v1/kad/operations/import-nodes-url",
+            {"url": " "},
+        )
+        assert import_empty_status == 400
+        assert "url" in import_empty_error["error"]["message"]
+        import_nodes = request_json(
+            base_url,
+            "POST",
+            "/api/v1/kad/operations/import-nodes-url",
+            {"url": f"http://{lan_host}:{port}/nodes.dat"},
+        )["data"]
+        assert import_nodes == {"ok": False, "imported": False}
+        bad_bootstrap_status, bad_bootstrap_error = request_json_status(
+            base_url,
+            "POST",
+            "/api/v1/kad/operations/bootstrap",
+            {"address": "", "port": 4662},
+        )
+        assert bad_bootstrap_status == 400
+        assert "address" in bad_bootstrap_error["error"]["message"]
+        bootstrapped_kad = request_json(
+            base_url,
+            "POST",
+            "/api/v1/kad/operations/bootstrap",
+            {"address": lan_host, "port": 4662},
+        )["data"]
+        assert bootstrapped_kad["running"] is True
+        assert bootstrapped_kad["connected"] is True
+        assert bootstrapped_kad["firewalled"] is False
+        assert bootstrapped_kad["contactCount"] == 0
+        recheck_kad = request_json(
+            base_url,
+            "POST",
+            "/api/v1/kad/operations/recheck-firewall",
+        )["data"]
+        assert recheck_kad["operationQueued"] is True
+        assert recheck_kad["alreadyRunning"] is False
+        stopped_kad = request_json(base_url, "POST", "/api/v1/kad/operations/stop")["data"]
+        assert stopped_kad["running"] is False
+        assert stopped_kad["connected"] is False
         logs = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
         assert logs == []
         denied_log_clear_status, denied_log_clear_error = request_json_status(
