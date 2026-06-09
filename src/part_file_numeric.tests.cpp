@@ -125,6 +125,20 @@ TEST_CASE("Part-file write thread seam bounds one IOCP dispatch burst without st
 #endif
 }
 
+TEST_CASE("Part-file write thread seam keeps download writes neutral for cache hints")
+{
+#ifdef EMULEBB_TEST_HAVE_PART_FILE_WRITE_CREATE_FLAGS
+	const unsigned long kFakeOverlappedFlag = 0x40000000ul;
+	const unsigned long kFakeSequentialScanFlag = 0x08000000ul;
+	const unsigned long flags = PartFileWriteThreadSeams::BuildPartFileWriteCreateFlags(kFakeOverlappedFlag);
+
+	CHECK((flags & kFakeOverlappedFlag) != 0u);
+	CHECK((flags & kFakeSequentialScanFlag) == 0u);
+#else
+	MESSAGE("Part-file write create flag helper is not available in this workspace.");
+#endif
+}
+
 TEST_CASE("Part file numeric seam clamps list counts and 32-bit scores before narrowing to uint16")
 {
 	CHECK_EQ(PartFileNumericSeams::ClampCountToUInt16(0), static_cast<uint16>(0u));
