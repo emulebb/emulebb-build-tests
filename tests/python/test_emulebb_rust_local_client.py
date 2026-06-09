@@ -9,6 +9,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,8 @@ import pytest
 
 API_KEY = "test-api-key"
 SEED_HASH = "00112233445566778899aabbccddeeff"
+SERVER_SEARCH_HASH = "31d6cfe0d16ae931b73c59d7e0c089c0"
+SERVER_SEARCH_NAME = "Rust.Live.Search.Fixture.bin"
 
 
 def workspace_root() -> Path:
@@ -141,6 +144,16 @@ def request_json(base_url: str, method: str, path: str, body: dict[str, object] 
         return json.loads(response.read().decode("utf-8"))
 
 
+def admin_json(base_url: str, path: str, token: str) -> dict[str, object]:
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        headers={"X-Admin-Token": token},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def process_output(output_path: Path) -> str:
     return output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
 
@@ -162,6 +175,85 @@ def wait_for_rest(base_url: str, process: subprocess.Popen[str], output_path: Pa
             f"emulebb-rust exited before REST became ready with code {process.returncode}\n{process_output(output_path)}"
         )
     raise AssertionError(f"emulebb-rust REST API did not become ready\n{process_output(output_path)}")
+
+
+def wait_for_condition(description: str, deadline_seconds: float, probe: Callable[[], object]) -> object:
+    deadline = time.monotonic() + deadline_seconds
+    last_error: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            result = probe()
+            if result:
+                return result
+        except (AssertionError, OSError, urllib.error.URLError) as exc:
+            last_error = exc
+        time.sleep(0.2)
+    detail = f": {last_error}" if last_error is not None else ""
+    raise AssertionError(f"Timed out waiting for {description}{detail}")
+
+
+def wait_for_goed2k_admin(base_url: str, token: str, process: subprocess.Popen[str], output_path: Path) -> None:
+    def probe() -> bool:
+        if process.poll() is not None:
+            raise AssertionError(f"goed2k-server exited early with code {process.returncode}\n{process_output(output_path)}")
+        payload = admin_json(base_url, "/api/stats", token)
+        return bool(payload.get("ok"))
+
+    wait_for_condition("goed2k-server admin API", 30, probe)
+
+
+def write_goed2k_catalog(path: Path, source_host: str, source_port: int) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "files": [
+                    {
+                        "hash": SERVER_SEARCH_HASH.upper(),
+                        "name": SERVER_SEARCH_NAME,
+                        "size": 4096,
+                        "file_type": "Archive",
+                        "extension": "bin",
+                        "sources": 1,
+                        "complete_sources": 1,
+                        "endpoints": [{"host": source_host, "port": source_port}],
+                    }
+                ]
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_goed2k_config(
+    path: Path,
+    *,
+    listen_host: str,
+    listen_port: int,
+    admin_port: int,
+    token: str,
+    catalog_path: Path,
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "listen_address": f"{listen_host}:{listen_port}",
+                "admin_listen_address": f"{listen_host}:{admin_port}",
+                "admin_token": token,
+                "server_name": "emulebb-rust-local-ed2k",
+                "server_description": "eMuleBB Rust local ED2K test server",
+                "storage_backend": "json",
+                "catalog_path": str(catalog_path),
+                "search_batch_size": 20,
+                "server_udp": True,
+                "udp_port_offset": 4,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def terminate_process(process: subprocess.Popen[str]) -> None:
@@ -302,3 +394,103 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         assert disconnected["connected"] is False
     finally:
         terminate_process(process)
+
+
+def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> None:
+    if shutil.which("cargo") is None:
+        pytest.skip("cargo is not available")
+    if shutil.which("go") is None:
+        pytest.skip("go is not available")
+    rust_repo = workspace_root() / "repos" / "emulebb-rust"
+    server_repo = workspace_root() / "repos" / "goed2k-server"
+    if not rust_repo.is_dir() or not server_repo.is_dir():
+        pytest.skip("emulebb-rust or goed2k-server repo is not available")
+    lan_host = os.environ.get("X_LOCAL_IP")
+    if not lan_host:
+        pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
+
+    server_root = tmp_path / "goed2k"
+    server_root.mkdir()
+    server_port = free_lan_port(lan_host)
+    admin_port = free_lan_port(lan_host)
+    admin_token = "goed2k-test-token"
+    catalog_path = server_root / "catalog.json"
+    server_config_path = server_root / "config.json"
+    server_output_path = tmp_path / "goed2k-server.out"
+    write_goed2k_catalog(catalog_path, lan_host, 41001)
+    write_goed2k_config(
+        server_config_path,
+        listen_host=lan_host,
+        listen_port=server_port,
+        admin_port=admin_port,
+        token=admin_token,
+        catalog_path=catalog_path,
+    )
+
+    with server_output_path.open("w", encoding="utf-8") as server_output:
+        server_process = subprocess.Popen(
+            ["go", "run", "./cmd/goed2k-server", "-config", str(server_config_path)],
+            cwd=server_repo,
+            stdout=server_output,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+    rust_runtime_dir = tmp_path / "runtime"
+    rust_config_path = tmp_path / "emulebb-rust.toml"
+    rust_output_path = tmp_path / "emulebb-rust.out"
+    rust_port = free_lan_port(lan_host)
+    write_config(
+        rust_config_path,
+        rust_runtime_dir,
+        lan_host,
+        rust_port,
+        ed2k_server_endpoint=f"{lan_host}:{server_port}",
+    )
+
+    with rust_output_path.open("w", encoding="utf-8") as rust_output:
+        rust_process = subprocess.Popen(
+            [
+                "cargo",
+                "run",
+                "-p",
+                "emulebb-daemon",
+                "--bin",
+                "emulebb-rust",
+                "--",
+                "--config",
+                str(rust_config_path),
+            ],
+            cwd=rust_repo,
+            stdout=rust_output,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+    try:
+        wait_for_goed2k_admin(f"http://{lan_host}:{admin_port}", admin_token, server_process, server_output_path)
+        base_url = f"http://{lan_host}:{rust_port}"
+        wait_for_rest(base_url, rust_process, rust_output_path)
+
+        connect = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
+        assert connect["running"] is True
+
+        wait_for_condition(
+            "emulebb-rust ED2K server connection",
+            30,
+            lambda: request_json(base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
+        )
+
+        search = request_json(
+            base_url,
+            "POST",
+            "/api/v1/searches",
+            {"query": "Rust.Live.Search.Fixture", "method": "server", "type": ""},
+        )["data"]
+        results = search["results"]
+        assert any(result["hash"] == SERVER_SEARCH_HASH and result["name"] == SERVER_SEARCH_NAME for result in results)
+        stats = admin_json(f"http://{lan_host}:{admin_port}", "/api/stats", admin_token)["data"]
+        assert int(stats["search_requests"]) >= 1
+    finally:
+        terminate_process(rust_process)
+        terminate_process(server_process)
