@@ -54,13 +54,16 @@ def test_resolve_manifest_repo_uses_workspace_deps(tmp_path: Path) -> None:
     assert module.resolve_ed2k_server_repo(workspace, None) == repo.resolve()
 
 
-def test_resolve_ed2k_server_exe_defaults_to_workspace_state(tmp_path: Path) -> None:
+def test_resolve_ed2k_server_exe_defaults_to_output_root(tmp_path: Path, monkeypatch) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"
+    output_root = tmp_path.parent / f"{tmp_path.name}-output"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
 
     resolved = module.resolve_ed2k_server_exe(workspace, None)
 
-    assert resolved == (workspace / "state" / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
+    assert resolved == (output_root / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
 
 
 def test_build_or_skip_ed2k_server_binary_honors_explicit_exe_without_manifest(tmp_path: Path) -> None:

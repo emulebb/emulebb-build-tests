@@ -25,7 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
-from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
+from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path  # noqa: E402
 
 
 def load_local_module(module_name: str, filename: str):
@@ -134,15 +134,15 @@ def resolve_ed2k_server_repo(workspace_root: Path, override: str | None) -> Path
 
 
 def resolve_ed2k_server_exe(workspace_root: Path, override: str | None) -> Path:
-    """Resolves the workspace-owned ED2K server tool output path."""
+    """Resolves the output-root ED2K server tool output path."""
 
     if override:
         return Path(override).resolve()
-    return (workspace_root / "state" / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
+    return (get_workspace_output_root() / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
 
 
 def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, object]:
-    """Builds the local ED2K server binary into the workspace state tree."""
+    """Builds the local ED2K server binary into the output root."""
 
     reject_windows_temp_path(server_exe.parent, "ED2K server binary directory")
     server_exe.parent.mkdir(parents=True, exist_ok=True)

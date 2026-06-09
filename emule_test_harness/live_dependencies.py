@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .paths import get_workspace_output_root
+
 
 DEPENDENCY_MODES = ("cache-only", "auto-download", "off")
 DEPENDENCY_CHANNELS = ("pinned", "latest")
@@ -79,9 +81,9 @@ class PortableDependency:
 
 
 def default_dependency_cache_root(workspace_root: Path) -> Path:
-    """Returns the workspace-owned cache used by reusable live dependencies."""
+    """Returns the output-root cache used by reusable live dependencies."""
 
-    return workspace_root / "state" / DEFAULT_CACHE_DIRNAME
+    return get_workspace_output_root() / "cache" / DEFAULT_CACHE_DIRNAME
 
 
 def sha256_file(path: Path) -> str:
