@@ -12,6 +12,8 @@ jobs:
   python-harness:
     name: python-harness (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      EMULEBB_WORKSPACE_ROOT: ${{ github.workspace }}
 
     strategy:
       fail-fast: false
@@ -48,6 +50,13 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Prepare workspace output root
+        shell: pwsh
+        run: |
+          $outputRoot = [System.IO.Path]::GetFullPath((Join-Path $env:EMULEBB_WORKSPACE_ROOT '..\emulebb-output'))
+          New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+          "EMULEBB_WORKSPACE_OUTPUT_ROOT=$outputRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install harness dependencies
         working-directory: repos/emulebb-build-tests
