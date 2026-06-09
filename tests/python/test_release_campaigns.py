@@ -193,6 +193,37 @@ def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
     assert campaign["proofTier"] == "future"
 
 
+def test_emulebb_rust_mvp_campaign_validates_and_covers_local_proof() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = release_campaigns.load_release_campaign(root, "emulebb-rust-mvp")
+
+    assert release_campaigns.validate_release_campaign(campaign, template) == []
+    assert campaign["releaseVersion"] == "0.1.0-mvp.1"
+    assert campaign["proofTier"] == "future"
+    scenario_ids = {
+        scenario["id"]
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    }
+    covered_ids = {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        for scenario_id in gate["coveredBy"]
+    }
+    rust_pytest_command = "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet"
+
+    assert covered_ids <= scenario_ids
+    assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
+    assert "emulebb.flow.rust.rest.transfer-search-subset.v1" in scenario_ids
+    assert sum(
+        1
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if scenario["command"] == rust_pytest_command
+    ) == 3
+
+
 def test_campaign_validation_rejects_missing_proof_tier() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)

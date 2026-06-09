@@ -20,6 +20,9 @@ SEED_HASH = "00112233445566778899aabbccddeeff"
 SERVER_SEARCH_HASH = "31d6cfe0d16ae931b73c59d7e0c089c0"
 SERVER_SEARCH_NAME = "Rust.Live.Search.Fixture.bin"
 ED2K_PART_SIZE = 9_728_000
+SERVICE_PORT_START = int(os.environ.get("EMULEBB_RUST_TEST_PORT_START", "30000"))
+SERVICE_PORT_END = int(os.environ.get("EMULEBB_RUST_TEST_PORT_END", "45000"))
+_ALLOCATED_PORTS: set[int] = set()
 
 
 def workspace_root() -> Path:
@@ -27,26 +30,47 @@ def workspace_root() -> Path:
 
 
 def free_lan_port(host: str) -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
+    return free_lan_port_not(host, set())
 
 
 def free_lan_port_not(host: str, forbidden: set[int]) -> int:
-    for _ in range(100):
-        port = free_lan_port(host)
-        if port not in forbidden:
+    blocked = set(forbidden) | _ALLOCATED_PORTS
+    for port in range(SERVICE_PORT_START, SERVICE_PORT_END):
+        if port in blocked:
+            continue
+        if _lan_port_available(host, port):
             forbidden.add(port)
+            _ALLOCATED_PORTS.add(port)
             return port
     raise RuntimeError(f"could not find a free LAN port outside {sorted(forbidden)}")
 
 
 def free_goed2k_server_port(host: str) -> int:
-    for _ in range(100):
-        port = free_lan_port(host)
-        if port <= 65531:
+    for port in range(SERVICE_PORT_START, SERVICE_PORT_END - 4):
+        if port in _ALLOCATED_PORTS or (port + 4) in _ALLOCATED_PORTS:
+            continue
+        if _lan_port_available(host, port) and _lan_port_available(host, port + 4):
+            _ALLOCATED_PORTS.add(port)
+            _ALLOCATED_PORTS.add(port + 4)
             return port
     raise RuntimeError("could not find a free goed2k server port with UDP offset room")
+
+
+def _lan_port_available(host: str, port: int) -> bool:
+    """Returns whether a deterministic LAN service port can bind TCP and UDP."""
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                tcp.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            tcp.bind((host, port))
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                udp.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            udp.bind((host, port))
+    except OSError:
+        return False
+    return True
 
 
 def write_config(

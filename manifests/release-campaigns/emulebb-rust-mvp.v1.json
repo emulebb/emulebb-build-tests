@@ -1,0 +1,212 @@
+{
+  "schemaVersion": "emulebb-build-tests.release-campaign.v1",
+  "kind": "instance",
+  "templateId": "emulebb.release.template.default.v1",
+  "campaignId": "emulebb-rust-mvp",
+  "releaseVersion": "0.1.0-mvp.1",
+  "title": "eMuleBB Rust MVP product-family campaign",
+  "description": "Initial campaign for the eMuleBB Rust headless client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
+  "proofTier": "future",
+  "phases": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.workspace.materialization.v1",
+          "title": "Rust client repo materializes from the eMuleBB org",
+          "phase": "preflight",
+          "flowCategory": "workspace-policy",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace sync",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Workspace deps.json contains emulebb-rust resolving to the emulebb organization repository."
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.rust.local-client.pytest.v1",
+          "title": "Rust local client pytest scenario",
+          "phase": "preflight",
+          "flowCategory": "python-harness",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Focused pytest coverage builds emulebb-rust through Cargo, launches local goed2k-server, and uses X_LOCAL_IP for deterministic LAN REST and P2P binding."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "protocol-parity",
+      "title": "Protocol parity",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.local-ed2k.search-download.v1",
+          "title": "Rust local eD2K search and download proof",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "The focused Rust pytest scenario proves configured P2P bind, local goed2k server search, source fallback, download, pause persistence, and destructive transfer file deletion."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "controller-surface",
+      "title": "Controller surface",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.rest.transfer-search-subset.v1",
+          "title": "Rust REST transfer and search subset",
+          "phase": "controller-surface",
+          "flowCategory": "rest-api",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Focused pytest coverage exercises the eMuleBB-owned /api/v1 server, search, transfer create, transfer control, and transfer file deletion envelopes implemented by emulebb-rust."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-wire-release",
+      "title": "Live-wire release",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.live-wire.hideme.v1",
+          "title": "Rust hide.me-bound live-wire proof",
+          "phase": "live-wire-release",
+          "flowCategory": "live-wire",
+          "required": false,
+          "blocking": false,
+          "command": "manual",
+          "localInputs": [
+            "operator-owned live-wire inputs stay in ignored local files",
+            "public live Rust P2P must bind through hide.me or an explicit VPN bind from configuration"
+          ],
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": false,
+              "description": "Add first-class Rust live-wire automation only after the Rust runtime supports the same configured VPN binding contract used by eMuleBB live campaigns."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ui-resource-depth",
+      "title": "UI resource depth",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.amutorrent.controller.v1",
+          "title": "aMuTorrent against Rust controller surface",
+          "phase": "ui-resource-depth",
+          "flowCategory": "amutorrent",
+          "required": false,
+          "blocking": false,
+          "command": "manual",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": false,
+              "description": "Use existing aMuTorrent controller scenarios once Rust implements the required eMuleBB REST endpoints without adapters or compatibility shims."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stabilization-stress",
+      "title": "Stabilization stress",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.resource.local-index-stress.v1",
+          "title": "Rust local indexing and resource stress",
+          "phase": "stabilization-stress",
+          "flowCategory": "stress",
+          "required": false,
+          "blocking": false,
+          "command": "manual",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": false,
+              "description": "Reuse eMuleBB resource evidence structure for SQLite index, FTS, transfer runtime, memory, handles, and REST counters after MVP storage scales beyond the local proof."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "packaging-provenance",
+      "title": "Packaging provenance",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.package.provenance.v1",
+          "title": "Rust package provenance",
+          "phase": "packaging-provenance",
+          "flowCategory": "packaging",
+          "required": false,
+          "blocking": false,
+          "command": "manual",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": false,
+              "description": "Define a Rust package artifact and SBOM row when the MVP gains a release package."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "releaseGates": [
+    {
+      "id": "emulebb-rust-workspace-materialization",
+      "coveredBy": [
+        "emulebb.flow.rust.workspace.materialization.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-local-client-pytest",
+      "coveredBy": [
+        "emulebb.flow.rust.local-client.pytest.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-local-ed2k-protocol",
+      "coveredBy": [
+        "emulebb.flow.rust.local-ed2k.search-download.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-rest-subset",
+      "coveredBy": [
+        "emulebb.flow.rust.rest.transfer-search-subset.v1"
+      ]
+    }
+  ]
+}
