@@ -731,6 +731,17 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         assert transfer["state"] == "completed"
         assert int(transfer["completedBytes"]) == len(payload)
         assert float(transfer["progress"]) == pytest.approx(1.0)
+        sources = request_json(
+            leecher_base_url,
+            "GET",
+            f"/api/v1/transfers/{result['hash']}/sources",
+        )["data"]["items"]
+        assert any(
+            source["ip"] == lan_host
+            and int(source["tcpPort"]) == seeder_ed2k_port
+            and source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
+            for source in sources
+        )
         downloaded_payload = leecher_runtime_dir / "transfers" / str(result["hash"]) / "pieces.bin"
         assert downloaded_payload.read_bytes() == payload
     finally:
