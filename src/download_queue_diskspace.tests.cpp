@@ -152,6 +152,26 @@ TEST_CASE("Queue disk-space seam invalidates cached path requirements only after
 	CHECK(DownloadQueueDiskSpaceSeams::ShouldInvalidateRequiredFreeSpacePathCacheAfterReservation(true));
 }
 
+TEST_CASE("Queue disk-space seam bounds recent free-space snapshots by age")
+{
+#ifdef EMULEBB_TEST_HAVE_RECENT_VOLUME_FREE_SPACE_SNAPSHOT
+	const uint64_t maxAgeMs = DownloadQueueDiskSpaceSeams::kRecentVolumeFreeSpaceSnapshotMaxAgeMs;
+	REQUIRE(maxAgeMs > 0u);
+
+	CHECK(DownloadQueueDiskSpaceSeams::IsRecentVolumeFreeSpaceSnapshotFresh(1000u, 1000u, maxAgeMs));
+	CHECK(DownloadQueueDiskSpaceSeams::IsRecentVolumeFreeSpaceSnapshotFresh(1000u + maxAgeMs, 1000u, maxAgeMs));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsRecentVolumeFreeSpaceSnapshotFresh(1001u + maxAgeMs, 1000u, maxAgeMs));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsRecentVolumeFreeSpaceSnapshotFresh(999u, 1000u, maxAgeMs));
+	CHECK_FALSE(DownloadQueueDiskSpaceSeams::IsRecentVolumeFreeSpaceSnapshotFresh(1000u, 0u, maxAgeMs));
+
+	CHECK_EQ(DownloadQueueDiskSpaceSeams::DiscountRecentVolumeFreeSpaceSnapshot(1000u, 250u), static_cast<uint64_t>(750u));
+	CHECK_EQ(DownloadQueueDiskSpaceSeams::DiscountRecentVolumeFreeSpaceSnapshot(1000u, 1000u), static_cast<uint64_t>(0u));
+	CHECK_EQ(DownloadQueueDiskSpaceSeams::DiscountRecentVolumeFreeSpaceSnapshot(1000u, 1250u), static_cast<uint64_t>(0u));
+#else
+	MESSAGE("Recent volume free-space snapshot helpers are not available in this workspace.");
+#endif
+}
+
 TEST_CASE("Queue disk-space seam fails closed when snapshot demand cannot be fully reserved")
 {
 	CHECK(DownloadQueueDiskSpaceSeams::WasProtectedVolumeSnapshotDemandFullyReserved(false, false, false, false));
