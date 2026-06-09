@@ -492,10 +492,43 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             timeout=30,
         )["data"]
         assert alias_reload_result["ok"] is True
-        shared_file_names = {
-            row["name"] for row in request_json(base_url, "GET", "/api/v1/shared-files")["data"]["items"]
-        }
+        shared_files = request_json(base_url, "GET", "/api/v1/shared-files")["data"]["items"]
+        shared_file_names = {row["name"] for row in shared_files}
         assert {shared_top_file.name, shared_nested_file.name} <= shared_file_names
+        top_shared_file = next(row for row in shared_files if row["name"] == shared_top_file.name)
+        nested_shared_file = next(row for row in shared_files if row["name"] == shared_nested_file.name)
+        comments = request_json(
+            base_url,
+            "GET",
+            f"/api/v1/shared-files/{top_shared_file['hash']}/comments",
+        )["data"]
+        assert comments["items"] == []
+        unshared = request_json(
+            base_url,
+            "DELETE",
+            f"/api/v1/shared-files/{top_shared_file['hash']}",
+        )["data"]
+        assert unshared["ok"] is True
+        assert unshared["deletedFiles"] is False
+        unshared_status, _ = request_json_status(
+            base_url,
+            "GET",
+            f"/api/v1/shared-files/{top_shared_file['hash']}",
+        )
+        assert unshared_status == 404
+        delete_without_confirm_status, _ = request_json_status(
+            base_url,
+            "DELETE",
+            f"/api/v1/shared-files/{nested_shared_file['hash']}/file",
+        )
+        assert delete_without_confirm_status == 400
+        deleted_shared_file = request_json(
+            base_url,
+            "DELETE",
+            f"/api/v1/shared-files/{nested_shared_file['hash']}/file?confirm=true",
+        )["data"]
+        assert deleted_shared_file["ok"] is True
+        assert deleted_shared_file["deletedFiles"] is True
 
         search = request_json(
             base_url,
