@@ -431,9 +431,10 @@ class _LocalSwarmHarnessCliCommon:
         source_artifacts_dir = Path(kwargs["artifacts_dir"]).resolve()
         source_artifacts_dir.mkdir(parents=True, exist_ok=True)
         app_exe = Path(kwargs["app_exe"]).resolve() if kwargs.get("app_exe") else self.app_root / "emulebb.exe"
+        workspace_root = Path(kwargs["workspace_root"]).resolve() if kwargs.get("workspace_root") else self.root / "workspace"
         return SimpleNamespace(
             repo_root=self.root,
-            workspace_root=Path(kwargs["workspace_root"]).resolve(),
+            workspace_root=workspace_root,
             app_root=Path(kwargs["app_root"]).resolve() if kwargs.get("app_root") else self.app_root,
             app_exe=app_exe,
             seed_config_dir=None,

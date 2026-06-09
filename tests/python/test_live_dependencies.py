@@ -26,6 +26,12 @@ def zip_payload(name: str, content: bytes = b"exe") -> bytes:
     return data.getvalue()
 
 
+@pytest.fixture(autouse=True)
+def isolated_workspace_output_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path / "workspace-root"))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(tmp_path / "workspace-output"))
+
+
 def test_select_release_asset_uses_windows_x64_zip() -> None:
     asset = live_dependencies.select_release_asset(
         {
