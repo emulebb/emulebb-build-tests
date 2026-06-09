@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import subprocess
@@ -16,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_windows_client_inventory  # noqa: E402
+from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
 API_KEY = "multi-client-p2p-matrix-key"
@@ -23,24 +23,11 @@ HARNESS_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-harness-002"
 AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
 THREE_CLIENT_SWARM_SCENARIO_ID = "cl-emulebb-001-cl-harness-002-cl-amule-004-concurrent-swarm"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
-RUST_EMULEBB_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-emulebb-rust-005"
+RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
 
 
-def load_local_module(module_name: str, filename: str):
-    """Loads one sibling helper module from a hyphenated script filename."""
-
-    module_path = Path(__file__).resolve().with_name(filename)
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-dtt = load_local_module("deterministic_two_client_transfer_matrix", "deterministic-two-client-transfer.py")
+harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
+dtt = load_script_module("deterministic_two_client_transfer_matrix", "deterministic-two-client-transfer.py")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -276,8 +263,8 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
     }
 
 
-def run_emulebb_rust_to_emulebb_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the REST-controlled Rust seeder to eMuleBB downloader scenario."""
+def run_emulebb_rust_emulebb_bidirectional_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the REST-controlled bidirectional Rust/eMuleBB transfer scenario."""
 
     scenario_artifacts = paths.source_artifacts_dir / "r5-e1"
     command = build_python_command()
@@ -294,7 +281,7 @@ def run_emulebb_rust_to_emulebb_scenario(paths, args: argparse.Namespace) -> dic
     completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
     child_report = compact_child_report(scenario_artifacts / "emulebb-rust-emulebb-cross-client-result.json")
     return {
-        "id": RUST_EMULEBB_TRANSFER_SCENARIO_ID,
+        "id": RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID,
         "status": "passed" if completed.returncode == 0 else "failed",
         "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["emulebb_rust"].profile_id],
         "command": command,
@@ -321,7 +308,7 @@ def build_optional_scenario_rows(
         (AMULE_TRANSFER_SCENARIO_ID, "amule"),
         (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
         (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
-        (RUST_EMULEBB_TRANSFER_SCENARIO_ID, "emulebb_rust"),
+        (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
         ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
     )
     for definition in definitions:
@@ -432,8 +419,8 @@ def main(argv: list[str] | None = None) -> int:
             scenarios.append(run_emulebb_rust_exchange_scenario(paths, args))
             completed_optional_ids.add(RUST_BIDIRECTIONAL_SCENARIO_ID)
         if rust.available and rust.deterministic_transfer_adapter:
-            scenarios.append(run_emulebb_rust_to_emulebb_scenario(paths, args))
-            completed_optional_ids.add(RUST_EMULEBB_TRANSFER_SCENARIO_ID)
+            scenarios.append(run_emulebb_rust_emulebb_bidirectional_scenario(paths, args))
+            completed_optional_ids.add(RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID)
         scenarios.extend(
             build_optional_scenario_rows(
                 inventory,

@@ -1,4 +1,4 @@
-"""Cross-client eD2K transfer between eMuleBB Rust and eMuleBB via REST."""
+"""Bidirectional cross-client eD2K transfer between eMuleBB Rust and eMuleBB via REST."""
 
 from __future__ import annotations
 
@@ -43,6 +43,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--p2p-bind-interface-address")
     parser.add_argument("--rest-ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--server-connect-timeout-seconds", type=float, default=120.0)
+    parser.add_argument("--link-export-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=4 * 1024 * 1024)
@@ -95,8 +96,7 @@ def wait_for_rust_rest(
 
 def wait_for_rust_ed2k_connected(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
     def resolve():
-        payload = request_json(base_url, "GET", "/api/v1/status", api_key)
-        data = payload.get("data")
+        data = request_json(base_url, "GET", "/api/v1/status", api_key)
         if isinstance(data, dict) and isinstance(data.get("ed2k"), dict) and data["ed2k"].get("connected"):
             return data
         return None
@@ -104,8 +104,83 @@ def wait_for_rust_ed2k_connected(base_url: str, api_key: str, timeout_seconds: f
     return live_common.wait_for(resolve, timeout_seconds, 0.5, "emulebb-rust ED2K connected")
 
 
+def wait_for_rust_transfer_completed(
+    base_url: str,
+    api_key: str,
+    transfer_hash: str,
+    runtime_dir: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until Rust completes one transfer and verifies the persisted bytes."""
+
+    observations: list[dict[str, object]] = []
+    pieces_path = runtime_dir / "transfers" / transfer_hash.lower() / "pieces.bin"
+
+    def resolve():
+        data = request_json(base_url, "GET", f"/api/v1/transfers/{transfer_hash}", api_key)
+        row = dict(data) if isinstance(data, dict) else {"payload": data}
+        row["observed_at"] = round(time.time(), 3)
+        row["pieces_file"] = dtt.snapshot_file(pieces_path, hash_limit_bytes=expected_size)
+        observations.append(row)
+        if (
+            isinstance(data, dict)
+            and data.get("state") == "completed"
+            and int(data.get("completedBytes") or 0) == expected_size
+            and pieces_path.is_file()
+            and pieces_path.stat().st_size == expected_size
+            and dtt.file_sha256(pieces_path) == expected_sha256
+        ):
+            result = dict(row)
+            result["observations"] = observations[-20:]
+            return result
+        return None
+
+    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust transfer {transfer_hash} completion")
+
+
+def wait_for_rust_search_result(
+    base_url: str,
+    api_key: str,
+    *,
+    query: str,
+    transfer_hash: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until Rust server search returns the expected file hash."""
+
+    observations: list[dict[str, object]] = []
+    normalized_hash = transfer_hash.lower()
+
+    def resolve():
+        search = request_json(
+            base_url,
+            "POST",
+            "/api/v1/searches",
+            api_key,
+            {"query": query, "method": "server", "type": ""},
+        )
+        results = search.get("results") if isinstance(search, dict) else None
+        result_count = len(results) if isinstance(results, list) else 0
+        observations.append({"result_count": result_count, "observed_at": round(time.time(), 3)})
+        if not isinstance(results, list):
+            return None
+        for result in results:
+            if isinstance(result, dict) and str(result.get("hash") or "").lower() == normalized_hash:
+                return {
+                    "search": search,
+                    "result": result,
+                    "observations": observations[-20:],
+                }
+        return None
+
+    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust server search result {normalized_hash}")
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Runs the Rust/eMuleBB cross-client transfer scenario."""
+    """Runs the bidirectional Rust/eMuleBB cross-client transfer scenario."""
 
     args = parse_args(argv)
     paths = harness_cli_common.prepare_run_paths(
@@ -197,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["rust_connect"] = request_json(rust_base_url, "POST", "/api/v1/servers/operations/connect", args.api_key)
         report["checks"]["rust_ed2k_connected"] = wait_for_rust_ed2k_connected(rust_base_url, args.api_key, args.server_connect_timeout_seconds)
-        shared = request_json(rust_base_url, "POST", "/api/v1/shared-files", args.api_key, {"path": str(fixture_path)})["data"]
+        shared = request_json(rust_base_url, "POST", "/api/v1/shared-files", args.api_key, {"path": str(fixture_path)})
         rust_file = shared["file"]
         link = str(rust_file["ed2kLink"])
         link_info = dtt.parse_ed2k_file_link(link)
@@ -218,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_port=ports["client1_rest"],
             lan_bind_addr=args.lan_bind_addr,
             p2p_bind_interface_name=args.p2p_bind_interface_name,
+            p2p_bind_addr=p2p_address,
         )
         dtt.write_server_met(Path(emulebb["config_dir"]) / "server.met", address=p2p_address, port=ports["ed2k_tcp"], name="emulebb-local-e2e")
         current_phase = "launch_emulebb"
@@ -248,6 +324,66 @@ def main(argv: list[str] | None = None) -> int:
                 temp_dir=Path(emulebb["temp_dir"]),
                 hash_limit_bytes=max(int(link_info["size"]), args.fixture_size_bytes),
             ),
+        )
+        emulebb_fixture_path = paths.source_artifacts_dir / "emulebb-shared" / "emulebb-to-emulebb-rust.bin"
+        emulebb_fixture_sha256 = dtt.write_fixture_file(emulebb_fixture_path, args.fixture_size_bytes, seed=0xE1BB2026)
+        report["emulebb_fixture"] = {
+            "path": str(emulebb_fixture_path),
+            "size": args.fixture_size_bytes,
+            "sha256": emulebb_fixture_sha256,
+        }
+        report["checks"]["emulebb_shared_file_add"] = dtt.add_emule_shared_file(
+            emulebb_base_url,
+            args.api_key,
+            emulebb_fixture_path,
+        )
+        report["checks"]["emulebb_shared_file_reload"] = dtt.reload_emule_shared_files(emulebb_base_url, args.api_key)
+        emulebb_shared_link = dtt.wait_for_emule_shared_file_link(
+            emulebb_base_url,
+            args.api_key,
+            file_name=emulebb_fixture_path.name,
+            timeout_seconds=args.link_export_timeout_seconds,
+        )
+        report["checks"]["emulebb_shared_file_link"] = emulebb_shared_link
+        emulebb_link = str(emulebb_shared_link["link"])
+        emulebb_link_info = dtt.parse_ed2k_file_link(emulebb_link)
+        emulebb_transfer_hash = str(emulebb_link_info["hash"])
+        report["checks"]["emulebb_server_file"] = dtt.wait_for_server_file(
+            admin_base_url,
+            args.api_key,
+            emulebb_transfer_hash,
+            args.server_publish_timeout_seconds,
+        )
+        rust_reverse_search = wait_for_rust_search_result(
+            rust_base_url,
+            args.api_key,
+            query="emulebb-to-emulebb-rust",
+            transfer_hash=emulebb_transfer_hash,
+            timeout_seconds=args.server_publish_timeout_seconds,
+        )
+        report["checks"]["rust_reverse_search"] = rust_reverse_search
+        rust_search = rust_reverse_search["search"]
+        report["checks"]["rust_reverse_download"] = request_json(
+            rust_base_url,
+            "POST",
+            f"/api/v1/searches/{rust_search['id']}/results/{emulebb_transfer_hash}/operations/download",
+            args.api_key,
+            {"paused": False},
+        )
+        report["checks"]["rust_reverse_resume"] = request_json(
+            rust_base_url,
+            "POST",
+            f"/api/v1/transfers/{emulebb_transfer_hash}/operations/resume",
+            args.api_key,
+        )
+        report["checks"]["rust_completed_reverse_file"] = wait_for_rust_transfer_completed(
+            rust_base_url,
+            args.api_key,
+            emulebb_transfer_hash,
+            rust_runtime,
+            expected_size=int(emulebb_link_info["size"]),
+            expected_sha256=emulebb_fixture_sha256,
+            timeout_seconds=args.transfer_completion_timeout_seconds,
         )
         report["checks"]["ed2k_server_stats_final"] = dtt.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import random
 import shutil
@@ -20,23 +19,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import amule as amule_harness  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_amule_client  # noqa: E402
+from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 
-def load_local_module(module_name: str, filename: str):
-    """Loads one sibling helper module from a hyphenated script filename."""
-
-    module_path = Path(__file__).resolve().with_name(filename)
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-dtt = load_local_module("deterministic_two_client_transfer_swarm", "deterministic-two-client-transfer.py")
-amule_seed = load_local_module("deterministic_amule_transfer_swarm", "deterministic-amule-transfer.py")
+dtt = load_script_module("deterministic_two_client_transfer_swarm", "deterministic-two-client-transfer.py")
+amule_seed = load_script_module("deterministic_amule_transfer_swarm", "deterministic-amule-transfer.py")
 harness_cli_common = dtt.harness_cli_common
 live_common = dtt.live_common
 rest_smoke = dtt.rest_smoke
@@ -47,7 +34,6 @@ CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
 CLIENT04 = CLIENT_IDENTITIES["amule"]
 CLIENT_KEYS = (CLIENT01.key, CLIENT02.key, CLIENT04.key)
-SHARED_FILES_ROUTE = "/api/v1/shared-files"
 SEED_SPECS = {
     CLIENT01.key: ("seed-from-cl-emulebb-001.bin", 0xE001),
     CLIENT02.key: ("seed-from-cl-harness-002.bin", 0xE002),
@@ -271,33 +257,13 @@ def require_shared_file_hash(row: dict[str, object], expected_name: str) -> str:
 def add_emule_shared_file(base_url: str, api_key: str, file_path: Path) -> dict[str, object]:
     """Adds one eMuleBB seed file to the shared-file model."""
 
-    result = rest_smoke.http_request(
-        base_url,
-        SHARED_FILES_ROUTE,
-        method="POST",
-        api_key=api_key,
-        json_body={"path": str(file_path.resolve())},
-        request_timeout_seconds=30.0,
-    )
-    if int(result.get("status", 0)) != 200:
-        raise RuntimeError(f"Adding eMuleBB shared file failed: {rest_smoke.compact_http_result(result)!r}")
-    return rest_smoke.compact_http_result(result)
+    return dtt.add_emule_shared_file(base_url, api_key, file_path)
 
 
 def reload_emule_shared_files(base_url: str, api_key: str) -> dict[str, object]:
     """Requests a native shared-files reload through REST."""
 
-    result = rest_smoke.http_request(
-        base_url,
-        f"{SHARED_FILES_ROUTE}/operations/reload",
-        method="POST",
-        api_key=api_key,
-        json_body={},
-        request_timeout_seconds=30.0,
-    )
-    if int(result.get("status", 0)) != 200:
-        raise RuntimeError(f"Reloading eMuleBB shared files failed: {rest_smoke.compact_http_result(result)!r}")
-    return rest_smoke.compact_http_result(result)
+    return dtt.reload_emule_shared_files(base_url, api_key)
 
 
 def wait_for_emule_shared_file_link(
@@ -308,31 +274,13 @@ def wait_for_emule_shared_file_link(
 ) -> SeedFile:
     """Waits until eMuleBB exposes a shared-file row and ED2K link."""
 
-    observations: list[dict[str, object]] = []
-
-    def resolve():
-        rows_result = rest_smoke.http_request(base_url, SHARED_FILES_ROUTE, api_key=api_key, request_timeout_seconds=10.0)
-        rows = rest_smoke.require_json_array(rows_result, 200)
-        observations.append({"count": len(rows), "observed_at": round(time.time(), 3)})
-        for row in rows:
-            if isinstance(row, dict) and row.get("name") == seed.name:
-                file_hash = require_shared_file_hash(row, seed.name)
-                link_result = rest_smoke.http_request(
-                    base_url,
-                    f"{SHARED_FILES_ROUTE}/{file_hash}/ed2k-link",
-                    api_key=api_key,
-                    request_timeout_seconds=10.0,
-                )
-                body = rest_smoke.require_json_object(link_result, 200)
-                link = body.get("link")
-                if isinstance(link, str) and link.startswith("ed2k://|file|"):
-                    return seed.with_link(link)
-        return None
-
-    try:
-        return live_common.wait_for(resolve, timeout_seconds, 1.0, f"eMuleBB shared link for {seed.name}")
-    except Exception as exc:
-        raise RuntimeError(f"Timed out waiting for eMuleBB shared link. Observations: {observations[-20:]!r}") from exc
+    linked = dtt.wait_for_emule_shared_file_link(
+        base_url,
+        api_key,
+        file_name=seed.name,
+        timeout_seconds=timeout_seconds,
+    )
+    return seed.with_link(str(linked["link"]))
 
 
 def wait_for_harness_download_report(path: Path, timeout_seconds: float) -> dict[str, object]:

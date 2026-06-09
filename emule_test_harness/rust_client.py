@@ -30,6 +30,7 @@ def write_rust_config(
     ed2k_port: int | None = None,
     kad_port: int | None = None,
     server_endpoint: str | None = None,
+    connect_timeout_secs: int = 10,
 ) -> None:
     """Writes a minimal eMuleBB Rust config for local harness runs."""
 
@@ -62,7 +63,7 @@ def write_rust_config(
                 "[ed2k]",
                 f"listenPort = {ed2k_port}",
                 f'serverEndpoints = ["{server_endpoint}"]',
-                "connectTimeoutSecs = 1",
+                f"connectTimeoutSecs = {connect_timeout_secs}",
                 "reconnectIntervalSecs = 60",
                 "",
             ]

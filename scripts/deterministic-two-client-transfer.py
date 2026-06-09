@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import ipaddress
 import json
 import os
@@ -26,24 +25,12 @@ from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
 from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path  # noqa: E402
+from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 
-def load_local_module(module_name: str, filename: str):
-    """Loads one sibling helper module from a hyphenated script filename."""
-
-    module_path = Path(__file__).resolve().with_name(filename)
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
-rest_smoke = load_local_module("rest_api_smoke", "rest-api-smoke.py")
+harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
+live_common = load_script_module("emule_live_profile_common", "emule-live-profile-common.py")
+rest_smoke = load_script_module("rest_api_smoke", "rest-api-smoke.py")
 
 SUITE_NAME = "deterministic-two-client-transfer"
 API_KEY = "deterministic-two-client-transfer-key"
@@ -52,6 +39,7 @@ DETERMINISTIC_BANDWIDTH_LIMIT_KIB = 262144
 DETERMINISTIC_BANDWIDTH_CAPACITY_KIB = 327680
 DETERMINISTIC_MAX_UPLOAD_CLIENTS = 32
 ED2K_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+SHARED_FILES_ROUTE = "/api/v1/shared-files"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
 
@@ -403,7 +391,7 @@ def parse_ed2k_file_link(link: str) -> dict[str, object]:
     return {"name": name, "size": size, "hash": file_hash}
 
 
-def write_fixture_file(path: Path, size_bytes: int) -> str:
+def write_fixture_file(path: Path, size_bytes: int, *, seed: int = 0xED2B2026) -> str:
     """Writes deterministic low-compressibility bytes and returns the SHA-256 proof hash."""
 
     if size_bytes <= 0:
@@ -414,7 +402,7 @@ def write_fixture_file(path: Path, size_bytes: int) -> str:
     import hashlib
 
     digest = hashlib.sha256()
-    rng = random.Random(0xED2B2026)
+    rng = random.Random(seed)
     with path.open("wb") as handle:
         while remaining > 0:
             chunk_size = min(64 * 1024, remaining)
@@ -447,6 +435,83 @@ def wait_for_exported_link(path: Path, timeout_seconds: float) -> str:
         return text if text.startswith("ed2k://|file|") else None
 
     return live_common.wait_for(resolve, timeout_seconds, 1.0, "client2 exported eD2K link")
+
+
+def add_emule_shared_file(base_url: str, api_key: str, file_path: Path) -> dict[str, object]:
+    """Adds one eMuleBB seed file to the shared-file model through REST."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        SHARED_FILES_ROUTE,
+        method="POST",
+        api_key=api_key,
+        json_body={"path": str(file_path.resolve())},
+        request_timeout_seconds=30.0,
+    )
+    if int(result.get("status", 0)) != 200:
+        raise RuntimeError(f"Adding eMuleBB shared file failed: {rest_smoke.compact_http_result(result)!r}")
+    return rest_smoke.compact_http_result(result)
+
+
+def reload_emule_shared_files(base_url: str, api_key: str) -> dict[str, object]:
+    """Requests a native eMuleBB shared-files reload through REST."""
+
+    result = rest_smoke.http_request(
+        base_url,
+        f"{SHARED_FILES_ROUTE}/operations/reload",
+        method="POST",
+        api_key=api_key,
+        json_body={},
+        request_timeout_seconds=30.0,
+    )
+    if int(result.get("status", 0)) != 200:
+        raise RuntimeError(f"Reloading eMuleBB shared files failed: {rest_smoke.compact_http_result(result)!r}")
+    return rest_smoke.compact_http_result(result)
+
+
+def wait_for_emule_shared_file_link(
+    base_url: str,
+    api_key: str,
+    *,
+    file_name: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until eMuleBB exposes a shared-file row and ED2K link for one file."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        rows_result = rest_smoke.http_request(base_url, SHARED_FILES_ROUTE, api_key=api_key, request_timeout_seconds=10.0)
+        rows = rest_smoke.require_json_array(rows_result, 200)
+        observations.append({"count": len(rows), "observed_at": round(time.time(), 3)})
+        for row in rows:
+            if not isinstance(row, dict) or row.get("name") != file_name:
+                continue
+            file_hash = row.get("hash")
+            if not isinstance(file_hash, str) or not ED2K_HASH_PATTERN.match(file_hash):
+                continue
+            normalized_hash = file_hash.lower()
+            link_result = rest_smoke.http_request(
+                base_url,
+                f"{SHARED_FILES_ROUTE}/{normalized_hash}/ed2k-link",
+                api_key=api_key,
+                request_timeout_seconds=10.0,
+            )
+            body = rest_smoke.require_json_object(link_result, 200)
+            link = body.get("link")
+            if isinstance(link, str) and link.startswith("ed2k://|file|"):
+                return {
+                    "file": dict(row),
+                    "hash": normalized_hash,
+                    "link": link,
+                    "observations": observations[-20:],
+                }
+        return None
+
+    try:
+        return live_common.wait_for(resolve, timeout_seconds, 1.0, f"eMuleBB shared link for {file_name}")
+    except Exception as exc:
+        raise RuntimeError(f"Timed out waiting for eMuleBB shared link. Observations: {observations[-20:]!r}") from exc
 
 
 def wait_for_file(path: Path, timeout_seconds: float, description: str) -> dict[str, object]:

@@ -345,6 +345,19 @@ def test_write_fixture_file_is_deterministic(tmp_path: Path) -> None:
     assert first_hash == second_hash == module.file_sha256(first)
 
 
+def test_write_fixture_file_seed_changes_bytes(tmp_path: Path) -> None:
+    module = load_suite_module()
+    first = tmp_path / "first.bin"
+    second = tmp_path / "second.bin"
+
+    first_hash = module.write_fixture_file(first, 4097)
+    second_hash = module.write_fixture_file(second, 4097, seed=0xE1BB2026)
+
+    assert first.read_bytes() != second.read_bytes()
+    assert first_hash != second_hash
+    assert second_hash == module.file_sha256(second)
+
+
 def test_build_client2_harness_args_uses_single_dash_parser_form(tmp_path: Path) -> None:
     module = load_suite_module()
 

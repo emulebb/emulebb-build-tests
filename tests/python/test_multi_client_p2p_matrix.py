@@ -69,7 +69,7 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
         "cl-emulebb-rust-005",
         "cl-emulebb-rust-006",
     ]
-    assert rows_by_id[module.RUST_EMULEBB_TRANSFER_SCENARIO_ID]["missing_clients"] == ["cl-emulebb-rust-005"]
+    assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == ["cl-emulebb-rust-005"]
 
 
 def test_matrix_defaults_to_132_mib_fixture() -> None:
@@ -172,7 +172,7 @@ def test_optional_rows_omit_completed_amule_scenario(tmp_path: Path) -> None:
         "cl-emulebb-001-downloads-from-cl-emuleai-003",
         module.THREE_CLIENT_SWARM_SCENARIO_ID,
         module.RUST_BIDIRECTIONAL_SCENARIO_ID,
-        module.RUST_EMULEBB_TRANSFER_SCENARIO_ID,
+        module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID,
         "cl-emuleai-003-and-cl-amule-004-discovery",
     }
 
@@ -199,6 +199,8 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
             "192.0.2.10",
             "--p2p-bind-interface-address",
             "10.1.2.3",
+            "--link-export-timeout-seconds",
+            "45",
         ]
     )
 
@@ -334,7 +336,7 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_pytest(monkey
     assert captured["env"]["X_LOCAL_IP"] == "192.0.2.10"
 
 
-def test_emulebb_rust_to_emulebb_scenario_uses_cross_client_script(monkeypatch, tmp_path: Path) -> None:
+def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     captured: dict[str, object] = {}
 
@@ -354,16 +356,19 @@ def test_emulebb_rust_to_emulebb_scenario_uses_cross_client_script(monkeypatch, 
             "192.0.2.10",
             "--p2p-bind-interface-address",
             "10.1.2.3",
+            "--link-export-timeout-seconds",
+            "45",
         ]
     )
 
-    result = module.run_emulebb_rust_to_emulebb_scenario(paths, args)
+    result = module.run_emulebb_rust_emulebb_bidirectional_scenario(paths, args)
 
     assert result["status"] == "passed"
-    assert result["id"] == module.RUST_EMULEBB_TRANSFER_SCENARIO_ID
+    assert result["id"] == module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID
     assert result["clients"] == ["cl-emulebb-001", "cl-emulebb-rust-005"]
     command = captured["command"]
     assert "emulebb-rust-emulebb-cross-client.py" in str(command[1])
     assert command[command.index("--artifacts-dir") + 1].endswith("\\r5-e1") or command[command.index("--artifacts-dir") + 1].endswith("/r5-e1")
     assert option_value(command, "--lan-bind-addr") == "192.0.2.10"
     assert option_value(command, "--p2p-bind-interface-address") == "10.1.2.3"
+    assert option_value(command, "--link-export-timeout-seconds") == "45.0"
