@@ -968,6 +968,21 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         )
         assert missing_server_status == 404
         assert missing_server_error["error"]["code"] == "NOT_FOUND"
+        import_empty_status, import_empty_error = request_json_status(
+            base_url,
+            "POST",
+            "/api/v1/servers/operations/import-met-url",
+            {"url": " "},
+        )
+        assert import_empty_status == 400
+        assert "url" in import_empty_error["error"]["message"]
+        imported_met = request_json(
+            base_url,
+            "POST",
+            "/api/v1/servers/operations/import-met-url",
+            {"url": f"http://{lan_host}:{port}/server.met"},
+        )["data"]
+        assert imported_met == {"ok": False, "imported": False}
 
         connected = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
         assert connected["running"] is True
