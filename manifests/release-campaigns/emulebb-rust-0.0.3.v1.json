@@ -176,7 +176,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Define a Rust package artifact and SBOM row when the 0.0.x line gains a release package."
+              "description": "Define Rust package artifacts and SBOM rows under the same naming structure as eMuleBB: campaign id emulebb-rust-0.0.3, future annotated release tag emulebb-rust-v0.0.3 after release proof and operator tagging approval, release root emulebb-rust-v0.0.3, and standard ZIP assets named emulebb-rust-0.0.3-ARCH.zip."
             }
           ]
         }
