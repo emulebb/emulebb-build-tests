@@ -223,7 +223,7 @@ def test_resolve_profile_seed_dir_uses_default_or_override(tmp_path: Path) -> No
     assert module.resolve_profile_seed_dir(paths, tmp_path / "override") == (tmp_path / "override").resolve()
 
 
-def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_path: Path) -> None:
+def test_prepare_run_paths_defaults_to_output_roots(monkeypatch, tmp_path: Path) -> None:
     module = load_harness_cli_common_module()
     repo_root = tmp_path / "repos" / "emulebb-build-tests"
     script_file = repo_root / "scripts" / "suite.py"
@@ -240,6 +240,9 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
     monkeypatch.setenv("TEMP", r"C:\not-the-workspace-temp")
     monkeypatch.setenv("TMP", r"C:\not-the-workspace-temp")
     monkeypatch.setenv("LOCALAPPDATA", r"C:\not-the-workspace-localappdata")
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
+    output_root = tmp_path.parent / "emulebb-output"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
 
     paths = module.prepare_run_paths(
         script_file=script_file,
@@ -251,13 +254,13 @@ def test_prepare_run_paths_defaults_to_workspace_state_roots(monkeypatch, tmp_pa
 
     label = "20260521T120000Z-emulebb-main-release-4242"
     assert paths.source_artifacts_dir == (
-        tmp_path / "workspaces" / "workspace" / "state" / "test-artifacts" / "rest-api-live-e2e" / label
+        output_root / "artifacts" / "rest-api-live-e2e" / label
     ).resolve()
     assert paths.run_report_dir == (
-        tmp_path / "workspaces" / "workspace" / "state" / "test-reports" / "rest-api-live-e2e" / label
+        output_root / "reports" / "rest-api-live-e2e" / label
     ).resolve()
     assert paths.latest_report_dir == (
-        tmp_path / "workspaces" / "workspace" / "state" / "test-reports" / "rest-api-live-e2e" / "latest"
+        output_root / "reports" / "rest-api-live-e2e" / "latest"
     ).resolve()
     assert paths.keep_source_artifacts is False
 

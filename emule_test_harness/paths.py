@@ -82,13 +82,13 @@ def get_workspace_state_root(workspace_root: Path) -> Path:
 def get_test_artifacts_root(workspace_root: Path) -> Path:
     """Returns the canonical scratch artifact root for test harness runs."""
 
-    return get_workspace_state_root(workspace_root) / TEST_ARTIFACTS_DIR_NAME
+    return get_workspace_output_root() / "artifacts"
 
 
 def get_test_reports_root(workspace_root: Path) -> Path:
     """Returns the canonical published report root for test harness runs."""
 
-    return get_workspace_state_root(workspace_root) / TEST_REPORTS_DIR_NAME
+    return get_workspace_output_root() / "reports"
 
 
 def _normalized_path_text(path: Path) -> str:
@@ -130,7 +130,7 @@ def reject_windows_temp_path(path: Path, purpose: str) -> None:
 
     for temp_root in windows_temp_roots():
         if path_is_relative_to(path, temp_root):
-            raise RuntimeError(f"{purpose} must be under workspace state, not Windows temp: {path.resolve()}")
+            raise RuntimeError(f"{purpose} must be under the workspace output root, not Windows temp: {path.resolve()}")
 
 
 def get_test_binary_path(

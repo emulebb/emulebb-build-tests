@@ -13,7 +13,7 @@ from pathlib import Path
 from .artifact_names import utc_run_id
 from .live_diff import LiveDiffConfig, run_live_diff
 from .native_coverage import NativeCoverageConfig, publish_directory_snapshot, run_native_coverage
-from .paths import get_test_artifacts_root, get_test_reports_root
+from .paths import get_test_artifacts_root, get_test_reports_root, get_workspace_output_root
 from .workspace_layout import get_default_workspace_root
 
 lan_bind_ENV_NAMES = ("X_LOCAL_IP", "EMULEBB_TEST_LAN_IP_RESOLVED")
@@ -219,6 +219,7 @@ def run_live_rest_e2e_for_community_summary(
     ]
     env = os.environ.copy()
     env["EMULEBB_WORKSPACE_ROOT"] = str(config.workspace_root.parent.parent)
+    env["EMULEBB_WORKSPACE_OUTPUT_ROOT"] = str(get_workspace_output_root())
     lan_bind_addr = resolve_lan_bind_address(env)
     if lan_bind_addr:
         command.extend(["--lan-bind-addr", lan_bind_addr])

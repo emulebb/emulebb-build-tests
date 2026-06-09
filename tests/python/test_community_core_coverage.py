@@ -12,10 +12,13 @@ from emule_test_harness.community_core_coverage import (
 )
 
 
-def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path) -> None:
+def test_get_latest_coverage_summary_path_returns_newest_summary(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "workspaces" / "workspace"
-    older = workspace_root / "state" / "test-reports" / "native-coverage" / "older" / "coverage-summary.json"
-    newer = workspace_root / "state" / "test-reports" / "native-coverage" / "newer" / "coverage-summary.json"
+    output_root = tmp_path.parent / f"{tmp_path.name}-output"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
+    older = output_root / "reports" / "native-coverage" / "older" / "coverage-summary.json"
+    newer = output_root / "reports" / "native-coverage" / "newer" / "coverage-summary.json"
     older.parent.mkdir(parents=True)
     newer.parent.mkdir(parents=True)
     older.write_text(json.dumps({"name": "older"}), encoding="utf-8")
@@ -55,6 +58,9 @@ def test_build_config_resolves_default_app_roots(tmp_path: Path) -> None:
 def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeypatch) -> None:
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
+    output_root = tmp_path.parent / f"{tmp_path.name}-output"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     main_app_root = workspace_root / "app" / "emulebb-main"
     community_app_root = workspace_root / "app" / "emulebb-community-baseline"
     main_app_root.mkdir(parents=True)
@@ -99,6 +105,7 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["EMULEBB_WORKSPACE_ROOT"] == str(tmp_path)
+    assert env["EMULEBB_WORKSPACE_OUTPUT_ROOT"] == str(output_root.resolve())
     assert summary["rest_coverage_budget"] == "contract"
     assert summary["rest_stress_budget"] == "smoke"
     assert summary["server_search_count"] == 6
@@ -109,6 +116,9 @@ def test_optional_live_rest_e2e_builds_main_only_command(tmp_path: Path, monkeyp
 def test_optional_live_rest_e2e_uses_lan_bind_when_available(tmp_path: Path, monkeypatch) -> None:
     test_repo_root = tmp_path / "repos" / "emulebb-build-tests"
     workspace_root = tmp_path / "workspaces" / "workspace"
+    output_root = tmp_path.parent / f"{tmp_path.name}-output"
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
     main_app_root = workspace_root / "app" / "emulebb-main"
     community_app_root = workspace_root / "app" / "emulebb-community-baseline"
     main_app_root.mkdir(parents=True)
