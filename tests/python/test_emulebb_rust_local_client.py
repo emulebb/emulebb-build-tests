@@ -597,6 +597,28 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert {shared_top_file.name, shared_nested_file.name} <= shared_file_names
         top_shared_file = next(row for row in shared_files if row["name"] == shared_top_file.name)
         nested_shared_file = next(row for row in shared_files if row["name"] == shared_nested_file.name)
+        transfer_rows_before_clear = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
+        assert any(
+            row["hash"] == top_shared_file["hash"] and row["state"] == "completed"
+            for row in transfer_rows_before_clear
+        )
+        denied_clear_completed_status, denied_clear_completed_error = request_json_status(
+            base_url,
+            "POST",
+            "/api/v1/transfers/operations/clear-completed",
+            {"confirmClearCompleted": False},
+        )
+        assert denied_clear_completed_status == 400
+        assert "confirmClearCompleted" in denied_clear_completed_error["error"]["message"]
+        cleared_completed = request_json(
+            base_url,
+            "POST",
+            "/api/v1/transfers/operations/clear-completed",
+            {"confirmClearCompleted": True},
+        )["data"]
+        assert cleared_completed["ok"] is True
+        transfer_rows_after_clear = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
+        assert not any(row["hash"] == top_shared_file["hash"] for row in transfer_rows_after_clear)
         comments = request_json(
             base_url,
             "GET",
