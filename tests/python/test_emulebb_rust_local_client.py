@@ -744,6 +744,36 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         )
         downloaded_payload = leecher_runtime_dir / "transfers" / str(result["hash"]) / "pieces.bin"
         assert downloaded_payload.read_bytes() == payload
+
+        terminate_process(leecher_process)
+        with leecher_output_path.open("a", encoding="utf-8") as leecher_output:
+            leecher_process = subprocess.Popen(
+                [
+                    "cargo",
+                    "run",
+                    "-p",
+                    "emulebb-daemon",
+                    "--bin",
+                    "emulebb-rust",
+                    "--",
+                    "--config",
+                    str(leecher_config_path),
+                ],
+                cwd=rust_repo,
+                stdout=leecher_output,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        wait_for_rest(leecher_base_url, leecher_process, leecher_output_path)
+        persisted_sources = request_json(
+            leecher_base_url,
+            "GET",
+            f"/api/v1/transfers/{result['hash']}/sources",
+        )["data"]["items"]
+        assert any(
+            source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
+            for source in persisted_sources
+        )
     finally:
         terminate_process(leecher_process)
         terminate_process(seeder_process)
