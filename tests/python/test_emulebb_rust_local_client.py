@@ -448,6 +448,42 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         app = request_json(base_url, "GET", "/api/v1/app")
         assert app["data"]["name"] == "eMuleBB Rust"
         assert "rest.emulebb.v1" in app["data"]["capabilities"]
+        categories = request_json(base_url, "GET", "/api/v1/categories")["data"]["items"]
+        assert categories[0]["id"] == 0
+        created_category = request_json(
+            base_url,
+            "POST",
+            "/api/v1/categories",
+            {
+                "name": " Harness Media ",
+                "path": str(shared_root),
+                "comment": "daemon category",
+                "color": 255,
+                "priority": "high",
+            },
+        )["data"]
+        assert created_category["id"] == 1
+        assert created_category["name"] == "Harness Media"
+        assert created_category["priority"] == 2
+        updated_category = request_json(
+            base_url,
+            "PATCH",
+            "/api/v1/categories/1",
+            {"name": "Harness Archive", "path": None, "color": None, "priority": "verylow"},
+        )["data"]
+        assert updated_category["name"] == "Harness Archive"
+        assert updated_category["path"] is None
+        assert updated_category["priority"] == 4
+        default_delete_status, _ = request_json_status(
+            base_url,
+            "DELETE",
+            "/api/v1/categories/0",
+        )
+        assert default_delete_status == 400
+        deleted_category = request_json(base_url, "DELETE", "/api/v1/categories/1")["data"]
+        assert deleted_category["ok"] is True
+        missing_category_status, _ = request_json_status(base_url, "GET", "/api/v1/categories/1")
+        assert missing_category_status == 404
         assert request_json(base_url, "GET", "/api/v1/uploads")["data"]["items"] == []
         upload_queue = request_json(base_url, "GET", "/api/v1/upload-queue")["data"]
         assert upload_queue["items"] == []
