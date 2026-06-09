@@ -290,13 +290,15 @@ def build_server_config(
     catalog_path: Path,
     token: str,
     admin_address: str,
+    ed2k_address: str | None = None,
     protocol_obfuscation: bool = True,
     server_udp: bool = True,
 ) -> dict[str, object]:
     """Writes and returns the local ED2K server JSON configuration."""
 
+    ed2k_bind_address = ed2k_address or "0.0.0.0"
     config = {
-        "listen_address": f"0.0.0.0:{ed2k_port}",
+        "listen_address": f"{ed2k_bind_address}:{ed2k_port}",
         "admin_listen_address": f"{admin_address}:{admin_port}",
         "admin_token": token,
         "server_name": "emulebb-local-e2e",

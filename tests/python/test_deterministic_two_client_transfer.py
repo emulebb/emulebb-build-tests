@@ -300,6 +300,25 @@ def test_build_server_config_allows_admin_bind_override(tmp_path: Path) -> None:
     assert json.loads(config_path.read_text(encoding="utf-8"))["admin_listen_address"] == "192.0.2.10:8080"
 
 
+def test_build_server_config_allows_ed2k_bind_override(tmp_path: Path) -> None:
+    module = load_suite_module()
+    config_path = tmp_path / "server" / "config.json"
+    catalog_path = tmp_path / "server" / "catalog.json"
+
+    config = module.build_server_config(
+        config_path,
+        ed2k_port=4661,
+        admin_port=8080,
+        catalog_path=catalog_path,
+        token="secret",
+        admin_address="192.0.2.10",
+        ed2k_address="192.0.2.20",
+    )
+
+    assert config["listen_address"] == "192.0.2.20:4661"
+    assert json.loads(config_path.read_text(encoding="utf-8"))["listen_address"] == "192.0.2.20:4661"
+
+
 def test_parse_exported_ed2k_file_link() -> None:
     module = load_suite_module()
 

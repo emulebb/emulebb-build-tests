@@ -14,6 +14,9 @@ from pathlib import Path
 
 import pytest
 
+from emule_test_harness import rust_client
+from emule_test_harness.script_modules import load_script_module
+
 
 API_KEY = "test-api-key"
 SEED_HASH = "00112233445566778899aabbccddeeff"
@@ -25,23 +28,25 @@ SERVICE_PORT_END = int(os.environ.get("EMULEBB_RUST_TEST_PORT_END", "45000"))
 _ALLOCATED_PORTS: set[int] = set()
 
 
+dtt = load_script_module("deterministic_two_client_transfer_for_rust_tests", "deterministic-two-client-transfer.py")
+
+
 def workspace_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def workspace_output_root() -> Path:
-    override = os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT")
-    if override:
-        return Path(override).resolve()
-    return workspace_root() / "output"
+def active_workspace_root() -> Path:
+    return workspace_root() / "workspaces" / "workspace"
 
 
-def rust_cargo_env() -> dict[str, str]:
-    env = os.environ.copy()
-    target_dir = Path(env.get("CARGO_TARGET_DIR") or workspace_output_root() / "builds" / "rust" / "target")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    env["CARGO_TARGET_DIR"] = str(target_dir)
-    return env
+def build_goed2k_server_binary() -> Path:
+    server_exe = dtt.resolve_ed2k_server_exe(active_workspace_root(), None)
+    dtt.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
+    return server_exe
+
+
+def start_goed2k_server(config_path: Path, output_path: Path) -> subprocess.Popen:
+    return dtt.start_ed2k_server(build_goed2k_server_binary(), config_path, output_path)
 
 
 def free_lan_port(host: str) -> int:
@@ -98,43 +103,16 @@ def write_config(
     ed2k_listen_port: int | None = None,
     kad_listen_port: int | None = None,
 ) -> None:
-    lines = [
-        f'runtimeDir = "{runtime_dir.as_posix()}"',
-    ]
-    if ed2k_server_endpoint is not None:
-        if ed2k_listen_port is None or kad_listen_port is None:
-            raise ValueError("ED2K configs require ed2k_listen_port and kad_listen_port")
-        lines.extend(
-            [
-                f'p2pBindIp = "{lan_host}"',
-                "",
-            ]
-        )
-    lines.extend(
-        [
-            "[rest]",
-            f'bindAddr = "{lan_host}:{port}"',
-            f'apiKey = "{API_KEY}"',
-            "",
-        ]
-    )
-    if ed2k_server_endpoint is not None:
-        lines.extend(
-            [
-                "[kad]",
-                f"listenPort = {kad_listen_port}",
-                "",
-                "[ed2k]",
-                f"listenPort = {ed2k_listen_port}",
-                f'serverEndpoints = ["{ed2k_server_endpoint}"]',
-                "connectTimeoutSecs = 1",
-                "reconnectIntervalSecs = 60",
-                "",
-            ]
-        )
-    path.write_text(
-        "\n".join(lines),
-        encoding="utf-8",
+    rust_client.write_rust_config(
+        path,
+        runtime_dir=runtime_dir,
+        rest_addr=lan_host,
+        rest_port=port,
+        api_key=API_KEY,
+        p2p_bind_ip=lan_host if ed2k_server_endpoint is not None else None,
+        ed2k_port=ed2k_listen_port,
+        kad_port=kad_listen_port,
+        server_endpoint=ed2k_server_endpoint,
     )
 
 
@@ -378,7 +356,7 @@ def write_goed2k_catalog(path: Path, source_host: str, source_port: int) -> None
 
 
 def write_empty_goed2k_catalog(path: Path) -> None:
-    path.write_text('{"files":[]}\n', encoding="utf-8")
+    dtt.write_empty_catalog(path)
 
 
 def write_goed2k_config(
@@ -390,60 +368,23 @@ def write_goed2k_config(
     token: str,
     catalog_path: Path,
 ) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "listen_address": f"{listen_host}:{listen_port}",
-                "admin_listen_address": f"{listen_host}:{admin_port}",
-                "admin_token": token,
-                "server_name": "emulebb-rust-local-ed2k",
-                "server_description": "eMuleBB Rust local ED2K test server",
-                "storage_backend": "json",
-                "catalog_path": str(catalog_path),
-                "search_batch_size": 20,
-                "server_udp": True,
-                "udp_port_offset": 4,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+    dtt.build_server_config(
+        path,
+        ed2k_port=listen_port,
+        admin_port=admin_port,
+        catalog_path=catalog_path,
+        token=token,
+        admin_address=listen_host,
+        ed2k_address=listen_host,
     )
 
 
 def terminate_process(process: subprocess.Popen[str]) -> None:
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
-        return
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
+    rust_client.stop_process_tree(process, timeout_seconds=5)
 
 
 def terminate_goed2k_server_processes() -> None:
-    if os.name != "nt":
-        return
-    subprocess.run(
-        ["taskkill", "/IM", "goed2k-server.exe", "/T", "/F"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    rust_client.stop_goed2k_server_processes()
 
 
 def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
@@ -484,7 +425,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
                 str(config_path),
             ],
             cwd=repo,
-            env=rust_cargo_env(),
+            env=rust_client.rust_cargo_env(),
             stdout=output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -970,7 +911,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
                 str(config_path),
             ],
             cwd=repo,
-            env=rust_cargo_env(),
+            env=rust_client.rust_cargo_env(),
             stdout=output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1081,14 +1022,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         catalog_path=catalog_path,
     )
 
-    with server_output_path.open("w", encoding="utf-8") as server_output:
-        server_process = subprocess.Popen(
-            ["go", "run", "./cmd/goed2k-server", "-config", str(server_config_path)],
-            cwd=server_repo,
-            stdout=server_output,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    server_process = start_goed2k_server(server_config_path, server_output_path)
 
     rust_runtime_dir = tmp_path / "runtime"
     rust_config_path = tmp_path / "emulebb-rust.toml"
@@ -1118,7 +1052,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
                 str(rust_config_path),
             ],
             cwd=rust_repo,
-            env=rust_cargo_env(),
+            env=rust_client.rust_cargo_env(),
             stdout=rust_output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1193,14 +1127,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         catalog_path=catalog_path,
     )
 
-    with server_output_path.open("w", encoding="utf-8") as server_output:
-        server_process = subprocess.Popen(
-            ["go", "run", "./cmd/goed2k-server", "-config", str(server_config_path)],
-            cwd=server_repo,
-            stdout=server_output,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    server_process = start_goed2k_server(server_config_path, server_output_path)
 
     seeder_runtime_dir = tmp_path / "seeder-runtime"
     seeder_config_path = tmp_path / "seeder.toml"
@@ -1265,7 +1192,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                 str(seeder_config_path),
             ],
             cwd=rust_repo,
-            env=rust_cargo_env(),
+            env=rust_client.rust_cargo_env(),
             stdout=seeder_output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1284,7 +1211,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                 str(leecher_config_path),
             ],
             cwd=rust_repo,
-            env=rust_cargo_env(),
+            env=rust_client.rust_cargo_env(),
             stdout=leecher_output,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1362,7 +1289,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                     str(remembered_config_path),
                 ],
                 cwd=rust_repo,
-                env=rust_cargo_env(),
+                env=rust_client.rust_cargo_env(),
                 stdout=remembered_output,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1545,7 +1472,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
                     str(leecher_config_path),
                 ],
                 cwd=rust_repo,
-                env=rust_cargo_env(),
+                env=rust_client.rust_cargo_env(),
                 stdout=leecher_output,
                 stderr=subprocess.STDOUT,
                 text=True,

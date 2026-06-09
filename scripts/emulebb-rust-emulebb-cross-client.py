@@ -3,40 +3,23 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
-import json
-import os
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
-from emule_test_harness.paths import get_workspace_output_root  # noqa: E402
+from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness.script_modules import load_script_module  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 
 
-def load_local_module(module_name: str, filename: str):
-    """Loads one sibling helper module from a hyphenated script filename."""
-
-    module_path = Path(__file__).resolve().with_name(filename)
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load helper module from '{module_path}'.")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-harness_cli_common = load_local_module("harness_cli_common", "harness-cli-common.py")
-live_common = load_local_module("emule_live_profile_common", "emule-live-profile-common.py")
-dtt = load_local_module("deterministic_two_client_transfer", "deterministic-two-client-transfer.py")
+harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
+live_common = load_script_module("emule_live_profile_common", "emule-live-profile-common.py")
+dtt = load_script_module("deterministic_two_client_transfer", "deterministic-two-client-transfer.py")
 
 SUITE_NAME = "emulebb-rust-emulebb-cross-client"
 API_KEY = "emulebb-rust-emulebb-cross-client-key"
@@ -68,19 +51,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def workspace_manifest_path(workspace_root: Path) -> Path:
-    return workspace_root / "deps.json"
-
-
-def resolve_manifest_repo(workspace_root: Path, repo_key: str) -> Path:
-    manifest_path = workspace_manifest_path(workspace_root)
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    value = payload.get("workspace", {}).get("repos", {}).get(repo_key)
-    if not isinstance(value, str) or not value.strip():
-        raise RuntimeError(f"Workspace manifest does not define workspace.repos.{repo_key}.")
-    return (manifest_path.parent / value).resolve()
-
-
 def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = False) -> int:
     for _ in range(100):
         candidate = dtt.rest_smoke.choose_listen_port(lan_bind_addr)
@@ -90,109 +60,18 @@ def choose_extra_port(lan_bind_addr: str, used_ports: set[int], *, udp: bool = F
     raise RuntimeError("Could not allocate an extra LAN port.")
 
 
-def write_rust_config(
-    path: Path,
-    *,
-    runtime_dir: Path,
-    rest_addr: str,
-    rest_port: int,
-    p2p_bind_ip: str,
-    ed2k_port: int,
-    kad_port: int,
-    server_endpoint: str,
-    api_key: str,
-) -> None:
-    path.write_text(
-        "\n".join(
-            [
-                f'runtimeDir = "{runtime_dir.as_posix()}"',
-                f'p2pBindIp = "{p2p_bind_ip}"',
-                "",
-                "[rest]",
-                f'bindAddr = "{rest_addr}:{rest_port}"',
-                f'apiKey = "{api_key}"',
-                "",
-                "[kad]",
-                f"listenPort = {kad_port}",
-                "",
-                "[ed2k]",
-                f"listenPort = {ed2k_port}",
-                f'serverEndpoints = ["{server_endpoint}"]',
-                "connectTimeoutSecs = 1",
-                "reconnectIntervalSecs = 60",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-def rust_cargo_env() -> dict[str, str]:
-    env = os.environ.copy()
-    target_dir = Path(env.get("CARGO_TARGET_DIR") or get_workspace_output_root() / "builds" / "rust" / "target")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    env["CARGO_TARGET_DIR"] = str(target_dir)
-    return env
-
-
-def start_rust_client(repo: Path, config_path: Path, output_path: Path) -> subprocess.Popen[str]:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_handle = output_path.open("w", encoding="utf-8")
-    return subprocess.Popen(
-        [
-            "cargo",
-            "run",
-            "-p",
-            "emulebb-daemon",
-            "--bin",
-            "emulebb-rust",
-            "--",
-            "--config",
-            str(config_path),
-        ],
-        cwd=repo,
-        env=rust_cargo_env(),
-        stdout=output_handle,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-
-def stop_process_tree(process: subprocess.Popen | None, *, timeout_seconds: float = 10.0) -> None:
-    if process is None or process.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    else:
-        process.terminate()
-    try:
-        process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=timeout_seconds)
-
-
 def request_json(base_url: str, method: str, path: str, api_key: str, body: dict[str, object] | None = None) -> dict[str, object]:
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(
-        base_url + path,
-        data=data,
+    result = dtt.retry_rest_request(
+        base_url,
+        path,
         method=method,
-        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        api_key=api_key,
+        json_body=body,
+        timeout_seconds=30.0,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30.0) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"REST request failed: {method} {path} status={exc.code} body={exc.read()!r}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"REST request returned a non-object payload: {method} {path} {payload!r}")
-    return payload
+    if int(result.get("status", 0)) != 200:
+        raise RuntimeError(f"REST request failed: {method} {path} {dtt.rest_smoke.compact_http_result(result)!r}")
+    return dtt.rest_smoke.require_json_object(result, 200)
 
 
 def wait_for_rust_rest(
@@ -207,7 +86,7 @@ def wait_for_rust_rest(
             raise RuntimeError(f"emulebb-rust exited early with code {process.returncode}: {output_path.read_text(encoding='utf-8', errors='replace')[-2000:]}")
         try:
             payload = request_json(base_url, "GET", "/api/v1/app", api_key)
-        except (OSError, urllib.error.URLError, RuntimeError):
+        except (OSError, RuntimeError):
             return None
         return payload
 
@@ -282,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             catalog_path=catalog_path,
             token=args.api_key,
             admin_address=args.lan_bind_addr,
+            ed2k_address=args.lan_bind_addr,
         )
         current_phase = "start_ed2k_server"
         server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
@@ -294,19 +174,19 @@ def main(argv: list[str] | None = None) -> int:
 
         rust_runtime = paths.source_artifacts_dir / "rust-runtime"
         rust_config = paths.source_artifacts_dir / "rust.toml"
-        write_rust_config(
+        rust_client.write_rust_config(
             rust_config,
             runtime_dir=rust_runtime,
             rest_addr=args.lan_bind_addr,
             rest_port=rust_rest_port,
+            api_key=args.api_key,
             p2p_bind_ip=p2p_address,
             ed2k_port=rust_ed2k_port,
             kad_port=rust_kad_port,
             server_endpoint=f"{p2p_address}:{ports['ed2k_tcp']}",
-            api_key=args.api_key,
         )
         current_phase = "launch_rust"
-        rust_process = start_rust_client(rust_repo, rust_config, paths.source_artifacts_dir / "rust.out")
+        rust_process = rust_client.start_rust_client(rust_repo, rust_config, paths.source_artifacts_dir / "rust.out")
         rust_base_url = f"http://{args.lan_bind_addr}:{rust_rest_port}"
         report["checks"]["rust_rest_ready"] = wait_for_rust_rest(
             rust_base_url,
@@ -387,8 +267,8 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup[CLIENT_EMULEBB.profile_id] = {"ok": True}
             except Exception as exc:
                 cleanup[CLIENT_EMULEBB.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        stop_process_tree(rust_process)
-        stop_process_tree(server_process)
+        rust_client.stop_process_tree(rust_process)
+        dtt.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         harness_cli_common.write_json_file(paths.source_artifacts_dir / "emulebb-rust-emulebb-cross-client-result.json", report)
