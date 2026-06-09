@@ -1989,7 +1989,6 @@ def build_parser() -> argparse.ArgumentParser:
     """Builds the aggregate live E2E argument parser."""
 
     parser = LiveE2EArgumentParser()
-    parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
@@ -2350,7 +2349,7 @@ def run_live_e2e_suite(args: argparse.Namespace, harness_cli_common) -> dict[str
         script_file=__file__,
         suite_name="live-e2e-suite",
         configuration=args.configuration,
-        workspace_root=args.workspace_root,
+        workspace_root=None,
         app_root=args.app_root,
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,

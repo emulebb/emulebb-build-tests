@@ -26,7 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-repo-root", type=Path, default=REPO_ROOT)
-    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--test-run-app-root", type=Path)
     parser.add_argument("--baseline-app-root", type=Path)
     parser.add_argument("--manifest-path", type=Path)
@@ -39,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     test_repo_root = args.test_repo_root.resolve()
-    workspace_root = (args.workspace_root or get_default_workspace_root(test_repo_root)).resolve()
+    workspace_root = get_default_workspace_root(test_repo_root).resolve()
     test_run_app_root = (args.test_run_app_root or (workspace_root / "app" / "emulebb-main")).resolve()
     baseline_app_root = (args.baseline_app_root or (workspace_root / "app" / "emulebb-community-baseline")).resolve()
     manifest_path = (args.manifest_path or (test_repo_root / "protocol-parity-surface.json")).resolve()

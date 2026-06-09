@@ -128,7 +128,6 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--test-repo-root", default=str(Path(__file__).resolve().parent.parent))
-    parser.add_argument("--workspace-root", default="")
     parser.add_argument("--coverage-summary-path", default="")
     parser.add_argument("--live-diff-summary-path", default="")
     parser.add_argument("--live-session-manifest-path", default="")
@@ -137,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     test_repo_root = Path(args.test_repo_root).resolve()
-    workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else get_default_workspace_root(test_repo_root)
+    workspace_root = get_default_workspace_root(test_repo_root)
     report_root = get_test_reports_root(workspace_root)
     coverage_summary_path = Path(args.coverage_summary_path).resolve() if args.coverage_summary_path else report_root / "native-coverage" / "latest" / "coverage-summary.json"
     live_diff_summary_path = Path(args.live_diff_summary_path).resolve() if args.live_diff_summary_path else report_root / "live-diff-summary.json"

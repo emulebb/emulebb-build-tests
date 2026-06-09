@@ -1401,7 +1401,6 @@ def main(argv: list[str]) -> int:
     """Parses arguments, runs the interruption suite, and publishes the report artifacts."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
@@ -1419,7 +1418,7 @@ def main(argv: list[str]) -> int:
         script_file=__file__,
         suite_name="shared-hash-ui-e2e",
         configuration=args.configuration,
-        workspace_root=args.workspace_root,
+        workspace_root=None,
         app_root=args.app_root,
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,

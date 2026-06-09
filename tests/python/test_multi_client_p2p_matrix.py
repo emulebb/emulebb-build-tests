@@ -143,8 +143,6 @@ def test_deterministic_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp
     paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
     args = module.parse_args(
         [
-            "--workspace-root",
-            str(tmp_path / "workspaces" / "workspace"),
             "--app-exe",
             str(tmp_path / "emulebb.exe"),
             "--client2-app-exe",
@@ -191,8 +189,6 @@ def test_amule_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: P
     paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
     args = module.parse_args(
         [
-            "--workspace-root",
-            str(tmp_path / "workspaces" / "workspace"),
             "--app-exe",
             str(tmp_path / "emulebb.exe"),
             "--profile-seed-dir",
@@ -232,8 +228,6 @@ def test_three_client_swarm_scenario_forwards_harness_and_amule(monkeypatch, tmp
     paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
     args = module.parse_args(
         [
-            "--workspace-root",
-            str(tmp_path / "workspaces" / "workspace"),
             "--app-exe",
             str(tmp_path / "emulebb.exe"),
             "--client2-app-exe",

@@ -522,7 +522,7 @@ def make_child_run_paths(args: argparse.Namespace):
     workspace_root, app_root, app_exe = harness_cli_common.resolve_app_executable(
         repo_root=repo_root,
         configuration=args.configuration,
-        workspace_root=Path(args.workspace_root).resolve() if args.workspace_root else None,
+        workspace_root=None,
         app_root=args.app_root,
         app_exe=args.app_exe,
     )
@@ -675,7 +675,6 @@ def run_resource_ui_smoke(paths, args: argparse.Namespace) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
@@ -699,7 +698,7 @@ def main() -> int:
         script_file=__file__,
         suite_name="resource-ui-smoke",
         configuration=args.configuration,
-        workspace_root=args.workspace_root,
+        workspace_root=None,
         app_root=args.app_root,
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,

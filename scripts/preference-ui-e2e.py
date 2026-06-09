@@ -993,7 +993,6 @@ def run_preference_roundtrip(paths: harness_cli_common.HarnessRunPaths, args: ar
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")
@@ -1011,7 +1010,7 @@ def main() -> None:
         script_file=__file__,
         suite_name="preference-ui-e2e",
         configuration=args.configuration,
-        workspace_root=args.workspace_root,
+        workspace_root=None,
         app_root=args.app_root,
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,

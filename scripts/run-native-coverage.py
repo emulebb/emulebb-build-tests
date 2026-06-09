@@ -19,7 +19,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-repo-root", type=Path, default=REPO_ROOT)
-    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--app-root", type=Path)
     parser.add_argument("--configuration", choices=("Debug", "Release"), default="Debug")
     parser.add_argument("--platform", choices=("x64",), default="x64")
@@ -35,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = build_config(
         test_repo_root=args.test_repo_root,
-        workspace_root=args.workspace_root,
+        workspace_root=None,
         app_root=args.app_root,
         configuration=args.configuration,
         platform=args.platform,

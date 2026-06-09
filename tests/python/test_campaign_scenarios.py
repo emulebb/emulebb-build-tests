@@ -110,9 +110,10 @@ class CampaignPlanHarnessCliCommon:
     def prepare_run_paths(self, **kwargs):
         source_artifacts_dir = Path(kwargs["artifacts_dir"]).resolve()
         source_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        workspace_root = kwargs["workspace_root"] or (self.root / "workspaces" / "workspace")
         return SimpleNamespace(
             repo_root=self.root,
-            workspace_root=Path(kwargs["workspace_root"]).resolve(),
+            workspace_root=Path(workspace_root).resolve(),
             app_root=Path(kwargs["app_root"]).resolve(),
             app_exe=Path(kwargs["app_exe"]).resolve(),
             seed_config_dir=None,
@@ -159,8 +160,6 @@ def test_all_reusable_campaign_local_modes_plan_declared_local_suites(tmp_path: 
         if scenario.uses_local_swarm and "godzilla-local-swarm" not in suites:
             suites.append("godzilla-local-swarm")
         argv = [
-            "--workspace-root",
-            str(workspace_root),
             "--app-root",
             str(app_root),
             "--app-exe",

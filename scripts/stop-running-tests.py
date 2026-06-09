@@ -352,12 +352,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Stops eMuleBB workspace test processes selected by process tree and command-line evidence."
     )
-    parser.add_argument(
-        "--workspace-root",
-        type=Path,
-        default=None,
-        help=argparse.SUPPRESS,
-    )
     parser.add_argument("--dry-run", action="store_true", help="Only print selected processes; do not stop them.")
     parser.add_argument("--json", action="store_true", help="Print a machine-readable JSON report.")
     return parser.parse_args(argv)
@@ -365,7 +359,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    workspace_root = default_workspace_root() if args.workspace_root is None else args.workspace_root.resolve()
+    workspace_root = default_workspace_root()
     output_root = default_output_root()
     processes = collect_windows_processes()
     selected_pids, reasons = select_test_processes(processes, workspace_root, output_root=output_root)

@@ -26,7 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
     """Builds the hash diagnostic launcher CLI parser."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--app-root", type=Path)
     parser.add_argument("--emule-exe", type=Path)
     parser.add_argument("--profile-seed-dir", type=Path)
@@ -83,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(argv)
     test_repo_root = REPO_ROOT.resolve()
-    workspace_root = (args.workspace_root or get_default_workspace_root(test_repo_root)).resolve()
+    workspace_root = get_default_workspace_root(test_repo_root).resolve()
     app_root = args.app_root.resolve() if args.app_root else resolve_workspace_app_root(
         workspace_root,
         preferred_variant_names=("main", "community", "tracing-harness"),

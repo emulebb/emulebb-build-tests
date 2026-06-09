@@ -214,7 +214,7 @@ def run_vhd_partfile_recovery(args: argparse.Namespace) -> dict[str, object]:
         script_file=__file__,
         suite_name=SUITE_NAME,
         configuration=args.configuration,
-        workspace_root=args.workspace_root,
+        workspace_root=None,
         app_root=args.app_root,
         app_exe=args.app_exe,
         artifacts_dir=args.artifacts_dir,
@@ -392,7 +392,6 @@ def build_parser() -> argparse.ArgumentParser:
     """Builds the VHD part-file recovery parser."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--workspace-root")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
     parser.add_argument("--profile-seed-dir")

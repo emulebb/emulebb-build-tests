@@ -256,7 +256,6 @@ def invoke_script(argv: list[str]) -> int:
 
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--test-repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
-    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--main-app-root", type=Path)
     parser.add_argument("--community-app-root", type=Path)
     parser.add_argument("--configuration", choices=("Debug", "Release"), default="Debug")
@@ -273,7 +272,7 @@ def invoke_script(argv: list[str]) -> int:
     return run_community_core_coverage(
         build_config(
             test_repo_root=args.test_repo_root,
-            workspace_root=args.workspace_root,
+            workspace_root=None,
             main_app_root=args.main_app_root,
             community_app_root=args.community_app_root,
             configuration=args.configuration,
