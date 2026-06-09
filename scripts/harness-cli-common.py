@@ -13,6 +13,7 @@ from pathlib import Path
 from emule_test_harness.paths import (
     get_test_artifacts_root,
     get_test_reports_root,
+    get_workspace_output_root,
     reject_windows_temp_path,
 )
 from emule_test_harness.artifact_names import (
@@ -81,6 +82,7 @@ class HarnessRunPaths:
 
     repo_root: Path
     workspace_root: Path
+    output_root: Path
     app_root: Path
     app_exe: Path
     seed_config_dir: Path
@@ -700,6 +702,7 @@ def prepare_run_paths(
     return HarnessRunPaths(
         repo_root=repo_root,
         workspace_root=resolved_workspace_root,
+        output_root=get_workspace_output_root(),
         app_root=resolved_app_root,
         app_exe=resolved_app_exe,
         seed_config_dir=seed_config_dir,

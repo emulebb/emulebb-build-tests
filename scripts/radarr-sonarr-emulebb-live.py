@@ -3846,7 +3846,7 @@ def build_admin_fixture_config(paths, args: argparse.Namespace, suite_name: str)
     mount_parent = (
         Path(args.mount_root).resolve()
         if args.mount_root
-        else paths.workspace_root / "state" / "admin-mounts"
+        else paths.output_root / "artifacts" / "admin-mounts"
     )
     reject_windows_temp_path(mount_parent, "admin fixture mount root")
     return AdminVolumeFixtureConfig(

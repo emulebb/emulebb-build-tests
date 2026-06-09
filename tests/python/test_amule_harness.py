@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from pathlib import Path
 
@@ -10,9 +11,12 @@ from emule_test_harness import amule
 
 
 def workspace_unit_root(name: str, request: pytest.FixtureRequest) -> Path:
-    """Returns a predictable workspace-state scratch root for path-discipline tests."""
+    """Returns a predictable output-root scratch root for path-discipline tests."""
 
-    root = Path(__file__).resolve().parents[4] / "workspaces" / "workspace" / "state" / "test-artifacts" / "unit-amule-harness" / name
+    output_root = os.environ.get("EMULEBB_WORKSPACE_OUTPUT_ROOT", "").strip()
+    if not output_root:
+        raise RuntimeError("EMULEBB_WORKSPACE_OUTPUT_ROOT must be set.")
+    root = Path(output_root).resolve() / "artifacts" / "unit-amule-harness" / name
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)

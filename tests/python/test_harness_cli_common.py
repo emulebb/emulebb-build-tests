@@ -113,6 +113,7 @@ def test_publish_latest_report_skips_heavy_payloads(tmp_path: Path) -> None:
     paths = module.HarnessRunPaths(
         repo_root=tmp_path,
         workspace_root=tmp_path / "workspaces" / "workspace",
+        output_root=tmp_path / "output",
         app_root=tmp_path / "app",
         app_exe=tmp_path / "app" / "emulebb.exe",
         seed_config_dir=tmp_path / "seed",
@@ -187,6 +188,7 @@ def test_cleanup_source_artifacts_leaves_locked_temp_payloads(monkeypatch, tmp_p
     paths = module.HarnessRunPaths(
         repo_root=tmp_path,
         workspace_root=tmp_path,
+        output_root=tmp_path / "output",
         app_root=tmp_path,
         app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path,
@@ -208,6 +210,7 @@ def test_resolve_profile_seed_dir_uses_default_or_override(tmp_path: Path) -> No
     paths = module.HarnessRunPaths(
         repo_root=tmp_path,
         workspace_root=tmp_path,
+        output_root=tmp_path / "output",
         app_root=tmp_path,
         app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path / "default-seed",
@@ -477,6 +480,7 @@ def test_cleanup_source_artifacts_restores_or_clears_local_dumps_registry(monkey
     paths = module.HarnessRunPaths(
         repo_root=tmp_path,
         workspace_root=tmp_path,
+        output_root=tmp_path / "output",
         app_root=tmp_path,
         app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path,
@@ -505,6 +509,7 @@ def test_cleanup_source_artifacts_restores_local_dumps_when_artifacts_are_kept(m
     paths = module.HarnessRunPaths(
         repo_root=tmp_path,
         workspace_root=tmp_path,
+        output_root=tmp_path / "output",
         app_root=tmp_path,
         app_exe=tmp_path / "emulebb.exe",
         seed_config_dir=tmp_path,
@@ -553,6 +558,7 @@ def test_publish_run_artifacts_rewrites_json_paths_to_report_dir(tmp_path: Path)
     paths = module.HarnessRunPaths(
         repo_root=tmp_path,
         workspace_root=tmp_path / "workspaces" / "workspace",
+        output_root=tmp_path / "output",
         app_root=tmp_path / "app",
         app_exe=tmp_path / "app" / "emulebb.exe",
         seed_config_dir=tmp_path / "seed",

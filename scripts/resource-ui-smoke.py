@@ -535,6 +535,7 @@ def make_child_run_paths(args: argparse.Namespace):
     return harness_cli_common.HarnessRunPaths(
         repo_root=repo_root,
         workspace_root=workspace_root,
+        output_root=harness_cli_common.get_workspace_output_root(),
         app_root=app_root,
         app_exe=app_exe,
         seed_config_dir=seed_config_dir,
