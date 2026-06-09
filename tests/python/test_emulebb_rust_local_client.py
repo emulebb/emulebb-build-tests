@@ -412,6 +412,13 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     config_path = tmp_path / "emulebb-rust.toml"
     output_path = tmp_path / "emulebb-rust.out"
+    shared_root = tmp_path / "shared-root"
+    nested_shared_root = shared_root / "nested"
+    shared_top_file = shared_root / "Rust.Shared.Root.bin"
+    shared_nested_file = nested_shared_root / "Rust.Shared.Nested.bin"
+    nested_shared_root.mkdir(parents=True)
+    shared_top_file.write_bytes(b"emulebb-rust shared root fixture")
+    shared_nested_file.write_bytes(b"emulebb-rust nested shared root fixture")
     port = free_lan_port(lan_host)
     write_config(config_path, runtime_dir, lan_host, port)
     seed_index(runtime_dir / "index.sqlite")
@@ -452,6 +459,43 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )
         assert missing_upload_status == 404
         assert missing_upload_error["error"]["code"] == "NOT_FOUND"
+        missing_confirm_status, missing_confirm_error = request_json_status(
+            base_url,
+            "PATCH",
+            "/api/v1/shared-directories",
+            {"roots": [str(shared_root)], "confirmReplaceRoots": False},
+        )
+        assert missing_confirm_status == 400
+        assert "confirmReplaceRoots" in json.dumps(missing_confirm_error)
+        shared_directories = request_json(
+            base_url,
+            "PATCH",
+            "/api/v1/shared-directories",
+            {"roots": [{"path": str(shared_root), "recursive": True}], "confirmReplaceRoots": True},
+        )["data"]
+        assert shared_directories["roots"][0]["recursive"] is True
+        assert shared_directories["roots"][0]["accessible"] is True
+        listed_directories = request_json(base_url, "GET", "/api/v1/shared-directories")["data"]
+        assert listed_directories["roots"][0]["path"] == shared_directories["roots"][0]["path"]
+        reload_result = request_json(
+            base_url,
+            "POST",
+            "/api/v1/shared-directories/operations/reload",
+            timeout=30,
+        )["data"]
+        assert reload_result["ok"] is True
+        assert reload_result["count"] == 2
+        alias_reload_result = request_json(
+            base_url,
+            "POST",
+            "/api/v1/shared-files/operations/reload",
+            timeout=30,
+        )["data"]
+        assert alias_reload_result["ok"] is True
+        shared_file_names = {
+            row["name"] for row in request_json(base_url, "GET", "/api/v1/shared-files")["data"]["items"]
+        }
+        assert {shared_top_file.name, shared_nested_file.name} <= shared_file_names
 
         search = request_json(
             base_url,
@@ -475,7 +519,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert transfer["state"] == "paused"
 
         transfers = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
-        assert [row["hash"] for row in transfers] == [SEED_HASH]
+        assert any(row["hash"] == SEED_HASH and row["state"] == "paused" for row in transfers)
         manifest_path = runtime_dir / "transfers" / SEED_HASH / "resume-manifest.json"
         assert manifest_path.is_file()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
