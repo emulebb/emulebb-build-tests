@@ -441,6 +441,17 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         app = request_json(base_url, "GET", "/api/v1/app")
         assert app["data"]["name"] == "eMuleBB Rust"
         assert "rest.emulebb.v1" in app["data"]["capabilities"]
+        assert request_json(base_url, "GET", "/api/v1/uploads")["data"]["items"] == []
+        upload_queue = request_json(base_url, "GET", "/api/v1/upload-queue")["data"]
+        assert upload_queue["items"] == []
+        assert {"total", "offset", "limit"} <= upload_queue.keys()
+        missing_upload_status, missing_upload_error = request_json_status(
+            base_url,
+            "GET",
+            "/api/v1/upload-queue/unknown",
+        )
+        assert missing_upload_status == 404
+        assert missing_upload_error["error"]["code"] == "NOT_FOUND"
 
         search = request_json(
             base_url,
