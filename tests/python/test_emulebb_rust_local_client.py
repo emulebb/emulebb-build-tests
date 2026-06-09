@@ -406,13 +406,17 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             base_url,
             "POST",
             f"/api/v1/searches/{search_id}/results/{SEED_HASH}/operations/download",
+            {"paused": True},
         )["data"]
         assert transfer["hash"] == SEED_HASH
-        assert transfer["state"] == "queued"
+        assert transfer["state"] == "paused"
 
         transfers = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
         assert [row["hash"] for row in transfers] == [SEED_HASH]
-        assert (runtime_dir / "transfers" / SEED_HASH / "resume-manifest.json").is_file()
+        manifest_path = runtime_dir / "transfers" / SEED_HASH / "resume-manifest.json"
+        assert manifest_path.is_file()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["control_state"] == "paused"
     finally:
         terminate_process(process)
 
