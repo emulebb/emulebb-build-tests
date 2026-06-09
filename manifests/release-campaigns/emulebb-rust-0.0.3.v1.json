@@ -2,10 +2,10 @@
   "schemaVersion": "emulebb-build-tests.release-campaign.v1",
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
-  "campaignId": "emulebb-rust-mvp",
-  "releaseVersion": "0.1.0-mvp.1",
-  "title": "eMuleBB Rust MVP product-family campaign",
-  "description": "Initial campaign for the eMuleBB Rust headless client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
+  "campaignId": "emulebb-rust-0.0.3",
+  "releaseVersion": "0.0.3",
+  "title": "eMuleBB Rust 0.0.3 product-family campaign",
+  "description": "Versioned campaign for the eMuleBB Rust headless client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
   "proofTier": "future",
   "phases": [
     {
@@ -154,7 +154,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Reuse eMuleBB resource evidence structure for SQLite index, FTS, transfer runtime, memory, handles, and REST counters after MVP storage scales beyond the local proof."
+              "description": "Reuse eMuleBB resource evidence structure for SQLite index, FTS, transfer runtime, memory, handles, and REST counters as 0.0.x storage scales beyond the local proof."
             }
           ]
         }
@@ -176,7 +176,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Define a Rust package artifact and SBOM row when the MVP gains a release package."
+              "description": "Define a Rust package artifact and SBOM row when the 0.0.x line gains a release package."
             }
           ]
         }

@@ -193,13 +193,13 @@ def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
     assert campaign["proofTier"] == "future"
 
 
-def test_emulebb_rust_mvp_campaign_validates_and_covers_local_proof() -> None:
+def test_emulebb_rust_003_campaign_validates_and_covers_local_proof() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
-    campaign = release_campaigns.load_release_campaign(root, "emulebb-rust-mvp")
+    campaign = release_campaigns.load_release_campaign(root, "emulebb-rust-0.0.3")
 
     assert release_campaigns.validate_release_campaign(campaign, template) == []
-    assert campaign["releaseVersion"] == "0.1.0-mvp.1"
+    assert campaign["releaseVersion"] == "0.0.3"
     assert campaign["proofTier"] == "future"
     scenario_ids = {
         scenario["id"]

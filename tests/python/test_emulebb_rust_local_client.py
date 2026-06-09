@@ -807,17 +807,30 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         share = request_json(
             seeder_base_url,
             "POST",
-            "/api/v1/shares",
-            {"path": str(payload_path), "name": payload_path.name},
+            "/api/v1/shared-files",
+            {"path": str(payload_path)},
             timeout=30,
         )["data"]
-        assert share["name"] == payload_path.name
-        assert int(share["sizeBytes"]) == len(payload)
+        assert share["ok"] is True
+        assert share["queued"] is False
+        assert share["file"]["name"] == payload_path.name
+        assert int(share["file"]["sizeBytes"]) == len(payload)
+        share_file = share["file"]
+
+        listed_shares = request_json(seeder_base_url, "GET", "/api/v1/shared-files")["data"]["items"]
+        assert any(file["hash"] == share_file["hash"] for file in listed_shares)
+        share_link = request_json(
+            seeder_base_url,
+            "GET",
+            f"/api/v1/shared-files/{share_file['hash']}/ed2k-link",
+        )["data"]
+        assert share_link["hash"] == share_file["hash"]
+        assert share_link["link"] == share_file["ed2kLink"]
 
         def server_has_dynamic_share() -> object:
-            files = admin_json(admin_base_url, f"/api/files?search={share['hash']}", admin_token)["data"]
+            files = admin_json(admin_base_url, f"/api/files?search={share_file['hash']}", admin_token)["data"]
             for file in files:
-                if file["hash"].lower() == str(share["hash"]).lower() and file["endpoints"]:
+                if file["hash"].lower() == str(share_file["hash"]).lower() and file["endpoints"]:
                     assert file["endpoints"][0]["host"] == lan_host
                     assert int(file["endpoints"][0]["port"]) == seeder_ed2k_port
                     return file
@@ -832,7 +845,7 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
 
         write_remembered_source_manifest(
             remembered_runtime_dir,
-            str(share["hash"]).lower(),
+            str(share_file["hash"]).lower(),
             payload_path.name,
             len(payload),
             lan_host,
@@ -859,26 +872,26 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         remembered_base_url = f"http://{lan_host}:{remembered_rest_port}"
         wait_for_rest(remembered_base_url, remembered_leecher_process, remembered_output_path)
         remembered_transfers = request_json(remembered_base_url, "GET", "/api/v1/transfers")["data"]["items"]
-        assert any(transfer["hash"] == str(share["hash"]).lower() for transfer in remembered_transfers)
+        assert any(transfer["hash"] == str(share_file["hash"]).lower() for transfer in remembered_transfers)
         remembered_resume = request_json(
             remembered_base_url,
             "POST",
-            f"/api/v1/transfers/{share['hash']}/operations/resume",
+            f"/api/v1/transfers/{share_file['hash']}/operations/resume",
             timeout=45,
         )["data"]
         assert remembered_resume["items"][0]["ok"] is True
-        remembered_transfer = request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share['hash']}")["data"]
+        remembered_transfer = request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share_file['hash']}")["data"]
         if remembered_transfer["state"] != "completed":
             remembered_transfer = wait_for_condition(
                 "remembered-source leecher transfer completion",
                 45,
-                lambda: request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share['hash']}")["data"]
-                if request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share['hash']}")["data"]["state"] == "completed"
+                lambda: request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share_file['hash']}")["data"]
+                if request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share_file['hash']}")["data"]["state"] == "completed"
                 else None,
             )
         assert remembered_transfer["state"] == "completed"
         assert int(remembered_transfer["completedBytes"]) == len(payload)
-        remembered_payload = remembered_runtime_dir / "transfers" / str(share["hash"]).lower() / "pieces.bin"
+        remembered_payload = remembered_runtime_dir / "transfers" / str(share_file["hash"]).lower() / "pieces.bin"
         assert remembered_payload.read_bytes() == payload
 
         leecher_base_url = f"http://{lan_host}:{leecher_rest_port}"
@@ -897,7 +910,7 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
             {"query": "Rust.Peer.Download.Fixture", "method": "server", "type": ""},
             timeout=30,
         )["data"]
-        result = next(result for result in search["results"] if result["hash"] == share["hash"])
+        result = next(result for result in search["results"] if result["hash"] == share_file["hash"])
         download = request_json(
             leecher_base_url,
             "POST",
