@@ -211,7 +211,6 @@ def run_native_coverage(config: NativeCoverageConfig) -> int:
         )
 
     binary_path = get_test_binary_path(
-        config.test_repo_root,
         build_tag=build_tag,
         platform=config.platform,
         configuration=config.configuration,

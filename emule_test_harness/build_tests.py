@@ -12,10 +12,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from .paths import get_build_tag, make_file_token
+from .paths import (
+    get_build_tag,
+    get_required_emule_workspace_root,
+    get_test_binary_path,
+    get_workspace_output_root,
+    make_file_token,
+)
 from .artifact_names import utc_run_id
 from .privacy_guard import PrivacyGuardFailure, run_privacy_guard
-from .workspace_layout import get_default_workspace_root, resolve_workspace_app_root
+from .workspace_layout import resolve_workspace_app_root
 
 
 @dataclass(frozen=True)
@@ -24,6 +30,7 @@ class BuildTestsConfig:
 
     test_repo_root: Path
     workspace_root: Path
+    output_root: Path
     app_root: Path
     configuration: str
     platform: str
@@ -49,7 +56,6 @@ class BuildLogPaths:
 def resolve_build_config(
     *,
     test_repo_root: Path,
-    workspace_root: Path | None,
     app_root: Path | None,
     configuration: str,
     platform: str,
@@ -66,12 +72,15 @@ def resolve_build_config(
     """Resolves CLI inputs into the build configuration used by the runner."""
 
     resolved_test_repo_root = test_repo_root.resolve()
-    resolved_workspace_root = (workspace_root or get_default_workspace_root(resolved_test_repo_root)).resolve()
+    emule_workspace_root = get_required_emule_workspace_root()
+    resolved_workspace_root = (emule_workspace_root / "workspaces" / "workspace").resolve()
+    resolved_output_root = get_workspace_output_root()
     resolved_app_root = app_root.resolve() if app_root is not None else resolve_workspace_app_root(resolved_workspace_root)
     resolved_build_tag = build_tag or get_build_tag(resolved_workspace_root, resolved_app_root)
     return BuildTestsConfig(
         test_repo_root=resolved_test_repo_root,
         workspace_root=resolved_workspace_root,
+        output_root=resolved_output_root,
         app_root=resolved_app_root,
         configuration=configuration,
         platform=platform,
@@ -146,10 +155,10 @@ def find_vswhere_path() -> Path | None:
     return None
 
 
-def get_build_log_directory(workspace_root: Path, build_log_session_stamp: str) -> Path:
-    """Returns the per-session build-log directory under workspace state."""
+def get_build_log_directory(output_root: Path, build_log_session_stamp: str) -> Path:
+    """Returns the per-session build-log directory under the output root."""
 
-    directory = workspace_root.resolve() / "state" / "build-logs" / build_log_session_stamp
+    directory = output_root.resolve() / "logs" / "builds" / build_log_session_stamp
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -157,7 +166,7 @@ def get_build_log_directory(workspace_root: Path, build_log_session_stamp: str) 
 def get_build_log_paths(config: BuildTestsConfig) -> BuildLogPaths:
     """Returns text and binary MSBuild log paths for one resolved build config."""
 
-    log_directory = get_build_log_directory(config.workspace_root, config.build_log_session_stamp)
+    log_directory = get_build_log_directory(config.output_root, config.build_log_session_stamp)
     token = make_file_token(f"emule-tests-{config.build_tag}")
     suffix = f"{config.configuration.lower()}-{config.platform.lower()}"
     return BuildLogPaths(
@@ -170,6 +179,7 @@ def build_msbuild_arguments(config: BuildTestsConfig, log_paths: BuildLogPaths) 
     """Builds the MSBuild command-line arguments for `emule-tests.vcxproj`."""
 
     project_path = config.test_repo_root / "emule-tests.vcxproj"
+    output_root = config.output_root / "builds" / "tests" / config.build_tag / config.platform / config.configuration
     arguments = [
         str(project_path),
         "/m",
@@ -180,6 +190,8 @@ def build_msbuild_arguments(config: BuildTestsConfig, log_paths: BuildLogPaths) 
         f"/p:BuildTag={config.build_tag}",
         f"/p:Configuration={config.configuration}",
         f"/p:Platform={config.platform}",
+        f"/p:OutDir={with_trailing_separator(output_root / 'bin')}",
+        f"/p:IntDir={with_trailing_separator(output_root / 'obj')}",
         f"/flp:LogFile={log_paths.text_log_path};Verbosity=normal;Encoding=UTF-8",
         f"/bl:{log_paths.binary_log_path}",
     ]
@@ -234,9 +246,9 @@ def run_build_tests(config: BuildTestsConfig) -> int:
 def remove_intermediate_root(config: BuildTestsConfig) -> None:
     """Removes the clean-build intermediate directory after validating its root."""
 
-    build_root = config.test_repo_root / "build" / config.build_tag / config.platform / config.configuration
+    build_root = config.output_root / "builds" / "tests" / config.build_tag / config.platform / config.configuration
     intermediate_root = (build_root / "obj").resolve()
-    allowed_root = (config.test_repo_root / "build").resolve()
+    allowed_root = (config.output_root / "builds" / "tests").resolve()
     try:
         intermediate_root.relative_to(allowed_root)
     except ValueError as exc:
@@ -248,7 +260,12 @@ def remove_intermediate_root(config: BuildTestsConfig) -> None:
 def run_native_test_binary(config: BuildTestsConfig) -> None:
     """Runs the built native test executable with optional tee-to-file output."""
 
-    binary_path = config.test_repo_root / "build" / config.build_tag / config.platform / config.configuration / "emule-tests.exe"
+    binary_path = get_test_binary_path(
+        build_tag=config.build_tag,
+        platform=config.platform,
+        configuration=config.configuration,
+        output_root=config.output_root,
+    )
     if not binary_path.is_file():
         raise RuntimeError(f"Built test executable not found: {binary_path}")
 
@@ -306,3 +323,10 @@ def write_build_step_summary(
             print(f"OK   TEST emule-tests ({duration_text})")
         return
     print(f"FAIL TEST emule-tests ({duration_text}) -> {log_path}")
+
+
+def with_trailing_separator(path: Path) -> str:
+    """Formats an MSBuild directory property with a trailing separator."""
+
+    text = str(path)
+    return text if text.endswith(("\\", "/")) else text + os.sep

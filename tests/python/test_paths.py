@@ -18,10 +18,10 @@ def test_get_build_tag_matches_workspace_and_app_segments(tmp_path: Path) -> Non
     assert get_build_tag(workspace_root, app_root) == "owner_with_space-workspace-emulebb-main"
 
 
-def test_get_test_binary_path_uses_existing_repo_layout(tmp_path: Path) -> None:
+def test_get_test_binary_path_uses_output_root_layout(tmp_path: Path) -> None:
     assert get_test_binary_path(
-        tmp_path,
         build_tag="tag",
         platform="x64",
         configuration="Debug",
-    ) == tmp_path / "build" / "tag" / "x64" / "Debug" / "emule-tests.exe"
+        output_root=tmp_path / "emulebb-output",
+    ) == tmp_path / "emulebb-output" / "builds" / "tests" / "tag" / "x64" / "Debug" / "bin" / "emule-tests.exe"

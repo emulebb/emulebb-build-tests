@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 
 WORKSPACE_NAME = "workspace"
+WORKSPACE_ROOT_ENV = "EMULEBB_WORKSPACE_ROOT"
+WORKSPACE_OUTPUT_ROOT_ENV = "EMULEBB_WORKSPACE_OUTPUT_ROOT"
 TEST_ARTIFACTS_DIR_NAME = "test-artifacts"
 TEST_REPORTS_DIR_NAME = "test-reports"
 
@@ -38,9 +40,31 @@ def get_build_tag(workspace_root: Path, app_root: Path | None = None) -> str:
 def get_emule_workspace_root(test_repo_root: Path) -> Path:
     """Returns the canonical root that owns `repos/` and `workspaces/`."""
 
-    if os.environ.get("EMULEBB_WORKSPACE_ROOT"):
-        return Path(os.environ["EMULEBB_WORKSPACE_ROOT"]).resolve()
+    if os.environ.get(WORKSPACE_ROOT_ENV):
+        return Path(os.environ[WORKSPACE_ROOT_ENV]).resolve()
     return test_repo_root.resolve().parent.parent
+
+
+def get_required_emule_workspace_root() -> Path:
+    """Returns the mandatory EMULEBB_WORKSPACE_ROOT value."""
+
+    value = os.environ.get(WORKSPACE_ROOT_ENV, "").strip()
+    if not value:
+        raise RuntimeError(f"{WORKSPACE_ROOT_ENV} must be set.")
+    return Path(value).resolve()
+
+
+def get_workspace_output_root() -> Path:
+    """Returns the mandatory EMULEBB_WORKSPACE_OUTPUT_ROOT value."""
+
+    value = os.environ.get(WORKSPACE_OUTPUT_ROOT_ENV, "").strip()
+    if not value:
+        raise RuntimeError(f"{WORKSPACE_OUTPUT_ROOT_ENV} must be set.")
+    output_root = Path(value).resolve()
+    workspace_root = get_required_emule_workspace_root()
+    if path_is_relative_to(output_root, workspace_root):
+        raise RuntimeError(f"{WORKSPACE_OUTPUT_ROOT_ENV} must not be inside {WORKSPACE_ROOT_ENV}: {output_root}")
+    return output_root
 
 
 def get_default_workspace_root(test_repo_root: Path, workspace_name: str = WORKSPACE_NAME) -> Path:
@@ -110,12 +134,13 @@ def reject_windows_temp_path(path: Path, purpose: str) -> None:
 
 
 def get_test_binary_path(
-    test_repo_root: Path,
     *,
     build_tag: str,
     platform: str,
     configuration: str,
+    output_root: Path | None = None,
 ) -> Path:
     """Returns the expected emule-tests.exe path for one build tag."""
 
-    return test_repo_root.resolve() / "build" / build_tag / platform / configuration / "emule-tests.exe"
+    root = output_root.resolve() if output_root is not None else get_workspace_output_root()
+    return root / "builds" / "tests" / build_tag / platform / configuration / "bin" / "emule-tests.exe"
