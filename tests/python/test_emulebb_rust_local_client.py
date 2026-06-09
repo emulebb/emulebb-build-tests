@@ -28,18 +28,45 @@ def free_lan_port(host: str) -> int:
         return int(sock.getsockname()[1])
 
 
-def write_config(path: Path, runtime_dir: Path, lan_host: str, port: int) -> None:
-    path.write_text(
-        "\n".join(
+def write_config(
+    path: Path,
+    runtime_dir: Path,
+    lan_host: str,
+    port: int,
+    *,
+    ed2k_server_endpoint: str | None = None,
+) -> None:
+    lines = [
+        f'runtimeDir = "{runtime_dir.as_posix()}"',
+    ]
+    if ed2k_server_endpoint is not None:
+        lines.extend(
             [
-                f'runtimeDir = "{runtime_dir.as_posix()}"',
-                "",
-                "[rest]",
-                f'bindAddr = "{lan_host}:{port}"',
-                f'apiKey = "{API_KEY}"',
+                f'p2pBindIp = "{lan_host}"',
                 "",
             ]
-        ),
+        )
+    lines.extend(
+        [
+            "[rest]",
+            f'bindAddr = "{lan_host}:{port}"',
+            f'apiKey = "{API_KEY}"',
+            "",
+        ]
+    )
+    if ed2k_server_endpoint is not None:
+        lines.extend(
+            [
+                "[ed2k]",
+                "listenPort = 41001",
+                f'serverEndpoints = ["{ed2k_server_endpoint}"]',
+                "connectTimeoutSecs = 1",
+                "reconnectIntervalSecs = 60",
+                "",
+            ]
+        )
+    path.write_text(
+        "\n".join(lines),
         encoding="utf-8",
     )
 
@@ -212,5 +239,66 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         transfers = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
         assert [row["hash"] for row in transfers] == [SEED_HASH]
         assert (runtime_dir / "transfers" / SEED_HASH / "resume-manifest.json").is_file()
+    finally:
+        terminate_process(process)
+
+
+def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) -> None:
+    if shutil.which("cargo") is None:
+        pytest.skip("cargo is not available")
+    repo = workspace_root() / "repos" / "emulebb-rust"
+    if not repo.is_dir():
+        pytest.skip("emulebb-rust repo is not available")
+    lan_host = os.environ.get("X_LOCAL_IP")
+    if not lan_host:
+        pytest.skip("X_LOCAL_IP is required for LAN-bound harness control traffic")
+
+    runtime_dir = tmp_path / "runtime"
+    config_path = tmp_path / "emulebb-rust.toml"
+    output_path = tmp_path / "emulebb-rust.out"
+    port = free_lan_port(lan_host)
+    write_config(
+        config_path,
+        runtime_dir,
+        lan_host,
+        port,
+        ed2k_server_endpoint="192.0.2.20:4661",
+    )
+
+    with output_path.open("w", encoding="utf-8") as output:
+        process = subprocess.Popen(
+            [
+                "cargo",
+                "run",
+                "-p",
+                "emulebb-daemon",
+                "--bin",
+                "emulebb-rust",
+                "--",
+                "--config",
+                str(config_path),
+            ],
+            cwd=repo,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    try:
+        base_url = f"http://{lan_host}:{port}"
+        wait_for_rest(base_url, process, output_path)
+
+        servers = request_json(base_url, "GET", "/api/v1/servers")["data"]["items"]
+        assert [server["endpoint"] for server in servers] == ["192.0.2.20:4661"]
+
+        connected = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
+        assert connected["running"] is True
+        assert connected["connected"] is False
+
+        status = request_json(base_url, "GET", "/api/v1/status")["data"]
+        assert status["ed2k"]["running"] is True
+
+        disconnected = request_json(base_url, "POST", "/api/v1/servers/operations/disconnect")["data"]
+        assert disconnected["running"] is False
+        assert disconnected["connected"] is False
     finally:
         terminate_process(process)
