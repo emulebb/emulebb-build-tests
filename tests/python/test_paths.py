@@ -41,3 +41,9 @@ def test_production_harness_scripts_do_not_expose_workspace_root_argument() -> N
     ]
 
     assert offenders == []
+
+
+def test_harness_paths_do_not_expose_workspace_state_helper() -> None:
+    paths_text = (repo_root() / "emule_test_harness" / "paths.py").read_text(encoding="utf-8")
+
+    assert "get_workspace_state_root" not in paths_text

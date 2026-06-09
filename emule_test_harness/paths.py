@@ -73,12 +73,6 @@ def get_default_workspace_root(test_repo_root: Path, workspace_name: str = WORKS
     return get_emule_workspace_root(test_repo_root) / "workspaces" / workspace_name
 
 
-def get_workspace_state_root(workspace_root: Path) -> Path:
-    """Returns the canonical generated test state root for one workspace."""
-
-    return workspace_root.resolve() / "state"
-
-
 def get_test_artifacts_root(workspace_root: Path) -> Path:
     """Returns the canonical scratch artifact root for test harness runs."""
 
