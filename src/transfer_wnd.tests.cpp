@@ -1,5 +1,8 @@
 #include "../third_party/doctest/doctest.h"
 
+#include <cstdint>
+#include <limits>
+
 #include <windows.h>
 
 #include "TransferWndSeams.h"
@@ -64,6 +67,19 @@ TEST_CASE("Transfer window seam formats broadband queue footer")
 	CHECK_EQ(TransferWndSeams::CalculateUploadUtilizationPercent(994u, 1000u), 99u);
 	CHECK_EQ(TransferWndSeams::CalculateUploadUtilizationPercent(995u, 1000u), 100u);
 	CHECK_EQ(TransferWndSeams::CalculateUploadUtilizationPercent(20000u, 1000u), TransferWndSeams::kUploadUtilizationDisplayPercentMax);
+}
+
+TEST_CASE("Transfer window seam calculates download buffer utilization")
+{
+	CHECK_EQ(TransferWndSeams::CalculateDownloadBufferUtilizationPercent(0u, 0u), 0u);
+	CHECK_EQ(TransferWndSeams::CalculateDownloadBufferUtilizationPercent(994u, 1000u), 99u);
+	CHECK_EQ(TransferWndSeams::CalculateDownloadBufferUtilizationPercent(995u, 1000u), 100u);
+	CHECK_EQ(
+		TransferWndSeams::CalculateDownloadBufferUtilizationPercent(20000u, 1000u),
+		TransferWndSeams::kDownloadBufferUtilizationDisplayPercentMax);
+	CHECK_EQ(
+		TransferWndSeams::CalculateDownloadBufferUtilizationPercent((std::numeric_limits<std::uint64_t>::max)(), 1u),
+		TransferWndSeams::kDownloadBufferUtilizationDisplayPercentMax);
 }
 
 TEST_CASE("Transfer window seam keeps detail routing off invalid states")
