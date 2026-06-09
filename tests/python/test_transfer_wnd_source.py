@@ -73,9 +73,14 @@ def test_transfer_download_metrics_use_top_toolbar_row_and_buffer_sources() -> N
     assert "theApp.downloadqueue->GetAdaptiveGlobalDownloadBufferBudgetBytes()" in update_block
     assert "theApp.downloadqueue->GetBufferedDownloadFileCount()" in update_block
     assert "theApp.downloadqueue->GetLargestBufferedDownloadFileBytes()" in update_block
+    assert "thePrefs.IsDownloadAutoBroadbandIOEnabled()" in update_block
+    assert "if (bAutoBroadbandIoEnabled)" in update_block
     assert "TransferWndSeams::CalculateDownloadBufferUtilizationPercent(" in update_block
     assert "::GlobalMemoryStatusEx(&memory)" in update_block
     assert "CastItoXBytes(ullBufferedBytes)" in update_block
+    assert "Auto DL buffer %s / %s RAM budget" in update_block
+    assert "DL buffer %s (%u files, max %s) | Auto buffer off, file cap %s" in update_block
+    assert "thePrefs.GetFileBufferSize()" in update_block
     assert "SetDlgItemText(IDC_DOWNLOAD_METRICS, strMetrics);" in update_block
 
     refresh_block = source[
