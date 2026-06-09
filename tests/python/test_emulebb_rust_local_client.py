@@ -419,6 +419,15 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert manifest_path.is_file()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert manifest["control_state"] == "paused"
+
+        delete_result = request_json(
+            base_url,
+            "DELETE",
+            f"/api/v1/transfers/{SEED_HASH}/files?confirm=true",
+        )["data"]
+        assert delete_result["items"][0]["ok"] is True
+        assert delete_result["items"][0]["hash"] == SEED_HASH
+        assert not (runtime_dir / "transfers" / SEED_HASH).exists()
     finally:
         terminate_process(process)
 
