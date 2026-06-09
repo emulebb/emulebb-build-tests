@@ -246,6 +246,32 @@ def request_json(
         return json.loads(response.read().decode("utf-8"))
 
 
+def request_json_status(
+    base_url: str,
+    method: str,
+    path: str,
+    body: dict[str, object] | None = None,
+    *,
+    timeout: float = 5,
+) -> tuple[int, dict[str, object]]:
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        data=data,
+        method=method,
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": API_KEY,
+        },
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
 def admin_json(base_url: str, path: str, token: str) -> dict[str, object]:
     request = urllib.request.Request(
         f"{base_url}{path}",
@@ -443,6 +469,14 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert manifest_path.is_file()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert manifest["control_state"] == "paused"
+
+        delete_row_status, delete_row_error = request_json_status(
+            base_url,
+            "DELETE",
+            f"/api/v1/transfers/{SEED_HASH}",
+        )
+        assert delete_row_status == 400
+        assert "only completed transfers can be removed without deleting files" in json.dumps(delete_row_error)
 
         delete_result = request_json(
             base_url,
@@ -932,6 +966,23 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
             source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
             for source in persisted_sources
         )
+
+        delete_row = request_json(
+            leecher_base_url,
+            "DELETE",
+            f"/api/v1/transfers/{result['hash']}",
+        )["data"]
+        assert delete_row["items"][0]["ok"] is True
+        assert delete_row["items"][0]["hash"] == result["hash"]
+        assert downloaded_payload.read_bytes() == payload
+        delete_read_status, _ = request_json_status(
+            leecher_base_url,
+            "GET",
+            f"/api/v1/transfers/{result['hash']}",
+        )
+        assert delete_read_status == 404
+        remaining_transfers = request_json(leecher_base_url, "GET", "/api/v1/transfers")["data"]["items"]
+        assert not any(transfer["hash"] == result["hash"] for transfer in remaining_transfers)
     finally:
         if remembered_leecher_process is not None:
             terminate_process(remembered_leecher_process)
