@@ -700,6 +700,17 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert delete_result["items"][0]["ok"] is True
         assert delete_result["items"][0]["hash"] == SEED_HASH
         assert not (runtime_dir / "transfers" / SEED_HASH).exists()
+        denied_search_clear_status, denied_search_clear_error = request_json_status(
+            base_url,
+            "DELETE",
+            "/api/v1/searches",
+        )
+        assert denied_search_clear_status == 400
+        assert "confirm" in denied_search_clear_error["error"]["message"]
+        cleared_searches = request_json(base_url, "DELETE", "/api/v1/searches?confirm=true")["data"]
+        assert cleared_searches["ok"] is True
+        searches_after_clear = request_json(base_url, "GET", "/api/v1/searches")["data"]["items"]
+        assert searches_after_clear == []
     finally:
         terminate_process(process)
 
