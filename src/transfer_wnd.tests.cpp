@@ -82,6 +82,62 @@ TEST_CASE("Transfer window seam calculates download buffer utilization")
 		TransferWndSeams::kDownloadBufferUtilizationDisplayPercentMax);
 }
 
+TEST_CASE("Transfer window seam formats compact download metrics")
+{
+	CHECK_EQ(
+		TransferWndSeams::FormatDownloadMetricsText(
+			true,
+			L"12 MB",
+			L"512 MB",
+			2u,
+			L"",
+			4u,
+			L"8 MB",
+			true,
+			L"14 GB",
+			61u),
+		std::wstring(L"DL buf 12 MB/512 MB 2% | f=4 lg=8 MB | RAM 14 GB free 61%"));
+	CHECK_EQ(
+		TransferWndSeams::FormatDownloadMetricsText(
+			true,
+			L"12 MB",
+			L"512 MB",
+			2u,
+			L"",
+			4u,
+			L"8 MB",
+			false,
+			L"",
+			0u),
+		std::wstring(L"DL buf 12 MB/512 MB 2% | f=4 lg=8 MB | RAM n/a"));
+	CHECK_EQ(
+		TransferWndSeams::FormatDownloadMetricsText(
+			false,
+			L"12 MB",
+			L"",
+			0u,
+			L"256 KB",
+			4u,
+			L"8 MB",
+			true,
+			L"14 GB",
+			61u),
+		std::wstring(L"DL buf 12 MB | cap=256 KB | f=4 lg=8 MB | RAM 14 GB free 61%"));
+	CHECK_EQ(
+		TransferWndSeams::FormatDownloadMetricsText(
+			false,
+			L"12 MB",
+			L"",
+			0u,
+			L"256 KB",
+			4u,
+			L"8 MB",
+			false,
+			L"",
+			0u),
+		std::wstring(L"DL buf 12 MB | cap=256 KB | f=4 lg=8 MB | RAM n/a"));
+}
+
 TEST_CASE("Transfer window seam keeps detail routing off invalid states")
 {
 	CHECK_FALSE(TransferWndSeams::IsUserDetailPrimaryListId(TransferWndSeams::kPrimaryListSplit));
