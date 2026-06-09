@@ -185,28 +185,6 @@ def admin_json(base_url: str, path: str, token: str) -> dict[str, object]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def admin_request_json(
-    base_url: str,
-    method: str,
-    path: str,
-    token: str,
-    body: dict[str, object] | None = None,
-) -> dict[str, object]:
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base_url}{path}",
-        data=data,
-        method=method,
-        headers={
-            "Content-Type": "application/json",
-            "X-Admin-Token": token,
-        },
-    )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=5) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def process_output(output_path: Path) -> str:
     return output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
 
@@ -281,29 +259,6 @@ def write_goed2k_catalog(path: Path, source_host: str, source_port: int) -> None
 
 def write_empty_goed2k_catalog(path: Path) -> None:
     path.write_text('{"files":[]}\n', encoding="utf-8")
-
-
-def upsert_goed2k_file(
-    base_url: str,
-    token: str,
-    *,
-    file_hash: str,
-    name: str,
-    size: int,
-    source_host: str,
-    source_port: int,
-) -> dict[str, object]:
-    payload = {
-        "hash": file_hash.upper(),
-        "name": name,
-        "size": size,
-        "file_type": "Archive",
-        "extension": "bin",
-        "sources": 1,
-        "complete_sources": 1,
-        "endpoints": [{"host": source_host, "port": source_port}],
-    }
-    return admin_request_json(base_url, "POST", "/api/files", token, payload)
 
 
 def write_goed2k_config(
@@ -705,12 +660,6 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
 
         seeder_base_url = f"http://{lan_host}:{seeder_rest_port}"
         wait_for_rest(seeder_base_url, seeder_process, seeder_output_path)
-        request_json(seeder_base_url, "POST", "/api/v1/servers/operations/connect")["data"]
-        wait_for_condition(
-            "seeder ED2K server connection",
-            30,
-            lambda: request_json(seeder_base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
-        )
         share = request_json(
             seeder_base_url,
             "POST",
@@ -720,16 +669,28 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         )["data"]
         assert share["name"] == payload_path.name
         assert int(share["sizeBytes"]) == len(payload)
-        upsert = upsert_goed2k_file(
-            admin_base_url,
-            admin_token,
-            file_hash=str(share["hash"]),
-            name=str(share["name"]),
-            size=int(share["sizeBytes"]),
-            source_host=lan_host,
-            source_port=seeder_ed2k_port,
+        request_json(seeder_base_url, "POST", "/api/v1/servers/operations/connect")["data"]
+        wait_for_condition(
+            "seeder ED2K server connection",
+            30,
+            lambda: request_json(seeder_base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
         )
-        assert upsert["ok"] is True
+
+        def server_has_dynamic_share() -> object:
+            files = admin_json(admin_base_url, f"/api/files?search={share['hash']}", admin_token)["data"]
+            for file in files:
+                if file["hash"].lower() == str(share["hash"]).lower() and file["endpoints"]:
+                    assert file["endpoints"][0]["host"] == lan_host
+                    assert int(file["endpoints"][0]["port"]) == seeder_ed2k_port
+                    return file
+            return None
+
+        published = wait_for_condition(
+            "goed2k dynamic file published by Rust OP_OFFERFILES",
+            30,
+            server_has_dynamic_share,
+        )
+        assert published["name"] == payload_path.name
 
         leecher_base_url = f"http://{lan_host}:{leecher_rest_port}"
         wait_for_rest(leecher_base_url, leecher_process, leecher_output_path)
