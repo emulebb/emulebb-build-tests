@@ -709,6 +709,44 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
         assert transfer["hash"] == SEED_HASH
         assert transfer["state"] == "paused"
+        multi_family_patch_status, multi_family_patch_error = request_json_status(
+            base_url,
+            "PATCH",
+            f"/api/v1/transfers/{SEED_HASH}",
+            {"priority": "high", "name": "Rejected.bin"},
+        )
+        assert multi_family_patch_status == 400
+        assert "one mutation family" in multi_family_patch_error["error"]["message"]
+        priority_transfer = request_json(
+            base_url,
+            "PATCH",
+            f"/api/v1/transfers/{SEED_HASH}",
+            {"priority": "veryhigh"},
+        )["data"]
+        assert priority_transfer["priority"] == "veryhigh"
+        download_category = request_json(
+            base_url,
+            "POST",
+            "/api/v1/categories",
+            {"name": "Harness Downloads"},
+        )["data"]
+        categorized_transfer = request_json(
+            base_url,
+            "PATCH",
+            f"/api/v1/transfers/{SEED_HASH}",
+            {"categoryName": "harness downloads"},
+        )["data"]
+        assert categorized_transfer["categoryId"] == download_category["id"]
+        assert categorized_transfer["categoryName"] == "Harness Downloads"
+        renamed_transfer = request_json(
+            base_url,
+            "PATCH",
+            f"/api/v1/transfers/{SEED_HASH}",
+            {"name": " Scenario Renamed.bin "},
+        )["data"]
+        assert renamed_transfer["name"] == "Scenario Renamed.bin"
+        assert renamed_transfer["priority"] == "veryhigh"
+        assert renamed_transfer["categoryId"] == download_category["id"]
 
         transfers = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
         assert any(row["hash"] == SEED_HASH and row["state"] == "paused" for row in transfers)
@@ -716,6 +754,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert manifest_path.is_file()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert manifest["control_state"] == "paused"
+        assert manifest["canonical_name"] == "Scenario Renamed.bin"
 
         delete_row_status, delete_row_error = request_json_status(
             base_url,
