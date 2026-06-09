@@ -402,12 +402,14 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert search["results"][0]["hash"] == SEED_HASH
 
         search_id = search["id"]
-        transfer = request_json(
+        download = request_json(
             base_url,
             "POST",
             f"/api/v1/searches/{search_id}/results/{SEED_HASH}/operations/download",
             {"paused": True},
         )["data"]
+        assert download == {"ok": True, "searchId": search_id, "hash": SEED_HASH}
+        transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
         assert transfer["hash"] == SEED_HASH
         assert transfer["state"] == "paused"
 
@@ -791,12 +793,14 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
         wait_for_rest(remembered_base_url, remembered_leecher_process, remembered_output_path)
         remembered_transfers = request_json(remembered_base_url, "GET", "/api/v1/transfers")["data"]["items"]
         assert any(transfer["hash"] == str(share["hash"]).lower() for transfer in remembered_transfers)
-        remembered_transfer = request_json(
+        remembered_resume = request_json(
             remembered_base_url,
             "POST",
             f"/api/v1/transfers/{share['hash']}/operations/resume",
             timeout=45,
         )["data"]
+        assert remembered_resume["items"][0]["ok"] is True
+        remembered_transfer = request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share['hash']}")["data"]
         if remembered_transfer["state"] != "completed":
             remembered_transfer = wait_for_condition(
                 "remembered-source leecher transfer completion",
@@ -827,17 +831,20 @@ def test_emulebb_rust_downloads_from_local_rust_peer_via_goed2k_sources(tmp_path
             timeout=30,
         )["data"]
         result = next(result for result in search["results"] if result["hash"] == share["hash"])
-        request_json(
+        download = request_json(
             leecher_base_url,
             "POST",
             f"/api/v1/searches/{search['id']}/results/{result['hash']}/operations/download",
         )["data"]
-        transfer = request_json(
+        assert download == {"ok": True, "searchId": search["id"], "hash": result["hash"]}
+        resume = request_json(
             leecher_base_url,
             "POST",
             f"/api/v1/transfers/{result['hash']}/operations/resume",
             timeout=30,
         )["data"]
+        assert resume["items"][0]["ok"] is True
+        transfer = request_json(leecher_base_url, "GET", f"/api/v1/transfers/{result['hash']}")["data"]
         if transfer["state"] != "completed":
             transfer = wait_for_condition(
                 "leecher transfer completion",
