@@ -2,10 +2,10 @@
   "schemaVersion": "emulebb-build-tests.release-campaign.v1",
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
-  "campaignId": "emulebb-rust-0.0.3",
+  "campaignId": "emulebb-rust",
   "releaseVersion": "0.0.3",
-  "title": "eMuleBB Rust 0.0.3 product-family campaign",
-  "description": "Versioned campaign for the eMuleBB Rust headless client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
+  "title": "eMuleBB Rust product-family campaign",
+  "description": "Campaign for the eMuleBB Rust headless client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
   "proofTier": "future",
   "phases": [
     {
@@ -176,7 +176,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Define Rust package artifacts and SBOM rows under the same naming structure as eMuleBB: campaign id emulebb-rust-0.0.3, future annotated release tag emulebb-rust-v0.0.3 after release proof and operator tagging approval, release root emulebb-rust-v0.0.3, and standard ZIP assets named emulebb-rust-0.0.3-ARCH.zip."
+              "description": "Define Rust package artifacts and SBOM rows under the same naming structure as eMuleBB: campaign id emulebb-rust, future annotated release tag emulebb-rust-v0.0.3 after release proof and operator tagging approval, release root emulebb-rust-v0.0.3, and standard ZIP assets named emulebb-rust-0.0.3-ARCH.zip."
             }
           ]
         }

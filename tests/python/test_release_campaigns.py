@@ -196,10 +196,10 @@ def test_p2p_overlord_campaign_validates_and_covers_all_release_gates() -> None:
 def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     root = repo_root()
     template = release_campaigns.load_release_campaign_template(root)
-    campaign = release_campaigns.load_release_campaign(root, "emulebb-rust-0.0.3")
+    campaign = release_campaigns.load_release_campaign(root, "emulebb-rust")
 
     assert release_campaigns.validate_release_campaign(campaign, template) == []
-    assert campaign["campaignId"] == "emulebb-rust-0.0.3"
+    assert campaign["campaignId"] == "emulebb-rust"
     assert campaign["releaseVersion"] == "0.0.3"
     assert campaign["proofTier"] == "future"
     assert "MVP" not in json.dumps(campaign)
