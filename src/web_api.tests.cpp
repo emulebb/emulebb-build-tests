@@ -235,6 +235,7 @@ TEST_CASE("WebSocket HTTP seams parse request methods exactly")
 TEST_CASE("WebSocket HTTP seams bound accepted-client thread fanout")
 {
 	CHECK(WebSocketHttpSeams::kAcceptedClientIoTimeoutMs > 0u);
+	CHECK_EQ(WebSocketHttpSeams::kSocketThreadShutdownTimeoutMs, 30000u);
 	CHECK_EQ(WebSocketHttpSeams::kAcceptedClientReadBufferBytes, static_cast<size_t>(4u * 1024u));
 	CHECK(WebSocketHttpSeams::CanStartAcceptedClientThread(0u));
 	CHECK(WebSocketHttpSeams::CanStartAcceptedClientThread(WebSocketHttpSeams::kMaxAcceptedClientThreads - 1u));
@@ -245,7 +246,7 @@ TEST_CASE("WebSocket HTTP seams bound accepted-client thread fanout")
 		== WebSocketHttpSeams::ESocketThreadShutdownFollowUp::CompleteShutdown);
 	CHECK(
 		WebSocketHttpSeams::GetSocketThreadShutdownFollowUp(false)
-		== WebSocketHttpSeams::ESocketThreadShutdownFollowUp::WaitWithoutTimeout);
+		== WebSocketHttpSeams::ESocketThreadShutdownFollowUp::DeferShutdownCleanup);
 }
 
 TEST_CASE("WebSocket HTTP seams keep draining accepts after remote IP rejection")
