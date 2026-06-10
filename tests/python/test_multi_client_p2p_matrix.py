@@ -306,17 +306,20 @@ def test_three_client_swarm_scenario_forwards_harness_and_amule(monkeypatch, tmp
     assert "--amule-control-exe" in command
 
 
-def test_emulebb_rust_exchange_scenario_uses_existing_local_client_pytest(monkeypatch, tmp_path: Path) -> None:
+def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     captured: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
         captured["command"] = command
         captured["env"] = kwargs["env"]
+        captured["cwd"] = kwargs["cwd"]
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
-    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
+    monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix", workspace_root=workspace_root)
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     result = module.run_emulebb_rust_exchange_scenario(paths, args)
@@ -327,13 +330,17 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_pytest(monkey
     assert captured["command"] == [
         sys.executable,
         "-m",
-        "pytest",
+        "emule_workspace",
+        "test",
+        "python",
+        "--path",
         "tests/python/test_emulebb_rust_local_client.py",
         "--quiet",
         "-k",
         "peers_exchange",
     ]
     assert captured["env"]["X_LOCAL_IP"] == "192.0.2.10"
+    assert captured["cwd"] == tmp_path / "repos" / "emulebb-build"
 
 
 def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(monkeypatch, tmp_path: Path) -> None:

@@ -14,7 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_windows_client_inventory  # noqa: E402
+from emule_test_harness.multi_client import (  # noqa: E402
+    CLIENT_IDENTITIES,
+    resolve_windows_client_inventory,
+    workspace_parent_root,
+)
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
@@ -64,6 +68,12 @@ def build_python_command() -> list[str]:
     """Returns the current Python interpreter command for child suites."""
 
     return [sys.executable]
+
+
+def emule_workspace_build_repo(workspace_root: Path) -> Path:
+    """Returns the build repo used for `python -m emule_workspace` child runs."""
+
+    return workspace_parent_root(workspace_root) / "repos" / "emulebb-build"
 
 
 def compact_child_report(path: Path) -> dict[str, object] | None:
@@ -227,7 +237,7 @@ def run_three_client_swarm_scenario(paths, args: argparse.Namespace) -> dict[str
 
 
 def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the existing Rust local-client pytest for bidirectional peer exchange."""
+    """Runs the existing Rust local-client suite for bidirectional peer exchange."""
 
     scenario_artifacts = paths.source_artifacts_dir / "r5"
     scenario_artifacts.mkdir(parents=True, exist_ok=True)
@@ -235,7 +245,10 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
     command.extend(
         [
             "-m",
-            "pytest",
+            "emule_workspace",
+            "test",
+            "python",
+            "--path",
             "tests/python/test_emulebb_rust_local_client.py",
             "--quiet",
             "-k",
@@ -246,7 +259,14 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
     child_env = os.environ.copy()
     child_env["X_LOCAL_IP"] = args.lan_bind_addr
     started = time.monotonic()
-    completed = subprocess.run(command, cwd=REPO_ROOT, env=child_env, text=True, capture_output=True, check=False)
+    completed = subprocess.run(
+        command,
+        cwd=emule_workspace_build_repo(paths.workspace_root),
+        env=child_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     return {
         "id": RUST_BIDIRECTIONAL_SCENARIO_ID,
         "status": "passed" if completed.returncode == 0 else "failed",

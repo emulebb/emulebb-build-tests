@@ -315,13 +315,13 @@ def resolve_emulebb_rust_client(
     repo_key: str = "emulebb_rust",
     identity_key: str = "emulebb_rust",
 ) -> ClientAvailability:
-    """Resolves the Rust client repository used by the local swarm pytest adapter."""
+    """Resolves the Rust client repository used by the orchestrated local swarm adapter."""
 
     identity = CLIENT_IDENTITIES[identity_key]
     try:
         root = resolve_manifest_repo(workspace_root, repo_key)
     except (OSError, json.JSONDecodeError, RuntimeError) as exc:
-        return unavailable_manifest_client(identity, repo_key, "cargo-pytest-local-client", exc)
+        return unavailable_manifest_client(identity, repo_key, "emule-workspace-python-test", exc)
     manifest = root / "Cargo.toml"
     available = manifest.is_file()
     return ClientAvailability(
@@ -329,7 +329,7 @@ def resolve_emulebb_rust_client(
         available=available,
         executable=manifest if available else None,
         reason="available" if available else f"missing Cargo.toml under {root}",
-        launch_adapter="cargo-pytest-local-client",
+        launch_adapter="emule-workspace-python-test",
         deterministic_transfer_adapter=available,
     )
 

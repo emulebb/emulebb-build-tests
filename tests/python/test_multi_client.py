@@ -70,7 +70,7 @@ def test_resolve_windows_inventory_reports_missing_optional_clients(tmp_path: Pa
     assert "missing Cargo.toml" in inventory["emulebb_rust"].reason
     assert inventory["emuleai"].launch_adapter == "emuleai-gui-profile"
     assert inventory["amule"].launch_adapter == "amuled-amulecmd"
-    assert inventory["emulebb_rust"].launch_adapter == "cargo-pytest-local-client"
+    assert inventory["emulebb_rust"].launch_adapter == "emule-workspace-python-test"
 
 
 def test_resolve_harness_client_accepts_current_and_renamed_executable_names(tmp_path: Path) -> None:
