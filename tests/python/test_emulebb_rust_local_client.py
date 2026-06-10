@@ -493,13 +493,13 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )["data"]
         assert reload_result["ok"] is True
         assert "count" not in reload_result
-        alias_reload_result = request_json(
+        shared_files_reload_result = request_json(
             base_url,
             "POST",
             "/api/v1/shared-files/operations/reload",
             timeout=30,
         )["data"]
-        assert alias_reload_result["ok"] is True
+        assert shared_files_reload_result["ok"] is True
         shared_files = request_json(base_url, "GET", "/api/v1/shared-files")["data"]["items"]
         shared_file_names = {row["name"] for row in shared_files}
         assert {shared_top_file.name, shared_nested_file.name} <= shared_file_names
