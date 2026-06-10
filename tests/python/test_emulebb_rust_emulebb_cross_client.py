@@ -61,6 +61,17 @@ def test_wait_for_rust_search_result_reads_unwrapped_search_payload(monkeypatch)
     assert result["result"]["name"] == "fixture.bin"
 
 
+def test_cross_client_script_uses_shared_goed2k_launcher_boundary() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.resolve_ed2k_server_exe(" not in script_text
+    assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
+    assert "goed2k.build_server_config(" not in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+
+
 def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspace"
@@ -68,8 +79,6 @@ def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkey
     rust_repo = tmp_path / "emulebb-rust"
     rust_repo.mkdir()
     (rust_repo / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
-    server_exe = tmp_path / "goed2k-server.exe"
-    server_exe.write_bytes(b"")
     server_process = object()
     calls: dict[str, object] = {"stopped": []}
 
@@ -101,18 +110,18 @@ def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkey
         },
     )
     monkeypatch.setattr(module, "choose_extra_port", lambda _lan_bind_addr, used_ports, *, udp=False: max(used_ports) + 1)
-    monkeypatch.setattr(module.goed2k, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
-    monkeypatch.setattr(module.goed2k, "build_or_skip_ed2k_server_binary", lambda *_args, **_kwargs: {"server_exe": str(server_exe)})
-    monkeypatch.setattr(module.goed2k, "write_empty_catalog", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
 
-    def fake_build_server_config(path, **kwargs):
-        calls["server_config"] = kwargs
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return {"listen_address": f"{kwargs['ed2k_address']}:{kwargs['ed2k_port']}"}
+    def fake_launch_ed2k_server(**kwargs):
+        calls["ed2k_launch"] = kwargs
+        return SimpleNamespace(
+            process=server_process,
+            admin_base_url="http://192.0.2.10:8080",
+            build={"skipped": True},
+            health={"ok": True},
+            config={"listen_address": f"{kwargs['ed2k_address']}:{kwargs['ed2k_port']}"},
+        )
 
-    monkeypatch.setattr(module.goed2k, "build_server_config", fake_build_server_config)
-    monkeypatch.setattr(module.goed2k, "start_ed2k_server", lambda *_args: server_process)
-    monkeypatch.setattr(module.goed2k, "wait_for_admin_health", lambda *_args: {"ok": True})
+    monkeypatch.setattr(module.goed2k, "launch_ed2k_server", fake_launch_ed2k_server)
     monkeypatch.setattr(module.goed2k, "stop_process", lambda process: calls["stopped"].append(process))
     monkeypatch.setattr(module.rust_client, "stop_process_tree", lambda process: calls.setdefault("rust_stop", process))
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.10")
@@ -132,8 +141,8 @@ def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkey
     )
 
     assert exit_code == 1
-    assert calls["server_config"]["admin_address"] == "192.0.2.10"
-    assert calls["server_config"]["ed2k_address"] == "198.51.100.20"
+    assert calls["ed2k_launch"]["admin_address"] == "192.0.2.10"
+    assert calls["ed2k_launch"]["ed2k_address"] == "198.51.100.20"
     assert calls["stopped"] == [server_process]
     assert calls["report"]["current_phase"] == "start_ed2k_server"
     assert calls["report"]["network"]["lan_bind_addr"] == "192.0.2.10"

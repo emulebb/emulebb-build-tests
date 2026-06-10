@@ -87,6 +87,35 @@ def test_build_or_skip_ed2k_server_binary_honors_explicit_exe_without_manifest(t
     assert result["reason"] == "using explicit --ed2k-server-exe"
 
 
+def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    server_exe = tmp_path / "tools" / "goed2k-server.exe"
+
+    monkeypatch.setattr(goed2k, "resolve_ed2k_server_exe", lambda _workspace, override: Path(override).resolve())
+    monkeypatch.setattr(
+        goed2k,
+        "build_or_skip_ed2k_server_binary",
+        lambda workspace_root, resolved_exe, **kwargs: {
+            "workspace_root": str(workspace_root),
+            "server_exe": str(resolved_exe),
+            "repo_override": kwargs["repo_override"],
+            "exe_override": kwargs["exe_override"],
+        },
+    )
+
+    prepared = goed2k.prepare_ed2k_server_binary(
+        workspace,
+        repo_override="repo-override",
+        exe_override=str(server_exe),
+    )
+
+    assert prepared.server_exe == server_exe.resolve()
+    assert prepared.build["workspace_root"] == str(workspace)
+    assert prepared.build["server_exe"] == str(server_exe.resolve())
+    assert prepared.build["repo_override"] == "repo-override"
+    assert prepared.build["exe_override"] == str(server_exe)
+
+
 def test_resolve_client2_app_exe_uses_tracing_harness_executable(tmp_path: Path) -> None:
     module = load_suite_module()
     workspace = tmp_path / "workspaces" / "workspace"

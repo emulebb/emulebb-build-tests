@@ -91,6 +91,9 @@ def test_protocol_cases_reuse_shared_goed2k_launcher() -> None:
     module = load_suite_module()
     script_text = Path(module.__file__).read_text(encoding="utf-8")
 
+    assert "goed2k.prepare_ed2k_server_binary(" in script_text
     assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.resolve_ed2k_server_exe(" not in script_text
+    assert "goed2k.build_ed2k_server_binary(" not in script_text
     assert "goed2k.start_ed2k_server(" not in script_text
     assert "goed2k.build_server_config(" not in script_text

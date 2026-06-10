@@ -451,9 +451,12 @@ def main(argv: list[str] | None = None) -> int:
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
         }
-        ed2k_repo = goed2k.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
-        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = goed2k.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+        ed2k_binary = goed2k.prepare_ed2k_server_binary(
+            paths.workspace_root,
+            repo_override=args.ed2k_server_repo,
+            exe_override=args.ed2k_server_exe,
+        )
+        report["checks"]["server_build"] = ed2k_binary.build
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
 
         for case in selected_cases(args.case):
@@ -463,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
                 paths=paths,
                 profile_seed_dir=profile_seed_dir,
                 p2p_address=p2p_address,
-                ed2k_exe=ed2k_exe,
+                ed2k_exe=ed2k_binary.server_exe,
                 client2_app_exe=client2_app_exe,
             )
             report["cases"].append(case_report)

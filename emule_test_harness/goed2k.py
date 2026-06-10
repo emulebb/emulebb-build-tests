@@ -35,6 +35,14 @@ class Goed2kServerLaunch:
     health: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Goed2kServerBinary:
+    """Resolved goed2k-server executable plus the build or explicit-override result."""
+
+    server_exe: Path
+    build: dict[str, object]
+
+
 def resolve_ed2k_server_repo(workspace_root: Path, override: str | None) -> Path:
     """Resolves the workspace ED2K server repo path from args or manifest."""
 
@@ -105,6 +113,24 @@ def build_or_skip_ed2k_server_binary(
         }
     server_repo = resolve_ed2k_server_repo(workspace_root, repo_override)
     return build_ed2k_server_binary(server_repo, server_exe)
+
+
+def prepare_ed2k_server_binary(
+    workspace_root: Path,
+    *,
+    repo_override: str | None = None,
+    exe_override: str | None = None,
+) -> Goed2kServerBinary:
+    """Resolves and stages the goed2k-server executable for one or more launches."""
+
+    server_exe = resolve_ed2k_server_exe(workspace_root, exe_override)
+    build = build_or_skip_ed2k_server_binary(
+        workspace_root,
+        server_exe,
+        repo_override=repo_override,
+        exe_override=exe_override,
+    )
+    return Goed2kServerBinary(server_exe=server_exe, build=build)
 
 
 def write_empty_catalog(path: Path) -> None:
@@ -201,10 +227,8 @@ def launch_ed2k_server(
 ) -> Goed2kServerLaunch:
     """Builds, configures, starts, and health-checks a local goed2k-server instance."""
 
-    server_exe = resolve_ed2k_server_exe(workspace_root, exe_override)
-    build = build_or_skip_ed2k_server_binary(
+    binary = prepare_ed2k_server_binary(
         workspace_root,
-        server_exe,
         repo_override=repo_override,
         exe_override=exe_override,
     )
@@ -226,18 +250,18 @@ def launch_ed2k_server(
         protocol_obfuscation=protocol_obfuscation,
         server_udp=server_udp,
     )
-    process = start_ed2k_server(server_exe, config_path, log_path)
+    process = start_ed2k_server(binary.server_exe, config_path, log_path)
     admin_base_url = f"http://{admin_address}:{admin_port}"
     health = wait_for_admin_health(admin_base_url, health_timeout_seconds)
     return Goed2kServerLaunch(
         process=process,
         admin_base_url=admin_base_url,
-        server_exe=server_exe,
+        server_exe=binary.server_exe,
         server_dir=server_dir,
         catalog_path=catalog_path,
         config_path=config_path,
         log_path=log_path,
-        build=build,
+        build=binary.build,
         config=config,
         health=health,
     )
