@@ -3008,6 +3008,36 @@ TEST_CASE("Web API classifies native REST API key failures without exposing wron
 	CHECK(auth.strErrorMessage.empty());
 }
 
+TEST_CASE("Web API compares REST API keys without short-circuiting on length or first difference")
+{
+	// Equal secrets accept.
+	CHECK(WebServerJsonSeams::ConstantTimeSecretEquals("secret", "secret"));
+
+	// A presented value that is a prefix of the expected key must be rejected
+	// (length mismatch is folded into the result, not early-out).
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals("secret", "sec"));
+
+	// A presented value longer than the expected key must be rejected.
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals("secret", "secretx"));
+
+	// A single differing byte at the end (same length) must be rejected.
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals("secret", "secreX"));
+
+	// A single differing byte at the start (same length) must be rejected.
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals("secret", "Xecret"));
+
+	// Empty expected never accepts, regardless of the presented value.
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals("", ""));
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals("", "secret"));
+
+	// Empty presented against a configured key is rejected.
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals("secret", ""));
+
+	// Embedded NUL bytes are honored across the full length.
+	CHECK(WebServerJsonSeams::ConstantTimeSecretEquals(std::string("a\0b", 3), std::string("a\0b", 3)));
+	CHECK_FALSE(WebServerJsonSeams::ConstantTimeSecretEquals(std::string("a\0b", 3), std::string("a\0c", 3)));
+}
+
 TEST_CASE("Web API builds stable native REST error envelopes")
 {
 	const WebServerJsonSeams::json envelope =
