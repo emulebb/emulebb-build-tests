@@ -282,6 +282,41 @@ def test_common_child_args_forward_explicit_p2p_interface(tmp_path: Path) -> Non
     assert option_value(command, "--p2p-bind-interface-name") == "Ethernet"
 
 
+def test_matrix_prepares_one_shared_goed2k_binary_for_child_scenarios(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    workspace = tmp_path / "workspaces" / "workspace"
+    server_exe = tmp_path / "tools" / "goed2k-server.exe"
+    calls: dict[str, object] = {}
+
+    def fake_prepare_ed2k_server_binary(workspace_root: Path, **kwargs):
+        calls["workspace_root"] = workspace_root
+        calls["kwargs"] = kwargs
+        return SimpleNamespace(server_exe=server_exe, build={"server_exe": str(server_exe), "return_code": 0})
+
+    monkeypatch.setattr(module.goed2k, "prepare_ed2k_server_binary", fake_prepare_ed2k_server_binary)
+    paths = SimpleNamespace(workspace_root=workspace)
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--ed2k-server-repo",
+            str(tmp_path / "goed2k-server"),
+        ]
+    )
+
+    build = module.prepare_shared_ed2k_server_binary(paths, args)
+
+    assert build == {"server_exe": str(server_exe), "return_code": 0}
+    assert args.ed2k_server_exe == str(server_exe)
+    assert calls == {
+        "workspace_root": workspace,
+        "kwargs": {
+            "repo_override": str(tmp_path / "goed2k-server"),
+            "exe_override": None,
+        },
+    }
+
+
 def test_amule_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     captured: dict[str, object] = {}

@@ -19,6 +19,7 @@ from emule_test_harness.multi_client import (  # noqa: E402
     resolve_windows_client_inventory,
     workspace_parent_root,
 )
+from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 SUITE_NAME = "multi-client-p2p-matrix"
@@ -142,6 +143,18 @@ def add_common_child_args(command: list[str], args: argparse.Namespace) -> None:
         command.extend(["--ed2k-server-repo", str(Path(args.ed2k_server_repo).resolve())])
     if args.ed2k_server_exe:
         command.extend(["--ed2k-server-exe", str(Path(args.ed2k_server_exe).resolve())])
+
+
+def prepare_shared_ed2k_server_binary(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Stages one goed2k-server executable for every child scenario in this matrix run."""
+
+    prepared = goed2k.prepare_ed2k_server_binary(
+        paths.workspace_root,
+        repo_override=args.ed2k_server_repo,
+        exe_override=args.ed2k_server_exe,
+    )
+    args.ed2k_server_exe = str(prepared.server_exe)
+    return prepared.build
 
 
 def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
@@ -435,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             return 1
 
+        report["ed2k_server_binary"] = prepare_shared_ed2k_server_binary(paths, args)
         scenarios = [run_deterministic_transfer_scenario(paths, args)]
         completed_optional_ids: set[str] = set()
         amule = inventory["amule"]
