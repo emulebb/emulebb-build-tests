@@ -439,26 +439,23 @@ def main(argv: list[str] | None = None) -> int:
             "ports": ports,
         }
 
-        ed2k_repo = goed2k.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
-        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = goed2k.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
-
         server_dir = paths.source_artifacts_dir / "ed2k-server"
-        catalog_path = server_dir / "catalog.json"
-        config_path = server_dir / "config.json"
-        goed2k.write_empty_catalog(catalog_path)
-        report["ed2k_server"] = goed2k.build_server_config(
-            config_path,
+        current_phase = "start_ed2k_server"
+        ed2k_server = goed2k.launch_ed2k_server(
+            workspace_root=paths.workspace_root,
+            server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
-            catalog_path=catalog_path,
             token=args.api_key,
             admin_address=args.lan_bind_addr,
+            repo_override=args.ed2k_server_repo,
+            exe_override=args.ed2k_server_exe,
         )
-        current_phase = "start_ed2k_server"
-        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
+        server_process = ed2k_server.process
+        admin_base_url = ed2k_server.admin_base_url
+        report["checks"]["server_build"] = ed2k_server.build
+        report["checks"]["ed2k_server_health"] = ed2k_server.health
+        report["ed2k_server"] = ed2k_server.config
 
         current_phase = "create_seed_files"
         seed_root = paths.source_artifacts_dir / "seeds"

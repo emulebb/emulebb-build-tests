@@ -102,3 +102,12 @@ def test_role_proofs_require_upload_and_download_for_each_client() -> None:
     assert all(row["has_upload_proof"] for row in proofs.values())
     assert all(row["has_download_proof"] for row in proofs.values())
     assert {row["completed_downloads"] for row in proofs.values()} == {2}
+
+
+def test_three_client_swarm_reuses_shared_goed2k_launcher() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_ed2k_server_binary(" not in script_text
