@@ -1447,6 +1447,52 @@ TEST_CASE("Web API validates qBittorrent session cookies by exact pair")
 	CHECK_FALSE(WebServerQBitCompatSeams::HasCookiePair("SID=abc123; SID=wrong", "SID", "abc123"));
 }
 
+TEST_CASE("Web API validates qBittorrent login form against the configured key")
+{
+	std::map<std::string, std::string> form;
+	form["username"] = "emule";
+	form["password"] = "s3cret-key";
+	CHECK(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "s3cret-key"));
+
+	// Wrong password / username / missing fields are rejected.
+	form["password"] = "wrong";
+	CHECK_FALSE(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "s3cret-key"));
+	form["password"] = "s3cret-key";
+	form["username"] = "admin";
+	CHECK_FALSE(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "s3cret-key"));
+	form.erase("password");
+	form["username"] = "emule";
+	CHECK_FALSE(WebServerQBitCompatSeams::IsValidLoginForm(form, "emule", "s3cret-key"));
+}
+
+TEST_CASE("Web API parses qBittorrent bearer Authorization tokens")
+{
+	std::string token;
+	CHECK(WebServerQBitCompatSeams::TryParseBearerToken("Bearer s3cret-key", token));
+	CHECK_EQ(token, "s3cret-key");
+	// Scheme is case-insensitive and surrounding whitespace is trimmed.
+	CHECK(WebServerQBitCompatSeams::TryParseBearerToken("  bearer   s3cret-key  ", token));
+	CHECK_EQ(token, "s3cret-key");
+	CHECK(WebServerQBitCompatSeams::TryParseBearerToken("BEARER abc", token));
+	CHECK_EQ(token, "abc");
+
+	// Non-bearer credentials, empty tokens, and missing headers are rejected.
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseBearerToken("Basic dXNlcjpwYXNz", token));
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseBearerToken("Bearer", token));
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseBearerToken("Bearer   ", token));
+	CHECK_FALSE(WebServerQBitCompatSeams::TryParseBearerToken("", token));
+}
+
+TEST_CASE("Web API authorizes qBittorrent requests by bearer API key")
+{
+	CHECK(WebServerQBitCompatSeams::IsAuthorizedByBearerApiKey("Bearer s3cret-key", "s3cret-key"));
+	// Wrong key, non-bearer headers, and an unconfigured key never authorize.
+	CHECK_FALSE(WebServerQBitCompatSeams::IsAuthorizedByBearerApiKey("Bearer wrong", "s3cret-key"));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsAuthorizedByBearerApiKey("Basic s3cret-key", "s3cret-key"));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsAuthorizedByBearerApiKey("Bearer s3cret-key", ""));
+	CHECK_FALSE(WebServerQBitCompatSeams::IsAuthorizedByBearerApiKey("", "s3cret-key"));
+}
+
 TEST_CASE("Web API preserves native transfer meaning in qBittorrent states")
 {
 	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("completed", false)), "pausedUP");
