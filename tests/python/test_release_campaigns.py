@@ -215,6 +215,11 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         for scenario_id in gate["coveredBy"]
     }
     rust_pytest_command = "python -m emule_workspace test python --path tests/python/test_emulebb_rust_local_client.py --quiet"
+    rust_rest_contract_command = (
+        "python -m emule_workspace test python "
+        "--path tests/python/test_emulebb_rust_rest_contract.py "
+        "--path tests/python/test_emulebb_rust_local_client.py --quiet"
+    )
 
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
@@ -224,7 +229,12 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         for phase in campaign["phases"]
         for scenario in phase["scenarios"]
         if scenario["command"] == rust_pytest_command
-    ) == 3
+    ) == 2
+    assert any(
+        scenario["command"] == rust_rest_contract_command
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    )
 
 
 def test_campaign_validation_rejects_missing_proof_tier() -> None:
