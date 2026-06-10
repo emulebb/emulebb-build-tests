@@ -198,6 +198,7 @@ TEST_CASE("IOCP helper owns completion port handles")
 
 TEST_CASE("Event helper shutdown only waits when thread launch succeeded")
 {
+	CHECK_EQ(HelperThreadLaunchSeams::kHelperThreadShutdownWaitMs, 30000u);
 	CHECK(HelperThreadLaunchSeams::ShouldWaitForEventThreadShutdown(true));
 	CHECK_FALSE(HelperThreadLaunchSeams::ShouldWaitForEventThreadShutdown(false));
 }
