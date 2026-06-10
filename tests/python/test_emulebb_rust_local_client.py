@@ -83,6 +83,8 @@ def write_config(
     ed2k_server_endpoint: str | None = None,
     ed2k_listen_port: int | None = None,
     kad_listen_port: int | None = None,
+    kad_bootstrap_nodes: list[str] | None = None,
+    kad_bootstrap_min_routing_contacts: int = 10,
 ) -> None:
     rust_client.write_rust_config(
         path,
@@ -94,6 +96,8 @@ def write_config(
         ed2k_port=ed2k_listen_port,
         kad_port=kad_listen_port,
         server_endpoint=ed2k_server_endpoint,
+        kad_bootstrap_nodes=kad_bootstrap_nodes,
+        kad_bootstrap_min_routing_contacts=kad_bootstrap_min_routing_contacts,
     )
 
 
@@ -1056,6 +1060,14 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     seeder_rest_port = free_lan_port_not(lan_host, forbidden_ports)
     seeder_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
     seeder_kad_port = free_lan_port_not(lan_host, forbidden_ports)
+
+    leecher_runtime_dir = tmp_path / "leecher-runtime"
+    leecher_config_path = tmp_path / "leecher.toml"
+    leecher_output_path = tmp_path / "leecher.out"
+    leecher_rest_port = free_lan_port_not(lan_host, forbidden_ports)
+    leecher_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
+    leecher_kad_port = free_lan_port_not(lan_host, forbidden_ports)
+    kad_bootstrap_min_contacts = 1
     write_config(
         seeder_config_path,
         seeder_runtime_dir,
@@ -1064,14 +1076,9 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         ed2k_server_endpoint=f"{lan_host}:{server_port}",
         ed2k_listen_port=seeder_ed2k_port,
         kad_listen_port=seeder_kad_port,
+        kad_bootstrap_nodes=[f"{lan_host}:{leecher_kad_port}"],
+        kad_bootstrap_min_routing_contacts=kad_bootstrap_min_contacts,
     )
-
-    leecher_runtime_dir = tmp_path / "leecher-runtime"
-    leecher_config_path = tmp_path / "leecher.toml"
-    leecher_output_path = tmp_path / "leecher.out"
-    leecher_rest_port = free_lan_port_not(lan_host, forbidden_ports)
-    leecher_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
-    leecher_kad_port = free_lan_port_not(lan_host, forbidden_ports)
     write_config(
         leecher_config_path,
         leecher_runtime_dir,
@@ -1080,6 +1087,8 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         ed2k_server_endpoint=f"{lan_host}:{server_port}",
         ed2k_listen_port=leecher_ed2k_port,
         kad_listen_port=leecher_kad_port,
+        kad_bootstrap_nodes=[f"{lan_host}:{seeder_kad_port}"],
+        kad_bootstrap_min_routing_contacts=kad_bootstrap_min_contacts,
     )
 
     remembered_runtime_dir = tmp_path / "remembered-leecher-runtime"
@@ -1097,7 +1106,15 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         ed2k_server_endpoint=f"{lan_host}:{dead_server_port}",
         ed2k_listen_port=remembered_ed2k_port,
         kad_listen_port=remembered_kad_port,
+        kad_bootstrap_nodes=[f"{lan_host}:{seeder_kad_port}"],
+        kad_bootstrap_min_routing_contacts=kad_bootstrap_min_contacts,
     )
+    seeder_config = seeder_config_path.read_text(encoding="utf-8")
+    leecher_config = leecher_config_path.read_text(encoding="utf-8")
+    assert f'bootstrapNodes = ["{lan_host}:{leecher_kad_port}"]' in seeder_config
+    assert f'bootstrapNodes = ["{lan_host}:{seeder_kad_port}"]' in leecher_config
+    assert "bootstrapMinRoutingContacts = 1" in seeder_config
+    assert "bootstrapMinRoutingContacts = 1" in leecher_config
 
     with seeder_output_path.open("w", encoding="utf-8") as seeder_output:
         seeder_process = subprocess.Popen(
