@@ -341,37 +341,35 @@ def main(argv: list[str] | None = None) -> int:
             "ports": ports,
         }
 
-        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = goed2k.build_or_skip_ed2k_server_binary(
-            paths.workspace_root,
-            ed2k_exe,
-            repo_override=args.ed2k_server_repo,
-            exe_override=args.ed2k_server_exe,
-        )
-
         current_phase = "prepare_catalog"
         server_dir = paths.source_artifacts_dir / "ed2k-server"
-        catalog_path = server_dir / "catalog.json"
         synthetic_records = build_synthetic_catalog_records(
             args.synthetic_catalog_files,
             source_host=p2p_address,
             source_port=ports["client2_tcp"],
         )
-        report["checks"]["synthetic_catalog"] = write_catalog(catalog_path, synthetic_records)
-        config_path = server_dir / "config.json"
-        report["ed2k_server"] = goed2k.build_server_config(
-            config_path,
-            ed2k_port=ports["ed2k_tcp"],
-            admin_port=ports["ed2k_admin"],
-            catalog_path=catalog_path,
-            token=args.api_key,
-            admin_address=args.lan_bind_addr,
-        )
+        report["checks"]["synthetic_catalog"] = {
+            "path": str(server_dir / "catalog.json"),
+            "file_count": len(synthetic_records),
+        }
 
         current_phase = "start_ed2k_server"
-        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
+        ed2k_server = goed2k.launch_ed2k_server(
+            workspace_root=paths.workspace_root,
+            server_dir=server_dir,
+            ed2k_port=ports["ed2k_tcp"],
+            admin_port=ports["ed2k_admin"],
+            token=args.api_key,
+            admin_address=args.lan_bind_addr,
+            catalog_files=synthetic_records,
+            repo_override=args.ed2k_server_repo,
+            exe_override=args.ed2k_server_exe,
+        )
+        server_process = ed2k_server.process
+        admin_base_url = ed2k_server.admin_base_url
+        report["checks"]["server_build"] = ed2k_server.build
+        report["checks"]["ed2k_server_health"] = ed2k_server.health
+        report["ed2k_server"] = ed2k_server.config
 
         current_phase = "prepare_profiles"
         client1 = live_common.prepare_scenario_profile(profile_seed_dir, paths.source_artifacts_dir, [], CLIENT01.profile_id)

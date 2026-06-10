@@ -64,13 +64,8 @@ def test_main_uses_lan_bind_and_staged_server_helper(tmp_path: Path, monkeypatch
             "client2_udp": 4673,
         }
 
-    def fake_build_or_skip(workspace_root, server_exe_arg, *, repo_override=None, exe_override=None):
-        calls["server_build"] = {
-            "workspace_root": workspace_root,
-            "server_exe": server_exe_arg,
-            "repo_override": repo_override,
-            "exe_override": exe_override,
-        }
+    def fake_launch_ed2k_server(**kwargs):
+        calls["ed2k_launch"] = kwargs
         raise RuntimeError("stop after staged server helper")
 
     monkeypatch.setattr(module.harness_cli_common, "prepare_run_paths", fake_prepare_run_paths)
@@ -79,19 +74,31 @@ def test_main_uses_lan_bind_and_staged_server_helper(tmp_path: Path, monkeypatch
     monkeypatch.setattr(module.harness_cli_common, "cleanup_source_artifacts", lambda _paths: None)
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.77")
     monkeypatch.setattr(module.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
-    monkeypatch.setattr(module.goed2k, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
-    monkeypatch.setattr(module.goed2k, "build_or_skip_ed2k_server_binary", fake_build_or_skip)
+    monkeypatch.setattr(module.goed2k, "launch_ed2k_server", fake_launch_ed2k_server)
 
     exit_code = module.main(["--lan-bind-addr", "192.0.2.77", "--ed2k-server-exe", str(server_exe)])
 
     assert exit_code == 1
     assert calls["port_host"] == "192.0.2.77"
-    assert calls["server_build"] == {
-        "workspace_root": tmp_path / "workspace",
-        "server_exe": server_exe,
-        "repo_override": None,
-        "exe_override": str(server_exe),
-    }
+    assert calls["ed2k_launch"]["workspace_root"] == tmp_path / "workspace"
+    assert calls["ed2k_launch"]["server_dir"] == source_artifacts_dir / "ed2k-server"
+    assert calls["ed2k_launch"]["ed2k_port"] == 4661
+    assert calls["ed2k_launch"]["admin_port"] == 8080
+    assert calls["ed2k_launch"]["token"] == module.API_KEY
+    assert calls["ed2k_launch"]["admin_address"] == "192.0.2.77"
+    assert calls["ed2k_launch"]["repo_override"] is None
+    assert calls["ed2k_launch"]["exe_override"] == str(server_exe)
+    assert len(calls["ed2k_launch"]["catalog_files"]) == module.DEFAULT_SYNTHETIC_CATALOG_FILES
+    assert calls["ed2k_launch"]["catalog_files"][0]["endpoints"] == [{"host": "192.0.2.77", "port": 4663}]
+
+
+def test_local_soak_reuses_shared_goed2k_launcher() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
 
 
 def test_synthetic_catalog_records_are_deterministic_and_searchable() -> None:
