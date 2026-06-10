@@ -20,7 +20,7 @@ TEST_CASE("Part-file completion seam classifies worker launch results")
 
 TEST_CASE("Part-file completion seam waits before deleting worker-owned files")
 {
-	CHECK_EQ(PartFileCompletionSeams::kCompletionOwnerShutdownWaitMs, 5000u);
+	CHECK_EQ(PartFileCompletionSeams::kCompletionOwnerShutdownWaitMs, 120000u);
 	CHECK(
 		PartFileCompletionSeams::GetCompletionOwnerShutdownWaitAction(true)
 		== PartFileCompletionSeams::ECompletionOwnerShutdownWaitAction::DeleteNow);

@@ -27,12 +27,13 @@ def test_download_queue_waits_for_completion_worker_before_deleting_part_files()
     part_file_header = (app_source_root() / "PartFile.h").read_text(encoding="utf-8", errors="ignore")
 
     assert "CPartFile *pPartFile = filelist.RemoveHead();" in source
-    assert "pPartFile->WaitForFileCompletionWorkerForShutdown();" in source
-    assert source.index("pPartFile->WaitForFileCompletionWorkerForShutdown();") < source.index("delete pPartFile;")
-    assert "void\tWaitForFileCompletionWorkerForShutdown();" in part_file_header
-    assert "void CPartFile::WaitForFileCompletionWorkerForShutdown()" in part_file
+    assert "!pPartFile->WaitForFileCompletionWorkerForShutdown()" in source
+    assert source.index("!pPartFile->WaitForFileCompletionWorkerForShutdown()") < source.index("delete pPartFile;")
+    assert "bool\tWaitForFileCompletionWorkerForShutdown();" in part_file_header
+    assert "bool CPartFile::WaitForFileCompletionWorkerForShutdown()" in part_file
     assert "lock.Lock(PartFileCompletionSeams::kCompletionOwnerShutdownWaitMs)" in part_file
-    assert "lock.Lock(INFINITE)" in part_file
+    assert "return false;" in part_file
+    assert "lock.Lock(INFINITE)" not in part_file
     assert "Hold the owner mutex until after the result is queued; shutdown waits on" in part_file
     assert "sLock.Unlock();\n\n\tif (!PostPartFileCompletionThreadResult(this, FILE_COMPLETION_THREAD_SUCCESS" not in part_file
 
