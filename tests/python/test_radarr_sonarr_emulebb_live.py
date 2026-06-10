@@ -58,6 +58,15 @@ def test_local_ed2k_parser_defaults_keep_fixture_in_workspace_control() -> None:
     assert args.rest_webserver_scheme == "https"
 
 
+def test_deterministic_local_ed2k_reuses_shared_goed2k_launcher() -> None:
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "radarr-sonarr-emulebb-live.py"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_server_config(" not in script_text
+
+
 def test_embedded_controller_parser_accepts_arr_executables() -> None:
     module = load_radarr_sonarr_module()
 

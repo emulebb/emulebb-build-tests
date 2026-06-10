@@ -4769,15 +4769,6 @@ def main() -> int:
             local_ports = choose_local_ed2k_ports({port})
             local_server_dir = artifacts_dir / "local-ed2k-server"
             local_catalog_path = local_server_dir / "catalog.json"
-            local_config_path = local_server_dir / "config.json"
-            ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-            report["checks"]["local_ed2k_server_build"] = goed2k.build_or_skip_ed2k_server_binary(
-                paths.workspace_root,
-                ed2k_exe,
-                repo_override=args.ed2k_server_repo,
-                exe_override=args.ed2k_server_exe,
-            )
-            goed2k.write_empty_catalog(local_catalog_path)
             report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
                 {
                     "p2p_address": p2p_address,
@@ -4785,21 +4776,21 @@ def main() -> int:
                     "server_catalog_path": str(local_catalog_path),
                 }
             )
-            report["checks"]["local_ed2k_server_config"] = goed2k.build_server_config(
-                local_config_path,
+            local_ed2k_server = goed2k.launch_ed2k_server(
+                workspace_root=paths.workspace_root,
+                server_dir=local_server_dir,
                 ed2k_port=local_ports["ed2k_tcp"],
                 admin_port=local_ports["ed2k_admin"],
-                catalog_path=local_catalog_path,
                 token=args.emule_api_key,
                 admin_address=bind_addr,
+                repo_override=args.ed2k_server_repo,
+                exe_override=args.ed2k_server_exe,
             )
-            local_ed2k_server_process = goed2k.start_ed2k_server(
-                ed2k_exe,
-                local_config_path,
-                local_server_dir / "server.log",
-            )
-            local_admin_base_url = f"http://{bind_addr}:{local_ports['ed2k_admin']}"
-            report["checks"]["local_ed2k_server_health"] = goed2k.wait_for_admin_health(local_admin_base_url, 30.0)
+            local_ed2k_server_process = local_ed2k_server.process
+            local_admin_base_url = local_ed2k_server.admin_base_url
+            report["checks"]["local_ed2k_server_build"] = local_ed2k_server.build
+            report["checks"]["local_ed2k_server_config"] = local_ed2k_server.config
+            report["checks"]["local_ed2k_server_health"] = local_ed2k_server.health
 
             fake_release_name = arr_fake_release_name(kind, media_terms[0])
             fixture_file = artifacts_dir / "local-arr-seed" / fake_release_name
