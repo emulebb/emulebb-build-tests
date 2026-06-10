@@ -316,25 +316,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     write_config(config_path, runtime_dir, lan_host, port)
     seed_index(runtime_dir / "index.sqlite")
 
-    with output_path.open("w", encoding="utf-8") as output:
-        process = subprocess.Popen(
-            [
-                "cargo",
-                "run",
-                "-p",
-                "emulebb-daemon",
-                "--bin",
-                "emulebb-rust",
-                "--",
-                "--config",
-                str(config_path),
-            ],
-            cwd=repo,
-            env=rust_client.rust_cargo_env(),
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    process = rust_client.start_rust_client(repo, config_path, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
@@ -818,25 +800,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         kad_listen_port=kad_port,
     )
 
-    with output_path.open("w", encoding="utf-8") as output:
-        process = subprocess.Popen(
-            [
-                "cargo",
-                "run",
-                "-p",
-                "emulebb-daemon",
-                "--bin",
-                "emulebb-rust",
-                "--",
-                "--config",
-                str(config_path),
-            ],
-            cwd=repo,
-            env=rust_client.rust_cargo_env(),
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    process = rust_client.start_rust_client(repo, config_path, output_path)
     try:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
@@ -966,25 +930,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         kad_listen_port=rust_kad_port,
     )
 
-    with rust_output_path.open("w", encoding="utf-8") as rust_output:
-        rust_process = subprocess.Popen(
-            [
-                "cargo",
-                "run",
-                "-p",
-                "emulebb-daemon",
-                "--bin",
-                "emulebb-rust",
-                "--",
-                "--config",
-                str(rust_config_path),
-            ],
-            cwd=rust_repo,
-            env=rust_client.rust_cargo_env(),
-            stdout=rust_output,
-            stderr=subprocess.STDOUT,
-            text=True,
-    )
+    rust_process = rust_client.start_rust_client(rust_repo, rust_config_path, rust_output_path)
 
     try:
         admin_base_url = ed2k_server.admin_base_url
@@ -1012,7 +958,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         assert int(stats["search_requests"]) >= 1
     finally:
         terminate_process(rust_process)
-        terminate_process(server_process)
+        goed2k.stop_process(server_process)
         rust_client.stop_goed2k_server_processes()
 
 
@@ -1116,44 +1062,8 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     assert "bootstrapMinRoutingContacts = 1" in seeder_config
     assert "bootstrapMinRoutingContacts = 1" in leecher_config
 
-    with seeder_output_path.open("w", encoding="utf-8") as seeder_output:
-        seeder_process = subprocess.Popen(
-            [
-                "cargo",
-                "run",
-                "-p",
-                "emulebb-daemon",
-                "--bin",
-                "emulebb-rust",
-                "--",
-                "--config",
-                str(seeder_config_path),
-            ],
-            cwd=rust_repo,
-            env=rust_client.rust_cargo_env(),
-            stdout=seeder_output,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-    with leecher_output_path.open("w", encoding="utf-8") as leecher_output:
-        leecher_process = subprocess.Popen(
-            [
-                "cargo",
-                "run",
-                "-p",
-                "emulebb-daemon",
-                "--bin",
-                "emulebb-rust",
-                "--",
-                "--config",
-                str(leecher_config_path),
-            ],
-            cwd=rust_repo,
-            env=rust_client.rust_cargo_env(),
-            stdout=leecher_output,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    seeder_process = rust_client.start_rust_client(rust_repo, seeder_config_path, seeder_output_path)
+    leecher_process = rust_client.start_rust_client(rust_repo, leecher_config_path, leecher_output_path)
 
     remembered_leecher_process: subprocess.Popen[str] | None = None
     try:
@@ -1209,25 +1119,11 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             lan_host,
             seeder_ed2k_port,
         )
-        with remembered_output_path.open("w", encoding="utf-8") as remembered_output:
-            remembered_leecher_process = subprocess.Popen(
-                [
-                    "cargo",
-                    "run",
-                    "-p",
-                    "emulebb-daemon",
-                    "--bin",
-                    "emulebb-rust",
-                    "--",
-                    "--config",
-                    str(remembered_config_path),
-                ],
-                cwd=rust_repo,
-                env=rust_client.rust_cargo_env(),
-                stdout=remembered_output,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
+        remembered_leecher_process = rust_client.start_rust_client(
+            rust_repo,
+            remembered_config_path,
+            remembered_output_path,
+        )
         remembered_base_url = f"http://{lan_host}:{remembered_rest_port}"
         wait_for_rest(remembered_base_url, remembered_leecher_process, remembered_output_path)
         remembered_transfers = request_json(remembered_base_url, "GET", "/api/v1/transfers")["data"]["items"]
@@ -1389,25 +1285,11 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert reverse_downloaded_payload.read_bytes() == reverse_payload
 
         terminate_process(leecher_process)
-        with leecher_output_path.open("a", encoding="utf-8") as leecher_output:
-            leecher_process = subprocess.Popen(
-                [
-                    "cargo",
-                    "run",
-                    "-p",
-                    "emulebb-daemon",
-                    "--bin",
-                    "emulebb-rust",
-                    "--",
-                    "--config",
-                    str(leecher_config_path),
-                ],
-                cwd=rust_repo,
-                env=rust_client.rust_cargo_env(),
-                stdout=leecher_output,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
+        leecher_process = rust_client.start_rust_client_append(
+            rust_repo,
+            leecher_config_path,
+            leecher_output_path,
+        )
         wait_for_rest(leecher_base_url, leecher_process, leecher_output_path)
         persisted_sources = request_json(
             leecher_base_url,
@@ -1499,5 +1381,5 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             terminate_process(remembered_leecher_process)
         terminate_process(leecher_process)
         terminate_process(seeder_process)
-        terminate_process(server_process)
+        goed2k.stop_process(server_process)
         rust_client.stop_goed2k_server_processes()

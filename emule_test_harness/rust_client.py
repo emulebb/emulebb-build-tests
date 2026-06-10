@@ -81,6 +81,20 @@ def start_rust_client(repo: Path, config_path: Path, output_path: Path) -> subpr
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_handle = output_path.open("w", encoding="utf-8")
+    return start_rust_client_with_output(repo, config_path, output_handle)
+
+
+def start_rust_client_append(repo: Path, config_path: Path, output_path: Path) -> subprocess.Popen[str]:
+    """Restarts `emulebb-rust` while appending to an existing harness log."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_handle = output_path.open("a", encoding="utf-8")
+    return start_rust_client_with_output(repo, config_path, output_handle)
+
+
+def start_rust_client_with_output(repo: Path, config_path: Path, output_handle) -> subprocess.Popen[str]:
+    """Starts `emulebb-rust` with an already-open output handle."""
+
     return subprocess.Popen(
         [
             "cargo",

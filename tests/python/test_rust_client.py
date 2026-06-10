@@ -92,3 +92,59 @@ def test_rust_cargo_env_uses_workspace_output_root(tmp_path: Path, monkeypatch: 
     assert Path(env["CARGO_TARGET_DIR"]) == output_root / "builds" / "rust" / "target"
     assert Path(env["CARGO_TARGET_DIR"]).is_dir()
     assert os.environ.get("CARGO_TARGET_DIR") is None
+
+
+def test_start_rust_client_uses_shared_cargo_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr(rust_client, "rust_cargo_env", lambda: {"CARGO_TARGET_DIR": "target-dir"})
+    monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
+
+    process = rust_client.start_rust_client(tmp_path / "repo", tmp_path / "config.toml", tmp_path / "rust.out")
+
+    assert isinstance(process, FakeProcess)
+    assert calls[0]["command"] == [
+        "cargo",
+        "run",
+        "-p",
+        "emulebb-daemon",
+        "--bin",
+        "emulebb-rust",
+        "--",
+        "--config",
+        str(tmp_path / "config.toml"),
+    ]
+    assert calls[0]["cwd"] == tmp_path / "repo"
+    assert calls[0]["env"] == {"CARGO_TARGET_DIR": "target-dir"}
+    assert calls[0]["stdout"].mode == "w"
+    calls[0]["stdout"].close()
+
+
+def test_start_rust_client_append_keeps_restart_log(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return FakeProcess()
+
+    output_path = tmp_path / "rust.out"
+    output_path.write_text("first run\n", encoding="utf-8")
+    monkeypatch.setattr(rust_client, "rust_cargo_env", lambda: {"CARGO_TARGET_DIR": "target-dir"})
+    monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
+
+    rust_client.start_rust_client_append(tmp_path / "repo", tmp_path / "config.toml", output_path)
+
+    assert calls[0]["stdout"].mode == "a"
+    calls[0]["stdout"].write("second run\n")
+    calls[0]["stdout"].close()
+    assert output_path.read_text(encoding="utf-8") == "first run\nsecond run\n"
