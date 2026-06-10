@@ -220,7 +220,10 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "--path tests/python/test_emulebb_rust_rest_contract.py "
         "--path tests/python/test_emulebb_rust_local_client.py --quiet"
     )
-    rust_cross_client_command = "python scripts/emulebb-rust-emulebb-cross-client.py --lan-bind-addr ${X_LOCAL_IP}"
+    rust_cross_client_command = (
+        "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} "
+        "--require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
+    )
 
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)

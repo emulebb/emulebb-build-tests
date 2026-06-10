@@ -73,12 +73,12 @@
           "flowCategory": "protocol",
           "required": true,
           "blocking": true,
-          "command": "python scripts/emulebb-rust-emulebb-cross-client.py --lan-bind-addr ${X_LOCAL_IP}",
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
           "evidence": [
             {
               "kind": "manual",
               "required": true,
-              "description": "The existing cross-client suite launches shared goed2k-server, starts emulebb-rust and eMuleBB with configured LAN or VPN binds, proves Rust-to-eMuleBB transfer, then proves eMuleBB-to-Rust transfer through canonical REST APIs."
+              "description": "The existing multi-client P2P matrix requires the Rust/eMuleBB bidirectional scenario, which delegates to the shared cross-client suite and goed2k launcher, starts emulebb-rust and eMuleBB with configured LAN or VPN binds, proves Rust-to-eMuleBB transfer, then proves eMuleBB-to-Rust transfer through canonical REST APIs."
             }
           ]
         }

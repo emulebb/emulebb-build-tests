@@ -72,6 +72,48 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
     assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == ["cl-emulebb-rust-005"]
 
 
+def test_required_scenario_fails_only_targeted_optional_row_when_missing() -> None:
+    module = load_suite_module()
+    inventory = {
+        "emuleai": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emuleai"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
+        "amule": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["amule"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
+        "emulebb_rust": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
+        "emulebb_rust_peer": multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES["emulebb_rust_peer"],
+            available=False,
+            executable=None,
+            reason="missing",
+        ),
+    }
+
+    rows = module.build_optional_scenario_rows(
+        inventory,
+        require_optional_clients=False,
+        required_scenario_ids={module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID},
+    )
+    rows_by_id = {row["id"]: row for row in rows}
+
+    assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["status"] == "failed"
+    assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == ["cl-emulebb-rust-005"]
+    assert rows_by_id[module.RUST_BIDIRECTIONAL_SCENARIO_ID]["status"] == "skipped"
+    assert rows_by_id[module.AMULE_TRANSFER_SCENARIO_ID]["status"] == "skipped"
+
+
 def test_matrix_defaults_to_132_mib_fixture() -> None:
     module = load_suite_module()
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
@@ -79,6 +121,21 @@ def test_matrix_defaults_to_132_mib_fixture() -> None:
     assert args.fixture_size_bytes == 132 * 1024 * 1024
     assert args.transfer_completion_timeout_seconds == 1800.0
     assert args.p2p_bind_interface_name == ""
+    assert args.require_scenario == []
+
+
+def test_matrix_accepts_targeted_required_scenario() -> None:
+    module = load_suite_module()
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--require-scenario",
+            module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID,
+        ]
+    )
+
+    assert args.require_scenario == [module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]
 
 
 def test_optional_scenarios_fail_when_required_and_adapter_not_enabled(tmp_path: Path) -> None:

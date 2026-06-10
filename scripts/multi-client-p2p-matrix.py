@@ -28,6 +28,14 @@ AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
 THREE_CLIENT_SWARM_SCENARIO_ID = "cl-emulebb-001-cl-harness-002-cl-amule-004-concurrent-swarm"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
 RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
+OPTIONAL_SCENARIO_DEFINITIONS = (
+    ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
+    (AMULE_TRANSFER_SCENARIO_ID, "amule"),
+    (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
+    (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
+    (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
+    ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
+)
 
 
 harness_cli_common = load_script_module("harness_cli_common", "harness-cli-common.py")
@@ -61,6 +69,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--amule-daemon-exe")
     parser.add_argument("--amule-control-exe")
     parser.add_argument("--require-optional-clients", action="store_true")
+    parser.add_argument(
+        "--require-scenario",
+        action="append",
+        choices=[definition[0] for definition in OPTIONAL_SCENARIO_DEFINITIONS],
+        default=[],
+        help="Require one optional matrix scenario without requiring every optional client.",
+    )
     return parser.parse_args(argv)
 
 
@@ -317,24 +332,19 @@ def build_optional_scenario_rows(
     inventory: dict[str, object],
     *,
     require_optional_clients: bool,
+    required_scenario_ids: set[str] | None = None,
     completed_scenario_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Builds explicit rows for optional Windows clients that are not silently ignored."""
 
+    required_scenario_ids = required_scenario_ids or set()
     completed_scenario_ids = completed_scenario_ids or set()
     rows: list[dict[str, object]] = []
-    definitions = (
-        ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
-        (AMULE_TRANSFER_SCENARIO_ID, "amule"),
-        (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
-        (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
-        (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
-        ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
-    )
-    for definition in definitions:
+    for definition in OPTIONAL_SCENARIO_DEFINITIONS:
         scenario_id = definition[0]
         if scenario_id in completed_scenario_ids:
             continue
+        required = require_optional_clients or scenario_id in required_scenario_ids
         client_keys = definition[1:]
         availability = [inventory[key] for key in client_keys]
         missing = [row for row in availability if not row.available]
@@ -342,7 +352,7 @@ def build_optional_scenario_rows(
             rows.append(
                 {
                     "id": scenario_id,
-                    "status": "failed" if require_optional_clients else "skipped",
+                    "status": "failed" if required else "skipped",
                     "reason": "optional client artifact missing",
                     "missing_clients": [row.identity.profile_id for row in missing],
                     "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
@@ -365,7 +375,7 @@ def build_optional_scenario_rows(
         rows.append(
             {
                 "id": scenario_id,
-                "status": "failed" if require_optional_clients else "skipped",
+                "status": "failed" if required else "skipped",
                 "reason": "optional deterministic scenario runner is not implemented yet",
                 "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
             }
@@ -445,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
             build_optional_scenario_rows(
                 inventory,
                 require_optional_clients=args.require_optional_clients,
+                required_scenario_ids=set(args.require_scenario or ()),
                 completed_scenario_ids=completed_optional_ids,
             )
         )
