@@ -1739,7 +1739,9 @@ def test_openapi_rest_consistency_cleanup_contracts() -> None:
                 assert "requestBody" not in operation
             assert expected_error_statuses <= set(operation["responses"])
             for status in expected_error_statuses:
-                assert operation["responses"][status]["$ref"].endswith("/ErrorResponse")
+                # 405 carries the Allow header via a dedicated response component.
+                expected_ref = "/MethodNotAllowedResponse" if status == "405" else "/ErrorResponse"
+                assert operation["responses"][status]["$ref"].endswith(expected_ref)
             assert operation["responses"]["default"]["$ref"].endswith("/ErrorResponse")
 
     source_properties = schemas["TransferSource"]["properties"]
@@ -2435,9 +2437,15 @@ def _native_route_token_value(token: str, workspace_root: Path) -> str:
 def _native_route_contracts() -> dict[tuple[str, str], dict[str, set[str]]]:
     workspace_root = Path(__file__).resolve().parents[4]
     route_header = workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid" / "WebServerJsonSeams.h"
+    # Scope the scan to the GetApiRouteSpecs() table so unrelated brace-enclosed
+    # string arrays elsewhere in the header (for example method-name lists) are
+    # not misread as route specs.
+    header_text = route_header.read_text(encoding="utf-8")
+    block_start = header_text.index("GetApiRouteSpecs()")
+    block_end = header_text.index("return specs;", block_start)
     route_specs = re.findall(
         r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"\s*,\s*("[^"]*"|WebApiSurfaceSeams::kMutablePreferenceFieldListCsv)\s*,\s*("[^"]*")(?:\s*,\s*([^}]+?))?\s*\}',
-        route_header.read_text(encoding="utf-8"),
+        header_text[block_start:block_end],
     )
 
     return {
