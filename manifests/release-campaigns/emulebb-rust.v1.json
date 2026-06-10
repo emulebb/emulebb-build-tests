@@ -5,7 +5,7 @@
   "campaignId": "emulebb-rust",
   "releaseVersion": "0.0.3",
   "title": "eMuleBB Rust product-family campaign",
-  "description": "Campaign for the eMuleBB Rust headless client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
+  "description": "Campaign for the eMuleBB Rust 0.0.3 headless core client. It reuses the shared eMuleBB campaign runner and local deterministic swarm policy for REST, ED2K, Kad, transfer, upload, queue, and local indexing proof, with public live-wire proof deferred until a hide.me-bound Rust live scenario exists.",
   "proofTier": "future",
   "phases": [
     {
@@ -40,7 +40,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Focused pytest coverage builds emulebb-rust through Cargo, launches local goed2k-server, and uses X_LOCAL_IP for deterministic LAN REST and P2P binding."
+              "description": "Focused pytest coverage builds emulebb-rust through Cargo, launches local goed2k-server, and writes configured LAN REST and P2P binds from X_LOCAL_IP into the generated Rust config."
             }
           ]
         }
@@ -62,7 +62,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "The focused Rust pytest scenario proves configured P2P bind, local goed2k server search, source fallback, download, pause persistence, and destructive transfer file deletion."
+              "description": "The focused Rust pytest scenario proves configured P2P bind, local goed2k server search, source fallback, download, pause persistence, destructive transfer file deletion, and core client status visibility."
             }
           ]
         },
@@ -116,7 +116,7 @@
             {
               "kind": "manual",
               "required": true,
-              "description": "Focused pytest coverage first compares the emulebb-rust route table to the eMuleBB-owned /api/v1 contract, then exercises the Rust server, search, transfer create, transfer control, diagnostic, and transfer file deletion envelopes."
+              "description": "Focused pytest coverage first compares the emulebb-rust route table to the eMuleBB-owned /api/v1 contract, then exercises the Rust server, Kad, search, transfer create, transfer control, shared-file, upload/queue, diagnostic, and transfer file deletion envelopes without private aliases or shims."
             }
           ]
         }
@@ -164,7 +164,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Use existing aMuTorrent controller scenarios once Rust implements the required eMuleBB REST endpoints without adapters or compatibility shims."
+              "description": "Use existing aMuTorrent controller scenarios once Rust implements the required eMuleBB REST endpoints without private adapters, aliases, or compatibility shims."
             }
           ]
         }
@@ -186,7 +186,7 @@
             {
               "kind": "manual",
               "required": false,
-              "description": "Reuse eMuleBB resource evidence structure for SQLite index, FTS, transfer runtime, memory, handles, and REST counters as 0.0.x storage scales beyond the local proof."
+              "description": "Reuse eMuleBB resource evidence structure for SQLite index, FTS, buffered I/O, RAM, handles, transfer runtime, upload queue, and REST counters as 0.0.x storage scales beyond the local proof."
             }
           ]
         }
