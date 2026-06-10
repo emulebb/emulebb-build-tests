@@ -40,16 +40,6 @@ def active_workspace_root() -> Path:
     return workspace_root() / "workspaces" / "workspace"
 
 
-def build_goed2k_server_binary() -> Path:
-    server_exe = dtt.resolve_ed2k_server_exe(active_workspace_root(), None)
-    dtt.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
-    return server_exe
-
-
-def start_goed2k_server(config_path: Path, output_path: Path) -> subprocess.Popen:
-    return dtt.start_ed2k_server(build_goed2k_server_binary(), config_path, output_path)
-
-
 def free_lan_port(host: str) -> int:
     return free_lan_port_not(host, set())
 
@@ -64,17 +54,6 @@ def free_lan_port_not(host: str, forbidden: set[int]) -> int:
             _ALLOCATED_PORTS.add(port)
             return port
     raise RuntimeError(f"could not find a free LAN port outside {sorted(forbidden)}")
-
-
-def free_goed2k_server_port(host: str) -> int:
-    for port in range(SERVICE_PORT_START, SERVICE_PORT_END - 4):
-        if port in _ALLOCATED_PORTS or (port + 4) in _ALLOCATED_PORTS:
-            continue
-        if _lan_port_available(host, port) and _lan_port_available(host, port + 4):
-            _ALLOCATED_PORTS.add(port)
-            _ALLOCATED_PORTS.add(port + 4)
-            return port
-    raise RuntimeError("could not find a free goed2k server port with UDP offset room")
 
 
 def _lan_port_available(host: str, port: int) -> bool:
@@ -266,16 +245,6 @@ def request_json_status(
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def admin_json(base_url: str, path: str, token: str) -> dict[str, object]:
-    request = urllib.request.Request(
-        f"{base_url}{path}",
-        headers={"X-Admin-Token": token},
-    )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=5) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def has_endpoint(file: dict[str, object], host: str, port: int) -> bool:
     return any(
         endpoint.get("host") == host and int(endpoint.get("port", 0)) == port
@@ -322,16 +291,6 @@ def wait_for_condition(description: str, deadline_seconds: float, probe: Callabl
     raise AssertionError(f"Timed out waiting for {description}{detail}")
 
 
-def wait_for_goed2k_admin(base_url: str, token: str, process: subprocess.Popen[str], output_path: Path) -> None:
-    def probe() -> bool:
-        if process.poll() is not None:
-            raise AssertionError(f"goed2k-server exited early with code {process.returncode}\n{process_output(output_path)}")
-        payload = admin_json(base_url, "/api/stats", token)
-        return bool(payload.get("ok"))
-
-    wait_for_condition("goed2k-server admin API", 30, probe)
-
-
 def write_goed2k_catalog(path: Path, source_host: str, source_port: int) -> None:
     path.write_text(
         json.dumps(
@@ -356,36 +315,8 @@ def write_goed2k_catalog(path: Path, source_host: str, source_port: int) -> None
     )
 
 
-def write_empty_goed2k_catalog(path: Path) -> None:
-    dtt.write_empty_catalog(path)
-
-
-def write_goed2k_config(
-    path: Path,
-    *,
-    listen_host: str,
-    listen_port: int,
-    admin_port: int,
-    token: str,
-    catalog_path: Path,
-) -> None:
-    dtt.build_server_config(
-        path,
-        ed2k_port=listen_port,
-        admin_port=admin_port,
-        catalog_path=catalog_path,
-        token=token,
-        admin_address=listen_host,
-        ed2k_address=listen_host,
-    )
-
-
 def terminate_process(process: subprocess.Popen[str]) -> None:
     rust_client.stop_process_tree(process, timeout_seconds=5)
-
-
-def terminate_goed2k_server_processes() -> None:
-    rust_client.stop_goed2k_server_processes()
 
 
 def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
@@ -1022,7 +953,8 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
 
     server_root = tmp_path / "goed2k"
     server_root.mkdir()
-    server_port = free_goed2k_server_port(lan_host)
+    server_port = dtt.choose_tcp_port_with_udp_offset(lan_host)
+    _ALLOCATED_PORTS.update({server_port, server_port + 4})
     admin_port = free_lan_port(lan_host)
     forbidden_ports = {server_port, admin_port, server_port + 4}
     rust_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
@@ -1032,16 +964,19 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
     server_config_path = server_root / "config.json"
     server_output_path = tmp_path / "goed2k-server.out"
     write_goed2k_catalog(catalog_path, lan_host, rust_ed2k_port)
-    write_goed2k_config(
+    dtt.build_server_config(
         server_config_path,
-        listen_host=lan_host,
-        listen_port=server_port,
+        ed2k_port=server_port,
         admin_port=admin_port,
         token=admin_token,
         catalog_path=catalog_path,
+        admin_address=lan_host,
+        ed2k_address=lan_host,
     )
 
-    server_process = start_goed2k_server(server_config_path, server_output_path)
+    server_exe = dtt.resolve_ed2k_server_exe(active_workspace_root(), None)
+    dtt.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
+    server_process = dtt.start_ed2k_server(server_exe, server_config_path, server_output_path)
 
     rust_runtime_dir = tmp_path / "runtime"
     rust_config_path = tmp_path / "emulebb-rust.toml"
@@ -1078,7 +1013,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         )
 
     try:
-        wait_for_goed2k_admin(f"http://{lan_host}:{admin_port}", admin_token, server_process, server_output_path)
+        dtt.wait_for_admin_health(f"http://{lan_host}:{admin_port}", 30.0)
         base_url = f"http://{lan_host}:{rust_port}"
         wait_for_rest(base_url, rust_process, rust_output_path)
 
@@ -1099,12 +1034,12 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         )["data"]
         results = search["results"]
         assert any(result["hash"] == SERVER_SEARCH_HASH and result["name"] == SERVER_SEARCH_NAME for result in results)
-        stats = admin_json(f"http://{lan_host}:{admin_port}", "/api/stats", admin_token)["data"]
+        stats = dtt.admin_request(f"http://{lan_host}:{admin_port}", admin_token, "/api/stats")["data"]
         assert int(stats["search_requests"]) >= 1
     finally:
         terminate_process(rust_process)
         terminate_process(server_process)
-        terminate_goed2k_server_processes()
+        rust_client.stop_goed2k_server_processes()
 
 
 def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Path) -> None:
@@ -1129,24 +1064,28 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
 
     server_root = tmp_path / "goed2k"
     server_root.mkdir()
-    server_port = free_goed2k_server_port(lan_host)
+    server_port = dtt.choose_tcp_port_with_udp_offset(lan_host)
+    _ALLOCATED_PORTS.update({server_port, server_port + 4})
     admin_port = free_lan_port(lan_host)
     forbidden_ports = {server_port, admin_port, server_port + 4}
     admin_token = "goed2k-test-token"
     catalog_path = server_root / "catalog.json"
     server_config_path = server_root / "config.json"
     server_output_path = tmp_path / "goed2k-server.out"
-    write_empty_goed2k_catalog(catalog_path)
-    write_goed2k_config(
+    dtt.write_empty_catalog(catalog_path)
+    dtt.build_server_config(
         server_config_path,
-        listen_host=lan_host,
-        listen_port=server_port,
+        ed2k_port=server_port,
         admin_port=admin_port,
         token=admin_token,
         catalog_path=catalog_path,
+        admin_address=lan_host,
+        ed2k_address=lan_host,
     )
 
-    server_process = start_goed2k_server(server_config_path, server_output_path)
+    server_exe = dtt.resolve_ed2k_server_exe(active_workspace_root(), None)
+    dtt.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
+    server_process = dtt.start_ed2k_server(server_exe, server_config_path, server_output_path)
 
     seeder_runtime_dir = tmp_path / "seeder-runtime"
     seeder_config_path = tmp_path / "seeder.toml"
@@ -1239,7 +1178,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     remembered_leecher_process: subprocess.Popen[str] | None = None
     try:
         admin_base_url = f"http://{lan_host}:{admin_port}"
-        wait_for_goed2k_admin(admin_base_url, admin_token, server_process, server_output_path)
+        dtt.wait_for_admin_health(admin_base_url, 30.0)
 
         seeder_base_url = f"http://{lan_host}:{seeder_rest_port}"
         wait_for_rest(seeder_base_url, seeder_process, seeder_output_path)
@@ -1273,7 +1212,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert share_link["link"] == share_file["ed2kLink"]
 
         def server_has_dynamic_share() -> object:
-            files = admin_json(admin_base_url, f"/api/files?search={share_file['hash']}", admin_token)["data"]
+            files = dtt.admin_request(admin_base_url, admin_token, f"/api/files?search={share_file['hash']}")["data"]
             for file in files:
                 if file["hash"].lower() == str(share_file["hash"]).lower() and has_endpoint(file, lan_host, seeder_ed2k_port):
                     return file
@@ -1408,7 +1347,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         reverse_share_file = reverse_share["file"]
 
         def server_has_reverse_dynamic_share() -> object:
-            files = admin_json(admin_base_url, f"/api/files?search={reverse_share_file['hash']}", admin_token)["data"]
+            files = dtt.admin_request(admin_base_url, admin_token, f"/api/files?search={reverse_share_file['hash']}")["data"]
             for file in files:
                 if file["hash"].lower() == str(reverse_share_file["hash"]).lower() and has_endpoint(file, lan_host, leecher_ed2k_port):
                     return file
@@ -1588,4 +1527,4 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         terminate_process(leecher_process)
         terminate_process(seeder_process)
         terminate_process(server_process)
-        terminate_goed2k_server_processes()
+        rust_client.stop_goed2k_server_processes()
