@@ -154,6 +154,7 @@ def prepare_shared_ed2k_server_binary(paths, args: argparse.Namespace) -> dict[s
         exe_override=args.ed2k_server_exe,
     )
     args.ed2k_server_exe = str(prepared.server_exe)
+    args.ed2k_server_repo = None
     return prepared.build
 
 

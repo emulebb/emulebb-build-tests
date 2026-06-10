@@ -308,6 +308,7 @@ def test_matrix_prepares_one_shared_goed2k_binary_for_child_scenarios(monkeypatc
 
     assert build == {"server_exe": str(server_exe), "return_code": 0}
     assert args.ed2k_server_exe == str(server_exe)
+    assert args.ed2k_server_repo is None
     assert calls == {
         "workspace_root": workspace,
         "kwargs": {
@@ -481,6 +482,39 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(mo
     assert option_value(command, "--ed2k-server-repo") == str((tmp_path / "goed2k-server").resolve())
     assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "goed2k-server.exe").resolve())
     assert option_value(command, "--link-export-timeout-seconds") == "45.0"
+
+
+def test_emulebb_rust_emulebb_bidirectional_scenario_uses_prepared_goed2k_exe_only(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
+    args = module.parse_args(
+        [
+            "--app-exe",
+            str(tmp_path / "emulebb.exe"),
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--p2p-bind-interface-address",
+            "10.1.2.3",
+            "--ed2k-server-repo",
+            str(tmp_path / "goed2k-server"),
+        ]
+    )
+    args.ed2k_server_exe = str(tmp_path / "tools" / "goed2k-server.exe")
+    args.ed2k_server_repo = None
+
+    result = module.run_emulebb_rust_emulebb_bidirectional_scenario(paths, args)
+
+    assert result["status"] == "passed"
+    command = captured["command"]
+    assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "tools" / "goed2k-server.exe").resolve())
+    assert "--ed2k-server-repo" not in command
 
 
 def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatch, tmp_path: Path) -> None:
