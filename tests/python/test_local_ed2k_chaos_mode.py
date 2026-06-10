@@ -74,3 +74,12 @@ def test_admin_fixture_config_enforces_minimum_vhd_size(monkeypatch, tmp_path: P
 
     assert config.vhd_path == tmp_path / "artifacts" / "admin-volumes" / "local-ed2k-chaos-mode.vhdx"
     assert config.size_mb == module.MIN_ADMIN_VHD_SIZE_MB
+
+
+def test_chaos_mode_reuses_shared_goed2k_launcher() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_ed2k_server_binary(" not in script_text
