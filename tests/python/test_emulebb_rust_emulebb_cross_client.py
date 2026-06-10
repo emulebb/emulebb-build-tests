@@ -122,10 +122,20 @@ def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkey
 
     monkeypatch.setattr(module.rust_client, "write_rust_config", fail_after_goed2k_started)
 
-    exit_code = module.main(["--lan-bind-addr", "192.0.2.10"])
+    exit_code = module.main(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--p2p-bind-interface-address",
+            "198.51.100.20",
+        ]
+    )
 
     assert exit_code == 1
     assert calls["server_config"]["admin_address"] == "192.0.2.10"
-    assert calls["server_config"]["ed2k_address"] == "192.0.2.10"
+    assert calls["server_config"]["ed2k_address"] == "198.51.100.20"
     assert calls["stopped"] == [server_process]
     assert calls["report"]["current_phase"] == "start_ed2k_server"
+    assert calls["report"]["network"]["lan_bind_addr"] == "192.0.2.10"
+    assert calls["report"]["network"]["p2p_bind_interface_address"] == "198.51.100.20"
+    assert calls["report"]["network"]["server_endpoint"] == "198.51.100.20:4661"

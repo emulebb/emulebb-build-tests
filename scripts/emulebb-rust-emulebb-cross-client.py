@@ -214,7 +214,14 @@ def main(argv: list[str] | None = None) -> int:
         rust_rest_port = choose_extra_port(args.lan_bind_addr, used_ports)
         rust_ed2k_port = choose_extra_port(args.lan_bind_addr, used_ports)
         rust_kad_port = choose_extra_port(args.lan_bind_addr, used_ports)
-        report["network"] = {"p2p_address": p2p_address, "ports": {**ports, "rust_rest": rust_rest_port, "rust_ed2k": rust_ed2k_port, "rust_kad": rust_kad_port}}
+        server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
+        report["network"] = {
+            "lan_bind_addr": args.lan_bind_addr,
+            "p2p_bind_interface_name": args.p2p_bind_interface_name,
+            "p2p_bind_interface_address": p2p_address,
+            "server_endpoint": server_endpoint,
+            "ports": {**ports, "rust_rest": rust_rest_port, "rust_ed2k": rust_ed2k_port, "rust_kad": rust_kad_port},
+        }
 
         rust_repo = resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
         if not (rust_repo / "Cargo.toml").is_file():
@@ -229,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             token=args.api_key,
             admin_address=args.lan_bind_addr,
-            ed2k_address=args.lan_bind_addr,
+            ed2k_address=p2p_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
         )
@@ -254,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             p2p_bind_ip=p2p_address,
             ed2k_port=rust_ed2k_port,
             kad_port=rust_kad_port,
-            server_endpoint=f"{p2p_address}:{ports['ed2k_tcp']}",
+            server_endpoint=server_endpoint,
         )
         current_phase = "launch_rust"
         rust_process = rust_client.start_rust_client(rust_repo, rust_config, paths.source_artifacts_dir / "rust.out")
