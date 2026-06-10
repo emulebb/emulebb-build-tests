@@ -2737,6 +2737,61 @@ TEST_CASE("Web API maps every current REST route family to a command")
 	CHECK(route.params["_items_envelope"].get<bool>());
 }
 
+TEST_CASE("Web API resolves every registered route spec to a dispatch command")
+{
+	// Guards the dual encoding of the REST surface: GetApiRouteSpecs() is the
+	// declarative registry used for validation, while TryBuildRoute maps each
+	// path to an internal command through a hand-written chain that ends in a
+	// NOT_FOUND fallthrough. A spec route with no dispatch branch (or one whose
+	// operation list drifts from the registry) would pass the route/OpenAPI/Rust
+	// contract tests yet return 404 at runtime. Drive every spec through
+	// TryBuildRoute with a synthesized valid path and assert it never resolves to
+	// NOT_FOUND. A covered route returns either success or an INVALID_ARGUMENT
+	// required-field error (both acceptable here); only a registry/dispatch
+	// mismatch yields NOT_FOUND.
+	auto substituteTemplate = [](const std::string &rTemplate) {
+		struct Substitution { const char *pszToken; const char *pszValue; };
+		// Values chosen to satisfy ValidateTemplateParameter for each kind.
+		static const Substitution kSubstitutions[] = {
+			{"{hash}", "0123456789abcdef0123456789abcdef"},
+			{"{userHash}", "fedcba9876543210fedcba9876543210"},
+			{"{clientId}", "0123456789abcdef0123456789abcdef"},
+			{"{categoryId}", "2"},
+			{"{searchId}", "1"},
+			{"{serverId}", "1.2.3.4:4661"},
+		};
+		std::string result(rTemplate);
+		for (const Substitution &rSub : kSubstitutions) {
+			const std::string token(rSub.pszToken);
+			const std::string value(rSub.pszValue);
+			std::string::size_type pos = 0;
+			while ((pos = result.find(token, pos)) != std::string::npos) {
+				result.replace(pos, token.size(), value);
+				pos += value.size();
+			}
+		}
+		return result;
+	};
+
+	const std::vector<WebServerJsonSeams::SApiRouteSpec> &specs = WebServerJsonSeams::GetApiRouteSpecs();
+	CHECK(specs.size() > 50);
+	for (const WebServerJsonSeams::SApiRouteSpec &rSpec : specs) {
+		const std::string method(rSpec.pszMethod != NULL ? rSpec.pszMethod : "");
+		const std::string target("/api/v1" + substituteTemplate(rSpec.pszPathTemplate != NULL ? rSpec.pszPathTemplate : ""));
+		// GET/DELETE carry no body; POST/PATCH get an empty object so that only
+		// the dispatch branch's own required-field checks can fault them.
+		const std::string body = (method == "GET" || method == "DELETE") ? "" : "{}";
+
+		WebServerJsonSeams::SApiRoute route;
+		std::string errorCode;
+		std::string errorMessage;
+		WebServerJsonSeams::TryBuildRoute(method, target, body, route, errorCode, errorMessage);
+
+		INFO("route " << method << " " << target << " resolved to errorCode=" << errorCode);
+		CHECK(errorCode != "NOT_FOUND");
+	}
+}
+
 TEST_CASE("Web API carries server and search payloads into live-capable routes")
 {
 	WebServerJsonSeams::SApiRoute route;
