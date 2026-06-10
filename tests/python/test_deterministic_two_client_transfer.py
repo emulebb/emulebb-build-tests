@@ -900,6 +900,15 @@ def test_godzilla_rejects_loopback_lan_env(monkeypatch) -> None:
         godzilla.resolve_local_p2p_address(args)
 
 
+def test_godzilla_local_swarm_reuses_shared_goed2k_launcher() -> None:
+    godzilla = load_script_module("godzilla-local-swarm.py", "godzilla_for_goed2k_launcher_test")
+    script_text = Path(godzilla.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_server_config(" not in script_text
+
+
 def test_default_fixture_size_is_132_mib() -> None:
     module = load_suite_module()
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])

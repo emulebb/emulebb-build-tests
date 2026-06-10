@@ -2273,30 +2273,24 @@ def main(argv: list[str] | None = None) -> int:
             "crypt_tcp_padding_length": protocol_matrix.PROTOCOL_PADDING_LENGTH,
         }
 
-        current_phase = "build_ed2k_server"
-        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = goed2k.build_or_skip_ed2k_server_binary(
-            paths.workspace_root,
-            ed2k_exe,
-            repo_override=args.ed2k_server_repo,
-            exe_override=args.ed2k_server_exe,
-        )
         server_dir = paths.source_artifacts_dir / "ed2k-server"
-        catalog_path = server_dir / "catalog.json"
-        config_path = server_dir / "config.json"
-        goed2k.write_empty_catalog(catalog_path)
-        report["ed2k_server"] = goed2k.build_server_config(
-            config_path,
+        current_phase = "start_ed2k_server"
+        ed2k_server = goed2k.launch_ed2k_server(
+            workspace_root=paths.workspace_root,
+            server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
-            catalog_path=catalog_path,
             token=args.api_key,
             admin_address=ed2k_admin_address,
+            repo_override=args.ed2k_server_repo,
+            exe_override=args.ed2k_server_exe,
             protocol_obfuscation=protocol_case.server_protocol_obfuscation,
             server_udp=protocol_case.server_udp,
         )
-        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
+        server_process = ed2k_server.process
+        report["checks"]["server_build"] = ed2k_server.build
+        report["checks"]["ed2k_server_health"] = ed2k_server.health
+        report["ed2k_server"] = ed2k_server.config
 
         current_phase = "generate_libraries"
         library_root = runtime_root / "generated-libraries"
