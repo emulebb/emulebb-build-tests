@@ -391,7 +391,7 @@
       "uiBindingIds": [
         "PPgDisplay.cpp:146:0:IsAlwaysShowTrayIcon",
         "PPgDisplay.cpp:148:0:m_bAlwaysShowTrayIcon",
-        "PPgDisplay.cpp:205:0:IsAlwaysShowTrayIcon",
+        "PPgDisplay.cpp:203:0:IsAlwaysShowTrayIcon",
         "PPgDisplay.cpp:78:0:IsAlwaysShowTrayIcon"
       ],
       "restBindings": [],
@@ -2041,9 +2041,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
+        "PPgDisplay.cpp:167:0:m_bDisableKnownClientList",
+        "PPgDisplay.cpp:168:0:m_bDisableKnownClientList",
         "PPgDisplay.cpp:169:0:m_bDisableKnownClientList",
-        "PPgDisplay.cpp:170:0:m_bDisableKnownClientList",
-        "PPgDisplay.cpp:171:0:m_bDisableKnownClientList",
         "PPgDisplay.cpp:81:0:m_bDisableKnownClientList"
       ],
       "restBindings": [],
@@ -2068,9 +2068,9 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
+        "PPgDisplay.cpp:176:0:m_bDisableQueueList",
+        "PPgDisplay.cpp:177:0:m_bDisableQueueList",
         "PPgDisplay.cpp:178:0:m_bDisableQueueList",
-        "PPgDisplay.cpp:179:0:m_bDisableQueueList",
-        "PPgDisplay.cpp:180:0:m_bDisableQueueList",
         "PPgDisplay.cpp:82:0:m_bDisableQueueList"
       ],
       "restBindings": [],
@@ -5451,7 +5451,7 @@
       "uiBindingIds": [
         "PPgDisplay.cpp:145:0:mintotray",
         "PPgDisplay.cpp:147:0:mintotray",
-        "PPgDisplay.cpp:203:0:mintotray",
+        "PPgDisplay.cpp:201:0:mintotray",
         "PPgDisplay.cpp:77:0:mintotray"
       ],
       "restBindings": [],
@@ -7346,7 +7346,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgDisplay.cpp:207:0:ShowRatesOnTitle"
+        "PPgDisplay.cpp:205:0:ShowRatesOnTitle"
       ],
       "restBindings": [],
       "notes": ""
@@ -7466,8 +7466,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgDisplay.cpp:157:0:m_bShowWin7TaskbarGoodies",
-        "PPgDisplay.cpp:158:0:m_bShowWin7TaskbarGoodies"
+        "PPgDisplay.cpp:156:0:m_bShowWin7TaskbarGoodies",
+        "PPgDisplay.cpp:157:0:m_bShowWin7TaskbarGoodies"
       ],
       "restBindings": [],
       "notes": ""
@@ -8434,8 +8434,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgDisplay.cpp:188:0:SetToolTipDelay",
-        "PPgDisplay.cpp:189:0:GetToolTipDelay"
+        "PPgDisplay.cpp:186:0:SetToolTipDelay",
+        "PPgDisplay.cpp:187:0:GetToolTipDelay"
       ],
       "restBindings": [],
       "notes": ""
@@ -12003,8 +12003,8 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgDisplay.cpp:163:0:ShowCatTabInfos",
-        "PPgDisplay.cpp:164:0:ShowCatTabInfos",
+        "PPgDisplay.cpp:161:0:ShowCatTabInfos",
+        "PPgDisplay.cpp:162:0:ShowCatTabInfos",
         "PPgDisplay.cpp:84:0:ShowCatTabInfos"
       ],
       "restBindings": [],
@@ -12028,7 +12028,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgDisplay.cpp:161:0:showRatesInTitle",
+        "PPgDisplay.cpp:159:0:showRatesInTitle",
         "PPgDisplay.cpp:80:0:showRatesInTitle"
       ],
       "restBindings": [],
@@ -12301,7 +12301,7 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgDisplay.cpp:195:0:IsTransToolbarEnabled",
+        "PPgDisplay.cpp:193:0:IsTransToolbarEnabled",
         "PPgDisplay.cpp:87:0:IsTransToolbarEnabled"
       ],
       "restBindings": [],
@@ -13872,10 +13872,10 @@
       "defaultExpression": "",
       "clampOrNormalizer": "",
       "uiBindingIds": [
-        "PPgDisplay.cpp:196:0:m_bWinaTransToolbar",
-        "PPgDisplay.cpp:196:1:m_bWinaTransToolbar",
-        "PPgDisplay.cpp:197:0:m_bWinaTransToolbar",
-        "PPgDisplay.cpp:199:0:m_bWinaTransToolbar"
+        "PPgDisplay.cpp:194:0:m_bWinaTransToolbar",
+        "PPgDisplay.cpp:194:1:m_bWinaTransToolbar",
+        "PPgDisplay.cpp:195:0:m_bWinaTransToolbar",
+        "PPgDisplay.cpp:197:0:m_bWinaTransToolbar"
       ],
       "restBindings": [],
       "notes": ""
@@ -15896,10 +15896,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:157:0:m_bShowWin7TaskbarGoodies",
+      "id": "PPgDisplay.cpp:156:0:m_bShowWin7TaskbarGoodies",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 157,
+      "line": 156,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bShowWin7TaskbarGoodies",
@@ -15914,10 +15914,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:158:0:m_bShowWin7TaskbarGoodies",
+      "id": "PPgDisplay.cpp:157:0:m_bShowWin7TaskbarGoodies",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 158,
+      "line": 157,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bShowWin7TaskbarGoodies",
@@ -15928,10 +15928,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:161:0:showRatesInTitle",
+      "id": "PPgDisplay.cpp:159:0:showRatesInTitle",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 161,
+      "line": 159,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "showRatesInTitle",
@@ -15946,10 +15946,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:163:0:ShowCatTabInfos",
+      "id": "PPgDisplay.cpp:161:0:ShowCatTabInfos",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 163,
+      "line": 161,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "ShowCatTabInfos",
@@ -15964,10 +15964,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:164:0:ShowCatTabInfos",
+      "id": "PPgDisplay.cpp:162:0:ShowCatTabInfos",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 164,
+      "line": 162,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "ShowCatTabInfos",
@@ -15975,6 +15975,42 @@
       "directControlIds": [],
       "schemaIds": [
         "ui-runtime::showcattabinfos"
+      ]
+    },
+    {
+      "id": "PPgDisplay.cpp:167:0:m_bDisableKnownClientList",
+      "page": "PPgDisplay.cpp",
+      "dialogId": "IDD_PPG_DISPLAY",
+      "line": 167,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bDisableKnownClientList",
+      "controlIds": [
+        "IDC_DISABLEKNOWNLIST"
+      ],
+      "directControlIds": [
+        "IDC_DISABLEKNOWNLIST"
+      ],
+      "schemaIds": [
+        "DisableKnownClientList"
+      ]
+    },
+    {
+      "id": "PPgDisplay.cpp:168:0:m_bDisableKnownClientList",
+      "page": "PPgDisplay.cpp",
+      "dialogId": "IDD_PPG_DISPLAY",
+      "line": 168,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bDisableKnownClientList",
+      "controlIds": [
+        "IDC_DISABLEKNOWNLIST"
+      ],
+      "directControlIds": [
+        "IDC_DISABLEKNOWNLIST"
+      ],
+      "schemaIds": [
+        "DisableKnownClientList"
       ]
     },
     {
@@ -15985,46 +16021,46 @@
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bDisableKnownClientList",
-      "controlIds": [
-        "IDC_DISABLEKNOWNLIST"
-      ],
-      "directControlIds": [
-        "IDC_DISABLEKNOWNLIST"
-      ],
-      "schemaIds": [
-        "DisableKnownClientList"
-      ]
-    },
-    {
-      "id": "PPgDisplay.cpp:170:0:m_bDisableKnownClientList",
-      "page": "PPgDisplay.cpp",
-      "dialogId": "IDD_PPG_DISPLAY",
-      "line": 170,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bDisableKnownClientList",
-      "controlIds": [
-        "IDC_DISABLEKNOWNLIST"
-      ],
-      "directControlIds": [
-        "IDC_DISABLEKNOWNLIST"
-      ],
-      "schemaIds": [
-        "DisableKnownClientList"
-      ]
-    },
-    {
-      "id": "PPgDisplay.cpp:171:0:m_bDisableKnownClientList",
-      "page": "PPgDisplay.cpp",
-      "dialogId": "IDD_PPG_DISPLAY",
-      "line": 171,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bDisableKnownClientList",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
         "DisableKnownClientList"
+      ]
+    },
+    {
+      "id": "PPgDisplay.cpp:176:0:m_bDisableQueueList",
+      "page": "PPgDisplay.cpp",
+      "dialogId": "IDD_PPG_DISPLAY",
+      "line": 176,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bDisableQueueList",
+      "controlIds": [
+        "IDC_DISABLEQUEUELIST"
+      ],
+      "directControlIds": [
+        "IDC_DISABLEQUEUELIST"
+      ],
+      "schemaIds": [
+        "DisableQueueList"
+      ]
+    },
+    {
+      "id": "PPgDisplay.cpp:177:0:m_bDisableQueueList",
+      "page": "PPgDisplay.cpp",
+      "dialogId": "IDD_PPG_DISPLAY",
+      "line": 177,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bDisableQueueList",
+      "controlIds": [
+        "IDC_DISABLEQUEUELIST"
+      ],
+      "directControlIds": [
+        "IDC_DISABLEQUEUELIST"
+      ],
+      "schemaIds": [
+        "DisableQueueList"
       ]
     },
     {
@@ -16035,42 +16071,6 @@
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bDisableQueueList",
-      "controlIds": [
-        "IDC_DISABLEQUEUELIST"
-      ],
-      "directControlIds": [
-        "IDC_DISABLEQUEUELIST"
-      ],
-      "schemaIds": [
-        "DisableQueueList"
-      ]
-    },
-    {
-      "id": "PPgDisplay.cpp:179:0:m_bDisableQueueList",
-      "page": "PPgDisplay.cpp",
-      "dialogId": "IDD_PPG_DISPLAY",
-      "line": 179,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bDisableQueueList",
-      "controlIds": [
-        "IDC_DISABLEQUEUELIST"
-      ],
-      "directControlIds": [
-        "IDC_DISABLEQUEUELIST"
-      ],
-      "schemaIds": [
-        "DisableQueueList"
-      ]
-    },
-    {
-      "id": "PPgDisplay.cpp:180:0:m_bDisableQueueList",
-      "page": "PPgDisplay.cpp",
-      "dialogId": "IDD_PPG_DISPLAY",
-      "line": 180,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bDisableQueueList",
       "controlIds": [],
       "directControlIds": [],
       "schemaIds": [
@@ -16078,10 +16078,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:188:0:SetToolTipDelay",
+      "id": "PPgDisplay.cpp:186:0:SetToolTipDelay",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 188,
+      "line": 186,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "SetToolTipDelay",
@@ -16092,10 +16092,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:189:0:GetToolTipDelay",
+      "id": "PPgDisplay.cpp:187:0:GetToolTipDelay",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 189,
+      "line": 187,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "GetToolTipDelay",
@@ -16106,10 +16106,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:195:0:IsTransToolbarEnabled",
+      "id": "PPgDisplay.cpp:193:0:IsTransToolbarEnabled",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 195,
+      "line": 193,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsTransToolbarEnabled",
@@ -16124,10 +16124,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:196:0:m_bWinaTransToolbar",
+      "id": "PPgDisplay.cpp:194:0:m_bWinaTransToolbar",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 196,
+      "line": 194,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bWinaTransToolbar",
@@ -16138,10 +16138,24 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:196:1:m_bWinaTransToolbar",
+      "id": "PPgDisplay.cpp:194:1:m_bWinaTransToolbar",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 196,
+      "line": 194,
+      "function": "OnApply",
+      "access": "write",
+      "ownerExpression": "m_bWinaTransToolbar",
+      "controlIds": [],
+      "directControlIds": [],
+      "schemaIds": [
+        "WinaTransToolbar"
+      ]
+    },
+    {
+      "id": "PPgDisplay.cpp:195:0:m_bWinaTransToolbar",
+      "page": "PPgDisplay.cpp",
+      "dialogId": "IDD_PPG_DISPLAY",
+      "line": 195,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "m_bWinaTransToolbar",
@@ -16166,24 +16180,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:199:0:m_bWinaTransToolbar",
+      "id": "PPgDisplay.cpp:201:0:mintotray",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 199,
-      "function": "OnApply",
-      "access": "write",
-      "ownerExpression": "m_bWinaTransToolbar",
-      "controlIds": [],
-      "directControlIds": [],
-      "schemaIds": [
-        "WinaTransToolbar"
-      ]
-    },
-    {
-      "id": "PPgDisplay.cpp:203:0:mintotray",
-      "page": "PPgDisplay.cpp",
-      "dialogId": "IDD_PPG_DISPLAY",
-      "line": 203,
+      "line": 201,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "mintotray",
@@ -16194,10 +16194,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:205:0:IsAlwaysShowTrayIcon",
+      "id": "PPgDisplay.cpp:203:0:IsAlwaysShowTrayIcon",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 205,
+      "line": 203,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "IsAlwaysShowTrayIcon",
@@ -16208,10 +16208,10 @@
       ]
     },
     {
-      "id": "PPgDisplay.cpp:207:0:ShowRatesOnTitle",
+      "id": "PPgDisplay.cpp:205:0:ShowRatesOnTitle",
       "page": "PPgDisplay.cpp",
       "dialogId": "IDD_PPG_DISPLAY",
-      "line": 207,
+      "line": 205,
       "function": "OnApply",
       "access": "write",
       "ownerExpression": "ShowRatesOnTitle",
