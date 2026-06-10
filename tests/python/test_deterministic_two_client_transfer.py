@@ -388,6 +388,15 @@ def test_launch_ed2k_server_centralizes_catalog_config_start_and_health(monkeypa
     assert launch.config["admin_listen_address"] == "192.0.2.10:8080"
 
 
+def test_deterministic_transfer_reuses_shared_goed2k_launcher() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
+
+
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
     monkeypatch.setattr(
         goed2k,
