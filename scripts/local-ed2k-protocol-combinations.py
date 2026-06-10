@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
 
 
@@ -240,8 +241,8 @@ def run_protocol_case(
         server_dir = case_dir / "ed2k-server"
         catalog_path = server_dir / "catalog.json"
         config_path = server_dir / "config.json"
-        dtt.write_empty_catalog(catalog_path)
-        report["ed2k_server"] = dtt.build_server_config(
+        goed2k.write_empty_catalog(catalog_path)
+        report["ed2k_server"] = goed2k.build_server_config(
             config_path,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
@@ -252,9 +253,9 @@ def run_protocol_case(
             server_udp=case.server_udp,
         )
         current_phase = "start_ed2k_server"
-        server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
+        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
         admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
+        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
 
         fixture_file = case_dir / "client2-shared" / f"{case.artifact_id}.bin"
         fixture_sha256 = write_protocol_fixture_file(fixture_file, args.fixture_size_bytes, case.fixture_pattern)
@@ -345,13 +346,13 @@ def run_protocol_case(
         link_info = dtt.parse_ed2k_file_link(exported_link)
         transfer_hash = str(link_info["hash"])
         report["checks"]["client2_exported_link"] = {"path": str(export_link_path), "link": exported_link, "parsed": link_info}
-        report["checks"]["client2_server_client"] = dtt.wait_for_server_client(
+        report["checks"]["client2_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["client2_server_file"] = dtt.wait_for_server_file(
+        report["checks"]["client2_server_file"] = goed2k.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -372,7 +373,7 @@ def run_protocol_case(
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["client1_server_client"] = dtt.wait_for_server_client(
+        report["checks"]["client1_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -398,7 +399,7 @@ def run_protocol_case(
         )
         final_transfer = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key)
         report["checks"]["client1_transfer_final_rest"] = dtt.compact_transfer_http(final_transfer)
-        report["checks"]["ed2k_server_stats_final"] = dtt.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
     except Exception as exc:
         report["status"] = "failed"
@@ -416,7 +417,7 @@ def run_protocol_case(
                 close_results[name] = {"ok": True}
             except Exception as exc:
                 close_results[name] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        dtt.stop_process(server_process)
+        goed2k.stop_process(server_process)
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     return report
@@ -451,9 +452,9 @@ def main(argv: list[str] | None = None) -> int:
             "p2p_bind_interface_name": args.p2p_bind_interface_name,
             "p2p_bind_interface_address": p2p_address,
         }
-        ed2k_repo = dtt.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
-        ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = dtt.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+        ed2k_repo = goed2k.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
+        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+        report["checks"]["server_build"] = goed2k.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
         client2_app_exe = dtt.resolve_client2_app_exe(paths.workspace_root, args.configuration, args.client2_app_exe)
 
         for case in selected_cases(args.case):

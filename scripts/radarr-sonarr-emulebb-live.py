@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import goed2k
 from emule_test_harness import live_env
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     AdminVolumeFixture,
@@ -4769,14 +4770,14 @@ def main() -> int:
             local_server_dir = artifacts_dir / "local-ed2k-server"
             local_catalog_path = local_server_dir / "catalog.json"
             local_config_path = local_server_dir / "config.json"
-            ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-            report["checks"]["local_ed2k_server_build"] = dtt.build_or_skip_ed2k_server_binary(
+            ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+            report["checks"]["local_ed2k_server_build"] = goed2k.build_or_skip_ed2k_server_binary(
                 paths.workspace_root,
                 ed2k_exe,
                 repo_override=args.ed2k_server_repo,
                 exe_override=args.ed2k_server_exe,
             )
-            dtt.write_empty_catalog(local_catalog_path)
+            goed2k.write_empty_catalog(local_catalog_path)
             report["deterministic_local_ed2k"].update(  # type: ignore[union-attr]
                 {
                     "p2p_address": p2p_address,
@@ -4784,7 +4785,7 @@ def main() -> int:
                     "server_catalog_path": str(local_catalog_path),
                 }
             )
-            report["checks"]["local_ed2k_server_config"] = dtt.build_server_config(
+            report["checks"]["local_ed2k_server_config"] = goed2k.build_server_config(
                 local_config_path,
                 ed2k_port=local_ports["ed2k_tcp"],
                 admin_port=local_ports["ed2k_admin"],
@@ -4792,13 +4793,13 @@ def main() -> int:
                 token=args.emule_api_key,
                 admin_address=bind_addr,
             )
-            local_ed2k_server_process = dtt.start_ed2k_server(
+            local_ed2k_server_process = goed2k.start_ed2k_server(
                 ed2k_exe,
                 local_config_path,
                 local_server_dir / "server.log",
             )
             local_admin_base_url = f"http://{bind_addr}:{local_ports['ed2k_admin']}"
-            report["checks"]["local_ed2k_server_health"] = dtt.wait_for_admin_health(local_admin_base_url, 30.0)
+            report["checks"]["local_ed2k_server_health"] = goed2k.wait_for_admin_health(local_admin_base_url, 30.0)
 
             fake_release_name = arr_fake_release_name(kind, media_terms[0])
             fixture_file = artifacts_dir / "local-arr-seed" / fake_release_name
@@ -4876,13 +4877,13 @@ def main() -> int:
                 }
             )
             report["checks"]["local_ed2k_seed_ready"] = dtt.wait_for_file(ready_path, 30.0, "ARR local seed ready file")
-            report["checks"]["local_ed2k_seed_client"] = dtt.wait_for_server_client(
+            report["checks"]["local_ed2k_seed_client"] = goed2k.wait_for_server_client(
                 local_admin_base_url,
                 args.emule_api_key,
                 dtt.CLIENT02.nick,
                 args.emule_connection_timeout_seconds,
             )
-            report["checks"]["local_ed2k_seed_file"] = dtt.wait_for_server_file(
+            report["checks"]["local_ed2k_seed_file"] = goed2k.wait_for_server_file(
                 local_admin_base_url,
                 args.emule_api_key,
                 str(link_info["hash"]),
@@ -5162,7 +5163,7 @@ def main() -> int:
                 report.setdefault("cleanup", {})["local_ed2k_seed_close_error"] = str(exc)  # type: ignore[index]
                 if report.get("status") == "passed":
                     report["status"] = "failed"
-        dtt.stop_process(local_ed2k_server_process)
+        goed2k.stop_process(local_ed2k_server_process)
         for name, process in reversed(embedded_controller_processes):
             package_helper.stop_process(process)
             report.setdefault("cleanup", {})[f"stopped_{name}"] = True  # type: ignore[index]

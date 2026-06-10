@@ -79,8 +79,8 @@ def test_main_uses_lan_bind_and_staged_server_helper(tmp_path: Path, monkeypatch
     monkeypatch.setattr(module.harness_cli_common, "cleanup_source_artifacts", lambda _paths: None)
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.77")
     monkeypatch.setattr(module.dtt, "choose_distinct_ports", fake_choose_distinct_ports)
-    monkeypatch.setattr(module.dtt, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
-    monkeypatch.setattr(module.dtt, "build_or_skip_ed2k_server_binary", fake_build_or_skip)
+    monkeypatch.setattr(module.goed2k, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
+    monkeypatch.setattr(module.goed2k, "build_or_skip_ed2k_server_binary", fake_build_or_skip)
 
     exit_code = module.main(["--lan-bind-addr", "192.0.2.77", "--ed2k-server-exe", str(server_exe)])
 

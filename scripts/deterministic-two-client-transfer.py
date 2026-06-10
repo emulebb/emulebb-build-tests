@@ -13,18 +13,16 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
-from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness.ini import read_ini_text  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_harness_client  # noqa: E402
-from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
 
@@ -111,78 +109,6 @@ def resolve_client2_app_exe(workspace_root: Path, configuration: str, override: 
     return availability.executable
 
 
-def resolve_ed2k_server_repo(workspace_root: Path, override: str | None) -> Path:
-    """Resolves the workspace ED2K server repo path from args or manifest."""
-
-    candidate = Path(override).resolve() if override else resolve_manifest_repo(workspace_root, "ed2k_server")
-    if not (candidate / "go.mod").is_file():
-        raise RuntimeError(f"ED2K server repo was not found at '{candidate}'.")
-    return candidate
-
-
-def resolve_ed2k_server_exe(workspace_root: Path, override: str | None) -> Path:
-    """Resolves the output-root ED2K server tool output path."""
-
-    if override:
-        return Path(override).resolve()
-    return (get_workspace_output_root() / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
-
-
-def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, object]:
-    """Builds the local ED2K server binary into the output root."""
-
-    reject_windows_temp_path(server_exe.parent, "ED2K server binary directory")
-    server_exe.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "go",
-        "build",
-        "-o",
-        str(server_exe),
-        "./cmd/goed2k-server",
-    ]
-    completed = subprocess.run(
-        command,
-        cwd=server_repo,
-        text=True,
-        capture_output=True,
-        timeout=180,
-        check=False,
-    )
-    result = {
-        "command": command,
-        "cwd": str(server_repo),
-        "return_code": completed.returncode,
-        "stdout": completed.stdout[-4000:],
-        "stderr": completed.stderr[-4000:],
-        "server_exe": str(server_exe),
-    }
-    if completed.returncode != 0:
-        raise RuntimeError(f"ED2K server build failed: {result!r}")
-    return result
-
-
-def build_or_skip_ed2k_server_binary(
-    workspace_root: Path,
-    server_exe: Path,
-    *,
-    repo_override: str | None = None,
-    exe_override: str | None = None,
-) -> dict[str, object]:
-    """Builds the ED2K server unless an explicit executable override is already staged."""
-
-    if exe_override:
-        return {
-            "command": [],
-            "cwd": "",
-            "return_code": 0,
-            "server_exe": str(server_exe),
-            "skipped": True,
-            "reason": "using explicit --ed2k-server-exe",
-        }
-    server_repo = resolve_ed2k_server_repo(workspace_root, repo_override)
-    return build_ed2k_server_binary(server_repo, server_exe)
-
-
 def is_port_available(port: int, *, host: str | None = None, udp: bool = False) -> bool:
     """Reports whether a TCP or UDP port can be bound locally."""
 
@@ -261,120 +187,6 @@ def build_old_ed2k_string_tag(name_id: int, value: str) -> bytes:
     if len(encoded) > 0xFFFF:
         raise ValueError("server.met tag string is too long.")
     return struct.pack("<BHBH", TAGTYPE_STRING, 1, name_id, len(encoded)) + encoded
-
-
-def write_empty_catalog(path: Path) -> None:
-    """Creates an empty JSON catalog accepted by the ED2K server."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"files": []}, indent=2), encoding="utf-8")
-
-
-def build_server_config(
-    path: Path,
-    *,
-    ed2k_port: int,
-    admin_port: int,
-    catalog_path: Path,
-    token: str,
-    admin_address: str,
-    ed2k_address: str | None = None,
-    protocol_obfuscation: bool = True,
-    server_udp: bool = True,
-) -> dict[str, object]:
-    """Writes and returns the local ED2K server JSON configuration."""
-
-    ed2k_bind_address = ed2k_address or "0.0.0.0"
-    config = {
-        "listen_address": f"{ed2k_bind_address}:{ed2k_port}",
-        "admin_listen_address": f"{admin_address}:{admin_port}",
-        "admin_token": token,
-        "server_name": "emulebb-local-e2e",
-        "server_description": "Workspace deterministic eMuleBB live E2E server",
-        "message": "Workspace deterministic eMuleBB live E2E server",
-        "storage_backend": "json",
-        "catalog_path": str(catalog_path),
-        "search_batch_size": 200,
-        "protocol_obfuscation": protocol_obfuscation,
-        "server_udp": server_udp,
-        "udp_port_offset": 4,
-        "soft_files_limit": 5000,
-        "hard_files_limit": 200000,
-        "max_users_advertised": 500000,
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    return config
-
-
-def admin_request(admin_base_url: str, token: str, path: str, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
-    """Issues one ED2K server admin request and returns its JSON payload."""
-
-    request = urllib.request.Request(admin_base_url + path, headers={"X-Admin-Token": token})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            data = response.read()
-    except urllib.error.HTTPError as exc:
-        data = exc.read()
-        raise RuntimeError(f"ED2K admin request failed: {path} status={exc.code} body={data!r}") from exc
-    payload = json.loads(data.decode("utf-8"))
-    if not payload.get("ok"):
-        raise RuntimeError(f"ED2K admin request failed: {path} payload={payload!r}")
-    return payload
-
-
-def wait_for_admin_health(admin_base_url: str, timeout_seconds: float) -> dict[str, Any]:
-    """Waits until the ED2K admin health endpoint is reachable."""
-
-    def resolve():
-        try:
-            request = urllib.request.Request(admin_base_url + "/healthz")
-            with urllib.request.urlopen(request, timeout=2.0) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, json.JSONDecodeError):
-            return None
-
-    return live_common.wait_for(resolve, timeout_seconds, 0.5, "ED2K server admin health")
-
-
-def wait_for_server_client(admin_base_url: str, token: str, name_fragment: str, timeout_seconds: float) -> dict[str, Any]:
-    """Waits for one connected client to appear in the ED2K server admin API."""
-
-    observations: list[dict[str, object]] = []
-
-    def resolve():
-        payload = admin_request(admin_base_url, token, "/api/clients", timeout_seconds=5.0)
-        rows = payload.get("data")
-        if not isinstance(rows, list):
-            return None
-        observations.append({"count": len(rows), "observed_at": round(time.time(), 3)})
-        for row in rows:
-            if isinstance(row, dict) and name_fragment.lower() in str(row.get("client_name") or "").lower():
-                row = dict(row)
-                row["observations"] = observations
-                return row
-        return None
-
-    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"ED2K client {name_fragment!r}")
-
-
-def wait_for_server_file(admin_base_url: str, token: str, file_hash: str, timeout_seconds: float) -> dict[str, Any]:
-    """Waits until client2 publishes the fixture file to the ED2K server."""
-
-    normalized_hash = file_hash.upper()
-    observations: list[dict[str, object]] = []
-
-    def resolve():
-        payload = admin_request(admin_base_url, token, f"/api/files/{normalized_hash}", timeout_seconds=5.0)
-        row = payload.get("data")
-        if isinstance(row, dict):
-            row = dict(row)
-            row["observations"] = observations
-            return row
-        observations.append({"observed_at": round(time.time(), 3), "payload": payload})
-        return None
-
-    return live_common.wait_for(resolve, timeout_seconds, 1.0, "client2 ED2K server file publication")
 
 
 def parse_ed2k_file_link(link: str) -> dict[str, object]:
@@ -771,33 +583,6 @@ def configure_client_profile(
         )
 
 
-def start_ed2k_server(server_exe: Path, config_path: Path, log_path: Path) -> subprocess.Popen:
-    """Starts the local ED2K server with stdout/stderr captured under artifacts."""
-
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_handle = log_path.open("w", encoding="utf-8")
-    return subprocess.Popen(
-        [str(server_exe), "-config", str(config_path)],
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-        cwd=server_exe.parent,
-        text=True,
-    )
-
-
-def stop_process(process: subprocess.Popen | None, *, timeout_seconds: float = 10.0) -> None:
-    """Terminates one child process without leaving it running after the suite."""
-
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=timeout_seconds)
-
-
 def retry_rest_request(
     base_url: str,
     path: str,
@@ -997,8 +782,8 @@ def main(argv: list[str] | None = None) -> int:
             "ports": ports,
         }
 
-        ed2k_exe = resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = build_or_skip_ed2k_server_binary(
+        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+        report["checks"]["server_build"] = goed2k.build_or_skip_ed2k_server_binary(
             paths.workspace_root,
             ed2k_exe,
             repo_override=args.ed2k_server_repo,
@@ -1008,8 +793,8 @@ def main(argv: list[str] | None = None) -> int:
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         catalog_path = server_dir / "catalog.json"
         config_path = server_dir / "config.json"
-        write_empty_catalog(catalog_path)
-        report["ed2k_server"] = build_server_config(
+        goed2k.write_empty_catalog(catalog_path)
+        report["ed2k_server"] = goed2k.build_server_config(
             config_path,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
@@ -1018,9 +803,9 @@ def main(argv: list[str] | None = None) -> int:
             admin_address=args.lan_bind_addr,
         )
         current_phase = "start_ed2k_server"
-        server_process = start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
+        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
         admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = wait_for_admin_health(admin_base_url, 30.0)
+        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
 
         fixture_dir = paths.source_artifacts_dir / "client2-shared"
         fixture_file = fixture_dir / "deterministic-two-client-transfer.bin"
@@ -1118,13 +903,13 @@ def main(argv: list[str] | None = None) -> int:
         link_info = parse_ed2k_file_link(exported_link)
         report["checks"]["client2_exported_link"] = {"path": str(export_link_path), "link": exported_link, "parsed": link_info}
         transfer_hash = str(link_info["hash"])
-        report["checks"]["client2_server_client"] = wait_for_server_client(
+        report["checks"]["client2_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["client2_server_file"] = wait_for_server_file(
+        report["checks"]["client2_server_file"] = goed2k.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -1145,7 +930,7 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["client1_server_client"] = wait_for_server_client(
+        report["checks"]["client1_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -1171,7 +956,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         final_transfer = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key)
         report["checks"]["client1_transfer_final_rest"] = compact_transfer_http(final_transfer)
-        report["checks"]["ed2k_server_stats_final"] = admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -1191,7 +976,7 @@ def main(argv: list[str] | None = None) -> int:
                 close_results[name] = {"ok": True}
             except Exception as exc:
                 close_results[name] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        stop_process(server_process)
+        goed2k.stop_process(server_process)
         report["cleanup"] = close_results
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         report_path = paths.source_artifacts_dir / "deterministic-two-client-transfer-result.json"

@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import amule as amule_harness  # noqa: E402
+from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_amule_client  # noqa: E402
 
 
@@ -163,15 +164,15 @@ def main(argv: list[str] | None = None) -> int:
             "ports": ports,
         }
 
-        ed2k_repo = dtt.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
-        ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = dtt.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
+        ed2k_repo = goed2k.resolve_ed2k_server_repo(paths.workspace_root, args.ed2k_server_repo)
+        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+        report["checks"]["server_build"] = goed2k.build_ed2k_server_binary(ed2k_repo, ed2k_exe)
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         catalog_path = server_dir / "catalog.json"
         config_path = server_dir / "config.json"
-        dtt.write_empty_catalog(catalog_path)
-        report["ed2k_server"] = dtt.build_server_config(
+        goed2k.write_empty_catalog(catalog_path)
+        report["ed2k_server"] = goed2k.build_server_config(
             config_path,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
@@ -180,9 +181,9 @@ def main(argv: list[str] | None = None) -> int:
             admin_address=args.lan_bind_addr,
         )
         current_phase = "start_ed2k_server"
-        server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
+        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
         admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
+        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
 
         current_phase = "prepare_amule_profile"
         amule_profile = amule_harness.prepare_amule_profile(
@@ -248,13 +249,13 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=30.0,
             )
         )
-        report["checks"]["amule_server_client"] = dtt.wait_for_server_client(
+        report["checks"]["amule_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT04.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["amule_server_file"] = dtt.wait_for_server_file(
+        report["checks"]["amule_server_file"] = goed2k.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -311,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["client1_server_client"] = dtt.wait_for_server_client(
+        report["checks"]["client1_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -337,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         final_transfer = rest_smoke.http_request(base_url, f"/api/v1/transfers/{transfer_hash}", api_key=args.api_key)
         report["checks"]["client1_transfer_final_rest"] = dtt.compact_transfer_http(final_transfer)
-        report["checks"]["ed2k_server_stats_final"] = dtt.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -359,8 +360,8 @@ def main(argv: list[str] | None = None) -> int:
             cleanup[CLIENT04.profile_id] = shutdown_amule(amule_control_exe, amule_profile)
         except Exception as exc:
             cleanup[CLIENT04.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        dtt.stop_process(amule_process)
-        dtt.stop_process(server_process)
+        goed2k.stop_process(amule_process)
+        goed2k.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_reports(paths, report)

@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
@@ -219,8 +220,8 @@ def main(argv: list[str] | None = None) -> int:
         if not (rust_repo / "Cargo.toml").is_file():
             raise RuntimeError(f"emulebb-rust repo is missing Cargo.toml: {rust_repo}")
 
-        ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = dtt.build_or_skip_ed2k_server_binary(
+        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+        report["checks"]["server_build"] = goed2k.build_or_skip_ed2k_server_binary(
             paths.workspace_root,
             ed2k_exe,
             repo_override=args.ed2k_server_repo,
@@ -229,8 +230,8 @@ def main(argv: list[str] | None = None) -> int:
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         catalog_path = server_dir / "catalog.json"
         config_path = server_dir / "config.json"
-        dtt.write_empty_catalog(catalog_path)
-        report["ed2k_server"] = dtt.build_server_config(
+        goed2k.write_empty_catalog(catalog_path)
+        report["ed2k_server"] = goed2k.build_server_config(
             config_path,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
@@ -240,9 +241,9 @@ def main(argv: list[str] | None = None) -> int:
             ed2k_address=args.lan_bind_addr,
         )
         current_phase = "start_ed2k_server"
-        server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
+        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
         admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
+        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
 
         fixture_path = paths.source_artifacts_dir / "rust-shared" / "emulebb-rust-to-emulebb.bin"
         fixture_sha256 = dtt.write_fixture_file(fixture_path, args.fixture_size_bytes)
@@ -279,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         link_info = dtt.parse_ed2k_file_link(link)
         transfer_hash = str(link_info["hash"])
         report["checks"]["rust_shared_file"] = rust_file
-        report["checks"]["rust_server_file"] = dtt.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
+        report["checks"]["rust_server_file"] = goed2k.wait_for_server_file(admin_base_url, args.api_key, transfer_hash, args.server_publish_timeout_seconds)
 
         emulebb = live_common.prepare_scenario_profile(profile_seed_dir, paths.source_artifacts_dir, [], CLIENT_EMULEBB.profile_id)
         dtt.configure_client_profile(
@@ -349,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
         emulebb_link = str(emulebb_shared_link["link"])
         emulebb_link_info = dtt.parse_ed2k_file_link(emulebb_link)
         emulebb_transfer_hash = str(emulebb_link_info["hash"])
-        report["checks"]["emulebb_server_file"] = dtt.wait_for_server_file(
+        report["checks"]["emulebb_server_file"] = goed2k.wait_for_server_file(
             admin_base_url,
             args.api_key,
             emulebb_transfer_hash,
@@ -386,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_sha256=emulebb_fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
         )
-        report["checks"]["ed2k_server_stats_final"] = dtt.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0
     except Exception as exc:
@@ -405,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 cleanup[CLIENT_EMULEBB.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
         rust_client.stop_process_tree(rust_process)
-        dtt.stop_process(server_process)
+        goed2k.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         harness_cli_common.write_json_file(paths.source_artifacts_dir / "emulebb-rust-emulebb-cross-client-result.json", report)

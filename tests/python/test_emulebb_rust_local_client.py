@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from emule_test_harness import goed2k
 from emule_test_harness import rust_client
 from emule_test_harness.script_modules import load_script_module
 
@@ -964,7 +965,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
     server_config_path = server_root / "config.json"
     server_output_path = tmp_path / "goed2k-server.out"
     write_goed2k_catalog(catalog_path, lan_host, rust_ed2k_port)
-    dtt.build_server_config(
+    goed2k.build_server_config(
         server_config_path,
         ed2k_port=server_port,
         admin_port=admin_port,
@@ -974,9 +975,9 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         ed2k_address=lan_host,
     )
 
-    server_exe = dtt.resolve_ed2k_server_exe(active_workspace_root(), None)
-    dtt.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
-    server_process = dtt.start_ed2k_server(server_exe, server_config_path, server_output_path)
+    server_exe = goed2k.resolve_ed2k_server_exe(active_workspace_root(), None)
+    goed2k.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
+    server_process = goed2k.start_ed2k_server(server_exe, server_config_path, server_output_path)
 
     rust_runtime_dir = tmp_path / "runtime"
     rust_config_path = tmp_path / "emulebb-rust.toml"
@@ -1013,7 +1014,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         )
 
     try:
-        dtt.wait_for_admin_health(f"http://{lan_host}:{admin_port}", 30.0)
+        goed2k.wait_for_admin_health(f"http://{lan_host}:{admin_port}", 30.0)
         base_url = f"http://{lan_host}:{rust_port}"
         wait_for_rest(base_url, rust_process, rust_output_path)
 
@@ -1034,7 +1035,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         )["data"]
         results = search["results"]
         assert any(result["hash"] == SERVER_SEARCH_HASH and result["name"] == SERVER_SEARCH_NAME for result in results)
-        stats = dtt.admin_request(f"http://{lan_host}:{admin_port}", admin_token, "/api/stats")["data"]
+        stats = goed2k.admin_request(f"http://{lan_host}:{admin_port}", admin_token, "/api/stats")["data"]
         assert int(stats["search_requests"]) >= 1
     finally:
         terminate_process(rust_process)
@@ -1072,8 +1073,8 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     catalog_path = server_root / "catalog.json"
     server_config_path = server_root / "config.json"
     server_output_path = tmp_path / "goed2k-server.out"
-    dtt.write_empty_catalog(catalog_path)
-    dtt.build_server_config(
+    goed2k.write_empty_catalog(catalog_path)
+    goed2k.build_server_config(
         server_config_path,
         ed2k_port=server_port,
         admin_port=admin_port,
@@ -1083,9 +1084,9 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         ed2k_address=lan_host,
     )
 
-    server_exe = dtt.resolve_ed2k_server_exe(active_workspace_root(), None)
-    dtt.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
-    server_process = dtt.start_ed2k_server(server_exe, server_config_path, server_output_path)
+    server_exe = goed2k.resolve_ed2k_server_exe(active_workspace_root(), None)
+    goed2k.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
+    server_process = goed2k.start_ed2k_server(server_exe, server_config_path, server_output_path)
 
     seeder_runtime_dir = tmp_path / "seeder-runtime"
     seeder_config_path = tmp_path / "seeder.toml"
@@ -1178,7 +1179,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     remembered_leecher_process: subprocess.Popen[str] | None = None
     try:
         admin_base_url = f"http://{lan_host}:{admin_port}"
-        dtt.wait_for_admin_health(admin_base_url, 30.0)
+        goed2k.wait_for_admin_health(admin_base_url, 30.0)
 
         seeder_base_url = f"http://{lan_host}:{seeder_rest_port}"
         wait_for_rest(seeder_base_url, seeder_process, seeder_output_path)
@@ -1212,7 +1213,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert share_link["link"] == share_file["ed2kLink"]
 
         def server_has_dynamic_share() -> object:
-            files = dtt.admin_request(admin_base_url, admin_token, f"/api/files?search={share_file['hash']}")["data"]
+            files = goed2k.admin_request(admin_base_url, admin_token, f"/api/files?search={share_file['hash']}")["data"]
             for file in files:
                 if file["hash"].lower() == str(share_file["hash"]).lower() and has_endpoint(file, lan_host, seeder_ed2k_port):
                     return file
@@ -1347,7 +1348,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         reverse_share_file = reverse_share["file"]
 
         def server_has_reverse_dynamic_share() -> object:
-            files = dtt.admin_request(admin_base_url, admin_token, f"/api/files?search={reverse_share_file['hash']}")["data"]
+            files = goed2k.admin_request(admin_base_url, admin_token, f"/api/files?search={reverse_share_file['hash']}")["data"]
             for file in files:
                 if file["hash"].lower() == str(reverse_share_file["hash"]).lower() and has_endpoint(file, lan_host, leecher_ed2k_port):
                     return file

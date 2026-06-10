@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
 
 
@@ -340,8 +341,8 @@ def main(argv: list[str] | None = None) -> int:
             "ports": ports,
         }
 
-        ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = dtt.build_or_skip_ed2k_server_binary(
+        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+        report["checks"]["server_build"] = goed2k.build_or_skip_ed2k_server_binary(
             paths.workspace_root,
             ed2k_exe,
             repo_override=args.ed2k_server_repo,
@@ -358,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["synthetic_catalog"] = write_catalog(catalog_path, synthetic_records)
         config_path = server_dir / "config.json"
-        report["ed2k_server"] = dtt.build_server_config(
+        report["ed2k_server"] = goed2k.build_server_config(
             config_path,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
@@ -368,9 +369,9 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         current_phase = "start_ed2k_server"
-        server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
+        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
         admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
+        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
 
         current_phase = "prepare_profiles"
         client1 = live_common.prepare_scenario_profile(profile_seed_dir, paths.source_artifacts_dir, [], CLIENT01.profile_id)
@@ -440,13 +441,13 @@ def main(argv: list[str] | None = None) -> int:
             "parsed": link_info,
         }
         report["checks"]["harness_ready"] = dtt.wait_for_file(harness_ready_path, 30.0, "tracing harness ready file")
-        report["checks"]["harness_server_client"] = dtt.wait_for_server_client(
+        report["checks"]["harness_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT02.nick,
             args.server_connect_timeout_seconds,
         )
-        report["checks"]["harness_server_file"] = dtt.wait_for_server_file(
+        report["checks"]["harness_server_file"] = goed2k.wait_for_server_file(
             admin_base_url,
             args.api_key,
             transfer_hash,
@@ -466,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
             port=ports["ed2k_tcp"],
             timeout_seconds=args.server_connect_timeout_seconds,
         )
-        report["checks"]["emulebb_server_client"] = dtt.wait_for_server_client(
+        report["checks"]["emulebb_server_client"] = goed2k.wait_for_server_client(
             admin_base_url,
             args.api_key,
             CLIENT01.nick,
@@ -499,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.download_timeout_seconds,
         )
         report["checks"]["delete_all_searches"] = rest_smoke.delete_all_searches(base_url, args.api_key)
-        report["checks"]["ed2k_server_stats_final"] = dtt.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["profiles"] = {
             CLIENT01.profile_id: {
                 "profile_base": str(client1["profile_base"]),
@@ -535,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup[identity.profile_id] = {"ok": True}
             except Exception as exc:
                 cleanup[identity.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
-        dtt.stop_process(server_process)
+        goed2k.stop_process(server_process)
         report["cleanup"] = cleanup
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         report_path = paths.source_artifacts_dir / "local-ed2k-search-soak-result.json"

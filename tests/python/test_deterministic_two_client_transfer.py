@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from emule_test_harness import goed2k
+
 
 def load_suite_module():
     """Loads the hyphenated deterministic transfer script for unit tests."""
@@ -51,7 +53,7 @@ def test_resolve_manifest_repo_uses_workspace_deps(tmp_path: Path) -> None:
     )
 
     assert module.resolve_manifest_repo(workspace, "ed2k_server") == repo.resolve()
-    assert module.resolve_ed2k_server_repo(workspace, None) == repo.resolve()
+    assert goed2k.resolve_ed2k_server_repo(workspace, None) == repo.resolve()
 
 
 def test_resolve_ed2k_server_exe_defaults_to_output_root(tmp_path: Path, monkeypatch) -> None:
@@ -61,7 +63,7 @@ def test_resolve_ed2k_server_exe_defaults_to_output_root(tmp_path: Path, monkeyp
     monkeypatch.setenv("EMULEBB_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMULEBB_WORKSPACE_OUTPUT_ROOT", str(output_root))
 
-    resolved = module.resolve_ed2k_server_exe(workspace, None)
+    resolved = goed2k.resolve_ed2k_server_exe(workspace, None)
 
     assert resolved == (output_root / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
 
@@ -73,7 +75,7 @@ def test_build_or_skip_ed2k_server_binary_honors_explicit_exe_without_manifest(t
     server_exe.parent.mkdir(parents=True)
     server_exe.write_bytes(b"")
 
-    result = module.build_or_skip_ed2k_server_binary(
+    result = goed2k.build_or_skip_ed2k_server_binary(
         workspace,
         server_exe,
         exe_override=str(server_exe),
@@ -244,7 +246,7 @@ def test_build_server_config_uses_workspace_artifact_paths(tmp_path: Path) -> No
     config_path = tmp_path / "state" / "artifacts" / "server" / "config.json"
     catalog_path = tmp_path / "state" / "artifacts" / "server" / "catalog.json"
 
-    config = module.build_server_config(
+    config = goed2k.build_server_config(
         config_path,
         ed2k_port=4661,
         admin_port=8080,
@@ -267,7 +269,7 @@ def test_build_server_config_allows_protocol_overrides(tmp_path: Path) -> None:
     config_path = tmp_path / "server" / "config.json"
     catalog_path = tmp_path / "server" / "catalog.json"
 
-    config = module.build_server_config(
+    config = goed2k.build_server_config(
         config_path,
         ed2k_port=4661,
         admin_port=8080,
@@ -287,7 +289,7 @@ def test_build_server_config_allows_admin_bind_override(tmp_path: Path) -> None:
     config_path = tmp_path / "server" / "config.json"
     catalog_path = tmp_path / "server" / "catalog.json"
 
-    config = module.build_server_config(
+    config = goed2k.build_server_config(
         config_path,
         ed2k_port=4661,
         admin_port=8080,
@@ -305,7 +307,7 @@ def test_build_server_config_allows_ed2k_bind_override(tmp_path: Path) -> None:
     config_path = tmp_path / "server" / "config.json"
     catalog_path = tmp_path / "server" / "catalog.json"
 
-    config = module.build_server_config(
+    config = goed2k.build_server_config(
         config_path,
         ed2k_port=4661,
         admin_port=8080,

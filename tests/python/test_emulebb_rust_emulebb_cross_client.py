@@ -101,19 +101,19 @@ def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkey
         },
     )
     monkeypatch.setattr(module, "choose_extra_port", lambda _lan_bind_addr, used_ports, *, udp=False: max(used_ports) + 1)
-    monkeypatch.setattr(module.dtt, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
-    monkeypatch.setattr(module.dtt, "build_or_skip_ed2k_server_binary", lambda *_args, **_kwargs: {"server_exe": str(server_exe)})
-    monkeypatch.setattr(module.dtt, "write_empty_catalog", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(module.goed2k, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
+    monkeypatch.setattr(module.goed2k, "build_or_skip_ed2k_server_binary", lambda *_args, **_kwargs: {"server_exe": str(server_exe)})
+    monkeypatch.setattr(module.goed2k, "write_empty_catalog", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
 
     def fake_build_server_config(path, **kwargs):
         calls["server_config"] = kwargs
         path.parent.mkdir(parents=True, exist_ok=True)
         return {"listen_address": f"{kwargs['ed2k_address']}:{kwargs['ed2k_port']}"}
 
-    monkeypatch.setattr(module.dtt, "build_server_config", fake_build_server_config)
-    monkeypatch.setattr(module.dtt, "start_ed2k_server", lambda *_args: server_process)
-    monkeypatch.setattr(module.dtt, "wait_for_admin_health", lambda *_args: {"ok": True})
-    monkeypatch.setattr(module.dtt, "stop_process", lambda process: calls["stopped"].append(process))
+    monkeypatch.setattr(module.goed2k, "build_server_config", fake_build_server_config)
+    monkeypatch.setattr(module.goed2k, "start_ed2k_server", lambda *_args: server_process)
+    monkeypatch.setattr(module.goed2k, "wait_for_admin_health", lambda *_args: {"ok": True})
+    monkeypatch.setattr(module.goed2k, "stop_process", lambda process: calls["stopped"].append(process))
     monkeypatch.setattr(module.rust_client, "stop_process_tree", lambda process: calls.setdefault("rust_stop", process))
     monkeypatch.setattr(module.dtt, "discover_interface_ipv4", lambda _name: "192.0.2.10")
 

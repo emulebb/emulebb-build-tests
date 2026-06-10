@@ -28,6 +28,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import amule as amule_harness  # noqa: E402
 from emule_test_harness import cpu_profile  # noqa: E402
+from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness import windows_processes  # noqa: E402
 from emule_test_harness.admin_volume_fixtures import (  # noqa: E402
     AdminVolumeFixtureConfig,
@@ -539,7 +540,7 @@ def admin_files_page(admin_base_url: str, api_key: str, *, search: str, page: in
     """Reads one ED2K server admin file page."""
 
     encoded = quote(search)
-    return dtt.admin_request(admin_base_url, api_key, f"/api/files?search={encoded}&page={page}&per_page=500&sort=name")
+    return goed2k.admin_request(admin_base_url, api_key, f"/api/files?search={encoded}&page={page}&per_page=500&sort=name")
 
 
 def server_file_count(admin_base_url: str, api_key: str, *, search: str) -> int:
@@ -576,7 +577,7 @@ def wait_for_server_file_count(
 def server_total_file_count(admin_base_url: str, api_key: str) -> int:
     """Returns the current dynamic/shared file count from the local ED2K server."""
 
-    stats = dtt.admin_request(admin_base_url, api_key, "/api/stats")
+    stats = goed2k.admin_request(admin_base_url, api_key, "/api/stats")
     data = stats.get("data") if isinstance(stats, dict) else None
     if not isinstance(data, dict):
         return 0
@@ -857,7 +858,7 @@ def server_telemetry_snapshot(admin_base_url: str, api_key: str) -> dict[str, ob
     }
     for name, endpoint in endpoints.items():
         try:
-            snapshot[name] = dtt.admin_request(admin_base_url, api_key, endpoint)
+            snapshot[name] = goed2k.admin_request(admin_base_url, api_key, endpoint)
         except Exception as exc:  # noqa: BLE001 - telemetry must not abort the hammer
             snapshot[name] = {"error_type": type(exc).__name__, "error_message": str(exc) or repr(exc)}
     return snapshot
@@ -1570,7 +1571,7 @@ def restart_tracing_harness_client(
         event["terminate"] = {"ok": True}
     restarted = live_common.launch_app(app_exe, profile_base, minimized_to_tray=not visible_ui, extra_args=extra_args)
     event["pid"] = app_process_id(restarted)
-    event["server_client"] = dtt.wait_for_server_client(admin_base_url, api_key, CLIENT02.nick, timeout_seconds)
+    event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, CLIENT02.nick, timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return restarted, event
 
@@ -1611,7 +1612,7 @@ def restart_extra_emulebb_client(
         port=int(client["server_port"]),
         timeout_seconds=timeout_seconds,
     )
-    event["server_client"] = dtt.wait_for_server_client(admin_base_url, api_key, str(client["nick"]), timeout_seconds)
+    event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, str(client["nick"]), timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return event
 
@@ -1649,7 +1650,7 @@ def restart_primary_emulebb_client(
         port=ed2k_port,
         timeout_seconds=timeout_seconds,
     )
-    event["server_client"] = dtt.wait_for_server_client(admin_base_url, api_key, CLIENT01.nick, timeout_seconds)
+    event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, CLIENT01.nick, timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return restarted, event
 
@@ -1804,7 +1805,7 @@ def restart_amule_client(
     event["connect_server"] = amule_command_summary(
         amule_harness.run_amulecmd(control_exe, profile, "Connect ed2k", timeout_seconds=30.0, check=False)
     )
-    event["server_client"] = dtt.wait_for_server_client(admin_base_url, api_key, CLIENT04.nick, timeout_seconds)
+    event["server_client"] = goed2k.wait_for_server_client(admin_base_url, api_key, CLIENT04.nick, timeout_seconds)
     event["finished_at"] = round(time.time(), 3)
     return restarted, event
 
@@ -2273,8 +2274,8 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         current_phase = "build_ed2k_server"
-        ed2k_exe = dtt.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
-        report["checks"]["server_build"] = dtt.build_or_skip_ed2k_server_binary(
+        ed2k_exe = goed2k.resolve_ed2k_server_exe(paths.workspace_root, args.ed2k_server_exe)
+        report["checks"]["server_build"] = goed2k.build_or_skip_ed2k_server_binary(
             paths.workspace_root,
             ed2k_exe,
             repo_override=args.ed2k_server_repo,
@@ -2283,8 +2284,8 @@ def main(argv: list[str] | None = None) -> int:
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         catalog_path = server_dir / "catalog.json"
         config_path = server_dir / "config.json"
-        dtt.write_empty_catalog(catalog_path)
-        report["ed2k_server"] = dtt.build_server_config(
+        goed2k.write_empty_catalog(catalog_path)
+        report["ed2k_server"] = goed2k.build_server_config(
             config_path,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
@@ -2294,8 +2295,8 @@ def main(argv: list[str] | None = None) -> int:
             protocol_obfuscation=protocol_case.server_protocol_obfuscation,
             server_udp=protocol_case.server_udp,
         )
-        server_process = dtt.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        report["checks"]["ed2k_server_health"] = dtt.wait_for_admin_health(admin_base_url, 30.0)
+        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
+        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
 
         current_phase = "generate_libraries"
         library_root = runtime_root / "generated-libraries"
@@ -2577,10 +2578,10 @@ def main(argv: list[str] | None = None) -> int:
 
         current_phase = "wait_for_publish"
         report["checks"]["server_clients"] = {
-            CLIENT01.profile_id: dtt.wait_for_server_client(admin_base_url, args.api_key, CLIENT01.nick, args.server_connect_timeout_seconds),
-            CLIENT02.profile_id: dtt.wait_for_server_client(admin_base_url, args.api_key, CLIENT02.nick, args.server_connect_timeout_seconds),
+            CLIENT01.profile_id: goed2k.wait_for_server_client(admin_base_url, args.api_key, CLIENT01.nick, args.server_connect_timeout_seconds),
+            CLIENT02.profile_id: goed2k.wait_for_server_client(admin_base_url, args.api_key, CLIENT02.nick, args.server_connect_timeout_seconds),
             **{
-                str(client["profile_id"]): dtt.wait_for_server_client(
+                str(client["profile_id"]): goed2k.wait_for_server_client(
                     admin_base_url,
                     args.api_key,
                     str(client["nick"]),
@@ -2590,7 +2591,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         }
         if amule_enabled:
-            report["checks"]["server_clients"][CLIENT04.profile_id] = dtt.wait_for_server_client(
+            report["checks"]["server_clients"][CLIENT04.profile_id] = goed2k.wait_for_server_client(
                 admin_base_url,
                 args.api_key,
                 CLIENT04.nick,
@@ -2932,7 +2933,7 @@ def main(argv: list[str] | None = None) -> int:
         final_transfers = rest_smoke.http_request(base_url, "/api/v1/transfers", api_key=args.api_key, request_timeout_seconds=20.0)
         final_rows = rest_smoke.require_json_array(final_transfers, 200)
         report["checks"]["final_transfer_count"] = len(final_rows)
-        report["checks"]["ed2k_server_stats_final"] = dtt.admin_request(admin_base_url, args.api_key, "/api/stats")
+        report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         current_phase = "diagnostic_capture"
         capture_primary_memory_diagnostics(
             report=report,
@@ -3051,7 +3052,7 @@ def main(argv: list[str] | None = None) -> int:
                 cleanup["amule_process_terminate_error"] = str(exc)
         if server_process is not None:
             try:
-                dtt.stop_process(server_process)
+                goed2k.stop_process(server_process)
                 cleanup["ed2k_server"] = {"ok": True}
             except Exception as exc:  # pragma: no cover - cleanup diagnostics only
                 cleanup["ed2k_server"] = {"error": str(exc)}
