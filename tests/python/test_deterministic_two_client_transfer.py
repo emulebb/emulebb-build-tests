@@ -397,6 +397,15 @@ def test_deterministic_transfer_reuses_shared_goed2k_launcher() -> None:
     assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
 
 
+def test_deterministic_amule_transfer_reuses_shared_goed2k_launcher() -> None:
+    module = load_script_module("deterministic-amule-transfer.py", "amule_transfer_goed2k_launcher_test")
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_ed2k_server_binary(" not in script_text
+
+
 def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
     monkeypatch.setattr(
         goed2k,
