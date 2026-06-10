@@ -220,10 +220,13 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "--path tests/python/test_emulebb_rust_rest_contract.py "
         "--path tests/python/test_emulebb_rust_local_client.py --quiet"
     )
+    rust_cross_client_command = "python scripts/emulebb-rust-emulebb-cross-client.py --lan-bind-addr ${X_LOCAL_IP}"
 
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
     assert "emulebb.flow.rust.rest.emulebb-contract.v1" in scenario_ids
+    assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in scenario_ids
+    assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in covered_ids
     assert sum(
         1
         for phase in campaign["phases"]
@@ -232,6 +235,13 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
     ) == 2
     assert any(
         scenario["command"] == rust_rest_contract_command
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    )
+    assert any(
+        scenario["command"] == rust_cross_client_command
+        and scenario["required"] is True
+        and scenario["blocking"] is True
         for phase in campaign["phases"]
         for scenario in phase["scenarios"]
     )
