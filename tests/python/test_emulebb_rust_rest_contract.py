@@ -37,6 +37,33 @@ def test_emulebb_rust_routes_match_canonical_emulebb_rest_contract() -> None:
     assert sorted(rust_routes - canonical_routes) == []
 
 
+def test_emulebb_rust_routes_match_openapi_contract() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    workspace_root = get_emule_workspace_root(repo_root)
+    openapi_routes = openapi_emulebb_routes(
+        workspace_root
+        / "repos"
+        / "emulebb-tooling"
+        / "docs"
+        / "rest"
+        / "REST-API-OPENAPI.yaml"
+    )
+    rust_routes = emulebb_rust_routes(
+        workspace_root
+        / "repos"
+        / "emulebb-rust"
+        / "crates"
+        / "emulebb-rest"
+        / "src"
+        / "lib.rs"
+    )
+
+    assert openapi_routes
+    assert rust_routes
+    assert sorted(openapi_routes - rust_routes) == []
+    assert sorted(rust_routes - openapi_routes) == []
+
+
 def canonical_emulebb_routes(path: Path) -> set[tuple[str, str]]:
     text = path.read_text(encoding="utf-8", errors="replace")
     specs = route_spec_block(text)
@@ -44,6 +71,22 @@ def canonical_emulebb_routes(path: Path) -> set[tuple[str, str]]:
         (method, normalize_route_path(f"/api/v1{route}"))
         for method, route in re.findall(r'\{\s*"([A-Z]+)"\s*,\s*"([^"]+)"', specs)
     }
+
+
+def openapi_emulebb_routes(path: Path) -> set[tuple[str, str]]:
+    routes: set[tuple[str, str]] = set()
+    current_path: str | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("components:"):
+            break
+        path_match = re.match(r"  (/[^:]+):\s*$", line)
+        if path_match:
+            current_path = normalize_route_path(f"/api/v1{path_match.group(1)}")
+            continue
+        method_match = re.match(r"    (get|post|patch|delete):\s*$", line)
+        if method_match and current_path is not None:
+            routes.add((method_match.group(1).upper(), current_path))
+    return routes
 
 
 def emulebb_rust_routes(path: Path) -> set[tuple[str, str]]:
