@@ -413,6 +413,7 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monk
     workspace_root = tmp_path / "workspaces" / "workspace"
     paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix", workspace_root=workspace_root)
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
+    args.ed2k_server_exe = str(tmp_path / "tools" / "goed2k-server.exe")
 
     result = module.run_emulebb_rust_exchange_scenario(paths, args)
 
@@ -432,6 +433,9 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monk
         "peers_exchange",
     ]
     assert captured["env"]["X_LOCAL_IP"] == "192.0.2.10"
+    assert captured["env"][module.goed2k.ED2K_SERVER_EXE_ENV] == str(
+        (tmp_path / "tools" / "goed2k-server.exe").resolve()
+    )
     assert captured["cwd"] == tmp_path / "repos" / "emulebb-build"
 
 

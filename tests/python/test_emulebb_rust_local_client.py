@@ -878,11 +878,12 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
 def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")
-    if shutil.which("go") is None:
+    ed2k_server_exe = goed2k.env_ed2k_server_exe_override()
+    if shutil.which("go") is None and ed2k_server_exe is None:
         pytest.skip("go is not available")
     rust_repo = workspace_root() / "repos" / "emulebb-rust"
     server_repo = workspace_root() / "repos" / "goed2k-server"
-    if not rust_repo.is_dir() or not server_repo.is_dir():
+    if not rust_repo.is_dir() or (ed2k_server_exe is None and not server_repo.is_dir()):
         pytest.skip("emulebb-rust or goed2k-server repo is not available")
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
@@ -905,6 +906,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         token=admin_token,
         admin_address=lan_host,
         ed2k_address=lan_host,
+        exe_override=ed2k_server_exe,
         catalog_files=[
             goed2k.catalog_file(
                 file_hash=SERVER_SEARCH_HASH,
@@ -965,11 +967,12 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
 def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")
-    if shutil.which("go") is None:
+    ed2k_server_exe = goed2k.env_ed2k_server_exe_override()
+    if shutil.which("go") is None and ed2k_server_exe is None:
         pytest.skip("go is not available")
     rust_repo = workspace_root() / "repos" / "emulebb-rust"
     server_repo = workspace_root() / "repos" / "goed2k-server"
-    if not rust_repo.is_dir() or not server_repo.is_dir():
+    if not rust_repo.is_dir() or (ed2k_server_exe is None and not server_repo.is_dir()):
         pytest.skip("emulebb-rust or goed2k-server repo is not available")
     lan_host = os.environ.get("X_LOCAL_IP")
     if not lan_host:
@@ -997,6 +1000,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         token=admin_token,
         admin_address=lan_host,
         ed2k_address=lan_host,
+        exe_override=ed2k_server_exe,
     )
     server_process = ed2k_server.process
 

@@ -87,6 +87,17 @@ def test_build_or_skip_ed2k_server_binary_honors_explicit_exe_without_manifest(t
     assert result["reason"] == "using explicit --ed2k-server-exe"
 
 
+def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
+    assert goed2k.env_ed2k_server_exe_override({}) is None
+    assert goed2k.env_ed2k_server_exe_override({goed2k.ED2K_SERVER_EXE_ENV: "  "}) is None
+    assert (
+        goed2k.env_ed2k_server_exe_override(
+            {goed2k.ED2K_SERVER_EXE_ENV: "C:/tools/goed2k-server.exe"}
+        )
+        == "C:/tools/goed2k-server.exe"
+    )
+
+
 def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     server_exe = tmp_path / "tools" / "goed2k-server.exe"

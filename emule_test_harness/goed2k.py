@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -17,6 +18,7 @@ from .script_modules import load_script_module
 
 
 live_common = load_script_module("emule_live_profile_common_goed2k", "emule-live-profile-common.py")
+ED2K_SERVER_EXE_ENV = "EMULEBB_TEST_ED2K_SERVER_EXE"
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,13 @@ def resolve_ed2k_server_exe(_workspace_root: Path, override: str | None) -> Path
     if override:
         return Path(override).resolve()
     return (get_workspace_output_root() / "tools" / "goed2k-server" / "goed2k-server.exe").resolve()
+
+
+def env_ed2k_server_exe_override(env: dict[str, str] | None = None) -> str | None:
+    """Returns the shared goed2k-server executable override passed to pytest children."""
+
+    value = (env or os.environ).get(ED2K_SERVER_EXE_ENV, "").strip()
+    return value or None
 
 
 def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, object]:

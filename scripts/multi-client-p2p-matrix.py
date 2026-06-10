@@ -286,6 +286,8 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
 
     child_env = os.environ.copy()
     child_env["X_LOCAL_IP"] = args.lan_bind_addr
+    if args.ed2k_server_exe:
+        child_env[goed2k.ED2K_SERVER_EXE_ENV] = str(Path(args.ed2k_server_exe).resolve())
     started = time.monotonic()
     completed = subprocess.run(
         command,
