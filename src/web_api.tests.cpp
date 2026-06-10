@@ -2912,6 +2912,24 @@ TEST_CASE("Web API rejects unknown routes and unsupported HTTP methods")
 	CHECK_EQ(errorMessage, "only GET, POST, PATCH, and DELETE are supported");
 }
 
+TEST_CASE("Web API lists allowed methods for the 405 Allow header")
+{
+	// Methods are reported in canonical order regardless of registry order.
+	CHECK_EQ(WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/api/v1/app"), "GET");
+	CHECK_EQ(WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/api/v1/categories"), "GET, POST");
+	CHECK_EQ(
+		WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/api/v1/transfers/0123456789abcdef0123456789abcdef"),
+		"GET, PATCH, DELETE");
+	CHECK_EQ(WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/api/v1/uploads/0123456789abcdef0123456789abcdef"), "GET");
+
+	// A query string does not change the resolved route methods.
+	CHECK_EQ(WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/api/v1/transfers?limit=10"), "GET, POST");
+
+	// Unknown or non-API targets yield no Allow value.
+	CHECK_EQ(WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/api/v1/does-not-exist"), "");
+	CHECK_EQ(WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/favicon.ico"), "");
+}
+
 TEST_CASE("Web API classifies malformed version-root paths as native REST requests")
 {
 	WebServerJsonSeams::SApiRoute route;
