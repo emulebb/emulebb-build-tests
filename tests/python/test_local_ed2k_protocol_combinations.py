@@ -85,3 +85,12 @@ def test_compressible_fixture_writer_is_deterministic(tmp_path: Path) -> None:
 
     assert first.read_bytes() == second.read_bytes()
     assert first_hash == second_hash == module.dtt.file_sha256(first)
+
+
+def test_protocol_cases_reuse_shared_goed2k_launcher() -> None:
+    module = load_suite_module()
+    script_text = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "goed2k.launch_ed2k_server(" in script_text
+    assert "goed2k.start_ed2k_server(" not in script_text
+    assert "goed2k.build_server_config(" not in script_text

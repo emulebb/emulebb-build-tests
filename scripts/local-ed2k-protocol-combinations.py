@@ -239,23 +239,22 @@ def run_protocol_case(
         }
 
         server_dir = case_dir / "ed2k-server"
-        catalog_path = server_dir / "catalog.json"
-        config_path = server_dir / "config.json"
-        goed2k.write_empty_catalog(catalog_path)
-        report["ed2k_server"] = goed2k.build_server_config(
-            config_path,
+        current_phase = "start_ed2k_server"
+        ed2k_server = goed2k.launch_ed2k_server(
+            workspace_root=paths.workspace_root,
+            server_dir=server_dir,
             ed2k_port=ports["ed2k_tcp"],
             admin_port=ports["ed2k_admin"],
-            catalog_path=catalog_path,
             token=args.api_key,
             admin_address=args.lan_bind_addr,
+            exe_override=str(ed2k_exe),
             protocol_obfuscation=case.server_protocol_obfuscation,
             server_udp=case.server_udp,
         )
-        current_phase = "start_ed2k_server"
-        server_process = goed2k.start_ed2k_server(ed2k_exe, config_path, server_dir / "server.log")
-        admin_base_url = f"http://{args.lan_bind_addr}:{ports['ed2k_admin']}"
-        report["checks"]["ed2k_server_health"] = goed2k.wait_for_admin_health(admin_base_url, 30.0)
+        server_process = ed2k_server.process
+        admin_base_url = ed2k_server.admin_base_url
+        report["checks"]["ed2k_server_health"] = ed2k_server.health
+        report["ed2k_server"] = ed2k_server.config
 
         fixture_file = case_dir / "client2-shared" / f"{case.artifact_id}.bin"
         fixture_sha256 = write_protocol_fixture_file(fixture_file, args.fixture_size_bytes, case.fixture_pattern)
