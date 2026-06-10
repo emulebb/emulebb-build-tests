@@ -58,6 +58,28 @@ def test_write_rust_config_uses_configurable_ed2k_connect_timeout(tmp_path: Path
     assert "connectTimeoutSecs = 15" in text
 
 
+def test_write_rust_config_uses_configured_kad_bootstrap_nodes(tmp_path: Path) -> None:
+    config_path = tmp_path / "emulebb-rust.toml"
+
+    rust_client.write_rust_config(
+        config_path,
+        runtime_dir=tmp_path / "runtime",
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        p2p_bind_ip="192.0.2.10",
+        ed2k_port=4662,
+        kad_port=4672,
+        server_endpoint="192.0.2.10:4661",
+        kad_bootstrap_nodes=["192.0.2.11:4672"],
+        kad_bootstrap_min_routing_contacts=1,
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert 'bootstrapNodes = ["192.0.2.11:4672"]' in text
+    assert "bootstrapMinRoutingContacts = 1" in text
+
+
 def test_rust_cargo_env_uses_workspace_output_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace_root = tmp_path / "workspace-root"
     output_root = tmp_path / "output-root"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import json
 from pathlib import Path
 
 from .paths import get_workspace_output_root
@@ -31,6 +32,8 @@ def write_rust_config(
     kad_port: int | None = None,
     server_endpoint: str | None = None,
     connect_timeout_secs: int = 10,
+    kad_bootstrap_nodes: list[str] | None = None,
+    kad_bootstrap_min_routing_contacts: int = 10,
 ) -> None:
     """Writes a minimal eMuleBB Rust config for local harness runs."""
 
@@ -59,6 +62,8 @@ def write_rust_config(
             [
                 "[kad]",
                 f"listenPort = {kad_port}",
+                f"bootstrapNodes = {json.dumps(kad_bootstrap_nodes or [])}",
+                f"bootstrapMinRoutingContacts = {kad_bootstrap_min_routing_contacts}",
                 "",
                 "[ed2k]",
                 f"listenPort = {ed2k_port}",
