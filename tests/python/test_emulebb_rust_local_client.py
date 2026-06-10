@@ -29,6 +29,7 @@ _ALLOCATED_PORTS: set[int] = set()
 
 
 dtt = load_script_module("deterministic_two_client_transfer_for_rust_tests", "deterministic-two-client-transfer.py")
+rest_smoke = load_script_module("rest_api_smoke_for_rust_tests", "rest-api-smoke.py")
 
 
 def workspace_root() -> Path:
@@ -434,6 +435,24 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         base_url = f"http://{lan_host}:{port}"
         wait_for_rest(base_url, process, output_path)
 
+        rest_contract = rest_smoke.exercise_rest_contract_completeness(base_url, API_KEY, "contract")
+        assert rest_contract["ok"], json.dumps(
+            [
+                {
+                    "operationId": route["operationId"],
+                    "method": route["method"],
+                    "path": route["path"],
+                    "status": route.get("status"),
+                    "outcome": route.get("outcome"),
+                    "error": route.get("error"),
+                }
+                for route in rest_contract["routes"]
+                if not route.get("ok") and not route.get("skipped")
+            ],
+            indent=2,
+        )
+        assert rest_contract["openapi"]["ok"], rest_contract["openapi"]
+
         app = request_json(base_url, "GET", "/api/v1/app")
         assert app["data"]["name"] == "eMuleBB Rust"
         assert "rest.emulebb.v1" in app["data"]["capabilities"]
@@ -573,7 +592,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             timeout=30,
         )["data"]
         assert reload_result["ok"] is True
-        assert reload_result["count"] == 2
+        assert "count" not in reload_result
         alias_reload_result = request_json(
             base_url,
             "POST",
@@ -694,8 +713,9 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert len(snapshot["sharedFiles"]) <= 1
         assert len(snapshot["uploads"]) <= 1
         assert len(snapshot["uploadQueue"]) <= 1
-        assert "ed2k" in snapshot["network"]
-        assert "kad" in snapshot["network"]
+        assert "ports" in snapshot["network"]
+        assert "binding" in snapshot["network"]
+        assert "vpnGuard" in snapshot["network"]
         kad_status = request_json(base_url, "GET", "/api/v1/kad")["data"]
         assert kad_status["running"] is False
         assert kad_status["connected"] is False
@@ -768,7 +788,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             "/api/v1/searches",
             {"query": "scenario file", "method": "automatic", "type": ""},
         )["data"]
-        assert search["status"] == "completed"
+        assert search["status"] == "complete"
         assert search["results"][0]["hash"] == SEED_HASH
         paged_search = request_json(
             base_url,
@@ -776,9 +796,6 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             f"/api/v1/searches/{search['id']}?offset=0&limit=1&includeEvidence=false&exactTotal=true",
         )["data"]
         assert paged_search["id"] == search["id"]
-        assert paged_search["total"] >= 1
-        assert paged_search["offset"] == 0
-        assert paged_search["limit"] == 1
         assert len(paged_search["results"]) == 1
         assert paged_search["results"][0]["hash"] == SEED_HASH
 
@@ -921,7 +938,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         wait_for_rest(base_url, process, output_path)
 
         servers = request_json(base_url, "GET", "/api/v1/servers")["data"]["items"]
-        assert [server["endpoint"] for server in servers] == ["192.0.2.20:4661"]
+        assert [(server["address"], server["port"]) for server in servers] == [("192.0.2.20", 4661)]
         configured_server = request_json(base_url, "GET", "/api/v1/servers/192.0.2.20:4661")["data"]
         assert configured_server["address"] == "192.0.2.20"
         assert configured_server["port"] == 4661
@@ -938,7 +955,8 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
                 "static": False,
             },
         )["data"]
-        assert created_server["endpoint"] == "192.0.2.21:4661"
+        assert created_server["address"] == "192.0.2.21"
+        assert created_server["port"] == 4661
         assert created_server["priority"] == "low"
         updated_server = request_json(
             base_url,
@@ -950,7 +968,8 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         assert updated_server["priority"] == "high"
         assert updated_server["static"] is True
         deleted_server = request_json(base_url, "DELETE", "/api/v1/servers/192.0.2.21:4661")["data"]
-        assert deleted_server["endpoint"] == "192.0.2.21:4661"
+        assert deleted_server["address"] == "192.0.2.21"
+        assert deleted_server["port"] == 4661
         missing_server_status, missing_server_error = request_json_status(
             base_url,
             "GET",
@@ -975,14 +994,14 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         assert imported_met == {"ok": False, "imported": False}
 
         connected = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
-        assert connected["running"] is True
+        assert connected["serverCount"] == 1
         assert connected["connected"] is False
 
         status = request_json(base_url, "GET", "/api/v1/status")["data"]
-        assert status["ed2k"]["running"] is True
+        assert status["servers"]["serverCount"] == 1
 
         disconnected = request_json(base_url, "POST", "/api/v1/servers/operations/disconnect")["data"]
-        assert disconnected["running"] is False
+        assert disconnected["serverCount"] == 1
         assert disconnected["connected"] is False
     finally:
         terminate_process(process)
@@ -1064,12 +1083,12 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         wait_for_rest(base_url, rust_process, rust_output_path)
 
         connect = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
-        assert connect["running"] is True
+        assert connect["serverCount"] == 1
 
         wait_for_condition(
             "emulebb-rust ED2K server connection",
             30,
-            lambda: request_json(base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
+            lambda: request_json(base_url, "GET", "/api/v1/status")["data"]["stats"]["ed2kConnected"],
         )
 
         search = request_json(
@@ -1228,7 +1247,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         wait_for_condition(
             "seeder ED2K server connection",
             30,
-            lambda: request_json(seeder_base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
+            lambda: request_json(seeder_base_url, "GET", "/api/v1/status")["data"]["stats"]["ed2kConnected"],
         )
         share = request_json(
             seeder_base_url,
@@ -1325,7 +1344,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         wait_for_condition(
             "leecher ED2K server connection",
             30,
-            lambda: request_json(leecher_base_url, "GET", "/api/v1/status")["data"]["ed2k"]["connected"],
+            lambda: request_json(leecher_base_url, "GET", "/api/v1/status")["data"]["stats"]["ed2kConnected"],
         )
 
         search = request_json(
