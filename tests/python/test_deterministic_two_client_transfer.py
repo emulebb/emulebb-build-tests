@@ -321,6 +321,101 @@ def test_build_server_config_allows_ed2k_bind_override(tmp_path: Path) -> None:
     assert json.loads(config_path.read_text(encoding="utf-8"))["listen_address"] == "192.0.2.20:4661"
 
 
+def test_launch_ed2k_server_centralizes_catalog_config_start_and_health(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    server_dir = tmp_path / "server"
+    server_exe = tmp_path / "tools" / "goed2k-server.exe"
+    fake_process = object()
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(goed2k, "resolve_ed2k_server_exe", lambda _workspace, _override: server_exe)
+    monkeypatch.setattr(
+        goed2k,
+        "build_or_skip_ed2k_server_binary",
+        lambda _workspace, exe, **_kwargs: {"server_exe": str(exe), "return_code": 0},
+    )
+
+    def fake_start(exe: Path, config_path: Path, log_path: Path):
+        calls["start"] = {"exe": exe, "config_path": config_path, "log_path": log_path}
+        return fake_process
+
+    monkeypatch.setattr(goed2k, "start_ed2k_server", fake_start)
+    monkeypatch.setattr(goed2k, "wait_for_admin_health", lambda base_url, timeout: {"base_url": base_url, "timeout": timeout})
+
+    launch = goed2k.launch_ed2k_server(
+        workspace_root=workspace,
+        server_dir=server_dir,
+        ed2k_port=4661,
+        admin_port=8080,
+        token="secret",
+        admin_address="192.0.2.10",
+        ed2k_address="192.0.2.10",
+        catalog_files=[
+            goed2k.catalog_file(
+                file_hash="00112233445566778899aabbccddeeff",
+                name="fixture.bin",
+                size=123,
+                endpoints=[{"host": "192.0.2.20", "port": 4662}],
+            )
+        ],
+        repo_override="repo-override",
+        exe_override="exe-override",
+        health_timeout_seconds=12.5,
+    )
+
+    assert launch.process is fake_process
+    assert launch.admin_base_url == "http://192.0.2.10:8080"
+    assert launch.build["server_exe"] == str(server_exe)
+    assert launch.health == {"base_url": "http://192.0.2.10:8080", "timeout": 12.5}
+    assert calls["start"] == {
+        "exe": server_exe,
+        "config_path": server_dir / "config.json",
+        "log_path": server_dir / "server.log",
+    }
+    assert json.loads((server_dir / "catalog.json").read_text(encoding="utf-8"))["files"] == [
+        {
+            "hash": "00112233445566778899AABBCCDDEEFF",
+            "name": "fixture.bin",
+            "size": 123,
+            "file_type": "Archive",
+            "extension": "bin",
+            "sources": 1,
+            "complete_sources": 1,
+            "endpoints": [{"host": "192.0.2.20", "port": 4662}],
+        }
+    ]
+    assert launch.config["listen_address"] == "192.0.2.10:4661"
+    assert launch.config["admin_listen_address"] == "192.0.2.10:8080"
+
+
+def test_wait_for_server_file_endpoint_reuses_shared_admin_polling(monkeypatch) -> None:
+    monkeypatch.setattr(
+        goed2k,
+        "admin_request",
+        lambda *_args, **_kwargs: {
+            "data": [
+                {
+                    "hash": "00112233445566778899AABBCCDDEEFF",
+                    "name": "fixture.bin",
+                    "endpoints": [{"host": "192.0.2.10", "port": 4662}],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(goed2k.live_common, "wait_for", lambda resolve, *_args: resolve())
+
+    row = goed2k.wait_for_server_file_endpoint(
+        "http://192.0.2.10:8080",
+        "secret",
+        "00112233445566778899aabbccddeeff",
+        "192.0.2.10",
+        4662,
+        1.0,
+    )
+
+    assert row["name"] == "fixture.bin"
+
+
 def test_parse_exported_ed2k_file_link() -> None:
     module = load_suite_module()
 

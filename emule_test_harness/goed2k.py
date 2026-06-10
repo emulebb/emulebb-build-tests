@@ -7,6 +7,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,22 @@ from .script_modules import load_script_module
 
 
 live_common = load_script_module("emule_live_profile_common_goed2k", "emule-live-profile-common.py")
+
+
+@dataclass(frozen=True)
+class Goed2kServerLaunch:
+    """Result of launching one local goed2k-server instance for a harness suite."""
+
+    process: subprocess.Popen
+    admin_base_url: str
+    server_exe: Path
+    server_dir: Path
+    catalog_path: Path
+    config_path: Path
+    log_path: Path
+    build: dict[str, object]
+    config: dict[str, object]
+    health: dict[str, Any]
 
 
 def resolve_ed2k_server_repo(workspace_root: Path, override: str | None) -> Path:
@@ -97,6 +114,38 @@ def write_empty_catalog(path: Path) -> None:
     path.write_text(json.dumps({"files": []}, indent=2), encoding="utf-8")
 
 
+def catalog_file(
+    *,
+    file_hash: str,
+    name: str,
+    size: int,
+    endpoints: list[dict[str, object]] | None = None,
+    file_type: str = "Archive",
+    extension: str = "bin",
+    sources: int = 1,
+    complete_sources: int = 1,
+) -> dict[str, object]:
+    """Builds one JSON catalog file row accepted by goed2k-server."""
+
+    return {
+        "hash": file_hash.upper(),
+        "name": name,
+        "size": size,
+        "file_type": file_type,
+        "extension": extension,
+        "sources": sources,
+        "complete_sources": complete_sources,
+        "endpoints": list(endpoints or []),
+    }
+
+
+def write_catalog(path: Path, files: list[dict[str, object]]) -> None:
+    """Writes a goed2k-server JSON catalog with the provided file rows."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"files": files}, indent=2) + "\n", encoding="utf-8")
+
+
 def build_server_config(
     path: Path,
     *,
@@ -132,6 +181,66 @@ def build_server_config(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     return config
+
+
+def launch_ed2k_server(
+    *,
+    workspace_root: Path,
+    server_dir: Path,
+    ed2k_port: int,
+    admin_port: int,
+    token: str,
+    admin_address: str,
+    ed2k_address: str | None = None,
+    catalog_files: list[dict[str, object]] | None = None,
+    repo_override: str | None = None,
+    exe_override: str | None = None,
+    protocol_obfuscation: bool = True,
+    server_udp: bool = True,
+    health_timeout_seconds: float = 30.0,
+) -> Goed2kServerLaunch:
+    """Builds, configures, starts, and health-checks a local goed2k-server instance."""
+
+    server_exe = resolve_ed2k_server_exe(workspace_root, exe_override)
+    build = build_or_skip_ed2k_server_binary(
+        workspace_root,
+        server_exe,
+        repo_override=repo_override,
+        exe_override=exe_override,
+    )
+    catalog_path = server_dir / "catalog.json"
+    config_path = server_dir / "config.json"
+    log_path = server_dir / "server.log"
+    if catalog_files is None:
+        write_empty_catalog(catalog_path)
+    else:
+        write_catalog(catalog_path, catalog_files)
+    config = build_server_config(
+        config_path,
+        ed2k_port=ed2k_port,
+        admin_port=admin_port,
+        catalog_path=catalog_path,
+        token=token,
+        admin_address=admin_address,
+        ed2k_address=ed2k_address,
+        protocol_obfuscation=protocol_obfuscation,
+        server_udp=server_udp,
+    )
+    process = start_ed2k_server(server_exe, config_path, log_path)
+    admin_base_url = f"http://{admin_address}:{admin_port}"
+    health = wait_for_admin_health(admin_base_url, health_timeout_seconds)
+    return Goed2kServerLaunch(
+        process=process,
+        admin_base_url=admin_base_url,
+        server_exe=server_exe,
+        server_dir=server_dir,
+        catalog_path=catalog_path,
+        config_path=config_path,
+        log_path=log_path,
+        build=build,
+        config=config,
+        health=health,
+    )
 
 
 def admin_request(admin_base_url: str, token: str, path: str, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
@@ -202,6 +311,42 @@ def wait_for_server_file(admin_base_url: str, token: str, file_hash: str, timeou
         return None
 
     return live_common.wait_for(resolve, timeout_seconds, 1.0, "ED2K server file publication")
+
+
+def wait_for_server_file_endpoint(
+    admin_base_url: str,
+    token: str,
+    file_hash: str,
+    host: str,
+    port: int,
+    timeout_seconds: float,
+    description: str = "ED2K server file endpoint publication",
+) -> dict[str, Any]:
+    """Waits until a published server file advertises one expected source endpoint."""
+
+    normalized_hash = file_hash.lower()
+
+    def resolve():
+        payload = admin_request(admin_base_url, token, f"/api/files?search={file_hash}", timeout_seconds=5.0)
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("hash") or "").lower() != normalized_hash:
+                continue
+            endpoints = row.get("endpoints")
+            if not isinstance(endpoints, list):
+                continue
+            if any(
+                isinstance(endpoint, dict)
+                and endpoint.get("host") == host
+                and int(endpoint.get("port", 0)) == port
+                for endpoint in endpoints
+            ):
+                return row
+        return None
+
+    return live_common.wait_for(resolve, timeout_seconds, 1.0, description)
 
 
 def start_ed2k_server(server_exe: Path, config_path: Path, log_path: Path) -> subprocess.Popen:

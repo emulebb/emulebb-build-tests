@@ -246,14 +246,6 @@ def request_json_status(
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def has_endpoint(file: dict[str, object], host: str, port: int) -> bool:
-    return any(
-        endpoint.get("host") == host and int(endpoint.get("port", 0)) == port
-        for endpoint in file.get("endpoints", [])
-        if isinstance(endpoint, dict)
-    )
-
-
 def process_output(output_path: Path) -> str:
     return output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
 
@@ -290,30 +282,6 @@ def wait_for_condition(description: str, deadline_seconds: float, probe: Callabl
         time.sleep(0.2)
     detail = f": {last_error}" if last_error is not None else ""
     raise AssertionError(f"Timed out waiting for {description}{detail}")
-
-
-def write_goed2k_catalog(path: Path, source_host: str, source_port: int) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "files": [
-                    {
-                        "hash": SERVER_SEARCH_HASH.upper(),
-                        "name": SERVER_SEARCH_NAME,
-                        "size": 4096,
-                        "file_type": "Archive",
-                        "extension": "bin",
-                        "sources": 1,
-                        "complete_sources": 1,
-                        "endpoints": [{"host": source_host, "port": source_port}],
-                    }
-                ]
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
 
 
 def terminate_process(process: subprocess.Popen[str]) -> None:
@@ -961,23 +929,24 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
     rust_ed2k_port = free_lan_port_not(lan_host, forbidden_ports)
     rust_kad_port = free_lan_port_not(lan_host, forbidden_ports)
     admin_token = "goed2k-test-token"
-    catalog_path = server_root / "catalog.json"
-    server_config_path = server_root / "config.json"
-    server_output_path = tmp_path / "goed2k-server.out"
-    write_goed2k_catalog(catalog_path, lan_host, rust_ed2k_port)
-    goed2k.build_server_config(
-        server_config_path,
+    ed2k_server = goed2k.launch_ed2k_server(
+        workspace_root=active_workspace_root(),
+        server_dir=server_root,
         ed2k_port=server_port,
         admin_port=admin_port,
         token=admin_token,
-        catalog_path=catalog_path,
         admin_address=lan_host,
         ed2k_address=lan_host,
+        catalog_files=[
+            goed2k.catalog_file(
+                file_hash=SERVER_SEARCH_HASH,
+                name=SERVER_SEARCH_NAME,
+                size=4096,
+                endpoints=[{"host": lan_host, "port": rust_ed2k_port}],
+            )
+        ],
     )
-
-    server_exe = goed2k.resolve_ed2k_server_exe(active_workspace_root(), None)
-    goed2k.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
-    server_process = goed2k.start_ed2k_server(server_exe, server_config_path, server_output_path)
+    server_process = ed2k_server.process
 
     rust_runtime_dir = tmp_path / "runtime"
     rust_config_path = tmp_path / "emulebb-rust.toml"
@@ -1011,10 +980,10 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
             stdout=rust_output,
             stderr=subprocess.STDOUT,
             text=True,
-        )
+    )
 
     try:
-        goed2k.wait_for_admin_health(f"http://{lan_host}:{admin_port}", 30.0)
+        admin_base_url = ed2k_server.admin_base_url
         base_url = f"http://{lan_host}:{rust_port}"
         wait_for_rest(base_url, rust_process, rust_output_path)
 
@@ -1035,7 +1004,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         )["data"]
         results = search["results"]
         assert any(result["hash"] == SERVER_SEARCH_HASH and result["name"] == SERVER_SEARCH_NAME for result in results)
-        stats = goed2k.admin_request(f"http://{lan_host}:{admin_port}", admin_token, "/api/stats")["data"]
+        stats = goed2k.admin_request(admin_base_url, admin_token, "/api/stats")["data"]
         assert int(stats["search_requests"]) >= 1
     finally:
         terminate_process(rust_process)
@@ -1070,23 +1039,16 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     admin_port = free_lan_port(lan_host)
     forbidden_ports = {server_port, admin_port, server_port + 4}
     admin_token = "goed2k-test-token"
-    catalog_path = server_root / "catalog.json"
-    server_config_path = server_root / "config.json"
-    server_output_path = tmp_path / "goed2k-server.out"
-    goed2k.write_empty_catalog(catalog_path)
-    goed2k.build_server_config(
-        server_config_path,
+    ed2k_server = goed2k.launch_ed2k_server(
+        workspace_root=active_workspace_root(),
+        server_dir=server_root,
         ed2k_port=server_port,
         admin_port=admin_port,
         token=admin_token,
-        catalog_path=catalog_path,
         admin_address=lan_host,
         ed2k_address=lan_host,
     )
-
-    server_exe = goed2k.resolve_ed2k_server_exe(active_workspace_root(), None)
-    goed2k.build_or_skip_ed2k_server_binary(active_workspace_root(), server_exe)
-    server_process = goed2k.start_ed2k_server(server_exe, server_config_path, server_output_path)
+    server_process = ed2k_server.process
 
     seeder_runtime_dir = tmp_path / "seeder-runtime"
     seeder_config_path = tmp_path / "seeder.toml"
@@ -1178,8 +1140,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
 
     remembered_leecher_process: subprocess.Popen[str] | None = None
     try:
-        admin_base_url = f"http://{lan_host}:{admin_port}"
-        goed2k.wait_for_admin_health(admin_base_url, 30.0)
+        admin_base_url = ed2k_server.admin_base_url
 
         seeder_base_url = f"http://{lan_host}:{seeder_rest_port}"
         wait_for_rest(seeder_base_url, seeder_process, seeder_output_path)
@@ -1212,17 +1173,14 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert share_link["hash"] == share_file["hash"]
         assert share_link["link"] == share_file["ed2kLink"]
 
-        def server_has_dynamic_share() -> object:
-            files = goed2k.admin_request(admin_base_url, admin_token, f"/api/files?search={share_file['hash']}")["data"]
-            for file in files:
-                if file["hash"].lower() == str(share_file["hash"]).lower() and has_endpoint(file, lan_host, seeder_ed2k_port):
-                    return file
-            return None
-
-        published = wait_for_condition(
-            "goed2k dynamic file published by Rust OP_OFFERFILES",
+        published = goed2k.wait_for_server_file_endpoint(
+            admin_base_url,
+            admin_token,
+            str(share_file["hash"]),
+            lan_host,
+            seeder_ed2k_port,
             30,
-            server_has_dynamic_share,
+            "goed2k dynamic file published by Rust OP_OFFERFILES",
         )
         assert published["name"] == payload_path.name
 
@@ -1347,17 +1305,14 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert int(reverse_share["file"]["sizeBytes"]) == len(reverse_payload)
         reverse_share_file = reverse_share["file"]
 
-        def server_has_reverse_dynamic_share() -> object:
-            files = goed2k.admin_request(admin_base_url, admin_token, f"/api/files?search={reverse_share_file['hash']}")["data"]
-            for file in files:
-                if file["hash"].lower() == str(reverse_share_file["hash"]).lower() and has_endpoint(file, lan_host, leecher_ed2k_port):
-                    return file
-            return None
-
-        reverse_published = wait_for_condition(
-            "goed2k reverse dynamic file published by Rust OP_OFFERFILES",
+        reverse_published = goed2k.wait_for_server_file_endpoint(
+            admin_base_url,
+            admin_token,
+            str(reverse_share_file["hash"]),
+            lan_host,
+            leecher_ed2k_port,
             30,
-            server_has_reverse_dynamic_share,
+            "goed2k reverse dynamic file published by Rust OP_OFFERFILES",
         )
         assert reverse_published["name"] == reverse_payload_path.name
 
