@@ -16,6 +16,8 @@ STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES = {
     "amutorrent-interactive-session.py": "vpn",
     "amutorrent-resilience-live.py": "vpn",
     "deterministic-amule-transfer.py": "lan",
+    "emulebb-rust-amule-cross-client.py": "lan",
+    "emulebb-rust-emulebb-cross-client.py": "lan",
     "fake-kad-trust-soak.py": "vpn",
     "radarr-sonarr-emulebb-live.py": "vpn",
     "three-client-swarm-transfer.py": "lan",

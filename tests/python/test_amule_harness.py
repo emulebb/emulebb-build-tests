@@ -172,6 +172,23 @@ def test_wait_for_shared_file_hash_parses_amulecmd_output(
     )
 
 
+def test_wait_for_completed_file_verifies_exact_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "incoming" / "completed.bin"
+    path.parent.mkdir()
+    path.write_bytes(b"completed-bytes")
+
+    row = amule.wait_for_completed_file(
+        path,
+        expected_size=len(b"completed-bytes"),
+        expected_sha256=hashlib.sha256(b"completed-bytes").hexdigest(),
+        timeout_seconds=1.0,
+    )
+
+    assert row["path"] == str(path)
+    assert row["size"] == len(b"completed-bytes")
+    assert row["sha256"] == hashlib.sha256(b"completed-bytes").hexdigest()
+
+
 def test_parse_kad_status_from_amulecmd_status() -> None:
     assert amule.parse_kad_status("eD2k: Not connected\nKad: Not running\n") == {
         "present": True,

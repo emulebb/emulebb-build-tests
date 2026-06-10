@@ -70,6 +70,10 @@ def test_optional_scenarios_are_skipped_when_optional_clients_missing() -> None:
         "cl-emulebb-rust-006",
     ]
     assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == ["cl-emulebb-rust-005"]
+    assert rows_by_id[module.RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == [
+        "cl-emulebb-rust-005",
+        "cl-amule-004",
+    ]
 
 
 def test_required_scenario_fails_only_targeted_optional_row_when_missing() -> None:
@@ -111,6 +115,7 @@ def test_required_scenario_fails_only_targeted_optional_row_when_missing() -> No
     assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["status"] == "failed"
     assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["missing_clients"] == ["cl-emulebb-rust-005"]
     assert rows_by_id[module.RUST_BIDIRECTIONAL_SCENARIO_ID]["status"] == "skipped"
+    assert rows_by_id[module.RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID]["status"] == "skipped"
     assert rows_by_id[module.AMULE_TRANSFER_SCENARIO_ID]["status"] == "skipped"
 
 
@@ -230,6 +235,7 @@ def test_optional_rows_omit_completed_amule_scenario(tmp_path: Path) -> None:
         module.THREE_CLIENT_SWARM_SCENARIO_ID,
         module.RUST_BIDIRECTIONAL_SCENARIO_ID,
         module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID,
+        module.RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID,
         "cl-emuleai-003-and-cl-amule-004-discovery",
     }
 
@@ -549,6 +555,43 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_prepared_goed2k_exe_on
     command = captured["command"]
     assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "tools" / "goed2k-server.exe").resolve())
     assert "--ed2k-server-repo" not in command
+
+
+def test_emulebb_rust_amule_bidirectional_scenario_uses_cross_client_script(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    paths = SimpleNamespace(source_artifacts_dir=tmp_path / "matrix")
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--p2p-bind-interface-address",
+            "10.1.2.3",
+            "--amule-daemon-exe",
+            str(tmp_path / "amuled.exe"),
+            "--amule-control-exe",
+            str(tmp_path / "amulecmd.exe"),
+        ]
+    )
+
+    result = module.run_emulebb_rust_amule_bidirectional_scenario(paths, args)
+
+    assert result["status"] == "passed"
+    assert result["id"] == module.RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID
+    assert result["clients"] == ["cl-emulebb-rust-005", "cl-amule-004"]
+    command = captured["command"]
+    assert "emulebb-rust-amule-cross-client.py" in str(command[1])
+    assert command[command.index("--artifacts-dir") + 1].endswith("\\r5-a4") or command[command.index("--artifacts-dir") + 1].endswith("/r5-a4")
+    assert option_value(command, "--lan-bind-addr") == "192.0.2.10"
+    assert option_value(command, "--p2p-bind-interface-address") == "10.1.2.3"
+    assert "--amule-daemon-exe" in command
+    assert "--amule-control-exe" in command
 
 
 def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatch, tmp_path: Path) -> None:

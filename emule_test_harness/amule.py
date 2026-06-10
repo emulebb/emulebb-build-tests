@@ -349,6 +349,49 @@ def wait_for_shared_file_hash(
     raise RuntimeError(f"Timed out waiting for aMule to share {file_name!r}. Observations: {observations[-5:]!r}")
 
 
+def file_sha256(path: Path) -> str:
+    """Returns one file's SHA-256 hex digest."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def wait_for_completed_file(
+    path: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits until aMule completes a downloaded file with exact bytes."""
+
+    observations: list[dict[str, object]] = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if path.is_file():
+            size = path.stat().st_size
+            row: dict[str, object] = {
+                "exists": True,
+                "size": size,
+                "observed_at": round(time.time(), 3),
+            }
+            if size == expected_size:
+                digest = file_sha256(path)
+                row["sha256"] = digest
+                if digest == expected_sha256:
+                    row["path"] = str(path)
+                    row["observations"] = observations[-20:]
+                    return row
+        else:
+            row = {"exists": False, "observed_at": round(time.time(), 3)}
+        observations.append(row)
+        time.sleep(1.0)
+    raise RuntimeError(f"Timed out waiting for aMule completed file {path}. Observations: {observations[-20:]!r}")
+
+
 def build_file_link(file_name: str, size: int, file_hash: str) -> str:
     """Builds the deterministic ED2K file link consumed by eMuleBB."""
 

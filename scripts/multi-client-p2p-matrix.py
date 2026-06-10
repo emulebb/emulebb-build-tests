@@ -29,12 +29,14 @@ AMULE_TRANSFER_SCENARIO_ID = "cl-emulebb-001-downloads-from-cl-amule-004"
 THREE_CLIENT_SWARM_SCENARIO_ID = "cl-emulebb-001-cl-harness-002-cl-amule-004-concurrent-swarm"
 RUST_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange"
 RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange"
+RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID = "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange"
 OPTIONAL_SCENARIO_DEFINITIONS = (
     ("cl-emulebb-001-downloads-from-cl-emuleai-003", "emuleai"),
     (AMULE_TRANSFER_SCENARIO_ID, "amule"),
     (THREE_CLIENT_SWARM_SCENARIO_ID, "amule"),
     (RUST_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "emulebb_rust_peer"),
     (RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust"),
+    (RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID, "emulebb_rust", "amule"),
     ("cl-emuleai-003-and-cl-amule-004-discovery", "emuleai", "amule"),
 )
 
@@ -325,6 +327,25 @@ def run_emulebb_rust_emulebb_bidirectional_scenario(paths, args: argparse.Namesp
     )
 
 
+def run_emulebb_rust_amule_bidirectional_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the bidirectional Rust/aMule compatibility scenario."""
+
+    scenario_artifacts = paths.source_artifacts_dir / "r5-a4"
+    command = build_child_script_command("emulebb-rust-amule-cross-client.py", scenario_artifacts, args)
+    if args.amule_daemon_exe:
+        command.extend(["--amule-daemon-exe", str(Path(args.amule_daemon_exe).resolve())])
+    if args.amule_control_exe:
+        command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
+
+    return run_child_scenario(
+        scenario_id=RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID,
+        clients=[CLIENT_IDENTITIES["emulebb_rust"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
+        command=command,
+        cwd=REPO_ROOT,
+        report_path=scenario_artifacts / "emulebb-rust-amule-cross-client-result.json",
+    )
+
+
 def build_optional_scenario_rows(
     inventory: dict[str, object],
     *,
@@ -361,7 +382,7 @@ def build_optional_scenario_rows(
             rows.append(
                 {
                     "id": scenario_id,
-                    "status": "failed" if require_optional_clients else "skipped",
+                    "status": "failed" if required else "skipped",
                     "reason": "deterministic transfer adapter is not enabled for optional client",
                     "adapter_blocked_clients": [row.identity.profile_id for row in adapter_blocked],
                     "launch_adapters": {row.identity.profile_id: row.launch_adapter for row in availability},
@@ -449,6 +470,14 @@ def main(argv: list[str] | None = None) -> int:
         if rust.available and rust.deterministic_transfer_adapter:
             scenarios.append(run_emulebb_rust_emulebb_bidirectional_scenario(paths, args))
             completed_optional_ids.add(RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID)
+        if (
+            rust.available
+            and rust.deterministic_transfer_adapter
+            and amule.available
+            and amule.deterministic_transfer_adapter
+        ):
+            scenarios.append(run_emulebb_rust_amule_bidirectional_scenario(paths, args))
+            completed_optional_ids.add(RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID)
         scenarios.extend(
             build_optional_scenario_rows(
                 inventory,
