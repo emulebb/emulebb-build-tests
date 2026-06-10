@@ -69,6 +69,15 @@ def env_ed2k_server_exe_override(env: dict[str, str] | None = None) -> str | Non
     return value or None
 
 
+def with_ed2k_server_exe_env(env: dict[str, str], server_exe: str | Path | None) -> dict[str, str]:
+    """Returns a child-process environment with the shared goed2k-server override applied."""
+
+    child_env = dict(env)
+    if server_exe:
+        child_env[ED2K_SERVER_EXE_ENV] = str(Path(server_exe).resolve())
+    return child_env
+
+
 def build_ed2k_server_binary(server_repo: Path, server_exe: Path) -> dict[str, object]:
     """Builds the local ED2K server binary into the output root."""
 

@@ -98,6 +98,17 @@ def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
     )
 
 
+def test_with_ed2k_server_exe_env_returns_child_env_copy(tmp_path: Path) -> None:
+    base_env = {"KEEP": "1"}
+    server_exe = tmp_path / "tools" / "goed2k-server.exe"
+
+    child_env = goed2k.with_ed2k_server_exe_env(base_env, server_exe)
+
+    assert child_env["KEEP"] == "1"
+    assert child_env[goed2k.ED2K_SERVER_EXE_ENV] == str(server_exe.resolve())
+    assert goed2k.ED2K_SERVER_EXE_ENV not in base_env
+
+
 def test_stop_server_processes_uses_shared_goed2k_process_name_on_windows(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 

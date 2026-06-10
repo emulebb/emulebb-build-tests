@@ -158,86 +158,101 @@ def prepare_shared_ed2k_server_binary(paths, args: argparse.Namespace) -> dict[s
     return prepared.build
 
 
-def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
-    """Runs the mandatory eMuleBB download from tracing-harness seed scenario."""
-
-    scenario_id = HARNESS_TRANSFER_SCENARIO_ID
-    scenario_artifacts = paths.source_artifacts_dir / "h2"
-    command = build_python_command()
-    command.extend(
-        [
-            str((Path(__file__).resolve().with_name("deterministic-two-client-transfer.py"))),
-            "--artifacts-dir",
-            str(scenario_artifacts),
-        ]
-    )
-    add_common_child_args(command, args)
-    if args.client2_app_exe:
-        command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
+def run_child_scenario(
+    *,
+    scenario_id: str,
+    clients: list[str],
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    report_path: Path | None = None,
+    artifacts_dir: Path | None = None,
+) -> dict[str, object]:
+    """Runs one existing child suite and returns the normalized matrix row."""
 
     started = time.monotonic()
-    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
-    child_report = compact_child_report(scenario_artifacts / "deterministic-two-client-transfer.json")
-    return {
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    row: dict[str, object] = {
         "id": scenario_id,
         "status": "passed" if completed.returncode == 0 else "failed",
-        "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["harness"].profile_id],
+        "clients": clients,
         "command": command,
         "return_code": completed.returncode,
         "duration_seconds": round(time.monotonic() - started, 3),
         "stdout_tail": completed.stdout[-4000:],
         "stderr_tail": completed.stderr[-4000:],
-        "report": child_report,
     }
+    if report_path is not None:
+        row["report"] = compact_child_report(report_path)
+    if artifacts_dir is not None:
+        row["artifacts_dir"] = str(artifacts_dir)
+    return row
+
+
+def build_child_script_command(script_name: str, scenario_artifacts: Path, args: argparse.Namespace) -> list[str]:
+    """Builds a command line for one existing live-suite script."""
+
+    command = build_python_command()
+    command.extend(
+        [
+            str((Path(__file__).resolve().with_name(script_name))),
+            "--artifacts-dir",
+            str(scenario_artifacts),
+        ]
+    )
+    add_common_child_args(command, args)
+    return command
+
+
+def run_deterministic_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
+    """Runs the mandatory eMuleBB download from tracing-harness seed scenario."""
+
+    scenario_id = HARNESS_TRANSFER_SCENARIO_ID
+    scenario_artifacts = paths.source_artifacts_dir / "h2"
+    command = build_child_script_command("deterministic-two-client-transfer.py", scenario_artifacts, args)
+    if args.client2_app_exe:
+        command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
+
+    return run_child_scenario(
+        scenario_id=scenario_id,
+        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["harness"].profile_id],
+        command=command,
+        cwd=REPO_ROOT,
+        report_path=scenario_artifacts / "deterministic-two-client-transfer.json",
+    )
 
 
 def run_amule_transfer_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the eMuleBB download from a headless aMule seed scenario."""
 
     scenario_artifacts = paths.source_artifacts_dir / "a4"
-    command = build_python_command()
-    command.extend(
-        [
-            str((Path(__file__).resolve().with_name("deterministic-amule-transfer.py"))),
-            "--artifacts-dir",
-            str(scenario_artifacts),
-        ]
-    )
-    add_common_child_args(command, args)
+    command = build_child_script_command("deterministic-amule-transfer.py", scenario_artifacts, args)
     if args.amule_daemon_exe:
         command.extend(["--amule-daemon-exe", str(Path(args.amule_daemon_exe).resolve())])
     if args.amule_control_exe:
         command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
 
-    started = time.monotonic()
-    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
-    child_report = compact_child_report(scenario_artifacts / "deterministic-amule-transfer.json")
-    return {
-        "id": AMULE_TRANSFER_SCENARIO_ID,
-        "status": "passed" if completed.returncode == 0 else "failed",
-        "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
-        "command": command,
-        "return_code": completed.returncode,
-        "duration_seconds": round(time.monotonic() - started, 3),
-        "stdout_tail": completed.stdout[-4000:],
-        "stderr_tail": completed.stderr[-4000:],
-        "report": child_report,
-    }
+    return run_child_scenario(
+        scenario_id=AMULE_TRANSFER_SCENARIO_ID,
+        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["amule"].profile_id],
+        command=command,
+        cwd=REPO_ROOT,
+        report_path=scenario_artifacts / "deterministic-amule-transfer.json",
+    )
 
 
 def run_three_client_swarm_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the full eMuleBB, tracing-harness, and aMule concurrent swarm."""
 
     scenario_artifacts = paths.source_artifacts_dir / "sw3"
-    command = build_python_command()
-    command.extend(
-        [
-            str((Path(__file__).resolve().with_name("three-client-swarm-transfer.py"))),
-            "--artifacts-dir",
-            str(scenario_artifacts),
-        ]
-    )
-    add_common_child_args(command, args)
+    command = build_child_script_command("three-client-swarm-transfer.py", scenario_artifacts, args)
     if args.client2_app_exe:
         command.extend(["--client2-app-exe", str(Path(args.client2_app_exe).resolve())])
     if args.amule_daemon_exe:
@@ -245,24 +260,17 @@ def run_three_client_swarm_scenario(paths, args: argparse.Namespace) -> dict[str
     if args.amule_control_exe:
         command.extend(["--amule-control-exe", str(Path(args.amule_control_exe).resolve())])
 
-    started = time.monotonic()
-    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
-    child_report = compact_child_report(scenario_artifacts / "three-client-swarm-transfer.json")
-    return {
-        "id": THREE_CLIENT_SWARM_SCENARIO_ID,
-        "status": "passed" if completed.returncode == 0 else "failed",
-        "clients": [
+    return run_child_scenario(
+        scenario_id=THREE_CLIENT_SWARM_SCENARIO_ID,
+        clients=[
             CLIENT_IDENTITIES["emulebb"].profile_id,
             CLIENT_IDENTITIES["harness"].profile_id,
             CLIENT_IDENTITIES["amule"].profile_id,
         ],
-        "command": command,
-        "return_code": completed.returncode,
-        "duration_seconds": round(time.monotonic() - started, 3),
-        "stdout_tail": completed.stdout[-4000:],
-        "stderr_tail": completed.stderr[-4000:],
-        "report": child_report,
-    }
+        command=command,
+        cwd=REPO_ROOT,
+        report_path=scenario_artifacts / "three-client-swarm-transfer.json",
+    )
 
 
 def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
@@ -288,60 +296,33 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
     child_env = os.environ.copy()
     child_env["X_LOCAL_IP"] = args.lan_bind_addr
     if args.ed2k_server_exe:
-        child_env[goed2k.ED2K_SERVER_EXE_ENV] = str(Path(args.ed2k_server_exe).resolve())
-    started = time.monotonic()
-    completed = subprocess.run(
-        command,
-        cwd=emule_workspace_build_repo(paths.workspace_root),
-        env=child_env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    return {
-        "id": RUST_BIDIRECTIONAL_SCENARIO_ID,
-        "status": "passed" if completed.returncode == 0 else "failed",
-        "clients": [
+        child_env = goed2k.with_ed2k_server_exe_env(child_env, args.ed2k_server_exe)
+    return run_child_scenario(
+        scenario_id=RUST_BIDIRECTIONAL_SCENARIO_ID,
+        clients=[
             CLIENT_IDENTITIES["emulebb_rust"].profile_id,
             CLIENT_IDENTITIES["emulebb_rust_peer"].profile_id,
         ],
-        "command": command,
-        "return_code": completed.returncode,
-        "duration_seconds": round(time.monotonic() - started, 3),
-        "stdout_tail": completed.stdout[-4000:],
-        "stderr_tail": completed.stderr[-4000:],
-        "artifacts_dir": str(scenario_artifacts),
-    }
+        command=command,
+        cwd=emule_workspace_build_repo(paths.workspace_root),
+        env=child_env,
+        artifacts_dir=scenario_artifacts,
+    )
 
 
 def run_emulebb_rust_emulebb_bidirectional_scenario(paths, args: argparse.Namespace) -> dict[str, object]:
     """Runs the REST-controlled bidirectional Rust/eMuleBB transfer scenario."""
 
     scenario_artifacts = paths.source_artifacts_dir / "r5-e1"
-    command = build_python_command()
-    command.extend(
-        [
-            str((Path(__file__).resolve().with_name("emulebb-rust-emulebb-cross-client.py"))),
-            "--artifacts-dir",
-            str(scenario_artifacts),
-        ]
-    )
-    add_common_child_args(command, args)
+    command = build_child_script_command("emulebb-rust-emulebb-cross-client.py", scenario_artifacts, args)
 
-    started = time.monotonic()
-    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
-    child_report = compact_child_report(scenario_artifacts / "emulebb-rust-emulebb-cross-client-result.json")
-    return {
-        "id": RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID,
-        "status": "passed" if completed.returncode == 0 else "failed",
-        "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["emulebb_rust"].profile_id],
-        "command": command,
-        "return_code": completed.returncode,
-        "duration_seconds": round(time.monotonic() - started, 3),
-        "stdout_tail": completed.stdout[-4000:],
-        "stderr_tail": completed.stderr[-4000:],
-        "report": child_report,
-    }
+    return run_child_scenario(
+        scenario_id=RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID,
+        clients=[CLIENT_IDENTITIES["emulebb"].profile_id, CLIENT_IDENTITIES["emulebb_rust"].profile_id],
+        command=command,
+        cwd=REPO_ROOT,
+        report_path=scenario_artifacts / "emulebb-rust-emulebb-cross-client-result.json",
+    )
 
 
 def build_optional_scenario_rows(

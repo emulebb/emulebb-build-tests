@@ -318,6 +318,40 @@ def test_matrix_prepares_one_shared_goed2k_binary_for_child_scenarios(monkeypatc
     }
 
 
+def test_child_scenario_runner_normalizes_subprocess_and_report(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    report_path = tmp_path / "child-report.json"
+    report_path.write_text('{"status":"passed","detail":"child"}', encoding="utf-8")
+    command = [sys.executable, "child.py"]
+    calls: dict[str, object] = {}
+
+    def fake_run(run_command, **kwargs):
+        calls["command"] = run_command
+        calls["kwargs"] = kwargs
+        return subprocess.CompletedProcess(run_command, 0, stdout="stdout", stderr="stderr")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    row = module.run_child_scenario(
+        scenario_id="scenario-1",
+        clients=["cl-emulebb-001", "cl-emulebb-rust-005"],
+        command=command,
+        cwd=tmp_path,
+        env={"X_LOCAL_IP": "192.0.2.10"},
+        report_path=report_path,
+        artifacts_dir=tmp_path / "artifacts",
+    )
+
+    assert row["id"] == "scenario-1"
+    assert row["status"] == "passed"
+    assert row["clients"] == ["cl-emulebb-001", "cl-emulebb-rust-005"]
+    assert row["command"] == command
+    assert row["report"] == {"status": "passed", "detail": "child"}
+    assert row["artifacts_dir"] == str(tmp_path / "artifacts")
+    assert calls["kwargs"]["cwd"] == tmp_path
+    assert calls["kwargs"]["env"] == {"X_LOCAL_IP": "192.0.2.10"}
+
+
 def test_amule_transfer_scenario_uses_stable_client_ids(monkeypatch, tmp_path: Path) -> None:
     module = load_suite_module()
     captured: dict[str, object] = {}
