@@ -153,16 +153,16 @@ TEST_CASE("Shared hash shutdown wait stays bounded by the configured budget")
 
 TEST_CASE("Startup-cache save shutdown wait stays bounded by the configured budget")
 {
-	CHECK(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 0ui64, 5000ui64 }));
-	CHECK(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 4999ui64, 5000ui64 }));
-	CHECK_FALSE(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 5000ui64, 5000ui64 }));
-	CHECK_FALSE(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 7500ui64, 5000ui64 }));
+	CHECK(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 0ui64, 15000ui64 }));
+	CHECK(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 14999ui64, 15000ui64 }));
+	CHECK_FALSE(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 15000ui64, 15000ui64 }));
+	CHECK_FALSE(SharedFileListSeams::ShouldKeepWaitingForStartupCacheSaveShutdown({ 20000ui64, 15000ui64 }));
 }
 
 TEST_CASE("Shared-file shutdown polling uses one bounded sleep policy")
 {
 	CHECK_EQ(SharedFileListSeams::kSharedHashShutdownWaitMs, 5000u);
-	CHECK_EQ(SharedFileListSeams::kStartupCacheSaveShutdownWaitMs, 5000u);
+	CHECK_EQ(SharedFileListSeams::kStartupCacheSaveShutdownWaitMs, 15000u);
 	CHECK_EQ(SharedFileListSeams::kSharedShutdownPollIntervalMs, 15u);
 
 	CHECK(SharedFileListSeams::ShouldKeepWaitingForSharedShutdownPoll({ 0ui64, 5000ui64, 15u }));
@@ -186,10 +186,12 @@ TEST_CASE("Shared hash UI drain post retries do not sleep after the final attemp
 	CHECK_FALSE(SharedFileListSeams::ShouldRetrySharedHashDrainPost(0u, 1u));
 }
 
-TEST_CASE("Shutdown skips shared startup-cache persistence after interrupted hashing")
+TEST_CASE("Shutdown skips starting shared startup-cache persistence")
 {
-	CHECK(SharedFileListSeams::ShouldPersistStartupCacheOnShutdown(false));
-	CHECK_FALSE(SharedFileListSeams::ShouldPersistStartupCacheOnShutdown(true));
+	CHECK_FALSE(SharedFileListSeams::ShouldStartStartupCacheSaveOnShutdown(false));
+	CHECK_FALSE(SharedFileListSeams::ShouldStartStartupCacheSaveOnShutdown(true));
+	CHECK(SharedFileListSeams::ShouldWaitForStartupCacheSaveOnShutdown(true));
+	CHECK_FALSE(SharedFileListSeams::ShouldWaitForStartupCacheSaveOnShutdown(false));
 }
 
 TEST_CASE("Startup-cache save scheduling waits until deferred hashing has drained")
