@@ -97,7 +97,8 @@ def wait_for_rust_rest(
 def wait_for_rust_ed2k_connected(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
     def resolve():
         data = request_json(base_url, "GET", "/api/v1/status", api_key)
-        if isinstance(data, dict) and isinstance(data.get("ed2k"), dict) and data["ed2k"].get("connected"):
+        stats = data.get("stats") if isinstance(data, dict) else None
+        if isinstance(stats, dict) and stats.get("ed2kConnected"):
             return data
         return None
 

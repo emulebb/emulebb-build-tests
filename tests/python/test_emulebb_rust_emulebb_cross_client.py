@@ -19,19 +19,19 @@ def load_suite_module():
     return module
 
 
-def test_wait_for_rust_ed2k_connected_reads_unwrapped_status_payload(monkeypatch) -> None:
+def test_wait_for_rust_ed2k_connected_reads_canonical_status_stats(monkeypatch) -> None:
     module = load_suite_module()
 
     monkeypatch.setattr(
         module,
         "request_json",
-        lambda *_args, **_kwargs: {"ed2k": {"connected": True, "running": True}},
+        lambda *_args, **_kwargs: {"stats": {"ed2kConnected": True}},
     )
     monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())
 
     status = module.wait_for_rust_ed2k_connected("http://192.0.2.10:4711", "key", 1.0)
 
-    assert status["ed2k"]["connected"] is True
+    assert status["stats"]["ed2kConnected"] is True
 
 
 def test_wait_for_rust_search_result_reads_unwrapped_search_payload(monkeypatch) -> None:
