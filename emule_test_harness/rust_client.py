@@ -34,6 +34,8 @@ def write_rust_config(
     connect_timeout_secs: int = 10,
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
+    kad_hello_intro_interval_secs: int = 1,
+    kad_hello_intro_fanout: int = 4,
 ) -> None:
     """Writes a minimal eMuleBB Rust config for local harness runs."""
 
@@ -64,6 +66,8 @@ def write_rust_config(
                 f"listenPort = {kad_port}",
                 f"bootstrapNodes = {json.dumps(kad_bootstrap_nodes or [])}",
                 f"bootstrapMinRoutingContacts = {kad_bootstrap_min_routing_contacts}",
+                f"helloIntroIntervalSecs = {kad_hello_intro_interval_secs}",
+                f"helloIntroFanout = {kad_hello_intro_fanout}",
                 "",
                 "[ed2k]",
                 f"listenPort = {ed2k_port}",

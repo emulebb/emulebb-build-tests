@@ -80,6 +80,26 @@ def test_write_rust_config_uses_configured_kad_bootstrap_nodes(tmp_path: Path) -
     assert "bootstrapMinRoutingContacts = 1" in text
 
 
+def test_write_rust_config_enables_fast_harness_kad_hello_intro(tmp_path: Path) -> None:
+    config_path = tmp_path / "emulebb-rust.toml"
+
+    rust_client.write_rust_config(
+        config_path,
+        runtime_dir=tmp_path / "runtime",
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        p2p_bind_ip="192.0.2.10",
+        ed2k_port=4662,
+        kad_port=4672,
+        server_endpoint="192.0.2.10:4661",
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert "helloIntroIntervalSecs = 1" in text
+    assert "helloIntroFanout = 4" in text
+
+
 def test_rust_cargo_env_uses_workspace_output_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace_root = tmp_path / "workspace-root"
     output_root = tmp_path / "output-root"
