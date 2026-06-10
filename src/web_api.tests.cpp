@@ -1495,15 +1495,16 @@ TEST_CASE("Web API authorizes qBittorrent requests by bearer API key")
 
 TEST_CASE("Web API preserves native transfer meaning in qBittorrent states")
 {
-	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("completed", false)), "pausedUP");
+	// qBittorrent 5.0 (Web API 2.11.0) state vocabulary: paused* was renamed to stopped*.
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("completed", false)), "stoppedUP");
 	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("checking", false)), "checkingDL");
 	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("completing", false)), "checkingDL");
 	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("error", false)), "error");
 	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("missingfiles", false)), "missingFiles");
-	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("paused", false)), "pausedDL");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("paused", false)), "stoppedDL");
 	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("queued", false)), "queuedDL");
 	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("downloading", false)), "downloading");
-	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("downloading", true)), "pausedDL");
+	CHECK_EQ(std::string(WebServerQBitCompatSeams::GetQBitStateForNativeTransferState("downloading", true)), "stoppedDL");
 }
 
 TEST_CASE("Web API validates qBittorrent login form credentials exactly")
