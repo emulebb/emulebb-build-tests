@@ -481,3 +481,71 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(mo
     assert option_value(command, "--ed2k-server-repo") == str((tmp_path / "goed2k-server").resolve())
     assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "goed2k-server.exe").resolve())
     assert option_value(command, "--link-export-timeout-seconds") == "45.0"
+
+
+def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    calls: list[str] = []
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    app_exe = tmp_path / "emulebb.exe"
+    harness_exe = tmp_path / "harness.exe"
+    app_exe.write_text("", encoding="utf-8")
+    harness_exe.write_text("", encoding="utf-8")
+    paths = SimpleNamespace(
+        workspace_root=workspace_root,
+        app_exe=app_exe,
+        source_artifacts_dir=tmp_path / "artifacts",
+    )
+    paths.source_artifacts_dir.mkdir()
+
+    def available_client(key: str):
+        identity = multi_client.CLIENT_IDENTITIES[key]
+        return multi_client.ClientAvailability(
+            identity=identity,
+            available=True,
+            executable=tmp_path / f"{identity.profile_id}.exe",
+            reason="available",
+            deterministic_transfer_adapter=True,
+        )
+
+    inventory = {
+        "emulebb": available_client("emulebb"),
+        "harness": available_client("harness"),
+        "emuleai": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emuleai"], False, None, "missing"),
+        "amule": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["amule"], False, None, "missing"),
+        "emulebb_rust": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emulebb_rust"], False, None, "missing"),
+        "emulebb_rust_peer": multi_client.ClientAvailability(
+            multi_client.CLIENT_IDENTITIES["emulebb_rust_peer"],
+            False,
+            None,
+            "missing",
+        ),
+    }
+
+    monkeypatch.setattr(module.harness_cli_common, "prepare_run_paths", lambda **_kwargs: paths)
+    monkeypatch.setattr(module, "resolve_windows_client_inventory", lambda **_kwargs: inventory)
+    monkeypatch.setattr(module, "prepare_shared_ed2k_server_binary", lambda _paths, _args: {"skipped": True})
+    monkeypatch.setattr(
+        module,
+        "run_deterministic_transfer_scenario",
+        lambda _paths, _args: {"id": module.HARNESS_TRANSFER_SCENARIO_ID, "status": "failed"},
+    )
+    monkeypatch.setattr(module.goed2k, "stop_server_processes", lambda: calls.append("stop_goed2k"))
+    monkeypatch.setattr(module.harness_cli_common, "write_json_file", lambda _path, _report: calls.append("write_report"))
+    monkeypatch.setattr(module.harness_cli_common, "publish_run_artifacts", lambda _paths: calls.append("publish_run"))
+    monkeypatch.setattr(module.harness_cli_common, "publish_latest_report", lambda _paths: calls.append("publish_latest"))
+    monkeypatch.setattr(module.harness_cli_common, "cleanup_source_artifacts", lambda _paths: calls.append("cleanup_artifacts"))
+
+    exit_code = module.main(
+        [
+            "--app-exe",
+            str(app_exe),
+            "--client2-app-exe",
+            str(harness_exe),
+            "--lan-bind-addr",
+            "192.0.2.10",
+        ]
+    )
+
+    assert exit_code == 1
+    assert calls == ["write_report", "stop_goed2k", "publish_run", "publish_latest", "cleanup_artifacts"]

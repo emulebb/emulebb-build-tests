@@ -961,7 +961,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
     finally:
         terminate_process(rust_process)
         goed2k.stop_process(server_process)
-        rust_client.stop_goed2k_server_processes()
+        goed2k.stop_server_processes()
 
 
 def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Path) -> None:
@@ -1386,4 +1386,4 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         terminate_process(leecher_process)
         terminate_process(seeder_process)
         goed2k.stop_process(server_process)
-        rust_client.stop_goed2k_server_processes()
+        goed2k.stop_server_processes()

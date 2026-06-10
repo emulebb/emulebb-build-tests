@@ -98,6 +98,38 @@ def test_env_ed2k_server_exe_override_uses_shared_harness_env() -> None:
     )
 
 
+def test_stop_server_processes_uses_shared_goed2k_process_name_on_windows(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return None
+
+    monkeypatch.setattr(goed2k.os, "name", "nt", raising=False)
+    monkeypatch.setattr(goed2k.subprocess, "run", fake_run)
+
+    goed2k.stop_server_processes()
+
+    assert calls == [
+        {
+            "command": ["taskkill", "/IM", "goed2k-server.exe", "/T", "/F"],
+            "stdout": goed2k.subprocess.DEVNULL,
+            "stderr": goed2k.subprocess.DEVNULL,
+            "check": False,
+        }
+    ]
+
+
+def test_stop_server_processes_is_noop_off_windows(monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(goed2k.os, "name", "posix", raising=False)
+    monkeypatch.setattr(goed2k.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    goed2k.stop_server_processes()
+
+    assert calls == []
+
+
 def test_prepare_ed2k_server_binary_centralizes_resolution_and_build(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     server_exe = tmp_path / "tools" / "goed2k-server.exe"

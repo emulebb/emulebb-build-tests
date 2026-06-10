@@ -486,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_reports(paths, report)
+        goed2k.stop_server_processes()
         try:
             harness_cli_common.publish_run_artifacts(paths)
             harness_cli_common.publish_latest_report(paths)

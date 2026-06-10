@@ -134,16 +134,3 @@ def stop_process_tree(process: subprocess.Popen | None, *, timeout_seconds: floa
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=timeout_seconds)
-
-
-def stop_goed2k_server_processes() -> None:
-    """Stops any stray `goed2k-server.exe` process left behind after harness runs."""
-
-    if os.name != "nt":
-        return
-    subprocess.run(
-        ["taskkill", "/IM", "goed2k-server.exe", "/T", "/F"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
