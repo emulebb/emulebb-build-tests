@@ -363,6 +363,8 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(mo
             "192.0.2.10",
             "--p2p-bind-interface-address",
             "10.1.2.3",
+            "--ed2k-server-repo",
+            str(tmp_path / "goed2k-server"),
             "--ed2k-server-exe",
             str(tmp_path / "goed2k-server.exe"),
             "--link-export-timeout-seconds",
@@ -380,5 +382,6 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(mo
     assert command[command.index("--artifacts-dir") + 1].endswith("\\r5-e1") or command[command.index("--artifacts-dir") + 1].endswith("/r5-e1")
     assert option_value(command, "--lan-bind-addr") == "192.0.2.10"
     assert option_value(command, "--p2p-bind-interface-address") == "10.1.2.3"
+    assert option_value(command, "--ed2k-server-repo") == str((tmp_path / "goed2k-server").resolve())
     assert option_value(command, "--ed2k-server-exe") == str((tmp_path / "goed2k-server.exe").resolve())
     assert option_value(command, "--link-export-timeout-seconds") == "45.0"
