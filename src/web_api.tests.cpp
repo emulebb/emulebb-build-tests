@@ -2930,6 +2930,43 @@ TEST_CASE("Web API lists allowed methods for the 405 Allow header")
 	CHECK_EQ(WebServerJsonSeams::CollectAllowedMethodsForRequestTarget("/favicon.ico"), "");
 }
 
+TEST_CASE("Web API reports field and constraint details for out-of-range pagination")
+{
+	WebServerJsonSeams::SApiRoute route;
+	std::string errorCode;
+	std::string errorMessage;
+	WebServerJsonSeams::json details;
+
+	// limit above the maximum.
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"GET", "/api/v1/transfers?limit=5000", "", route, errorCode, errorMessage, "application/json", &details));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(details["field"], "limit");
+	CHECK_EQ(details["constraint"], "1..1000");
+
+	// limit below the minimum (1) must be rejected, not clamped.
+	details = WebServerJsonSeams::json::object();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"GET", "/api/v1/transfers?limit=0", "", route, errorCode, errorMessage, "application/json", &details));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(details["field"], "limit");
+	CHECK_EQ(details["constraint"], "1..1000");
+
+	// offset above INT_MAX.
+	details = WebServerJsonSeams::json::object();
+	CHECK_FALSE(WebServerJsonSeams::TryBuildRoute(
+		"GET", "/api/v1/transfers?offset=2147483648", "", route, errorCode, errorMessage, "application/json", &details));
+	CHECK_EQ(errorCode, "INVALID_ARGUMENT");
+	CHECK_EQ(details["field"], "offset");
+	CHECK_EQ(details["constraint"], "0..2147483647");
+
+	// Valid pagination produces an empty details object.
+	details = WebServerJsonSeams::json{{"stale", true}};
+	CHECK(WebServerJsonSeams::TryBuildRoute(
+		"GET", "/api/v1/transfers?limit=10&offset=5", "", route, errorCode, errorMessage, "application/json", &details));
+	CHECK(details.empty());
+}
+
 TEST_CASE("Web API classifies malformed version-root paths as native REST requests")
 {
 	WebServerJsonSeams::SApiRoute route;
