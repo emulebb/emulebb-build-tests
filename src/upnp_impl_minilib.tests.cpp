@@ -12,6 +12,9 @@ TEST_CASE("MiniUPnP seam accepts an existing mapping that already targets the re
 #if defined(EMULEBB_TEST_HAVE_UPNP_MINILIB_ADD_FAILURE_SEAM)
 	CHECK(ShouldAcceptMiniUPnPExistingMappingAfterAddFailure(true, "10.54.224.185", "27198", "10.54.224.185", 27198));
 #endif
+#if defined(EMULEBB_TEST_HAVE_UPNP_MINILIB_REFRESH_MATCH_SEAM)
+	CHECK(ShouldAcceptMiniUPnPRefreshMapping(true, "10.54.224.185", "27198", "10.54.224.185", 27198));
+#endif
 }
 
 TEST_CASE("MiniUPnP seam rejects missing or mismatched mapping targets")
@@ -24,6 +27,11 @@ TEST_CASE("MiniUPnP seam rejects missing or mismatched mapping targets")
 	CHECK_FALSE(ShouldAcceptMiniUPnPExistingMappingAfterAddFailure(true, "10.54.224.186", "27198", "10.54.224.185", 27198));
 	CHECK_FALSE(ShouldAcceptMiniUPnPExistingMappingAfterAddFailure(true, "10.54.224.185", "27199", "10.54.224.185", 27198));
 	CHECK_FALSE(ShouldAcceptMiniUPnPExistingMappingAfterAddFailure(false, "10.54.224.185", "27198", "10.54.224.185", 27198));
+#endif
+#if defined(EMULEBB_TEST_HAVE_UPNP_MINILIB_REFRESH_MATCH_SEAM)
+	CHECK_FALSE(ShouldAcceptMiniUPnPRefreshMapping(true, "10.54.224.186", "27198", "10.54.224.185", 27198));
+	CHECK_FALSE(ShouldAcceptMiniUPnPRefreshMapping(true, "10.54.224.185", "27199", "10.54.224.185", 27198));
+	CHECK_FALSE(ShouldAcceptMiniUPnPRefreshMapping(false, "10.54.224.185", "27198", "10.54.224.185", 27198));
 #endif
 }
 

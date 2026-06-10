@@ -119,3 +119,50 @@ def test_upnp_startup_and_refresh_log_suppressed_exception_details() -> None:
     assert "strImplementationName = impl->GetImplementationName();" in refresh_block
     assert "DebugLogWarning(_T(\"NAT mapping refresh failed in backend '%s'\"), (LPCTSTR)strImplementationName);" in refresh_block
     assert "DebugLogWarning(_T(\"NAT mapping refresh failed in backend '%s'%s\"), (LPCTSTR)strImplementationName, (LPCTSTR)CExceptionStrDash(*ex));" in refresh_block
+
+
+def test_upnp_result_logs_backend_diagnostic_details() -> None:
+    source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    result_block = source[source.index("LRESULT CemuleDlg::OnUPnPResult") : source.index("LRESULT CemuleDlg::OnPowerBroadcast")]
+
+    assert "impl->GetLastResultSummary()" in result_block
+    assert "mapping attempt timed out" in result_block
+    assert "NAT mapping backend '%s' did not complete successfully: %s" in result_block
+    assert "Trying fallback NAT mapping backend '%s' after failure: %s" in result_block
+    assert "No more available NAT mapping backends left after failure: %s" in result_block
+    assert "NAT mapping active via %s: %s" in result_block
+    assert "NAT mapping diagnostic: %s" in result_block
+    assert "NAT mapping refresh completed in backend '%s': %s" in result_block
+    assert "NAT mapping refresh failed in backend '%s': %s" in result_block
+
+
+def test_upnp_periodic_refresh_timer_lifecycle() -> None:
+    source = (app_source_root() / "EmuleDlg.cpp").read_text(encoding="utf-8", errors="ignore")
+    header = (app_source_root() / "EmuleDlg.h").read_text(encoding="utf-8", errors="ignore")
+    connection_source = (app_source_root() / "PPgConnection.cpp").read_text(encoding="utf-8", errors="ignore")
+
+    result_block = source[source.index("LRESULT CemuleDlg::OnUPnPResult") : source.index("LRESULT CemuleDlg::OnPowerBroadcast")]
+    timer_block = source[source.index("void CemuleDlg::OnTimer") : source.index("BOOL CemuleDlg::OnDeviceChange")]
+    start_timer_block = source[source.index("void CemuleDlg::StartUPnPRefreshTimer") : source.index("void CemuleDlg::StopUPnPRefreshTimer")]
+    stop_timer_block = source[source.index("void CemuleDlg::StopUPnPRefreshTimer") : source.index("void CemuleDlg::OnTimer")]
+    shutdown_block = source[source.index("// close uPnP Ports") : source.index("thePrefs.Save();")]
+    resume_block = source[source.index("LRESULT CemuleDlg::OnPowerBroadcast") : source.index("void CemuleDlg::StartUPnP")]
+    disable_block = connection_source[
+        connection_source.index("if (thePrefs.IsUPnPEnabled() != (IsDlgButtonChecked(IDC_PREF_UPNPONSTART) != 0))") :
+        connection_source.index("theApp.scheduler->SaveOriginals();")
+    ]
+
+    assert "static const UINT_PTR kUPnPRefreshTimerId = 0xB10F;" in source
+    assert "static const UINT kUPnPRefreshIntervalMs = MIN2MS(20);" in source
+    assert "UINT_PTR m_uUPnPRefreshTimer;" in header
+    assert ", m_uUPnPRefreshTimer()" in source
+    assert "StartUPnPRefreshTimer();" in result_block
+    assert result_block.index("StartUPnPRefreshTimer();") < result_block.index("StopUPnPRefreshTimer();")
+    assert "if (nIDEvent == kUPnPRefreshTimerId)" in timer_block
+    assert "else if (m_hUPnPTimeOutTimer == 0)" in timer_block
+    assert "RefreshUPnP(false);" in timer_block
+    assert "SetTimer(kUPnPRefreshTimerId, kUPnPRefreshIntervalMs, NULL)" in start_timer_block
+    assert "KillTimer(m_uUPnPRefreshTimer)" in stop_timer_block
+    assert "StopUPnPRefreshTimer();" in disable_block
+    assert "StopUPnPRefreshTimer();" in shutdown_block
+    assert "RefreshUPnP(true);" not in resume_block
