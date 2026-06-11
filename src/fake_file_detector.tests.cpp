@@ -241,6 +241,57 @@ TEST_CASE("fake-file analyzer merges the same title tokens in a different order"
 	CHECK(report.nameDivergenceGroups.empty());
 }
 
+TEST_CASE("fake-file analyzer merges names carrying hash suffixes and episode markers")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Sample Show Alpha 05 Creator (Extra Subtitle).mp4",
+		L"Creator - Sample Show Alpha - 01x05 - Creator.mp4",
+		L"Sample Show Alpha - Creator-9ff9f11c-abef-4dcf-bd56-6fef7fefa95a.mp4",
+	};
+	evidence.extensionType = VIDEO_MP4;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
+TEST_CASE("fake-file analyzer merges a shared title core that differs in cast or crew words")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"2009 - Sample Movie - 2009 - genreword with Actorone Actortwo Actorthree - divx ita.avi",
+		L"Sample Movie 2009 by Directorname (Actorone Actortwo Actorthree) DivX Ita.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
+TEST_CASE("fake-file analyzer merges the same core across multilingual connector words")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Sample Title de Alpha Beta con Gamma.avi",   // Spanish connectors
+		L"Sample Title von Alpha Beta mit Gamma.avi",  // German connectors
+		L"Sample Title de Alpha Beta com Gamma.avi",   // Portuguese connectors
+		L"Sample Title di Alpha Beta e Gamma.avi",     // Italian connectors
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
 TEST_CASE("fake-file analyzer ignores generic download fallback names")
 {
 	FakeFileDetectorSeams::RuleSet rules;
