@@ -138,15 +138,18 @@ def _list_of_strings(value: object) -> list[str]:
 
 
 def extract_search_risk_evidence(row: dict[str, Any]) -> dict[str, object] | None:
-    """Returns the current grouped search risk evidence."""
+    """Returns the underlying fake-file signals from the consolidated confidence axis."""
 
     evidence = row.get("evidence")
     if isinstance(evidence, dict):
-        risk = evidence.get("riskEvidence")
+        confidence = evidence.get("confidence")
         name = evidence.get("nameEvidence")
         integrity = evidence.get("integrityEvidence")
-        if isinstance(risk, dict):
-            report = dict(risk)
+        if isinstance(confidence, dict):
+            # The consolidated `confidence.score` is the composite (higher = more
+            # confident); the fake-file analyzer score lives in `fakeScore`.
+            report = dict(confidence)
+            report["score"] = confidence.get("fakeScore")
             if isinstance(name, dict):
                 report["canonicalNames"] = name.get("canonicalNames")
                 report["ignoredNameTokens"] = name.get("ignoredNameTokens")

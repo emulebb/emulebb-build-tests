@@ -87,6 +87,7 @@ TEST_CASE("Search trust hint classifies fake-file reason codes")
 	using SearchTrustHintSeams::ExplanationReason;
 
 	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("multiple_names") == ExplanationReason::MultipleNames);
+	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("name_media_tag_mismatch") == ExplanationReason::NameMediaTagMismatch);
 	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("bad_signal_name") == ExplanationReason::BadSignalName);
 	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("bad_signal_comment") == ExplanationReason::BadSignalComment);
 	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("header_extension_mismatch") == ExplanationReason::HeaderExtensionMismatch);
@@ -100,6 +101,77 @@ TEST_CASE("Search trust hint classifies fake-file reason codes")
 	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("fake_rating") == ExplanationReason::FakeRating);
 	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("multiple_aich") == ExplanationReason::MultipleAich);
 	CHECK(SearchTrustHintSeams::ClassifyExplanationReason("future_reason") == ExplanationReason::Unknown);
+}
+
+TEST_CASE("Confidence hint folds spam and fake severity into the negative bands")
+{
+	using FakeFileDetectorSeams::Severity;
+	using SearchTrustHintSeams::ConfidenceLevel;
+	const SearchTrustHintSeams::KadTrustHint noKad = SearchTrustHintSeams::BuildKadTrustHint(0);
+
+	const auto spam = SearchTrustHintSeams::BuildConfidenceHint(true, Severity::None, 0, noKad, 0, false);
+	CHECK(spam.level == ConfidenceLevel::Spam);
+	CHECK(spam.rank == 0);
+	CHECK(spam.score == 0);
+
+	const auto likelyFake = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::High, 80, noKad, 0, false);
+	CHECK(likelyFake.level == ConfidenceLevel::LikelyFake);
+	CHECK(likelyFake.fakeScore == 80);
+
+	const auto critical = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::Critical, 95, noKad, 0, false);
+	CHECK(critical.level == ConfidenceLevel::LikelyFake);
+
+	const auto suspect = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::Medium, 40, noKad, 0, false);
+	CHECK(suspect.level == ConfidenceLevel::Suspect);
+
+	const auto caution = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::Low, 15, noKad, 0, false);
+	CHECK(caution.level == ConfidenceLevel::Caution);
+}
+
+TEST_CASE("Confidence hint surfaces the positive end from ratings and Kad publish trust")
+{
+	using FakeFileDetectorSeams::Severity;
+	using SearchTrustHintSeams::ConfidenceLevel;
+	const SearchTrustHintSeams::KadTrustHint noKad = SearchTrustHintSeams::BuildKadTrustHint(0);
+	const SearchTrustHintSeams::KadTrustHint highKad = SearchTrustHintSeams::BuildKadTrustHint((1u << 24) | (8u << 16) | 300u);
+	const SearchTrustHintSeams::KadTrustHint normalKad = SearchTrustHintSeams::BuildKadTrustHint((1u << 24) | (8u << 16) | 100u);
+
+	const auto neutral = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::None, 0, noKad, 0, false);
+	CHECK(neutral.level == ConfidenceLevel::LooksGood);
+	CHECK(neutral.score == 70);
+
+	const auto genuineByKad = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::None, 0, highKad, 0, false);
+	CHECK(genuineByKad.level == ConfidenceLevel::Genuine);
+	CHECK(genuineByKad.score >= 90);
+
+	const auto genuineByRating = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::None, 0, noKad, 5, true);
+	CHECK(genuineByRating.level == ConfidenceLevel::Genuine);
+
+	const auto looksGoodByKad = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::None, 0, normalKad, 0, false);
+	CHECK(looksGoodByKad.level == ConfidenceLevel::LooksGood);
+	CHECK(looksGoodByKad.score == 78);
+}
+
+TEST_CASE("Confidence hint comparison and tokens follow the symmetric scale")
+{
+	using FakeFileDetectorSeams::Severity;
+	using SearchTrustHintSeams::ConfidenceLevel;
+	const SearchTrustHintSeams::KadTrustHint noKad = SearchTrustHintSeams::BuildKadTrustHint(0);
+	const SearchTrustHintSeams::KadTrustHint highKad = SearchTrustHintSeams::BuildKadTrustHint((1u << 24) | (8u << 16) | 300u);
+
+	const auto spam = SearchTrustHintSeams::BuildConfidenceHint(true, Severity::None, 0, noKad, 0, false);
+	const auto genuine = SearchTrustHintSeams::BuildConfidenceHint(false, Severity::None, 0, highKad, 0, false);
+	CHECK(SearchTrustHintSeams::CompareConfidenceHints(spam, genuine) < 0);
+	CHECK(SearchTrustHintSeams::CompareConfidenceHints(genuine, spam) > 0);
+	CHECK(SearchTrustHintSeams::CompareConfidenceHints(spam, spam) == 0);
+
+	using namespace std::string_literals;
+	CHECK(SearchTrustHintSeams::ConfidenceToken(ConfidenceLevel::Spam) == "spam"s);
+	CHECK(SearchTrustHintSeams::ConfidenceToken(ConfidenceLevel::LikelyFake) == "likely_fake"s);
+	CHECK(SearchTrustHintSeams::ConfidenceToken(ConfidenceLevel::Suspect) == "suspect"s);
+	CHECK(SearchTrustHintSeams::ConfidenceToken(ConfidenceLevel::Caution) == "caution"s);
+	CHECK(SearchTrustHintSeams::ConfidenceToken(ConfidenceLevel::LooksGood) == "looks_good"s);
+	CHECK(SearchTrustHintSeams::ConfidenceToken(ConfidenceLevel::Genuine) == "genuine"s);
 }
 
 TEST_SUITE_END();

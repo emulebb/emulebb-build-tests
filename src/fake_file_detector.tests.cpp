@@ -279,6 +279,44 @@ TEST_CASE("fake-file analyzer accepts plausible media metadata")
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "implausible_media_bitrate") == report.reasons.end());
 }
 
+TEST_CASE("fake-file analyzer flags filename that omits its own embedded media tags")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"random_upload_2024.mp3" };
+	evidence.extensionType = AUDIO_MPEG;
+	evidence.mediaArtist = L"Wolfgang Mozart";
+	evidence.mediaTitle = L"Symphony No 5";
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "name_media_tag_mismatch") != report.reasons.end());
+}
+
+TEST_CASE("fake-file analyzer accepts filename that reflects an embedded media tag")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"Wolfgang Mozart - Symphony No 5.mp3" };
+	evidence.extensionType = AUDIO_MPEG;
+	evidence.mediaArtist = L"Wolfgang Mozart";
+	evidence.mediaTitle = L"Symphony No 5";
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "name_media_tag_mismatch") == report.reasons.end());
+}
+
+TEST_CASE("fake-file analyzer ignores short embedded media tags as too noisy")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = { L"random_upload_2024.mp3" };
+	evidence.extensionType = AUDIO_MPEG;
+	evidence.mediaTitle = L"Yo"; // shorter than the 4-char meaningful-tag threshold
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "name_media_tag_mismatch") == report.reasons.end());
+}
+
 TEST_CASE("fake-file analyzer reports pending header without mismatch penalty")
 {
 	FakeFileDetectorSeams::RuleSet rules;

@@ -35,8 +35,9 @@ def test_fake_report_validation_rejects_inconsistent_score_and_divergence() -> N
     row = {
         "hash": "0123456789abcdef0123456789abcdef",
         "evidence": {
-            "riskEvidence": {
-                "score": 15,
+            "confidence": {
+                "band": "looks_good",
+                "fakeScore": 15,
                 "severity": "none",
                 "reasons": ["multiple_names"],
             },
@@ -86,8 +87,9 @@ def test_result_summary_counts_risk_and_kad_metrics() -> None:
             "name": "The Longest Movie DivX 1080p.avi",
             "kadPublishInfo": (2 << 24) | (4 << 16) | 99,
             "evidence": {
-                "riskEvidence": {
-                    "score": 0,
+                "confidence": {
+                    "band": "looks_good",
+                    "fakeScore": 0,
                     "severity": "none",
                     "reasons": [],
                 },
@@ -106,8 +108,9 @@ def test_result_summary_counts_risk_and_kad_metrics() -> None:
             "name": "Sports Madness 2000.avi",
             "kadPublishInfo": (1 << 24) | (8 << 16) | 300,
             "evidence": {
-                "riskEvidence": {
-                    "score": 15,
+                "confidence": {
+                    "band": "caution",
+                    "fakeScore": 15,
                     "severity": "low",
                     "reasons": ["multiple_names"],
                 },
