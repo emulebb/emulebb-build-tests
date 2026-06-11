@@ -6874,6 +6874,26 @@
       "notes": ""
     },
     {
+      "id": "SearchHideKnownStates",
+      "inventoryId": "SearchHideKnownStates",
+      "storageFile": "preferences.ini",
+      "section": "<default>",
+      "key": "SearchHideKnownStates",
+      "sourceExpression": "_T(\"SearchHideKnownStates\")",
+      "valueType": "integer",
+      "access": [
+        "read",
+        "write"
+      ],
+      "classification": "persisted-runtime",
+      "ownerExpressions": [],
+      "defaultExpression": "",
+      "clampOrNormalizer": "",
+      "uiBindingIds": [],
+      "restBindings": [],
+      "notes": ""
+    },
+    {
       "id": "SearchMethod",
       "inventoryId": "SearchMethod",
       "storageFile": "preferences.ini",

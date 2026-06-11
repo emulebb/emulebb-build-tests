@@ -2781,6 +2781,28 @@
       "notes": ""
     },
     {
+      "id": "SearchHideKnownStates",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "SearchHideKnownStates",
+      "sourceExpression": "_T(\"SearchHideKnownStates\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Int"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
       "id": "EnableUPnP",
       "storageFile": "preferences.ini",
       "sections": [
