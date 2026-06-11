@@ -193,6 +193,54 @@ TEST_CASE("fake-file analyzer still flags meaningful title divergence")
 	CHECK(std::find(report.nameDivergenceGroups.begin(), report.nameDivergenceGroups.end(), L"sports madness 2000") != report.nameDivergenceGroups.end());
 }
 
+TEST_CASE("fake-file analyzer merges names that differ only by a stray year token")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"[GROUP-ITA] Sample Title (Alpha Beta - 2023).avi",
+		L"Sample.Title.Alpha.Beta.2023.HDTV.ITA.AC3.XviD-Relgroup.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
+TEST_CASE("fake-file analyzer merges a terse title that is a subset of a descriptive one")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"[uploader] Sample Title 2016 Alpha Beta DVDRip XviD - by uploader note.avi",
+		L"Sample Title of Alpha Beta with Gamma Delta and Epsilon Zeta - 2016.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
+TEST_CASE("fake-file analyzer merges the same title tokens in a different order")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Alpha Beta - Sample Title.avi",
+		L"Sample Title - Alpha Beta(Divx).avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
 TEST_CASE("fake-file analyzer ignores generic download fallback names")
 {
 	FakeFileDetectorSeams::RuleSet rules;
