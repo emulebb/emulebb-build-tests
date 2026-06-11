@@ -119,6 +119,35 @@ def test_required_scenario_fails_only_targeted_optional_row_when_missing() -> No
     assert rows_by_id[module.AMULE_TRANSFER_SCENARIO_ID]["status"] == "skipped"
 
 
+def test_selected_required_scenario_marks_unselected_optional_rows_skipped() -> None:
+    module = load_suite_module()
+    inventory = {
+        key: multi_client.ClientAvailability(
+            identity=multi_client.CLIENT_IDENTITIES[key],
+            available=True,
+            executable=Path(f"{key}.exe"),
+            reason="available",
+            deterministic_transfer_adapter=True,
+        )
+        for key in ("emuleai", "amule", "emulebb_rust", "emulebb_rust_peer")
+    }
+
+    rows = module.build_optional_scenario_rows(
+        inventory,
+        require_optional_clients=False,
+        required_scenario_ids={module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID},
+        selected_scenario_ids={module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID},
+    )
+    rows_by_id = {row["id"]: row for row in rows}
+
+    assert rows_by_id[module.RUST_BIDIRECTIONAL_SCENARIO_ID]["status"] == "skipped"
+    assert rows_by_id[module.RUST_BIDIRECTIONAL_SCENARIO_ID]["reason"] == "not selected by --require-scenario"
+    assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["status"] == "failed"
+    assert rows_by_id[module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID]["reason"] == (
+        "optional deterministic scenario runner is not implemented yet"
+    )
+
+
 def test_matrix_defaults_to_132_mib_fixture() -> None:
     module = load_suite_module()
     args = module.parse_args(["--lan-bind-addr", "192.0.2.10"])
@@ -660,3 +689,93 @@ def test_matrix_main_stops_stray_goed2k_processes_after_child_failure(monkeypatc
 
     assert exit_code == 1
     assert calls == ["write_report", "stop_goed2k", "publish_run", "publish_latest", "cleanup_artifacts"]
+
+
+def test_matrix_main_runs_only_requested_optional_scenario(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    calls: list[str] = []
+    reports: list[dict[str, object]] = []
+    workspace_root = tmp_path / "workspaces" / "workspace"
+    app_exe = tmp_path / "emulebb.exe"
+    harness_exe = tmp_path / "harness.exe"
+    app_exe.write_text("", encoding="utf-8")
+    harness_exe.write_text("", encoding="utf-8")
+    paths = SimpleNamespace(
+        workspace_root=workspace_root,
+        app_exe=app_exe,
+        source_artifacts_dir=tmp_path / "artifacts",
+    )
+    paths.source_artifacts_dir.mkdir()
+
+    def available_client(key: str):
+        identity = multi_client.CLIENT_IDENTITIES[key]
+        return multi_client.ClientAvailability(
+            identity=identity,
+            available=True,
+            executable=tmp_path / f"{identity.profile_id}.exe",
+            reason="available",
+            deterministic_transfer_adapter=True,
+        )
+
+    inventory = {
+        "emulebb": available_client("emulebb"),
+        "harness": available_client("harness"),
+        "emuleai": multi_client.ClientAvailability(multi_client.CLIENT_IDENTITIES["emuleai"], False, None, "missing"),
+        "amule": available_client("amule"),
+        "emulebb_rust": available_client("emulebb_rust"),
+        "emulebb_rust_peer": available_client("emulebb_rust_peer"),
+    }
+
+    monkeypatch.setattr(module.harness_cli_common, "prepare_run_paths", lambda **_kwargs: paths)
+    monkeypatch.setattr(module, "resolve_windows_client_inventory", lambda **_kwargs: inventory)
+    monkeypatch.setattr(module, "prepare_shared_ed2k_server_binary", lambda _paths, _args: {"skipped": True})
+    monkeypatch.setattr(
+        module,
+        "run_deterministic_transfer_scenario",
+        lambda _paths, _args: calls.append("h2") or {"id": module.HARNESS_TRANSFER_SCENARIO_ID, "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "run_emulebb_rust_exchange_scenario",
+        lambda _paths, _args: calls.append("rust-rust") or {"id": module.RUST_BIDIRECTIONAL_SCENARIO_ID, "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "run_emulebb_rust_emulebb_bidirectional_scenario",
+        lambda _paths, _args: calls.append("rust-emulebb")
+        or {"id": module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID, "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "run_emulebb_rust_amule_bidirectional_scenario",
+        lambda _paths, _args: calls.append("rust-amule")
+        or {"id": module.RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID, "status": "passed"},
+    )
+    monkeypatch.setattr(module, "run_amule_transfer_scenario", lambda _paths, _args: calls.append("amule"))
+    monkeypatch.setattr(module, "run_three_client_swarm_scenario", lambda _paths, _args: calls.append("swarm"))
+    monkeypatch.setattr(module.goed2k, "stop_server_processes", lambda: calls.append("stop_goed2k"))
+    monkeypatch.setattr(
+        module.harness_cli_common,
+        "write_json_file",
+        lambda _path, report: reports.append(report),
+    )
+    monkeypatch.setattr(module.harness_cli_common, "publish_run_artifacts", lambda _paths: calls.append("publish_run"))
+    monkeypatch.setattr(module.harness_cli_common, "publish_latest_report", lambda _paths: calls.append("publish_latest"))
+    monkeypatch.setattr(module.harness_cli_common, "cleanup_source_artifacts", lambda _paths: calls.append("cleanup_artifacts"))
+
+    exit_code = module.main(
+        [
+            "--app-exe",
+            str(app_exe),
+            "--client2-app-exe",
+            str(harness_exe),
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--require-scenario",
+            module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID,
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == ["h2", "rust-emulebb", "stop_goed2k", "publish_run", "publish_latest", "cleanup_artifacts"]
+    assert reports[-1]["status"] == "passed"

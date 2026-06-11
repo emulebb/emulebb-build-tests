@@ -351,11 +351,13 @@ def build_optional_scenario_rows(
     *,
     require_optional_clients: bool,
     required_scenario_ids: set[str] | None = None,
+    selected_scenario_ids: set[str] | None = None,
     completed_scenario_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Builds explicit rows for optional Windows clients that are not silently ignored."""
 
     required_scenario_ids = required_scenario_ids or set()
+    selected_scenario_ids = selected_scenario_ids or set()
     completed_scenario_ids = completed_scenario_ids or set()
     rows: list[dict[str, object]] = []
     for definition in OPTIONAL_SCENARIO_DEFINITIONS:
@@ -365,6 +367,16 @@ def build_optional_scenario_rows(
         required = require_optional_clients or scenario_id in required_scenario_ids
         client_keys = definition[1:]
         availability = [inventory[key] for key in client_keys]
+        if selected_scenario_ids and scenario_id not in selected_scenario_ids:
+            rows.append(
+                {
+                    "id": scenario_id,
+                    "status": "skipped",
+                    "reason": "not selected by --require-scenario",
+                    "clients": [CLIENT_IDENTITIES["emulebb"].profile_id, *[row.identity.profile_id for row in availability]],
+                }
+            )
+            continue
         missing = [row for row in availability if not row.available]
         if missing:
             rows.append(
@@ -456,22 +468,40 @@ def main(argv: list[str] | None = None) -> int:
         report["ed2k_server_binary"] = prepare_shared_ed2k_server_binary(paths, args)
         scenarios = [run_deterministic_transfer_scenario(paths, args)]
         completed_optional_ids: set[str] = set()
+        selected_optional_ids = set(args.require_scenario or ())
+        run_all_optional = not selected_optional_ids
         amule = inventory["amule"]
-        if amule.available and amule.deterministic_transfer_adapter:
+        if amule.available and amule.deterministic_transfer_adapter and (
+            run_all_optional or AMULE_TRANSFER_SCENARIO_ID in selected_optional_ids
+        ):
             scenarios.append(run_amule_transfer_scenario(paths, args))
             completed_optional_ids.add(AMULE_TRANSFER_SCENARIO_ID)
+        if amule.available and amule.deterministic_transfer_adapter and (
+            run_all_optional or THREE_CLIENT_SWARM_SCENARIO_ID in selected_optional_ids
+        ):
             scenarios.append(run_three_client_swarm_scenario(paths, args))
             completed_optional_ids.add(THREE_CLIENT_SWARM_SCENARIO_ID)
         rust = inventory["emulebb_rust"]
         rust_peer = inventory["emulebb_rust_peer"]
-        if rust.available and rust_peer.available and rust.deterministic_transfer_adapter and rust_peer.deterministic_transfer_adapter:
+        if (
+            (run_all_optional or RUST_BIDIRECTIONAL_SCENARIO_ID in selected_optional_ids)
+            and rust.available
+            and rust_peer.available
+            and rust.deterministic_transfer_adapter
+            and rust_peer.deterministic_transfer_adapter
+        ):
             scenarios.append(run_emulebb_rust_exchange_scenario(paths, args))
             completed_optional_ids.add(RUST_BIDIRECTIONAL_SCENARIO_ID)
-        if rust.available and rust.deterministic_transfer_adapter:
+        if (
+            (run_all_optional or RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID in selected_optional_ids)
+            and rust.available
+            and rust.deterministic_transfer_adapter
+        ):
             scenarios.append(run_emulebb_rust_emulebb_bidirectional_scenario(paths, args))
             completed_optional_ids.add(RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID)
         if (
-            rust.available
+            (run_all_optional or RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID in selected_optional_ids)
+            and rust.available
             and rust.deterministic_transfer_adapter
             and amule.available
             and amule.deterministic_transfer_adapter
@@ -483,6 +513,7 @@ def main(argv: list[str] | None = None) -> int:
                 inventory,
                 require_optional_clients=args.require_optional_clients,
                 required_scenario_ids=set(args.require_scenario or ()),
+                selected_scenario_ids=selected_optional_ids,
                 completed_scenario_ids=completed_optional_ids,
             )
         )
