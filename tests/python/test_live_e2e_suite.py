@@ -1033,6 +1033,7 @@ def test_multi_client_p2p_profile_runs_windows_matrix(tmp_path: Path, monkeypatc
     assert option_values(commands[4], "--bootstrap-mode") == ["rest"]
     assert option_values(commands[5], "--p2p-bind-interface-name") == []
     assert option_values(commands[6], "--p2p-bind-interface-name") == []
+    assert "--include-rust-client" not in commands[6]
 
 
 def test_multi_client_optional_clients_can_be_required_from_aggregate_runner(tmp_path: Path, monkeypatch) -> None:
@@ -1087,6 +1088,7 @@ def test_multi_client_required_profile_enables_required_optional_clients(tmp_pat
         "amutorrent-local-ed2k-ui-live.py",
     ]
     assert "--require-optional-clients" in commands[0]
+    assert "--include-rust-client" in commands[6]
 
 
 def test_controller_local_profile_owns_lan_arr_lanes(tmp_path: Path, monkeypatch) -> None:

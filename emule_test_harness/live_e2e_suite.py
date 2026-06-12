@@ -1324,6 +1324,8 @@ def build_suite_command(
         command.extend(["--ui-download-lifecycle-count", str(search_ui_download_lifecycle_count)])
     if spec.name == "multi-client-p2p-matrix" and multi_client_require_optional_clients:
         command.append("--require-optional-clients")
+    if spec.name == "amutorrent-local-ed2k-ui-live" and multi_client_require_optional_clients:
+        command.append("--include-rust-client")
     if spec.name in ED2K_SERVER_EXE_SUITE_NAMES and ed2k_server_exe is not None:
         command.extend(["--ed2k-server-exe", str(ed2k_server_exe.resolve())])
     if spec.name in CLIENT2_APP_EXE_SUITE_NAMES and client2_app_exe is not None:
