@@ -28,7 +28,7 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
         amutorrent_port=4001,
         emule_port=47110,
         api_key="test-key",
-        instance_id="emulebb-127.0.0.1-47110",
+        instance_id="emulebb-192.168.56.10-47110",
         lan_bind_addr="192.0.2.10",
         node_path=node_path,
         data_dir=tmp_path / "amutorrent-data",
@@ -44,7 +44,7 @@ def test_build_amutorrent_environment_points_to_emulebb_rest(tmp_path: Path) -> 
     assert env["EMULEBB_PORT"] == "47110"
     assert env["EMULEBB_API_KEY"] == "test-key"
     assert env["EMULEBB_USE_SSL"] == "true"
-    assert env["EMULEBB_ID"] == "emulebb-127.0.0.1-47110"
+    assert env["EMULEBB_ID"] == "emulebb-192.168.56.10-47110"
     assert env["NODE_EXTRA_CA_CERTS"] == str(tmp_path / "webserver-cert.pem")
     assert env["UNCHANGED"] == "1"
     assert env["PATH"].startswith(str(node_path.parent) + os.pathsep)
@@ -63,11 +63,44 @@ def test_write_stop_script_closes_emule_and_stops_amutorrent(tmp_path: Path) -> 
     assert "taskkill /PID %pid% /F" in text
 
 
+def test_write_stop_script_can_label_rust_backend(tmp_path: Path) -> None:
+    session = load_session_module()
+    stop_script = tmp_path / "stop-session.cmd"
+
+    session.write_stop_script(stop_script, emule_pid=1234, amutorrent_pid=None, emule_label="eMuleBB Rust")
+
+    text = stop_script.read_text(encoding="utf-8")
+    assert 'call :stop_process "eMuleBB Rust" "1234"' in text
+    assert "aMuTorrent" not in text
+
+
 def test_parser_defaults_to_local_control_session() -> None:
     session = load_session_module()
 
     args = session.build_parser().parse_args(["--lan-bind-addr", "192.0.2.10"])
 
     assert args.configuration == "Debug"
+    assert args.backend == "native"
     assert args.live_network is False
     assert args.lan_bind_addr == "192.0.2.10"
+
+
+def test_parser_accepts_rust_backend_inputs() -> None:
+    session = load_session_module()
+
+    args = session.build_parser().parse_args(
+        [
+            "--backend",
+            "rust",
+            "--rust-exe",
+            "C:/out/tools/emulebb-rust/bin/emulebb-rust.exe",
+            "--rust-repo",
+            "C:/workspace/repos/emulebb-rust",
+            "--lan-bind-addr",
+            "192.0.2.10",
+        ]
+    )
+
+    assert args.backend == "rust"
+    assert args.rust_exe == "C:/out/tools/emulebb-rust/bin/emulebb-rust.exe"
+    assert args.rust_repo == "C:/workspace/repos/emulebb-rust"

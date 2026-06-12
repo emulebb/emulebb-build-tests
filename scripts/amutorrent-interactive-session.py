@@ -12,6 +12,12 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness import rust_client  # noqa: E402
+
 
 def load_local_module(module_name: str, filename: str):
     """Loads one sibling helper module from a hyphenated script filename."""
@@ -133,11 +139,17 @@ def build_amutorrent_environment(
     return env
 
 
-def write_stop_script(path: Path, *, emule_pid: int | None, amutorrent_pid: int | None) -> None:
+def write_stop_script(
+    path: Path,
+    *,
+    emule_pid: int | None,
+    amutorrent_pid: int | None,
+    emule_label: str = "eMuleBB",
+) -> None:
     """Writes a command helper that stops the launched interactive processes."""
 
     process_rows = [
-        ("eMuleBB", emule_pid),
+        (emule_label, emule_pid),
         ("aMuTorrent", amutorrent_pid),
     ]
     stop_calls = "\n".join(
@@ -183,8 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     """Builds the interactive-session argument parser."""
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=["native", "rust"], default="native")
     parser.add_argument("--app-root")
     parser.add_argument("--app-exe")
+    parser.add_argument("--rust-exe")
+    parser.add_argument("--rust-repo")
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
@@ -199,22 +214,118 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def prepare_rust_run_paths(args: argparse.Namespace) -> harness_cli_common.HarnessRunPaths:
+    """Prepares report/artifact paths for a Rust-backed session without requiring a native app build."""
+
+    repo_root = harness_cli_common.get_repo_root(__file__)
+    workspace_root = harness_cli_common.get_default_workspace_root(repo_root)
+    report_root = harness_cli_common.get_test_reports_root(workspace_root)
+    harness_cli_common.reject_windows_temp_path(report_root, "report root")
+    suite_report_root = report_root / "amutorrent-interactive-session"
+    report_stamp = harness_cli_common.utc_run_id()
+    report_label = f"{report_stamp}-emulebb-rust-{args.configuration.lower()}-{os.getpid()}"
+    source_artifacts_dir = (
+        Path(args.artifacts_dir).resolve()
+        if args.artifacts_dir
+        else (
+            harness_cli_common.get_test_artifacts_root(workspace_root)
+            / "amutorrent-interactive-session"
+            / report_label
+        ).resolve()
+    )
+    harness_cli_common.reject_windows_temp_path(source_artifacts_dir, "artifacts directory")
+    source_artifacts_dir.mkdir(parents=True, exist_ok=True)
+    rust_app_path = Path(args.rust_exe or args.rust_repo or repo_root).resolve()
+    return harness_cli_common.HarnessRunPaths(
+        repo_root=repo_root,
+        workspace_root=workspace_root,
+        output_root=harness_cli_common.get_workspace_output_root(),
+        app_root=rust_app_path.parent,
+        app_exe=rust_app_path,
+        seed_config_dir=(repo_root / "manifests" / "live-profile-seed" / "config").resolve(),
+        configuration=args.configuration,
+        suite_name="amutorrent-interactive-session",
+        source_artifacts_dir=source_artifacts_dir,
+        run_report_dir=(suite_report_root / report_label).resolve(),
+        latest_report_dir=(report_root / "amutorrent-interactive-session" / "latest").resolve(),
+        keep_source_artifacts=True,
+    )
+
+
+def resolve_rust_executable(paths: harness_cli_common.HarnessRunPaths, args: argparse.Namespace) -> Path:
+    """Returns the staged Rust executable path preferred by package-backed sessions."""
+
+    if args.rust_exe:
+        return Path(args.rust_exe).resolve()
+    exe_name = "emulebb-rust.exe" if os.name == "nt" else "emulebb-rust"
+    return paths.output_root / "tools" / "emulebb-rust" / "bin" / exe_name
+
+
+def resolve_rust_repo(paths: harness_cli_common.HarnessRunPaths, args: argparse.Namespace) -> Path:
+    """Returns the Rust repo path used when no staged executable is available."""
+
+    if args.rust_repo:
+        return Path(args.rust_repo).resolve()
+    return paths.workspace_root.parent.parent / "repos" / "emulebb-rust"
+
+
+def start_rust_backend(
+    paths: harness_cli_common.HarnessRunPaths,
+    args: argparse.Namespace,
+    *,
+    rest_addr: str,
+    rest_port: int,
+) -> tuple[subprocess.Popen[str], dict[str, str]]:
+    """Starts the Rust client for an interactive aMuTorrent session."""
+
+    runtime_dir = paths.source_artifacts_dir / "rust-runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    config_path = paths.source_artifacts_dir / "emulebb-rust.toml"
+    rust_client.write_rust_config(
+        config_path,
+        runtime_dir=runtime_dir,
+        rest_addr=rest_addr,
+        rest_port=rest_port,
+        api_key=args.api_key,
+    )
+    log_path = paths.source_artifacts_dir / "emulebb-rust.log"
+    executable = resolve_rust_executable(paths, args)
+    if executable.is_file():
+        process = rust_client.start_rust_client_executable(executable, config_path, log_path)
+        launch_mode = "executable"
+        launched_from = executable
+    else:
+        rust_repo = resolve_rust_repo(paths, args)
+        process = rust_client.start_rust_client(rust_repo, config_path, log_path)
+        launch_mode = "cargo"
+        launched_from = rust_repo
+    return process, {
+        "rust_launch_mode": launch_mode,
+        "rust_launch_path": str(launched_from),
+        "rust_config": str(config_path),
+        "rust_runtime_dir": str(runtime_dir),
+        "rust_log": str(log_path),
+    }
+
+
 def main() -> int:
     """Starts eMuleBB and aMuTorrent, then leaves both running for the operator."""
 
     args = build_parser().parse_args()
-    paths = harness_cli_common.prepare_run_paths(
-        script_file=__file__,
-        suite_name="amutorrent-interactive-session",
-        configuration=args.configuration,
-        workspace_root=None,
-        app_root=args.app_root,
-        app_exe=args.app_exe,
-        artifacts_dir=args.artifacts_dir,
-        keep_artifacts=True,
-    )
+    if args.backend == "rust":
+        paths = prepare_rust_run_paths(args)
+    else:
+        paths = harness_cli_common.prepare_run_paths(
+            script_file=__file__,
+            suite_name="amutorrent-interactive-session",
+            configuration=args.configuration,
+            workspace_root=None,
+            app_root=args.app_root,
+            app_exe=args.app_exe,
+            artifacts_dir=args.artifacts_dir,
+            keep_artifacts=True,
+        )
     amutorrent_root = amutorrent_smoke.resolve_amutorrent_root(paths.workspace_root)
-    seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
     node_info = amutorrent_smoke.resolve_amutorrent_node()
 
     emule_port = choose_listen_port(args.lan_bind_addr)
@@ -230,22 +341,26 @@ def main() -> int:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     amutorrent_data_dir = artifacts_dir / "amutorrent-data"
 
-    profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-interactive-session")
-    configure_session_profile(
-        Path(profile["config_dir"]),
-        paths.app_exe,
-        args.api_key,
-        emule_port,
-        args.lan_bind_addr,
-        args.p2p_bind_interface_name,
-        live_network=bool(args.live_network),
-        vpn_guard_enabled=args.vpn_guard_enabled,
-        vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
-    )
+    profile: dict[str, Any] | None = None
+    if args.backend == "native":
+        seed_config_dir = harness_cli_common.resolve_profile_seed_dir(paths, args.profile_seed_dir)
+        profile = prepare_profile_base(seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="amutorrent-interactive-session")
+        configure_session_profile(
+            Path(profile["config_dir"]),
+            paths.app_exe,
+            args.api_key,
+            emule_port,
+            args.lan_bind_addr,
+            args.p2p_bind_interface_name,
+            live_network=bool(args.live_network),
+            vpn_guard_enabled=args.vpn_guard_enabled,
+            vpn_guard_allowed_public_ip_cidrs=args.vpn_guard_allowed_public_ip_cidrs,
+        )
 
     report: dict[str, Any] = {
         "suite": "amutorrent-interactive-session",
         "status": "failed",
+        "backend": args.backend,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "configuration": args.configuration,
         "live_network": bool(args.live_network),
@@ -253,8 +368,6 @@ def main() -> int:
         "enable_upnp": True,
         "emule_base_url": emule_base_url,
         "amutorrent_base_url": amutorrent_base_url,
-        "profile_base": str(profile["profile_base"]),
-        "config_dir": str(profile["config_dir"]),
         "amutorrent_root": str(amutorrent_root),
         "amutorrent_data_dir": str(amutorrent_data_dir),
         "node": node_info,
@@ -262,15 +375,30 @@ def main() -> int:
         "checks": {},
         "cleanup": {},
     }
+    if profile is not None:
+        report["profile_base"] = str(profile["profile_base"])
+        report["config_dir"] = str(profile["config_dir"])
 
     app = None
+    rust_process: subprocess.Popen[str] | None = None
     amutorrent: subprocess.Popen[str] | None = None
     try:
         amutorrent_smoke.require_amutorrent_server_dependencies(amutorrent_root, node_info)
-        app = launch_app(paths.app_exe, Path(profile["profile_base"]))
-        report["emule_process_id"] = get_app_process_id(app)
-        main_window = wait_for_main_window(app)
-        report["main_window_title"] = main_window.window_text()
+        if args.backend == "rust":
+            rust_process, rust_report = start_rust_backend(
+                paths,
+                args,
+                rest_addr=lan_bind_addr,
+                rest_port=emule_port,
+            )
+            report.update(rust_report)
+            report["emule_process_id"] = rust_process.pid
+        else:
+            assert profile is not None
+            app = launch_app(paths.app_exe, Path(profile["profile_base"]))
+            report["emule_process_id"] = get_app_process_id(app)
+            main_window = wait_for_main_window(app)
+            report["main_window_title"] = main_window.window_text()
         report["checks"]["emule_rest_ready"] = wait_for_rest_ready(
             emule_base_url,
             args.api_key,
@@ -314,6 +442,7 @@ def main() -> int:
             artifacts_dir / "stop-session.cmd",
             emule_pid=int(report["emule_process_id"]),
             amutorrent_pid=amutorrent.pid,
+            emule_label="eMuleBB Rust" if args.backend == "rust" else "eMuleBB",
         )
         write_json(artifacts_dir / "amutorrent-interactive-session-result.json", report)
         harness_cli_common.publish_run_artifacts(paths)
@@ -343,6 +472,8 @@ def main() -> int:
                 close_app_cleanly(app)
             except Exception:
                 app.kill()
+        if rust_process is not None:
+            rust_client.stop_process_tree(rust_process)
         harness_cli_common.publish_run_artifacts(paths)
         harness_cli_common.publish_latest_report(paths)
         raise

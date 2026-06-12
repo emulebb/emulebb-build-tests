@@ -208,3 +208,27 @@ def test_start_rust_client_append_keeps_restart_log(monkeypatch: pytest.MonkeyPa
     calls[0]["stdout"].write("second run\n")
     calls[0]["stdout"].close()
     assert output_path.read_text(encoding="utf-8") == "first run\nsecond run\n"
+
+
+def test_start_rust_client_executable_uses_staged_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return FakeProcess()
+
+    executable = tmp_path / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"exe")
+    monkeypatch.setattr(rust_client.subprocess, "Popen", fake_popen)
+
+    process = rust_client.start_rust_client_executable(executable, tmp_path / "config.toml", tmp_path / "rust.out")
+
+    assert isinstance(process, FakeProcess)
+    assert calls[0]["command"] == [str(executable), "--config", str(tmp_path / "config.toml")]
+    assert calls[0]["cwd"] == executable.parent
+    assert calls[0]["stdout"].mode == "w"
+    calls[0]["stdout"].close()
