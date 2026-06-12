@@ -56,3 +56,42 @@ def test_start_client_falls_back_to_cargo(monkeypatch, tmp_path: Path) -> None:
     assert mode == "cargo"
     assert launch_path == tmp_path / "repo"
     assert calls == [("cargo", tmp_path / "repo", tmp_path / "rust.toml", tmp_path / "rust.log")]
+
+
+def test_publish_shared_tree_configures_recursive_root_and_returns_link(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_request_json(_base_url, method, path, _api_key, body=None):
+        calls.append((method, path, body))
+        if path == "/api/v1/shared-directories":
+            return {"roots": [{"path": body["roots"][0]["path"], "recursive": True}], "items": []}
+        if path == "/api/v1/shared-directories/operations/reload":
+            return {"ok": True}
+        if path == "/api/v1/shared-files":
+            return {
+                "items": [
+                    {
+                        "name": "Nested.bin",
+                        "ed2kLink": "ed2k://|file|Nested.bin|1|00112233445566778899aabbccddeeff|/",
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(rust_local_ed2k, "request_json", fake_request_json)
+
+    result = rust_local_ed2k.publish_shared_tree(
+        "http://192.0.2.10:4711",
+        "key",
+        root=tmp_path / "shared-tree",
+        file_name="Nested.bin",
+    )
+
+    assert calls[0] == (
+        "PATCH",
+        "/api/v1/shared-directories",
+        {"roots": [{"path": str(tmp_path / "shared-tree"), "recursive": True}], "confirmReplaceRoots": True},
+    )
+    assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
+    assert calls[2] == ("GET", "/api/v1/shared-files", None)
+    assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"

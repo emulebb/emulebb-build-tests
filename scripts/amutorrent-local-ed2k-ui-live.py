@@ -56,6 +56,7 @@ AMUTORRENT_EMULEBB_ID = CLIENT01.profile_id
 AMUTORRENT_AMULE_ID = CLIENT04.profile_id
 AMUTORRENT_RUST_ID = CLIENT05.profile_id
 RUST_ED2K_NICK = "eMule"
+RUST_SHARED_TREE_FIXTURE_NAME = "amutorrent-rust-shared-tree-Unicode-\u00e9-\u6f22.bin"
 
 BASE_ED2K_INSTANCE_MATRIX = [
     {
@@ -141,6 +142,7 @@ AMUTORRENT_CAPABILITY_MATRIX = {
         "same_hash_is_instance_scoped",
         "single_instance_operations_preserve_other_instance",
         "completed_files_match_fixture_for_both_clients",
+        "rust_shared_tree_upload_download_when_enabled",
     ],
 }
 
@@ -166,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-publish-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--transfer-completion-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--fixture-size-bytes", type=int, default=dtt.DEFAULT_FIXTURE_SIZE_BYTES)
+    parser.add_argument("--rust-shared-tree-fixture-size-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--ed2k-server-repo")
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--amule-daemon-exe")
@@ -449,6 +452,24 @@ def start_rust_download_client(
         "log": str(log_path),
         "launch_mode": launch_mode,
         "launch_path": str(launch_path),
+    }
+
+
+def write_rust_shared_tree_fixture(root: Path, size_bytes: int) -> dict[str, object]:
+    """Writes the nested throw-away Rust shared-tree fixture for aMuTorrent proof."""
+
+    nested_dir = root / "alpha" / "beta"
+    fixture_path = nested_dir / RUST_SHARED_TREE_FIXTURE_NAME
+    fixture_sha256 = dtt.write_fixture_file(fixture_path, size_bytes, seed=0xA7ED2B)
+    return {
+        "root": str(root),
+        "nested_dir": str(nested_dir),
+        "path": str(fixture_path),
+        "name": fixture_path.name,
+        "size": size_bytes,
+        "sha256": fixture_sha256,
+        "unicode_name": True,
+        "recursive": True,
     }
 
 
@@ -1016,6 +1037,7 @@ def run_browser_download_matrix(
     instances: list[dict[str, Any]],
     artifacts_dir: Path,
     timeout_seconds: float,
+    extra_downloads: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Drives the visible aMuTorrent UI for both local ED2K client targets."""
 
@@ -1069,6 +1091,17 @@ def run_browser_download_matrix(
                 instances=instances,
                 timeout_seconds=timeout_seconds,
             )
+            checks["extra_downloads"] = [
+                add_download_through_visible_modal(
+                    page,
+                    link=download["link"],
+                    transfer_hash=download["transfer_hash"],
+                    instance_id=download["instance_id"],
+                    instance_name=download["instance_name"],
+                    timeout_seconds=timeout_seconds,
+                )
+                for download in (extra_downloads or [])
+            ]
             screenshot = artifacts_dir / "amutorrent-local-ed2k-ui-final.png"
             page.screenshot(path=str(screenshot), full_page=True)
             checks["screenshots"] = {"final": str(screenshot)}
@@ -1138,6 +1171,9 @@ def main(argv: list[str] | None = None) -> int:
     amule_profile: amule_harness.AmuleRuntimeProfile | None = None
     amule_control_exe: Path | None = None
     rust_profile: dict[str, Any] | None = None
+    rust_shared_tree_fixture: dict[str, object] | None = None
+    rust_shared_tree_link_info: dict[str, object] | None = None
+    rust_shared_tree_sha256: str | None = None
     current_phase = "initializing"
 
     try:
@@ -1387,6 +1423,26 @@ def main(argv: list[str] | None = None) -> int:
                 RUST_ED2K_NICK,
                 args.server_connect_timeout_seconds,
             )
+            rust_shared_tree_fixture = write_rust_shared_tree_fixture(
+                paths.source_artifacts_dir / "rust-shared-tree",
+                args.rust_shared_tree_fixture_size_bytes,
+            )
+            rust_shared_tree_sha256 = str(rust_shared_tree_fixture["sha256"])
+            report["rust_shared_tree_fixture"] = rust_shared_tree_fixture
+            report["checks"]["rust_shared_tree_publish"] = rust_local_ed2k.publish_shared_tree(
+                rust_base_url,
+                args.api_key,
+                root=Path(str(rust_shared_tree_fixture["root"])),
+                file_name=str(rust_shared_tree_fixture["name"]),
+            )
+            rust_shared_tree_file = report["checks"]["rust_shared_tree_publish"]["sharedFiles"]["matched"]
+            rust_shared_tree_link_info = dtt.parse_ed2k_file_link(str(rust_shared_tree_file["ed2kLink"]))
+            report["checks"]["rust_shared_tree_server_file"] = goed2k.wait_for_server_file(
+                admin_base_url,
+                args.api_key,
+                str(rust_shared_tree_link_info["hash"]),
+                args.server_publish_timeout_seconds,
+            )
 
         current_phase = "launch_amutorrent"
         amutorrent_data_dir = paths.source_artifacts_dir / "amutorrent-data"
@@ -1450,6 +1506,16 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         current_phase = "browser_ui_downloads"
+        extra_downloads: list[dict[str, str]] = []
+        if rust_shared_tree_link_info is not None:
+            extra_downloads.append(
+                {
+                    "link": str(report["checks"]["rust_shared_tree_publish"]["sharedFiles"]["matched"]["ed2kLink"]),
+                    "transfer_hash": str(rust_shared_tree_link_info["hash"]),
+                    "instance_id": CLIENT01.profile_id,
+                    "instance_name": CLIENT01.profile_id,
+                }
+            )
         report["checks"]["browser_ui"] = run_browser_download_matrix(
             base_url=amutorrent_base_url,
             link=exported_link,
@@ -1457,6 +1523,7 @@ def main(argv: list[str] | None = None) -> int:
             instances=ed2k_instance_matrix(include_rust_client=bool(args.include_rust_client)),
             artifacts_dir=paths.source_artifacts_dir,
             timeout_seconds=args.rest_ready_timeout_seconds,
+            extra_downloads=extra_downloads,
         )
 
         current_phase = "verify_completed_files"
@@ -1492,6 +1559,27 @@ def main(argv: list[str] | None = None) -> int:
                 expected_size=int(link_info["size"]),
                 expected_sha256=fixture_sha256,
                 timeout_seconds=args.transfer_completion_timeout_seconds,
+            )
+            assert rust_shared_tree_fixture is not None
+            assert rust_shared_tree_link_info is not None
+            assert rust_shared_tree_sha256 is not None
+            rust_tree_completed_path = Path(client1["incoming_dir"]) / str(rust_shared_tree_link_info["name"])
+            report["checks"]["emulebb_completed_rust_shared_tree_file"] = dtt.wait_for_completed_file(
+                rust_tree_completed_path,
+                expected_size=int(rust_shared_tree_link_info["size"]),
+                expected_sha256=rust_shared_tree_sha256,
+                timeout_seconds=args.transfer_completion_timeout_seconds,
+                snapshot_callback=lambda: dtt.collect_client1_transfer_snapshot(
+                    base_url=client1_base_url,
+                    api_key=args.api_key,
+                    transfer_hash=str(rust_shared_tree_link_info["hash"]),
+                    incoming_path=rust_tree_completed_path,
+                    temp_dir=Path(client1["temp_dir"]),
+                    hash_limit_bytes=max(
+                        int(rust_shared_tree_link_info["size"]),
+                        int(rust_shared_tree_fixture["size"]),
+                    ),
+                ),
             )
         report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"

@@ -159,6 +159,58 @@ def wait_for_transfer_completed(
     )
 
 
+def require_shared_file_item(shared_files: dict[str, object], file_name: str) -> dict[str, object]:
+    """Returns one Rust shared-file row from a paged shared-files payload."""
+
+    items = shared_files.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("Rust shared-files response did not expose an items list.")
+    for item in items:
+        if isinstance(item, dict) and item.get("name") == file_name:
+            link = str(item.get("ed2kLink") or "")
+            if not link.startswith("ed2k://|file|"):
+                raise RuntimeError(f"Rust shared-file row for {file_name} did not expose an ED2K link.")
+            return item
+    raise RuntimeError(f"Rust shared-files response did not include {file_name}.")
+
+
+def publish_shared_tree(
+    base_url: str,
+    api_key: str,
+    *,
+    root: Path,
+    file_name: str,
+) -> dict[str, object]:
+    """Configures one recursive Rust shared-directory root and returns the matched file row."""
+
+    directories = request_json(
+        base_url,
+        "PATCH",
+        "/api/v1/shared-directories",
+        api_key,
+        {
+            "roots": [{"path": str(root), "recursive": True}],
+            "confirmReplaceRoots": True,
+        },
+    )
+    reload_result = request_json(
+        base_url,
+        "POST",
+        "/api/v1/shared-directories/operations/reload",
+        api_key,
+    )
+    shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
+    shared_file = require_shared_file_item(shared_files, file_name)
+    return {
+        "directories": directories,
+        "reload": reload_result,
+        "sharedFiles": {
+            "count": len(shared_files.get("items", [])) if isinstance(shared_files.get("items"), list) else 0,
+            "matched": shared_file,
+        },
+    }
+
+
 def start_client(
     *,
     repo: Path,

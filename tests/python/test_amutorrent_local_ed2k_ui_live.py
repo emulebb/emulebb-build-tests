@@ -28,6 +28,7 @@ def test_parser_defaults_use_local_ed2k_and_132_mib_fixture() -> None:
 
     assert args.p2p_bind_interface_name == ""
     assert args.fixture_size_bytes == 132 * 1024 * 1024
+    assert args.rust_shared_tree_fixture_size_bytes == 4 * 1024 * 1024
     assert args.configuration == "Release"
     assert args.include_rust_client is False
 
@@ -50,6 +51,21 @@ def test_parser_accepts_optional_rust_client() -> None:
     assert args.include_rust_client is True
     assert args.rust_repo == "C:/workspace/repos/emulebb-rust"
     assert args.rust_exe == "C:/out/tools/emulebb-rust/bin/emulebb-rust.exe"
+
+
+def test_write_rust_shared_tree_fixture_uses_nested_unicode_fixture(tmp_path: Path) -> None:
+    module = load_suite_module()
+
+    fixture = module.write_rust_shared_tree_fixture(tmp_path / "rust-shared-tree", 4097)
+
+    assert fixture["recursive"] is True
+    assert fixture["unicode_name"] is True
+    assert Path(fixture["path"]).is_file()
+    assert Path(fixture["path"]).parent == tmp_path / "rust-shared-tree" / "alpha" / "beta"
+    assert fixture["name"] == module.RUST_SHARED_TREE_FIXTURE_NAME
+    assert not str(fixture["name"]).isascii()
+    assert fixture["size"] == 4097
+    assert len(str(fixture["sha256"])) == 64
 
 
 def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkeypatch) -> None:
@@ -281,6 +297,7 @@ def test_capability_matrix_covers_both_ed2k_clients_and_core_surfaces() -> None:
         "refresh_shared",
     } <= set(manifest["ed2k_instance_mutation"])
     assert "same_hash_is_instance_scoped" in manifest["coexistence_invariants"]
+    assert "rust_shared_tree_upload_download_when_enabled" in manifest["coexistence_invariants"]
 
 
 def test_optional_rust_matrix_adds_emulebb_compatible_instance() -> None:
