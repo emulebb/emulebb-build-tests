@@ -403,6 +403,7 @@ def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> N
     assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/indexSnoopQueueCovered"] is True
     emulebb_cross_evidence = scenarios[emulebb_cross_id]["evidence"][0]
     assert emulebb_cross_evidence["matches"]["/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/unicodeFixtureNames"] is True
+    assert emulebb_cross_evidence["matches"]["/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/recursiveSharedTreeUpload"] is True
     assert emulebb_cross_evidence["matches"]["/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedAichHashset"] is True
     rust_cross_evidence = scenarios[rust_cross_id]["evidence"][0]
     assert rust_cross_evidence["matches"]["/scenarios/1/report/checks/multiTransferCount"] == 3
@@ -615,6 +616,7 @@ def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(
                                 "rust_emulebb_cross_client_requirements": {
                                     "bidirectionalTransfers": True,
                                     "unicodeFixtureNames": True,
+                                    "recursiveSharedTreeUpload": True,
                                     "rustPersistedSourceUserHash": True,
                                     "rustPersistedMd4Hashset": True,
                                     "rustPersistedAichHashset": True,

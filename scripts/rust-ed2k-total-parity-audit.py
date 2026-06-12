@@ -104,6 +104,7 @@ SCENARIO_REQUIREMENTS: tuple[Requirement, ...] = (
             ("/scenarios/*/report/status", "passed"),
             ("/scenarios/*/report/checks/rust_emulebb_cross_client_requirements/bidirectionalTransfers", True),
             ("/scenarios/*/report/checks/rust_emulebb_cross_client_requirements/unicodeFixtureNames", True),
+            ("/scenarios/*/report/checks/rust_emulebb_cross_client_requirements/recursiveSharedTreeUpload", True),
             ("/scenarios/*/report/checks/rust_emulebb_cross_client_requirements/rustPersistedSourceUserHash", True),
             ("/scenarios/*/report/checks/rust_emulebb_cross_client_requirements/rustPersistedMd4Hashset", True),
             ("/scenarios/*/report/checks/rust_emulebb_cross_client_requirements/rustPersistedAichHashset", True),

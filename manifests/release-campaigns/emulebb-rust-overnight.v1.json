@@ -193,6 +193,7 @@
                 "/scenarios/1/report/status": "passed",
                 "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/bidirectionalTransfers": true,
                 "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/unicodeFixtureNames": true,
+                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/recursiveSharedTreeUpload": true,
                 "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedSourceUserHash": true,
                 "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedMd4Hashset": true,
                 "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedAichHashset": true

@@ -112,6 +112,7 @@ def seed_complete_evidence(output_root: Path) -> None:
                             "rust_emulebb_cross_client_requirements": {
                                 "bidirectionalTransfers": True,
                                 "unicodeFixtureNames": True,
+                                "recursiveSharedTreeUpload": True,
                                 "rustPersistedSourceUserHash": True,
                                 "rustPersistedMd4Hashset": True,
                                 "rustPersistedAichHashset": True,
