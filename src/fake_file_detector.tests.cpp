@@ -292,6 +292,38 @@ TEST_CASE("fake-file analyzer merges the same core across multilingual connector
 	CHECK(report.nameDivergenceGroups.empty());
 }
 
+TEST_CASE("fake-file analyzer merges a shared core buried in format and resolution junk")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Sample.Title.14-11-2023.HDTV.1080i.mkv.avi",
+		L"Sample Title (14-11-2023)-(HDTV.1080i).mkv",
+		L"Sample Title 1080p Alpha Beta.avi",
+	};
+	evidence.extensionType = VIDEO_AVI;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(report.score == 0);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") == report.reasons.end());
+	CHECK(report.nameDivergenceGroups.empty());
+}
+
+TEST_CASE("fake-file analyzer still flags unrelated titles that share only format tokens")
+{
+	FakeFileDetectorSeams::RuleSet rules;
+	FakeFileDetectorSeams::Evidence evidence;
+	evidence.names = {
+		L"Sample Alpha 1080i HDTV.mkv",
+		L"Other Gamma 1080i HDTV.mkv",
+	};
+	evidence.extensionType = VIDEO_MP4;
+
+	const FakeFileDetectorSeams::Report report = FakeFileDetectorSeams::Analyze(evidence, rules);
+	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") != report.reasons.end());
+	CHECK(report.nameDivergenceGroups.size() == 2);
+}
+
 TEST_CASE("fake-file analyzer ignores generic download fallback names")
 {
 	FakeFileDetectorSeams::RuleSet rules;
