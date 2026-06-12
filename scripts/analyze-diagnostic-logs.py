@@ -9,7 +9,12 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from emule_test_harness.diagnostic_logs import analyze_diagnostic_logs, format_diagnostic_log_analysis  # noqa: E402
+from emule_test_harness.diagnostic_logs import (  # noqa: E402
+    analyze_diagnostic_logs,
+    analyze_upload_bandwidth,
+    format_diagnostic_log_analysis,
+    format_upload_bandwidth,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +24,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--logs-dir", required=True, type=Path, help="Directory containing emulebb-diagnostics-*.log files.")
     parser.add_argument("--window-minutes", type=float, default=15.0, help="Bad-peer analysis window.")
     parser.add_argument("--top", type=int, default=12, help="Maximum rows per top list.")
+    parser.add_argument(
+        "--upload-bandwidth",
+        action="store_true",
+        help="Report upload-slot bandwidth utilization vs the configured upload budget (max-upload-BW view).",
+    )
+    parser.add_argument("--tail", type=int, default=12, help="Upload-bandwidth recent-sample rows to show.")
+    parser.add_argument(
+        "--budget-bytes-per-sec",
+        type=int,
+        default=None,
+        help="Override the upload budget; defaults to configuredBudgetBytesPerSec from the latest summary.",
+    )
     parser.add_argument("--json", action="store_true", help="Write machine-readable JSON.")
     return parser
 
@@ -27,6 +44,14 @@ def main(argv: list[str] | None = None) -> int:
     """Runs the diagnostics log analyzer."""
 
     args = build_parser().parse_args(argv)
+    if args.upload_bandwidth:
+        analysis = analyze_upload_bandwidth(
+            args.logs_dir,
+            tail=args.tail,
+            budget_bytes_per_sec=args.budget_bytes_per_sec,
+        )
+        print(json.dumps(analysis, indent=2, sort_keys=True) if args.json else format_upload_bandwidth(analysis))
+        return 0
     analysis = analyze_diagnostic_logs(args.logs_dir, window_minutes=args.window_minutes, top_count=args.top)
     if args.json:
         print(json.dumps(analysis, indent=2, sort_keys=True))

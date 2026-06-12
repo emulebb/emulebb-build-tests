@@ -419,3 +419,166 @@ def _format_summary(title: str, payload: dict[str, Any]) -> list[str]:
     ]
     parts = [f"{key}={summary[key]}" for key in interesting if key in summary]
     return [f"{title}: " + (" ".join(parts) if parts else json.dumps(summary, sort_keys=True))]
+
+
+UPLOAD_SLOT_SUMMARY_PREFIX = "UploadSlotDiagnostics: summary "
+
+
+def read_summary_series(logs_dir: Path, log_name: str, prefix: str) -> list[dict[str, Any]]:
+    """Returns every summary sample (full time series) from a summary diagnostics log."""
+
+    samples: list[dict[str, Any]] = []
+    for path in _diagnostic_log_paths(logs_dir.expanduser().resolve(), log_name):
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if line.startswith(prefix):
+                    samples.append(_parse_key_value_summary(line.removeprefix(prefix)))
+    return samples
+
+
+def analyze_upload_bandwidth(
+    logs_dir: Path,
+    *,
+    tail: int = 12,
+    budget_bytes_per_sec: int | None = None,
+) -> dict[str, Any]:
+    """Analyzes upload-slot summaries for upload-bandwidth utilization vs the configured budget.
+
+    The goal metric is steady-state upload throughput relative to the configured upload
+    budget. The verdict explains why utilization sits where it does: publish ramp,
+    eligible-demand starvation, slot-promotion cadence, or slow-slot reclamation.
+    """
+
+    logs_dir = logs_dir.expanduser().resolve()
+    samples = read_summary_series(logs_dir, UPLOAD_SLOT_LOG_NAME, UPLOAD_SLOT_SUMMARY_PREFIX)
+    if not samples:
+        return {"exists": False, "logs_dir": str(logs_dir), "samples": 0}
+
+    latest = samples[-1]
+    budget = int(budget_bytes_per_sec or _summary_int(latest, "configuredBudgetBytesPerSec"))
+    rate = _summary_int(latest, "toNetworkBytesPerSec") or _summary_int(latest, "datarateBytesPerSec")
+    active = _summary_int(latest, "activeSlots")
+    cap = _summary_int(latest, "effectiveSlotCap")
+    waiting = _summary_int(latest, "waiting")
+    eligible = _summary_int(latest, "waitingEligible")
+    underfilled = bool(_summary_int(latest, "underfilled"))
+    slow = _summary_int(latest, "slowTracking")
+    pending = _summary_int(latest, "ed2kPendingFiles")
+    utilization = (rate / budget) if budget else None
+
+    verdict, reason = _upload_bandwidth_verdict(
+        utilization=utilization,
+        active=active,
+        cap=cap,
+        waiting=waiting,
+        eligible=eligible,
+        underfilled=underfilled,
+        pending_publish=pending,
+    )
+    return {
+        "exists": True,
+        "logs_dir": str(logs_dir),
+        "samples": len(samples),
+        "budget_bytes_per_sec": budget,
+        "rate_bytes_per_sec": rate,
+        "utilization": utilization,
+        "active_slots": active,
+        "effective_slot_cap": cap,
+        "waiting": waiting,
+        "waiting_eligible": eligible,
+        "underfilled": underfilled,
+        "slow_tracking": slow,
+        "ed2k_published_files": _summary_int(latest, "ed2kPublishedFiles"),
+        "ed2k_pending_files": pending,
+        "kad_publish_ready": _summary_int(latest, "kadPublishReady"),
+        "verdict": verdict,
+        "reason": reason,
+        "series": [_upload_bandwidth_row(sample) for sample in samples[-tail:]],
+    }
+
+
+def _summary_int(summary: dict[str, Any], key: str) -> int:
+    value = summary.get(key)
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def _upload_bandwidth_row(summary: dict[str, Any]) -> dict[str, Any]:
+    rate = _summary_int(summary, "toNetworkBytesPerSec") or _summary_int(summary, "datarateBytesPerSec")
+    return {
+        "activeSlots": _summary_int(summary, "activeSlots"),
+        "effectiveSlotCap": _summary_int(summary, "effectiveSlotCap"),
+        "waiting": _summary_int(summary, "waiting"),
+        "waitingEligible": _summary_int(summary, "waitingEligible"),
+        "rateKiBps": rate // 1024,
+        "underfilled": _summary_int(summary, "underfilled"),
+        "ed2kPublishedFiles": _summary_int(summary, "ed2kPublishedFiles"),
+        "kadPublishReady": _summary_int(summary, "kadPublishReady"),
+    }
+
+
+def _upload_bandwidth_verdict(
+    *,
+    utilization: float | None,
+    active: int,
+    cap: int,
+    waiting: int,
+    eligible: int,
+    underfilled: bool,
+    pending_publish: int,
+) -> tuple[str, str]:
+    if utilization is None:
+        return "unknown", "No configured upload budget in the summary."
+    if utilization >= 0.9:
+        return "near-cap", f"Upload is at {utilization:.0%} of budget; slot policy is saturating the budget."
+    if not underfilled:
+        return "healthy", f"Upload at {utilization:.0%} of budget and not flagged underfilled."
+    if eligible > 0 and active < cap:
+        return (
+            "promotion-limited",
+            f"{eligible} eligible waiting client(s) but only {active}/{cap} slots active while underfilled; "
+            "slot-promotion cadence is the binding constraint, not demand or budget.",
+        )
+    if waiting == 0:
+        return "demand-empty", "Underfilled with an empty waiting queue; no upload demand to fill the budget."
+    if eligible == 0:
+        return (
+            "demand-eligibility-limited",
+            f"{waiting} waiting client(s) but 0 eligible (all in reask/cooldown); "
+            "demand exists but is not promotable yet (normal eD2K reask churn).",
+        )
+    if pending_publish > 0:
+        return "publish-ramp", f"Underfilled with {pending_publish} files still pending publish; discovery is ramping."
+    return "ramping", f"Underfilled at {utilization:.0%} of budget; throughput still ramping."
+
+
+def format_upload_bandwidth(analysis: dict[str, Any]) -> str:
+    """Formats upload-bandwidth utilization analysis for operator-facing CLI output."""
+
+    if not analysis.get("exists"):
+        return f"Upload-slot diagnostics: none found under {analysis.get('logs_dir')}"
+    budget_kib = analysis["budget_bytes_per_sec"] // 1024
+    rate_kib = analysis["rate_bytes_per_sec"] // 1024
+    util = analysis["utilization"]
+    util_text = f"{util:.0%} of cap" if util is not None else "no budget"
+    lines = [
+        f"Upload bandwidth ({analysis['logs_dir']}):",
+        f"  rate={rate_kib} KiB/s of budget={budget_kib} KiB/s ({util_text})",
+        (
+            f"  slots: active={analysis['active_slots']}/{analysis['effective_slot_cap']} "
+            f"waiting={analysis['waiting']} eligible={analysis['waiting_eligible']} "
+            f"underfilled={int(analysis['underfilled'])} slowTracking={analysis['slow_tracking']}"
+        ),
+        (
+            f"  publish: ed2k {analysis['ed2k_published_files']} published / "
+            f"{analysis['ed2k_pending_files']} pending, kadPublishReady={analysis['kad_publish_ready']}"
+        ),
+        f"  verdict: {analysis['verdict']} - {analysis['reason']}",
+        "  recent samples (rateKiBps  active/cap  waiting/eligible  ed2kPub):",
+    ]
+    for row in analysis["series"]:
+        lines.append(
+            f"    {row['rateKiBps']:>6}  {row['activeSlots']:>2}/{row['effectiveSlotCap']:<2}  "
+            f"{row['waiting']:>3}/{row['waitingEligible']:<3}  ed2kPub={row['ed2kPublishedFiles']}"
+        )
+    return "\n".join(lines)
