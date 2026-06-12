@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -26,6 +28,8 @@ SUITE_NAME = "emulebb-rust-emulebb-cross-client"
 API_KEY = "emulebb-rust-emulebb-cross-client-key"
 CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
 CLIENT_RUST = CLIENT_IDENTITIES["emulebb_rust"]
+ED2K_PART_SIZE_BYTES = 9_728_000
+UNICODE_FIXTURE_SUFFIX = "Unicode-\u00e9-\u6f22"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -181,6 +185,122 @@ def wait_for_rust_search_result(
     return live_common.wait_for(resolve, timeout_seconds, 1.0, f"emulebb-rust server search result {normalized_hash}")
 
 
+def require_rust_download_manifest_metadata(
+    runtime_dir: Path,
+    *,
+    transfer_hash: str,
+    expected_name: str,
+    expected_size: int,
+    require_aich_hashset: bool,
+) -> dict[str, object]:
+    """Requires Rust to persist stock metadata learned from a cross-client source."""
+
+    manifest_path = runtime_dir / "transfers" / transfer_hash.lower() / "resume-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected_part_count = max(1, (expected_size + ED2K_PART_SIZE_BYTES - 1) // ED2K_PART_SIZE_BYTES)
+    md4_hashset = manifest.get("md4_hashset")
+    aich_hashset = manifest.get("aich_hashset")
+    sources = manifest.get("sources")
+    if str(manifest.get("file_hash") or "").lower() != transfer_hash.lower():
+        raise RuntimeError("Rust cross-client manifest has the wrong file hash.")
+    if manifest.get("canonical_name") != expected_name:
+        raise RuntimeError("Rust cross-client manifest did not preserve the canonical file name.")
+    if int(manifest.get("file_size") or 0) != expected_size:
+        raise RuntimeError("Rust cross-client manifest did not preserve the file size.")
+    if manifest.get("md4_hashset_acquired") is not True or not isinstance(md4_hashset, list):
+        raise RuntimeError("Rust did not acquire the MD4 hashset from the cross-client source.")
+    if len(md4_hashset) != expected_part_count:
+        raise RuntimeError(
+            f"Rust acquired {len(md4_hashset)} MD4 parts from the cross-client source, expected {expected_part_count}."
+        )
+    if require_aich_hashset:
+        if manifest.get("aich_hashset_acquired") is not True or not isinstance(aich_hashset, list):
+            raise RuntimeError("Rust did not acquire the AICH hashset from the cross-client source.")
+        if len(aich_hashset) != expected_part_count:
+            raise RuntimeError(
+                f"Rust acquired {len(aich_hashset)} AICH parts from the cross-client source, expected {expected_part_count}."
+            )
+    if not isinstance(sources, list) or not sources:
+        raise RuntimeError("Rust cross-client manifest did not persist any transfer source.")
+    source_user_hashes = [
+        str(source.get("user_hash") or "")
+        for source in sources
+        if isinstance(source, dict) and is_lower_hex_32(str(source.get("user_hash") or ""))
+    ]
+    if not source_user_hashes:
+        raise RuntimeError("Rust cross-client manifest did not persist the peer user hash.")
+    return {
+        "manifestPath": str(manifest_path),
+        "fileHash": str(manifest.get("file_hash") or "").lower(),
+        "canonicalName": manifest.get("canonical_name"),
+        "fileSize": int(manifest.get("file_size") or 0),
+        "expectedPartCount": expected_part_count,
+        "md4HashsetAcquired": bool(manifest.get("md4_hashset_acquired")),
+        "md4HashsetCount": len(md4_hashset),
+        "aichRoot": str(manifest.get("aich_root") or ""),
+        "aichHashsetAcquired": bool(manifest.get("aich_hashset_acquired")),
+        "aichHashsetCount": len(aich_hashset) if isinstance(aich_hashset, list) else 0,
+        "sourceCount": len(sources),
+        "sourceUserHashCount": len(source_user_hashes),
+    }
+
+
+def is_lower_hex_32(value: str) -> bool:
+    """Returns whether a persisted peer hash has the REST manifest shape."""
+
+    return len(value) == 32 and all(char in "0123456789abcdef" for char in value)
+
+
+def rust_to_emulebb_fixture_name() -> str:
+    """Returns the Rust-seeded cross-client Unicode fixture name."""
+
+    return f"emulebb-rust-to-emulebb-{UNICODE_FIXTURE_SUFFIX}.bin"
+
+
+def emulebb_to_rust_fixture_name() -> str:
+    """Returns the eMuleBB-seeded cross-client Unicode fixture name."""
+
+    return f"emulebb-to-emulebb-rust-{UNICODE_FIXTURE_SUFFIX}.bin"
+
+
+def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
+    """Returns the display filename from a parsed ED2K link."""
+
+    return unquote(str(link_info.get("name") or ""))
+
+
+def require_cross_client_requirements(report: dict[str, object]) -> dict[str, object]:
+    """Checks the high-level Rust/eMuleBB ED2K parity surfaces proven by the report."""
+
+    fixture = report.get("fixture")
+    emulebb_fixture = report.get("emulebb_fixture")
+    checks = report.get("checks")
+    if not isinstance(fixture, dict) or not isinstance(emulebb_fixture, dict) or not isinstance(checks, dict):
+        raise RuntimeError("Rust/eMuleBB cross-client report is missing fixture or check sections.")
+    rust_fixture_name = str(fixture.get("name") or "")
+    emulebb_fixture_name = str(emulebb_fixture.get("name") or "")
+    if rust_fixture_name.isascii() or emulebb_fixture_name.isascii():
+        raise RuntimeError("Rust/eMuleBB cross-client fixtures did not use Unicode filenames.")
+    manifest_metadata = checks.get("rust_emulebb_manifest_metadata")
+    if not isinstance(manifest_metadata, dict):
+        raise RuntimeError("Rust/eMuleBB cross-client report is missing Rust manifest metadata.")
+    if manifest_metadata.get("canonicalName") != emulebb_fixture_name:
+        raise RuntimeError("Rust/eMuleBB cross-client manifest did not preserve the Unicode canonical name.")
+    if int(manifest_metadata.get("sourceUserHashCount") or 0) < 1:
+        raise RuntimeError("Rust/eMuleBB cross-client manifest did not persist source userHash metadata.")
+    if int(manifest_metadata.get("md4HashsetCount") or 0) < 1 or int(manifest_metadata.get("aichHashsetCount") or 0) < 1:
+        raise RuntimeError("Rust/eMuleBB cross-client manifest did not persist MD4/AICH hashset metadata.")
+    return {
+        "bidirectionalTransfers": True,
+        "unicodeFixtureNames": True,
+        "rustToEmulebbUnicodeName": rust_fixture_name,
+        "emulebbToRustUnicodeName": emulebb_fixture_name,
+        "rustPersistedSourceUserHash": True,
+        "rustPersistedMd4Hashset": True,
+        "rustPersistedAichHashset": True,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Runs the bidirectional Rust/eMuleBB cross-client transfer scenario."""
 
@@ -246,9 +366,15 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["ed2k_server_health"] = ed2k_server.health
         report["ed2k_server"] = ed2k_server.config
 
-        fixture_path = paths.source_artifacts_dir / "rust-shared" / "emulebb-rust-to-emulebb.bin"
+        fixture_path = paths.source_artifacts_dir / "rust-shared" / rust_to_emulebb_fixture_name()
         fixture_sha256 = dtt.write_fixture_file(fixture_path, args.fixture_size_bytes)
-        report["fixture"] = {"path": str(fixture_path), "size": args.fixture_size_bytes, "sha256": fixture_sha256}
+        report["fixture"] = {
+            "path": str(fixture_path),
+            "name": fixture_path.name,
+            "size": args.fixture_size_bytes,
+            "sha256": fixture_sha256,
+            "unicode_name": True,
+        }
 
         rust_runtime = paths.source_artifacts_dir / "rust-runtime"
         rust_config = paths.source_artifacts_dir / "rust.toml"
@@ -328,12 +454,14 @@ def main(argv: list[str] | None = None) -> int:
                 hash_limit_bytes=max(int(link_info["size"]), args.fixture_size_bytes),
             ),
         )
-        emulebb_fixture_path = paths.source_artifacts_dir / "emulebb-shared" / "emulebb-to-emulebb-rust.bin"
+        emulebb_fixture_path = paths.source_artifacts_dir / "emulebb-shared" / emulebb_to_rust_fixture_name()
         emulebb_fixture_sha256 = dtt.write_fixture_file(emulebb_fixture_path, args.fixture_size_bytes, seed=0xE1BB2026)
         report["emulebb_fixture"] = {
             "path": str(emulebb_fixture_path),
+            "name": emulebb_fixture_path.name,
             "size": args.fixture_size_bytes,
             "sha256": emulebb_fixture_sha256,
+            "unicode_name": True,
         }
         report["checks"]["emulebb_shared_file_add"] = dtt.add_emule_shared_file(
             emulebb_base_url,
@@ -388,6 +516,14 @@ def main(argv: list[str] | None = None) -> int:
             expected_sha256=emulebb_fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
         )
+        report["checks"]["rust_emulebb_manifest_metadata"] = require_rust_download_manifest_metadata(
+            rust_runtime,
+            transfer_hash=emulebb_transfer_hash,
+            expected_name=decoded_ed2k_link_name(emulebb_link_info),
+            expected_size=int(emulebb_link_info["size"]),
+            require_aich_hashset=True,
+        )
+        report["checks"]["rust_emulebb_cross_client_requirements"] = require_cross_client_requirements(report)
         report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0

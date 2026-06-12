@@ -192,6 +192,7 @@ def run_child_scenario(
         "stderr_tail": completed.stderr[-4000:],
     }
     if report_path is not None:
+        row["report_path"] = str(report_path)
         row["report"] = compact_child_report(report_path)
     if artifacts_dir is not None:
         row["artifacts_dir"] = str(artifacts_dir)
@@ -280,6 +281,7 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
 
     scenario_artifacts = paths.source_artifacts_dir / "r5"
     scenario_artifacts.mkdir(parents=True, exist_ok=True)
+    report_path = scenario_artifacts / "emulebb-rust-peer-exchange-result.json"
     command = build_python_command()
     command.extend(
         [
@@ -299,6 +301,7 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
     child_env["X_LOCAL_IP"] = args.lan_bind_addr
     if args.ed2k_server_exe:
         child_env = goed2k.with_ed2k_server_exe_env(child_env, args.ed2k_server_exe)
+    child_env["EMULEBB_RUST_PEER_EXCHANGE_REPORT"] = str(report_path)
     return run_child_scenario(
         scenario_id=RUST_BIDIRECTIONAL_SCENARIO_ID,
         clients=[
@@ -308,6 +311,7 @@ def run_emulebb_rust_exchange_scenario(paths, args: argparse.Namespace) -> dict[
         command=command,
         cwd=emule_workspace_build_repo(paths.workspace_root),
         env=child_env,
+        report_path=report_path,
         artifacts_dir=scenario_artifacts,
     )
 

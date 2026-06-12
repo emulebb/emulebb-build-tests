@@ -1,0 +1,375 @@
+{
+  "schemaVersion": "emulebb-build-tests.release-campaign.v1",
+  "kind": "instance",
+  "templateId": "emulebb.release.template.default.v1",
+  "campaignId": "emulebb-rust-overnight",
+  "releaseVersion": "0.0.3",
+  "title": "eMuleBB Rust full overnight parity campaign",
+  "description": "Long-form Rust headless core proof for total local eD2K parity. It promotes the full protocol-combination matrix, private Rust ED2K queue/resume/callback/serving modules, Rust/eMuleBB cross-client exchange, and Rust/aMule cross-client exchange to overnight-blocking evidence while keeping all runtime artifacts under EMULEBB_WORKSPACE_OUTPUT_ROOT.",
+  "proofTier": "overnight-full",
+  "phases": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.overnight.local-client.pytest.v1",
+          "title": "Rust overnight local client pytest surface",
+          "phase": "preflight",
+          "flowCategory": "python-harness",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/rust-overnight-pytest-proof.py",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "path": "reports/rust-overnight-pytest-proof/latest/rust-overnight-pytest-proof-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/checks/rust_overnight_pytest_requirements/caseCount": 2,
+                "/checks/rust_overnight_pytest_requirements/allCasesPassed": true,
+                "/checks/rust_overnight_pytest_requirements/localClientPytestPassed": true,
+                "/checks/rust_overnight_pytest_requirements/restContractPytestPassed": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "protocol-parity",
+      "title": "Protocol parity",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
+          "title": "Rust overnight local eD2K protocol-combination matrix",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "path": "reports/local-ed2k-rust-protocol-combinations/latest/local-ed2k-rust-protocol-combinations-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/checks/protocol_matrix_coverage/caseCount": 4,
+                "/checks/protocol_matrix_coverage/hashOnlyFixtureNames": true,
+                "/checks/protocol_matrix_coverage/multiTransferFixtureNames": true,
+                "/checks/rust_protocol_case_requirements/threeTransfersPerCase": true,
+                "/checks/rust_protocol_case_requirements/hashOnlyMetadataRecoveryPerCase": true,
+                "/checks/rust_protocol_case_requirements/unicodeHashOnlyMetadataPerCase": true,
+                "/checks/rust_protocol_case_requirements/namedTransferHashsetsPerCase": true,
+                "/checks/rust_protocol_case_requirements/obfuscatedSourceUserHashPerCase": true
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.rust.overnight.private-ed2k.modules.v1",
+          "title": "Rust overnight private ED2K client/server protocol, transfer metadata, transfer-frame, queue, resume, callback, and serving modules",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/rust-ed2k-private-parity-modules.py",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "path": "reports/rust-ed2k-private-parity-modules/latest/rust-ed2k-private-parity-modules-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/checks/rust_private_ed2k_module_requirements/caseCount": 55,
+                "/checks/rust_private_ed2k_module_requirements/allCasesPassed": true,
+                "/checks/rust_private_ed2k_module_requirements/protocolCodecCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/ed2kConfigDefaultsCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/helloAdvertTruthfulnessCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/sourceExchange2Covered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverProtocolCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverLoginOracleCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverOfferFilesCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverSearchDecodeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverSourceDecodeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverBackgroundSearchCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverCallbackDecodeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverObfuscationCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverStartupInlineCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverOfferFilesLanBindCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverOfferFilesUnicodeTagCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverOfferFilesCompressionSentinelCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverDiagnosticsInlineCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/serverDiagnosticsDumpNameCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferRuntimeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferMd4PieceVerificationCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferAichPersistenceCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferRemoteAichPreservedCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferLocalIngestCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferLegacyManifestRepairCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferInvalidAichRejectedCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferMetadataReconcileCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferPartialProgressResumeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferCatalogHintMergeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/transferUploadQueueCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/previewSurfaceCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/startupMetadataCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/hashOnlyMetadataRecoveryCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/startupSecureIdentCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/downloadHashsetCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/compressedFrameDownloadCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/obfuscatedPackedCompressedFrameCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/sendingPartFrameCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/badPayloadRejectedCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/malformedRangeRecoveryCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/outOfOrderRangeCompleteCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/outOfOrderRangeIncompleteCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/outOfOrderCompressedRangeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/adaptiveWindowPolicyCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/hashset2AichCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/downloaderQueueCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/listenerQueueCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/downloaderResumeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/listenerResumeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/callbackSessionCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/compressedPartServingCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/listenerStartupCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/sharedBrowseDeniedCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/obfuscatedQueueCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/obfuscatedResumeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/obfuscatedServingCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/obfuscatedProtocolCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/secureIdentProtocolCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/tcpDumpPhaseLabelsCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/tcpDumpInlineCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/downloaderSecureIdentStateCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/kadFirewallRuntimeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/natRuntimeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/networkingRuntimeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreDirectDownloadSchedulerCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreDirectDownloadCandidatesCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreSourceRequeryPolicyCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreZeroSourceBackgroundCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreCallbackRouteCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreSourceMergeCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreHashOnlySearchCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreKeywordTargetCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreStockSearchPaginationCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreSourcePublishCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreEd2kFileTypeSearchCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/coreTransferLifecycleCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/daemonEd2kNetworkConfigCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/daemonEd2kUserHashCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/daemonP2pBindInterfaceCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/daemonEd2kConfigParseCovered": true,
+                "/checks/rust_private_ed2k_module_requirements/indexSnoopQueueCovered": true
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1",
+          "title": "Rust overnight eMuleBB bidirectional exchange",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/scenarios/1/id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+                "/scenarios/1/status": "passed",
+                "/scenarios/1/report/status": "passed",
+                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/bidirectionalTransfers": true,
+                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/unicodeFixtureNames": true,
+                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedSourceUserHash": true,
+                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedMd4Hashset": true,
+                "/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedAichHashset": true
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1",
+          "title": "Rust overnight Rust-to-Rust bidirectional exchange",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/scenarios/1/id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+                "/scenarios/1/status": "passed",
+                "/scenarios/1/report/status": "passed",
+                "/scenarios/1/report/checks/multiTransferCount": 3,
+                "/scenarios/1/report/checks/unicodeFilenameTransfer": true,
+                "/scenarios/1/report/checks/hashOnlyMetadataRecovery": true,
+                "/scenarios/1/report/checks/bidirectionalRustTransfers": true,
+                "/scenarios/1/report/checks/sourcePersistenceAfterRestart": true,
+                "/scenarios/1/report/checks/sourceControlOperations": true
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1",
+          "title": "Rust overnight aMule bidirectional exchange",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/multi-client-p2p-matrix.py --lan-bind-addr ${X_LOCAL_IP} --app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe --client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe --ed2k-server-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe --require-scenario cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "glob": "reports/multi-client-p2p-matrix/*/multi-client-p2p-matrix-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/scenarios/1/id": "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
+                "/scenarios/1/status": "passed"
+              }
+            }
+          ]
+        },
+        {
+          "id": "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1",
+          "title": "Rust overnight total eD2K parity audit",
+          "phase": "protocol-parity",
+          "flowCategory": "protocol",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/rust-ed2k-total-parity-audit.py",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "path": "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/checks/rust_ed2k_total_parity_audit/requirementCount": 7,
+                "/checks/rust_ed2k_total_parity_audit/allRequirementsPassed": true,
+                "/checks/rust_ed2k_total_parity_audit/failedRequirementCount": 0,
+                "/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed": true,
+                "/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed": true,
+                "/checks/rust_ed2k_total_parity_audit/privateP2pOverlordModulesPassed": true,
+                "/checks/rust_ed2k_total_parity_audit/preflightAndRestPassed": true,
+                "/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "controller-surface",
+      "title": "Controller surface",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.overnight.rest.contract.v1",
+          "title": "Rust overnight REST contract parity",
+          "phase": "controller-surface",
+          "flowCategory": "rest-api",
+          "required": true,
+          "blocking": true,
+          "command": "python scripts/rust-overnight-pytest-proof.py",
+          "evidence": [
+            {
+              "kind": "json-status",
+              "required": true,
+              "base": "workspace-output",
+              "path": "reports/rust-overnight-pytest-proof/latest/rust-overnight-pytest-proof-result.json",
+              "statusPointer": "/status",
+              "matches": {
+                "/checks/rust_overnight_pytest_requirements/restContractPytestPassed": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-wire-release",
+      "title": "Live-wire release",
+      "scenarios": [
+        {
+          "id": "emulebb.flow.rust.overnight.live-wire.deferred.v1",
+          "title": "Rust live-wire proof deferred until VPN binding exists",
+          "phase": "live-wire-release",
+          "flowCategory": "live-wire",
+          "required": false,
+          "blocking": false,
+          "command": "manual",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": false,
+              "description": "Public live-wire Rust proof remains deferred until the Rust runtime has the same hide.me-bound VPN contract as eMuleBB live campaigns; local ED2K parity is owned by the overnight protocol matrix."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ui-resource-depth",
+      "title": "UI resource depth",
+      "scenarios": []
+    },
+    {
+      "id": "stabilization-stress",
+      "title": "Stabilization stress",
+      "scenarios": []
+    },
+    {
+      "id": "packaging-provenance",
+      "title": "Packaging provenance",
+      "scenarios": []
+    }
+  ],
+  "releaseGates": [
+    {
+      "id": "emulebb-rust-overnight-preflight",
+      "coveredBy": [
+        "emulebb.flow.rust.overnight.local-client.pytest.v1",
+        "emulebb.flow.rust.overnight.rest.contract.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-overnight-ed2k-protocol-parity",
+      "coveredBy": [
+        "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1",
+        "emulebb.flow.rust.overnight.private-ed2k.modules.v1",
+        "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1",
+        "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1",
+        "emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1",
+        "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-overnight-live-wire-deferred",
+      "coveredBy": [
+        "emulebb.flow.rust.overnight.live-wire.deferred.v1"
+      ]
+    }
+  ]
+}

@@ -381,6 +381,7 @@ def test_child_scenario_runner_normalizes_subprocess_and_report(monkeypatch, tmp
     assert row["status"] == "passed"
     assert row["clients"] == ["cl-emulebb-001", "cl-emulebb-rust-005"]
     assert row["command"] == command
+    assert row["report_path"] == str(report_path)
     assert row["report"] == {"status": "passed", "detail": "child"}
     assert row["artifacts_dir"] == str(tmp_path / "artifacts")
     assert calls["kwargs"]["cwd"] == tmp_path
@@ -490,6 +491,7 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monk
     assert result["status"] == "passed"
     assert result["id"] == module.RUST_BIDIRECTIONAL_SCENARIO_ID
     assert result["clients"] == ["cl-emulebb-rust-005", "cl-emulebb-rust-006"]
+    assert result["report_path"] == str(tmp_path / "matrix" / "r5" / "emulebb-rust-peer-exchange-result.json")
     assert captured["command"] == [
         sys.executable,
         "-m",
@@ -505,6 +507,9 @@ def test_emulebb_rust_exchange_scenario_uses_existing_local_client_campaign(monk
     assert captured["env"]["X_LOCAL_IP"] == "192.0.2.10"
     assert captured["env"][module.goed2k.ED2K_SERVER_EXE_ENV] == str(
         (tmp_path / "tools" / "goed2k-server.exe").resolve()
+    )
+    assert captured["env"]["EMULEBB_RUST_PEER_EXCHANGE_REPORT"] == str(
+        tmp_path / "matrix" / "r5" / "emulebb-rust-peer-exchange-result.json"
     )
     assert captured["cwd"] == tmp_path / "repos" / "emulebb-build"
 
@@ -543,6 +548,9 @@ def test_emulebb_rust_emulebb_bidirectional_scenario_uses_cross_client_script(mo
     assert result["status"] == "passed"
     assert result["id"] == module.RUST_EMULEBB_BIDIRECTIONAL_SCENARIO_ID
     assert result["clients"] == ["cl-emulebb-001", "cl-emulebb-rust-005"]
+    assert result["report_path"] == str(
+        tmp_path / "matrix" / "r5-e1" / "emulebb-rust-emulebb-cross-client-result.json"
+    )
     command = captured["command"]
     assert "emulebb-rust-emulebb-cross-client.py" in str(command[1])
     assert command[command.index("--artifacts-dir") + 1].endswith("\\r5-e1") or command[command.index("--artifacts-dir") + 1].endswith("/r5-e1")
@@ -614,6 +622,9 @@ def test_emulebb_rust_amule_bidirectional_scenario_uses_cross_client_script(monk
     assert result["status"] == "passed"
     assert result["id"] == module.RUST_AMULE_BIDIRECTIONAL_SCENARIO_ID
     assert result["clients"] == ["cl-emulebb-rust-005", "cl-amule-004"]
+    assert result["report_path"] == str(
+        tmp_path / "matrix" / "r5-a4" / "emulebb-rust-amule-cross-client-result.json"
+    )
     command = captured["command"]
     assert "emulebb-rust-amule-cross-client.py" in str(command[1])
     assert command[command.index("--artifacts-dir") + 1].endswith("\\r5-a4") or command[command.index("--artifacts-dir") + 1].endswith("/r5-a4")

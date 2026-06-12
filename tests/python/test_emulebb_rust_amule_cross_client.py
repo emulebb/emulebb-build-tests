@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from emule_test_harness import multi_client
 
@@ -40,6 +43,111 @@ def test_cross_client_script_uses_shared_goed2k_launcher_boundary() -> None:
     assert "goed2k.build_or_skip_ed2k_server_binary(" not in script_text
     assert "goed2k.build_server_config(" not in script_text
     assert "goed2k.start_ed2k_server(" not in script_text
+
+
+def test_rust_amule_manifest_metadata_accepts_md4_and_source_identity(tmp_path: Path) -> None:
+    module = load_suite_module()
+    transfer_hash = "00112233445566778899aabbccddeeff"
+    manifest_dir = tmp_path / "transfers" / transfer_hash
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "resume-manifest.json").write_text(
+        json.dumps(
+            {
+                "file_hash": transfer_hash,
+                "canonical_name": "amule-to-emulebb-rust.bin",
+                "file_size": module.rust_emulebb.ED2K_PART_SIZE_BYTES + 1,
+                "md4_hashset_acquired": True,
+                "md4_hashset": [
+                    "0123456789abcdef0123456789abcdef",
+                    "fedcba9876543210fedcba9876543210",
+                ],
+                "aich_hashset_acquired": False,
+                "aich_root": "1767dfbce3f588f0cb21f3533ff5c8e3fbbf6858",
+                "aich_hashset": [],
+                "sources": [
+                    {
+                        "ip": "192.0.2.44",
+                        "tcp_port": 4662,
+                        "user_hash": "6c4e1c7ded0e89767a608a181d1c6f25",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    metadata = module.rust_emulebb.require_rust_download_manifest_metadata(
+        tmp_path,
+        transfer_hash=transfer_hash,
+        expected_name="amule-to-emulebb-rust.bin",
+        expected_size=module.rust_emulebb.ED2K_PART_SIZE_BYTES + 1,
+        require_aich_hashset=False,
+    )
+
+    assert metadata["expectedPartCount"] == 2
+    assert metadata["md4HashsetAcquired"] is True
+    assert metadata["md4HashsetCount"] == 2
+    assert metadata["aichRoot"] == "1767dfbce3f588f0cb21f3533ff5c8e3fbbf6858"
+    assert metadata["aichHashsetAcquired"] is False
+    assert metadata["sourceUserHashCount"] == 1
+
+
+def test_rust_amule_manifest_metadata_rejects_missing_source_identity(tmp_path: Path) -> None:
+    module = load_suite_module()
+    transfer_hash = "00112233445566778899aabbccddeeff"
+    manifest_dir = tmp_path / "transfers" / transfer_hash
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "resume-manifest.json").write_text(
+        json.dumps(
+            {
+                "file_hash": transfer_hash,
+                "canonical_name": "amule-to-emulebb-rust.bin",
+                "file_size": module.rust_emulebb.ED2K_PART_SIZE_BYTES,
+                "md4_hashset_acquired": True,
+                "md4_hashset": ["0123456789abcdef0123456789abcdef"],
+                "sources": [{"ip": "192.0.2.44", "tcp_port": 4662}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="peer user hash"):
+        module.rust_emulebb.require_rust_download_manifest_metadata(
+            tmp_path,
+            transfer_hash=transfer_hash,
+            expected_name="amule-to-emulebb-rust.bin",
+            expected_size=module.rust_emulebb.ED2K_PART_SIZE_BYTES,
+            require_aich_hashset=False,
+        )
+
+
+def test_rust_amule_manifest_metadata_requires_lowercase_hex_source_identity(tmp_path: Path) -> None:
+    module = load_suite_module()
+    transfer_hash = "00112233445566778899aabbccddeeff"
+    manifest_dir = tmp_path / "transfers" / transfer_hash
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "resume-manifest.json").write_text(
+        json.dumps(
+            {
+                "file_hash": transfer_hash,
+                "canonical_name": "amule-to-emulebb-rust.bin",
+                "file_size": module.rust_emulebb.ED2K_PART_SIZE_BYTES,
+                "md4_hashset_acquired": True,
+                "md4_hashset": ["0123456789abcdef0123456789abcdef"],
+                "sources": [{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": "6C4E1C7DED0E89767A608A181D1C6F25"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="peer user hash"):
+        module.rust_emulebb.require_rust_download_manifest_metadata(
+            tmp_path,
+            transfer_hash=transfer_hash,
+            expected_name="amule-to-emulebb-rust.bin",
+            expected_size=module.rust_emulebb.ED2K_PART_SIZE_BYTES,
+            require_aich_hashset=False,
+        )
 
 
 def test_cross_client_uses_configured_lan_and_p2p_addresses(monkeypatch, tmp_path: Path) -> None:

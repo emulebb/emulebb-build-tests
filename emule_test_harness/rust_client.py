@@ -31,6 +31,8 @@ def write_rust_config(
     ed2k_port: int | None = None,
     kad_port: int | None = None,
     server_endpoint: str | None = None,
+    server_entry: dict[str, object] | None = None,
+    obfuscation_enabled: bool = True,
     connect_timeout_secs: int = 10,
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
@@ -51,6 +53,11 @@ def write_rust_config(
                 "",
             ]
         )
+    if server_entry is not None:
+        if server_endpoint is None:
+            raise ValueError("ED2K Rust serverEntry requires server_endpoint.")
+        if "host" not in server_entry or "port" not in server_entry:
+            raise ValueError("ED2K Rust serverEntry requires host and port.")
     lines.extend(
         [
             "[rest]",
@@ -71,13 +78,33 @@ def write_rust_config(
                 "",
                 "[ed2k]",
                 f"listenPort = {ed2k_port}",
-                f'serverEndpoints = ["{server_endpoint}"]',
+                f"obfuscationEnabled = {str(obfuscation_enabled).lower()}",
                 f"connectTimeoutSecs = {connect_timeout_secs}",
                 "reconnectIntervalSecs = 60",
                 "",
             ]
         )
+        if server_entry is None:
+            lines.append(f'serverEndpoints = ["{server_endpoint}"]')
+        else:
+            lines.append("[[ed2k.serverEntries]]")
+            lines.extend(toml_line(key, value) for key, value in server_entry.items())
+        lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def toml_line(key: str, value: object) -> str:
+    """Formats a simple TOML scalar line for generated harness configs."""
+
+    if isinstance(value, bool):
+        rendered = str(value).lower()
+    elif isinstance(value, int):
+        rendered = str(value)
+    elif isinstance(value, str):
+        rendered = json.dumps(value)
+    else:
+        raise TypeError(f"unsupported TOML scalar for {key}: {value!r}")
+    return f"{key} = {rendered}"
 
 
 def start_rust_client(repo: Path, config_path: Path, output_path: Path) -> subprocess.Popen[str]:

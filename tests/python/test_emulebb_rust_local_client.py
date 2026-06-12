@@ -147,6 +147,17 @@ def write_remembered_source_manifest(
     )
 
 
+def write_rust_peer_exchange_report(report: dict[str, object]) -> None:
+    """Writes optional structured Rust peer-exchange evidence for matrix runs."""
+
+    report_path = os.environ.get("EMULEBB_RUST_PEER_EXCHANGE_REPORT")
+    if not report_path:
+        return
+    path = Path(report_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def seed_index(index_path: Path) -> None:
     index_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(index_path) as conn:
@@ -199,6 +210,16 @@ def seed_index(index_path: Path) -> None:
             VALUES (1, 'Scenario.File.bin', 'scenario file bin')
             """
         )
+
+
+def test_rust_peer_exchange_report_writer_uses_env_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    report_path = tmp_path / "reports" / "rust-peer.json"
+    monkeypatch.setenv("EMULEBB_RUST_PEER_EXCHANGE_REPORT", str(report_path))
+
+    write_rust_peer_exchange_report({"status": "passed", "checks": {"bidirectionalRustTransfers": True}})
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report == {"status": "passed", "checks": {"bidirectionalRustTransfers": True}}
 
 
 def request_json(
@@ -981,6 +1002,12 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
     payload_path = tmp_path / "Rust.Peer.Download.Fixture.bin"
     payload = (b"emulebb-rust-ed2k-download-fixture\n" * 256) + b"tail"
     payload_path.write_bytes(payload)
+    unicode_payload_path = tmp_path / "Rust.Peer.Unicode-\u00e9-\u6f22.Fixture.bin"
+    unicode_payload = (b"emulebb-rust-ed2k-unicode-download-fixture\n" * 257) + b"tail"
+    unicode_payload_path.write_bytes(unicode_payload)
+    hash_only_payload_path = tmp_path / "Rust.Peer.Hash.Only.Metadata.Fixture.bin"
+    hash_only_payload = (b"emulebb-rust-ed2k-hash-only-metadata-fixture\n" * 255) + b"tail"
+    hash_only_payload_path.write_bytes(hash_only_payload)
     reverse_payload_path = tmp_path / "Rust.Peer.Reverse.Download.Fixture.bin"
     reverse_payload = (b"emulebb-rust-ed2k-reverse-download-fixture\n" * 256) + b"tail"
     reverse_payload_path.write_bytes(reverse_payload)
@@ -1093,9 +1120,35 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert share["file"]["name"] == payload_path.name
         assert int(share["file"]["sizeBytes"]) == len(payload)
         share_file = share["file"]
+        unicode_share = request_json(
+            seeder_base_url,
+            "POST",
+            "/api/v1/shared-files",
+            {"path": str(unicode_payload_path)},
+            timeout=30,
+        )["data"]
+        assert unicode_share["ok"] is True
+        assert unicode_share["queued"] is False
+        assert unicode_share["file"]["name"] == unicode_payload_path.name
+        assert int(unicode_share["file"]["sizeBytes"]) == len(unicode_payload)
+        unicode_share_file = unicode_share["file"]
+        hash_only_share = request_json(
+            seeder_base_url,
+            "POST",
+            "/api/v1/shared-files",
+            {"path": str(hash_only_payload_path)},
+            timeout=30,
+        )["data"]
+        assert hash_only_share["ok"] is True
+        assert hash_only_share["queued"] is False
+        assert hash_only_share["file"]["name"] == hash_only_payload_path.name
+        assert int(hash_only_share["file"]["sizeBytes"]) == len(hash_only_payload)
+        hash_only_share_file = hash_only_share["file"]
 
         listed_shares = request_json(seeder_base_url, "GET", "/api/v1/shared-files")["data"]["items"]
         assert any(file["hash"] == share_file["hash"] for file in listed_shares)
+        assert any(file["hash"] == unicode_share_file["hash"] for file in listed_shares)
+        assert any(file["hash"] == hash_only_share_file["hash"] for file in listed_shares)
         share_link = request_json(
             seeder_base_url,
             "GET",
@@ -1114,6 +1167,26 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             "goed2k dynamic file published by Rust OP_OFFERFILES",
         )
         assert published["name"] == payload_path.name
+        unicode_published = goed2k.wait_for_server_file_endpoint(
+            admin_base_url,
+            admin_token,
+            str(unicode_share_file["hash"]),
+            lan_host,
+            seeder_ed2k_port,
+            30,
+            "goed2k Unicode file published by Rust OP_OFFERFILES",
+        )
+        assert unicode_published["name"] == unicode_payload_path.name
+        hash_only_published = goed2k.wait_for_server_file_endpoint(
+            admin_base_url,
+            admin_token,
+            str(hash_only_share_file["hash"]),
+            lan_host,
+            seeder_ed2k_port,
+            30,
+            "goed2k hash-only metadata file published by Rust OP_OFFERFILES",
+        )
+        assert hash_only_published["name"] == hash_only_payload_path.name
 
         write_remembered_source_manifest(
             remembered_runtime_dir,
@@ -1161,6 +1234,17 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             30,
             lambda: request_json(leecher_base_url, "GET", "/api/v1/status")["data"]["stats"]["ed2kConnected"],
         )
+        hash_only_hash = str(hash_only_share_file["hash"]).lower()
+        hash_only_link = f"ed2k://|file|{hash_only_hash}|0|{hash_only_hash}|/"
+        hash_only_create = request_json(
+            leecher_base_url,
+            "POST",
+            "/api/v1/transfers",
+            {"link": hash_only_link, "paused": False},
+            timeout=30,
+        )["data"]
+        assert hash_only_create["items"][0]["ok"] is True
+        assert hash_only_create["items"][0]["hash"] == hash_only_hash
 
         search = request_json(
             leecher_base_url,
@@ -1176,6 +1260,32 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             f"/api/v1/searches/{search['id']}/results/{result['hash']}/operations/download",
         )["data"]
         assert download == {"ok": True, "searchId": search["id"], "hash": result["hash"]}
+        unicode_search = request_json(
+            leecher_base_url,
+            "POST",
+            "/api/v1/searches",
+            {"query": "Rust.Peer.Unicode-\u00e9-\u6f22", "method": "server", "type": ""},
+            timeout=30,
+        )["data"]
+        unicode_result = next(
+            result
+            for result in unicode_search["results"]
+            if result["hash"] == unicode_share_file["hash"]
+        )
+        assert unicode_result["name"] == unicode_payload_path.name
+        unicode_download = request_json(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/searches/{unicode_search['id']}/results/{unicode_result['hash']}/operations/download",
+        )["data"]
+        assert unicode_download == {
+            "ok": True,
+            "searchId": unicode_search["id"],
+            "hash": unicode_result["hash"],
+        }
+        queued_downloads = request_json(leecher_base_url, "GET", "/api/v1/transfers")["data"]["items"]
+        queued_hashes = {transfer["hash"] for transfer in queued_downloads}
+        assert {result["hash"], unicode_result["hash"]} <= queued_hashes
         resume = request_json(
             leecher_base_url,
             "POST",
@@ -1183,6 +1293,20 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             timeout=30,
         )["data"]
         assert resume["items"][0]["ok"] is True
+        unicode_resume = request_json(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/transfers/{unicode_result['hash']}/operations/resume",
+            timeout=30,
+        )["data"]
+        assert unicode_resume["items"][0]["ok"] is True
+        hash_only_resume = request_json(
+            leecher_base_url,
+            "POST",
+            f"/api/v1/transfers/{hash_only_hash}/operations/resume",
+            timeout=30,
+        )["data"]
+        assert hash_only_resume["items"][0]["ok"] is True
         transfer = request_json(leecher_base_url, "GET", f"/api/v1/transfers/{result['hash']}")["data"]
         if transfer["state"] != "completed":
             transfer = wait_for_condition(
@@ -1195,6 +1319,46 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert transfer["state"] == "completed"
         assert int(transfer["completedBytes"]) == len(payload)
         assert float(transfer["progress"]) == pytest.approx(1.0)
+        unicode_transfer = request_json(
+            leecher_base_url,
+            "GET",
+            f"/api/v1/transfers/{unicode_result['hash']}",
+        )["data"]
+        if unicode_transfer["state"] != "completed":
+            unicode_transfer = wait_for_condition(
+                "Unicode leecher transfer completion",
+                30,
+                lambda: request_json(
+                    leecher_base_url,
+                    "GET",
+                    f"/api/v1/transfers/{unicode_result['hash']}",
+                )["data"]
+                if request_json(
+                    leecher_base_url,
+                    "GET",
+                    f"/api/v1/transfers/{unicode_result['hash']}",
+                )["data"]["state"]
+                == "completed"
+                else None,
+            )
+        assert unicode_transfer["name"] == unicode_payload_path.name
+        assert unicode_transfer["state"] == "completed"
+        assert int(unicode_transfer["completedBytes"]) == len(unicode_payload)
+        assert float(unicode_transfer["progress"]) == pytest.approx(1.0)
+        hash_only_transfer = request_json(leecher_base_url, "GET", f"/api/v1/transfers/{hash_only_hash}")["data"]
+        if hash_only_transfer["state"] != "completed":
+            hash_only_transfer = wait_for_condition(
+                "hash-only metadata leecher transfer completion",
+                45,
+                lambda: request_json(leecher_base_url, "GET", f"/api/v1/transfers/{hash_only_hash}")["data"]
+                if request_json(leecher_base_url, "GET", f"/api/v1/transfers/{hash_only_hash}")["data"]["state"] == "completed"
+                else None,
+            )
+        assert hash_only_transfer["name"] == hash_only_payload_path.name
+        assert hash_only_transfer["state"] == "completed"
+        assert int(hash_only_transfer["sizeBytes"]) == len(hash_only_payload)
+        assert int(hash_only_transfer["completedBytes"]) == len(hash_only_payload)
+        assert float(hash_only_transfer["progress"]) == pytest.approx(1.0)
         sources = request_json(
             leecher_base_url,
             "GET",
@@ -1208,6 +1372,12 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         )
         downloaded_payload = leecher_runtime_dir / "transfers" / str(result["hash"]) / "pieces.bin"
         assert downloaded_payload.read_bytes() == payload
+        downloaded_unicode_payload = (
+            leecher_runtime_dir / "transfers" / str(unicode_result["hash"]) / "pieces.bin"
+        )
+        assert downloaded_unicode_payload.read_bytes() == unicode_payload
+        downloaded_hash_only_payload = leecher_runtime_dir / "transfers" / hash_only_hash / "pieces.bin"
+        assert downloaded_hash_only_payload.read_bytes() == hash_only_payload
 
         reverse_share = request_json(
             leecher_base_url,
@@ -1300,16 +1470,17 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             "GET",
             f"/api/v1/transfers/{result['hash']}/sources",
         )["data"]["items"]
-        assert any(
-            source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
-            for source in persisted_sources
-        )
+        persisted_endpoint = f"{lan_host}:{seeder_ed2k_port}"
+        assert any(source["endpoint"] == persisted_endpoint for source in persisted_sources)
         persisted_source = next(
             source
             for source in persisted_sources
-            if source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
+            if source["endpoint"] == persisted_endpoint
         )
-        assert persisted_source["clientId"] == f"{lan_host}:{seeder_ed2k_port}"
+        if persisted_source.get("userHash"):
+            assert persisted_source["clientId"] == persisted_source["userHash"]
+        else:
+            assert persisted_source["clientId"] == persisted_endpoint
         assert int(persisted_source["port"]) == seeder_ed2k_port
         assert int(persisted_source["tcpPort"]) == seeder_ed2k_port
         single_source = request_json(
@@ -1380,6 +1551,51 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         assert delete_read_status == 404
         remaining_transfers = request_json(leecher_base_url, "GET", "/api/v1/transfers")["data"]["items"]
         assert not any(transfer["hash"] == result["hash"] for transfer in remaining_transfers)
+        write_rust_peer_exchange_report(
+            {
+                "schema": "emulebb-rust.peer-exchange-result.v1",
+                "status": "passed",
+                "checks": {
+                    "serverDynamicOfferFiles": True,
+                    "rememberedSourceResumeWithoutServer": True,
+                    "multiTransferCount": 3,
+                    "unicodeFilenameTransfer": True,
+                    "hashOnlyMetadataRecovery": True,
+                    "bidirectionalRustTransfers": True,
+                    "sourcePersistenceAfterRestart": True,
+                    "sourceControlOperations": True,
+                    "destructiveTransferDelete": True,
+                },
+                "transfers": {
+                    "primary": {
+                        "hash": str(result["hash"]).lower(),
+                        "name": transfer["name"],
+                        "sizeBytes": int(transfer["sizeBytes"]),
+                    },
+                    "unicode": {
+                        "hash": str(unicode_result["hash"]).lower(),
+                        "name": unicode_transfer["name"],
+                        "sizeBytes": int(unicode_transfer["sizeBytes"]),
+                    },
+                    "hashOnly": {
+                        "hash": hash_only_hash,
+                        "hashOnlyLink": hash_only_link,
+                        "name": hash_only_transfer["name"],
+                        "sizeBytes": int(hash_only_transfer["sizeBytes"]),
+                    },
+                    "reverse": {
+                        "hash": str(reverse_result["hash"]).lower(),
+                        "name": reverse_transfer["name"],
+                        "sizeBytes": int(reverse_transfer["sizeBytes"]),
+                    },
+                },
+                "sources": {
+                    "persistedEndpoint": persisted_endpoint,
+                    "persistedClientId": persisted_source["clientId"],
+                    "reverseEndpoint": f"{lan_host}:{leecher_ed2k_port}",
+                },
+            }
+        )
     finally:
         if remembered_leecher_process is not None:
             terminate_process(remembered_leecher_process)

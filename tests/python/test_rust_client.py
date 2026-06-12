@@ -55,7 +55,47 @@ def test_write_rust_config_uses_configurable_ed2k_connect_timeout(tmp_path: Path
     )
 
     text = config_path.read_text(encoding="utf-8")
+    assert 'p2pBindIp = "192.0.2.10"' in text
     assert "connectTimeoutSecs = 15" in text
+    assert "obfuscationEnabled = true" in text
+
+
+def test_write_rust_config_can_disable_obfuscation_and_write_server_entry(tmp_path: Path) -> None:
+    config_path = tmp_path / "emulebb-rust.toml"
+
+    rust_client.write_rust_config(
+        config_path,
+        runtime_dir=tmp_path / "runtime",
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+        p2p_bind_ip="192.0.2.10",
+        ed2k_port=4662,
+        kad_port=4672,
+        server_endpoint="192.0.2.20:4661",
+        server_entry={
+            "host": "192.0.2.20",
+            "port": 4661,
+            "name": "emulebb-local-e2e",
+            "udpFlags": 0x78,
+            "udpKey": 0x11223344,
+            "udpKeyIp": 0,
+            "obfuscationPortTcp": 4661,
+            "obfuscationPortUdp": 4665,
+        },
+        obfuscation_enabled=False,
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert 'p2pBindIp = "192.0.2.10"' in text
+    assert "obfuscationEnabled = false" in text
+    assert "serverEndpoints" not in text
+    assert "[[ed2k.serverEntries]]" in text
+    assert 'host = "192.0.2.20"' in text
+    assert "port = 4661" in text
+    assert "udpFlags = 120" in text
+    assert "udpKey = 287454020" in text
+    assert "obfuscationPortUdp = 4665" in text
 
 
 def test_write_rust_config_uses_configured_kad_bootstrap_nodes(tmp_path: Path) -> None:

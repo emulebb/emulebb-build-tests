@@ -344,6 +344,8 @@ def test_build_server_config_uses_workspace_artifact_paths(tmp_path: Path) -> No
     assert payload["admin_listen_address"] == "192.0.2.10:8080"
     assert payload["catalog_path"] == str(catalog_path)
     assert payload["protocol_obfuscation"] is True
+    assert payload["tcp_flags"] == goed2k.SERVER_TCP_FLAG_TCPOBFUSCATION
+    assert payload["aux_port"] == 0
     assert payload["server_udp"] is True
 
 
@@ -364,6 +366,7 @@ def test_build_server_config_allows_protocol_overrides(tmp_path: Path) -> None:
     )
 
     assert config["protocol_obfuscation"] is False
+    assert config["tcp_flags"] == 0
     assert config["server_udp"] is False
 
 

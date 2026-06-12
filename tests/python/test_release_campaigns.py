@@ -232,12 +232,19 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe "
         "--require-scenario cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange"
     )
+    rust_protocol_combinations_command = (
+        "python scripts/local-ed2k-rust-protocol-combinations.py --lan-bind-addr ${X_LOCAL_IP} "
+        "--app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe "
+        "--client2-app-exe ${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/tracing-harness/x64/Release/standard/bin/emule.exe"
+    )
 
     assert covered_ids <= scenario_ids
     assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
     assert "emulebb.flow.rust.rest.emulebb-contract.v1" in scenario_ids
+    assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in scenario_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in scenario_ids
     assert "emulebb.flow.rust.cross-client.amule-bidirectional.v1" in scenario_ids
+    assert "emulebb.flow.rust.local-ed2k.protocol-combinations.v1" in covered_ids
     assert "emulebb.flow.rust.cross-client.emulebb-bidirectional.v1" in covered_ids
     assert "emulebb.flow.rust.cross-client.amule-bidirectional.v1" in covered_ids
     assert sum(
@@ -265,6 +272,428 @@ def test_emulebb_rust_campaign_validates_and_covers_local_proof() -> None:
         for phase in campaign["phases"]
         for scenario in phase["scenarios"]
     )
+    assert any(
+        scenario["command"] == rust_protocol_combinations_command
+        and scenario["required"] is True
+        and scenario["blocking"] is True
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    )
+    rust_scenarios = {
+        scenario["id"]: scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+        if scenario["id"].startswith("emulebb.flow.rust.")
+    }
+    local_description = json.dumps(rust_scenarios["emulebb.flow.rust.local-ed2k.search-download.v1"]["evidence"])
+    protocol_description = json.dumps(rust_scenarios["emulebb.flow.rust.local-ed2k.protocol-combinations.v1"]["evidence"])
+    cross_client_description = json.dumps(rust_scenarios["emulebb.flow.rust.cross-client.emulebb-bidirectional.v1"]["evidence"])
+    amule_description = json.dumps(rust_scenarios["emulebb.flow.rust.cross-client.amule-bidirectional.v1"]["evidence"])
+    assert "Unicode filenames" in local_description
+    assert "hash-only ED2K metadata recovery" in local_description
+    assert "protocol_matrix_coverage" in protocol_description
+    assert "all four cases" in protocol_description
+    assert "Unicode fixture-name, and hash-only fixture-name surfaces" in protocol_description
+    assert "ED2K link name round-trip" in protocol_description
+    assert "three Rust transfers in one protocol session" in protocol_description
+    assert "hash-only ED2K link metadata recovery in every protocol case" in protocol_description
+    assert "source userHash metadata" in protocol_description
+    assert "MD4/AICH hashset metadata for both named transfers" in protocol_description
+    assert "Rust-persisted source userHash" in cross_client_description
+    assert "Unicode filename" in cross_client_description
+    assert "AICH hashset metadata" in cross_client_description
+    assert "Rust-persisted source userHash" in amule_description
+    assert "aMule's missing AICH hashset" in amule_description
+
+
+def test_emulebb_rust_overnight_campaign_validates_and_covers_ed2k_parity() -> None:
+    root = repo_root()
+    template = release_campaigns.load_release_campaign_template(root)
+    campaign = release_campaigns.load_release_campaign(root, "emulebb-rust-overnight")
+
+    assert release_campaigns.validate_release_campaign(campaign, template) == []
+    assert campaign["campaignId"] == "emulebb-rust-overnight"
+    assert campaign["proofTier"] == "overnight-full"
+    assert {phase["id"] for phase in campaign["phases"]} == set(release_campaigns.STRICT_PHASE_TAXONOMY)
+
+    scenarios = {
+        scenario["id"]: scenario
+        for phase in campaign["phases"]
+        for scenario in phase["scenarios"]
+    }
+    covered_ids = {
+        scenario_id
+        for gate in campaign["releaseGates"]
+        for scenario_id in gate["coveredBy"]
+    }
+    protocol_id = "emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1"
+    private_modules_id = "emulebb.flow.rust.overnight.private-ed2k.modules.v1"
+    emulebb_cross_id = "emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"
+    rust_cross_id = "emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"
+    amule_cross_id = "emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1"
+    total_audit_id = "emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"
+    preflight_id = "emulebb.flow.rust.overnight.local-client.pytest.v1"
+    rest_contract_id = "emulebb.flow.rust.overnight.rest.contract.v1"
+
+    assert covered_ids <= set(scenarios)
+    assert preflight_id in covered_ids
+    assert rest_contract_id in covered_ids
+    assert protocol_id in covered_ids
+    assert private_modules_id in covered_ids
+    assert emulebb_cross_id in covered_ids
+    assert rust_cross_id in covered_ids
+    assert amule_cross_id in covered_ids
+    assert total_audit_id in covered_ids
+    preflight_evidence = scenarios[preflight_id]["evidence"][0]
+    assert preflight_evidence["kind"] == "json-status"
+    assert preflight_evidence["base"] == "workspace-output"
+    assert preflight_evidence["matches"]["/checks/rust_overnight_pytest_requirements/caseCount"] == 2
+    assert preflight_evidence["matches"]["/checks/rust_overnight_pytest_requirements/localClientPytestPassed"] is True
+    assert preflight_evidence["matches"]["/checks/rust_overnight_pytest_requirements/restContractPytestPassed"] is True
+    rest_contract_evidence = scenarios[rest_contract_id]["evidence"][0]
+    assert rest_contract_evidence["kind"] == "json-status"
+    assert rest_contract_evidence["base"] == "workspace-output"
+    assert rest_contract_evidence["matches"]["/checks/rust_overnight_pytest_requirements/restContractPytestPassed"] is True
+    assert scenarios[protocol_id]["required"] is True
+    assert scenarios[protocol_id]["blocking"] is True
+    assert "${EMULEBB_WORKSPACE_OUTPUT_ROOT}/builds/app/main/x64/Release/standard/bin/emulebb.exe" in scenarios[protocol_id]["command"]
+    assert "${EMULEBB_WORKSPACE_OUTPUT_ROOT}/tools/goed2k-server/goed2k-server.exe" in scenarios[protocol_id]["command"]
+    protocol_evidence = scenarios[protocol_id]["evidence"][0]
+    assert protocol_evidence["base"] == "workspace-output"
+    assert protocol_evidence["matches"]["/checks/protocol_matrix_coverage/caseCount"] == 4
+    assert protocol_evidence["matches"]["/checks/rust_protocol_case_requirements/hashOnlyMetadataRecoveryPerCase"] is True
+    assert protocol_evidence["matches"]["/checks/rust_protocol_case_requirements/unicodeHashOnlyMetadataPerCase"] is True
+    private_modules_evidence = scenarios[private_modules_id]["evidence"][0]
+    assert private_modules_evidence["base"] == "workspace-output"
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/caseCount"] == 55
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/protocolCodecCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/ed2kConfigDefaultsCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/helloAdvertTruthfulnessCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/sourceExchange2Covered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/serverProtocolCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/serverObfuscationCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/serverStartupInlineCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/serverOfferFilesUnicodeTagCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/serverOfferFilesCompressionSentinelCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/serverDiagnosticsInlineCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/serverDiagnosticsDumpNameCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/transferRuntimeCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/transferAichPersistenceCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/transferUploadQueueCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/hashset2AichCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/compressedFrameDownloadCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/outOfOrderCompressedRangeCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/downloaderQueueCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/listenerResumeCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/callbackSessionCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/obfuscatedServingCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/secureIdentProtocolCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/downloaderSecureIdentStateCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/kadFirewallRuntimeCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/natRuntimeCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/networkingRuntimeCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/coreDirectDownloadSchedulerCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/coreHashOnlySearchCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/coreKeywordTargetCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/coreStockSearchPaginationCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/coreSourceMergeCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/coreEd2kFileTypeSearchCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/daemonEd2kNetworkConfigCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/daemonEd2kUserHashCovered"] is True
+    assert private_modules_evidence["matches"]["/checks/rust_private_ed2k_module_requirements/indexSnoopQueueCovered"] is True
+    emulebb_cross_evidence = scenarios[emulebb_cross_id]["evidence"][0]
+    assert emulebb_cross_evidence["matches"]["/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/unicodeFixtureNames"] is True
+    assert emulebb_cross_evidence["matches"]["/scenarios/1/report/checks/rust_emulebb_cross_client_requirements/rustPersistedAichHashset"] is True
+    rust_cross_evidence = scenarios[rust_cross_id]["evidence"][0]
+    assert rust_cross_evidence["matches"]["/scenarios/1/report/checks/multiTransferCount"] == 3
+    assert rust_cross_evidence["matches"]["/scenarios/1/report/checks/hashOnlyMetadataRecovery"] is True
+    assert rust_cross_evidence["matches"]["/scenarios/1/report/checks/bidirectionalRustTransfers"] is True
+    total_audit_evidence = scenarios[total_audit_id]["evidence"][0]
+    assert total_audit_evidence["base"] == "workspace-output"
+    assert total_audit_evidence["path"] == (
+        "reports/rust-ed2k-total-parity-audit/latest/rust-ed2k-total-parity-audit-result.json"
+    )
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/requirementCount"] == 7
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/allRequirementsPassed"] is True
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/failedRequirementCount"] == 0
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/protocolVariantsPassed"] is True
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/multiUnicodeMetadataPassed"] is True
+    assert total_audit_evidence["matches"]["/checks/rust_ed2k_total_parity_audit/crossClientMatrixPassed"] is True
+
+
+def test_emulebb_rust_overnight_report_matches_strict_workspace_output_evidence(tmp_path: Path) -> None:
+    tests_root = tmp_path / "tests"
+    output_root = tmp_path / "output"
+    manifest_root = tests_root / "manifests" / "release-campaigns"
+    manifest_root.mkdir(parents=True)
+    for path in (repo_root() / "manifests" / "release-campaigns").glob("*.json"):
+        (manifest_root / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    protocol_report = output_root / "reports" / "local-ed2k-rust-protocol-combinations" / "latest"
+    protocol_report.mkdir(parents=True)
+    (protocol_report / "local-ed2k-rust-protocol-combinations-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "checks": {
+                    "protocol_matrix_coverage": {
+                        "caseCount": 4,
+                        "hashOnlyFixtureNames": True,
+                        "multiTransferFixtureNames": True,
+                    },
+                    "rust_protocol_case_requirements": {
+                        "threeTransfersPerCase": True,
+                        "hashOnlyMetadataRecoveryPerCase": True,
+                        "unicodeHashOnlyMetadataPerCase": True,
+                        "namedTransferHashsetsPerCase": True,
+                        "obfuscatedSourceUserHashPerCase": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    private_modules_report = output_root / "reports" / "rust-ed2k-private-parity-modules" / "latest"
+    private_modules_report.mkdir(parents=True)
+    (private_modules_report / "rust-ed2k-private-parity-modules-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "checks": {
+                    "rust_private_ed2k_module_requirements": {
+                        "caseCount": 55,
+                        "allCasesPassed": True,
+                        "protocolCodecCovered": True,
+                        "ed2kConfigDefaultsCovered": True,
+                        "helloAdvertTruthfulnessCovered": True,
+                        "sourceExchange2Covered": True,
+                        "serverProtocolCovered": True,
+                        "serverLoginOracleCovered": True,
+                        "serverOfferFilesCovered": True,
+                        "serverSearchDecodeCovered": True,
+                        "serverSourceDecodeCovered": True,
+                        "serverBackgroundSearchCovered": True,
+                        "serverCallbackDecodeCovered": True,
+                        "serverObfuscationCovered": True,
+                        "serverStartupInlineCovered": True,
+                        "serverOfferFilesLanBindCovered": True,
+                        "serverOfferFilesUnicodeTagCovered": True,
+                        "serverOfferFilesCompressionSentinelCovered": True,
+                        "serverDiagnosticsInlineCovered": True,
+                        "serverDiagnosticsDumpNameCovered": True,
+                        "transferRuntimeCovered": True,
+                        "transferMd4PieceVerificationCovered": True,
+                        "transferAichPersistenceCovered": True,
+                        "transferRemoteAichPreservedCovered": True,
+                        "transferLocalIngestCovered": True,
+                        "transferLegacyManifestRepairCovered": True,
+                        "transferInvalidAichRejectedCovered": True,
+                        "transferMetadataReconcileCovered": True,
+                        "transferPartialProgressResumeCovered": True,
+                        "transferCatalogHintMergeCovered": True,
+                        "transferUploadQueueCovered": True,
+                        "previewSurfaceCovered": True,
+                        "startupMetadataCovered": True,
+                        "hashOnlyMetadataRecoveryCovered": True,
+                        "startupSecureIdentCovered": True,
+                        "downloadHashsetCovered": True,
+                        "compressedFrameDownloadCovered": True,
+                        "obfuscatedPackedCompressedFrameCovered": True,
+                        "sendingPartFrameCovered": True,
+                        "badPayloadRejectedCovered": True,
+                        "malformedRangeRecoveryCovered": True,
+                        "outOfOrderRangeCompleteCovered": True,
+                        "outOfOrderRangeIncompleteCovered": True,
+                        "outOfOrderCompressedRangeCovered": True,
+                        "adaptiveWindowPolicyCovered": True,
+                        "hashset2AichCovered": True,
+                        "downloaderQueueCovered": True,
+                        "listenerQueueCovered": True,
+                        "downloaderResumeCovered": True,
+                        "listenerResumeCovered": True,
+                        "callbackSessionCovered": True,
+                        "compressedPartServingCovered": True,
+                        "listenerStartupCovered": True,
+                        "sharedBrowseDeniedCovered": True,
+                        "obfuscatedQueueCovered": True,
+                        "obfuscatedResumeCovered": True,
+                        "obfuscatedServingCovered": True,
+                        "obfuscatedProtocolCovered": True,
+                        "secureIdentProtocolCovered": True,
+                        "tcpDumpPhaseLabelsCovered": True,
+                        "tcpDumpInlineCovered": True,
+                        "downloaderSecureIdentStateCovered": True,
+                        "kadFirewallRuntimeCovered": True,
+                        "natRuntimeCovered": True,
+                        "networkingRuntimeCovered": True,
+                        "coreDirectDownloadSchedulerCovered": True,
+                        "coreDirectDownloadCandidatesCovered": True,
+                        "coreSourceRequeryPolicyCovered": True,
+                        "coreZeroSourceBackgroundCovered": True,
+                        "coreCallbackRouteCovered": True,
+                        "coreSourceMergeCovered": True,
+                        "coreHashOnlySearchCovered": True,
+                        "coreKeywordTargetCovered": True,
+                        "coreStockSearchPaginationCovered": True,
+                        "coreSourcePublishCovered": True,
+                        "coreEd2kFileTypeSearchCovered": True,
+                        "coreTransferLifecycleCovered": True,
+                        "daemonEd2kNetworkConfigCovered": True,
+                        "daemonEd2kUserHashCovered": True,
+                        "daemonP2pBindInterfaceCovered": True,
+                        "daemonEd2kConfigParseCovered": True,
+                        "indexSnoopQueueCovered": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pytest_report = output_root / "reports" / "rust-overnight-pytest-proof" / "latest"
+    pytest_report.mkdir(parents=True)
+    (pytest_report / "rust-overnight-pytest-proof-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "checks": {
+                    "rust_overnight_pytest_requirements": {
+                        "caseCount": 2,
+                        "allCasesPassed": True,
+                        "localClientPytestPassed": True,
+                        "restContractPytestPassed": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    total_audit_report = output_root / "reports" / "rust-ed2k-total-parity-audit" / "latest"
+    total_audit_report.mkdir(parents=True)
+    (total_audit_report / "rust-ed2k-total-parity-audit-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "checks": {
+                    "rust_ed2k_total_parity_audit": {
+                        "requirementCount": 7,
+                        "allRequirementsPassed": True,
+                        "failedRequirementCount": 0,
+                        "failedRequirementIds": [],
+                        "protocolVariantsPassed": True,
+                        "multiUnicodeMetadataPassed": True,
+                        "privateP2pOverlordModulesPassed": True,
+                        "preflightAndRestPassed": True,
+                        "crossClientMatrixPassed": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    emulebb_report = output_root / "reports" / "multi-client-p2p-matrix" / "20260612T010000Z"
+    rust_report = output_root / "reports" / "multi-client-p2p-matrix" / "20260612T015000Z"
+    amule_report = output_root / "reports" / "multi-client-p2p-matrix" / "20260612T020000Z"
+    emulebb_report.mkdir(parents=True)
+    rust_report.mkdir(parents=True)
+    amule_report.mkdir(parents=True)
+    (emulebb_report / "multi-client-p2p-matrix-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "scenarios": [
+                    {"id": "cl-emulebb-001-downloads-from-cl-harness-002", "status": "passed"},
+                    {
+                        "id": "cl-emulebb-001-cl-emulebb-rust-005-bidirectional-exchange",
+                        "status": "passed",
+                        "report": {
+                            "status": "passed",
+                            "checks": {
+                                "rust_emulebb_cross_client_requirements": {
+                                    "bidirectionalTransfers": True,
+                                    "unicodeFixtureNames": True,
+                                    "rustPersistedSourceUserHash": True,
+                                    "rustPersistedMd4Hashset": True,
+                                    "rustPersistedAichHashset": True,
+                                }
+                            },
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (rust_report / "multi-client-p2p-matrix-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "scenarios": [
+                    {"id": "cl-emulebb-001-downloads-from-cl-harness-002", "status": "passed"},
+                    {
+                        "id": "cl-emulebb-rust-005-cl-emulebb-rust-006-bidirectional-exchange",
+                        "status": "passed",
+                        "report": {
+                            "status": "passed",
+                            "checks": {
+                                "multiTransferCount": 3,
+                                "unicodeFilenameTransfer": True,
+                                "hashOnlyMetadataRecovery": True,
+                                "bidirectionalRustTransfers": True,
+                                "sourcePersistenceAfterRestart": True,
+                                "sourceControlOperations": True,
+                            },
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (amule_report / "multi-client-p2p-matrix-result.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "scenarios": [
+                    {"id": "cl-emulebb-001-downloads-from-cl-harness-002", "status": "passed"},
+                    {
+                        "id": "cl-emulebb-rust-005-cl-amule-004-bidirectional-exchange",
+                        "status": "passed",
+                        "report": {
+                            "status": "passed",
+                            "checks": {
+                                "rust_amule_manifest_metadata": {
+                                    "md4HashsetAcquired": True,
+                                    "sourceUserHashCount": 1,
+                                }
+                            },
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = release_campaigns.build_release_campaign_report(
+        release_campaigns.ReleaseCampaignPaths(
+            tests_repo_root=tests_root,
+            workspace_output_root=output_root,
+        ),
+        campaign_id="emulebb-rust-overnight",
+        phase_id="protocol-parity",
+    )
+
+    statuses = {scenario["id"]: scenario["status"] for scenario in report["scenarios"]}
+    assert statuses["emulebb.flow.rust.overnight.local-ed2k.protocol-combinations.v1"] == "passed"
+    assert statuses["emulebb.flow.rust.overnight.private-ed2k.modules.v1"] == "passed"
+    assert statuses["emulebb.flow.rust.overnight.cross-client.emulebb-bidirectional.v1"] == "passed"
+    assert statuses["emulebb.flow.rust.overnight.cross-client.rust-bidirectional.v1"] == "passed"
+    assert statuses["emulebb.flow.rust.overnight.cross-client.amule-bidirectional.v1"] == "passed"
+    assert statuses["emulebb.flow.rust.overnight.ed2k-total-parity-audit.v1"] == "passed"
 
 
 def test_campaign_validation_rejects_missing_proof_tier() -> None:

@@ -19,6 +19,7 @@ from .script_modules import load_script_module
 
 live_common = load_script_module("emule_live_profile_common_goed2k", "emule-live-profile-common.py")
 ED2K_SERVER_EXE_ENV = "EMULEBB_TEST_ED2K_SERVER_EXE"
+SERVER_TCP_FLAG_TCPOBFUSCATION = 0x0000_0400
 
 
 @dataclass(frozen=True)
@@ -215,6 +216,8 @@ def build_server_config(
         "storage_backend": "json",
         "catalog_path": str(catalog_path),
         "search_batch_size": 200,
+        "tcp_flags": SERVER_TCP_FLAG_TCPOBFUSCATION if protocol_obfuscation else 0,
+        "aux_port": 0,
         "protocol_obfuscation": protocol_obfuscation,
         "server_udp": server_udp,
         "udp_port_offset": 4,

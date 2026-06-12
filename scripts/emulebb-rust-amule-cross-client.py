@@ -327,6 +327,13 @@ def main(argv: list[str] | None = None) -> int:
             expected_sha256=amule_fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
         )
+        report["checks"]["rust_amule_manifest_metadata"] = rust_emulebb.require_rust_download_manifest_metadata(
+            rust_runtime,
+            transfer_hash=amule_transfer_hash,
+            expected_name=str(amule_link_info["name"]),
+            expected_size=int(amule_link_info["size"]),
+            require_aich_hashset=False,
+        )
         report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0
