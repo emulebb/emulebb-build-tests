@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,27 @@ def test_parser_defaults_use_local_ed2k_and_132_mib_fixture() -> None:
     assert args.p2p_bind_interface_name == ""
     assert args.fixture_size_bytes == 132 * 1024 * 1024
     assert args.configuration == "Release"
+    assert args.include_rust_client is False
+
+
+def test_parser_accepts_optional_rust_client() -> None:
+    module = load_suite_module()
+
+    args = module.parse_args(
+        [
+            "--lan-bind-addr",
+            "192.0.2.10",
+            "--include-rust-client",
+            "--rust-repo",
+            "C:/workspace/repos/emulebb-rust",
+            "--rust-exe",
+            "C:/out/tools/emulebb-rust/bin/emulebb-rust.exe",
+        ]
+    )
+
+    assert args.include_rust_client is True
+    assert args.rust_repo == "C:/workspace/repos/emulebb-rust"
+    assert args.rust_exe == "C:/out/tools/emulebb-rust/bin/emulebb-rust.exe"
 
 
 def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkeypatch) -> None:
@@ -64,6 +86,51 @@ def test_amutorrent_environment_enables_both_ed2k_clients(tmp_path: Path, monkey
     assert env["AMULE_PASSWORD"] == "amule-password"
     assert env["AMULE_ID"] == module.CLIENT04.profile_id
     assert env["AMULE_NAME"] == module.CLIENT04.profile_id
+    assert env["UNRELATED"] == "kept"
+
+
+def test_configured_amutorrent_environment_uses_config_file_clients(tmp_path: Path, monkeypatch) -> None:
+    module = load_suite_module()
+    monkeypatch.setattr(module, "reject_windows_temp_path", lambda _path, _description: None)
+    node_path = Path(r"C:\tools\node\node.exe") if os.name == "nt" else Path("/opt/node/bin/node")
+
+    config_path = module.write_local_amutorrent_config(
+        tmp_path / "amutorrent-data",
+        amutorrent_port=19001,
+        lan_bind_addr="192.0.2.10",
+        emulebb_rest_port=19002,
+        emulebb_api_key="api-key",
+        amule_ec_port=19003,
+        amule_password="amule-password",
+        rust_rest_port=19004,
+        rust_api_key="rust-key",
+    )
+    env = module.build_configured_amutorrent_environment(
+        base_env={
+            "PATH": "base-path",
+            "EMULEBB_HOST": "old-host",
+            "AMULE_PASSWORD": "old-password",
+            "UNRELATED": "kept",
+        },
+        amutorrent_port=19001,
+        lan_bind_addr="192.0.2.10",
+        node_path=node_path,
+        data_dir=tmp_path / "amutorrent-data",
+    )
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert [client["id"] for client in payload["clients"]] == [
+        module.AMUTORRENT_EMULEBB_ID,
+        module.AMUTORRENT_AMULE_ID,
+        module.AMUTORRENT_RUST_ID,
+    ]
+    assert payload["clients"][2]["port"] == 19004
+    assert payload["clients"][2]["apiKey"] == "rust-key"
+    assert env["PORT"] == "19001"
+    assert env["lan_bind_address"] == "192.0.2.10"
+    assert env["AMUTORRENT_DATA_DIR"].endswith("amutorrent-data")
+    assert "EMULEBB_HOST" not in env
+    assert "AMULE_PASSWORD" not in env
     assert env["UNRELATED"] == "kept"
 
 
@@ -214,6 +281,21 @@ def test_capability_matrix_covers_both_ed2k_clients_and_core_surfaces() -> None:
         "refresh_shared",
     } <= set(manifest["ed2k_instance_mutation"])
     assert "same_hash_is_instance_scoped" in manifest["coexistence_invariants"]
+
+
+def test_optional_rust_matrix_adds_emulebb_compatible_instance() -> None:
+    module = load_suite_module()
+
+    matrix = module.ed2k_instance_matrix(include_rust_client=True)
+
+    assert [row["instance_id"] for row in matrix] == [
+        module.AMUTORRENT_EMULEBB_ID,
+        module.AMUTORRENT_AMULE_ID,
+        module.AMUTORRENT_RUST_ID,
+    ]
+    assert matrix[2]["client_type"] == "emulebb"
+    assert matrix[2]["search_type"] == "server"
+    assert matrix[2]["search_requires_fixture_match"] is True
 
 
 def test_qbittorrent_compat_checks_cover_text_and_json_facade(monkeypatch) -> None:

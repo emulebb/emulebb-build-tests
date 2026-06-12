@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -18,7 +19,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import amule as amule_harness  # noqa: E402
 from emule_test_harness import goed2k  # noqa: E402
-from emule_test_harness.multi_client import CLIENT_IDENTITIES  # noqa: E402
+from emule_test_harness import rust_client, rust_local_ed2k  # noqa: E402
+from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.paths import reject_windows_temp_path  # noqa: E402
 
 
@@ -49,10 +51,13 @@ API_KEY = "amutorrent-local-ed2k-ui-live-key"
 CLIENT01 = CLIENT_IDENTITIES["emulebb"]
 CLIENT02 = CLIENT_IDENTITIES["harness"]
 CLIENT04 = CLIENT_IDENTITIES["amule"]
+CLIENT05 = CLIENT_IDENTITIES["emulebb_rust"]
 AMUTORRENT_EMULEBB_ID = CLIENT01.profile_id
 AMUTORRENT_AMULE_ID = CLIENT04.profile_id
+AMUTORRENT_RUST_ID = CLIENT05.profile_id
+RUST_ED2K_NICK = "eMule"
 
-ED2K_INSTANCE_MATRIX = [
+BASE_ED2K_INSTANCE_MATRIX = [
     {
         "instance_id": AMUTORRENT_EMULEBB_ID,
         "client_type": "emulebb",
@@ -68,6 +73,14 @@ ED2K_INSTANCE_MATRIX = [
         "search_requires_fixture_match": False,
     },
 ]
+RUST_ED2K_INSTANCE = {
+    "instance_id": AMUTORRENT_RUST_ID,
+    "client_type": "emulebb",
+    "display_name": CLIENT05.profile_id,
+    "search_type": "server",
+    "search_requires_fixture_match": True,
+}
+ED2K_INSTANCE_MATRIX = BASE_ED2K_INSTANCE_MATRIX
 
 AMUTORRENT_CAPABILITY_MATRIX = {
     "global_read": [
@@ -157,6 +170,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ed2k-server-exe")
     parser.add_argument("--amule-daemon-exe")
     parser.add_argument("--amule-control-exe")
+    parser.add_argument("--include-rust-client", action="store_true")
+    parser.add_argument("--rust-repo")
+    parser.add_argument("--rust-exe")
     return parser
 
 
@@ -171,7 +187,7 @@ def choose_ports() -> dict[str, int]:
 
     ports = amule_transfer.choose_amule_ports(dtt.choose_distinct_ports())
     used = set(ports.values())
-    for name in ("amutorrent",):
+    for name in ("amutorrent", "rust_rest", "rust_ed2k", "rust_kad"):
         for _ in range(100):
             candidate = rest_smoke.choose_listen_port()
             if candidate not in used and dtt.is_port_available(candidate):
@@ -181,6 +197,15 @@ def choose_ports() -> dict[str, int]:
         else:
             raise RuntimeError(f"Could not allocate port for {name}.")
     return ports
+
+
+def ed2k_instance_matrix(*, include_rust_client: bool) -> list[dict[str, Any]]:
+    """Returns the aMuTorrent ED2K instance matrix for this run."""
+
+    matrix = [dict(row) for row in BASE_ED2K_INSTANCE_MATRIX]
+    if include_rust_client:
+        matrix.append(dict(RUST_ED2K_INSTANCE))
+    return matrix
 
 
 def build_local_amutorrent_environment(
@@ -222,6 +247,106 @@ def build_local_amutorrent_environment(
             "AMULE_NAME": CLIENT04.profile_id,
         }
     )
+    if node_path.is_absolute():
+        env["PATH"] = str(node_path.parent) + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def write_local_amutorrent_config(
+    data_dir: Path,
+    *,
+    amutorrent_port: int,
+    lan_bind_addr: str,
+    emulebb_rest_port: int,
+    emulebb_api_key: str,
+    amule_ec_port: int,
+    amule_password: str,
+    rust_rest_port: int | None = None,
+    rust_api_key: str | None = None,
+) -> Path:
+    """Writes a runtime aMuTorrent config with explicit ED2K client instances."""
+
+    reject_windows_temp_path(data_dir, "aMuTorrent local ED2K data directory")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    clients: list[dict[str, object]] = [
+        {
+            "id": AMUTORRENT_EMULEBB_ID,
+            "type": "emulebb",
+            "name": CLIENT01.profile_id,
+            "host": lan_bind_addr,
+            "port": emulebb_rest_port,
+            "apiKey": emulebb_api_key,
+            "useSsl": False,
+            "enabled": True,
+        },
+        {
+            "id": AMUTORRENT_AMULE_ID,
+            "type": "amule",
+            "name": CLIENT04.profile_id,
+            "host": lan_bind_addr,
+            "port": amule_ec_port,
+            "password": amule_password,
+            "enabled": True,
+        },
+    ]
+    if rust_rest_port is not None:
+        clients.append(
+            {
+                "id": AMUTORRENT_RUST_ID,
+                "type": "emulebb",
+                "name": CLIENT05.profile_id,
+                "host": lan_bind_addr,
+                "port": rust_rest_port,
+                "apiKey": rust_api_key or emulebb_api_key,
+                "useSsl": False,
+                "enabled": True,
+            }
+        )
+    config_path = data_dir / "config.json"
+    payload = {
+        "version": "1.0",
+        "firstRunCompleted": True,
+        "server": {
+            "host": lan_bind_addr,
+            "port": amutorrent_port,
+            "auth": {"enabled": False, "password": "", "sessionSecret": "local-ed2k-ui-session"},
+        },
+        "clients": clients,
+        "directories": {
+            "data": str(data_dir.resolve()),
+            "logs": str((data_dir / "logs").resolve()),
+            "geoip": str((data_dir / "geoip").resolve()),
+        },
+        "integrations": {"amuleInstanceId": AMUTORRENT_AMULE_ID},
+    }
+    config_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return config_path
+
+
+def build_configured_amutorrent_environment(
+    *,
+    base_env: dict[str, str],
+    amutorrent_port: int,
+    lan_bind_addr: str,
+    node_path: Path,
+    data_dir: Path,
+) -> dict[str, str]:
+    """Builds an aMuTorrent environment that uses a prewritten config.json clients array."""
+
+    env = dict(base_env)
+    env.update(
+        {
+            "PORT": str(amutorrent_port),
+            "lan_bind_address": lan_bind_addr,
+            "AMUTORRENT_DATA_DIR": str(data_dir.resolve()),
+            "WEB_AUTH_ENABLED": "false",
+            "SKIP_SETUP_WIZARD": "true",
+        }
+    )
+    for prefix in ("EMULEBB", "AMULE"):
+        for key in list(env):
+            if key.startswith(f"{prefix}_"):
+                env.pop(key, None)
     if node_path.is_absolute():
         env["PATH"] = str(node_path.parent) + os.pathsep + env.get("PATH", "")
     return env
@@ -269,6 +394,62 @@ def wait_for_amutorrent_clients(
         description="aMuTorrent local ED2K clients",
     )
     return {"payload": result, "observations": observations[-10:]}
+
+
+def rust_executable_from_args(args: argparse.Namespace) -> Path | None:
+    """Returns the optional staged Rust executable path for local ED2K UI runs."""
+
+    if args.rust_exe:
+        return Path(args.rust_exe).resolve()
+    exe_name = "emulebb-rust.exe" if os.name == "nt" else "emulebb-rust"
+    output_root = Path(os.environ["EMULEBB_WORKSPACE_OUTPUT_ROOT"]).resolve()
+    return output_root / "tools" / "emulebb-rust" / "bin" / exe_name
+
+
+def start_rust_download_client(
+    paths,
+    args: argparse.Namespace,
+    *,
+    p2p_address: str,
+    server_endpoint: str,
+    ports: dict[str, int],
+) -> tuple[subprocess.Popen[str], dict[str, Any]]:
+    """Starts a Rust ED2K client connected to the local server for aMuTorrent UI coverage."""
+
+    rust_repo = Path(args.rust_repo).resolve() if args.rust_repo else resolve_manifest_repo(paths.workspace_root, "emulebb_rust")
+    runtime_dir = paths.source_artifacts_dir / "clients" / CLIENT05.profile_id / "runtime"
+    config_path = paths.source_artifacts_dir / "clients" / CLIENT05.profile_id / "emulebb-rust.toml"
+    log_path = paths.source_artifacts_dir / "clients" / CLIENT05.profile_id / "emulebb-rust.log"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    rust_client.write_rust_config(
+        config_path,
+        runtime_dir=runtime_dir,
+        rest_addr=args.lan_bind_addr,
+        rest_port=ports["rust_rest"],
+        api_key=args.api_key,
+        p2p_bind_ip=p2p_address,
+        ed2k_port=ports["rust_ed2k"],
+        kad_port=ports["rust_kad"],
+        server_endpoint=server_endpoint,
+    )
+    process, launch_mode, launch_path = rust_local_ed2k.start_client(
+        repo=rust_repo,
+        executable=rust_executable_from_args(args),
+        config_path=config_path,
+        log_path=log_path,
+    )
+    base_url = f"http://{args.lan_bind_addr}:{ports['rust_rest']}"
+    return process, {
+        "client_key": CLIENT05.key,
+        "nick": RUST_ED2K_NICK,
+        "profile_id": CLIENT05.profile_id,
+        "base_url": base_url,
+        "runtime_dir": str(runtime_dir),
+        "config": str(config_path),
+        "log": str(log_path),
+        "launch_mode": launch_mode,
+        "launch_path": str(launch_path),
+    }
 
 
 def fetch_page_json(page: Any, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -735,6 +916,7 @@ def run_coexistence_capability_matrix(
     *,
     transfer_hash: str,
     file_name: str,
+    instances: list[dict[str, Any]],
     timeout_seconds: float,
 ) -> dict[str, Any]:
     """Runs the local aMuTorrent capability matrix with both ED2K clients configured."""
@@ -744,11 +926,11 @@ def run_coexistence_capability_matrix(
         "initial_snapshot": require_snapshot_has_instances(
             page,
             transfer_hash=transfer_hash,
-            expected=ED2K_INSTANCE_MATRIX,
+            expected=instances,
         ),
         "instances": {},
     }
-    for instance in ED2K_INSTANCE_MATRIX:
+    for instance in instances:
         checks["instances"][instance["instance_id"]] = run_instance_capability_checks(
             page,
             transfer_hash=transfer_hash,
@@ -759,12 +941,12 @@ def run_coexistence_capability_matrix(
         checks[f"snapshot_after_{instance['instance_id']}"] = require_snapshot_has_instances(
             page,
             transfer_hash=transfer_hash,
-            expected=ED2K_INSTANCE_MATRIX,
+            expected=instances,
         )
     checks["final_snapshot"] = require_snapshot_has_instances(
         page,
         transfer_hash=transfer_hash,
-        expected=ED2K_INSTANCE_MATRIX,
+        expected=instances,
     )
     checks["global"] = run_global_capability_checks(page)
     checks["qbittorrent_compat"] = run_qbittorrent_compat_checks(page, transfer_hash=transfer_hash)
@@ -831,6 +1013,7 @@ def run_browser_download_matrix(
     base_url: str,
     link: str,
     transfer_hash: str,
+    instances: list[dict[str, Any]],
     artifacts_dir: Path,
     timeout_seconds: float,
 ) -> dict[str, Any]:
@@ -870,18 +1053,11 @@ def run_browser_download_matrix(
                     page,
                     link=link,
                     transfer_hash=transfer_hash,
-                    instance_id=AMUTORRENT_EMULEBB_ID,
-                    instance_name=CLIENT01.profile_id,
+                    instance_id=str(instance["instance_id"]),
+                    instance_name=str(instance["display_name"]),
                     timeout_seconds=timeout_seconds,
-                ),
-                add_download_through_visible_modal(
-                    page,
-                    link=link,
-                    transfer_hash=transfer_hash,
-                    instance_id=AMUTORRENT_AMULE_ID,
-                    instance_name=CLIENT04.profile_id,
-                    timeout_seconds=timeout_seconds,
-                ),
+                )
+                for instance in instances
             ]
             file_name = str(
                 checks["add_downloads"][0]["snapshot_item"].get("name") or "amutorrent-local-ed2k-ui.bin"
@@ -890,6 +1066,7 @@ def run_browser_download_matrix(
                 page,
                 transfer_hash=transfer_hash,
                 file_name=file_name,
+                instances=instances,
                 timeout_seconds=timeout_seconds,
             )
             screenshot = artifacts_dir / "amutorrent-local-ed2k-ui-final.png"
@@ -947,16 +1124,20 @@ def main(argv: list[str] | None = None) -> int:
         "suite": SUITE_NAME,
         "status": "running",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "include_rust_client": bool(args.include_rust_client),
+        "ed2k_instances": ed2k_instance_matrix(include_rust_client=bool(args.include_rust_client)),
         "checks": {},
     }
     server_process: subprocess.Popen | None = None
     client1_app = None
     client2_app = None
     amule_process: subprocess.Popen | None = None
+    rust_process: subprocess.Popen[str] | None = None
     amutorrent_process: subprocess.Popen[str] | None = None
     amutorrent_output = None
     amule_profile: amule_harness.AmuleRuntimeProfile | None = None
     amule_control_exe: Path | None = None
+    rust_profile: dict[str, Any] | None = None
     current_phase = "initializing"
 
     try:
@@ -979,6 +1160,7 @@ def main(argv: list[str] | None = None) -> int:
             "p2p_bind_interface_address": p2p_address,
             "ports": ports,
         }
+        server_endpoint = f"{p2p_address}:{ports['ed2k_tcp']}"
 
         server_dir = paths.source_artifacts_dir / "ed2k-server"
         current_phase = "start_ed2k_server"
@@ -989,6 +1171,7 @@ def main(argv: list[str] | None = None) -> int:
             admin_port=ports["ed2k_admin"],
             token=args.api_key,
             admin_address=args.lan_bind_addr,
+            ed2k_address=p2p_address,
             repo_override=args.ed2k_server_repo,
             exe_override=args.ed2k_server_exe,
         )
@@ -1084,6 +1267,12 @@ def main(argv: list[str] | None = None) -> int:
             },
             CLIENT04.profile_id: amule_profile.as_report(),
         }
+        if args.include_rust_client:
+            report["profiles"][CLIENT05.profile_id] = {
+                "client_key": CLIENT05.key,
+                "nick": RUST_ED2K_NICK,
+                "profile_id": CLIENT05.profile_id,
+            }
 
         export_link_path = paths.source_artifacts_dir / "seed-export" / "fixture.ed2k.txt"
         ready_path = paths.source_artifacts_dir / "seed-export" / "ready.txt"
@@ -1163,20 +1352,78 @@ def main(argv: list[str] | None = None) -> int:
             args.server_connect_timeout_seconds,
         )
 
+        if args.include_rust_client:
+            current_phase = "launch_rust_client"
+            rust_process, rust_profile = start_rust_download_client(
+                paths,
+                args,
+                p2p_address=p2p_address,
+                server_endpoint=server_endpoint,
+                ports=ports,
+            )
+            report["profiles"][CLIENT05.profile_id] = rust_profile
+            rust_base_url = str(rust_profile["base_url"])
+            report["checks"]["rust_rest_ready"] = rust_local_ed2k.wait_for_rest_ready(
+                rust_base_url,
+                rust_process,
+                Path(str(rust_profile["log"])),
+                args.api_key,
+                args.rest_ready_timeout_seconds,
+            )
+            report["checks"]["rust_connect"] = rust_local_ed2k.request_json(
+                rust_base_url,
+                "POST",
+                "/api/v1/servers/operations/connect",
+                args.api_key,
+            )
+            report["checks"]["rust_server_connected"] = rust_local_ed2k.wait_for_ed2k_connected(
+                rust_base_url,
+                args.api_key,
+                args.server_connect_timeout_seconds,
+            )
+            report["checks"]["rust_server_client"] = goed2k.wait_for_server_client(
+                admin_base_url,
+                args.api_key,
+                RUST_ED2K_NICK,
+                args.server_connect_timeout_seconds,
+            )
+
         current_phase = "launch_amutorrent"
         amutorrent_data_dir = paths.source_artifacts_dir / "amutorrent-data"
         amutorrent_log_path = paths.source_artifacts_dir / "amutorrent-server.log"
-        env = build_local_amutorrent_environment(
-            base_env=os.environ,
-            amutorrent_port=ports["amutorrent"],
-            lan_bind_addr=args.lan_bind_addr,
-            node_path=node_path,
-            data_dir=amutorrent_data_dir,
-            emulebb_rest_port=ports["client1_rest"],
-            emulebb_api_key=args.api_key,
-            amule_ec_port=ports["amule_ec"],
-            amule_password=amule_profile.ec_password,
-        )
+        if args.include_rust_client:
+            report["amutorrent_config"] = str(
+                write_local_amutorrent_config(
+                    amutorrent_data_dir,
+                    amutorrent_port=ports["amutorrent"],
+                    lan_bind_addr=args.lan_bind_addr,
+                    emulebb_rest_port=ports["client1_rest"],
+                    emulebb_api_key=args.api_key,
+                    amule_ec_port=ports["amule_ec"],
+                    amule_password=amule_profile.ec_password,
+                    rust_rest_port=ports["rust_rest"],
+                    rust_api_key=args.api_key,
+                )
+            )
+            env = build_configured_amutorrent_environment(
+                base_env=os.environ,
+                amutorrent_port=ports["amutorrent"],
+                lan_bind_addr=args.lan_bind_addr,
+                node_path=node_path,
+                data_dir=amutorrent_data_dir,
+            )
+        else:
+            env = build_local_amutorrent_environment(
+                base_env=os.environ,
+                amutorrent_port=ports["amutorrent"],
+                lan_bind_addr=args.lan_bind_addr,
+                node_path=node_path,
+                data_dir=amutorrent_data_dir,
+                emulebb_rest_port=ports["client1_rest"],
+                emulebb_api_key=args.api_key,
+                amule_ec_port=ports["amule_ec"],
+                amule_password=amule_profile.ec_password,
+            )
         amutorrent_output = amutorrent_log_path.open("w", encoding="utf-8", errors="replace")
         amutorrent_process = subprocess.Popen(
             [str(node_path), "server/server.js"],
@@ -1195,7 +1442,10 @@ def main(argv: list[str] | None = None) -> int:
         }
         report["checks"]["amutorrent_clients_connected"] = wait_for_amutorrent_clients(
             base_url=amutorrent_base_url,
-            expected={AMUTORRENT_EMULEBB_ID: "emulebb", AMUTORRENT_AMULE_ID: "amule"},
+            expected={
+                str(instance["instance_id"]): str(instance["client_type"])
+                for instance in ed2k_instance_matrix(include_rust_client=bool(args.include_rust_client))
+            },
             timeout_seconds=args.rest_ready_timeout_seconds,
         )
 
@@ -1204,6 +1454,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=amutorrent_base_url,
             link=exported_link,
             transfer_hash=transfer_hash,
+            instances=ed2k_instance_matrix(include_rust_client=bool(args.include_rust_client)),
             artifacts_dir=paths.source_artifacts_dir,
             timeout_seconds=args.rest_ready_timeout_seconds,
         )
@@ -1231,6 +1482,17 @@ def main(argv: list[str] | None = None) -> int:
             expected_sha256=fixture_sha256,
             timeout_seconds=args.transfer_completion_timeout_seconds,
         )
+        if args.include_rust_client:
+            assert rust_profile is not None
+            report["checks"]["rust_completed_file"] = rust_local_ed2k.wait_for_transfer_completed(
+                str(rust_profile["base_url"]),
+                args.api_key,
+                transfer_hash,
+                Path(str(rust_profile["runtime_dir"])),
+                expected_size=int(link_info["size"]),
+                expected_sha256=fixture_sha256,
+                timeout_seconds=args.transfer_completion_timeout_seconds,
+            )
         report["checks"]["ed2k_server_stats_final"] = goed2k.admin_request(admin_base_url, args.api_key, "/api/stats")
         report["status"] = "passed"
         return 0
@@ -1266,6 +1528,7 @@ def main(argv: list[str] | None = None) -> int:
             cleanup[CLIENT04.profile_id] = amule_transfer.shutdown_amule(amule_control_exe, amule_profile)
         except Exception as exc:
             cleanup[CLIENT04.profile_id] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+        rust_client.stop_process_tree(rust_process)
         goed2k.stop_process(amule_process)
         goed2k.stop_process(server_process)
         report["cleanup"] = cleanup
