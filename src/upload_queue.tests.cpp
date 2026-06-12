@@ -103,6 +103,10 @@ TEST_CASE("Upload queue probes no-request cooldowns only while underfilled below
 	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 5001u, kProductiveNoRequestCooldownProbeRemainingMs, true));
 	CHECK(ShouldProbeNoRequestCooldownCandidate(false, 0u, kProductiveNoRequestCooldownProbeRemainingMs, true));
 	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 0u));
+	CHECK_FALSE(HasNoRequestUploadReplacementPressure(true, true, true));
+	CHECK(HasNoRequestUploadReplacementPressure(false, true, false));
+	CHECK(HasNoRequestUploadReplacementPressure(false, false, true));
+	CHECK_FALSE(HasNoRequestUploadReplacementPressure(false, false, false));
 }
 
 TEST_CASE("Upload queue retry cooldown applies only to non-friend peers with live IP cooldowns")
@@ -269,6 +273,16 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 3u), 240u);
 	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 7u), kNoRequestRepeatCooldownMaxSeconds);
 	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(600u, 4u), kNoRequestRepeatCooldownMaxSeconds);
+	CHECK_EQ(kNoRequestRepeatBanThreshold, 8u);
+	CHECK_EQ(kBroadbandNoRequestRepeatBanThreshold, 16u);
+	CHECK_EQ(
+		GetNoRequestRepeatBanThresholdForBudget(kBroadbandNoRequestCooldownBudgetBytesPerSec - 1u),
+		kNoRequestRepeatBanThreshold);
+	CHECK_EQ(
+		GetNoRequestRepeatBanThresholdForBudget(kBroadbandNoRequestCooldownBudgetBytesPerSec),
+		kBroadbandNoRequestRepeatBanThreshold);
+	CHECK_FALSE(ShouldBanNoRequestRepeatOffender(15u, kBroadbandNoRequestRepeatBanThreshold));
+	CHECK(ShouldBanNoRequestRepeatOffender(16u, kBroadbandNoRequestRepeatBanThreshold));
 }
 
 TEST_CASE("Upload queue clears retry cooldown only when queued peers request valid blocks")

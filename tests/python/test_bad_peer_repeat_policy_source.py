@@ -33,10 +33,12 @@ def test_repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> No
     assert "#define CLIENTBANTIME\t\t\tHR2MS(4)\t// 4h" in opcodes
     assert "kNoRequestRepeatStrikeWindowSeconds = 4u * 60u * 60u" in seams
     assert "kNoRequestRepeatBanThreshold = 8u" in seams
+    assert "kBroadbandNoRequestRepeatBanThreshold = 16u" in seams
     assert "kNoRequestRepeatHashRotationBanThreshold = 3u" in seams
     assert "kNoRequestRepeatHashRotationStrikeThreshold = 5u" in seams
     assert "kNoRequestRepeatCooldownMaxSeconds = 60u * 60u" in seams
     assert "kNoRequestRepeatCleanupIntervalSeconds = 60u" in seams
+    assert "GetNoRequestRepeatBanThresholdForBudget(" in seams
     assert "GetNoRequestRepeatCooldownSeconds(" in seams
     assert "ullCooldownSeconds = uBaseCooldownSeconds;" in seams
     assert "ullCooldownSeconds *= 2u;" in seams
@@ -53,18 +55,21 @@ def test_repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> No
     assert "ULONGLONG m_ullLastNoRequestRepeatCleanup;" in queue_header
     assert "UINT uTotalStrikes;" in queue_header
     assert "UINT uIPRotationStrikes;" in queue_header
-    assert "TrackNoRequestRepeatOffender(CUpDownClient *client, ULONGLONG curTick, UINT uBaseCooldownSeconds)" in queue_header
+    assert "TrackNoRequestRepeatOffender(CUpDownClient *client, ULONGLONG curTick, UINT uBaseCooldownSeconds, UINT uBanThreshold)" in queue_header
     assert "m_noRequestRepeatOffendersByHash[key]" in queue_source
     assert "m_noRequestRepeatOffendersByIP[dwCooldownIP]" in queue_source
     assert "m_noRequestRepeatHashesByIP[dwCooldownIP]" in queue_source
     assert "++ipHashState.uTotalStrikes;" in queue_source
     assert "penalty.uIPRotationStrikes = ipHashState.uTotalStrikes;" in queue_source
     assert "penalty.bShouldIPBan = penalty.uDistinctIPHashes >= kNoRequestRepeatHashRotationBanThreshold\n\t\t\t\t&& penalty.uIPRotationStrikes >= kNoRequestRepeatHashRotationStrikeThreshold;" in queue_source
-    assert "penalty.bShouldBan = ShouldBanNoRequestRepeatOffender(penalty.uStrikes);" in queue_source
+    assert "penalty.bShouldBan = ShouldBanNoRequestRepeatOffender(penalty.uStrikes, uBanThreshold);" in queue_source
     assert "client->Ban(repeatPenalty.bShouldIPBan" in queue_source
     assert "repeatPenalty.bShouldIPBan ? clientBanScopeBoth : clientBanScopeHash" in queue_source
     assert "GetNoRequestRepeatBaseCooldownSeconds(" not in seams
     assert "const UINT uBaseCooldownSeconds = uConfiguredCooldownSeconds;" in queue_source
+    assert "const UINT uRepeatBanThreshold = GetNoRequestRepeatBanThresholdForBudget(uBudgetBytesPerSec);" in queue_source
+    assert "TrackNoRequestRepeatOffender(client, curTick, uBaseCooldownSeconds, uRepeatBanThreshold)" in queue_source
+    assert "uRepeatBanThreshold," in queue_source
     assert "GetNoRequestRepeatCooldownSeconds(uBaseCooldownSeconds, penalty.uStrikes)" in queue_source
     assert "m_ullLastNoRequestRepeatCleanup + SEC2MS(kNoRequestRepeatCleanupIntervalSeconds)" in queue_source
     assert "m_ullLastNoRequestRepeatCleanup = curTick;" in queue_source

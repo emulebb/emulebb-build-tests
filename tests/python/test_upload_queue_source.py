@@ -34,7 +34,7 @@ def test_broadband_retained_slot_logs_are_throttled() -> None:
     assert "constexpr ULONGLONG ullLogIntervalMs = SEC2MS(30);" in source
     assert "++s_uSuppressedBroadbandRetainedSlotLogs;" in source
     assert "Suppressed retained-slot logs: %u." in source
-    assert source.count("if (!ShouldLogBroadbandRetainedSlot(uSuppressedLogs))\n\t\t\t\t\treturn false;") == 1
+    assert source.count("if (!ShouldLogBroadbandRetainedSlot(uSuppressedLogs))\n\t\t\t\t\treturn false;") == 2
     assert source.count("if (!ShouldLogBroadbandRetainedSlot(uSuppressedLogs))\n\t\t\t\treturn false;") == 1
 
 
@@ -45,12 +45,14 @@ def test_underfilled_upload_queue_probes_no_request_cooldowns_below_base_slots()
 
     assert "ShouldProbeUploadCooldownCandidate" in seams
     assert "HasOpenBaseUploadSlotDuringBroadbandUnderfill" in seams
+    assert "HasNoRequestUploadReplacementPressure" in seams
     assert "kProductiveNoRequestCooldownProbeRemainingMs = 5000u" in seams
     assert "ShouldProbeUnproductiveNoRequestCooldownCandidate" not in seams
     assert "ShouldProbeNoRequestCooldownCandidate" in seams
     assert "kUnproductiveNoRequestCooldownProbeRemainingMs" not in seams
     assert "iUploadSlots < iSoftMaxUploadSlots" in seams
     assert "return bOpenBaseSlotUnderfill;" in seams
+    assert "return !bWaitingListEmpty && (bHasAdmissionCandidate || bHasCooldownProbeCandidate);" in seams
     assert "bool\tHasUploadCooldownProbeCandidate(ULONGLONG curTick);" in header
     assert "bool\tCanProbeUploadCooldownCandidate(CUpDownClient *client, ULONGLONG curTick) const;" in header
     assert "bool CUploadQueue::HasUploadCooldownProbeCandidate(ULONGLONG curTick)" in source
