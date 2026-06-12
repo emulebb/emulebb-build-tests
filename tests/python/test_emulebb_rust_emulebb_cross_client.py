@@ -79,8 +79,10 @@ def test_cross_client_fixture_names_are_unicode() -> None:
     module = load_suite_module()
 
     assert "Unicode-\u00e9-\u6f22" in module.rust_to_emulebb_fixture_name()
+    assert "Unicode-\u00e9-\u6f22" in module.rust_shared_tree_fixture_name()
     assert "Unicode-\u00e9-\u6f22" in module.emulebb_to_rust_fixture_name()
     assert not module.rust_to_emulebb_fixture_name().isascii()
+    assert not module.rust_shared_tree_fixture_name().isascii()
     assert not module.emulebb_to_rust_fixture_name().isascii()
 
 
@@ -94,12 +96,22 @@ def test_decoded_ed2k_link_name_handles_url_escaped_unicode() -> None:
 
 def test_cross_client_requirements_accept_unicode_and_manifest_metadata() -> None:
     module = load_suite_module()
+    shared_tree_name = "emulebb-rust-shared-tree-Unicode-\u00e9-\u6f22.bin"
 
     requirements = module.require_cross_client_requirements(
         {
             "fixture": {"name": "emulebb-rust-to-emulebb-Unicode-\u00e9-\u6f22.bin"},
             "emulebb_fixture": {"name": "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin"},
+            "rust_shared_tree": {"name": shared_tree_name, "recursive": True},
             "checks": {
+                "rust_shared_tree_publish": {
+                    "sharedFiles": {
+                        "matched": {
+                            "name": shared_tree_name,
+                            "ed2kLink": "ed2k://|file|fixture.bin|1|00112233445566778899aabbccddeeff|/",
+                        }
+                    }
+                },
                 "rust_emulebb_manifest_metadata": {
                     "canonicalName": "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin",
                     "sourceUserHashCount": 1,
@@ -112,6 +124,7 @@ def test_cross_client_requirements_accept_unicode_and_manifest_metadata() -> Non
 
     assert requirements["bidirectionalTransfers"] is True
     assert requirements["unicodeFixtureNames"] is True
+    assert requirements["recursiveSharedTreeUpload"] is True
     assert requirements["rustPersistedSourceUserHash"] is True
     assert requirements["rustPersistedMd4Hashset"] is True
     assert requirements["rustPersistedAichHashset"] is True
@@ -125,7 +138,16 @@ def test_cross_client_requirements_reject_ascii_fixture_names() -> None:
             {
                 "fixture": {"name": "emulebb-rust-to-emulebb.bin"},
                 "emulebb_fixture": {"name": "emulebb-to-emulebb-rust.bin"},
+                "rust_shared_tree": {"name": "emulebb-rust-shared-tree.bin", "recursive": True},
                 "checks": {
+                    "rust_shared_tree_publish": {
+                        "sharedFiles": {
+                            "matched": {
+                                "name": "emulebb-rust-shared-tree.bin",
+                                "ed2kLink": "ed2k://|file|fixture.bin|1|00112233445566778899aabbccddeeff|/",
+                            }
+                        }
+                    },
                     "rust_emulebb_manifest_metadata": {
                         "canonicalName": "emulebb-to-emulebb-rust.bin",
                         "sourceUserHashCount": 1,
@@ -139,6 +161,60 @@ def test_cross_client_requirements_reject_ascii_fixture_names() -> None:
         assert "Unicode" in str(exc)
     else:
         raise AssertionError("ASCII cross-client fixture names were accepted")
+
+
+def test_write_rust_shared_tree_fixture_uses_nested_recursive_fixture(tmp_path: Path) -> None:
+    module = load_suite_module()
+
+    fixture = module.write_rust_shared_tree_fixture(tmp_path / "shared-tree", 4097)
+
+    assert fixture["recursive"] is True
+    assert fixture["unicode_name"] is True
+    assert Path(fixture["path"]).is_file()
+    assert Path(fixture["path"]).parent == tmp_path / "shared-tree" / "alpha" / "beta"
+    assert fixture["name"] == module.rust_shared_tree_fixture_name()
+    assert fixture["size"] == 4097
+    assert len(str(fixture["sha256"])) == 64
+
+
+def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(monkeypatch, tmp_path: Path) -> None:
+    module = load_suite_module()
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_request_json(_base_url, method, path, _api_key, body=None):
+        calls.append((method, path, body))
+        if path == "/api/v1/shared-directories":
+            return {"roots": [{"path": body["roots"][0]["path"], "recursive": True}], "items": []}
+        if path == "/api/v1/shared-directories/operations/reload":
+            return {"ok": True}
+        if path == "/api/v1/shared-files":
+            return {
+                "items": [
+                    {
+                        "name": "Nested.bin",
+                        "ed2kLink": "ed2k://|file|Nested.bin|1|00112233445566778899aabbccddeeff|/",
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(module, "request_json", fake_request_json)
+
+    result = module.publish_rust_shared_tree(
+        "http://192.0.2.10:4711",
+        "key",
+        root=tmp_path / "shared-tree",
+        file_name="Nested.bin",
+    )
+
+    assert calls[0] == (
+        "PATCH",
+        "/api/v1/shared-directories",
+        {"roots": [{"path": str(tmp_path / "shared-tree"), "recursive": True}], "confirmReplaceRoots": True},
+    )
+    assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
+    assert calls[2] == ("GET", "/api/v1/shared-files", None)
+    assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"
 
 
 def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tmp_path: Path) -> None:

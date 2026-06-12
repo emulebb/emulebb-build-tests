@@ -257,6 +257,12 @@ def rust_to_emulebb_fixture_name() -> str:
     return f"emulebb-rust-to-emulebb-{UNICODE_FIXTURE_SUFFIX}.bin"
 
 
+def rust_shared_tree_fixture_name() -> str:
+    """Returns the nested Rust shared-tree fixture name."""
+
+    return f"emulebb-rust-shared-tree-{UNICODE_FIXTURE_SUFFIX}.bin"
+
+
 def emulebb_to_rust_fixture_name() -> str:
     """Returns the eMuleBB-seeded cross-client Unicode fixture name."""
 
@@ -269,18 +275,102 @@ def decoded_ed2k_link_name(link_info: dict[str, object]) -> str:
     return unquote(str(link_info.get("name") or ""))
 
 
+def write_rust_shared_tree_fixture(root: Path, size_bytes: int) -> dict[str, object]:
+    """Writes a throw-away recursive shared tree fixture for Rust upload proof."""
+
+    nested_dir = root / "alpha" / "beta"
+    fixture_path = nested_dir / rust_shared_tree_fixture_name()
+    fixture_sha256 = dtt.write_fixture_file(fixture_path, size_bytes, seed=0x52555354)
+    return {
+        "root": str(root),
+        "nested_dir": str(nested_dir),
+        "path": str(fixture_path),
+        "name": fixture_path.name,
+        "size": size_bytes,
+        "sha256": fixture_sha256,
+        "unicode_name": True,
+        "recursive": True,
+    }
+
+
+def require_shared_file_item(shared_files: dict[str, object], file_name: str) -> dict[str, object]:
+    """Returns one shared-file row from a paged Rust REST shared-files payload."""
+
+    items = shared_files.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("Rust shared-files response did not expose an items list.")
+    for item in items:
+        if isinstance(item, dict) and item.get("name") == file_name:
+            link = str(item.get("ed2kLink") or "")
+            if not link.startswith("ed2k://|file|"):
+                raise RuntimeError(f"Rust shared-file row for {file_name} did not expose an ED2K link.")
+            return item
+    raise RuntimeError(f"Rust shared-files response did not include {file_name}.")
+
+
+def publish_rust_shared_tree(
+    base_url: str,
+    api_key: str,
+    *,
+    root: Path,
+    file_name: str,
+) -> dict[str, object]:
+    """Configures and reloads one recursive Rust shared directory root."""
+
+    directories = request_json(
+        base_url,
+        "PATCH",
+        "/api/v1/shared-directories",
+        api_key,
+        {
+            "roots": [{"path": str(root), "recursive": True}],
+            "confirmReplaceRoots": True,
+        },
+    )
+    reload_result = request_json(
+        base_url,
+        "POST",
+        "/api/v1/shared-directories/operations/reload",
+        api_key,
+    )
+    shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
+    shared_file = require_shared_file_item(shared_files, file_name)
+    return {
+        "directories": directories,
+        "reload": reload_result,
+        "sharedFiles": {
+            "count": len(shared_files.get("items", [])) if isinstance(shared_files.get("items"), list) else 0,
+            "matched": shared_file,
+        },
+    }
+
+
 def require_cross_client_requirements(report: dict[str, object]) -> dict[str, object]:
     """Checks the high-level Rust/eMuleBB ED2K parity surfaces proven by the report."""
 
     fixture = report.get("fixture")
     emulebb_fixture = report.get("emulebb_fixture")
+    shared_tree = report.get("rust_shared_tree")
     checks = report.get("checks")
-    if not isinstance(fixture, dict) or not isinstance(emulebb_fixture, dict) or not isinstance(checks, dict):
+    if (
+        not isinstance(fixture, dict)
+        or not isinstance(emulebb_fixture, dict)
+        or not isinstance(shared_tree, dict)
+        or not isinstance(checks, dict)
+    ):
         raise RuntimeError("Rust/eMuleBB cross-client report is missing fixture or check sections.")
     rust_fixture_name = str(fixture.get("name") or "")
     emulebb_fixture_name = str(emulebb_fixture.get("name") or "")
     if rust_fixture_name.isascii() or emulebb_fixture_name.isascii():
         raise RuntimeError("Rust/eMuleBB cross-client fixtures did not use Unicode filenames.")
+    if shared_tree.get("recursive") is not True or str(shared_tree.get("name") or "").isascii():
+        raise RuntimeError("Rust/eMuleBB cross-client report did not prove a recursive Unicode shared-tree fixture.")
+    tree_publish = checks.get("rust_shared_tree_publish")
+    if not isinstance(tree_publish, dict):
+        raise RuntimeError("Rust/eMuleBB cross-client report is missing Rust shared-tree publish evidence.")
+    matched = tree_publish.get("sharedFiles", {}).get("matched") if isinstance(tree_publish.get("sharedFiles"), dict) else None
+    if not isinstance(matched, dict) or matched.get("name") != shared_tree.get("name"):
+        raise RuntimeError("Rust/eMuleBB cross-client report did not match the shared-tree fixture in Rust shared files.")
     manifest_metadata = checks.get("rust_emulebb_manifest_metadata")
     if not isinstance(manifest_metadata, dict):
         raise RuntimeError("Rust/eMuleBB cross-client report is missing Rust manifest metadata.")
@@ -293,6 +383,7 @@ def require_cross_client_requirements(report: dict[str, object]) -> dict[str, ob
     return {
         "bidirectionalTransfers": True,
         "unicodeFixtureNames": True,
+        "recursiveSharedTreeUpload": True,
         "rustToEmulebbUnicodeName": rust_fixture_name,
         "emulebbToRustUnicodeName": emulebb_fixture_name,
         "rustPersistedSourceUserHash": True,
@@ -366,15 +457,14 @@ def main(argv: list[str] | None = None) -> int:
         report["checks"]["ed2k_server_health"] = ed2k_server.health
         report["ed2k_server"] = ed2k_server.config
 
-        fixture_path = paths.source_artifacts_dir / "rust-shared" / rust_to_emulebb_fixture_name()
-        fixture_sha256 = dtt.write_fixture_file(fixture_path, args.fixture_size_bytes)
-        report["fixture"] = {
-            "path": str(fixture_path),
-            "name": fixture_path.name,
-            "size": args.fixture_size_bytes,
-            "sha256": fixture_sha256,
-            "unicode_name": True,
-        }
+        rust_shared_tree = write_rust_shared_tree_fixture(
+            paths.source_artifacts_dir / "rust-shared-tree",
+            args.fixture_size_bytes,
+        )
+        fixture_path = Path(str(rust_shared_tree["path"]))
+        fixture_sha256 = str(rust_shared_tree["sha256"])
+        report["fixture"] = dict(rust_shared_tree)
+        report["rust_shared_tree"] = dict(rust_shared_tree)
 
         rust_runtime = paths.source_artifacts_dir / "rust-runtime"
         rust_config = paths.source_artifacts_dir / "rust.toml"
@@ -401,8 +491,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"]["rust_connect"] = request_json(rust_base_url, "POST", "/api/v1/servers/operations/connect", args.api_key)
         report["checks"]["rust_ed2k_connected"] = wait_for_rust_ed2k_connected(rust_base_url, args.api_key, args.server_connect_timeout_seconds)
-        shared = request_json(rust_base_url, "POST", "/api/v1/shared-files", args.api_key, {"path": str(fixture_path)})
-        rust_file = shared["file"]
+        report["checks"]["rust_shared_tree_publish"] = publish_rust_shared_tree(
+            rust_base_url,
+            args.api_key,
+            root=Path(str(rust_shared_tree["root"])),
+            file_name=str(rust_shared_tree["name"]),
+        )
+        rust_file = report["checks"]["rust_shared_tree_publish"]["sharedFiles"]["matched"]
         link = str(rust_file["ed2kLink"])
         link_info = dtt.parse_ed2k_file_link(link)
         transfer_hash = str(link_info["hash"])
