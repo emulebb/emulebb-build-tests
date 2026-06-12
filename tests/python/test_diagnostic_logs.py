@@ -160,6 +160,105 @@ def test_analyze_diagnostic_logs_summarizes_bad_peers_and_slot_summaries(tmp_pat
     assert "Latest upload summary:" in formatted
 
 
+def test_upload_bandwidth_analysis_reports_98_percent_gap(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / diagnostic_logs.UPLOAD_SLOT_LOG_NAME).write_text(
+        "\n".join(
+            [
+                "UploadSlotDiagnostics: summary configuredBudgetBytesPerSec=1000000 "
+                "toNetworkBytesPerSec=910000 activeSlots=10 effectiveSlotCap=12 waiting=0 "
+                "waitingEligible=0 underfilled=1 slowTracking=0 ed2kPublishedFiles=100 ed2kPendingFiles=0 "
+                "kadPublishReady=0",
+                "UploadSlotDiagnostics: summary configuredBudgetBytesPerSec=1000000 "
+                "toNetworkBytesPerSec=970000 activeSlots=11 effectiveSlotCap=12 waiting=0 "
+                "waitingEligible=0 underfilled=1 slowTracking=0 ed2kPublishedFiles=100 ed2kPendingFiles=0 "
+                "kadPublishReady=0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    analysis = diagnostic_logs.analyze_upload_bandwidth(logs_dir, target_utilization=0.98, tail=2)
+
+    assert analysis["target_utilization"] == 0.98
+    assert analysis["target_rate_bytes_per_sec"] == 980000
+    assert analysis["target_gap_bytes_per_sec"] == 10000
+    assert analysis["verdict"] == "near-target"
+    assert analysis["series"][0]["rateKiBps"] == 888
+    assert analysis["series"][1]["rateKiBps"] == 947
+
+    formatted = diagnostic_logs.format_upload_bandwidth(analysis)
+
+    assert "97.0% of cap" in formatted
+    assert "target=957 KiB/s gap=9 KiB/s" in formatted
+    assert "verdict: near-target" in formatted
+
+
+def test_upload_bandwidth_analysis_marks_target_met(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / diagnostic_logs.UPLOAD_SLOT_LOG_NAME).write_text(
+        "UploadSlotDiagnostics: summary configuredBudgetBytesPerSec=1000000 "
+        "toNetworkBytesPerSec=981000 activeSlots=12 effectiveSlotCap=12 waiting=0 "
+        "waitingEligible=0 underfilled=0 slowTracking=0 ed2kPublishedFiles=100 ed2kPendingFiles=0 "
+        "kadPublishReady=0\n",
+        encoding="utf-8",
+    )
+
+    analysis = diagnostic_logs.analyze_upload_bandwidth(logs_dir, target_utilization=0.98)
+
+    assert analysis["verdict"] == "target-met"
+    assert analysis["target_gap_bytes_per_sec"] == -1000
+
+
+def test_upload_bandwidth_watch_rollup_summarizes_samples() -> None:
+    samples = [
+        {
+            "exists": True,
+            "budget_bytes_per_sec": 1000000,
+            "target_utilization": 0.98,
+            "target_rate_bytes_per_sec": 980000,
+            "rate_bytes_per_sec": 200000,
+            "utilization": 0.2,
+            "waiting": 0,
+            "waiting_eligible": 0,
+            "active_slots": 2,
+            "effective_slot_cap": 12,
+            "verdict": "demand-empty",
+        },
+        {
+            "exists": True,
+            "budget_bytes_per_sec": 1000000,
+            "target_utilization": 0.98,
+            "target_rate_bytes_per_sec": 980000,
+            "rate_bytes_per_sec": 400000,
+            "utilization": 0.4,
+            "waiting": 1,
+            "waiting_eligible": 0,
+            "active_slots": 3,
+            "effective_slot_cap": 12,
+            "verdict": "demand-eligibility-limited",
+        },
+    ]
+
+    summary = diagnostic_logs.summarize_upload_bandwidth_watch(samples)
+
+    assert summary["avg_rate_bytes_per_sec"] == 300000
+    assert summary["max_rate_bytes_per_sec"] == 400000
+    assert summary["avg_utilization"] == 0.30000000000000004
+    assert summary["max_waiting"] == 1
+    assert summary["max_waiting_eligible"] == 0
+    assert summary["verdict_counts"] == {"demand-empty": 1, "demand-eligibility-limited": 1}
+
+    formatted = diagnostic_logs.format_upload_bandwidth_watch(summary)
+
+    assert "Upload monitor rollup:" in formatted
+    assert "avg=292 KiB/s" in formatted
+    assert "eligibleMax=0" in formatted
+
+
 def write_json_lines(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 

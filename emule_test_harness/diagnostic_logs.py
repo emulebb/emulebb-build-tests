@@ -442,6 +442,7 @@ def analyze_upload_bandwidth(
     *,
     tail: int = 12,
     budget_bytes_per_sec: int | None = None,
+    target_utilization: float = 0.98,
 ) -> dict[str, Any]:
     """Analyzes upload-slot summaries for upload-bandwidth utilization vs the configured budget.
 
@@ -466,9 +467,11 @@ def analyze_upload_bandwidth(
     slow = _summary_int(latest, "slowTracking")
     pending = _summary_int(latest, "ed2kPendingFiles")
     utilization = (rate / budget) if budget else None
+    target_rate = int(budget * target_utilization) if budget else None
 
     verdict, reason = _upload_bandwidth_verdict(
         utilization=utilization,
+        target_utilization=target_utilization,
         active=active,
         cap=cap,
         waiting=waiting,
@@ -483,6 +486,9 @@ def analyze_upload_bandwidth(
         "budget_bytes_per_sec": budget,
         "rate_bytes_per_sec": rate,
         "utilization": utilization,
+        "target_utilization": target_utilization,
+        "target_rate_bytes_per_sec": target_rate,
+        "target_gap_bytes_per_sec": (target_rate - rate) if target_rate is not None else None,
         "active_slots": active,
         "effective_slot_cap": cap,
         "waiting": waiting,
@@ -520,6 +526,7 @@ def _upload_bandwidth_row(summary: dict[str, Any]) -> dict[str, Any]:
 def _upload_bandwidth_verdict(
     *,
     utilization: float | None,
+    target_utilization: float,
     active: int,
     cap: int,
     waiting: int,
@@ -529,8 +536,10 @@ def _upload_bandwidth_verdict(
 ) -> tuple[str, str]:
     if utilization is None:
         return "unknown", "No configured upload budget in the summary."
+    if utilization >= target_utilization:
+        return "target-met", f"Upload is at {utilization:.0%} of budget; target is {target_utilization:.0%}."
     if utilization >= 0.9:
-        return "near-cap", f"Upload is at {utilization:.0%} of budget; slot policy is saturating the budget."
+        return "near-target", f"Upload is at {utilization:.0%} of budget; target is {target_utilization:.0%}."
     if not underfilled:
         return "healthy", f"Upload at {utilization:.0%} of budget and not flagged underfilled."
     if eligible > 0 and active < cap:
@@ -559,11 +568,16 @@ def format_upload_bandwidth(analysis: dict[str, Any]) -> str:
         return f"Upload-slot diagnostics: none found under {analysis.get('logs_dir')}"
     budget_kib = analysis["budget_bytes_per_sec"] // 1024
     rate_kib = analysis["rate_bytes_per_sec"] // 1024
+    target_kib = analysis["target_rate_bytes_per_sec"] // 1024 if analysis.get("target_rate_bytes_per_sec") is not None else 0
+    gap_kib = analysis["target_gap_bytes_per_sec"] // 1024 if analysis.get("target_gap_bytes_per_sec") is not None else 0
     util = analysis["utilization"]
-    util_text = f"{util:.0%} of cap" if util is not None else "no budget"
+    util_text = f"{util:.1%} of cap" if util is not None else "no budget"
     lines = [
         f"Upload bandwidth ({analysis['logs_dir']}):",
-        f"  rate={rate_kib} KiB/s of budget={budget_kib} KiB/s ({util_text})",
+        (
+            f"  rate={rate_kib} KiB/s of budget={budget_kib} KiB/s ({util_text}); "
+            f"target={target_kib} KiB/s gap={gap_kib} KiB/s"
+        ),
         (
             f"  slots: active={analysis['active_slots']}/{analysis['effective_slot_cap']} "
             f"waiting={analysis['waiting']} eligible={analysis['waiting_eligible']} "
@@ -582,3 +596,75 @@ def format_upload_bandwidth(analysis: dict[str, Any]) -> str:
             f"{row['waiting']:>3}/{row['waitingEligible']:<3}  ed2kPub={row['ed2kPublishedFiles']}"
         )
     return "\n".join(lines)
+
+
+def summarize_upload_bandwidth_watch(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarizes repeated upload-bandwidth analyses from live monitoring."""
+
+    usable = [sample for sample in samples if sample.get("exists")]
+    if not usable:
+        return {"exists": False, "samples": len(samples)}
+    rates = [int(sample["rate_bytes_per_sec"]) for sample in usable]
+    utilizations = [float(sample["utilization"]) for sample in usable if sample.get("utilization") is not None]
+    verdicts: dict[str, int] = {}
+    for sample in usable:
+        verdict = str(sample.get("verdict", "unknown"))
+        verdicts[verdict] = verdicts.get(verdict, 0) + 1
+    return {
+        "exists": True,
+        "samples": len(usable),
+        "budget_bytes_per_sec": usable[-1].get("budget_bytes_per_sec"),
+        "target_utilization": usable[-1].get("target_utilization"),
+        "target_rate_bytes_per_sec": usable[-1].get("target_rate_bytes_per_sec"),
+        "avg_rate_bytes_per_sec": sum(rates) / len(rates),
+        "min_rate_bytes_per_sec": min(rates),
+        "max_rate_bytes_per_sec": max(rates),
+        "last_rate_bytes_per_sec": rates[-1],
+        "avg_utilization": (sum(utilizations) / len(utilizations)) if utilizations else None,
+        "min_utilization": min(utilizations) if utilizations else None,
+        "max_utilization": max(utilizations) if utilizations else None,
+        "last_utilization": utilizations[-1] if utilizations else None,
+        "avg_waiting": sum(int(sample["waiting"]) for sample in usable) / len(usable),
+        "max_waiting": max(int(sample["waiting"]) for sample in usable),
+        "avg_waiting_eligible": sum(int(sample["waiting_eligible"]) for sample in usable) / len(usable),
+        "max_waiting_eligible": max(int(sample["waiting_eligible"]) for sample in usable),
+        "max_active_slots": max(int(sample["active_slots"]) for sample in usable),
+        "last_active_slots": int(usable[-1]["active_slots"]),
+        "last_effective_slot_cap": int(usable[-1]["effective_slot_cap"]),
+        "verdict_counts": verdicts,
+    }
+
+
+def format_upload_bandwidth_watch(summary: dict[str, Any]) -> str:
+    """Formats a repeated upload-bandwidth monitor summary."""
+
+    if not summary.get("exists"):
+        return f"Upload monitor rollup: no usable samples ({summary.get('samples', 0)} sample(s))."
+    avg_rate_kib = int(summary["avg_rate_bytes_per_sec"]) // 1024
+    max_rate_kib = int(summary["max_rate_bytes_per_sec"]) // 1024
+    last_rate_kib = int(summary["last_rate_bytes_per_sec"]) // 1024
+    target_rate_kib = int(summary["target_rate_bytes_per_sec"] or 0) // 1024
+    avg_util = summary.get("avg_utilization")
+    max_util = summary.get("max_utilization")
+    last_util = summary.get("last_utilization")
+    verdicts = ", ".join(f"{name}={count}" for name, count in sorted(summary["verdict_counts"].items()))
+    return "\n".join(
+        [
+            "Upload monitor rollup:",
+            (
+                f"  samples={summary['samples']} avg={avg_rate_kib} KiB/s "
+                f"max={max_rate_kib} KiB/s last={last_rate_kib} KiB/s target={target_rate_kib} KiB/s"
+            ),
+            (
+                f"  utilization avg={avg_util:.1%} max={max_util:.1%} last={last_util:.1%} "
+                f"target={summary['target_utilization']:.1%}"
+            ),
+            (
+                f"  slots last={summary['last_active_slots']}/{summary['last_effective_slot_cap']} "
+                f"maxActive={summary['max_active_slots']} waitingAvg={summary['avg_waiting']:.1f} "
+                f"waitingMax={summary['max_waiting']} eligibleAvg={summary['avg_waiting_eligible']:.1f} "
+                f"eligibleMax={summary['max_waiting_eligible']}"
+            ),
+            f"  verdicts: {verdicts}",
+        ]
+    )
