@@ -88,12 +88,20 @@ TEST_CASE("Upload queue direct admission bypasses only cooldown-only waiting lis
 	CHECK_FALSE(ShouldDirectAdmitBehindCooldownOnlyWaitingList(true, true));
 }
 
-TEST_CASE("Upload queue probes productive no-request cooldowns only near expiry")
+TEST_CASE("Upload queue probes no-request cooldowns only while underfilled below base slots")
 {
 	CHECK_EQ(kProductiveNoRequestCooldownProbeRemainingMs, static_cast<std::uint64_t>(5000u));
+	CHECK(HasOpenBaseUploadSlotDuringBroadbandUnderfill(true, 11, 12));
+	CHECK_FALSE(HasOpenBaseUploadSlotDuringBroadbandUnderfill(true, 12, 12));
+	CHECK_FALSE(HasOpenBaseUploadSlotDuringBroadbandUnderfill(true, 13, 12));
+	CHECK_FALSE(HasOpenBaseUploadSlotDuringBroadbandUnderfill(false, 11, 12));
+	CHECK_FALSE(HasOpenBaseUploadSlotDuringBroadbandUnderfill(true, 0, 0));
+	CHECK(ShouldProbeUploadCooldownCandidate(true, 11, 12));
+	CHECK_FALSE(ShouldProbeUploadCooldownCandidate(true, 12, 12));
+	CHECK_FALSE(ShouldProbeUploadCooldownCandidate(false, 11, 12));
 	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 5000u, kProductiveNoRequestCooldownProbeRemainingMs, true));
-	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 5001u, kProductiveNoRequestCooldownProbeRemainingMs, true));
-	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(false, 0u, kProductiveNoRequestCooldownProbeRemainingMs, true));
+	CHECK(ShouldProbeNoRequestCooldownCandidate(true, 5001u, kProductiveNoRequestCooldownProbeRemainingMs, true));
+	CHECK(ShouldProbeNoRequestCooldownCandidate(false, 0u, kProductiveNoRequestCooldownProbeRemainingMs, true));
 	CHECK_FALSE(ShouldProbeNoRequestCooldownCandidate(true, 0u));
 }
 
@@ -277,16 +285,21 @@ TEST_CASE("Upload queue clears retry cooldown only when queued peers request val
 	CHECK_FALSE(ShouldAttemptUploadRetryCooldownClearOnQueuedRequest(true, true, false));
 }
 
-TEST_CASE("Upload queue lets productive no-request peers prove renewed demand")
+TEST_CASE("Upload queue lets no-request peers prove renewed demand during base-slot underfill")
 {
-	CHECK(ShouldProbeUploadCooldownCandidate(true, 12, 12));
 	CHECK(ShouldProbeUploadCooldownCandidate(true, 11, 12));
+	CHECK_FALSE(ShouldProbeUploadCooldownCandidate(true, 12, 12));
 	CHECK_FALSE(ShouldProbeUploadCooldownCandidate(false, 11, 12));
 
 	CHECK(ShouldAllowNoRequestCooldownClear(false, false));
 	CHECK(ShouldAllowNoRequestCooldownClear(false, true));
 	CHECK(ShouldAllowNoRequestCooldownClear(true, false));
 	CHECK_FALSE(ShouldAllowNoRequestCooldownClear(true, true));
+
+	CHECK(ShouldClearActiveNoRequestCooldownOnQueuedRequest(true, false));
+	CHECK(ShouldClearActiveNoRequestCooldownOnQueuedRequest(true, true));
+	CHECK(ShouldClearActiveNoRequestCooldownOnQueuedRequest(false, true));
+	CHECK_FALSE(ShouldClearActiveNoRequestCooldownOnQueuedRequest(false, false));
 
 	CHECK_FALSE(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(false, false));
 	CHECK(ShouldBlockQueuedRequestRetryClearForActiveNoRequest(true, false));

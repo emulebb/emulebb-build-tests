@@ -248,16 +248,16 @@ def test_queued_block_request_can_reopen_upload_slot_after_cooldown_clear() -> N
     assert "const bool bProductiveNoRequestRecycle = itNoRequest->second.bProductiveRecycle;" in queue_source
     assert "ShouldAllowNoRequestCooldownClear(true, itNoRequest->second.bQueuedRequestClearUsed)" in queue_source
     assert "reject-not-uploading-no-request-clear-used" in queue_source
+    assert "ShouldClearActiveNoRequestCooldownOnQueuedRequest" in seams_header
+    assert "bClearedUnderfilledNoRequestCooldown" in clear_cooldown_block
+    assert "bOpenBaseSlotUnderfill" in clear_cooldown_block
     assert "bClearedProductiveNoRequestCooldown = true;" in queue_source
-    assert "ShouldClearActiveNoRequestCooldownOnQueuedRequest" not in seams_header
-    assert "bClearedUnderfilledNoRequestCooldown" not in clear_cooldown_block
     assert "fresh demand" not in clear_cooldown_block
     assert "ShouldBlockQueuedRequestRetryClearForActiveNoRequest" in seams_header
-    assert "ShouldBlockQueuedRequestRetryClearForActiveNoRequest(bHadNoRequestCooldown, bClearedProductiveNoRequestCooldown)" in clear_cooldown_block
+    assert "bClearedProductiveNoRequestCooldown || bClearedUnderfilledNoRequestCooldown" in clear_cooldown_block
     assert "reject-not-uploading-unproductive-no-request-active" in clear_cooldown_block
-    assert clear_cooldown_block.index("ShouldBlockQueuedRequestRetryClearForActiveNoRequest(bHadNoRequestCooldown, bClearedProductiveNoRequestCooldown)") < clear_cooldown_block.index("m_uploadRetryCooldownByIP.find(dwCooldownIP)")
-    assert "bHadClientCooldown || bHadIPCooldown || bClearedProductiveNoRequestCooldown" in queue_source
-    assert "bHadClientCooldown || bHadIPCooldown || bClearedProductiveNoRequestCooldown ||" not in queue_source
+    assert clear_cooldown_block.index("ShouldBlockQueuedRequestRetryClearForActiveNoRequest") < clear_cooldown_block.index("m_uploadRetryCooldownByIP.find(dwCooldownIP)")
+    assert "bHadClientCooldown || bHadIPCooldown || bClearedProductiveNoRequestCooldown || bClearedUnderfilledNoRequestCooldown" in queue_source
     assert "reject-not-uploading-retry-clear-used" in queue_source
     assert "reject-not-uploading-no-request-only-cooldown" in queue_source
     assert "reject-not-uploading-no-active-cooldown" in queue_source

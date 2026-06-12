@@ -38,18 +38,19 @@ def test_broadband_retained_slot_logs_are_throttled() -> None:
     assert source.count("if (!ShouldLogBroadbandRetainedSlot(uSuppressedLogs))\n\t\t\t\treturn false;") == 1
 
 
-def test_underfilled_upload_queue_only_probes_productive_no_request_cooldowns() -> None:
+def test_underfilled_upload_queue_probes_no_request_cooldowns_below_base_slots() -> None:
     source = (app_source_root() / "UploadQueue.cpp").read_text(encoding="utf-8", errors="ignore")
     header = (app_source_root() / "UploadQueue.h").read_text(encoding="utf-8", errors="ignore")
     seams = (app_source_root() / "UploadQueueSeams.h").read_text(encoding="utf-8", errors="ignore")
 
     assert "ShouldProbeUploadCooldownCandidate" in seams
+    assert "HasOpenBaseUploadSlotDuringBroadbandUnderfill" in seams
     assert "kProductiveNoRequestCooldownProbeRemainingMs = 5000u" in seams
     assert "ShouldProbeUnproductiveNoRequestCooldownCandidate" not in seams
     assert "ShouldProbeNoRequestCooldownCandidate" in seams
     assert "kUnproductiveNoRequestCooldownProbeRemainingMs" not in seams
-    assert "bProductiveNoRequestCooldown\n\t\t&& bOpenCapUnderfill" in seams
-    assert "ullCooldownRemainingMs <= ullMaxProductiveProbeRemainingMs" in seams
+    assert "iUploadSlots < iSoftMaxUploadSlots" in seams
+    assert "return bOpenBaseSlotUnderfill;" in seams
     assert "bool\tHasUploadCooldownProbeCandidate(ULONGLONG curTick);" in header
     assert "bool\tCanProbeUploadCooldownCandidate(CUpDownClient *client, ULONGLONG curTick) const;" in header
     assert "bool CUploadQueue::HasUploadCooldownProbeCandidate(ULONGLONG curTick)" in source
@@ -73,13 +74,13 @@ def test_underfilled_upload_queue_only_probes_productive_no_request_cooldowns() 
     assert "client == NULL || client->GetSlowUploadCooldownRemaining() == 0" in cooldown_probe_block
     assert "m_noRequestUploadRetryCooldownByIP.find(dwCooldownIP)" in cooldown_probe_block
     assert "itNoRequest->second.ullCooldownUntil > curTick" in cooldown_probe_block
-    assert "already contributed payload" in cooldown_probe_block
-    assert "hard admission gates" in cooldown_probe_block
+    assert "below the configured base slot target" in cooldown_probe_block
+    assert "elastic overflow still treats those cooldowns as hard gates" in cooldown_probe_block
     assert "const ULONGLONG ullCooldownRemainingMs = itNoRequest->second.ullCooldownUntil - curTick;" in cooldown_probe_block
     assert "ShouldProbeNoRequestCooldownCandidate(" in cooldown_probe_block
     assert "kProductiveNoRequestCooldownProbeRemainingMs" in cooldown_probe_block
     assert "ShouldProbeUploadCooldownCandidate(HasSustainedBroadbandUnderfill(curTick), uploadinglist.GetCount(), GetSoftMaxUploadSlots())" in cooldown_probe_block
-    assert cooldown_probe_block.index("ShouldProbeNoRequestCooldownCandidate") < cooldown_probe_block.rindex("return true;")
+    assert cooldown_probe_block.index("ShouldProbeNoRequestCooldownCandidate") < cooldown_probe_block.rindex("return false;")
 
     has_probe_block = source[
         source.index("bool CUploadQueue::HasUploadCooldownProbeCandidate") :
