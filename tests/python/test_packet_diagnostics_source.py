@@ -135,6 +135,11 @@ def test_packet_diagnostics_logging_api_is_compile_guarded() -> None:
     assert "VERIFY(rLog.SetFlushOnWrite(true));" in log_source
     assert "WriteDiagnosticsLogLineV(theUploadSlotDiagnosticsLog, g_uploadSlotDiagnosticsLogLock, pszFmt, argp)" in log_source
     assert "WriteDiagnosticsLogLineV(theDownloadSlotDiagnosticsLog, g_downloadSlotDiagnosticsLogLock, pszFmt, argp)" in log_source
+    assert "constexpr ULONGLONG kDiagnosticsDiskFlushIntervalMs = 1000;" in log_source
+    assert "bool FlushToDisk();" in log_header
+    assert "bool CLogFile::FlushToDisk()" in log_source
+    assert "_commit(_fileno(m_fp)) == 0" in log_source
+    assert "FlushDiagnosticsLogToDiskIfDue(rLog, s_ullLastDiagnosticsDiskFlushTick, ::GetTickCount64());" in log_source
     assert "LogArtifactNames::PacketDiagnosticsLogFileName()" in emule_source
     assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS\ninline LPCTSTR PacketDiagnosticsLogFileName()" in artifacts
     assert 'return _T("emulebb-diagnostics-packet.log");' in artifacts
