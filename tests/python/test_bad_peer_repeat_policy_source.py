@@ -55,7 +55,7 @@ def test_repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> No
     assert "ULONGLONG m_ullLastNoRequestRepeatCleanup;" in queue_header
     assert "UINT uTotalStrikes;" in queue_header
     assert "UINT uIPRotationStrikes;" in queue_header
-    assert "TrackNoRequestRepeatOffender(CUpDownClient *client, ULONGLONG curTick, UINT uBaseCooldownSeconds, UINT uBanThreshold)" in queue_header
+    assert "TrackNoRequestRepeatOffender(CUpDownClient *client, ULONGLONG curTick, UINT uBaseCooldownSeconds, UINT uMaxCooldownSeconds, UINT uBanThreshold)" in queue_header
     assert "m_noRequestRepeatOffendersByHash[key]" in queue_source
     assert "m_noRequestRepeatOffendersByIP[dwCooldownIP]" in queue_source
     assert "m_noRequestRepeatHashesByIP[dwCooldownIP]" in queue_source
@@ -67,10 +67,11 @@ def test_repeated_no_request_policy_is_configured_hash_aware_and_bounded() -> No
     assert "repeatPenalty.bShouldIPBan ? clientBanScopeBoth : clientBanScopeHash" in queue_source
     assert "GetNoRequestRepeatBaseCooldownSeconds(" not in seams
     assert "const UINT uBaseCooldownSeconds = uConfiguredCooldownSeconds;" in queue_source
+    assert "const UINT uRepeatCooldownMaxSeconds = GetRepeatedNoRequestUploadCooldownMaxSecondsForBudget(uBudgetBytesPerSec);" in queue_source
     assert "const UINT uRepeatBanThreshold = GetNoRequestRepeatBanThresholdForBudget(uBudgetBytesPerSec);" in queue_source
-    assert "TrackNoRequestRepeatOffender(client, curTick, uBaseCooldownSeconds, uRepeatBanThreshold)" in queue_source
+    assert "TrackNoRequestRepeatOffender(client, curTick, uBaseCooldownSeconds, uRepeatCooldownMaxSeconds, uRepeatBanThreshold)" in queue_source
     assert "uRepeatBanThreshold," in queue_source
-    assert "GetNoRequestRepeatCooldownSeconds(uBaseCooldownSeconds, penalty.uStrikes)" in queue_source
+    assert "GetNoRequestRepeatCooldownSeconds(uBaseCooldownSeconds, penalty.uStrikes, uMaxCooldownSeconds)" in queue_source
     assert "m_ullLastNoRequestRepeatCleanup + SEC2MS(kNoRequestRepeatCleanupIntervalSeconds)" in queue_source
     assert "m_ullLastNoRequestRepeatCleanup = curTick;" in queue_source
 

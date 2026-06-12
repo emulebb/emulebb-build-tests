@@ -140,15 +140,17 @@ def test_upload_slot_diagnostics_reports_cooldown_pressure() -> None:
     assert "Broadband no-request slot retained because no replacement is available" in no_request_recycle_block
     assert no_request_recycle_block.index("HasNoRequestUploadReplacementPressure(") < no_request_recycle_block.index("if (ShouldCooldownNoRequestUploadRecycle(false))")
     assert "const UINT uProductiveCooldownSeconds = GetNoRequestUploadRetryCooldownSeconds" in no_request_recycle_block
+    assert "const UINT uRepeatCooldownMaxSeconds = GetRepeatedNoRequestUploadCooldownMaxSecondsForBudget(uBudgetBytesPerSec);" in no_request_recycle_block
     assert "const UINT uBaseCooldownSeconds = uConfiguredCooldownSeconds;" in no_request_recycle_block
     assert "const UINT uRepeatBanThreshold = GetNoRequestRepeatBanThresholdForBudget(uBudgetBytesPerSec);" in no_request_recycle_block
     assert "NoRequestRepeatPenalty repeatPenalty = {};" in no_request_recycle_block
-    assert "repeatPenalty = TrackNoRequestRepeatOffender(client, curTick, uBaseCooldownSeconds, uRepeatBanThreshold);" in no_request_recycle_block
+    assert "repeatPenalty = TrackNoRequestRepeatOffender(client, curTick, uBaseCooldownSeconds, uRepeatCooldownMaxSeconds, uRepeatBanThreshold);" in no_request_recycle_block
     assert "uCooldownSeconds = repeatPenalty.uCooldownSeconds;" in no_request_recycle_block
     assert "uRepeatBanThreshold," in no_request_recycle_block
-    assert "GetNoRequestRepeatCooldownSeconds(uBaseCooldownSeconds, penalty.uStrikes)" in source
+    assert "GetNoRequestRepeatCooldownSeconds(uBaseCooldownSeconds, penalty.uStrikes, uMaxCooldownSeconds)" in source
     assert "upload_no_request_repeat_cooldown" in no_request_recycle_block
     assert "upload_no_request_repeat_ban" in no_request_recycle_block
+    assert '\\"max_cooldown_seconds\\":%u' in no_request_recycle_block
     assert '\\"key_type\\":\\"%s\\",\\"scope\\":\\"%s\\"' in no_request_recycle_block
     assert "LPCTSTR pszRepeatScope = repeatPenalty.bShouldIPBan || !repeatPenalty.bHashScoped ? _T(\"ip\") : _T(\"hash\");" in no_request_recycle_block
     assert "Repeated zero-request upload slot abuse" in no_request_recycle_block
@@ -160,6 +162,7 @@ def test_upload_slot_diagnostics_reports_cooldown_pressure() -> None:
         no_request_cooldown_start :
         no_request_recycle_block.index("client->SetSlowUploadCooldownUntil", no_request_cooldown_start)
     ]
+    assert no_request_recycle_block.index("const UINT uRepeatCooldownMaxSeconds") < no_request_recycle_block.index("const UINT uProductiveCooldownSeconds")
     assert no_request_cooldown_block.index("const UINT uBaseCooldownSeconds") < no_request_cooldown_block.index("const UINT uInitialCooldownSeconds")
     assert no_request_cooldown_block.index("const UINT uRepeatBanThreshold") < no_request_cooldown_block.index("TrackNoRequestRepeatOffender")
     assert no_request_cooldown_block.index("const UINT uInitialCooldownSeconds") < no_request_cooldown_block.index("UINT uCooldownSeconds = uInitialCooldownSeconds;")

@@ -273,6 +273,9 @@ TEST_CASE("Broadband no-request cooldown covers drained sessions")
 	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 3u), 240u);
 	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(60u, 7u), kNoRequestRepeatCooldownMaxSeconds);
 	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(600u, 4u), kNoRequestRepeatCooldownMaxSeconds);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(30u, 1u, kBroadbandRepeatedNoRequestUploadCooldownMaxSeconds), 30u);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(30u, 2u, kBroadbandRepeatedNoRequestUploadCooldownMaxSeconds), kBroadbandRepeatedNoRequestUploadCooldownMaxSeconds);
+	CHECK_EQ(GetNoRequestRepeatCooldownSeconds(30u, 8u, kBroadbandRepeatedNoRequestUploadCooldownMaxSeconds), kBroadbandRepeatedNoRequestUploadCooldownMaxSeconds);
 	CHECK_EQ(kNoRequestRepeatBanThreshold, 8u);
 	CHECK_EQ(kBroadbandNoRequestRepeatBanThreshold, 16u);
 	CHECK_EQ(
