@@ -39,7 +39,7 @@ TEST_CASE("Preference validation seam centralizes core numeric ranges")
 	CHECK(PreferenceValidationSeams::kMaxUploadSlots == 64u);
 	CHECK(PreferenceValidationSeams::kMaxEffectiveUploadSlots == 128u);
 	CHECK(PreferenceValidationSeams::kDefaultMaxUploadSlots == 12u);
-	CHECK(PreferenceValidationSeams::kDefaultUploadSlotElasticPercent == 50u);
+	CHECK(PreferenceValidationSeams::kDefaultUploadSlotElasticPercent == 80u);
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlotElasticPercent(101u) == PreferenceValidationSeams::kMaxUploadSlotElasticPercent);
 	CHECK(PreferenceValidationSeams::GetElasticUploadSlotCap(10u, 50u) == 15u);
 	CHECK(PreferenceValidationSeams::GetElasticUploadSlotCap(63u, 1u) == 64u);
@@ -97,7 +97,7 @@ TEST_CASE("Preference validation seam centralizes broadband upload policy ranges
 	CHECK(PreferenceValidationSeams::NormalizeUploadSlotElasticPercent(PreferenceValidationSeams::kDefaultUploadSlotElasticPercent) == PreferenceValidationSeams::kDefaultUploadSlotElasticPercent);
 
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.01f) == PreferenceValidationSeams::kMinSlowUploadThresholdFactor);
-	CHECK(PreferenceValidationSeams::kDefaultSlowUploadThresholdFactor == 0.55f);
+	CHECK(PreferenceValidationSeams::kDefaultSlowUploadThresholdFactor == 0.75f);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(0.70f) == 0.70f);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(2.0f) == PreferenceValidationSeams::kMaxSlowUploadThresholdFactor);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadThresholdFactor(std::numeric_limits<float>::quiet_NaN()) == PreferenceValidationSeams::kDefaultSlowUploadThresholdFactor);
@@ -112,7 +112,7 @@ TEST_CASE("Preference validation seam centralizes broadband upload policy ranges
 	CHECK(PreferenceValidationSeams::kDefaultZeroUploadRateGraceSeconds == 5u);
 	CHECK(PreferenceValidationSeams::NormalizeZeroUploadRateGraceSeconds(121u) == PreferenceValidationSeams::kMaxZeroUploadRateGraceSeconds);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadCooldownSeconds(0u) == PreferenceValidationSeams::kMinSlowUploadCooldownSeconds);
-	CHECK(PreferenceValidationSeams::kDefaultSlowUploadCooldownSeconds == 60u);
+	CHECK(PreferenceValidationSeams::kDefaultSlowUploadCooldownSeconds == 30u);
 	CHECK(PreferenceValidationSeams::NormalizeSlowUploadCooldownSeconds(3601u) == PreferenceValidationSeams::kMaxSlowUploadCooldownSeconds);
 
 	CHECK(PreferenceValidationSeams::NormalizeLowRatioThreshold(-1.0f) == PreferenceValidationSeams::kMinLowRatioThreshold);
