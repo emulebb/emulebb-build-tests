@@ -19,6 +19,7 @@ STANDALONE_LIVE_SCRIPT_NETWORK_SCOPES = {
     "emulebb-rust-amule-cross-client.py": "lan",
     "emulebb-rust-emulebb-cross-client.py": "lan",
     "fake-kad-trust-soak.py": "vpn",
+    "local-ed2k-rust-protocol-combinations.py": "lan",
     "radarr-sonarr-emulebb-live.py": "vpn",
     "three-client-swarm-transfer.py": "lan",
 }
