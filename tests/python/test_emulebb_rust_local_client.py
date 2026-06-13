@@ -180,6 +180,28 @@ def request_json(
         return json.loads(response.read().decode("utf-8"))
 
 
+def poll_search(
+    base_url: str,
+    search_id: str,
+    *,
+    want: int = 1,
+    attempts: int = 40,
+    interval: float = 0.25,
+) -> dict[str, object]:
+    """Polls a search (async eMuleBB search/start -> poll search/results) until it
+    has at least `want` items under the canonical "items" key, returning the page."""
+    page: dict[str, object] = {"items": []}
+    for _ in range(attempts):
+        page = request_json(
+            base_url, "GET", f"/api/v1/searches/{search_id}?limit=200&offset=0"
+        )["data"]
+        if len(page.get("items", [])) >= want or page.get("status") == "complete":
+            if page.get("items"):
+                return page
+        time.sleep(interval)
+    return page
+
+
 def request_json_status(
     base_url: str,
     method: str,
@@ -574,13 +596,16 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         )
         assert import_empty_status == 400
         assert "url" in import_empty_error["error"]["message"]
-        import_nodes = request_json(
+        # An unreachable/invalid URL import now fails explicitly with EMULE_ERROR
+        # (master URL-import contract), not an in-band {ok:false}.
+        import_fail_status, import_fail_error = request_json_status(
             base_url,
             "POST",
             "/api/v1/kad/operations/import-nodes-url",
             {"url": f"http://{lan_host}:{port}/nodes.dat"},
-        )["data"]
-        assert import_nodes == {"ok": False, "imported": False}
+        )
+        assert import_fail_status == 500
+        assert import_fail_error["error"]["code"] == "EMULE_ERROR"
         bad_bootstrap_status, bad_bootstrap_error = request_json_status(
             base_url,
             "POST",
@@ -610,7 +635,9 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         assert stopped_kad["running"] is False
         assert stopped_kad["connected"] is False
         logs = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
-        assert logs == []
+        assert isinstance(logs, list)
+        for entry in logs:
+            assert set(entry) >= {"timestamp", "level", "message", "debug"}
         denied_log_clear_status, denied_log_clear_error = request_json_status(
             base_url,
             "POST",
@@ -626,6 +653,8 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             {"confirmClearLogs": True},
         )["data"]
         assert cleared_logs["ok"] is True
+        logs_after_clear = request_json(base_url, "GET", "/api/v1/logs")["data"]["items"]
+        assert logs_after_clear == []
 
         search = request_json(
             base_url,
@@ -633,16 +662,12 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
             "/api/v1/searches",
             {"query": "scenario file", "method": "automatic", "type": ""},
         )["data"]
-        assert search["status"] == "complete"
-        assert search["results"][0]["hash"] == SEED_HASH
-        paged_search = request_json(
-            base_url,
-            "GET",
-            f"/api/v1/searches/{search['id']}?offset=0&limit=1&includeEvidence=false&exactTotal=true",
-        )["data"]
+        # search/start returns an empty first page (status running); poll for results.
+        assert search["status"] == "running"
+        paged_search = poll_search(base_url, search["id"], want=1)
         assert paged_search["id"] == search["id"]
-        assert len(paged_search["results"]) == 1
-        assert paged_search["results"][0]["hash"] == SEED_HASH
+        assert len(paged_search["items"]) == 1
+        assert paged_search["items"][0]["hash"] == SEED_HASH
 
         search_id = search["id"]
         download = request_json(
@@ -816,13 +841,15 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         )
         assert import_empty_status == 400
         assert "url" in import_empty_error["error"]["message"]
-        imported_met = request_json(
+        # Unreachable/invalid URL import fails explicitly with EMULE_ERROR.
+        import_met_fail_status, import_met_fail_error = request_json_status(
             base_url,
             "POST",
             "/api/v1/servers/operations/import-met-url",
             {"url": f"http://{lan_host}:{port}/server.met"},
-        )["data"]
-        assert imported_met == {"ok": False, "imported": False}
+        )
+        assert import_met_fail_status == 500
+        assert import_met_fail_error["error"]["code"] == "EMULE_ERROR"
 
         connected = request_json(base_url, "POST", "/api/v1/servers/operations/connect")["data"]
         assert connected["serverCount"] == 1
@@ -917,7 +944,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
             "/api/v1/searches",
             {"query": "Rust.Live.Search.Fixture", "method": "server", "type": ""},
         )["data"]
-        results = search["results"]
+        results = poll_search(base_url, search["id"])["items"]
         assert any(result["hash"] == SERVER_SEARCH_HASH and result["name"] == SERVER_SEARCH_NAME for result in results)
         stats = goed2k.admin_request(admin_base_url, admin_token, "/api/stats")["data"]
         assert int(stats["search_requests"]) >= 1
@@ -1195,7 +1222,8 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             {"query": "Rust.Peer.Download.Fixture", "method": "server", "type": ""},
             timeout=30,
         )["data"]
-        result = next(result for result in search["results"] if result["hash"] == share_file["hash"])
+        search_items = poll_search(leecher_base_url, search["id"])["items"]
+        result = next(result for result in search_items if result["hash"] == share_file["hash"])
         download = request_json(
             leecher_base_url,
             "POST",
@@ -1209,9 +1237,10 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             {"query": "Rust.Peer.Unicode-\u00e9-\u6f22", "method": "server", "type": ""},
             timeout=30,
         )["data"]
+        unicode_items = poll_search(leecher_base_url, unicode_search["id"])["items"]
         unicode_result = next(
             result
-            for result in unicode_search["results"]
+            for result in unicode_items
             if result["hash"] == unicode_share_file["hash"]
         )
         assert unicode_result["name"] == unicode_payload_path.name
@@ -1352,9 +1381,10 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             {"query": "Rust.Peer.Reverse.Download.Fixture", "method": "server", "type": ""},
             timeout=30,
         )["data"]
+        reverse_items = poll_search(seeder_base_url, reverse_search["id"])["items"]
         reverse_result = next(
             result
-            for result in reverse_search["results"]
+            for result in reverse_items
             if result["hash"] == reverse_share_file["hash"]
         )
         reverse_download = request_json(
