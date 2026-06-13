@@ -3,10 +3,102 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 from emule_test_harness.paths import get_emule_workspace_root
 
 
 ROUTE_SPEC_FUNCTION = "inline const std::vector<SApiRouteSpec> &GetApiRouteSpecs()"
+
+# Maps each OpenAPI request-body schema to the Rust request struct that backs it.
+# Guards the deny_unknown_fields class of bug where a documented optional field is
+# missing from the Rust struct and every request carrying it is rejected with 400.
+REQUEST_SCHEMA_TO_RUST_STRUCT = {
+    "PreferencesPatch": "PreferencesUpdate",
+    "ShutdownRequest": "ShutdownRequest",
+    "DiagnosticDumpRequest": "DiagnosticDumpRequest",
+    "DiagnosticCrashTestRequest": "DiagnosticCrashTestRequest",
+    "CategoryCreateRequest": "CategoryCreate",
+    "CategoryPatch": "CategoryUpdate",
+    "TransferCreateRequest": "TransferCreate",
+    "ClearCompletedTransfersRequest": "ClearCompletedTransfersRequest",
+    "TransferPatch": "TransferUpdate",
+    "SharedFileCreateRequest": "SharedFileCreateRequest",
+    "SharedFilePatch": "SharedFileUpdate",
+    "SharedDirectoryReplaceRequest": "SharedDirectoriesUpdate",
+    "ServerCreateRequest": "ServerCreate",
+    "UrlImportRequest": "UrlImportRequest",
+    "ServerPatch": "ServerUpdate",
+    "KadBootstrapRequest": "KadBootstrapRequest",
+    "SearchCreateRequest": "SearchCreate",
+    "SearchResultDownloadRequest": "SearchResultDownloadCreate",
+    "FriendCreateRequest": "FriendCreate",
+    "ClearLogsRequest": "LogsClearRequest",
+}
+
+
+def test_emulebb_rust_request_bodies_accept_contract_fields() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    workspace_root = get_emule_workspace_root(repo_root)
+    contract = yaml.safe_load(
+        (
+            workspace_root / "repos" / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    schemas = contract["components"]["schemas"]
+    rust_structs = rust_request_struct_fields(
+        workspace_root / "repos" / "emulebb-rust" / "crates"
+    )
+
+    missing: dict[str, list[str]] = {}
+    for schema_name, rust_name in REQUEST_SCHEMA_TO_RUST_STRUCT.items():
+        contract_fields = set((schemas[schema_name].get("properties") or {}).keys())
+        assert contract_fields, f"contract schema {schema_name} has no properties"
+        assert rust_name in rust_structs, f"Rust request struct not found: {rust_name}"
+        gap = sorted(contract_fields - rust_structs[rust_name])
+        if gap:
+            missing[f"{schema_name} -> {rust_name}"] = gap
+
+    assert not missing, f"Rust request structs reject documented contract fields: {missing}"
+
+
+def rust_request_struct_fields(crates_dir: Path) -> dict[str, set[str]]:
+    structs: dict[str, set[str]] = {}
+    for source in crates_dir.glob("**/src/**/*.rs"):
+        if "/target/" in source.as_posix():
+            continue
+        lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        for index, line in enumerate(lines):
+            match = re.match(r"\s*(?:pub )?struct (\w+)\s*\{", line)
+            if not match:
+                continue
+            context = "\n".join(lines[max(0, index - 4) : index])
+            if "Deserialize" not in context:
+                continue
+            structs[match.group(1)] = rust_struct_field_names(lines, index + 1)
+    return structs
+
+
+def rust_struct_field_names(lines: list[str], start: int) -> set[str]:
+    fields: set[str] = set()
+    rename: str | None = None
+    for line in lines[start:]:
+        if re.match(r"\s*\}", line):
+            break
+        rename_match = re.search(r'rename\s*=\s*"([^"]+)"', line)
+        if rename_match:
+            rename = rename_match.group(1)
+        field_match = re.match(r"\s*(?:pub )?(\w+|r#\w+)\s*:", line)
+        if field_match:
+            ident = field_match.group(1).replace("r#", "")
+            fields.add(rename or snake_to_camel(ident))
+            rename = None
+    return fields
+
+
+def snake_to_camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in tail)
 
 
 def test_emulebb_rust_routes_match_canonical_emulebb_rest_contract() -> None:
