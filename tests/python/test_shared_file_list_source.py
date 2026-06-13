@@ -361,3 +361,31 @@ def test_shared_publish_diagnostics_reports_server_and_kad_backlog() -> None:
     assert "IsKadSourcePublishDue(pFile, tNow)" in block
     assert "++rSnapshot.uKadSourceDueFiles;" in block
     assert "++rSnapshot.uKadSourceBackoffFiles;" in block
+
+
+def test_shared_file_page_copy_is_server_side_bounded() -> None:
+    # FEAT-068: the shared-file REST page must stay bounded on very large
+    # libraries (50k+). CopySharedFilePage indexes straight to the offset, copies
+    # at most `uLimit` pointers, and holds the write-list lock only for that copy
+    # (JSON serialization happens after it returns), so one request never walks or
+    # serializes the whole map.
+    source = (app_source_root() / "SharedFileList.cpp").read_text(encoding="utf-8", errors="ignore")
+    block = source[
+        source.index("void CSharedFileList::CopySharedFilePage(") : source.index("CKnownFile* CSharedFileList::GetFileByPath(")
+    ]
+    assert "*pTotal = m_allSharedFiles.size();" in block
+    assert "for (size_t i = uOffset; i < m_allSharedFiles.size() && rFiles.size() < uLimit; ++i)" in block
+    assert "CSingleLock listlock(&m_mutWriteList, TRUE);" in block
+
+
+def test_snapshot_bounds_every_live_collection_for_large_profiles() -> None:
+    # FEAT-068: the snapshot polling summary applies the caller-visible limit to
+    # every live collection so one controller refresh cannot serialize an entire
+    # large profile on the UI-owned state path.
+    source = (app_source_root() / "WebServerJson.cpp").read_text(encoding="utf-8", errors="ignore")
+    start = source.index('strCommand == "snapshot/get"')
+    block = source[start : start + 1600]
+    assert "BuildSharedFilesListJson(0, maxEntries)" in block
+    assert "BuildTransfersListJson(json::object(), listError, false, maxEntries)" in block
+    assert "BuildUploadsListJson(false, maxEntries)" in block
+    assert "BuildUploadsListJson(true, maxEntries)" in block
