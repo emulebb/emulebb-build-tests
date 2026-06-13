@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import socket
-import sqlite3
 import subprocess
 import time
 import urllib.error
@@ -16,6 +15,7 @@ import pytest
 
 from emule_test_harness import goed2k
 from emule_test_harness import rust_client
+from emule_test_harness import rust_metadata
 from emule_test_harness.script_modules import load_script_module
 
 
@@ -109,41 +109,18 @@ def write_remembered_source_manifest(
     source_host: str,
     source_port: int,
 ) -> None:
-    transfer_dir = runtime_dir / "transfers" / file_hash
-    transfer_dir.mkdir(parents=True, exist_ok=True)
-    piece_count = (size_bytes + ED2K_PART_SIZE - 1) // ED2K_PART_SIZE
-    pieces = [
-        {
-            "piece_index": piece_index,
-            "state": "Missing",
-            "bytes_written": 0,
-        }
-        for piece_index in range(piece_count)
-    ]
-    manifest = {
-        "file_hash": file_hash,
-        "canonical_name": name,
-        "file_size": size_bytes,
-        "piece_size": ED2K_PART_SIZE,
-        "completed": False,
-        "md4_hashset_acquired": False,
-        "md4_hashset": [],
-        "aich_hashset_acquired": False,
-        "aich_root": None,
-        "aich_hashset": [],
-        "verified_ranges": [],
-        "pieces": pieces,
-        "sources": [
-            {
-                "ip": source_host,
-                "tcp_port": source_port,
-                "user_hash": None,
-            }
-        ],
-    }
-    (transfer_dir / "resume-manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n",
-        encoding="utf-8",
+    repo = workspace_root() / "repos" / "emulebb-rust"
+    metadata_path = runtime_dir / "metadata.sqlite"
+    if not metadata_path.exists():
+        rust_metadata.create_metadata_db(repo, metadata_path)
+    rust_metadata.seed_remembered_source_transfer(
+        metadata_path,
+        ed2k_hash=file_hash,
+        name=name,
+        size_bytes=size_bytes,
+        piece_size=ED2K_PART_SIZE,
+        source_ip=source_host,
+        source_tcp_port=source_port,
     )
 
 
@@ -158,58 +135,16 @@ def write_rust_peer_exchange_report(report: dict[str, object]) -> None:
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def seed_index(index_path: Path) -> None:
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(index_path) as conn:
-        conn.executescript(
-            """
-            CREATE TABLE files (
-                id INTEGER PRIMARY KEY,
-                ed2k_hash BLOB NOT NULL UNIQUE,
-                size_bytes INTEGER NOT NULL,
-                content_type TEXT NOT NULL,
-                availability_score INTEGER NOT NULL DEFAULT 0,
-                first_seen INTEGER NOT NULL DEFAULT (unixepoch()),
-                last_seen INTEGER NOT NULL DEFAULT (unixepoch())
-            );
-
-            CREATE TABLE file_names (
-                id INTEGER PRIMARY KEY,
-                file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                name TEXT NOT NULL,
-                normalized_name TEXT NOT NULL,
-                seen_count INTEGER NOT NULL DEFAULT 1,
-                first_seen INTEGER NOT NULL DEFAULT (unixepoch()),
-                last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
-                UNIQUE(file_id, normalized_name)
-            );
-
-            CREATE VIRTUAL TABLE file_name_fts USING fts5(
-                name,
-                normalized_name,
-                content='file_names',
-                content_rowid='id',
-                tokenize = 'unicode61 remove_diacritics 2 tokenchars ''.-_'''
-            );
-
-            CREATE TRIGGER file_names_ai AFTER INSERT ON file_names BEGIN
-                INSERT INTO file_name_fts(rowid, name, normalized_name)
-                VALUES (new.id, new.name, new.normalized_name);
-            END;
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO files(ed2k_hash, size_bytes, content_type, availability_score)
-            VALUES (x'00112233445566778899aabbccddeeff', 4096, 'archive', 2)
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO file_names(file_id, name, normalized_name)
-            VALUES (1, 'Scenario.File.bin', 'scenario file bin')
-            """
-        )
+def seed_index(repo: Path, metadata_path: Path) -> None:
+    rust_metadata.create_metadata_db(repo, metadata_path)
+    rust_metadata.seed_indexed_file(
+        metadata_path,
+        ed2k_hash=SEED_HASH,
+        name="Scenario.File.bin",
+        size_bytes=4096,
+        content_type="archive",
+        availability_score=2,
+    )
 
 
 def test_rust_peer_exchange_report_writer_uses_env_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -335,7 +270,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     shared_nested_file.write_bytes(b"emulebb-rust nested shared root fixture")
     port = free_lan_port(lan_host)
     write_config(config_path, runtime_dir, lan_host, port)
-    seed_index(runtime_dir / "index.sqlite")
+    seed_index(repo, runtime_dir / "metadata.sqlite")
 
     process = rust_client.start_rust_client(repo, config_path, output_path)
     try:
@@ -582,11 +517,14 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
                 "rating": 4,
             }
         ]
-        top_manifest_path = runtime_dir / "transfers" / top_shared_file["hash"] / "resume-manifest.json"
-        top_manifest = json.loads(top_manifest_path.read_text(encoding="utf-8"))
-        assert top_manifest["upload_priority"] == "release"
-        assert top_manifest["comment"] == "Harness share comment"
-        assert top_manifest["rating"] == 4
+        persisted_shared_file = request_json(
+            base_url,
+            "GET",
+            f"/api/v1/shared-files/{top_shared_file['hash']}",
+        )["data"]
+        assert persisted_shared_file["priority"] == "release"
+        assert persisted_shared_file["comment"] == "Harness share comment"
+        assert persisted_shared_file["rating"] == 4
         unshared = request_json(
             base_url,
             "DELETE",
@@ -758,11 +696,15 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
 
         transfers = request_json(base_url, "GET", "/api/v1/transfers")["data"]["items"]
         assert any(row["hash"] == SEED_HASH and row["state"] == "paused" for row in transfers)
-        manifest_path = runtime_dir / "transfers" / SEED_HASH / "resume-manifest.json"
-        assert manifest_path.is_file()
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        assert manifest["control_state"] == "paused"
-        assert manifest["canonical_name"] == "Scenario Renamed.bin"
+
+        # Persistence proof: restart the daemon and confirm the paused control
+        # state and renamed canonical name reload from metadata.sqlite.
+        terminate_process(process)
+        process = rust_client.start_rust_client_append(repo, config_path, output_path)
+        wait_for_rest(base_url, process, output_path)
+        reloaded_transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
+        assert reloaded_transfer["state"] == "paused"
+        assert reloaded_transfer["name"] == "Scenario Renamed.bin"
 
         delete_row_status, delete_row_error = request_json_status(
             base_url,
