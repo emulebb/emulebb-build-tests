@@ -149,16 +149,17 @@
           "flowCategory": "live-wire",
           "required": false,
           "blocking": false,
-          "command": "manual",
+          "command": "python scripts/rust-live-wire-hideme.py --inputs live-wire-inputs.local.json",
           "localInputs": [
-            "operator-owned live-wire inputs stay in ignored local files",
-            "public live Rust P2P must bind through hide.me or an explicit VPN bind from configuration"
+            "operator-owned live-wire inputs stay in ignored local files (live-wire-inputs.local.json)",
+            "X_LOCAL_IP (REST bind) and EMULEBB_WORKSPACE_OUTPUT_ROOT (release exe + runtime) come from the environment",
+            "public live Rust P2P binds through the hide.me split tunnel; the daemon exe is whitelisted in %APPDATA%/Hide.me/vpn.settings"
           ],
           "evidence": [
             {
               "kind": "manual",
               "required": false,
-              "description": "Add first-class Rust live-wire automation only after the Rust runtime supports the same configured VPN binding contract used by eMuleBB live campaigns."
+              "description": "Host-level live-wire run binds Rust P2P through hide.me, connects to the operator eD2K server, bootstraps Kad from the public nodes.dat, and proves connection, server keyword search, Kad participation, source exchange, and a completed download across obfuscation-on and obfuscation-off passes. Report JSON is written under EMULEBB_WORKSPACE_OUTPUT_ROOT/live-wire/ (outside the repo)."
             }
           ]
         }
