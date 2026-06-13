@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
+
+from emule_test_harness import rust_metadata
+
+
+def _rust_repo() -> Path:
+    return Path(__file__).resolve().parents[3] / "emulebb-rust"
 
 
 def load_suite_module():
@@ -254,31 +259,28 @@ def test_obfuscated_rust_source_metadata_rejects_missing_peer_user_hash() -> Non
 
 def test_rust_hashset_metadata_accepts_large_file_manifest(tmp_path: Path) -> None:
     module = load_suite_module()
-    manifest_path = tmp_path / "resume-manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "file_hash": "00112233445566778899aabbccddeeff",
-                "canonical_name": "large-fixture.bin",
-                "file_size": module.ED2K_PART_SIZE_BYTES + 1,
-                "md4_hashset_acquired": True,
-                "md4_hashset": [
-                    "00112233445566778899aabbccddeeff",
-                    "ffeeddccbbaa99887766554433221100",
-                ],
-                "aich_hashset_acquired": True,
-                "aich_root": "0123456789abcdef0123456789abcdef01234567",
-                "aich_hashset": [
-                    "0123456789abcdef0123456789abcdef01234567",
-                    "89abcdef0123456789abcdef0123456789abcdef",
-                ],
-            }
-        ),
-        encoding="utf-8",
+    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    rust_metadata.seed_transfer_manifest(
+        tmp_path / "metadata.sqlite",
+        ed2k_hash="00112233445566778899aabbccddeeff",
+        name="large-fixture.bin",
+        size_bytes=module.ED2K_PART_SIZE_BYTES + 1,
+        piece_size=module.ED2K_PART_SIZE_BYTES,
+        md4_hashset_acquired=True,
+        md4_hashset=[
+            "00112233445566778899aabbccddeeff",
+            "ffeeddccbbaa99887766554433221100",
+        ],
+        aich_hashset_acquired=True,
+        aich_root="0123456789abcdef0123456789abcdef01234567",
+        aich_hashset=[
+            "0123456789abcdef0123456789abcdef01234567",
+            "89abcdef0123456789abcdef0123456789abcdef",
+        ],
     )
 
     metadata = module.require_rust_hashset_metadata(
-        manifest_path,
+        tmp_path / "metadata.sqlite",
         expected_hash="00112233445566778899AABBCCDDEEFF",
         expected_name="large-fixture.bin",
         expected_size=module.ED2K_PART_SIZE_BYTES + 1,
@@ -293,29 +295,26 @@ def test_rust_hashset_metadata_accepts_large_file_manifest(tmp_path: Path) -> No
 
 def test_rust_hashset_metadata_rejects_missing_large_file_aich(tmp_path: Path) -> None:
     module = load_suite_module()
-    manifest_path = tmp_path / "resume-manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "file_hash": "00112233445566778899aabbccddeeff",
-                "canonical_name": "large-fixture.bin",
-                "file_size": module.ED2K_PART_SIZE_BYTES + 1,
-                "md4_hashset_acquired": True,
-                "md4_hashset": [
-                    "00112233445566778899aabbccddeeff",
-                    "ffeeddccbbaa99887766554433221100",
-                ],
-                "aich_hashset_acquired": False,
-                "aich_root": None,
-                "aich_hashset": [],
-            }
-        ),
-        encoding="utf-8",
+    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    rust_metadata.seed_transfer_manifest(
+        tmp_path / "metadata.sqlite",
+        ed2k_hash="00112233445566778899aabbccddeeff",
+        name="large-fixture.bin",
+        size_bytes=module.ED2K_PART_SIZE_BYTES + 1,
+        piece_size=module.ED2K_PART_SIZE_BYTES,
+        md4_hashset_acquired=True,
+        md4_hashset=[
+            "00112233445566778899aabbccddeeff",
+            "ffeeddccbbaa99887766554433221100",
+        ],
+        aich_hashset_acquired=False,
+        aich_root=None,
+        aich_hashset=[],
     )
 
     try:
         module.require_rust_hashset_metadata(
-            manifest_path,
+            tmp_path / "metadata.sqlite",
             expected_hash="00112233445566778899aabbccddeeff",
             expected_name="large-fixture.bin",
             expected_size=module.ED2K_PART_SIZE_BYTES + 1,

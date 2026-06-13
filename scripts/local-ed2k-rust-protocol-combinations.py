@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 import time
@@ -17,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 
@@ -242,7 +242,7 @@ def require_rust_source_metadata(
 
 
 def require_rust_hashset_metadata(
-    manifest_path: Path,
+    metadata_path: Path,
     *,
     expected_hash: str,
     expected_name: str,
@@ -250,9 +250,9 @@ def require_rust_hashset_metadata(
 ) -> dict[str, object]:
     """Checks Rust's persisted ED2K hashset and AICH metadata for one completed transfer."""
 
-    if not manifest_path.is_file():
-        raise RuntimeError(f"Rust transfer manifest is missing: {manifest_path}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = rust_metadata.read_transfer_manifest(metadata_path, expected_hash)
+    if manifest is None:
+        raise RuntimeError(f"Rust transfer manifest is missing for {expected_hash} in {metadata_path}")
     normalized_hash = expected_hash.lower()
     if str(manifest.get("file_hash") or "").lower() != normalized_hash:
         raise RuntimeError(f"Rust manifest file_hash did not match {normalized_hash}.")
@@ -278,7 +278,7 @@ def require_rust_hashset_metadata(
             raise RuntimeError("Rust transfer manifest did not persist a 20-byte AICH root.")
 
     return {
-        "manifestPath": str(manifest_path),
+        "metadataPath": str(metadata_path),
         "fileHash": str(manifest.get("file_hash") or ""),
         "canonicalName": manifest.get("canonical_name"),
         "fileSize": manifest.get("file_size"),
@@ -673,7 +673,7 @@ def run_protocol_case(
             expected_tcp_port=ports["client2_tcp"],
         )
         report["checks"]["rust_hashset_metadata"] = require_rust_hashset_metadata(
-            rust_runtime / "transfers" / transfer_hash.lower() / "resume-manifest.json",
+            rust_runtime / "metadata.sqlite",
             expected_hash=transfer_hash,
             expected_name=decoded_link_name,
             expected_size=int(link_info["size"]),
@@ -725,7 +725,7 @@ def run_protocol_case(
             expected_tcp_port=ports["client2_tcp"],
         )
         report["checks"]["rust_secondary_hashset_metadata"] = require_rust_hashset_metadata(
-            rust_runtime / "transfers" / secondary_transfer_hash.lower() / "resume-manifest.json",
+            rust_runtime / "metadata.sqlite",
             expected_hash=secondary_transfer_hash,
             expected_name=secondary_fixture_file.name,
             expected_size=SECONDARY_FIXTURE_SIZE_BYTES,
@@ -794,7 +794,7 @@ def run_protocol_case(
             expected_tcp_port=ports["client2_tcp"],
         )
         report["checks"]["rust_hash_only_manifest_metadata"] = require_rust_hashset_metadata(
-            rust_runtime / "transfers" / hash_only_hash / "resume-manifest.json",
+            rust_runtime / "metadata.sqlite",
             expected_hash=hash_only_hash,
             expected_name=hash_only_fixture_file.name,
             expected_size=HASH_ONLY_FIXTURE_SIZE_BYTES,

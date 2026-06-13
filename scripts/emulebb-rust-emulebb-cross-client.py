@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 import time
@@ -16,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness import goed2k  # noqa: E402
 from emule_test_harness import rust_client  # noqa: E402
+from emule_test_harness import rust_metadata  # noqa: E402
 from emule_test_harness.script_modules import load_script_module  # noqa: E402
 from emule_test_harness.multi_client import CLIENT_IDENTITIES, resolve_manifest_repo  # noqa: E402
 
@@ -195,8 +195,9 @@ def require_rust_download_manifest_metadata(
 ) -> dict[str, object]:
     """Requires Rust to persist stock metadata learned from a cross-client source."""
 
-    manifest_path = runtime_dir / "transfers" / transfer_hash.lower() / "resume-manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = rust_metadata.read_transfer_manifest(runtime_dir / "metadata.sqlite", transfer_hash)
+    if manifest is None:
+        raise RuntimeError(f"Rust cross-client manifest is missing for {transfer_hash}.")
     expected_part_count = max(1, (expected_size + ED2K_PART_SIZE_BYTES - 1) // ED2K_PART_SIZE_BYTES)
     md4_hashset = manifest.get("md4_hashset")
     aich_hashset = manifest.get("aich_hashset")
@@ -230,7 +231,7 @@ def require_rust_download_manifest_metadata(
     if not source_user_hashes:
         raise RuntimeError("Rust cross-client manifest did not persist the peer user hash.")
     return {
-        "manifestPath": str(manifest_path),
+        "metadataPath": str(runtime_dir / "metadata.sqlite"),
         "fileHash": str(manifest.get("file_hash") or "").lower(),
         "canonicalName": manifest.get("canonical_name"),
         "fileSize": int(manifest.get("file_size") or 0),

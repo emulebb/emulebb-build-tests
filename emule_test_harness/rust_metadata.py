@@ -109,21 +109,43 @@ def seed_indexed_file(
         conn.commit()
 
 
-def seed_remembered_source_transfer(
+def seed_transfer_manifest(
     db_path: Path,
     *,
     ed2k_hash: str,
     name: str,
     size_bytes: int,
     piece_size: int,
-    source_ip: str,
-    source_tcp_port: int,
-    source_user_hash: str | None = None,
+    completed: bool = False,
+    md4_hashset_acquired: bool = False,
+    md4_hashset: list[str] | None = None,
+    aich_hashset_acquired: bool = False,
+    aich_root: str | None = None,
+    aich_hashset: list[str] | None = None,
+    sources: list[dict] | None = None,
+    control_state: str | None = None,
+    upload_priority: str = "normal",
+    auto_upload_priority: bool = False,
+    comment: str = "",
+    rating: int = 0,
 ) -> None:
-    """Seed an incomplete transfer with a remembered source (mirrors ``upsert_transfer_manifest``)."""
+    """Seed a full ED2K transfer manifest (mirrors ``MetadataStore::upsert_transfer_manifest``).
 
+    ``sources`` items are dicts with ``ip``, ``tcp_port`` and optional ``user_hash`` (hex).
+    ``md4_hashset``/``aich_hashset`` are lists of lowercase hex part hashes.
+    """
+
+    md4_hashset = md4_hashset or []
+    aich_hashset = aich_hashset or []
+    sources = sources or []
     hash_blob = bytes.fromhex(ed2k_hash)
-    piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes else 0
+    piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes and piece_size else 0
+    if completed:
+        visible_state = "completed"
+    elif control_state is not None:
+        visible_state = "controlled"
+    else:
+        visible_state = "queued"
     now = _now_ms()
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -137,9 +159,27 @@ def seed_remembered_source_transfer(
                 auto_upload_priority, comment, rating,
                 first_seen_ms, last_seen_ms, updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, NULL, 'normal', 0, '', 0, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (content_object_id, hash_blob, size_bytes, name, piece_size, piece_count, now, now, now),
+            (
+                content_object_id,
+                hash_blob,
+                size_bytes,
+                name,
+                piece_size,
+                piece_count,
+                1 if completed else 0,
+                1 if md4_hashset_acquired else 0,
+                1 if aich_hashset_acquired else 0,
+                bytes.fromhex(aich_root) if aich_root else None,
+                upload_priority,
+                1 if auto_upload_priority else 0,
+                comment,
+                rating,
+                now,
+                now,
+                now,
+            ),
         )
         known_file_id = conn.execute(
             "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
@@ -148,38 +188,157 @@ def seed_remembered_source_transfer(
             """
             INSERT INTO transfers(
                 known_file_id, visible_state, control_state, priority,
-                payload_directory, created_at_ms, updated_at_ms
+                payload_directory, created_at_ms, updated_at_ms, completed_at_ms
             )
-            VALUES (?, 'queued', NULL, 'normal', ?, ?, ?)
+            VALUES (?, ?, ?, 'normal', ?, ?, ?, ?)
             """,
-            (known_file_id, ed2k_hash, now, now),
+            (known_file_id, visible_state, control_state, ed2k_hash, now, now, now if completed else None),
         )
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
         for piece_index in range(piece_count):
+            state = "Verified" if completed else "Missing"
+            written = piece_size if completed else 0
             conn.execute(
                 """
                 INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
-                VALUES (?, ?, 'Missing', 0, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (transfer_id, piece_index, now),
+                (transfer_id, piece_index, state, written, now),
             )
-        conn.execute(
-            """
-            INSERT INTO transfer_sources(transfer_id, ip, tcp_port, user_hash, first_seen_ms, last_seen_ms)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                transfer_id,
-                source_ip,
-                source_tcp_port,
-                bytes.fromhex(source_user_hash) if source_user_hash else None,
-                now,
-                now,
-            ),
-        )
+        for index, part_hash in enumerate(md4_hashset):
+            conn.execute(
+                "INSERT INTO ed2k_part_hashes(known_file_id, part_index, md4_hash) VALUES (?, ?, ?)",
+                (known_file_id, index, bytes.fromhex(part_hash)),
+            )
+        for index, part_hash in enumerate(aich_hashset):
+            conn.execute(
+                "INSERT INTO aich_part_hashes(known_file_id, part_index, aich_hash) VALUES (?, ?, ?)",
+                (known_file_id, index, bytes.fromhex(part_hash)),
+            )
+        for source in sources:
+            user_hash = source.get("user_hash")
+            conn.execute(
+                """
+                INSERT INTO transfer_sources(transfer_id, ip, tcp_port, user_hash, first_seen_ms, last_seen_ms)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    transfer_id,
+                    source["ip"],
+                    source["tcp_port"],
+                    bytes.fromhex(user_hash) if user_hash else None,
+                    now,
+                    now,
+                ),
+            )
         conn.commit()
+
+
+def seed_remembered_source_transfer(
+    db_path: Path,
+    *,
+    ed2k_hash: str,
+    name: str,
+    size_bytes: int,
+    piece_size: int,
+    source_ip: str,
+    source_tcp_port: int,
+    source_user_hash: str | None = None,
+) -> None:
+    """Seed an incomplete transfer with a single remembered source."""
+
+    seed_transfer_manifest(
+        db_path,
+        ed2k_hash=ed2k_hash,
+        name=name,
+        size_bytes=size_bytes,
+        piece_size=piece_size,
+        sources=[{"ip": source_ip, "tcp_port": source_tcp_port, "user_hash": source_user_hash}],
+    )
+
+
+def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
+    """Read a persisted ED2K transfer manifest from ``metadata.sqlite``.
+
+    Mirrors ``MetadataStore::transfer_manifest_by_hash`` and returns the same
+    field shape the legacy ``resume-manifest.json`` exposed, so harness checks can
+    verify internal hashset/AICH metadata that has no REST surface. Returns
+    ``None`` when no known file with that hash exists.
+    """
+
+    hash_blob = bytes.fromhex(ed2k_hash)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT known_files.id, transfers.id, transfers.control_state,
+                   known_files.canonical_name, known_files.size_bytes,
+                   coalesce(known_files.part_size, 0),
+                   known_files.completed, known_files.md4_hashset_acquired,
+                   known_files.aich_hashset_acquired,
+                   CASE WHEN known_files.aich_root IS NULL THEN NULL
+                        ELSE lower(hex(known_files.aich_root)) END,
+                   known_files.upload_priority, known_files.comment, known_files.rating
+            FROM known_files
+            LEFT JOIN transfers ON transfers.known_file_id = known_files.id
+            WHERE known_files.ed2k_hash = ?
+            """,
+            (hash_blob,),
+        ).fetchone()
+        if row is None:
+            return None
+        known_file_id = row[0]
+        transfer_id = row[1]
+        sources = []
+        if transfer_id is not None:
+            sources = [
+                {
+                    "ip": src[0],
+                    "tcp_port": src[1],
+                    "user_hash": src[2],
+                }
+                for src in conn.execute(
+                    """
+                    SELECT ip, tcp_port,
+                           CASE WHEN user_hash IS NULL THEN NULL ELSE lower(hex(user_hash)) END
+                    FROM transfer_sources WHERE transfer_id = ?
+                    ORDER BY id
+                    """,
+                    (transfer_id,),
+                )
+            ]
+        md4_hashset = [
+            r[0]
+            for r in conn.execute(
+                "SELECT lower(hex(md4_hash)) FROM ed2k_part_hashes WHERE known_file_id = ? ORDER BY part_index",
+                (known_file_id,),
+            )
+        ]
+        aich_hashset = [
+            r[0]
+            for r in conn.execute(
+                "SELECT lower(hex(aich_hash)) FROM aich_part_hashes WHERE known_file_id = ? ORDER BY part_index",
+                (known_file_id,),
+            )
+        ]
+    return {
+        "file_hash": ed2k_hash.lower(),
+        "control_state": row[2],
+        "canonical_name": row[3],
+        "file_size": row[4],
+        "piece_size": row[5],
+        "completed": bool(row[6]),
+        "md4_hashset_acquired": bool(row[7]),
+        "aich_hashset_acquired": bool(row[8]),
+        "aich_root": row[9],
+        "upload_priority": row[10],
+        "comment": row[11],
+        "rating": row[12],
+        "md4_hashset": md4_hashset,
+        "aich_hashset": aich_hashset,
+        "sources": sources,
+    }
 
 
 def _upsert_content_object(

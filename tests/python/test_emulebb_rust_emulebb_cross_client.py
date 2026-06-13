@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from emule_test_harness import rust_metadata
+
+
+def _rust_repo() -> Path:
+    return Path(__file__).resolve().parents[3] / "emulebb-rust"
 
 
 def load_suite_module():
@@ -220,35 +225,25 @@ def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(mon
 def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tmp_path: Path) -> None:
     module = load_suite_module()
     transfer_hash = "00112233445566778899aabbccddeeff"
-    manifest_dir = tmp_path / "transfers" / transfer_hash
-    manifest_dir.mkdir(parents=True)
-    (manifest_dir / "resume-manifest.json").write_text(
-        json.dumps(
-            {
-                "file_hash": transfer_hash,
-                "canonical_name": "emulebb-to-emulebb-rust.bin",
-                "file_size": module.ED2K_PART_SIZE_BYTES + 1,
-                "md4_hashset_acquired": True,
-                "md4_hashset": [
-                    "0123456789abcdef0123456789abcdef",
-                    "fedcba9876543210fedcba9876543210",
-                ],
-                "aich_hashset_acquired": True,
-                "aich_root": "59ba286e4c4b8f0019c9fd89806d7212b37c82d6",
-                "aich_hashset": [
-                    "044c4a5f2af419cc2b6b06f69f5e3bd655ec6edb",
-                    "06fd075b8705ae9189470c69a70e2d5d5593ca09",
-                ],
-                "sources": [
-                    {
-                        "ip": "192.0.2.44",
-                        "tcp_port": 4662,
-                        "user_hash": "31719b50f40e503c1d533d9af3ef6fb8",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    rust_metadata.seed_transfer_manifest(
+        tmp_path / "metadata.sqlite",
+        ed2k_hash=transfer_hash,
+        name="emulebb-to-emulebb-rust.bin",
+        size_bytes=module.ED2K_PART_SIZE_BYTES + 1,
+        piece_size=module.ED2K_PART_SIZE_BYTES,
+        md4_hashset_acquired=True,
+        md4_hashset=[
+            "0123456789abcdef0123456789abcdef",
+            "fedcba9876543210fedcba9876543210",
+        ],
+        aich_hashset_acquired=True,
+        aich_root="59ba286e4c4b8f0019c9fd89806d7212b37c82d6",
+        aich_hashset=[
+            "044c4a5f2af419cc2b6b06f69f5e3bd655ec6edb",
+            "06fd075b8705ae9189470c69a70e2d5d5593ca09",
+        ],
+        sources=[{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": "31719b50f40e503c1d533d9af3ef6fb8"}],
     )
 
     metadata = module.require_rust_download_manifest_metadata(
@@ -269,22 +264,18 @@ def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tm
 def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: Path) -> None:
     module = load_suite_module()
     transfer_hash = "00112233445566778899aabbccddeeff"
-    manifest_dir = tmp_path / "transfers" / transfer_hash
-    manifest_dir.mkdir(parents=True)
-    (manifest_dir / "resume-manifest.json").write_text(
-        json.dumps(
-            {
-                "file_hash": transfer_hash,
-                "canonical_name": "emulebb-to-emulebb-rust.bin",
-                "file_size": module.ED2K_PART_SIZE_BYTES,
-                "md4_hashset_acquired": True,
-                "md4_hashset": ["0123456789abcdef0123456789abcdef"],
-                "aich_hashset_acquired": False,
-                "aich_hashset": [],
-                "sources": [{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": "31719b50f40e503c1d533d9af3ef6fb8"}],
-            }
-        ),
-        encoding="utf-8",
+    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    rust_metadata.seed_transfer_manifest(
+        tmp_path / "metadata.sqlite",
+        ed2k_hash=transfer_hash,
+        name="emulebb-to-emulebb-rust.bin",
+        size_bytes=module.ED2K_PART_SIZE_BYTES,
+        piece_size=module.ED2K_PART_SIZE_BYTES,
+        md4_hashset_acquired=True,
+        md4_hashset=["0123456789abcdef0123456789abcdef"],
+        aich_hashset_acquired=False,
+        aich_hashset=[],
+        sources=[{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": "31719b50f40e503c1d533d9af3ef6fb8"}],
     )
 
     with pytest.raises(RuntimeError, match="AICH hashset"):
