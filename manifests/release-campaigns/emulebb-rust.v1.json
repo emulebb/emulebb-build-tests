@@ -176,12 +176,12 @@
           "flowCategory": "amutorrent",
           "required": false,
           "blocking": false,
-          "command": "manual",
+          "command": "python -m emule_workspace test python --path tests/python/test_amutorrent_rust_controller.py --quiet",
           "evidence": [
             {
               "kind": "manual",
               "required": false,
-              "description": "Use existing aMuTorrent controller scenarios once Rust implements the required eMuleBB REST endpoints without private adapters, aliases, or compatibility shims."
+              "description": "aMuTorrent's real EmulebbManager adapter drives a live emulebb-rust client through the canonical /api/v1 contract (connect, categories, snapshot, shared files, search) with no private adapters, aliases, or compatibility shims. Verified green via tests/python/test_amutorrent_rust_controller.py."
             }
           ]
         }
