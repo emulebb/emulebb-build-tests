@@ -1434,7 +1434,7 @@ def test_rest_payload_unwraps_success_and_error_envelopes() -> None:
 def test_openapi_error_envelope_documents_stable_error_codes() -> None:
     openapi_path = Path(__file__).resolve().parents[3] / "emulebb-tooling" / "docs" / "rest" / "REST-API-OPENAPI.yaml"
     text = openapi_path.read_text(encoding="utf-8")
-    error_schema = text[text.index("    ErrorEnvelope:\n") : text.index("    Collection:\n")]
+    error_schema = text[text.index("    ErrorEnvelope:\n") : text.index("    AppEnvelope:\n")]
 
     assert "required: [error]" in error_schema
     assert "required: [code, message, details]" in error_schema
@@ -1458,7 +1458,7 @@ def test_openapi_metadata_tracks_beta_release_contract() -> None:
     text = openapi_path.read_text(encoding="utf-8")
 
     assert "  version: 0.7.3\n" in text
-    assert "Canonical 0.7.3 RC1 contract" in text
+    assert "Canonical 0.7.3 RC2 contract" in text
     assert "1.0.0-pre" not in text
 
 
@@ -2846,7 +2846,7 @@ def test_openapi_custom_success_response_samples_match_contract() -> None:
         "BulkOperationResponse": {"data": {"items": [{"ok": True, "hash": "0" * 32}], "total": 1}, "meta": meta},
         "PeerBanResponse": {"data": {"ok": True, "banned": True}, "meta": meta},
         "UploadRemoveResponse": {"data": {"ok": True, "removed": "queue"}, "meta": meta},
-        "UrlImportResponse": {"data": {"ok": True, "imported": False}, "meta": meta},
+        "UrlImportResponse": {"data": {"ok": True, "imported": True}, "meta": meta},
         "SharedFileCreateResponse": {
             "data": {"ok": True, "path": "C:/incoming/example.dat", "alreadyShared": False, "queued": True, "file": None},
             "meta": meta,
