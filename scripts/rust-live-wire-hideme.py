@@ -248,6 +248,13 @@ def run_downloads(
                 f"/api/v1/searches/{candidate['_searchId']}/results/{file_hash}/operations/download",
                 api_key=API_KEY, method="POST", body={"paused": False, "categoryId": 0},
             )
+            # download_search_result only inserts a "queued" transfer; resume is
+            # what actually starts the download driver + ED2K source acquisition.
+            retry_http_json(
+                "resume", 2, base_url,
+                f"/api/v1/transfers/{file_hash}/operations/resume",
+                api_key=API_KEY, method="POST", body={},
+            )
         except Exception as exc:  # noqa: BLE001
             start_errors.append(f"{file_hash}: {type(exc).__name__}")
             continue
