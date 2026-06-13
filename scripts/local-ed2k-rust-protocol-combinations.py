@@ -305,31 +305,54 @@ def wait_for_rust_search_result_by_name(
     observations: list[dict[str, object]] = []
 
     def resolve():
-        search = rust_emulebb.request_json(
+        # eMuleBB search is asynchronous: POST /searches creates the search
+        # (empty first page, status "running"); results are polled from GET
+        # /searches/{id} under the canonical "items" key. A single server
+        # search can race server-side publish propagation, so each attempt
+        # issues a fresh search and polls it to a terminal status, and the
+        # outer wait_for re-issues until the result appears or it times out.
+        created = rust_emulebb.request_json(
             base_url,
             "POST",
             "/api/v1/searches",
             api_key,
             {"query": query, "method": "server", "type": ""},
         )
-        results = search.get("results") if isinstance(search, dict) else None
-        result_count = len(results) if isinstance(results, list) else 0
-        observations.append({"result_count": result_count, "observed_at": round(time.time(), 3)})
-        if not isinstance(results, list):
+        search_id = str(created.get("id") or "") if isinstance(created, dict) else ""
+        if not search_id:
             return None
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            result_name = str(result.get("name") or "")
-            result_size = int(result.get("size") or result.get("sizeBytes") or 0)
-            result_hash = str(result.get("hash") or "").lower()
-            if result_name == expected_name and result_size == expected_size and len(result_hash) == 32:
-                return {
-                    "search": search,
-                    "result": result,
-                    "transfer_hash": result_hash,
-                    "observations": observations[-20:],
-                }
+        search: dict[str, object] = created
+        item_count = 0
+        deadline = time.time() + 20.0
+        while True:
+            search = rust_emulebb.request_json(
+                base_url,
+                "GET",
+                f"/api/v1/searches/{search_id}?limit=200&offset=0",
+                api_key,
+            )
+            items = search.get("items") if isinstance(search, dict) else None
+            item_count = len(items) if isinstance(items, list) else 0
+            if isinstance(items, list):
+                for result in items:
+                    if not isinstance(result, dict):
+                        continue
+                    result_name = str(result.get("name") or "")
+                    result_size = int(result.get("size") or result.get("sizeBytes") or 0)
+                    result_hash = str(result.get("hash") or "").lower()
+                    if result_name == expected_name and result_size == expected_size and len(result_hash) == 32:
+                        observations.append({"result_count": item_count, "observed_at": round(time.time(), 3)})
+                        return {
+                            "search": search,
+                            "result": result,
+                            "transfer_hash": result_hash,
+                            "observations": observations[-20:],
+                        }
+            status = str(search.get("status") or "") if isinstance(search, dict) else ""
+            if status in ("complete", "completed", "error") or time.time() >= deadline:
+                break
+            time.sleep(0.5)
+        observations.append({"result_count": item_count, "observed_at": round(time.time(), 3)})
         return None
 
     return live_common.wait_for(
