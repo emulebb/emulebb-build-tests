@@ -3489,7 +3489,7 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                 "method": "kad",
                 "type": "iso",
                 "status": "running",
-                "results": [
+                "items": [
                     {
                         "method": "kad",
                         "type": "iso",
@@ -3501,6 +3501,9 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                         "completeSources": 0,
                     }
                 ],
+                "total": 1,
+                "offset": 0,
+                "limit": 100,
             },
             "raw_json": {
                 "data": {
@@ -3509,7 +3512,7 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                     "method": "kad",
                     "type": "iso",
                     "status": "running",
-                    "results": [
+                    "items": [
                         {
                             "method": "kad",
                             "type": "iso",
@@ -3521,6 +3524,9 @@ def test_live_download_trigger_posts_paused_download(monkeypatch) -> None:
                             "completeSources": 0,
                         }
                     ],
+                    "total": 1,
+                    "offset": 0,
+                    "limit": 100,
                 },
                 "meta": {"apiVersion": "v1"},
             },
@@ -3577,7 +3583,10 @@ def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch
                 "method": "kad",
                 "type": "",
                 "status": "running",
-                "results": [],
+                "items": [],
+                "total": 0,
+                "offset": 0,
+                "limit": 100,
             },
             "raw_json": {
                 "data": {
@@ -3586,7 +3595,10 @@ def test_live_download_trigger_timeout_without_candidate_is_nonfatal(monkeypatch
                     "method": "kad",
                     "type": "",
                     "status": "running",
-                    "results": [],
+                    "items": [],
+                    "total": 0,
+                    "offset": 0,
+                    "limit": 100,
                 },
                 "meta": {"apiVersion": "v1"},
             },

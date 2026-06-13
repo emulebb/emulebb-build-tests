@@ -6430,7 +6430,7 @@ def wait_for_search_observation(
         if int(result["status"]) != 200 or not isinstance(result["json"], dict):
             return None
         payload = require_json_object(result, 200)
-        results = payload.get("results")
+        results = payload.get("items")
         assert isinstance(results, list)
         snapshot = {
             "observed_at": round(time.time(), 3),
@@ -6506,7 +6506,7 @@ def is_safe_live_download_result(result_row: object) -> bool:
 def find_safe_live_download_result(search_payload: dict[str, Any]) -> dict[str, Any] | None:
     """Selects the first search result safe enough for the paused-download trigger."""
 
-    results = search_payload.get("results")
+    results = search_payload.get("items")
     if not isinstance(results, list):
         return None
     for result_row in results:
@@ -6570,7 +6570,7 @@ def trigger_paused_download_from_search_result(
             {
                 "observed_at": round(time.time(), 3),
                 "status": payload.get("status"),
-                "result_count": len(payload.get("results") or []),
+                "result_count": len(payload.get("items") or []),
                 "has_candidate": candidate is not None,
             }
         )
