@@ -240,3 +240,63 @@ def matching_paren_index(text: str, open_paren_index: int) -> int:
             if depth == 0:
                 return index
     raise AssertionError("unterminated Rust .route(...) call")
+
+
+# Response fields the eMuleBB master emits and that the Rust client now implements.
+# Guards the response-shape parity work (search items+pagination, transfer
+# eta/parts/timestamps, upload scoreBreakdown, app build/platform, VPN guard)
+# against regressions. Doc-only OpenAPI drift the master does NOT emit
+# (generatedAt, elevated, webServer, shared-dir exists/monitored) is excluded.
+ALIGNED_RESPONSE_FIELDS = [
+    # search uses the shared paged shape (items + total/offset/limit)
+    "items",
+    "total",
+    "offset",
+    "limit",
+    # transfer view
+    "eta",
+    "addedAt",
+    "completedAt",
+    "partsTotal",
+    "partsObtained",
+    "partsProgressText",
+    "autoPriority",
+    # upload score breakdown
+    "scoreBreakdown",
+    "baseScore",
+    "effectiveScore",
+    "coreScore",
+    "creditRatio",
+    "lowIdDivisor",
+    "cooldownRemainingMs",
+    # app metadata
+    "build",
+    "platform",
+    # VPN guard
+    "vpnGuard",
+    "blockedByVpnGuard",
+    "startupBlocked",
+    "allowedPublicIpCidrs",
+    # logs
+    "debug",
+]
+
+
+def test_emulebb_rust_emits_aligned_response_fields() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    workspace_root = get_emule_workspace_root(repo_root)
+    crates_dir = workspace_root / "repos" / "emulebb-rust" / "crates"
+    text = "".join(
+        source.read_text(encoding="utf-8", errors="replace")
+        for source in crates_dir.glob("**/src/**/*.rs")
+    )
+
+    def snake(name: str) -> str:
+        return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+    def present(field: str) -> bool:
+        # camelCase json! literal, or the serde struct field in snake_case.
+        return f'"{field}"' in text or re.search(rf"\b{snake(field)}\s*:", text) is not None
+
+    missing = [field for field in ALIGNED_RESPONSE_FIELDS if not present(field)]
+    assert not missing, f"Rust no longer emits aligned response fields: {missing}"
