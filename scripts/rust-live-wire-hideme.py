@@ -355,6 +355,12 @@ def run_pass(
         cfg.write("\n[nat]\nenabled = true\n")
 
     os.environ["RUST_LOG"] = RUST_LOG
+    # Capture the converged ed2k_packet_v1 packet dump for this pass so the live
+    # eD2k wire traffic against the emule-security server can be diffed against an
+    # eMuleBB diagnostic-build trace of the same exchange.
+    packet_dump_dir = pass_dir / "packet-dump"
+    packet_dump_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["EMULEBB_RUST_LOG_DIR"] = str(packet_dump_dir)
     handle = daemon_log.open("w", encoding="utf-8")
     process = start_rust_client_executable_with_output(exe_path, config_path, handle)
     evidence: dict[str, Any] = {"obfuscation": obfuscation}
