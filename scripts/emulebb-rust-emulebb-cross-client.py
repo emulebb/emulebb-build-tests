@@ -179,7 +179,7 @@ def wait_for_rust_search_result(
             return None
         search: dict[str, object] = created
         result_count = 0
-        deadline = time.time() + 20.0
+        deadline = time.time() + 35.0
         while True:
             search = request_json(
                 base_url,

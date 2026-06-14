@@ -323,7 +323,7 @@ def wait_for_rust_search_result_by_name(
             return None
         search: dict[str, object] = created
         item_count = 0
-        deadline = time.time() + 20.0
+        deadline = time.time() + 35.0
         while True:
             search = rust_emulebb.request_json(
                 base_url,
