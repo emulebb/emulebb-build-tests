@@ -184,6 +184,35 @@ def catalog_file(
     }
 
 
+def build_server_met(ip: str, port: int, name: str) -> bytes:
+    """Builds a minimal single-server ``server.met`` pointing a client (aMule,
+    emulebb) at a goed2k-server endpoint, so live suites can drive a real ED2K
+    client connection without scraping a public server list.
+
+    Layout: MET header (0x0E), uint32 server count, then per server the 4 IPv4
+    octets, a little-endian uint16 port, a uint32 tag count, and a single special
+    ST_SERVERNAME string tag.
+    """
+
+    import struct
+
+    octets = [int(part) for part in ip.split(".")]
+    if len(octets) != 4 or any(o < 0 or o > 255 for o in octets):
+        raise ValueError(f"server.met requires an IPv4 address, got {ip!r}")
+    name_bytes = name.encode("utf-8")
+    out = bytearray()
+    out.append(0x0E)
+    out += struct.pack("<I", 1)
+    out += bytes(octets)
+    out += struct.pack("<H", port)
+    out += struct.pack("<I", 1)  # one tag
+    out.append(0x02 | 0x80)  # string tag with special 1-byte name id
+    out.append(0x01)  # ST_SERVERNAME
+    out += struct.pack("<H", len(name_bytes))
+    out += name_bytes
+    return bytes(out)
+
+
 def write_catalog(path: Path, files: list[dict[str, object]]) -> None:
     """Writes a goed2k-server JSON catalog with the provided file rows."""
 
@@ -202,8 +231,15 @@ def build_server_config(
     ed2k_address: str | None = None,
     protocol_obfuscation: bool = True,
     server_udp: bool = True,
+    packet_trace: bool = False,
+    packet_trace_path: str | Path | None = None,
 ) -> dict[str, object]:
-    """Writes and returns the local ED2K server JSON configuration."""
+    """Writes and returns the local ED2K server JSON configuration.
+
+    When ``packet_trace`` is set the server emits a structured per-frame trace
+    (TCP and UDP, both directions); ``packet_trace_path`` additionally appends a
+    JSON-line trace file useful for parity comparisons against LegacyED2KServer.
+    """
 
     ed2k_bind_address = ed2k_address or "0.0.0.0"
     config = {
@@ -224,7 +260,10 @@ def build_server_config(
         "soft_files_limit": 5000,
         "hard_files_limit": 200000,
         "max_users_advertised": 500000,
+        "packet_trace": packet_trace,
     }
+    if packet_trace_path is not None:
+        config["packet_trace_path"] = str(packet_trace_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     return config
@@ -244,6 +283,7 @@ def launch_ed2k_server(
     exe_override: str | None = None,
     protocol_obfuscation: bool = True,
     server_udp: bool = True,
+    packet_trace: bool = False,
     health_timeout_seconds: float = 30.0,
 ) -> Goed2kServerLaunch:
     """Builds, configures, starts, and health-checks a local goed2k-server instance."""
@@ -256,6 +296,7 @@ def launch_ed2k_server(
     catalog_path = server_dir / "catalog.json"
     config_path = server_dir / "config.json"
     log_path = server_dir / "server.log"
+    trace_path = server_dir / "packets.trace.jsonl" if packet_trace else None
     if catalog_files is None:
         write_empty_catalog(catalog_path)
     else:
@@ -270,6 +311,8 @@ def launch_ed2k_server(
         ed2k_address=ed2k_address,
         protocol_obfuscation=protocol_obfuscation,
         server_udp=server_udp,
+        packet_trace=packet_trace,
+        packet_trace_path=trace_path,
     )
     process = start_ed2k_server(binary.server_exe, config_path, log_path)
     admin_base_url = f"http://{admin_address}:{admin_port}"
