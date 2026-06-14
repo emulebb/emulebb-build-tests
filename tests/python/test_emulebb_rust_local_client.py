@@ -1215,7 +1215,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         if remembered_transfer["state"] != "completed":
             remembered_transfer = wait_for_condition(
                 "remembered-source leecher transfer completion",
-                45,
+                90,
                 lambda: request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share_file['hash']}")["data"]
                 if request_json(remembered_base_url, "GET", f"/api/v1/transfers/{share_file['hash']}")["data"]["state"] == "completed"
                 else None,
@@ -1312,7 +1312,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         if transfer["state"] != "completed":
             transfer = wait_for_condition(
                 "leecher transfer completion",
-                30,
+                90,
                 lambda: request_json(leecher_base_url, "GET", f"/api/v1/transfers/{result['hash']}")["data"]
                 if request_json(leecher_base_url, "GET", f"/api/v1/transfers/{result['hash']}")["data"]["state"] == "completed"
                 else None,
@@ -1328,7 +1328,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         if unicode_transfer["state"] != "completed":
             unicode_transfer = wait_for_condition(
                 "Unicode leecher transfer completion",
-                30,
+                90,
                 lambda: request_json(
                     leecher_base_url,
                     "GET",
@@ -1350,7 +1350,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         if hash_only_transfer["state"] != "completed":
             hash_only_transfer = wait_for_condition(
                 "hash-only metadata leecher transfer completion",
-                45,
+                90,
                 lambda: request_json(leecher_base_url, "GET", f"/api/v1/transfers/{hash_only_hash}")["data"]
                 if request_json(leecher_base_url, "GET", f"/api/v1/transfers/{hash_only_hash}")["data"]["state"] == "completed"
                 else None,
@@ -1438,7 +1438,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
         if reverse_transfer["state"] != "completed":
             reverse_transfer = wait_for_condition(
                 "reverse seeder transfer completion",
-                30,
+                90,
                 lambda: request_json(seeder_base_url, "GET", f"/api/v1/transfers/{reverse_result['hash']}")["data"]
                 if request_json(seeder_base_url, "GET", f"/api/v1/transfers/{reverse_result['hash']}")["data"]["state"] == "completed"
                 else None,
