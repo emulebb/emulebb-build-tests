@@ -432,7 +432,25 @@ def run_pass(
     finally:
         stop_process_tree(process)
         handle.close()
-    log(f"pass obfuscation {label}: {evidence.get('status')}")
+    # Summarize the converged ed2k_packet_v1 capture so a silently-empty dump
+    # (release exe built without --features packet-diagnostics) is visible.
+    dump_files = sorted(packet_dump_dir.glob("emulebb-rust-ed2k-tcp-dump-*.jsonl"))
+    dump_lines = sum(
+        sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+        for f in dump_files
+    )
+    evidence["packetDump"] = {
+        "dir": str(packet_dump_dir),
+        "files": len(dump_files),
+        "records": dump_lines,
+        "captured": dump_lines > 0,
+    }
+    if dump_lines == 0:
+        log(
+            "WARN: no ed2k_packet_v1 records captured — build the release exe with "
+            "`--features packet-diagnostics` to enable the packet dump."
+        )
+    log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {dump_lines})")
     return evidence
 
 
