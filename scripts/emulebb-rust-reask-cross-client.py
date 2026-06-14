@@ -94,6 +94,13 @@ def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpo
         kad_port=kad_port,
         server_endpoint=server_endpoint,
         enable_udp_reask=enable_reask,
+        # Plaintext locally: the client-UDP reask obfuscation keys on our public
+        # IP, but the goed2k lab server reports a fake one (2.0.0.1) that does not
+        # match our LAN IP, so an obfuscated reask can't be deobfuscated by the
+        # peer. Real networks report the true public IP (no mismatch); the
+        # obfuscated path is covered by unit tests. Plaintext isolates the reask
+        # logic for this local cross-client check.
+        obfuscation_enabled=False,
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
     os.environ["RUST_LOG"] = RUST_LOG
