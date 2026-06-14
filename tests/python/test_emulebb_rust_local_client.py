@@ -680,6 +680,14 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
         assert transfer["hash"] == SEED_HASH
         assert transfer["state"] == "paused"
+        # Master-aligned transfer fields: KiBps speeds, the separate stopped flag,
+        # and the live source/part counters (0 here with no live peers).
+        assert transfer["stopped"] is False
+        assert "downloadSpeedBytesPerSec" not in transfer
+        assert isinstance(transfer["downloadSpeedKiBps"], (int, float))
+        assert isinstance(transfer["uploadSpeedKiBps"], (int, float))
+        assert transfer["sourcesTransferring"] == 0
+        assert transfer["partsAvailable"] == 0
         # Transfer details: {transfer, parts, sources}. The parts array carries
         # real per-part geometry/progress derived from the resume manifest.
         details = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}/details")["data"]
