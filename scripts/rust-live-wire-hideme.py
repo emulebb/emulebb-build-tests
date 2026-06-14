@@ -179,10 +179,12 @@ def run_search_corpus(
 ) -> dict[str, Any]:
     """Runs a GENTLE set of eD2K server keyword searches and collects candidates.
 
-    Gentle policy (avoid a Lugdunum IP ban): at most a few terms, ONE attempt
-    each (no retry bursts), and at least ~60s between searches. ``create_search``
-    returns results synchronously, so one well-spaced shot per term is enough; a
-    0-result response is accepted as-is rather than retried.
+    Gentle policy (avoid a Lugdunum IP ban): at most a few terms, ONE server
+    query each (no retry bursts), and at least ~60s between searches. The search
+    is async (eMuleBB contract): POST /searches returns status "running" with no
+    items, so each term is created once and then the search page is POLLED over
+    the LOCAL REST API (no extra server traffic) until it reports "complete",
+    and the paged ``items`` are read as the results.
     """
 
     searches: list[dict[str, Any]] = []
@@ -198,9 +200,27 @@ def run_search_corpus(
             body={"query": term, "method": "automatic", "type": ""},
             timeout_seconds=45.0,
         )
-        data = api_data(created)
-        search_id = str(data.get("id") if isinstance(data, dict) else "")
-        results = data.get("results", []) if isinstance(data, dict) else []
+        created_data = api_data(created)
+        search_id = str(created_data.get("id") if isinstance(created_data, dict) else "")
+        # Async search: poll the search page over the LOCAL REST API until it
+        # reports a terminal status, then read the paged `items`. (Polling is
+        # local-only; the eD2K server saw a single query for this term.)
+        results: list[dict[str, Any]] = []
+        if search_id:
+            def _completed_page() -> Any:
+                page = retry_http_json(
+                    "search poll", 2, base_url, f"/api/v1/searches/{search_id}",
+                    api_key=API_KEY, timeout_seconds=30.0,
+                )
+                page_data = api_data(page)
+                status = str(page_data.get("status") if isinstance(page_data, dict) else "")
+                return page if status in {"complete", "completed"} else None
+
+            try:
+                page = wait_until(f"search {term!r} results", 60.0, _completed_page)
+                results = api_rows(page, "items")
+            except RuntimeError as exc:
+                log(f"  search {term!r}: timed out awaiting completion ({exc})")
         total_results += len(results)
         for row in results:
             if isinstance(row, dict) and is_safe_download_candidate(row):
