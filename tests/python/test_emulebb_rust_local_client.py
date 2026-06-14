@@ -680,6 +680,28 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         transfer = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}")["data"]
         assert transfer["hash"] == SEED_HASH
         assert transfer["state"] == "paused"
+        # Transfer details: {transfer, parts, sources}. The parts array carries
+        # real per-part geometry/progress derived from the resume manifest.
+        details = request_json(base_url, "GET", f"/api/v1/transfers/{SEED_HASH}/details")["data"]
+        assert details["transfer"]["hash"] == SEED_HASH
+        assert isinstance(details["sources"], list)
+        assert isinstance(details["parts"], list)
+        assert len(details["parts"]) == transfer["partsTotal"]
+        part_fields = {
+            "index", "start", "end", "size", "completedBytes", "gapBytes",
+            "complete", "requested", "corrupted", "availableSources",
+        }
+        for index, part in enumerate(details["parts"]):
+            assert set(part) == part_fields
+            assert part["index"] == index
+            assert part["end"] >= part["start"]
+            assert part["size"] == part["end"] - part["start"] + 1
+            assert part["completedBytes"] + part["gapBytes"] == part["size"]
+            assert part["complete"] == (part["gapBytes"] == 0)
+        details_missing_status, _ = request_json_status(
+            base_url, "GET", "/api/v1/transfers/ffffffffffffffffffffffffffffffff/details"
+        )
+        assert details_missing_status == 404
         multi_family_patch_status, multi_family_patch_error = request_json_status(
             base_url,
             "PATCH",
