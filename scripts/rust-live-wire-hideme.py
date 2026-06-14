@@ -420,10 +420,18 @@ def run_pass(
         evidence["ed2kConnected"] = bool(stats.get("ed2kConnected"))
         evidence["ed2kHighId"] = bool(stats.get("ed2kHighId"))
 
-        kad = wait_until(
-            "Kad contacts", timeouts["connect"],
-            lambda: get_kad(base_url) if int(get_kad(base_url).get("contactCount") or 0) > 0 else None,
-        )
+        # Wait for Kad to actually finish bootstrapping (connected == is_bootstrapped),
+        # not just the first contact — otherwise the snapshot races the ~60s bootstrap
+        # and records connected=false with a partial contact count. Tolerate the
+        # window expiring (record the real end state rather than failing the pass).
+        def _kad_bootstrapped() -> dict[str, Any] | None:
+            k = get_kad(base_url)
+            return k if k.get("connected") else None
+
+        try:
+            kad = wait_until("Kad bootstrapped", timeouts["connect"], _kad_bootstrapped)
+        except RuntimeError:
+            kad = get_kad(base_url)
         evidence["kadRunning"] = bool(kad.get("running"))
         evidence["kadContactCount"] = int(kad.get("contactCount") or 0)
         evidence["kadConnected"] = bool(kad.get("connected"))
