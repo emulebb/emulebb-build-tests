@@ -125,3 +125,56 @@ def test_public_vpn_standalone_scripts_enable_vpn_guard_surface() -> None:
             offenders.append(f"{script_name}: public VPN default is not hide.me")
 
     assert offenders == []
+
+
+# Bespoke hide.me service/process control that must only live in the shared
+# emule_test_harness.hideme_split_tunnel helper, never reimplemented in a live
+# script. The split-tunnel allow-list and VPN restart are centralized so every
+# live launcher routes through one audited path.
+BESPOKE_HIDE_ME_RESTART_PATTERNS = (
+    re.compile(r"\bhmevpnsvc\b", re.IGNORECASE),
+    re.compile(r"\b(?:Start|Stop)-Service\b", re.IGNORECASE),
+    re.compile(r"\b(?:Start|Stop)-Process\b[^\n]*hide", re.IGNORECASE),
+    re.compile(r"\btaskkill\b[^\n]*hide", re.IGNORECASE),
+)
+
+
+def test_live_scripts_do_not_reimplement_hide_me_restart() -> None:
+    """Live scripts must use the shared helper, not their own VPN restart."""
+
+    offenders: list[str] = []
+    for path in sorted(SCRIPT_ROOT.glob("*.py")):
+        text = read_text(path)
+        for pattern in BESPOKE_HIDE_ME_RESTART_PATTERNS:
+            if pattern.search(text):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {pattern.pattern}")
+
+    assert offenders == []
+
+
+# The authoritative workspace path variables an agent must never assign; they are
+# machine-level inputs that the harness only ever reads. Mirrors the
+# emulebb-tooling `emulebb-env-override` policy audit at unit speed.
+AUTHORITATIVE_ENV_WRITE_PATTERNS = tuple(
+    re.compile(form.format(var=re.escape(var)))
+    for var in ("EMULEBB_WORKSPACE_ROOT", "EMULEBB_WORKSPACE_OUTPUT_ROOT")
+    for form in (
+        r"os\.environ\[\s*[\"']{var}[\"']\s*\]\s*=",
+        r"os\.environ\.setdefault\(\s*[\"']{var}[\"']",
+        r"os\.putenv\(\s*[\"']{var}[\"']",
+        r"\$env:{var}\s*=",
+    )
+)
+
+
+def test_harness_never_overrides_authoritative_workspace_env() -> None:
+    """Harness and live scripts must read, never assign, the workspace path vars."""
+
+    offenders: list[str] = []
+    for path in python_sources(SCRIPT_ROOT, HARNESS_ROOT):
+        text = read_text(path)
+        for pattern in AUTHORITATIVE_ENV_WRITE_PATTERNS:
+            if pattern.search(text):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {pattern.pattern}")
+
+    assert offenders == []
