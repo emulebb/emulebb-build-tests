@@ -18,7 +18,7 @@ which the public live-wire run could not (the server rate-limited searches).
 from __future__ import annotations
 
 import argparse
-import subprocess
+import os
 import sys
 import time
 from pathlib import Path
@@ -43,6 +43,12 @@ CLIENT_EMULEBB = CLIENT_IDENTITIES["emulebb"]
 # eMuleBB upload throttle: one slot, slow enough that the occupier keeps it busy
 # across the reask client's first reask ticks (REASK_TICK_INTERVAL = 30s).
 EMULEBB_MAX_UPLOAD_KIB = 4
+# Trace the reask + transfer paths so the detach / reask / ack are observable.
+RUST_LOG = (
+    "info,emulebb_ed2k=info,emulebb_core=info"
+    ",emulebb_ed2k::ed2k_tcp=debug,emulebb_ed2k::ed2k_transfer=debug"
+    ",emulebb_ed2k::ed2k_client_udp=trace"
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -90,6 +96,7 @@ def start_rust(*, repo, paths, lan_bind_addr, api_key, p2p_address, server_endpo
         enable_udp_reask=enable_reask,
     )
     out_path = paths.source_artifacts_dir / f"rust-{label}.out"
+    os.environ["RUST_LOG"] = RUST_LOG
     process = rust_client.start_rust_client(repo, config, out_path)
     base_url = f"http://{lan_bind_addr}:{rest_port}"
     cc.wait_for_rust_rest(base_url, process, out_path, api_key, 60.0)
@@ -110,6 +117,21 @@ def rust_download_emulebb_file(base_url, api_key, *, query, transfer_hash, timeo
         api_key, {"paused": False},
     )
     cc.request_json(base_url, "POST", f"/api/v1/transfers/{transfer_hash}/operations/resume", api_key)
+
+
+def wait_for_rust_downloading(base_url, api_key, transfer_hash, timeout):
+    """Waits until the transfer is pulling bytes (occupier is holding an upload slot)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        data = cc.request_json(base_url, "GET", "/api/v1/transfers", api_key)
+        items = data.get("data", data)
+        rows = items.get("items", []) if isinstance(items, dict) else []
+        for row in rows:
+            if isinstance(row, dict) and str(row.get("hash") or "").lower() == transfer_hash.lower():
+                if int(row.get("completedBytes") or 0) > 0:
+                    return int(row["completedBytes"])
+        time.sleep(2.0)
+    return 0
 
 
 def log_contains(path: Path, needle: str) -> int:
@@ -184,9 +206,12 @@ def main(argv: list[str] | None = None) -> int:
             label="occupier", enable_reask=False,
         )
         rust_download_emulebb_file(occ_url, args.api_key, query="reask", transfer_hash=transfer_hash, timeout=args.server_publish_timeout_seconds)
-        # Let the occupier actually engage the upload slot before the reask client asks.
-        time.sleep(20.0)
-        report["checks"]["occupier_started"] = True
+        # Wait until the occupier is actually pulling bytes -> it holds eMuleBB's
+        # one upload slot, so the reask client that asks next will be queued.
+        occ_bytes = wait_for_rust_downloading(occ_url, args.api_key, transfer_hash, 120.0)
+        report["checks"]["occupier_downloading_bytes"] = occ_bytes
+        if occ_bytes <= 0:
+            raise RuntimeError("occupier never engaged eMuleBB's upload slot (no bytes pulled)")
 
         # --- reask Rust: gets queued -> detaches onto UDP reask ---
         reask_url, reask_proc, reask_out, _ = start_rust(
