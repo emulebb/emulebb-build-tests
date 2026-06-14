@@ -38,6 +38,7 @@ def write_rust_config(
     kad_bootstrap_min_routing_contacts: int = 10,
     kad_hello_intro_interval_secs: int = 1,
     kad_hello_intro_fanout: int = 4,
+    enable_udp_reask: bool = False,
 ) -> None:
     """Writes a minimal eMuleBB Rust config for local harness runs."""
 
@@ -81,6 +82,7 @@ def write_rust_config(
                 f"obfuscationEnabled = {str(obfuscation_enabled).lower()}",
                 f"connectTimeoutSecs = {connect_timeout_secs}",
                 "reconnectIntervalSecs = 60",
+                f"enableUdpReask = {str(enable_udp_reask).lower()}",
                 "",
             ]
         )

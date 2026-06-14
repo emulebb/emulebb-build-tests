@@ -344,6 +344,7 @@ def run_pass(
     max_concurrent: int,
     max_terms: int,
     connect_marker: Path,
+    enable_reask: bool = False,
 ) -> dict[str, Any]:
     """Runs one obfuscation pass end-to-end and returns its evidence."""
 
@@ -368,13 +369,19 @@ def run_pass(
         obfuscation_enabled=obfuscation,
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
+        enable_udp_reask=enable_reask,
     )
     # Enable UPnP so the P2P stack maps ports on the hide.me IGD (needed for
     # HighID + inbound sources over the tunnel). write_rust_config omits [nat].
     with config_path.open("a", encoding="utf-8") as cfg:
         cfg.write("\n[nat]\nenabled = true\n")
 
-    os.environ["RUST_LOG"] = RUST_LOG
+    # Raise the reask module to trace when validating FEAT-001 so detach /
+    # reciprocity / reask-send activity is visible in the daemon log.
+    rust_log = RUST_LOG
+    if enable_reask:
+        rust_log += ",emulebb_ed2k::ed2k_client_udp=trace"
+    os.environ["RUST_LOG"] = rust_log
     # Capture the converged ed2k_packet_v1 packet dump for this pass so the live
     # eD2k wire traffic against the emule-security server can be diffed against an
     # eMuleBB diagnostic-build trace of the same exchange.
@@ -438,7 +445,7 @@ def run_pass(
         # Daemon-log evidence for Kad participation / source exchange / obfuscation.
         evidence["protocolLog"] = count_log_matches(
             daemon_log,
-            ("bootstrap response", "tcp_obfuscation", "Kad source", "source exchange", "KADEMLIA"),
+            ("bootstrap response", "tcp_obfuscation", "Kad source", "source exchange", "KADEMLIA", "udp reask"),
         )
         evidence["status"] = "passed" if (
             evidence.get("ed2kHighId")
@@ -485,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-concurrent", type=int, default=50, help="Max concurrent downloads per pass.")
     parser.add_argument("--max-terms", type=int, default=3, help="GENTLE: max keyword searches per pass (avoid server bans).")
     parser.add_argument("--both", action="store_true", help="Run both obfuscation passes (two connect+search cycles). Default: obfuscation-ON only, to stay gentle on the server.")
+    parser.add_argument("--reask", action="store_true", help="Enable the FEAT-001 UDP source-reask transport (enableUdpReask=true) for live validation.")
     args = parser.parse_args(argv)
 
     rest_addr = require_env("X_LOCAL_IP")
@@ -531,6 +539,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_concurrent=args.max_concurrent,
                 max_terms=args.max_terms,
                 connect_marker=connect_marker,
+                enable_reask=args.reask,
             )
         )
         time.sleep(3.0)
