@@ -177,6 +177,47 @@ def test_invalid_sub_opcode_diagnostics_call_sites_are_guarded() -> None:
     assert answer_block.index("LogInvalidMultipacketSubOpcode(_T(\"multipacket_answer\")") < answer_block.index("strError.Format(_T(\"Invalid sub opcode 0x%02x received\"), opcode_in);")
 
 
+def test_packet_diagnostics_emit_converged_ed2k_packet_v1_schema() -> None:
+    # Both eMuleBB packet emitters converge on the shared ed2k_packet_v1 schema so
+    # the trace diffs 1:1 against the emulebb-rust client-to-client packet dump.
+    log_header = read_source("Log.h")
+    log_source = read_source("Log.cpp")
+
+    # Client-to-client (peer) emitter declared + defined alongside the server one.
+    assert "void PacketDiagnosticsLogClientPacket(" in log_header
+    assert "void PacketDiagnosticsLogClientPacket(" in log_source
+    assert "void PacketDiagnosticsLogServerPacket(" in log_source
+
+    # Shared emitter + converged schema with a flow discriminator + trace_key.
+    assert "static void PacketDiagnosticsLogEd2kPacket(" in log_source
+    assert '\\"schema\\":\\"ed2k_packet_v1\\"' in log_source
+    assert '\\"flow\\":\\"%s\\"' in log_source
+    assert '\\"trace_key\\":\\"%s\\"' in log_source
+    # The retired per-family schema name must be gone (fully converged).
+    assert "ed2k_server_packet_v1" not in log_source
+
+    # Server uses flow="server", client uses flow="client".
+    assert 'PacketDiagnosticsLogEd2kPacket(_T("server")' in log_source
+    assert 'PacketDiagnosticsLogEd2kPacket(_T("client")' in log_source
+
+
+def test_packet_diagnostics_client_packet_call_sites_are_guarded() -> None:
+    # The client-to-client recv dispatch and send path both emit one ed2k_packet_v1
+    # record per packet, compile-gated on EMULEBB_ENABLE_PACKET_DIAGNOSTICS.
+    source = read_source("ListenSocket.cpp")
+
+    recv = source[source.index("bool CClientReqSocket::PacketReceived(") : source.index("void CClientReqSocket::SendPacket(")]
+    send = source[source.index("void CClientReqSocket::SendPacket(") :]
+    send = send[: send.index("CListenSocket::")]
+
+    for block, direction in ((recv, "recv"), (send, "send")):
+        assert "#ifdef EMULEBB_ENABLE_PACKET_DIAGNOSTICS" in block
+        assert "PacketDiagnosticsLogClientPacket(BuildPacketDiagnosticsPeerLabel(client)," in block
+        assert "GetPacketDiagnosticsTransportMode(client)" in block
+        assert f'_T("{direction}")' in block
+        assert "packet->prot, packet->opcode, (const BYTE*)packet->pBuffer, packet->size)" in block
+
+
 def test_packet_diagnostics_does_not_port_full_tracing_harness() -> None:
     combined = "\n".join(read_source(name) for name in ["ListenSocket.cpp", "Log.cpp", "Log.h", "Emule.cpp"])
 
