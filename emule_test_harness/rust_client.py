@@ -39,6 +39,7 @@ def write_rust_config(
     kad_hello_intro_interval_secs: int = 1,
     kad_hello_intro_fanout: int = 4,
     enable_udp_reask: bool = False,
+    upload_active_slots: int | None = None,
 ) -> None:
     """Writes a minimal eMuleBB Rust config for local harness runs."""
 
@@ -92,6 +93,16 @@ def write_rust_config(
             lines.append("[[ed2k.serverEntries]]")
             lines.extend(toml_line(key, value) for key, value in server_entry.items())
         lines.append("")
+        # Optional upload-queue policy override. activeSlots=0 forces every
+        # requester into the waiting queue (used to make a peer UDP-reask us).
+        if upload_active_slots is not None:
+            lines.extend(
+                [
+                    "[ed2k.uploadQueue]",
+                    f"activeSlots = {upload_active_slots}",
+                    "",
+                ]
+            )
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
