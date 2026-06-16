@@ -410,6 +410,7 @@ Event taxonomy (the `event` value within `family:"sched"`):
 | `upload_slot_closed` | an upload slot is released | slot removal | upload_queue close |
 | `upload_slot_recycled` | idle/no-request slot reclaimed | `activeNoRequestRecycle*` | upload_queue recycle |
 | `queue_rank` | a waiting peer's rank (periodic / on change) | per-slot `state=waiting` | `Waiting{rank}` |
+| `capacity_snapshot` | the upload-slot capacity gauge (base/elastic/effective cap + active/waiting counts) | upload-slot summary line | `capacity_snapshot()` |
 | `reask_sent` | a source reask is sent (TCP or UDP) | `udpFileReasks` / TCP reask | reask loop / coordinator |
 | `throttle_applied` | rate limiter delayed a send/read | upload throttler | `throttle.reserve` delay |
 | `conn_budget` | connection admit/deny decision | `TooManySockets` | `try_acquire_connection` |
@@ -423,10 +424,11 @@ Event taxonomy (the `event` value within `family:"sched"`):
 | `swapTargetFileHash` | C | hex? | source_swapped | NNP swap target |
 | `queueRank` | C | u16? | queue_rank / upload_slot_* | |
 | `slotKind` | C | `base`/`elastic`/`friend` | upload_slot_* | |
-| `activeSlots` | C | usize? | upload_slot_* / source_count | |
-| `baseSlots` | C | usize? | capacity snapshot | |
-| `elasticSlots` | C | usize? | capacity snapshot | |
-| `effectiveSlotCap` | C | usize? | capacity snapshot | master `effectiveSlotCap` |
+| `activeSlots` | C | usize? | upload_slot_* / source_count / capacity_snapshot | current active sessions on the snapshot |
+| `waitingSessions` | C | usize? | capacity_snapshot | current waiting queue depth |
+| `baseSlots` | C | usize? | capacity_snapshot | master `baseSlotTarget` |
+| `elasticSlots` | C | usize? | capacity_snapshot | |
+| `effectiveSlotCap` | C | usize? | capacity_snapshot | master `effectiveSlotCap` |
 | `denyReason` | C | string? | conn_budget deny | `concurrent_cap`/`window_cap` |
 | `activeConnections` | C | usize? | conn_budget | budget occupancy |
 | `connectionCap` | C | usize? | conn_budget | configured cap |
