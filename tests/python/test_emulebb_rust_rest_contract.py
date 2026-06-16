@@ -69,7 +69,7 @@ def rust_request_struct_fields(crates_dir: Path) -> dict[str, set[str]]:
             continue
         lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
         for index, line in enumerate(lines):
-            match = re.match(r"\s*(?:pub )?struct (\w+)\s*\{", line)
+            match = re.match(r"\s*(?:pub(?:\([^)]*\))?\s+)?struct (\w+)\s*\{", line)
             if not match:
                 continue
             context = "\n".join(lines[max(0, index - 4) : index])
@@ -88,7 +88,7 @@ def rust_struct_field_names(lines: list[str], start: int) -> set[str]:
         rename_match = re.search(r'rename\s*=\s*"([^"]+)"', line)
         if rename_match:
             rename = rename_match.group(1)
-        field_match = re.match(r"\s*(?:pub )?(\w+|r#\w+)\s*:", line)
+        field_match = re.match(r"\s*(?:pub(?:\([^)]*\))?\s+)?(\w+|r#\w+)\s*:", line)
         if field_match:
             ident = field_match.group(1).replace("r#", "")
             fields.add(rename or snake_to_camel(ident))
@@ -120,7 +120,6 @@ def test_emulebb_rust_routes_match_canonical_emulebb_rest_contract() -> None:
         / "crates"
         / "emulebb-rest"
         / "src"
-        / "lib.rs"
     )
 
     assert canonical_routes
@@ -147,7 +146,6 @@ def test_emulebb_rust_routes_match_openapi_contract() -> None:
         / "crates"
         / "emulebb-rest"
         / "src"
-        / "lib.rs"
     )
 
     assert openapi_routes
@@ -182,7 +180,17 @@ def openapi_emulebb_routes(path: Path) -> set[tuple[str, str]]:
 
 
 def emulebb_rust_routes(path: Path) -> set[tuple[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    # `path` may be a single file or the crate `src` directory; the axum
+    # `.route(...)` calls live wherever the router is wired (lib.rs historically,
+    # now routes.rs after the REST module split), so scan the whole tree when
+    # given a directory.
+    if path.is_dir():
+        text = "".join(
+            source.read_text(encoding="utf-8", errors="replace")
+            for source in sorted(path.glob("**/*.rs"))
+        )
+    else:
+        text = path.read_text(encoding="utf-8", errors="replace")
     routes: set[tuple[str, str]] = set()
     for call in rust_route_calls(text):
         path_match = re.search(r'"([^"]+)"', call)
