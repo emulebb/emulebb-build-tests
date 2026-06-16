@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-
-def app_source_root() -> Path:
-    return Path(__file__).resolve().parents[4] / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
+from emule_test_harness.master_source import app_source_root
 
 
 def dialog_block(resource_text: str, dialog_id: str) -> str:

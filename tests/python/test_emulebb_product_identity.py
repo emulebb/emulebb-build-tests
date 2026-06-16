@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-
-def app_source_root() -> Path:
-    workspace_root = Path(__file__).resolve().parents[4]
-    return workspace_root / "workspaces" / "workspace" / "app" / "emulebb-main" / "srchybrid"
+from emule_test_harness.master_source import app_source_root
 
 
 def read_source(name: str) -> str:
