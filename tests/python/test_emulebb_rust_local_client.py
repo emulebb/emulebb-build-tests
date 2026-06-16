@@ -1366,9 +1366,8 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             f"/api/v1/transfers/{result['hash']}/sources",
         )["data"]["items"]
         assert any(
-            source["ip"] == lan_host
-            and int(source["tcpPort"]) == seeder_ed2k_port
-            and source["endpoint"] == f"{lan_host}:{seeder_ed2k_port}"
+            source["address"] == lan_host
+            and int(source["port"]) == seeder_ed2k_port
             for source in sources
         )
         downloaded_payload = leecher_runtime_dir / "transfers" / str(result["hash"]) / "pieces.bin"
@@ -1452,9 +1451,8 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             f"/api/v1/transfers/{reverse_result['hash']}/sources",
         )["data"]["items"]
         assert any(
-            source["ip"] == lan_host
-            and int(source["tcpPort"]) == leecher_ed2k_port
-            and source["endpoint"] == f"{lan_host}:{leecher_ed2k_port}"
+            source["address"] == lan_host
+            and int(source["port"]) == leecher_ed2k_port
             for source in reverse_sources
         )
         reverse_downloaded_payload = seeder_runtime_dir / "transfers" / str(reverse_result["hash"]) / "pieces.bin"
@@ -1473,18 +1471,20 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             f"/api/v1/transfers/{result['hash']}/sources",
         )["data"]["items"]
         persisted_endpoint = f"{lan_host}:{seeder_ed2k_port}"
-        assert any(source["endpoint"] == persisted_endpoint for source in persisted_sources)
+        assert any(
+            source["address"] == lan_host and int(source["port"]) == seeder_ed2k_port
+            for source in persisted_sources
+        )
         persisted_source = next(
             source
             for source in persisted_sources
-            if source["endpoint"] == persisted_endpoint
+            if source["address"] == lan_host and int(source["port"]) == seeder_ed2k_port
         )
         if persisted_source.get("userHash"):
             assert persisted_source["clientId"] == persisted_source["userHash"]
         else:
             assert persisted_source["clientId"] == persisted_endpoint
         assert int(persisted_source["port"]) == seeder_ed2k_port
-        assert int(persisted_source["tcpPort"]) == seeder_ed2k_port
         single_source = request_json(
             leecher_base_url,
             "GET",
@@ -1510,7 +1510,7 @@ def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Pa
             "GET",
             f"/api/v1/transfers/{result['hash']}/sources/{persisted_source['clientId']}",
         )["data"]
-        assert source_after_ban["banned"] is True
+        assert source_after_ban["downloadState"] == "banned"
         unbanned_source = request_json(
             leecher_base_url,
             "POST",
