@@ -58,7 +58,7 @@ TEST_CASE("App command line rejects invalid and duplicate isolated profile bases
 	const auto duplicate = Parse({_T("emulebb.exe"), _T("/c"), _T("C:\\one"), _T("-c"), _T("C:\\two")});
 
 	CHECK(relative.eMode == AppCommandLineSeams::EMode::Invalid);
-	CHECK(relative.strError == CString(_T("The -c option requires a canonical absolute eMule base directory like C:\\path.")));
+	CHECK(relative.strError == CString(_T("The -c option requires a canonical absolute eMuleBB base directory like C:\\path.")));
 	CHECK(duplicate.eMode == AppCommandLineSeams::EMode::Invalid);
 	CHECK(duplicate.strError == CString(_T("The -c option may be specified only once.")));
 }
