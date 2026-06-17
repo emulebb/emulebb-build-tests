@@ -143,12 +143,12 @@
           "flowCategory": "rest-api",
           "required": true,
           "blocking": true,
-          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_rest_contract.py --path tests/python/test_emulebb_rust_local_client.py --quiet",
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_rest_contract.py --quiet",
           "evidence": [
             {
               "kind": "manual",
               "required": true,
-              "description": "Focused pytest coverage first compares the emulebb-rust route table to the eMuleBB-owned /api/v1 contract, then exercises the Rust server, Kad, search, transfer create, transfer control, shared-file, upload/queue, diagnostic, and transfer file deletion envelopes without private aliases or shims."
+              "description": "Focused pytest coverage compares the emulebb-rust route table and request/response field set to the eMuleBB-owned /api/v1 OpenAPI contract, asserting the server, Kad, search, transfer, shared-file, upload/queue, and diagnostic envelopes match without private aliases or shims. Live exercise of those envelopes is covered by the local-client and local-ed2k search/download scenarios."
             }
           ]
         }
