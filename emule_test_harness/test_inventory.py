@@ -25,7 +25,29 @@ SCHEMA = "emulebb-build-tests.test-inventory.v1"
 # Native doctest suites auto-run by ``python -m emule_workspace test all`` (and
 # therefore by the quick/fast/overnight certification tiers). Every other suite
 # tag is reachable only through ``test native --suite-name`` or a helper script.
-TIER_NATIVE_SUITES = ("parity", "protocol-parity", "web_api")
+# Keep in sync with TEST_ALL_NATIVE_SUITES in emulebb-build test_runs.py.
+TIER_NATIVE_SUITES = (
+    "parity",
+    "protocol-parity",
+    "web_api",
+    "async_dns_resolve",
+    "background_refresh",
+    "diagnostic_snapshot",
+    "kad-base",
+    "known_file_hash_open",
+    "packets",
+    "part_file_hash_launch",
+    "part_file_majority_name",
+    "process_launch",
+    "restart_app",
+    "search_trust_hint",
+    "server_connect",
+    "server_info",
+    "standby_prevention",
+    "startup_storage",
+    "version_check_launch",
+    "windows_firewall_repair",
+)
 
 _SUITE_RE = re.compile(r'TEST_SUITE(?:_BEGIN)?\(\s*"([^"]+)"')
 _CASE_RE = re.compile(r'TEST_CASE(?:_FIXTURE|_TEMPLATE)?\(\s*"([^"]+)"')
