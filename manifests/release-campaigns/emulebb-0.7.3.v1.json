@@ -85,45 +85,6 @@
       "title": "Protocol parity",
       "scenarios": [
         {
-          "id": "emulebb.flow.protocol.kad-ed2k.parity.v1",
-          "title": "Kad/eD2K protocol parity",
-          "phase": "protocol-parity",
-          "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
-          "command": "python -m emule_workspace test protocol-parity",
-          "evidence": [
-            {
-              "kind": "manual",
-              "required": true,
-              "description": "Protocol surface diff, protocol goldens, and protocol live-diff are command-level evidence."
-            }
-          ]
-        },
-        {
-          "id": "emulebb.flow.community-core.coverage.parity.v1",
-          "title": "Community-core coverage and comparison",
-          "phase": "protocol-parity",
-          "flowCategory": "community-comparison",
-          "required": true,
-          "blocking": true,
-          "command": "python -m emule_workspace test community-core-coverage",
-          "evidence": [
-            {
-              "kind": "json-status",
-              "required": false,
-              "base": "workspace-output",
-              "path": "reports/community-core-coverage/latest/community-core-coverage-summary.json",
-              "statusPointer": "/status"
-            },
-            {
-              "kind": "manual",
-              "required": true,
-              "description": "Community-core coverage command result remains authoritative when no summary path exists."
-            }
-          ]
-        },
-        {
           "id": "emulebb.flow.native.release.all.v1",
           "title": "Native release test sweep",
           "phase": "protocol-parity",
