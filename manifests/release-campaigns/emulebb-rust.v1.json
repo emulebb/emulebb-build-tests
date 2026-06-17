@@ -43,6 +43,22 @@
               "description": "Focused pytest coverage builds emulebb-rust through Cargo, launches local goed2k-server, and writes configured LAN REST and P2P binds from X_LOCAL_IP into the generated Rust config."
             }
           ]
+        },
+        {
+          "id": "emulebb.flow.rust.shared-dir.long-path-monitor.v1",
+          "title": "Rust shared-directory long-path and live-monitor proof",
+          "phase": "preflight",
+          "flowCategory": "python-harness",
+          "required": true,
+          "blocking": true,
+          "command": "python -m emule_workspace test python --path tests/python/test_emulebb_rust_shared_dir_long_path.py --quiet",
+          "evidence": [
+            {
+              "kind": "manual",
+              "required": true,
+              "description": "Focused pytest drives the emulebb-rust behavioral shared-directory integration tests (crates/emulebb-core/tests: long_path_shared_dir, shared_dir_monitor_e2e) through Cargo under the workspace output-root target dir, proving scoped Windows long-path (>260 char) scan/ingest/share for shared trees plus live filesystem-monitor auto-share on file drop and auto-remove on delete."
+            }
+          ]
         }
       ]
     },
@@ -243,6 +259,12 @@
       "id": "emulebb-rust-local-client-pytest",
       "coveredBy": [
         "emulebb.flow.rust.local-client.pytest.v1"
+      ]
+    },
+    {
+      "id": "emulebb-rust-shared-dir-long-path-monitor",
+      "coveredBy": [
+        "emulebb.flow.rust.shared-dir.long-path-monitor.v1"
       ]
     },
     {
