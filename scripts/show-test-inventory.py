@@ -107,7 +107,6 @@ def render_markdown(inv: dict) -> str:
     ]
     for m in inv["layers"]["pythonHarness"]["modules"]:
         out.append(f"| `{m['module']}` | {m['loc']} | {m['selfTestsScript'] or '(none)'} |")
-    out.append("")
     return "\n".join(out)
 
 
