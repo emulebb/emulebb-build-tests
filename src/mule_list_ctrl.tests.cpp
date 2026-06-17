@@ -159,11 +159,14 @@ TEST_CASE("Mule list view preset profiles are complete and scoped to main grids"
 	CHECK(search->iColumnCount == 17);
 	CHECK(search->iStockHiddenColumnCount == 3);
 	CHECK(search->iExtendedHiddenColumnCount == 2);
-	CHECK(search->piExtendedOrder[6] == 14);
+	// Column ids shifted after FEAT-118 (Risk + Kad Confidence merged into one
+	// Confidence column) and FEAT-120 (added Extension column) reshaped the
+	// search preset; values match kSearch* arrays in MuleListCtrlViewPresets.h.
+	CHECK(search->piExtendedOrder[6] == 13);
 	CHECK(search->piExtendedOrder[15] == 5);
-	CHECK(search->piExtendedOrder[16] == 16);
-	CHECK(search->piStockHiddenColumns[2] == 16);
-	CHECK(search->piExtendedHiddenColumns[1] == 16);
+	CHECK(search->piExtendedOrder[16] == 15);
+	CHECK(search->piStockHiddenColumns[2] == 15);
+	CHECK(search->piExtendedHiddenColumns[1] == 15);
 
 	const MuleListCtrlViewPresets::SListControlViewPresetProfile *shared = MuleListCtrlViewPresets::FindProfile(_T("SharedFilesCtrl"));
 	REQUIRE(shared != nullptr);
