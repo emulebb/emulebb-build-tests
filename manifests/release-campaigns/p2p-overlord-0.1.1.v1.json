@@ -5,7 +5,7 @@
   "campaignId": "p2p-overlord-0.1.1",
   "releaseVersion": "0.1.1-rc.1",
   "title": "p2p-overlord 0.1.1-rc.1 product-family campaign",
-  "description": "Shared RC campaign instance for the eMuleBB-owned p2p-overlord agents, backend, and tooling. It remains a future campaign until release mode is explicitly confirmed.",
+  "description": "Shared RC campaign instance for the eMuleBB-owned p2p-overlord agents, backend, and tooling. p2p-overlord is a separate product line outside the active eMuleBB forward scope (emulebb-rust, qBittorrentBB, TrackMuleBB), so every scenario here is optional (non-blocking) and runs only under --include-nonblocking. It remains a future campaign until release mode is explicitly confirmed.",
   "proofTier": "future",
   "phases": [
     {
@@ -17,13 +17,13 @@
           "title": "p2p-overlord repos materialize from the eMuleBB org",
           "phase": "preflight",
           "flowCategory": "workspace-policy",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace sync",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Workspace deps.json contains p2p_overlord_agents and p2p_overlord_be, both resolving to emulebb-owned repositories."
             }
           ]
@@ -33,13 +33,13 @@
           "title": "p2p-overlord Rust and backend quality gates",
           "phase": "preflight",
           "flowCategory": "python-harness",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "cargo fmt --all --check; cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all -W clippy::too_many_arguments -W clippy::type_complexity -W clippy::cognitive_complexity; npm run quality",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Run from p2p-overlord-agents, p2p-overlord-be, and p2p-overlord-tooling before 0.1.1-rc.1 release proof."
             }
           ]
@@ -55,13 +55,13 @@
           "title": "p2p-overlord ED2K/Kad agent parity",
           "phase": "protocol-parity",
           "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "manual",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "0.1.1-rc.1 Rust agent parity evidence must compare against stock eMuleBB/eMule behavior and use goed2k-server for deterministic ED2K server scenarios."
             }
           ]
@@ -77,13 +77,13 @@
           "title": "p2p-overlord claimed REST subset conforms to OpenAPI",
           "phase": "controller-surface",
           "flowCategory": "rest-api",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "manual",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "0.1.1-rc.1 conformance must load repos/emulebb-tooling/docs/rest/REST-API-OPENAPI.yaml and fail drift in any claimed p2p-overlord /api/v1 route."
             }
           ]
