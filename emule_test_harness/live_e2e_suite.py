@@ -707,6 +707,7 @@ PROFILE_SUITE_NAMES = {
         "deterministic-two-client-transfer",
         "godzilla-local-swarm",
         "shared-directories-rest",
+        "shared-directory-browse-stress",
         "rest-api",
         "rest-cold-start-dump-stress",
         "local-dumps-crash-smoke",
