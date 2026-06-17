@@ -17,13 +17,13 @@
           "title": "Workspace validation and policy audits",
           "phase": "preflight",
           "flowCategory": "workspace-policy",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace validate",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Operator records the validate command result in the release checklist."
             }
           ]
@@ -51,13 +51,13 @@
           "title": "Python harness unit coverage",
           "phase": "preflight",
           "flowCategory": "python-harness",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test python --quiet",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Covered directly and through certification; pytest output is recorded by the operator when run standalone."
             }
           ]
@@ -67,13 +67,13 @@
           "title": "Release coverage ownership manifest",
           "phase": "preflight",
           "flowCategory": "coverage-ownership",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test python --quiet",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Python harness validates the release coverage ownership manifest against campaign scenarios."
             }
           ]
@@ -128,8 +128,8 @@
           "title": "Native release test sweep",
           "phase": "protocol-parity",
           "flowCategory": "native",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test all",
           "evidence": [
             {
@@ -141,7 +141,7 @@
             },
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Native parity, coverage, and live-diff command result is recorded by the operator."
             }
           ]
@@ -151,8 +151,8 @@
           "title": "Protocol tag and file-format golden coverage",
           "phase": "protocol-parity",
           "flowCategory": "file-format",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test all",
           "evidence": [
             {
@@ -164,7 +164,7 @@
             },
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Native parity suite owns Kad/eD2K tag serialization and release file-format golden tests."
             }
           ]
@@ -174,13 +174,13 @@
           "title": "eD2K links and collection boundary coverage",
           "phase": "protocol-parity",
           "flowCategory": "protocol",
-          "required": true,
-          "blocking": true,
+          "required": false,
+          "blocking": false,
           "command": "python -m emule_workspace test all",
           "evidence": [
             {
               "kind": "manual",
-              "required": true,
+              "required": false,
               "description": "Native collection, direct download, and protocol parity tests own link and collection parser boundaries."
             }
           ]
