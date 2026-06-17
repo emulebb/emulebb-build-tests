@@ -190,7 +190,9 @@ TEST_CASE("fake-file analyzer still flags meaningful title divergence")
 	CHECK(std::find(report.reasons.begin(), report.reasons.end(), "multiple_names") != report.reasons.end());
 	CHECK(report.nameDivergenceGroups.size() == 2);
 	CHECK(std::find(report.nameDivergenceGroups.begin(), report.nameDivergenceGroups.end(), L"the longest movie") != report.nameDivergenceGroups.end());
-	CHECK(std::find(report.nameDivergenceGroups.begin(), report.nameDivergenceGroups.end(), L"sports madness 2000") != report.nameDivergenceGroups.end());
+	// The release year (2000) is a year-like token, so BUG-150 noise stripping
+	// drops it from the canonical name; the title divergence is still flagged.
+	CHECK(std::find(report.nameDivergenceGroups.begin(), report.nameDivergenceGroups.end(), L"sports madness") != report.nameDivergenceGroups.end());
 }
 
 TEST_CASE("fake-file analyzer merges names that differ only by a stray year token")
