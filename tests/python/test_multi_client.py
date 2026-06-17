@@ -19,9 +19,17 @@ def test_client_identities_use_stable_workspace_names() -> None:
 
 
 def test_client_long_path_capabilities_are_explicit() -> None:
-    report = multi_client.long_path_capability_report(["emulebb", "harness", "amule"])
+    report = multi_client.long_path_capability_report(
+        ["emulebb", "emulebb_rust", "emulebb_rust_peer", "harness", "amule"]
+    )
 
+    # The eMuleBB family (MFC master + the Rust client) is long-path capable;
+    # the Rust client's support is scoped to operator content path classes
+    # (shared trees / incoming / categories) via a longPathAware manifest + a
+    # verbatim \\?\ helper. The compatibility clients are not long-path capable.
     assert report["emulebb"]["supports_long_paths"] is True
+    assert report["emulebb_rust"]["supports_long_paths"] is True
+    assert report["emulebb_rust_peer"]["supports_long_paths"] is True
     assert report["harness"]["supports_long_paths"] is False
     assert report["amule"]["supports_long_paths"] is False
 

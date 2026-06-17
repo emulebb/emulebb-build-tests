@@ -109,7 +109,11 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT05_EMULEBB_RUST_A,
         product="eMuleBB Rust",
         role="headless Rust eMuleBB-compatible client",
-        supports_long_paths=False,
+        # Long-path capable, scoped to operator content path classes only:
+        # shared-directory trees, incoming downloads, and category paths
+        # (longPathAware manifest + verbatim \\?\ helper). Config/logs/DB and
+        # the internal hash-named piece store stay short-path by design.
+        supports_long_paths=True,
     ),
     "emulebb_rust_peer": ClientIdentity(
         key="emulebb_rust_peer",
@@ -117,7 +121,8 @@ CLIENT_IDENTITIES = {
         nick=NICK_CLIENT06_EMULEBB_RUST_B,
         product="eMuleBB Rust",
         role="second headless Rust eMuleBB-compatible client",
-        supports_long_paths=False,
+        # Long-path capable (scoped, see emulebb_rust above).
+        supports_long_paths=True,
     ),
 }
 
