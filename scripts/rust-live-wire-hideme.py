@@ -2,9 +2,9 @@
 
 Binds the Rust daemon's P2P stack through the hide.me split tunnel, connects to
 the operator's eD2K server, bootstraps Kad from the public emule-security
-``nodes.dat``, then exercises the full live cycle over the public network —
+``nodes.dat``, then exercises the full live cycle over the public network:
 connection, eD2K server keyword search, Kad participation, source exchange, and
-a completed file download — across an obfuscation-ON and an obfuscation-OFF
+a completed file download across an obfuscation-ON and an obfuscation-OFF
 pass.
 
 No operator-specific local paths are baked in: the REST bind comes from
@@ -47,7 +47,7 @@ from emule_test_harness.vm_guest_profiles import (
 
 # Operator-fixed network inputs (public identifiers, not local paths).
 OPERATOR_SERVER = "45.82.80.155:5687"
-# High listen ports — avoid ISP filtering of the classic 4662/4672.
+# High listen ports: avoid ISP filtering of the classic 4662/4672.
 ED2K_PORT = 51662
 KAD_PORT = 51672
 API_KEY = "live-wire"
@@ -84,7 +84,7 @@ def enforce_connect_cooldown(marker: Path) -> None:
         last = 0.0
     wait = CONNECT_COOLDOWN_SECONDS - (time.time() - last)
     if wait > 0:
-        log(f"connect cooldown: waiting {int(wait)}s (server connect ≤ 1 / 5 min)...")
+        log(f"connect cooldown: waiting {int(wait)}s (server connect <= 1 / 5 min)...")
         time.sleep(wait)
     marker.write_text(str(time.time()), encoding="utf-8")
 
@@ -398,7 +398,7 @@ def run_pass(
         # The daemon's auto-start is unreliable; drive Kad + ED2K explicitly.
         # This also brings up the P2P sockets so the VPN-bind check can pass.
         retry_http_json("kad start", 3, base_url, "/api/v1/kad/operations/start", api_key=API_KEY, method="POST", body={})
-        # Respect the gentle server-connect cadence (≤ 1 connect / 5 min) before
+        # Respect the gentle server-connect cadence (<= 1 connect / 5 min) before
         # we actually reach out to the operator eD2K server.
         enforce_connect_cooldown(connect_marker)
         retry_http_json(
@@ -422,7 +422,7 @@ def run_pass(
         evidence["ed2kHighId"] = bool(stats.get("ed2kHighId"))
 
         # Wait for Kad to actually finish bootstrapping (connected == is_bootstrapped),
-        # not just the first contact — otherwise the snapshot races the ~60s bootstrap
+        # not just the first contact; otherwise the snapshot races the ~60s bootstrap
         # and records connected=false with a partial contact count. Tolerate the
         # window expiring (record the real end state rather than failing the pass).
         def _kad_bootstrapped() -> dict[str, Any] | None:
@@ -483,7 +483,7 @@ def run_pass(
     }
     if dump_lines == 0:
         log(
-            "WARN: no ed2k_packet_v1 records captured — build the release exe with "
+            "WARN: no ed2k_packet_v1 records captured; build the release exe with "
             "`--features packet-diagnostics` to enable the packet dump."
         )
     log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {dump_lines})")
@@ -527,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     log(f"parsed {len(bootstrap_nodes)} bootstrap contacts")
 
     timeouts = {"rest": 60.0, "bind": 60.0, "connect": 120.0, "download": args.download_timeout}
-    # Cross-run marker enforcing ≤ 1 operator-server connect per 5 minutes.
+    # Cross-run marker enforcing <= 1 operator-server connect per 5 minutes.
     connect_marker = output_root / "live-wire" / ".last-server-connect"
     # Gentle default: a single obfuscation-ON pass (one connect + a few searches).
     passes = [True, False] if args.both else [True]
