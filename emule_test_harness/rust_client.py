@@ -28,6 +28,7 @@ def write_rust_config(
     rest_port: int,
     api_key: str,
     p2p_bind_ip: str | None = None,
+    p2p_bind_interface: str | None = None,
     ed2k_port: int | None = None,
     kad_port: int | None = None,
     server_endpoint: str | None = None,
@@ -47,14 +48,15 @@ def write_rust_config(
         f'runtimeDir = "{runtime_dir.as_posix()}"',
     ]
     if server_endpoint is not None:
-        if p2p_bind_ip is None or ed2k_port is None or kad_port is None:
-            raise ValueError("ED2K Rust configs require p2p_bind_ip, ed2k_port, and kad_port.")
-        lines.extend(
-            [
-                f'p2pBindIp = "{p2p_bind_ip}"',
-                "",
-            ]
-        )
+        if (p2p_bind_ip is None and p2p_bind_interface is None) or ed2k_port is None or kad_port is None:
+            raise ValueError(
+                "ED2K Rust configs require p2p_bind_ip and/or p2p_bind_interface, ed2k_port, and kad_port."
+            )
+        if p2p_bind_ip is not None:
+            lines.append(f'p2pBindIp = "{p2p_bind_ip}"')
+        if p2p_bind_interface is not None:
+            lines.append(f'p2pBindInterface = "{p2p_bind_interface}"')
+        lines.append("")
     if server_entry is not None:
         if server_endpoint is None:
             raise ValueError("ED2K Rust serverEntry requires server_endpoint.")

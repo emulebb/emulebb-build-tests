@@ -363,6 +363,7 @@ def run_pass(
         rest_port=rest_port,
         api_key=API_KEY,
         p2p_bind_ip=bind_ip,
+        p2p_bind_interface="hide.me",
         ed2k_port=ED2K_PORT,
         kad_port=KAD_PORT,
         server_endpoint=OPERATOR_SERVER,
