@@ -198,3 +198,13 @@ def test_rust_live_wire_can_require_packet_diagnostics() -> None:
     assert "packetDiagnosticsRequired" in text
     assert "require_packet_diagnostics" in text
     assert "python -m emule_workspace build clients --client emulebb-rust --diagnostics" in text
+
+
+def test_rust_live_wire_seeds_ed2k_server_list_before_search() -> None:
+    """The Rust live-wire path should mirror MFC global search with a server list."""
+
+    text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
+    assert "--server-met-url" in text
+    assert "https://upd.emule-security.org/server.met" in text
+    assert "/api/v1/servers/operations/import-met-url" in text
+    assert "serverMetImport" in text

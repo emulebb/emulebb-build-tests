@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import time
+from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ from emule_test_harness.vm_guest_profiles import (
 
 # Operator-fixed network inputs (public identifiers, not local paths).
 OPERATOR_SERVER = "45.82.80.155:5687"
+DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 # High listen ports: avoid ISP filtering of the classic 4662/4672.
 ED2K_PORT = 51662
 KAD_PORT = 51672
@@ -116,6 +118,32 @@ def get_stats(base_url: str) -> dict[str, Any]:
 def get_kad(base_url: str) -> dict[str, Any]:
     data = api_data(retry_http_json("kad", 3, base_url, "/api/v1/kad", api_key=API_KEY))
     return data if isinstance(data, dict) else {}
+
+
+def import_server_met(base_url: str, url: str) -> dict[str, Any]:
+    """Imports a server.met URL through the Rust REST API and returns a summary."""
+
+    if not url.strip():
+        return {"enabled": False, "imported": False, "serverCount": None}
+    payload = retry_http_json(
+        "server.met import",
+        2,
+        base_url,
+        "/api/v1/servers/operations/import-met-url",
+        api_key=API_KEY,
+        method="POST",
+        body={"url": url},
+        timeout_seconds=60.0,
+    )
+    rows = api_rows(
+        retry_http_json("servers", 2, base_url, "/api/v1/servers", api_key=API_KEY)
+    )
+    data = api_data(payload)
+    return {
+        "enabled": True,
+        "imported": bool(data.get("imported") if isinstance(data, dict) else False),
+        "serverCount": len(rows),
+    }
 
 
 def p2p_bound_to(bind_ip: str) -> bool:
@@ -344,6 +372,7 @@ def run_pass(
     max_concurrent: int,
     max_terms: int,
     connect_marker: Path,
+    server_met_url: str,
     enable_reask: bool = False,
     require_packet_diagnostics: bool = False,
 ) -> dict[str, Any]:
@@ -396,6 +425,7 @@ def run_pass(
     evidence: dict[str, Any] = {"obfuscation": obfuscation}
     try:
         wait_until("REST ready", timeouts["rest"], lambda: get_stats(base_url) or None)
+        evidence["serverMetImport"] = import_server_met(base_url, server_met_url)
 
         # The daemon's auto-start is unreliable; drive Kad + ED2K explicitly.
         # This also brings up the P2P sockets so the VPN-bind check can pass.
@@ -403,8 +433,9 @@ def run_pass(
         # Respect the gentle server-connect cadence (<= 1 connect / 5 min) before
         # we actually reach out to the operator eD2K server.
         enforce_connect_cooldown(connect_marker)
+        encoded_server_id = quote(OPERATOR_SERVER, safe="")
         retry_http_json(
-            "server connect", 3, base_url, "/api/v1/servers/operations/connect",
+            "server connect", 3, base_url, f"/api/v1/servers/{encoded_server_id}/operations/connect",
             api_key=API_KEY, method="POST", body={}, timeout_seconds=15.0,
         )
 
@@ -501,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inputs", required=True, help="Path to the live-wire-inputs.local.json file.")
     parser.add_argument("--profile", default="generic_open", help="search_terms profile to use.")
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL.")
+    parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL used to seed the ED2K global-search server list. Pass an empty value to disable.")
     parser.add_argument("--rest-port", type=int, default=4731, help="REST listen port on X_LOCAL_IP.")
     parser.add_argument("--bootstrap-limit", type=int, default=40, help="Max Kad bootstrap contacts to seed.")
     parser.add_argument("--download-timeout", type=float, default=900.0, help="Seconds to await a full download.")
@@ -559,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_concurrent=args.max_concurrent,
                 max_terms=args.max_terms,
                 connect_marker=connect_marker,
+                server_met_url=args.server_met_url,
                 enable_reask=args.reask,
                 require_packet_diagnostics=args.require_packet_diagnostics,
             )
@@ -570,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
         "runId": run_id,
         "server": OPERATOR_SERVER,
         "nodesUrl": args.nodes_url,
+        "serverMetUrl": args.server_met_url,
         "bindIp": bind_ip,
         "ed2kPort": ED2K_PORT,
         "kadPort": KAD_PORT,
