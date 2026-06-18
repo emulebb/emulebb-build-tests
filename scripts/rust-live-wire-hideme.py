@@ -345,6 +345,7 @@ def run_pass(
     max_terms: int,
     connect_marker: Path,
     enable_reask: bool = False,
+    require_packet_diagnostics: bool = False,
 ) -> dict[str, Any]:
     """Runs one obfuscation pass end-to-end and returns its evidence."""
 
@@ -484,9 +485,13 @@ def run_pass(
     }
     if dump_lines == 0:
         log(
-            "WARN: no ed2k_packet_v1 records captured; build the release exe with "
-            "`--features packet-diagnostics` to enable the packet dump."
+            "WARN: no ed2k_packet_v1 records captured; run "
+            "`python -m emule_workspace build clients --client emulebb-rust --diagnostics` "
+            "to stage a packet-diagnostics build."
         )
+        if require_packet_diagnostics:
+            evidence["status"] = "failed"
+            evidence["error"] = "packet diagnostics were required but no ed2k_packet_v1 records were captured"
     log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {dump_lines})")
     return evidence
 
@@ -503,6 +508,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-terms", type=int, default=3, help="GENTLE: max keyword searches per pass (avoid server bans).")
     parser.add_argument("--both", action="store_true", help="Run both obfuscation passes (two connect+search cycles). Default: obfuscation-ON only, to stay gentle on the server.")
     parser.add_argument("--reask", action="store_true", help="Enable the FEAT-001 UDP source-reask transport (enableUdpReask=true) for live validation.")
+    parser.add_argument(
+        "--require-packet-diagnostics",
+        action="store_true",
+        help="Fail the pass unless the staged Rust binary emits ed2k_packet_v1 packet diagnostics.",
+    )
     args = parser.parse_args(argv)
 
     rest_addr = require_env("X_LOCAL_IP")
@@ -550,6 +560,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_terms=args.max_terms,
                 connect_marker=connect_marker,
                 enable_reask=args.reask,
+                require_packet_diagnostics=args.require_packet_diagnostics,
             )
         )
         time.sleep(3.0)
@@ -564,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
         "kadPort": KAD_PORT,
         "bootstrapContacts": len(bootstrap_nodes),
         "searchProfile": args.profile,
+        "packetDiagnosticsRequired": args.require_packet_diagnostics,
         "passes": pass_results,
         "status": "passed" if all(p.get("status") == "passed" for p in pass_results) else "failed",
     }

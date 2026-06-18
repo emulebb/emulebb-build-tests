@@ -188,3 +188,13 @@ def test_rust_live_wire_uses_orchestrated_staged_runtime() -> None:
     text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
     assert '"tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"' in text
     assert '"builds" / "rust" / "target" / "release" / "emulebb-rust.exe"' not in text
+
+
+def test_rust_live_wire_can_require_packet_diagnostics() -> None:
+    """Diagnostic live-wire runs must fail when the staged Rust binary lacks packet dumps."""
+
+    text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
+    assert "--require-packet-diagnostics" in text
+    assert "packetDiagnosticsRequired" in text
+    assert "require_packet_diagnostics" in text
+    assert "python -m emule_workspace build clients --client emulebb-rust --diagnostics" in text
