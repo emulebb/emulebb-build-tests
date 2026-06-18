@@ -35,6 +35,7 @@ def write_rust_config(
     server_entry: dict[str, object] | None = None,
     obfuscation_enabled: bool = True,
     connect_timeout_secs: int = 10,
+    reconnect_interval_secs: int = 60,
     kad_bootstrap_nodes: list[str] | None = None,
     kad_bootstrap_min_routing_contacts: int = 10,
     kad_hello_intro_interval_secs: int = 1,
@@ -84,7 +85,7 @@ def write_rust_config(
                 f"listenPort = {ed2k_port}",
                 f"obfuscationEnabled = {str(obfuscation_enabled).lower()}",
                 f"connectTimeoutSecs = {connect_timeout_secs}",
-                "reconnectIntervalSecs = 60",
+                f"reconnectIntervalSecs = {reconnect_interval_secs}",
                 f"enableUdpReask = {str(enable_udp_reask).lower()}",
                 "",
             ]

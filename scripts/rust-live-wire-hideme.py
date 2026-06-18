@@ -368,6 +368,7 @@ def run_pass(
         kad_port=KAD_PORT,
         server_endpoint=OPERATOR_SERVER,
         obfuscation_enabled=obfuscation,
+        reconnect_interval_secs=int(CONNECT_COOLDOWN_SECONDS),
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
         enable_udp_reask=enable_reask,
