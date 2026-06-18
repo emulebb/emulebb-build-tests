@@ -59,9 +59,11 @@ RUST_LOG = (
     ",emulebb_ed2k::ed2k_transfer=debug,emulebb_ed2k::ed2k_tcp=debug"
 )
 
-# Pick a small, well-sourced, open-content file so a full download completes.
+# Pick a small, open-content file and then let the client prove source growth.
+# MFC accepts a search result with one advertised source; the live harness should
+# not hide download/source-acquisition regressions behind a stricter prefilter.
 MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
-MIN_DOWNLOAD_SOURCES = 3
+MIN_DOWNLOAD_SOURCES = 1
 UNSAFE_NAME_TOKENS = (".exe", ".msi", ".scr", ".bat", "keygen", "crack")
 
 
