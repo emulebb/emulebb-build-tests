@@ -284,10 +284,10 @@ def run_downloads(
     selected = candidates[:max_concurrent]
     initial_sources: dict[str, int] = {}
     sizes: dict[str, int] = {}
-    names: dict[str, str] = {}
+    ordinals: dict[str, int] = {}
     started = 0
     start_errors: list[str] = []
-    for candidate in selected:
+    for index, candidate in enumerate(selected, start=1):
         file_hash = candidate["hash"]
         try:
             retry_http_json(
@@ -303,12 +303,12 @@ def run_downloads(
                 api_key=API_KEY, method="POST", body={},
             )
         except Exception as exc:  # noqa: BLE001
-            start_errors.append(f"{file_hash}: {type(exc).__name__}")
+            start_errors.append(f"candidate {index}: {type(exc).__name__}")
             continue
         started += 1
         initial_sources[file_hash] = int(candidate.get("sources") or 0)
         sizes[file_hash] = int(candidate.get("sizeBytes") or candidate.get("size") or 0)
-        names[file_hash] = str(candidate.get("name") or "")
+        ordinals[file_hash] = index
     log(f"started {started}/{len(selected)} concurrent downloads")
 
     peak_sources: dict[str, int] = dict(initial_sources)
@@ -333,8 +333,9 @@ def run_downloads(
                 best_progress[file_hash] = max(best_progress[file_hash], 100.0 * completed_bytes / size)
             state = str(row.get("state") or "").casefold()
             if file_hash not in completed and ((size and completed_bytes >= size) or state in _COMPLETE_STATES):
-                completed[file_hash] = {"name": names.get(file_hash), "sizeBytes": size}
-                log(f"completed: {names.get(file_hash)!r}")
+                ordinal = ordinals.get(file_hash, 0)
+                completed[file_hash] = {"candidateIndex": ordinal, "sizeBytes": size}
+                log(f"completed candidate {ordinal}")
         total_completed_bytes = max(total_completed_bytes, snapshot_bytes)
         if len(completed) >= started:
             break

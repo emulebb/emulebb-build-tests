@@ -211,3 +211,13 @@ def test_rust_live_wire_seeds_ed2k_server_list_before_search() -> None:
     assert "https://upd.emule-security.org/server.met" in text
     assert "/api/v1/servers/operations/import-met-url" in text
     assert "serverMetImport" in text
+
+
+def test_rust_live_wire_does_not_persist_live_result_names() -> None:
+    """Live-wire reports should keep aggregate evidence without copied result names."""
+
+    text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
+    assert "candidateIndex" in text
+    assert "completed candidate" in text
+    assert '"name": names.get(file_hash)' not in text
+    assert "names: dict" not in text
