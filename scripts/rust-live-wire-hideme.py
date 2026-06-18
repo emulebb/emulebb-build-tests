@@ -22,7 +22,6 @@ import json
 import os
 import sys
 import time
-from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -433,9 +432,8 @@ def run_pass(
         # Respect the gentle server-connect cadence (<= 1 connect / 5 min) before
         # we actually reach out to the operator eD2K server.
         enforce_connect_cooldown(connect_marker)
-        encoded_server_id = quote(OPERATOR_SERVER, safe="")
         retry_http_json(
-            "server connect", 3, base_url, f"/api/v1/servers/{encoded_server_id}/operations/connect",
+            "server connect", 3, base_url, f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
             api_key=API_KEY, method="POST", body={}, timeout_seconds=15.0,
         )
 
@@ -522,7 +520,11 @@ def run_pass(
         )
         if require_packet_diagnostics:
             evidence["status"] = "failed"
-            evidence["error"] = "packet diagnostics were required but no ed2k_packet_v1 records were captured"
+            packet_error = "packet diagnostics were required but no ed2k_packet_v1 records were captured"
+            if "error" in evidence:
+                evidence["packetDiagnosticsError"] = packet_error
+            else:
+                evidence["error"] = packet_error
     log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {dump_lines})")
     return evidence
 
