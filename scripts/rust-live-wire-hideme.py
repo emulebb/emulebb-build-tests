@@ -499,20 +499,36 @@ def run_pass(
     finally:
         stop_process_tree(process)
         handle.close()
-    # Summarize the converged ed2k_packet_v1 capture so a silently-empty dump
+    # Summarize the converged ed2k_packet_v1 captures so a silently-empty dump
     # (release exe built without --features packet-diagnostics) is visible.
-    dump_files = sorted(packet_dump_dir.glob("emulebb-rust-ed2k-tcp-dump-*.jsonl"))
-    dump_lines = sum(
+    ed2k_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-ed2k-*-dump-*.jsonl"))
+    udp_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-kad-udp-dump-*.jsonl"))
+    diag_dump_files = sorted(packet_dump_dir.glob("emulebb-rust-diag-*.jsonl"))
+    ed2k_dump_lines = sum(
         sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
-        for f in dump_files
+        for f in ed2k_dump_files
+    )
+    udp_dump_lines = sum(
+        sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+        for f in udp_dump_files
+    )
+    diag_dump_lines = sum(
+        sum(1 for line in f.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+        for f in diag_dump_files
     )
     evidence["packetDump"] = {
         "dir": str(packet_dump_dir),
-        "files": len(dump_files),
-        "records": dump_lines,
-        "captured": dump_lines > 0,
+        "files": len(ed2k_dump_files),
+        "records": ed2k_dump_lines,
+        "captured": ed2k_dump_lines > 0,
+        "ed2kFiles": len(ed2k_dump_files),
+        "ed2kRecords": ed2k_dump_lines,
+        "udpFiles": len(udp_dump_files),
+        "udpRecords": udp_dump_lines,
+        "diagFiles": len(diag_dump_files),
+        "diagRecords": diag_dump_lines,
     }
-    if dump_lines == 0:
+    if ed2k_dump_lines == 0:
         log(
             "WARN: no ed2k_packet_v1 records captured; run "
             "`python -m emule_workspace build clients --client emulebb-rust --diagnostics` "
@@ -525,7 +541,7 @@ def run_pass(
                 evidence["packetDiagnosticsError"] = packet_error
             else:
                 evidence["error"] = packet_error
-    log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {dump_lines})")
+    log(f"pass obfuscation {label}: {evidence.get('status')} (packet records: {ed2k_dump_lines})")
     return evidence
 
 

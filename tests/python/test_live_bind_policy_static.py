@@ -198,6 +198,9 @@ def test_rust_live_wire_can_require_packet_diagnostics() -> None:
     assert "packetDiagnosticsRequired" in text
     assert "require_packet_diagnostics" in text
     assert "python -m emule_workspace build clients --client emulebb-rust --diagnostics" in text
+    assert 'glob("emulebb-rust-ed2k-*-dump-*.jsonl")' in text
+    assert '"ed2kRecords": ed2k_dump_lines' in text
+    assert '"udpRecords": udp_dump_lines' in text
 
 
 def test_rust_live_wire_seeds_ed2k_server_list_before_search() -> None:
