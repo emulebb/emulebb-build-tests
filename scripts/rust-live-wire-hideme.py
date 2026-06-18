@@ -179,7 +179,13 @@ def count_log_matches(log_path: Path, needles: tuple[str, ...]) -> dict[str, int
         text = log_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {needle: 0 for needle in needles}
-    return {needle: text.count(needle) for needle in needles}
+    return {needle: count_protocol_marker(text, needle) for needle in needles}
+
+
+def count_protocol_marker(text: str, marker: str) -> int:
+    if marker == "udp reask":
+        return text.count("ed2k udp reask: PKT-OUT reask ping")
+    return text.count(marker)
 
 
 def safe_download_rejection_reason(row: dict[str, Any]) -> str | None:
