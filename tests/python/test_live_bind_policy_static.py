@@ -219,5 +219,7 @@ def test_rust_live_wire_does_not_persist_live_result_names() -> None:
     text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
     assert "candidateIndex" in text
     assert "completed candidate" in text
+    assert "candidateStats" in text
+    assert "safe_download_rejection_reason" in text
     assert '"name": names.get(file_hash)' not in text
     assert "names: dict" not in text

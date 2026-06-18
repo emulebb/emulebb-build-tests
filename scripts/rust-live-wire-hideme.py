@@ -180,21 +180,32 @@ def count_log_matches(log_path: Path, needles: tuple[str, ...]) -> dict[str, int
     return {needle: text.count(needle) for needle in needles}
 
 
-def is_safe_download_candidate(row: dict[str, Any]) -> bool:
+def safe_download_rejection_reason(row: dict[str, Any]) -> str | None:
     name = str(row.get("name") or "").casefold()
-    if not name or any(token in name for token in UNSAFE_NAME_TOKENS):
-        return False
+    if not name:
+        return "missingName"
+    if any(token in name for token in UNSAFE_NAME_TOKENS):
+        return "unsafeNameToken"
     file_hash = str(row.get("hash") or "")
     size = row.get("sizeBytes", row.get("size"))
     sources = row.get("sources")
-    return (
-        len(file_hash) == 32
-        and all(ch in "0123456789abcdef" for ch in file_hash.casefold())
-        and isinstance(size, int)
-        and 0 < size <= MAX_DOWNLOAD_BYTES
-        and isinstance(sources, int)
-        and sources >= MIN_DOWNLOAD_SOURCES
-    )
+    if len(file_hash) != 32 or not all(ch in "0123456789abcdef" for ch in file_hash.casefold()):
+        return "invalidHash"
+    if not isinstance(size, int):
+        return "missingSize"
+    if size <= 0:
+        return "emptySize"
+    if size > MAX_DOWNLOAD_BYTES:
+        return "tooLarge"
+    if not isinstance(sources, int):
+        return "missingSources"
+    if sources < MIN_DOWNLOAD_SOURCES:
+        return "tooFewSources"
+    return None
+
+
+def is_safe_download_candidate(row: dict[str, Any]) -> bool:
+    return safe_download_rejection_reason(row) is None
 
 
 def run_search_corpus(
@@ -216,6 +227,8 @@ def run_search_corpus(
 
     searches: list[dict[str, Any]] = []
     candidates: dict[str, dict[str, Any]] = {}
+    rejection_reasons: dict[str, int] = {}
+    observed_rows = 0
     total_results = 0
     selected_terms = terms[:max_terms]
     for index, term in enumerate(selected_terms):
@@ -250,9 +263,16 @@ def run_search_corpus(
                 log(f"  search {term!r}: timed out awaiting completion ({exc})")
         total_results += len(results)
         for row in results:
-            if isinstance(row, dict) and is_safe_download_candidate(row):
+            if not isinstance(row, dict):
+                rejection_reasons["nonObjectRow"] = rejection_reasons.get("nonObjectRow", 0) + 1
+                continue
+            observed_rows += 1
+            rejection_reason = safe_download_rejection_reason(row)
+            if rejection_reason is None:
                 row["_searchId"] = search_id
                 candidates.setdefault(row["hash"], row)
+            else:
+                rejection_reasons[rejection_reason] = rejection_reasons.get(rejection_reason, 0) + 1
         log(f"  search {term!r}: {len(results)} results")
         searches.append({"query": term, "searchId": search_id, "resultCount": len(results)})
     # Download as many files as we can in parallel; order by most sources first
@@ -262,7 +282,18 @@ def run_search_corpus(
         key=lambda r: (int(r.get("sources") or 0), -int(r.get("sizeBytes") or r.get("size") or 0)),
         reverse=True,
     )
-    return {"searches": searches, "totalResults": total_results, "candidates": ranked}
+    return {
+        "searches": searches,
+        "totalResults": total_results,
+        "candidateStats": {
+            "observedRows": observed_rows,
+            "safeCandidates": len(ranked),
+            "rejected": dict(sorted(rejection_reasons.items())),
+            "maxDownloadBytes": MAX_DOWNLOAD_BYTES,
+            "minDownloadSources": MIN_DOWNLOAD_SOURCES,
+        },
+        "candidates": ranked,
+    }
 
 
 _COMPLETE_STATES = {"complete", "completed", "shared", "seeding", "finished"}
