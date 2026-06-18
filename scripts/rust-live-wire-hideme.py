@@ -507,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rest_addr = require_env("X_LOCAL_IP")
     output_root = get_workspace_output_root()
-    exe_path = output_root / "builds" / "rust" / "target" / "release" / "emulebb-rust.exe"
+    exe_path = output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
     if not exe_path.is_file():
         raise RuntimeError(f"Release binary missing: {exe_path}. Build emulebb-rust (release) first.")
 

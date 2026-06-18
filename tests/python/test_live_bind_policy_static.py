@@ -180,3 +180,11 @@ def test_harness_never_overrides_authoritative_workspace_env() -> None:
                 offenders.append(f"{path.relative_to(REPO_ROOT)}: {pattern.pattern}")
 
     assert offenders == []
+
+
+def test_rust_live_wire_uses_orchestrated_staged_runtime() -> None:
+    """The live-wire launcher must run the binary staged by build orchestration."""
+
+    text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
+    assert '"tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"' in text
+    assert '"builds" / "rust" / "target" / "release" / "emulebb-rust.exe"' not in text
