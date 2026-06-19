@@ -5,9 +5,12 @@ from pathlib import Path
 
 
 def load_live_wire_module():
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "rust-live-wire-hideme.py"
+    script_path = (
+        Path(__file__).resolve().parents[2] / "scripts" / "rust-live-wire-hideme.py"
+    )
     spec = importlib.util.spec_from_file_location("rust_live_wire_hideme", script_path)
-    assert spec and spec.loader
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -34,3 +37,21 @@ def test_udp_reask_protocol_log_counts_outbound_reasks_only(tmp_path: Path) -> N
     counts = module.count_log_matches(log_path, ("udp reask", "Kad source"))
 
     assert counts == {"udp reask": 2, "Kad source": 1}
+
+
+def test_p2p_bound_to_uses_python_socket_inventory(monkeypatch) -> None:
+    module = load_live_wire_module()
+
+    def fake_listening_socket_addresses(protocol: str) -> list[tuple[str, int]]:
+        if protocol == "tcp":
+            return [("192.0.2.10", module.ED2K_PORT)]
+        if protocol == "udp":
+            return [("192.0.2.10", module.KAD_PORT)]
+        raise AssertionError(f"unexpected protocol {protocol}")
+
+    monkeypatch.setattr(
+        module, "_listening_socket_addresses", fake_listening_socket_addresses
+    )
+
+    assert module.p2p_bound_to("192.0.2.10")
+    assert not module.p2p_bound_to("192.0.2.11")

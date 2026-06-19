@@ -12,6 +12,7 @@ dev = [
 ]
 live = [
     "playwright",
+    "psutil",
     "pywin32",
     "pywinauto",
 ]

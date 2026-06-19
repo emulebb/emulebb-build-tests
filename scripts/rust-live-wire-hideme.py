@@ -150,20 +150,47 @@ def import_server_met(base_url: str, url: str) -> dict[str, Any]:
 def p2p_bound_to(bind_ip: str) -> bool:
     """Returns True when the ED2K TCP and Kad UDP listeners are bound to ``bind_ip``."""
 
-    import subprocess
+    tcp_bound = any(
+        address == bind_ip and port == ED2K_PORT
+        for address, port in _listening_socket_addresses("tcp")
+    )
+    udp_bound = any(
+        address == bind_ip and port == KAD_PORT
+        for address, port in _listening_socket_addresses("udp")
+    )
+    return tcp_bound and udp_bound
 
-    script = (
-        f"$tcp = Get-NetTCPConnection -State Listen -LocalPort {ED2K_PORT} -ErrorAction SilentlyContinue | "
-        f"Where-Object {{ $_.LocalAddress -eq '{bind_ip}' }}; "
-        f"$udp = Get-NetUDPEndpoint -LocalPort {KAD_PORT} -ErrorAction SilentlyContinue | "
-        f"Where-Object {{ $_.LocalAddress -eq '{bind_ip}' }}; "
-        "if ($tcp -and $udp) { 'bound' } else { 'no' }"
-    )
-    completed = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", script],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30, check=False,
-    )
-    return "bound" in (completed.stdout or "")
+
+def _listening_socket_addresses(protocol: str) -> list[tuple[str, int]]:
+    """Return local listener/endpoint addresses using Python APIs only."""
+
+    import psutil
+
+    if protocol == "tcp":
+        connections = psutil.net_connections(kind="tcp")
+        return [
+            _socket_address_tuple(connection.laddr)
+            for connection in connections
+            if connection.status == psutil.CONN_LISTEN and connection.laddr
+        ]
+    if protocol == "udp":
+        return [
+            _socket_address_tuple(connection.laddr)
+            for connection in psutil.net_connections(kind="udp")
+            if connection.laddr
+        ]
+    raise ValueError(f"unsupported protocol {protocol!r}")
+
+
+def _socket_address_tuple(address: Any) -> tuple[str, int]:
+    """Normalize psutil's platform-specific address shape."""
+
+    host = getattr(address, "ip", None)
+    port = getattr(address, "port", None)
+    if host is None or port is None:
+        host = address[0]
+        port = address[1]
+    return str(host), int(port)
 
 
 def log_contains(log_path: Path, needle: str) -> bool:
