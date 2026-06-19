@@ -761,6 +761,13 @@ TEST_CASE("Shared file auto-reload accepts fallback polling as a valid dirty-wor
 	CHECK_FALSE(SharedFileListSeams::ShouldScheduleAutoReload({ true, false, false, true, false, false }));
 }
 
+TEST_CASE("Shared file auto-reload uses bounded five-minute polling defaults")
+{
+	CHECK_EQ(SharedFileListSeams::kSharedFileAutoReloadIntervalMs, 5u * 60u * 1000u);
+	CHECK_EQ(SharedFileListSeams::kSharedFileAutoReloadDirectoryChecksPerTick, 512u);
+	CHECK_EQ(SharedFileListSeams::kSharedFileAutoReloadDirectoryScansPerTick, 8u);
+}
+
 TEST_CASE("Shared file import yield only applies to active full-part imports")
 {
 	CHECK(SharedFileListSeams::ShouldYieldAfterImportProgress(true, true, true));
