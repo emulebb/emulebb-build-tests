@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 
 import pytest
 
 from emule_test_harness import rust_client
+
+
+def load_rust_live_wire_module():
+    script_path = Path(__file__).parents[2] / "scripts" / "rust-live-wire-hideme.py"
+    spec = importlib.util.spec_from_file_location("rust_live_wire_hideme", script_path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_write_rust_config_supports_rest_only_profile(tmp_path: Path) -> None:
@@ -24,6 +35,38 @@ def test_write_rust_config_supports_rest_only_profile(tmp_path: Path) -> None:
     assert 'bindAddr = "192.0.2.10:4711"' in text
     assert 'apiKey = "key"' in text
     assert "[ed2k]" not in text
+
+
+def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_rust_live_wire_module()
+
+    candidates = [
+        {"hash": "aa", "_searchId": "1", "sizeBytes": 1000, "sources": 3},
+        {"hash": "bb", "_searchId": "1", "sizeBytes": 2000, "sources": 4},
+    ]
+
+    def fake_retry_http_json(label, attempts, base_url, path, **kwargs):
+        _ = (attempts, base_url, kwargs)
+        if label in {"download", "resume"}:
+            return {"ok": True}
+        assert path == "/api/v1/transfers"
+        return {
+            "transfers": [
+                {"hash": "aa", "completedBytes": 1000, "sources": 3, "state": "completed"},
+                {"hash": "bb", "completedBytes": 600, "sources": 4, "state": "downloading"},
+            ]
+        }
+
+    monkeypatch.setattr(module, "retry_http_json", fake_retry_http_json)
+    monkeypatch.setattr(module, "api_rows", lambda payload, key: payload[key])
+    monkeypatch.setattr(module, "log", lambda message: None)
+
+    result = module.run_downloads("http://192.0.2.10:4711", candidates, 1, max_concurrent=2)
+
+    assert result["completedFiles"] == [{"candidateIndex": 1, "sizeBytes": 1000}]
+    assert result["completedFilesTotalBytes"] == 1000
+    assert result["aggregateVerifiedBytes"] == 1600
+    assert result["totalCompletedBytes"] == 1000
 
 
 def test_write_rust_config_requires_complete_ed2k_settings(tmp_path: Path) -> None:

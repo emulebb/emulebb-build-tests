@@ -504,7 +504,7 @@ def run_downloads(
     peak_sources: dict[str, int] = dict(initial_sources)
     best_progress: dict[str, float] = {h: 0.0 for h in initial_sources}
     completed: dict[str, dict[str, Any]] = {}
-    total_completed_bytes = 0
+    aggregate_verified_bytes = 0
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline and not completed:
         rows = api_rows(
@@ -526,12 +526,13 @@ def run_downloads(
                 ordinal = ordinals.get(file_hash, 0)
                 completed[file_hash] = {"candidateIndex": ordinal, "sizeBytes": size}
                 log(f"completed candidate {ordinal}")
-        total_completed_bytes = max(total_completed_bytes, snapshot_bytes)
+        aggregate_verified_bytes = max(aggregate_verified_bytes, snapshot_bytes)
         if completed:
             break
         time.sleep(5.0)
 
     source_exchange = any(peak_sources.get(h, 0) > initial_sources.get(h, 0) for h in initial_sources)
+    completed_files_total_bytes = sum(item["sizeBytes"] for item in completed.values())
     return {
         "candidatesAvailable": len(candidates),
         "started": started,
@@ -540,7 +541,9 @@ def run_downloads(
         "completedFiles": list(completed.values()),
         "anyCompleted": bool(completed),
         "maxProgressPercent": round(max(best_progress.values(), default=0.0), 1),
-        "totalCompletedBytes": total_completed_bytes,
+        "completedFilesTotalBytes": completed_files_total_bytes,
+        "aggregateVerifiedBytes": aggregate_verified_bytes,
+        "totalCompletedBytes": completed_files_total_bytes,
         "peakSourcesTotal": sum(peak_sources.values()),
         "initialSourcesTotal": sum(initial_sources.values()),
         "sourceExchangeObserved": source_exchange,
