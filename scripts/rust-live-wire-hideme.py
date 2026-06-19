@@ -80,6 +80,14 @@ OP_MULTIPACKET = 0x92
 OP_MULTIPACKET_EXT = 0xA4
 OP_MULTIPACKET_EXT2 = 0xA9
 OP_AICHFILEHASHREQ = 0x9E
+CLIENT_UDP_REASK_OPS = (
+    "OP_REASKFILEPING",
+    "OP_REASKACK",
+    "OP_FILENOTFOUND",
+    "OP_QUEUEFULL",
+    "OP_REASKCALLBACKUDP",
+    "OP_DIRECTCALLBACKREQ",
+)
 
 
 def log(message: str) -> None:
@@ -196,6 +204,54 @@ def summarize_source_exchange_packets(packet_dump_dir: Path) -> dict[str, Any]:
         "embeddedRequestSources2Sent": counts["sendEmbeddedRequestSources2"],
         "standaloneRequestSources2Sent": counts["sendRequestSources2"],
         "counts": dict(sorted(counts.items())),
+    }
+
+
+def summarize_client_udp_packets(packet_dump_dir: Path) -> dict[str, Any]:
+    """Summarizes retained client-UDP reask packet diagnostics."""
+
+    opcode_counts: Counter[str] = Counter()
+    direction_counts: Counter[str] = Counter()
+    transport_counts: Counter[str] = Counter()
+    direction_opcode_counts: Counter[tuple[str, str]] = Counter()
+    files = sorted(packet_dump_dir.glob("emulebb-rust-ed2k-client-udp-dump-*.jsonl"))
+    records = 0
+    unknown_records = 0
+    for dump_file in files:
+        for line in dump_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            records += 1
+            opcode_name = str(record.get("opcode_name") or "")
+            direction = str(record.get("direction") or "")
+            transport = str(record.get("transport_mode") or "")
+            opcode_counts[opcode_name] += 1
+            direction_counts[direction] += 1
+            direction_opcode_counts[(direction, opcode_name)] += 1
+            transport_counts[transport] += 1
+            if opcode_name == "UNKNOWN":
+                unknown_records += 1
+
+    return {
+        "files": len(files),
+        "records": records,
+        "captured": records > 0,
+        "unknownRecords": unknown_records,
+        "opcodes": dict(sorted((key, value) for key, value in opcode_counts.items() if key)),
+        "directions": dict(sorted((key, value) for key, value in direction_counts.items() if key)),
+        "transportModes": dict(sorted((key, value) for key, value in transport_counts.items() if key)),
+        "reaskFilePingSent": direction_opcode_counts[("send", "OP_REASKFILEPING")],
+        "reaskAckObserved": opcode_counts["OP_REASKACK"],
+        "fileNotFoundObserved": opcode_counts["OP_FILENOTFOUND"],
+        "queueFullObserved": opcode_counts["OP_QUEUEFULL"],
+        "callbackUdpObserved": opcode_counts["OP_REASKCALLBACKUDP"],
+        "callbackUdpSent": direction_opcode_counts[("send", "OP_REASKCALLBACKUDP")],
+        "directCallbackReqObserved": opcode_counts["OP_DIRECTCALLBACKREQ"],
+        "coveredOps": {name: opcode_counts[name] for name in CLIENT_UDP_REASK_OPS if opcode_counts[name]},
     }
 
 
@@ -724,6 +780,7 @@ def run_pass(
     }
     source_exchange_packets = summarize_source_exchange_packets(packet_dump_dir)
     evidence["packetDump"]["sourceExchange"] = source_exchange_packets
+    evidence["packetDump"]["clientUdp"] = summarize_client_udp_packets(packet_dump_dir)
     if source_exchange_packets["requestSources2Sent"] > 0 and isinstance(evidence.get("download"), dict):
         evidence["download"]["sourceExchangeObserved"] = True
         evidence["download"]["sourceExchangeEvidence"] = "ed2k_packet_v1"
