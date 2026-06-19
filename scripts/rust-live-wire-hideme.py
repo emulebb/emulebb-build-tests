@@ -485,7 +485,7 @@ def run_downloads(
     completed: dict[str, dict[str, Any]] = {}
     total_completed_bytes = 0
     deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline and len(completed) < started:
+    while time.monotonic() < deadline and not completed:
         rows = api_rows(
             retry_http_json("transfers", 4, base_url, "/api/v1/transfers", api_key=API_KEY), "transfers",
         )
@@ -506,7 +506,7 @@ def run_downloads(
                 completed[file_hash] = {"candidateIndex": ordinal, "sizeBytes": size}
                 log(f"completed candidate {ordinal}")
         total_completed_bytes = max(total_completed_bytes, snapshot_bytes)
-        if len(completed) >= started:
+        if completed:
             break
         time.sleep(5.0)
 

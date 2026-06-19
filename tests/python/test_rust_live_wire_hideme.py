@@ -118,3 +118,54 @@ def test_source_exchange_summary_counts_ext2_embedded_sx2_requests(tmp_path: Pat
 
     assert summary["requestSources2Sent"] == 1
     assert summary["embeddedRequestSources2Sent"] == 1
+
+
+def test_run_downloads_returns_after_first_completion(monkeypatch) -> None:
+    module = load_live_wire_module()
+    transfer_hashes = [
+        "00112233445566778899aabbccddeeff",
+        "ffeeddccbbaa99887766554433221100",
+    ]
+
+    def fake_retry_http_json(label, *_args, **_kwargs):
+        assert label in {"download", "resume", "transfers"}
+        if label == "transfers":
+            fake_retry_http_json.transfer_calls += 1
+            assert fake_retry_http_json.transfer_calls == 1
+            return {
+                "transfers": [
+                    {
+                        "hash": transfer_hashes[0],
+                        "completedBytes": 10,
+                        "sizeBytes": 10,
+                        "sources": 1,
+                        "state": "completed",
+                    },
+                    {
+                        "hash": transfer_hashes[1],
+                        "completedBytes": 0,
+                        "sizeBytes": 10,
+                        "sources": 1,
+                        "state": "downloading",
+                    },
+                ]
+            }
+        return {"ok": True}
+
+    fake_retry_http_json.transfer_calls = 0
+    monkeypatch.setattr(module, "retry_http_json", fake_retry_http_json)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.run_downloads(
+        "http://192.0.2.10:4731",
+        [
+            {"hash": transfer_hashes[0], "sources": 1, "sizeBytes": 10, "_searchId": "1"},
+            {"hash": transfer_hashes[1], "sources": 1, "sizeBytes": 10, "_searchId": "1"},
+        ],
+        60,
+        max_concurrent=2,
+    )
+
+    assert result["completed"] is True
+    assert result["completedCount"] == 1
+    assert fake_retry_http_json.transfer_calls == 1
