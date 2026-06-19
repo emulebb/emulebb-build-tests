@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -55,3 +56,65 @@ def test_p2p_bound_to_uses_python_socket_inventory(monkeypatch) -> None:
 
     assert module.p2p_bound_to("192.0.2.10")
     assert not module.p2p_bound_to("192.0.2.11")
+
+
+def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) -> None:
+    module = load_live_wire_module()
+    dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
+    request_filename_ext_info = bytes([1, 0, 0, 0, 0])
+    multipacket_ext_payload = (
+        bytes(range(16))
+        + (12345).to_bytes(8, "little")
+        + bytes([module.OP_REQUESTFILENAME])
+        + request_filename_ext_info
+        + bytes([module.OP_REQUESTSOURCES2, 4, 0, 0])
+        + bytes([module.OP_AICHFILEHASHREQ])
+    )
+    records = [
+        {
+            "direction": "send",
+            "opcode": module.OP_MULTIPACKET_EXT,
+            "payload_hex": multipacket_ext_payload.hex(),
+        },
+        {
+            "direction": "recv",
+            "opcode": module.OP_ANSWERSOURCES2,
+            "payload_hex": "",
+        },
+    ]
+    dump_path.write_text("\n".join(json.dumps(row) for row in records), encoding="utf-8")
+
+    summary = module.summarize_source_exchange_packets(tmp_path)
+
+    assert summary["requestSources2Sent"] == 1
+    assert summary["embeddedRequestSources2Sent"] == 1
+    assert summary["standaloneRequestSources2Sent"] == 0
+    assert summary["answerSources2Received"] == 1
+
+
+def test_source_exchange_summary_counts_ext2_embedded_sx2_requests(tmp_path: Path) -> None:
+    module = load_live_wire_module()
+    dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
+    request_filename_ext_info = bytes([1, 0, 0, 0, 0])
+    file_identifier = bytes([0x03]) + bytes(range(16)) + (54321).to_bytes(8, "little")
+    multipacket_ext2_payload = (
+        file_identifier
+        + bytes([module.OP_REQUESTFILENAME])
+        + request_filename_ext_info
+        + bytes([module.OP_REQUESTSOURCES2, 4, 0, 0])
+    )
+    dump_path.write_text(
+        json.dumps(
+            {
+                "direction": "send",
+                "opcode": module.OP_MULTIPACKET_EXT2,
+                "payload_hex": multipacket_ext2_payload.hex(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = module.summarize_source_exchange_packets(tmp_path)
+
+    assert summary["requestSources2Sent"] == 1
+    assert summary["embeddedRequestSources2Sent"] == 1

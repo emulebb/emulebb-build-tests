@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -70,9 +71,111 @@ UNSAFE_NAME_TOKENS = (".exe", ".msi", ".scr", ".bat", "keygen", "crack")
 # Gentle server-contact policy (avoid Lugdunum IP bans).
 CONNECT_COOLDOWN_SECONDS = 300.0  # at most one server connect per 5 minutes
 
+OP_REQUESTFILENAME = 0x58
+OP_SETREQFILEID = 0x4F
+OP_REQUESTSOURCES = 0x81
+OP_REQUESTSOURCES2 = 0x83
+OP_ANSWERSOURCES2 = 0x84
+OP_MULTIPACKET = 0x92
+OP_MULTIPACKET_EXT = 0xA4
+OP_MULTIPACKET_EXT2 = 0xA9
+OP_AICHFILEHASHREQ = 0x9E
+
 
 def log(message: str) -> None:
     print(f"[live-wire] {message}", flush=True)
+
+
+def _skip_request_filename_ext_info(payload: bytes, offset: int) -> int:
+    if offset + 2 > len(payload):
+        return len(payload)
+    part_count = int.from_bytes(payload[offset:offset + 2], "little")
+    bitfield_len = (part_count + 7) // 8
+    return min(len(payload), offset + 2 + bitfield_len + 2)
+
+
+def _skip_file_identifier(payload: bytes) -> int:
+    if not payload:
+        return 0
+    descriptor = payload[0]
+    if descriptor & 0xF8 or not descriptor & 0x01:
+        return 0
+    offset = 1 + 16
+    if descriptor & 0x02:
+        offset += 8
+    if descriptor & 0x04:
+        offset += 20
+    return min(len(payload), offset)
+
+
+def _multipacket_subop_counts(opcode: int, payload: bytes) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    if opcode == OP_MULTIPACKET_EXT2:
+        offset = _skip_file_identifier(payload)
+    elif opcode == OP_MULTIPACKET_EXT:
+        offset = 16 + 8
+    elif opcode == OP_MULTIPACKET:
+        offset = 16
+    else:
+        return counts
+
+    while offset < len(payload):
+        sub_opcode = payload[offset]
+        offset += 1
+        if sub_opcode == OP_REQUESTFILENAME:
+            offset = _skip_request_filename_ext_info(payload, offset)
+        elif sub_opcode == OP_SETREQFILEID:
+            counts["embeddedSetReqFileId"] += 1
+        elif sub_opcode == OP_REQUESTSOURCES:
+            counts["embeddedRequestSources1"] += 1
+        elif sub_opcode == OP_REQUESTSOURCES2:
+            counts["embeddedRequestSources2"] += 1
+            offset = min(len(payload), offset + 3)
+        elif sub_opcode == OP_AICHFILEHASHREQ:
+            counts["embeddedAichFileHashReq"] += 1
+        else:
+            # Unknown sub-ops have variable shapes; stop instead of scanning
+            # arbitrary hashes/payload bytes as if they were opcodes.
+            break
+    return counts
+
+
+def summarize_source_exchange_packets(packet_dump_dir: Path) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    for dump_file in packet_dump_dir.glob("emulebb-rust-ed2k-tcp-dump-*.jsonl"):
+        for line in dump_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            direction = str(record.get("direction") or "")
+            opcode = record.get("opcode")
+            try:
+                opcode_int = int(opcode)
+            except (TypeError, ValueError):
+                continue
+            if opcode_int == OP_REQUESTSOURCES2:
+                counts[f"{direction}RequestSources2"] += 1
+            elif opcode_int == OP_ANSWERSOURCES2:
+                counts[f"{direction}AnswerSources2"] += 1
+            elif opcode_int in {OP_MULTIPACKET, OP_MULTIPACKET_EXT, OP_MULTIPACKET_EXT2}:
+                payload_hex = str(record.get("payload_hex") or "")
+                try:
+                    payload = bytes.fromhex(payload_hex)
+                except ValueError:
+                    continue
+                for key, value in _multipacket_subop_counts(opcode_int, payload).items():
+                    counts[f"{direction}{key[0].upper()}{key[1:]}"] += value
+
+    return {
+        "requestSources2Sent": counts["sendRequestSources2"] + counts["sendEmbeddedRequestSources2"],
+        "answerSources2Received": counts["recvAnswerSources2"],
+        "embeddedRequestSources2Sent": counts["sendEmbeddedRequestSources2"],
+        "standaloneRequestSources2Sent": counts["sendRequestSources2"],
+        "counts": dict(sorted(counts.items())),
+    }
 
 
 def enforce_connect_cooldown(marker: Path) -> None:
@@ -595,6 +698,11 @@ def run_pass(
         "diagFiles": len(diag_dump_files),
         "diagRecords": diag_dump_lines,
     }
+    source_exchange_packets = summarize_source_exchange_packets(packet_dump_dir)
+    evidence["packetDump"]["sourceExchange"] = source_exchange_packets
+    if source_exchange_packets["requestSources2Sent"] > 0 and isinstance(evidence.get("download"), dict):
+        evidence["download"]["sourceExchangeObserved"] = True
+        evidence["download"]["sourceExchangeEvidence"] = "ed2k_packet_v1"
     if ed2k_dump_lines == 0:
         log(
             "WARN: no ed2k_packet_v1 records captured; run "
