@@ -140,6 +140,12 @@ def _multipacket_subop_counts(opcode: int, payload: bytes) -> Counter[str]:
     return counts
 
 
+def _answer_sources2_source_count(payload: bytes) -> int | None:
+    if len(payload) < 19:
+        return None
+    return int.from_bytes(payload[17:19], "little")
+
+
 def summarize_source_exchange_packets(packet_dump_dir: Path) -> dict[str, Any]:
     counts: Counter[str] = Counter()
     for dump_file in packet_dump_dir.glob("emulebb-rust-ed2k-tcp-dump-*.jsonl"):
@@ -160,6 +166,18 @@ def summarize_source_exchange_packets(packet_dump_dir: Path) -> dict[str, Any]:
                 counts[f"{direction}RequestSources2"] += 1
             elif opcode_int == OP_ANSWERSOURCES2:
                 counts[f"{direction}AnswerSources2"] += 1
+                payload_hex = str(record.get("payload_hex") or "")
+                try:
+                    payload = bytes.fromhex(payload_hex)
+                except ValueError:
+                    payload = b""
+                source_count = _answer_sources2_source_count(payload)
+                if source_count is None:
+                    counts[f"{direction}MalformedAnswerSources2"] += 1
+                else:
+                    counts[f"{direction}AnswerSources2SourceCount"] += source_count
+                    if source_count == 0:
+                        counts[f"{direction}EmptyAnswerSources2"] += 1
             elif opcode_int in {OP_MULTIPACKET, OP_MULTIPACKET_EXT, OP_MULTIPACKET_EXT2}:
                 payload_hex = str(record.get("payload_hex") or "")
                 try:
@@ -172,6 +190,9 @@ def summarize_source_exchange_packets(packet_dump_dir: Path) -> dict[str, Any]:
     return {
         "requestSources2Sent": counts["sendRequestSources2"] + counts["sendEmbeddedRequestSources2"],
         "answerSources2Received": counts["recvAnswerSources2"],
+        "answerSources2SourceCount": counts["recvAnswerSources2SourceCount"],
+        "emptyAnswerSources2Received": counts["recvEmptyAnswerSources2"],
+        "malformedAnswerSources2Received": counts["recvMalformedAnswerSources2"],
         "embeddedRequestSources2Sent": counts["sendEmbeddedRequestSources2"],
         "standaloneRequestSources2Sent": counts["sendRequestSources2"],
         "counts": dict(sorted(counts.items())),

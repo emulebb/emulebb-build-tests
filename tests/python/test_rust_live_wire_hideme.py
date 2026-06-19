@@ -62,6 +62,13 @@ def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) ->
     module = load_live_wire_module()
     dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
     request_filename_ext_info = bytes([1, 0, 0, 0, 0])
+    answer_sources2_payload = (
+        bytes([4])
+        + bytes(range(16))
+        + (2).to_bytes(2, "little")
+        + (bytes([192, 0, 2, 1]) + (4662).to_bytes(2, "little") + bytes(23))
+        + (bytes([192, 0, 2, 2]) + (4663).to_bytes(2, "little") + bytes(23))
+    )
     multipacket_ext_payload = (
         bytes(range(16))
         + (12345).to_bytes(8, "little")
@@ -79,7 +86,7 @@ def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) ->
         {
             "direction": "recv",
             "opcode": module.OP_ANSWERSOURCES2,
-            "payload_hex": "",
+            "payload_hex": answer_sources2_payload.hex(),
         },
     ]
     dump_path.write_text("\n".join(json.dumps(row) for row in records), encoding="utf-8")
@@ -90,6 +97,8 @@ def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) ->
     assert summary["embeddedRequestSources2Sent"] == 1
     assert summary["standaloneRequestSources2Sent"] == 0
     assert summary["answerSources2Received"] == 1
+    assert summary["answerSources2SourceCount"] == 2
+    assert summary["emptyAnswerSources2Received"] == 0
 
 
 def test_source_exchange_summary_counts_ext2_embedded_sx2_requests(tmp_path: Path) -> None:
@@ -118,6 +127,28 @@ def test_source_exchange_summary_counts_ext2_embedded_sx2_requests(tmp_path: Pat
 
     assert summary["requestSources2Sent"] == 1
     assert summary["embeddedRequestSources2Sent"] == 1
+
+
+def test_source_exchange_summary_counts_empty_sx2_answers(tmp_path: Path) -> None:
+    module = load_live_wire_module()
+    dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"
+    answer_sources2_payload = bytes([4]) + bytes(range(16)) + (0).to_bytes(2, "little")
+    dump_path.write_text(
+        json.dumps(
+            {
+                "direction": "recv",
+                "opcode": module.OP_ANSWERSOURCES2,
+                "payload_hex": answer_sources2_payload.hex(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = module.summarize_source_exchange_packets(tmp_path)
+
+    assert summary["answerSources2Received"] == 1
+    assert summary["answerSources2SourceCount"] == 0
+    assert summary["emptyAnswerSources2Received"] == 1
 
 
 def test_run_downloads_returns_after_first_completion(monkeypatch) -> None:
