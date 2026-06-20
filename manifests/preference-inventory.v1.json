@@ -6983,6 +6983,50 @@
       "notes": ""
     },
     {
+      "id": "BoldActiveCategoryTab",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "BoldActiveCategoryTab",
+      "sourceExpression": "_T(\"BoldActiveCategoryTab\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
+      "id": "AutoReloadSharedFiles",
+      "storageFile": "preferences.ini",
+      "sections": [
+        "<default>"
+      ],
+      "key": "AutoReloadSharedFiles",
+      "sourceExpression": "_T(\"AutoReloadSharedFiles\")",
+      "kind": "literal",
+      "access": [
+        "read",
+        "write"
+      ],
+      "valueKinds": [
+        "Bool"
+      ],
+      "ownerField": "",
+      "uiApiSurface": "",
+      "clampOrNormalizer": "",
+      "classification": "active-roundtrip",
+      "notes": ""
+    },
+    {
       "id": "ShowCopyEd2kLinkCmd",
       "storageFile": "preferences.ini",
       "sections": [
