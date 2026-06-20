@@ -52,7 +52,8 @@ def test_wait_for_rust_search_result_reads_unwrapped_search_payload(monkeypatch)
         "request_json",
         lambda *_args, **_kwargs: {
             "id": "search-1",
-            "results": [{"hash": expected_hash.upper(), "name": "fixture.bin"}],
+            "status": "complete",
+            "items": [{"hash": expected_hash.upper(), "name": "fixture.bin"}],
         },
     )
     monkeypatch.setattr(module.live_common, "wait_for", lambda resolve, *_args: resolve())

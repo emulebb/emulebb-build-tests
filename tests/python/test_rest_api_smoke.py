@@ -1458,7 +1458,7 @@ def test_openapi_metadata_tracks_beta_release_contract() -> None:
     text = openapi_path.read_text(encoding="utf-8")
 
     assert "  version: 0.7.3\n" in text
-    assert "Canonical 0.7.3 RC2 contract" in text
+    assert "Frozen 0.7.3 contract" in text
     assert "1.0.0-pre" not in text
 
 

@@ -10,6 +10,12 @@ from emule_test_harness.paths import get_emule_workspace_root
 
 ROUTE_SPEC_FUNCTION = "inline const std::vector<SApiRouteSpec> &GetApiRouteSpecs()"
 
+# Per the /api/v1 contract split, the forward Rust client owns its own evolving
+# contract and may expose routes the frozen MFC `0.7.3` contract never had. Rust
+# must still implement every frozen-contract route; these are the documented
+# forward-only additions it is allowed to carry on top.
+FORWARD_ONLY_RUST_ROUTES = {("GET", "/api/v1/capabilities")}
+
 # Maps each OpenAPI request-body schema to the Rust request struct that backs it.
 # Guards the deny_unknown_fields class of bug where a documented optional field is
 # missing from the Rust struct and every request carrying it is rejected with 400.
@@ -125,7 +131,7 @@ def test_emulebb_rust_routes_match_canonical_emulebb_rest_contract() -> None:
     assert canonical_routes
     assert rust_routes
     assert sorted(canonical_routes - rust_routes) == []
-    assert sorted(rust_routes - canonical_routes) == []
+    assert sorted(rust_routes - canonical_routes) == sorted(FORWARD_ONLY_RUST_ROUTES)
 
 
 def test_emulebb_rust_routes_match_openapi_contract() -> None:
@@ -151,7 +157,7 @@ def test_emulebb_rust_routes_match_openapi_contract() -> None:
     assert openapi_routes
     assert rust_routes
     assert sorted(openapi_routes - rust_routes) == []
-    assert sorted(rust_routes - openapi_routes) == []
+    assert sorted(rust_routes - openapi_routes) == sorted(FORWARD_ONLY_RUST_ROUTES)
 
 
 def canonical_emulebb_routes(path: Path) -> set[tuple[str, str]]:

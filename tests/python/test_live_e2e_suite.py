@@ -1725,6 +1725,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
         "search-ui-live.py",
         "deterministic-two-client-transfer.py",
         "godzilla-local-swarm.py",
+        "shared-directory-browse-stress.py",
         "shared-directories-rest-e2e.py",
         "rest-api-smoke.py",
         "rest-cold-start-dump-stress.py",
@@ -1735,6 +1736,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
         "search-ui-live",
         "deterministic-two-client-transfer",
         "godzilla-local-swarm",
+        "shared-directory-browse-stress",
         "shared-directories-rest",
         "rest-api",
         "rest-cold-start-dump-stress",
@@ -1777,8 +1779,8 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert summary["suites"][1]["search_ui_search_rounds"] == 3
     assert summary["suites"][1]["search_ui_download_lifecycle_count"] == 2
     assert summary["weak_path_matrix"]["ui"]["shared_directories_rest"] is True
-    assert summary["suites"][5]["rest_leak_churn_budget"] == "smoke"
-    assert summary["suites"][5]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
+    assert summary["suites"][6]["rest_leak_churn_budget"] == "smoke"
+    assert summary["suites"][6]["rest_leak_churn_cycles"] == live_e2e_suite.STABILIZATION_REST_LEAK_CHURN_CYCLES
 
     shared_files_command = commands[0]
     assert option_values(shared_files_command, "--scenario") == list(live_e2e_suite.SHARED_FILES_UI_FULL_STRESS_SCENARIOS)
@@ -1795,10 +1797,13 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     assert option_values(godzilla_command, "--stage") == [live_e2e_suite.RELEASE_EXPANDED_GODZILLA_STAGE]
     assert "--admin-volume-fixtures" in godzilla_command
 
-    shared_directories_command = commands[4]
+    browse_stress_command = commands[4]
+    assert script_name(browse_stress_command) == "shared-directory-browse-stress.py"
+
+    shared_directories_command = commands[5]
     assert script_name(shared_directories_command) == "shared-directories-rest-e2e.py"
 
-    rest_command = commands[5]
+    rest_command = commands[6]
     assert option_values(rest_command, "--rest-coverage-budget") == ["contract-stress"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
     assert option_values(rest_command, "--rest-stress-duration-seconds") == [
@@ -1818,7 +1823,7 @@ def test_stabilization_stress_profile_bundles_rest_leak_cpu_and_crash_coverage(t
     ]
     assert "--rest-stop-start-after-churn" in rest_command
 
-    cold_start_command = commands[6]
+    cold_start_command = commands[7]
     assert option_values(cold_start_command, "--waves") == [
         str(live_e2e_suite.STABILIZATION_REST_COLD_START_DUMP_STRESS_WAVES)
     ]
@@ -2138,7 +2143,7 @@ def test_stabilization_stress_profile_enables_tls_adversity_for_https(tmp_path: 
     assert summary["rest_stress_budget"] == "soak"
     assert summary["rest_leak_churn_budget"] == "smoke"
 
-    rest_command = commands[5]
+    rest_command = commands[6]
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["off"]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-stress-budget") == ["soak"]
@@ -2163,7 +2168,7 @@ def test_stabilization_stress_profile_enables_raw_socket_adversity_for_http(tmp_
     assert summary["rest_socket_adversity_budget"] == "smoke"
     assert summary["rest_tls_handshake_adversity_budget"] == "off"
 
-    rest_command = commands[5]
+    rest_command = commands[6]
     assert option_values(rest_command, "--rest-socket-adversity-budget") == ["smoke"]
     assert option_values(rest_command, "--rest-tls-handshake-adversity-budget") == ["off"]
 
