@@ -52,6 +52,16 @@ jobs:
           repository: emulebb/emulebb-rust
           path: repos/emulebb-rust
 
+      # The emulebb-miniupnpc-sys crate's build script compiles the bundled
+      # MiniUPnP source from repos/third_party/emulebb-miniupnp/miniupnpc, so the
+      # Rust cargo integration tests need that third-party source materialized.
+      - name: Checkout MiniUPnP third-party source
+        uses: actions/checkout@v6
+        with:
+          repository: emulebb/emulebb-miniupnp
+          ref: miniupnpc-master-emule
+          path: repos/third_party/emulebb-miniupnp
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
