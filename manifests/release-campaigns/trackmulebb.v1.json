@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "emulebb-build-tests.release-campaign.v1",
+  "kind": "instance",
+  "templateId": "emulebb.release.template.default.v1",
+  "campaignId": "trackmulebb",
+  "releaseVersion": "0.0.1",
+  "title": "TrackMuleBB 0.8.* release campaign (scaffold)",
+  "description": "Forward 0.8.* suite scaffold for the TrackMuleBB unified-transfers controller over emulebb-rust and qBittorrentBB (REST-grounded). Phase taxonomy is in place; scenarios are TBD and added as the controller surface matures. Not gating today (proofTier future).",
+  "proofTier": "future",
+  "phases": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "scenarios": []
+    },
+    {
+      "id": "protocol-parity",
+      "title": "Protocol Parity",
+      "scenarios": []
+    },
+    {
+      "id": "controller-surface",
+      "title": "Controller Surface",
+      "scenarios": []
+    },
+    {
+      "id": "live-wire-release",
+      "title": "Live Wire Release",
+      "scenarios": []
+    },
+    {
+      "id": "ui-resource-depth",
+      "title": "Ui Resource Depth",
+      "scenarios": []
+    },
+    {
+      "id": "stabilization-stress",
+      "title": "Stabilization Stress",
+      "scenarios": []
+    },
+    {
+      "id": "packaging-provenance",
+      "title": "Packaging Provenance",
+      "scenarios": []
+    }
+  ],
+  "releaseGates": []
+}
