@@ -577,8 +577,8 @@ def _check_crash_dump_source__capture_full_crash_dump_preference_is_persisted_an
 
     assert "HTREEITEM m_htiCaptureFullCrashDump;" in tweaks_h
     assert "bool m_bCaptureFullCrashDump;" in tweaks_h
-    assert 'return _T("Capture Full Dump");' in tweaks_cpp
-    assert "m_htiCaptureFullCrashDump = m_ctrlTreeOptions.InsertCheckBox(GetCaptureFullCrashDumpLabel(), m_htiLoggingGroup, m_bCaptureFullCrashDump);" in tweaks_cpp
+    assert "m_htiCaptureFullCrashDump = m_ctrlTreeOptions.InsertCheckBox(GetResString(IDS_TWEAKS_CAPTURE_FULL_CRASH_DUMP), m_htiLoggingGroup, m_bCaptureFullCrashDump);" in tweaks_cpp
+    assert "LocalizeItemText(m_htiCaptureFullCrashDump, IDS_TWEAKS_CAPTURE_FULL_CRASH_DUMP);" in tweaks_cpp
     assert "DDX_TreeCheck(pDX, IDC_EXT_OPTS, m_htiCaptureFullCrashDump, m_bCaptureFullCrashDump);" in tweaks_cpp
     assert "m_bCaptureFullCrashDump = thePrefs.GetCaptureFullCrashDump();" in tweaks_cpp
     assert "thePrefs.SetCaptureFullCrashDump(m_bCaptureFullCrashDump);" in tweaks_cpp
