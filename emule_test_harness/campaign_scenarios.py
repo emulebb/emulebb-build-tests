@@ -16,7 +16,7 @@ P2P_MODES = ("local-swarm", "live-wire")
 P2P_BIND_SCOPES = ("lan", "hide.me")
 LOCAL_SWARM_TIERS = (1, 2, 3)
 DEFAULT_LOCAL_SWARM_TIER = 1
-DEFAULT_RELEASE_VERSION = "0.7.3-rc.2"
+DEFAULT_RELEASE_VERSION = "0.7.3-rc.3"
 LOCAL_SWARM_TIER_OPTIONS: dict[int, dict[str, object]] = {
     1: {
         "stage": "launch-scale",

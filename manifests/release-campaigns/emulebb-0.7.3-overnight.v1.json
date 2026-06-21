@@ -3,8 +3,8 @@
   "kind": "instance",
   "templateId": "emulebb.release.template.default.v1",
   "campaignId": "emulebb-0.7.3-overnight",
-  "releaseVersion": "0.7.3-rc.2",
-  "title": "eMuleBB 0.7.3-rc.2 full overnight campaign",
+  "releaseVersion": "0.7.3-rc.3",
+  "title": "eMuleBB 0.7.3-rc.3 full overnight campaign",
   "description": "Long-form overnight and soak campaign. Runs full certification, full generated CPU-heavy stress, and the operator-owned real live profile monitor.",
   "proofTier": "overnight-full",
   "phases": [
