@@ -13,7 +13,7 @@ from emule_test_harness import converged_live_wire as clw
 def test_mfc_diagnostics_build_dir_uses_canonical_layout(tmp_path: Path) -> None:
     build_dir = clw.mfc_diagnostics_build_dir(tmp_path)
     assert build_dir == (
-        tmp_path / "builds" / "app" / "community" / "x64" / "Release" / "diagnostics" / "bin"
+        tmp_path / "builds" / "app" / "main" / "x64" / "Release" / "diagnostics" / "bin"
     )
 
 
@@ -107,7 +107,7 @@ def test_find_packet_trace_discovers_each_side(tmp_path: Path) -> None:
     rust_dir.mkdir()
     emule_dir.mkdir()
     rust_trace = rust_dir / "emulebb-rust-ed2k-tcp-dump-001.jsonl"
-    emule_trace = emule_dir / "emulebb-ed2k-tcp-dump-001.jsonl"
+    emule_trace = emule_dir / "emulebb-diagnostics-packet.log"
     rust_trace.write_text("{}\n", encoding="utf-8")
     emule_trace.write_text("{}\n", encoding="utf-8")
 

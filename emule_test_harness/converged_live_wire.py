@@ -7,7 +7,7 @@ live network:
 
 * :func:`resolve_mfc_diagnostics_exe` resolves the eMuleBB MFC *diagnostics*
   build exe from the canonical output build layout
-  (``builds/app/<variant>/<arch>/<configuration>/diagnostics/bin/emulebb.exe``)
+  (``builds/app/<variant>/<arch>/<configuration>/diagnostics/bin/emulebb-diagnostics.exe``)
   rather than from a hardcoded path;
 * :func:`build_search_payload` / :func:`build_shared_directory_patch_payload`
   build the REST request bodies shared by both clients (rust ``/api/v1`` and the
@@ -27,26 +27,26 @@ from pathlib import Path
 from typing import Any
 
 # Canonical MFC output build layout dimensions (see WORKSPACE-POLICY build root).
-DEFAULT_MFC_VARIANT = "community"
+# The packet-diagnostics MFC exe is the `main` variant built with --diagnostics:
+# builds/app/main/x64/Release/diagnostics/bin/emulebb-diagnostics.exe (verified).
+DEFAULT_MFC_VARIANT = "main"
 DEFAULT_MFC_ARCH = "x64"
 DEFAULT_MFC_CONFIGURATION = "Release"
 # The packet-diagnostics MFC build is staged under the "diagnostics" flavor.
 MFC_DIAGNOSTICS_FLAVOR = "diagnostics"
-MFC_EXE_NAME = "emulebb.exe"
+MFC_EXE_NAME = "emulebb-diagnostics.exe"
 
-# Both clients write the converged packet dump as ed2k_packet_v1 JSONL. The file
-# stems differ per client; discovery globs cover both vocabularies.
+# Both clients write the converged ed2k_packet_v1 dump. Rust emits per-flow JSONL
+# stems under EMULEBB_RUST_LOG_DIR; the MFC diagnostics build writes ONE fixed
+# file in its profile log dir (LogArtifactNames::PacketDiagnosticsLogFileName /
+# DiagEventV1LogFileName, srchybrid/LogArtifactNames.h).
 RUST_PACKET_DUMP_GLOBS = (
     "emulebb-rust-ed2k-*-dump-*.jsonl",
     "emulebb-rust-ed2k-tcp-dump-*.jsonl",
 )
-EMULE_PACKET_DUMP_GLOBS = (
-    "emulebb-ed2k-*-dump-*.jsonl",
-    "emulebb-ed2k-packet-*.jsonl",
-    "ed2k-packet-v1-*.jsonl",
-)
+EMULE_PACKET_DUMP_GLOBS = ("emulebb-diagnostics-packet.log",)
 RUST_DIAG_DUMP_GLOBS = ("emulebb-rust-diag-*.jsonl",)
-EMULE_DIAG_DUMP_GLOBS = ("emulebb-diag-*.jsonl", "diag-event-v1-*.jsonl")
+EMULE_DIAG_DUMP_GLOBS = ("emulebb-diagnostics-diag.log",)
 
 
 def mfc_diagnostics_build_dir(
@@ -95,8 +95,8 @@ def resolve_mfc_diagnostics_exe(
     if require_exists and not exe_path.is_file():
         raise RuntimeError(
             "eMuleBB MFC diagnostics exe was not found at "
-            f"'{exe_path}'. Build the community packet-diagnostics flavor "
-            "(community/x64/Release/diagnostics) first."
+            f"'{exe_path}'. Build the packet-diagnostics flavor "
+            "(emule_workspace build app --diagnostics; main/x64/Release/diagnostics) first."
         )
     return exe_path
 
