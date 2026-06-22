@@ -1,0 +1,203 @@
+"""Unit tests for the converged live-wire packet-diff pure logic."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from emule_test_harness import converged_live_wire as clw
+
+
+def test_mfc_diagnostics_build_dir_uses_canonical_layout(tmp_path: Path) -> None:
+    build_dir = clw.mfc_diagnostics_build_dir(tmp_path)
+    assert build_dir == (
+        tmp_path / "builds" / "app" / "community" / "x64" / "Release" / "diagnostics" / "bin"
+    )
+
+
+def test_resolve_mfc_diagnostics_exe_resolves_when_present(tmp_path: Path) -> None:
+    bin_dir = clw.mfc_diagnostics_build_dir(tmp_path)
+    bin_dir.mkdir(parents=True)
+    exe = bin_dir / clw.MFC_EXE_NAME
+    exe.write_bytes(b"MZ")
+
+    resolved = clw.resolve_mfc_diagnostics_exe(tmp_path)
+    assert resolved == exe
+
+
+def test_resolve_mfc_diagnostics_exe_honors_variant_arch_configuration(tmp_path: Path) -> None:
+    resolved = clw.resolve_mfc_diagnostics_exe(
+        tmp_path,
+        variant="main",
+        arch="ARM64",
+        configuration="Debug",
+        require_exists=False,
+    )
+    assert resolved == (
+        tmp_path / "builds" / "app" / "main" / "ARM64" / "Debug" / "diagnostics" / "bin" / clw.MFC_EXE_NAME
+    )
+
+
+def test_resolve_mfc_diagnostics_exe_raises_with_expected_path(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError) as excinfo:
+        clw.resolve_mfc_diagnostics_exe(tmp_path)
+    message = str(excinfo.value)
+    assert "diagnostics" in message
+    assert clw.MFC_EXE_NAME in message
+
+
+def test_build_search_payload_shape() -> None:
+    assert clw.build_search_payload("  hello world  ") == {
+        "query": "hello world",
+        "method": "automatic",
+        "type": "",
+    }
+
+
+def test_build_search_payload_rejects_blank() -> None:
+    with pytest.raises(ValueError):
+        clw.build_search_payload("   ")
+
+
+def test_build_shared_directory_patch_payload_appends_trailing_separator(tmp_path: Path) -> None:
+    payload = clw.build_shared_directory_patch_payload(tmp_path)
+    assert payload["confirmReplaceRoots"] is True
+    assert len(payload["roots"]) == 1
+    root = payload["roots"][0]
+    assert root.endswith(("\\", "/"))
+    assert str(tmp_path) in root
+
+
+def test_build_shared_directory_patch_payload_does_not_double_separator() -> None:
+    # When str(path) already ends in a separator the helper must not duplicate it.
+    class _FakeDir:
+        def __str__(self) -> str:
+            return "C:\\share\\seed\\"
+
+    payload = clw.build_shared_directory_patch_payload(_FakeDir())  # type: ignore[arg-type]
+    assert payload["roots"][0] == "C:\\share\\seed\\"
+
+
+def test_select_search_terms_is_gentle() -> None:
+    terms = ["  a  ", "b", "", "c", "d"]
+    assert clw.select_search_terms(terms, max_terms=2) == ["a", "b"]
+
+
+def test_select_search_terms_rejects_empty_corpus() -> None:
+    with pytest.raises(RuntimeError):
+        clw.select_search_terms(["   ", ""], max_terms=2)
+
+
+def test_select_search_terms_rejects_nonpositive_max() -> None:
+    with pytest.raises(ValueError):
+        clw.select_search_terms(["a"], max_terms=0)
+
+
+def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+
+def test_find_packet_trace_discovers_each_side(tmp_path: Path) -> None:
+    rust_dir = tmp_path / "rust"
+    emule_dir = tmp_path / "emule"
+    rust_dir.mkdir()
+    emule_dir.mkdir()
+    rust_trace = rust_dir / "emulebb-rust-ed2k-tcp-dump-001.jsonl"
+    emule_trace = emule_dir / "emulebb-ed2k-tcp-dump-001.jsonl"
+    rust_trace.write_text("{}\n", encoding="utf-8")
+    emule_trace.write_text("{}\n", encoding="utf-8")
+
+    assert clw.find_packet_trace(rust_dir, side="rust") == rust_trace
+    assert clw.find_packet_trace(emule_dir, side="emule") == emule_trace
+
+
+def test_find_packet_trace_returns_none_when_absent(tmp_path: Path) -> None:
+    assert clw.find_packet_trace(tmp_path, side="rust") is None
+
+
+def test_find_packet_trace_rejects_unknown_side(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        clw.find_packet_trace(tmp_path, side="bogus")
+
+
+def test_count_jsonl_records_ignores_blank_lines(tmp_path: Path) -> None:
+    path = tmp_path / "dump.jsonl"
+    path.write_text('{"a":1}\n\n{"b":2}\n', encoding="utf-8")
+    assert clw.count_jsonl_records(path) == 2
+    assert clw.count_jsonl_records(None) == 0
+    assert clw.count_jsonl_records(tmp_path / "missing.jsonl") == 0
+
+
+def test_build_converged_report_ok_when_both_captured_and_diffs_pass(tmp_path: Path) -> None:
+    rust_trace = tmp_path / "rust.jsonl"
+    emule_trace = tmp_path / "emule.jsonl"
+    _write_jsonl(rust_trace, [{"schema": "ed2k_packet_v1"}])
+    _write_jsonl(emule_trace, [{"schema": "ed2k_packet_v1"}])
+
+    report = clw.build_converged_report(
+        run_id="20260622T000000Z",
+        rust_packet_trace=rust_trace,
+        emule_packet_trace=emule_trace,
+        packet_diff={"ok": True, "totals": {"matched": 1}},
+        diag_diff={"ok": True},
+        rust_packet_summary={"requestSources2Sent": 0},
+        emule_packet_summary=None,
+    )
+    assert report["scenario"] == "emulebb.flow.converged.live-wire.hideme.v1"
+    assert report["ok"] is True
+    assert report["traces"]["bothCaptured"] is True
+    assert report["traces"]["rust"]["records"] == 1
+
+
+def test_build_converged_report_not_ok_when_one_side_missing(tmp_path: Path) -> None:
+    rust_trace = tmp_path / "rust.jsonl"
+    _write_jsonl(rust_trace, [{"schema": "ed2k_packet_v1"}])
+
+    report = clw.build_converged_report(
+        run_id="20260622T000000Z",
+        rust_packet_trace=rust_trace,
+        emule_packet_trace=None,
+        packet_diff=None,
+        diag_diff=None,
+        rust_packet_summary=None,
+        emule_packet_summary=None,
+    )
+    assert report["ok"] is False
+    assert report["traces"]["emule"]["captured"] is False
+
+
+def test_build_converged_report_not_ok_on_payload_mismatch(tmp_path: Path) -> None:
+    rust_trace = tmp_path / "rust.jsonl"
+    emule_trace = tmp_path / "emule.jsonl"
+    _write_jsonl(rust_trace, [{"schema": "ed2k_packet_v1"}])
+    _write_jsonl(emule_trace, [{"schema": "ed2k_packet_v1"}])
+
+    report = clw.build_converged_report(
+        run_id="20260622T000000Z",
+        rust_packet_trace=rust_trace,
+        emule_packet_trace=emule_trace,
+        packet_diff={"ok": False, "totals": {"payload_mismatches": 1}},
+        diag_diff={"ok": True},
+        rust_packet_summary=None,
+        emule_packet_summary=None,
+    )
+    assert report["ok"] is False
+
+
+def test_build_converged_report_merges_extra() -> None:
+    report = clw.build_converged_report(
+        run_id="r",
+        rust_packet_trace=None,
+        emule_packet_trace=None,
+        packet_diff=None,
+        diag_diff=None,
+        rust_packet_summary=None,
+        emule_packet_summary=None,
+        extra={"server": "1.2.3.4:5687", "bindIp": "10.0.0.2"},
+    )
+    assert report["server"] == "1.2.3.4:5687"
+    assert report["bindIp"] == "10.0.0.2"
