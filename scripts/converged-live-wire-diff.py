@@ -590,6 +590,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Reuse the rust orchestrator + MFC live drivers as importable modules.
     rust_mod = load_local_module("rust_live_wire_hideme_for_converged", "rust-live-wire-hideme.py")
+    # The reused rust helpers (get_stats / import_server_met) authenticate with
+    # their own module-level API_KEY ("live-wire"), but the converged orchestrator
+    # configures the rust client with RUST_API_KEY ("converged-live-wire"). Without
+    # this override every reused rust REST call returns HTTP 401, so the readiness
+    # poll never succeeds. Pin the reused module's key to the converged key so all
+    # rust REST traffic in this orchestrator is authenticated consistently.
+    setattr(rust_mod, "API_KEY", RUST_API_KEY)
     live_common = load_local_module("emule_live_profile_common_for_converged", "emule-live-profile-common.py")
     rest_smoke = load_local_module("rest_api_smoke_for_converged", "rest-api-smoke.py")
     shared_dirs_mod = load_local_module("shared_directories_rest_e2e_for_converged", "shared-directories-rest-e2e.py")
