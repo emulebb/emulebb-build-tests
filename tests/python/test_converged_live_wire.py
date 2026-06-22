@@ -8,6 +8,18 @@ from pathlib import Path
 import pytest
 
 from emule_test_harness import converged_live_wire as clw
+from emule_test_harness import live_profile_seed
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
+
+
+def test_default_mfc_seed_config_dir_passes_allowlist_validation() -> None:
+    # The converged orchestrator defaults the MFC profile seed to this
+    # canonical config-only directory; it must satisfy the same allowlist the
+    # profile builder enforces (regression guard for the diagnostics-bin-dir bug
+    # where the default pointed at the exe/.pdb bin directory).
+    live_profile_seed.validate_seed_config_dir(DEFAULT_MFC_SEED_CONFIG_DIR)
 
 
 def test_mfc_diagnostics_build_dir_uses_canonical_layout(tmp_path: Path) -> None:

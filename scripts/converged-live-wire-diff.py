@@ -60,6 +60,12 @@ from emule_test_harness.vm_guest_profiles import (
     wait_until,
 )
 
+# Canonical config-only MFC seed profile (preferences.ini/.dat, server.met,
+# nodes.dat). The same baseline the other MFC live scripts copy via
+# harness_cli_common.prepare_run_paths().seed_config_dir; the profile builder
+# validates this exact allowlist before copying it into a fresh per-run profile.
+DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
+
 SCENARIO = "emulebb.flow.converged.live-wire.hideme.v1"
 OPERATOR_SERVER = "45.82.80.155:5687"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
@@ -373,7 +379,11 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     log("=== MFC diagnostics side ===")
-    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else mfc_exe.parent
+    seed_config_dir = (
+        Path(args.profile_seed_dir).resolve()
+        if args.profile_seed_dir
+        else DEFAULT_MFC_SEED_CONFIG_DIR
+    )
     mfc_evidence = run_mfc_side(
         live_common=live_common, rest_smoke=rest_smoke, shared_dirs_mod=shared_dirs_mod,
         exe_path=mfc_exe, seed_config_dir=seed_config_dir, rest_host=rest_addr,
