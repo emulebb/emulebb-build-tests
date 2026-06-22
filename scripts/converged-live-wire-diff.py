@@ -235,8 +235,6 @@ def run_mfc_side(
 ) -> dict[str, Any]:
     """Drives the MFC diagnostics client end-to-end and returns its evidence."""
 
-    packet_dump_dir = side_dir / "packet-dump"
-    packet_dump_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = side_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://{rest_host}:{rest_port}"
@@ -245,15 +243,21 @@ def run_mfc_side(
         seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="converged-live-wire"
     )
     config_dir = Path(str(profile["config_dir"]))
+    # The diagnostics build writes the converged ed2k_packet_v1 packet dump
+    # (emulebb-diagnostics-packet.log) and the diag_event_v1 dump
+    # (emulebb-diagnostics-diag.log) into its profile log directory
+    # (GetMuleDirectory(EMULE_LOGDIR) == <profile_base>/logs), gated at COMPILE
+    # time by the EMULEBB_ENABLE_PACKET_DIAGNOSTICS define in the diagnostics
+    # flavor. There is no runtime env-var override for the dump path, so we read
+    # the profile log dir rather than setting EMULEBB_PACKET_DIAGNOSTICS_DIR.
+    packet_dump_dir = Path(str(profile["log_dir"]))
     # REST bound to X_LOCAL_IP, P2P bound to the hide.me tunnel interface, both
-    # eD2K + Kad enabled for the live exchange.
+    # eD2K + Kad enabled for the live exchange. configure_webserver_profile and
+    # apply_p2p_bind_interface_override both persist the live network policy
+    # (the latter pins BindInterface to the hide.me tunnel), so no extra
+    # apply_live_network_policy call is needed.
     rest_smoke.configure_webserver_profile(config_dir, exe_path, MFC_API_KEY, rest_port, rest_host)
     rest_smoke.apply_p2p_bind_interface_override(config_dir, bind_interface)
-    live_common.apply_live_network_policy(config_dir)
-
-    # Capture the converged ed2k_packet_v1 dump from the diagnostics build.
-    os.environ["EMULEBB_ENABLE_PACKET_DIAGNOSTICS"] = "1"
-    os.environ["EMULEBB_PACKET_DIAGNOSTICS_DIR"] = str(packet_dump_dir)
 
     evidence: dict[str, Any] = {"client": "emule", "baseUrl": base_url}
     app = None
