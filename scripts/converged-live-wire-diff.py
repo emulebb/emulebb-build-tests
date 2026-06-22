@@ -303,6 +303,45 @@ def run_rust_side(
 # --------------------------------------------------------------------------- #
 
 
+def connect_mfc_to_operator_server(
+    rest_smoke: ModuleType, base_url: str, timeout_seconds: float
+) -> dict[str, Any]:
+    """Connects the MFC client directly to the SAME operator server as rust.
+
+    The reused ``connect_to_live_server`` helper iterates every row in the seed
+    ``server.met`` (public servers) and connects to whichever the client lists
+    first -- in the failing run that was the dead public Astra-2, which diverged
+    from the rust side (operator lab server) and left the connect spinning until
+    the app exited. For a valid converged wire diff BOTH clients must connect to
+    the SAME server, so this targets the operator lab server by address exactly
+    like the rust leg (``POST /api/v1/servers/{OPERATOR_SERVER}/operations/connect``)
+    and watches the connect settle, instead of picking a public server.met row.
+    """
+
+    connect_result = rest_smoke.http_request(
+        base_url,
+        f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
+        method="POST",
+        api_key=MFC_API_KEY,
+        json_body={},
+        request_timeout_seconds=15.0,
+    )
+    settle = rest_smoke.observe_server_connect_attempt(
+        base_url, MFC_API_KEY, min(timeout_seconds, 120.0)
+    )
+    if rest_smoke.did_rest_listener_disappear(settle.get("observations")):
+        raise RuntimeError(
+            "REST listener disappeared during operator-server connect. "
+            f"Settle: {settle!r}"
+        )
+    return {
+        "server": OPERATOR_SERVER,
+        "connect_response": rest_smoke.compact_http_result(connect_result),
+        "settle": settle,
+        "connected": bool(settle.get("connected")),
+    }
+
+
 def run_mfc_side(
     *,
     live_common: ModuleType,
@@ -359,11 +398,11 @@ def run_mfc_side(
         rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
 
         # Same endpoints as rust: server connect, kad start, share, search.
-        server_rows = rest_smoke.require_json_array(
-            rest_smoke.http_request(base_url, "/api/v1/servers", api_key=MFC_API_KEY), 200
-        )
-        evidence["serverConnect"] = rest_smoke.connect_to_live_server(
-            base_url, MFC_API_KEY, server_rows, timeout_seconds=timeouts["connect"]
+        # Connect to the SAME operator lab server as the rust leg (the operator
+        # server is seeded into the MFC server.met), not a public server.met pick,
+        # so the two captured traces are a like-for-like converged wire diff.
+        evidence["serverConnect"] = connect_mfc_to_operator_server(
+            rest_smoke, base_url, timeouts["connect"]
         )
         kad_start = rest_smoke.http_request(
             base_url, "/api/v1/kad/operations/start", method="POST",
