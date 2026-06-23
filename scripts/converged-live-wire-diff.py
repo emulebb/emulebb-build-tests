@@ -70,10 +70,15 @@ DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "c
 SCENARIO = "emulebb.flow.converged.live-wire.hideme.v1"
 OPERATOR_SERVER = "45.82.80.155:5687"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
-# HIGH listen ports (the 49662/49672 pattern): hide.me's gateway only
-# UPnP-forwards high ports, so both clients need high ports for HighID.
-ED2K_PORT = 49662
-KAD_PORT = 49672
+# Rust listen ports. High enough to dodge ISP filtering of classic 4662/4672, but
+# BELOW the Windows dynamic/ephemeral range (49152-65535): Hyper-V/WSL reserve
+# rolling blocks inside that range (re-rolled each reboot), and a TCP listen bind
+# landing in a reserved block fails with WinError 10013 (UDP is unaffected). The
+# old 49662/49672 sat just under the first reserved block and was one reboot away
+# from breaking. 42662/42672 stay permanently clear. (MFC seed uses 27198/27208,
+# already safe.) HighID still works on these ports; LowID is acceptable regardless.
+ED2K_PORT = 42662
+KAD_PORT = 42672
 RUST_API_KEY = "converged-live-wire"
 MFC_API_KEY = "converged-live-wire-mfc"
 # Gentle server-contact policy (avoid Lugdunum IP bans): few, widely-spaced.
@@ -281,6 +286,25 @@ def run_rust_side(
         stats = wait_until(label, timeouts["connect"], connected)
         evidence["ed2kConnected"] = bool(stats.get("ed2kConnected"))
         evidence["ed2kHighId"] = bool(stats.get("ed2kHighId"))
+
+        # Kad-dependent searches (kad / automatic) must wait for Kad to finish
+        # bootstrapping before searching: `kad/operations/start` only spawns the
+        # bootstrap (~60s) and ed2kConnected can go true well before Kad has any
+        # contacts. Searching too early sends no KADEMLIA2_SEARCH_KEY_REQ (no nodes
+        # to query) and returns 0 — a harness race, not a client gap. Mirror the
+        # rust-live-wire soak which waits for kad.connected. Tolerate the window
+        # expiring (record real end state rather than failing the pass).
+        if scenario.search_method in ("kad", "automatic"):
+            def _kad_ready() -> dict[str, Any] | None:
+                kad = rust_mod.get_kad(base_url)
+                return kad if kad.get("connected") else None
+
+            try:
+                kad = wait_until("rust Kad bootstrapped", timeouts["connect"], _kad_ready)
+            except RuntimeError:
+                kad = rust_mod.get_kad(base_url)
+            evidence["kadConnected"] = bool(kad.get("connected"))
+            evidence["kadContactCount"] = int(kad.get("contactCount") or 0)
 
         log(f"rust: searching corpus (gentle, method={scenario.search_method})...")
         search = run_rust_search(base_url, terms, scenario.search_method)
