@@ -123,12 +123,19 @@ def toml_line(key: str, value: object) -> str:
     return f"{key} = {rendered}"
 
 
-def start_rust_client(repo: Path, config_path: Path, output_path: Path) -> subprocess.Popen[str]:
-    """Starts `emulebb-rust` through Cargo using the shared workspace target directory."""
+def start_rust_client(
+    repo: Path, config_path: Path, output_path: Path, features: str | None = None
+) -> subprocess.Popen[str]:
+    """Starts `emulebb-rust` through Cargo using the shared workspace target directory.
+
+    ``features`` forwards a Cargo feature list (e.g. ``packet-diagnostics``) so a
+    harness can compile in the ed2k_packet_v1 / Kad udp_packet_v1 dumps; default
+    None keeps the plain build for existing callers.
+    """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_handle = output_path.open("w", encoding="utf-8")
-    return start_rust_client_with_output(repo, config_path, output_handle)
+    return start_rust_client_with_output(repo, config_path, output_handle, features=features)
 
 
 def start_rust_client_append(repo: Path, config_path: Path, output_path: Path) -> subprocess.Popen[str]:
@@ -170,9 +177,16 @@ def start_rust_client_executable_with_output(
     )
 
 
-def start_rust_client_with_output(repo: Path, config_path: Path, output_handle) -> subprocess.Popen[str]:
-    """Starts `emulebb-rust` with an already-open output handle."""
+def start_rust_client_with_output(
+    repo: Path, config_path: Path, output_handle, features: str | None = None
+) -> subprocess.Popen[str]:
+    """Starts `emulebb-rust` with an already-open output handle.
 
+    ``features`` forwards a Cargo feature list (e.g. ``packet-diagnostics``);
+    default None keeps the plain build.
+    """
+
+    feature_args = ["--features", features] if features else []
     return subprocess.Popen(
         [
             "cargo",
@@ -181,6 +195,7 @@ def start_rust_client_with_output(repo: Path, config_path: Path, output_handle) 
             "emulebb-daemon",
             "--bin",
             "emulebb-rust",
+            *feature_args,
             "--",
             "--config",
             str(config_path),

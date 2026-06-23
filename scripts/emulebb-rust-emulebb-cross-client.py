@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -41,6 +42,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile-seed-dir")
     parser.add_argument("--artifacts-dir")
     parser.add_argument("--keep-artifacts", action="store_true")
+    parser.add_argument(
+        "--diagnostics", action="store_true",
+        help="Capture converged packet dumps on both clients for upload-path parity: build/run rust "
+        "with the packet-diagnostics feature + EMULEBB_RUST_LOG_DIR, and use the MFC diagnostics exe "
+        "(pass --app-exe pointing at emulebb-diagnostics.exe).",
+    )
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--api-key", default=API_KEY)
     parser.add_argument("--lan-bind-addr", required=True)
@@ -504,7 +511,21 @@ def main(argv: list[str] | None = None) -> int:
             server_endpoint=server_endpoint,
         )
         current_phase = "launch_rust"
-        rust_process = rust_client.start_rust_client(rust_repo, rust_config, paths.source_artifacts_dir / "rust.out")
+        rust_features: str | None = None
+        if args.diagnostics:
+            # Capture both clients' converged packet dumps for upload-path parity:
+            # rust writes ed2k_packet_v1 / Kad udp_packet_v1 when EMULEBB_RUST_LOG_DIR
+            # is set AND it is built with the packet-diagnostics feature; the MFC side
+            # must be the diagnostics exe (--app-exe ...emulebb-diagnostics.exe), which
+            # emits its packet log from the EMULEBB_ENABLE_PACKET_DIAGNOSTICS build.
+            rust_packet_dir = paths.source_artifacts_dir / "rust-packet-dump"
+            rust_packet_dir.mkdir(parents=True, exist_ok=True)
+            os.environ["EMULEBB_RUST_LOG_DIR"] = str(rust_packet_dir)
+            rust_features = "packet-diagnostics"
+            report["rust_packet_dump_dir"] = str(rust_packet_dir)
+        rust_process = rust_client.start_rust_client(
+            rust_repo, rust_config, paths.source_artifacts_dir / "rust.out", features=rust_features
+        )
         rust_base_url = f"http://{args.lan_bind_addr}:{rust_rest_port}"
         report["checks"]["rust_rest_ready"] = wait_for_rust_rest(
             rust_base_url,
