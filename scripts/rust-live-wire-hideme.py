@@ -49,9 +49,14 @@ from emule_test_harness.vm_guest_profiles import (
 # Operator-fixed network inputs (public identifiers, not local paths).
 OPERATOR_SERVER = "45.82.80.155:5687"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
-# High listen ports: avoid ISP filtering of the classic 4662/4672.
-ED2K_PORT = 51662
-KAD_PORT = 51672
+# High listen ports: avoid ISP filtering of the classic 4662/4672. Kept BELOW the
+# Windows dynamic/ephemeral range (49152-65535) on purpose: Hyper-V/WSL reserve
+# rolling blocks inside that range (re-rolled each reboot), and a TCP listen bind
+# landing in a reserved block fails with WinError 10013 (access forbidden). UDP is
+# unaffected, so the symptom is "Kad binds, eD2k TCP connect 400s". 41662/41672 sit
+# clear of every excluded range while still dodging the classic-port ISP filters.
+ED2K_PORT = 41662
+KAD_PORT = 41672
 API_KEY = "live-wire"
 # DEBUG on the transfer/peer path so we can see source acquisition (GETSOURCES,
 # peer connect/callback) when diagnosing why a live download isn't pulling bytes.
@@ -607,6 +612,80 @@ def run_downloads(
     }
 
 
+def hold_soak(base_url: str, soak_seconds: float) -> dict[str, Any]:
+    """Hold the live session open for ``soak_seconds``, polling read-only state.
+
+    Gentle by construction: only GETs (/stats, /kad, /transfers); never a new
+    search or reconnect. The point is wall-clock dwell so the slow protocol legs
+    (UDP reask cadence, organic uploads, Kad zone maintenance) actually occur and
+    land in the packet dumps. Returns periodic snapshots for the evidence report.
+    """
+
+    deadline = time.time() + soak_seconds
+    poll_interval = 60.0
+    snapshots: list[dict[str, Any]] = []
+    log(f"soak: holding the connection open for {int(soak_seconds)}s (read-only polling, no new searches)...")
+    while time.time() < deadline:
+        time.sleep(min(poll_interval, max(1.0, deadline - time.time())))
+        try:
+            stats = get_stats(base_url)
+            kad = get_kad(base_url)
+            transfers = retry_http_json("transfers", 2, base_url, "/api/v1/transfers", api_key=API_KEY)
+            transfer_items = api_data(transfers).get("items", []) if isinstance(api_data(transfers), dict) else []
+            uploading = sum(1 for t in transfer_items if isinstance(t, dict) and (t.get("uploadedBytes") or 0) > 0)
+            snapshot = {
+                "tSecondsLeft": int(max(0.0, deadline - time.time())),
+                "ed2kConnected": bool(stats.get("ed2kConnected")),
+                "kadConnected": bool(kad.get("connected")),
+                "kadContactCount": int(kad.get("contactCount") or 0),
+                "transferCount": len(transfer_items),
+                "transfersWithUpload": uploading,
+            }
+            snapshots.append(snapshot)
+            log(
+                f"soak: t-{snapshot['tSecondsLeft']}s ed2k={snapshot['ed2kConnected']} "
+                f"kadContacts={snapshot['kadContactCount']} transfers={snapshot['transferCount']} "
+                f"uploads={snapshot['transfersWithUpload']}"
+            )
+        except Exception as exc:  # noqa: BLE001 - soak polling is best-effort
+            log(f"soak: poll error (continuing): {type(exc).__name__}: {exc}")
+    return {"seconds": int(soak_seconds), "snapshots": snapshots}
+
+
+def load_shared_roots(inputs_path: Path) -> list[str]:
+    """Loads `shared_directories.roots[].path` from the gitignored live-wire inputs.
+
+    These are the operator's real shared (seeding) directories; the client shares
+    them so it becomes a source and the upload path is exercised live.
+    """
+
+    data = json.loads(inputs_path.read_text(encoding="utf-8-sig"))
+    roots = data.get("shared_directories", {}).get("roots", [])
+    paths: list[str] = []
+    for root in roots:
+        path = str(root.get("path", "")).strip() if isinstance(root, dict) else ""
+        if path:
+            paths.append(path)
+    return paths
+
+
+def share_directories(base_url: str, roots: list[str]) -> dict[str, Any]:
+    """Shares `roots` via PATCH /api/v1/shared-directories (same body shape both
+    clients accept). With a persisted runtime the daemon reuses cached MD4/AICH
+    hashes (incremental reload), so re-sharing across launches is cheap."""
+
+    if not roots:
+        return {"shared": False, "reason": "no shared_directories.roots in inputs"}
+    normalized = [r if r.endswith(("\\", "/")) else r + "\\" for r in roots]
+    body = {"confirmReplaceRoots": True, "roots": normalized}
+    result = retry_http_json(
+        "share dirs", 2, base_url, "/api/v1/shared-directories",
+        api_key=API_KEY, method="PATCH", body=body,
+    )
+    log(f"shared {len(normalized)} directory root(s) from live-wire inputs")
+    return {"shared": True, "roots": normalized, "result": api_data(result)}
+
+
 def run_pass(
     *,
     obfuscation: bool,
@@ -624,13 +703,23 @@ def run_pass(
     server_met_url: str,
     enable_reask: bool = False,
     require_packet_diagnostics: bool = False,
+    soak_seconds: float = 0.0,
+    shared_roots: list[str] | None = None,
+    persist_runtime_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Runs one obfuscation pass end-to-end and returns its evidence."""
 
     label = "on" if obfuscation else "off"
     log(f"=== pass: obfuscation {label} ===")
-    runtime_dir = pass_dir / "runtime"
+    # Persisted profile (default): a stable runtime dir keeps preferences + the
+    # hashed shared-file catalog (metadata.sqlite) valid across launches, so the
+    # operator's large shared dirs are hashed once and reused. Falls back to a
+    # per-pass ephemeral dir only when persistence is disabled.
+    runtime_dir = persist_runtime_dir if persist_runtime_dir is not None else pass_dir / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
+    # pass_dir holds the per-run config/log/dumps; create it explicitly (it is no
+    # longer created as a side effect of the runtime dir when persistence is on).
+    pass_dir.mkdir(parents=True, exist_ok=True)
     config_path = pass_dir / "emulebb-rust.toml"
     daemon_log = pass_dir / "daemon.out"
     base_url = f"http://{rest_addr}:{rest_port}"
@@ -676,6 +765,12 @@ def run_pass(
         wait_until("REST ready", timeouts["rest"], lambda: get_stats(base_url) or None)
         evidence["serverMetImport"] = import_server_met(base_url, server_met_url)
 
+        # Share the operator's shared directories from the live-wire inputs so the
+        # client becomes a source (OP_OFFERFILES + Kad source publish) and the
+        # upload path is exercised when peers download from us. Done before connect
+        # so the shares are offered on login.
+        evidence["share"] = share_directories(base_url, shared_roots or [])
+
         # The daemon's auto-start is unreliable; drive Kad + ED2K explicitly.
         # This also brings up the P2P sockets so the VPN-bind check can pass.
         retry_http_json("kad start", 3, base_url, "/api/v1/kad/operations/start", api_key=API_KEY, method="POST", body={})
@@ -694,13 +789,19 @@ def run_pass(
             lambda: (p2p_bound_to(bind_ip) or log_contains(daemon_log, f"bind_ip={bind_ip}")) or None,
         ) is not None
 
+        # Gate on a server connection only; LowID is acceptable. The operator runs a
+        # single canonical server (eMule Security, 45.82.80.155:5687) and behind the
+        # hide.me tunnel an inbound TCP callback may be unreachable, so HighID is not
+        # guaranteed. Require ed2kConnected; record HighID/LowID as evidence, not a gate
+        # (search + source download work on LowID too).
         def connected():
             stats = get_stats(base_url)
-            return stats if (stats.get("ed2kConnected") and stats.get("ed2kHighId")) else None
+            return stats if stats.get("ed2kConnected") else None
 
-        stats = wait_until("ED2K HighID", timeouts["connect"], connected)
+        stats = wait_until("ED2K connected (HighID or LowID)", timeouts["connect"], connected)
         evidence["ed2kConnected"] = bool(stats.get("ed2kConnected"))
         evidence["ed2kHighId"] = bool(stats.get("ed2kHighId"))
+        log(f"eD2k connected: {'HighID' if stats.get('ed2kHighId') else 'LowID'}")
 
         # Wait for Kad to actually finish bootstrapping (connected == is_bootstrapped),
         # not just the first contact; otherwise the snapshot races the ~60s bootstrap
@@ -731,6 +832,15 @@ def run_pass(
             )
         else:
             evidence["download"] = {"completed": False, "reason": "no safe candidate found"}
+
+        # Long-soak hold (gentle): keep the single connection alive for the
+        # configured duration so the slow protocol legs actually fire — eD2k UDP
+        # source reasks (~29 min FILE_REASK cadence), organic uploads (peers
+        # downloading our now-partial/complete files), and Kad maintenance —
+        # all captured to the packet dumps. Read-only polling only; NO new
+        # searches or reconnects, so it stays within the gentle server policy.
+        if soak_seconds > 0:
+            evidence["soak"] = hold_soak(base_url, soak_seconds)
 
         # Daemon-log evidence for Kad participation / source exchange / obfuscation.
         evidence["protocolLog"] = count_log_matches(
@@ -815,9 +925,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--both", action="store_true", help="Run both obfuscation passes (two connect+search cycles). Default: obfuscation-ON only, to stay gentle on the server.")
     parser.add_argument("--reask", action="store_true", help="Enable the FEAT-001 UDP source-reask transport (enableUdpReask=true) for live validation.")
     parser.add_argument(
+        "--soak-seconds", type=float, default=0.0,
+        help="GENTLE long soak: after the initial connect+search+download, hold the single "
+        "connection open this many seconds (read-only polling, no new searches) so the slow "
+        "legs fire (UDP reask ~29min, organic uploads, Kad maintenance) and land in the dumps.",
+    )
+    parser.add_argument(
         "--require-packet-diagnostics",
         action="store_true",
         help="Fail the pass unless the staged Rust binary emits ed2k_packet_v1 packet diagnostics.",
+    )
+    parser.add_argument(
+        "--ephemeral-profile",
+        action="store_true",
+        help="Use a fresh per-run runtime dir (re-hashes shares each launch). Default: a "
+        "PERSISTED profile dir so preferences + the hashed shared-file catalog survive launches.",
     )
     args = parser.parse_args(argv)
 
@@ -829,10 +951,20 @@ def main(argv: list[str] | None = None) -> int:
 
     inputs_path = Path(args.inputs).resolve()
     terms = load_search_terms(inputs_path, args.profile)
+    shared_roots = load_shared_roots(inputs_path)
+    log(f"live-wire inputs declare {len(shared_roots)} shared directory root(s)")
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = output_root / "live-wire" / f"rust-hideme-{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
+    # Persisted profile (default): stable runtime dir reused across launches so
+    # preferences + the hashed shared-file catalog (metadata.sqlite) stay valid.
+    persist_runtime_dir = (
+        None if args.ephemeral_profile
+        else output_root / "live-wire" / "persisted-profile" / "rust-runtime"
+    )
+    if persist_runtime_dir is not None:
+        log(f"persisted profile: {persist_runtime_dir}")
 
     log(f"ensuring hide.me split tunnel for {exe_path.name}...")
     vpn = ensure_vpn_ready(exe_path, name="eMuleBB Rust")
@@ -868,6 +1000,9 @@ def main(argv: list[str] | None = None) -> int:
                 server_met_url=args.server_met_url,
                 enable_reask=args.reask,
                 require_packet_diagnostics=args.require_packet_diagnostics,
+                soak_seconds=args.soak_seconds,
+                shared_roots=shared_roots,
+                persist_runtime_dir=persist_runtime_dir,
             )
         )
         time.sleep(3.0)
