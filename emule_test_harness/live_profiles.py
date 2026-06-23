@@ -92,6 +92,11 @@ class ProfileBuildSpec:
     scenario_id: str = DEFAULT_PROFILE_SCENARIO_ID
     incoming_dir: Path | None = None
     temp_dir: Path | None = None
+    # Persisted-profile mode: when the target profile-base already exists, reuse it
+    # instead of rebuilding from seed, so MFC's known.met/known2_64.met hash cache
+    # (and shareddir.dat) survive across runs and the shared library is not
+    # re-hashed every launch. First build still seeds normally.
+    reuse_existing: bool = False
 
 
 @dataclass(frozen=True)
@@ -434,8 +439,12 @@ def prepare_scenario_profile(
     scenario_id: str,
     incoming_dir: Path | None = None,
     temp_dir: Path | None = None,
+    reuse_existing: bool = False,
 ) -> dict[str, object]:
-    """Builds one scenario-scoped profile under `<artifacts>/profiles/<scenario>`."""
+    """Builds one scenario-scoped profile under `<artifacts>/profiles/<scenario>`.
+
+    With `reuse_existing`, an already-built profile-base is reused (persisted
+    profile) so the MFC hash cache survives across runs."""
 
     return build_profile_base(
         ProfileBuildSpec(
@@ -445,6 +454,7 @@ def prepare_scenario_profile(
             scenario_id=scenario_id,
             incoming_dir=incoming_dir,
             temp_dir=temp_dir,
+            reuse_existing=reuse_existing,
         )
     )
 
@@ -456,6 +466,7 @@ def prepare_profile_base(
     incoming_dir: Path | None = None,
     temp_dir: Path | None = None,
     scenario_id: str = DEFAULT_PROFILE_SCENARIO_ID,
+    reuse_existing: bool = False,
 ) -> dict[str, object]:
     """Builds one scenario-scoped profile using the default scenario id."""
 
@@ -466,6 +477,7 @@ def prepare_profile_base(
         scenario_id=scenario_id,
         incoming_dir=incoming_dir,
         temp_dir=temp_dir,
+        reuse_existing=reuse_existing,
     )
 
 
@@ -479,6 +491,24 @@ def build_profile_base(spec: ProfileBuildSpec) -> dict[str, object]:
     log_dir = profile_base / "logs"
     incoming_dir = spec.incoming_dir or (scenario_artifacts_dir / "incoming")
     temp_dir = spec.temp_dir or (scenario_artifacts_dir / "temp")
+
+    if spec.reuse_existing and config_dir.exists():
+        # Persisted profile: reuse the existing profile-base so MFC's known.met /
+        # known2_64.met hash cache and shareddir.dat survive across runs (no
+        # re-hash of the shared library). Only ensure the transient dirs exist.
+        log_dir.mkdir(parents=True, exist_ok=True)
+        incoming_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "scenario_id": scenario_id,
+            "scenario_artifacts_dir": scenario_artifacts_dir,
+            "profile_base": profile_base,
+            "config_dir": config_dir,
+            "log_dir": log_dir,
+            "incoming_dir": incoming_dir,
+            "temp_dir": temp_dir,
+            "startup_diagnostics_path": log_dir / STARTUP_DIAGNOSTICS_TRACE_FILE_NAME,
+        }
 
     validate_seed_config_dir(spec.seed_config_dir)
     shutil.copytree(spec.seed_config_dir, config_dir)

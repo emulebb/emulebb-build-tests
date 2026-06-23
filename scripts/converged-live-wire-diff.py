@@ -214,10 +214,14 @@ def run_rust_side(
     server_met_url: str,
     timeouts: dict[str, float],
     scenario: cs.ConvergedScenario,
+    persist_runtime_dir: Path | None = None,
+    shared_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Drives the rust client end-to-end for one scenario; returns its evidence."""
 
-    runtime_dir = side_dir / "runtime"
+    # Persisted runtime (when set): the daemon reuses its cached MD4/AICH catalog
+    # across runs (incremental reload), so the shared library is not re-hashed.
+    runtime_dir = persist_runtime_dir if persist_runtime_dir is not None else side_dir / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     config_path = side_dir / "emulebb-rust.toml"
     daemon_log = side_dir / "daemon.out"
@@ -264,13 +268,17 @@ def run_rust_side(
             api_key=RUST_API_KEY, method="POST", body={}, timeout_seconds=15.0,
         )
 
-        # ADDED share step: rust-live-wire-hideme.py never shares; share the same
-        # seed file over PATCH /api/v1/shared-directories (same shape as MFC).
-        evidence["share"] = retry_http_json(
-            "rust share", 2, base_url, "/api/v1/shared-directories",
-            api_key=RUST_API_KEY, method="PATCH",
-            body=clw.build_shared_directory_patch_payload(seed_dir),
-        )
+        # Share step: with --full-shares, share the live-wire library roots (same
+        # set as MFC); otherwise share the single gentle seed file. Both go over
+        # PATCH /api/v1/shared-directories (same shape both clients accept).
+        if shared_roots:
+            evidence["share"] = rust_mod.share_directories(base_url, shared_roots)
+        else:
+            evidence["share"] = retry_http_json(
+                "rust share", 2, base_url, "/api/v1/shared-directories",
+                api_key=RUST_API_KEY, method="PATCH",
+                body=clw.build_shared_directory_patch_payload(seed_dir),
+            )
 
         # HighID scenarios wait for ed2kHighId; the LowID scenario only waits for
         # a connected (LowID) session so the firewalled leg does not time out.
@@ -381,15 +389,25 @@ def run_mfc_side(
     side_dir: Path,
     timeouts: dict[str, float],
     scenario: cs.ConvergedScenario,
+    persist_artifacts_dir: Path | None = None,
+    shared_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Drives the MFC diagnostics client end-to-end for one scenario."""
 
-    artifacts_dir = side_dir / "artifacts"
+    # Persisted profile (when set): reuse the same profile-base across runs so
+    # MFC's known.met/known2_64.met hash cache survives and the shared library is
+    # not re-hashed. With --full-shares the library roots seed shareddir.dat on the
+    # first build (and are re-asserted over REST below for parity with rust).
+    artifacts_dir = persist_artifacts_dir if persist_artifacts_dir is not None else side_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://{rest_host}:{rest_port}"
 
     profile = live_common.prepare_profile_base(
-        seed_config_dir, artifacts_dir, shared_dirs=[], scenario_id="converged-live-wire"
+        seed_config_dir,
+        artifacts_dir,
+        shared_dirs=list(shared_roots or []),
+        scenario_id="converged-live-wire",
+        reuse_existing=persist_artifacts_dir is not None,
     )
     config_dir = Path(str(profile["config_dir"]))
     # The diagnostics build writes the converged ed2k_packet_v1 packet dump
@@ -444,10 +462,20 @@ def run_mfc_side(
         evidence["ed2kConnected"] = bool(server_status.get("connected"))
         evidence["ed2kHighId"] = bool(server_status.get("connected")) and not bool(server_status.get("lowId"))
 
-        # Share the SAME seed file via the SAME shared-directories endpoint.
-        evidence["share"] = shared_dirs_mod.patch_shared_directories(
-            base_url, MFC_API_KEY, clw.build_shared_directory_patch_payload(seed_dir)
-        )
+        # Share the SAME set as rust via the SAME shared-directories endpoint:
+        # the live-wire library roots with --full-shares, else the single seed.
+        if shared_roots:
+            roots_payload = {
+                "confirmReplaceRoots": True,
+                "roots": [r if r.endswith(("\\", "/")) else r + "\\" for r in shared_roots],
+            }
+            evidence["share"] = shared_dirs_mod.patch_shared_directories(
+                base_url, MFC_API_KEY, roots_payload
+            )
+        else:
+            evidence["share"] = shared_dirs_mod.patch_shared_directories(
+                base_url, MFC_API_KEY, clw.build_shared_directory_patch_payload(seed_dir)
+            )
 
         # Run the SAME searches over /api/v1/searches (gentle, widely spaced),
         # using the scenario's network method (server / kad / automatic).
@@ -509,6 +537,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-scenarios", action="store_true",
         help="Print the available scenario names and their knobs, then exit.",
     )
+    parser.add_argument(
+        "--persisted", action="store_true",
+        help="Reuse a stable per-client profile across runs (rust runtime dir + MFC "
+        "profile-base with its known.met hash cache) so the shared library is hashed "
+        "ONCE per client and not re-hashed every launch.",
+    )
+    parser.add_argument(
+        "--full-shares", action="store_true",
+        help="Share the live-wire-inputs library roots on BOTH clients (instead of the "
+        "single gentle seed), so the two traces compare the real shared libraries.",
+    )
     return parser
 
 
@@ -556,6 +595,9 @@ def run_one_scenario(
     terms: list[str],
     scenario_dir: Path,
     timeouts: dict[str, float],
+    persist_rust_runtime: Path | None = None,
+    persist_mfc_artifacts: Path | None = None,
+    shared_roots: list[str] | None = None,
 ) -> tuple[dict[str, Any], cs.ScenarioResult]:
     """Runs one gentle converged pass for ``scenario`` and returns report+result."""
 
@@ -570,6 +612,7 @@ def run_one_scenario(
         rest_port=args.rust_rest_port, bootstrap_nodes=bootstrap_nodes, terms=terms,
         seed_dir=seed_dir, side_dir=scenario_dir / "rust", server_met_url=args.server_met_url,
         timeouts=timeouts, scenario=scenario,
+        persist_runtime_dir=persist_rust_runtime, shared_roots=shared_roots,
     )
 
     log("--- MFC diagnostics side ---")
@@ -579,6 +622,7 @@ def run_one_scenario(
         rest_port=args.mfc_rest_port, bind_interface="hide.me", terms=terms,
         seed_dir=seed_dir, side_dir=scenario_dir / "emulebb", timeouts=timeouts,
         scenario=scenario,
+        persist_artifacts_dir=persist_mfc_artifacts, shared_roots=shared_roots,
     )
 
     log("--- diff ---")
@@ -694,6 +738,18 @@ def main(argv: list[str] | None = None) -> int:
     reject_windows_temp_path(report_dir, "converged report directory")
     report_dir.mkdir(parents=True, exist_ok=True)
 
+    # Persisted profiles (stable across runs, NOT under the per-run run_dir) so the
+    # shared library is hashed once per client; and the live-wire library roots for
+    # --full-shares (same set shared on both clients).
+    persisted_root = output_root / "live-wire" / "persisted-profile"
+    persist_rust_runtime = (persisted_root / "rust-runtime") if args.persisted else None
+    persist_mfc_artifacts = (persisted_root / "mfc-runtime") if args.persisted else None
+    shared_roots = rust_mod.load_shared_roots(inputs_path) if args.full_shares else None
+    if args.full_shares:
+        log(f"full-shares: {len(shared_roots or [])} library root(s) on both clients")
+    if args.persisted:
+        log(f"persisted profiles under {persisted_root}")
+
     results: list[cs.ScenarioResult] = []
     for scenario in selected:
         scenario_dir = run_dir / scenario.name
@@ -704,6 +760,8 @@ def main(argv: list[str] | None = None) -> int:
             mfc_exe=mfc_exe, seed_config_dir=seed_config_dir, rest_addr=rest_addr,
             args=args, bind_ip=bind_ip, bootstrap_nodes=bootstrap_nodes, terms=terms,
             scenario_dir=scenario_dir, timeouts=timeouts,
+            persist_rust_runtime=persist_rust_runtime,
+            persist_mfc_artifacts=persist_mfc_artifacts, shared_roots=shared_roots,
         )
         scenario_report_path = report_dir / f"{scenario.name}.json"
         scenario_report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
