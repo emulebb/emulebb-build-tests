@@ -71,3 +71,39 @@ def test_safe_common_download_candidate_returns_none_without_common_safe_hash() 
         )
         is None
     )
+
+
+def test_action_tracker_prime_suppresses_existing_rows() -> None:
+    runner = _load_soak_runner()
+    tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
+    baseline = tracker.prime(
+        rust_searches=[{"id": "old-rs", "key": "linux", "label": "linux"}],
+        rust_transfers=[{"id": "old-rt", "key": "a" * 32, "label": "old.iso"}],
+        mfc_searches=[{"id": "old-ms", "key": "linux", "label": "linux"}],
+        mfc_transfers=[{"id": "old-mt", "key": "a" * 32, "label": "old.iso"}],
+    )
+
+    pairs, unpaired = tracker.tick(
+        runner.datetime.now(runner.timezone.utc),
+        rust_searches=[
+            {"id": "old-rs", "key": "linux", "label": "linux"},
+            {"id": "new-rs", "key": "python", "label": "python"},
+        ],
+        rust_transfers=[{"id": "old-rt", "key": "a" * 32, "label": "old.iso"}],
+        mfc_searches=[
+            {"id": "old-ms", "key": "linux", "label": "linux"},
+            {"id": "new-ms", "key": "python", "label": "python"},
+        ],
+        mfc_transfers=[{"id": "old-mt", "key": "a" * 32, "label": "old.iso"}],
+    )
+
+    assert baseline == {
+        "rustSearches": 1,
+        "rustTransfers": 1,
+        "mfcSearches": 1,
+        "mfcTransfers": 1,
+    }
+    assert [(pair.kind, pair.key) for pair in pairs] == []
+    assert unpaired == []
+    assert [action.key for action in tracker.rust] == ["python"]
+    assert [action.key for action in tracker.mfc] == ["python"]

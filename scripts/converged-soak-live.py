@@ -347,6 +347,31 @@ class ActionTracker:
         for action in fresh:
             log(f"observed {client} {kind}: {action.label!r}")
 
+    def prime(
+        self,
+        *,
+        rust_searches: list[dict[str, str]],
+        rust_transfers: list[dict[str, str]],
+        mfc_searches: list[dict[str, str]],
+        mfc_transfers: list[dict[str, str]],
+    ) -> dict[str, int]:
+        """Seeds the seen-id sets from existing REST rows without recording actions."""
+
+        snapshots = {
+            ("rust", sad.SEARCH): rust_searches,
+            ("rust", sad.DOWNLOAD): rust_transfers,
+            ("mfc", sad.SEARCH): mfc_searches,
+            ("mfc", sad.DOWNLOAD): mfc_transfers,
+        }
+        for key, items in snapshots.items():
+            self.seen[key] = {item["id"] for item in items}
+        return {
+            "rustSearches": len(rust_searches),
+            "rustTransfers": len(rust_transfers),
+            "mfcSearches": len(mfc_searches),
+            "mfcTransfers": len(mfc_transfers),
+        }
+
     def tick(
         self,
         now: datetime,
@@ -613,6 +638,27 @@ def main(argv: list[str] | None = None) -> int:
             window_seconds=args.correlation_window,
             settle_seconds=args.settle_seconds,
             lead_seconds=args.lead_seconds,
+        )
+        baseline = tracker.prime(
+            rust_searches=sad.normalize_search_items(
+                _get_list(rust_base, "/api/v1/searches", RUST_API_KEY, "searches")
+            ),
+            rust_transfers=sad.normalize_transfer_items(
+                _get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers")
+            ),
+            mfc_searches=sad.normalize_search_items(
+                _get_list(mfc_base, "/api/v1/searches", MFC_API_KEY, "searches")
+            ),
+            mfc_transfers=sad.normalize_transfer_items(
+                _get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers")
+            ),
+        )
+        summary["baseline"] = baseline
+        write_summary(summary, summary_path)
+        log(
+            "baseline: "
+            f"rust searches={baseline['rustSearches']} transfers={baseline['rustTransfers']}; "
+            f"mfc searches={baseline['mfcSearches']} transfers={baseline['mfcTransfers']}"
         )
         rust_mon = ProcMonitor("rust", rust_proc.pid)
         mfc_pid = getattr(mfc_app, "pid", None)
