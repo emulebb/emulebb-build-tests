@@ -245,8 +245,18 @@ class ScenarioResult:
             return "no-diff"
         return "matched" if self.packet_diff.get("ok") else "diff"
 
+    def coverage_ok(self) -> bool:
+        """Reports whether this scenario passed the public live action gate."""
+
+        if self.packet_diff is None:
+            return False
+        live_action = self.packet_diff.get("liveActionCoverage")
+        if isinstance(live_action, dict) and "ok" in live_action:
+            return bool(live_action.get("ok"))
+        return bool(self.packet_diff.get("coverageOk", self.packet_diff.get("ok")))
+
     def coverage_verdict(self) -> str:
-        """Returns the live-wire gate verdict based on opcode coverage parity."""
+        """Returns the live-wire gate verdict based on public action coverage."""
 
         if self.error is not None:
             return "error"
@@ -254,7 +264,7 @@ class ScenarioResult:
             return "missing-trace"
         if self.packet_diff is None:
             return "no-diff"
-        return "matched" if self.packet_diff.get("coverageOk", self.packet_diff.get("ok")) else "diff"
+        return "matched" if self.coverage_ok() else "diff"
 
     def low_id_observed_as_expected(self) -> bool:
         """Reports whether the observed HighID/LowID matches the scenario intent.
@@ -285,7 +295,7 @@ class ScenarioResult:
             },
             "packetVerdict": self.packet_verdict(),
             "coverageVerdict": self.coverage_verdict(),
-            "coverageOk": self.coverage_verdict() == "matched",
+            "coverageOk": self.coverage_ok(),
             "byteExactOk": self.packet_verdict() == "matched",
             "packetDiff": self.packet_diff,
             "diagDiff": self.diag_diff,
@@ -300,10 +310,10 @@ def aggregate_scenario_summary(results: list[ScenarioResult]) -> dict[str, Any]:
     """Builds the combined per-scenario parity summary from scenario results.
 
     ``ok`` is true only when every selected scenario captured both traces, its
-    opcode coverage matched, and its HighID/LowID intent was observed. The
+    public action coverage matched, and its HighID/LowID intent was observed. The
     strict byte-level packet diff remains reported as diagnostics because public
     live clients can see different peer timing while still proving protocol
-    coverage parity.
+    action parity.
     """
 
     rows = [result.summary() for result in results]
@@ -323,7 +333,7 @@ def aggregate_scenario_summary(results: list[ScenarioResult]) -> dict[str, Any]:
         coverage_verdict_counts[coverage_verdict] = coverage_verdict_counts.get(coverage_verdict, 0) + 1
     return {
         "ok": all_ok,
-        "gate": "opcodeCoverage",
+        "gate": "liveActionCoverage",
         "scenarioCount": len(results),
         "verdictCounts": dict(sorted(verdict_counts.items())),
         "coverageVerdictCounts": dict(sorted(coverage_verdict_counts.items())),

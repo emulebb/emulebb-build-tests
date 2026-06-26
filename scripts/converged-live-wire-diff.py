@@ -665,6 +665,83 @@ def build_environment_parity_profile(
     }
 
 
+def _shared_opcode_present(
+    packet_diff: dict[str, Any],
+    *,
+    channel: str,
+    direction: str,
+    protocol_marker: int,
+    opcode: int,
+) -> bool:
+    coverage = packet_diff.get("opcodeCoverage")
+    channels = coverage.get("channels") if isinstance(coverage, dict) else None
+    if not isinstance(channels, list):
+        return False
+    for item in channels:
+        if not isinstance(item, dict):
+            continue
+        if item.get("channel") != channel or item.get("direction") != direction:
+            continue
+        shared = item.get("shared")
+        if not isinstance(shared, list):
+            return False
+        for row in shared:
+            if not isinstance(row, dict):
+                continue
+            if int(row.get("protocolMarker") or 0) == protocol_marker and int(row.get("opcode") or 0) == opcode:
+                return int(row.get("rustCount") or 0) > 0 and int(row.get("emuleCount") or 0) > 0
+    return False
+
+
+def build_live_action_coverage(packet_diff: dict[str, Any], scenario: cs.ConvergedScenario) -> dict[str, Any]:
+    """Builds the public-live pass gate from scenario-specific action opcodes."""
+
+    required: list[dict[str, Any]] = []
+    if scenario.search_method == cs.SEARCH_SERVER:
+        required = [
+            {
+                "label": "server-search-request",
+                "channel": "server",
+                "direction": "send",
+                "protocolMarker": 0xE3,
+                "opcode": 0x16,
+                "opcodeName": "OP_SEARCHREQUEST",
+            },
+            {
+                "label": "server-search-result",
+                "channel": "server",
+                "direction": "recv",
+                "protocolMarker": 0xE3,
+                "opcode": 0x33,
+                "opcodeName": "OP_SEARCHRESULT",
+            },
+        ]
+
+    if not required:
+        return {
+            "ok": bool(packet_diff.get("coverageOk")),
+            "mode": "full-opcode-coverage",
+            "required": [],
+        }
+
+    checked: list[dict[str, Any]] = []
+    for row in required:
+        present = _shared_opcode_present(
+            packet_diff,
+            channel=str(row["channel"]),
+            direction=str(row["direction"]),
+            protocol_marker=int(row["protocolMarker"]),
+            opcode=int(row["opcode"]),
+        )
+        checked.append({**row, "presentOnBoth": present})
+    return {
+        "ok": all(row["presentOnBoth"] for row in checked),
+        "mode": "scenario-required-opcodes",
+        "required": checked,
+        "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
+    }
+
+
 def diff_scenario_traces(
     rust_evidence: dict[str, Any], mfc_evidence: dict[str, Any]
 ) -> tuple[Path | None, Path | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -742,6 +819,8 @@ def run_one_scenario(
 
     log("--- diff ---")
     rust_trace, emule_trace, packet_diff, diag_diff = diff_scenario_traces(rust_evidence, mfc_evidence)
+    if packet_diff is not None:
+        packet_diff["liveActionCoverage"] = build_live_action_coverage(packet_diff, scenario)
 
     report = clw.build_converged_report(
         run_id=scenario.name,
@@ -764,6 +843,11 @@ def run_one_scenario(
             "emule": mfc_evidence,
         },
     )
+    if packet_diff is not None:
+        report["gate"] = "liveActionCoverage"
+        report["ok"] = bool(report["traces"]["bothCaptured"]) and bool(
+            packet_diff["liveActionCoverage"]["ok"]
+        ) and (diag_diff is None or bool(diag_diff.get("ok")))
 
     rust_search_obj = rust_evidence.get("search")
     rust_search: dict[str, Any] = rust_search_obj if isinstance(rust_search_obj, dict) else {}

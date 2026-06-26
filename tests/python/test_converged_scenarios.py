@@ -121,6 +121,20 @@ def test_coverage_verdict_uses_opcode_coverage_for_live_gate() -> None:
     assert _matched_result(scenario, packet_diff={"ok": True}).coverage_verdict() == "matched"
 
 
+def test_coverage_verdict_prefers_live_action_gate_when_present() -> None:
+    scenario = cs.ConvergedScenario(name="s")
+    result = _matched_result(
+        scenario,
+        packet_diff={
+            "ok": False,
+            "coverageOk": False,
+            "liveActionCoverage": {"ok": True},
+        },
+    )
+    assert result.coverage_ok() is True
+    assert result.coverage_verdict() == "matched"
+
+
 def test_low_id_expectation() -> None:
     high = cs.ConvergedScenario(name="hi")
     low = cs.ConvergedScenario(name="lo", low_id=True)
@@ -145,7 +159,7 @@ def test_aggregate_scenario_summary_ok_when_all_matched() -> None:
     results = [_matched_result(scenario) for scenario in scenarios]
     summary = cs.aggregate_scenario_summary(results)
     assert summary["ok"] is True
-    assert summary["gate"] == "opcodeCoverage"
+    assert summary["gate"] == "liveActionCoverage"
     assert summary["scenarioCount"] == 2
     assert summary["verdictCounts"] == {"matched": 2}
     assert summary["coverageVerdictCounts"] == {"matched": 2}

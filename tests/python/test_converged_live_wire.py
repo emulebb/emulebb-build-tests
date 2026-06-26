@@ -184,6 +184,62 @@ def test_converged_runner_clears_mfc_append_only_diagnostic_logs(tmp_path: Path)
     assert keep_log.exists()
 
 
+def test_converged_runner_server_search_action_gate_uses_required_shared_opcodes() -> None:
+    runner = _load_converged_runner()
+    packet_diff = {
+        "coverageOk": False,
+        "opcodeCoverage": {
+            "channels": [
+                {
+                    "channel": "server",
+                    "direction": "send",
+                    "shared": [
+                        {"protocolMarker": 0xE3, "opcode": 0x16, "rustCount": 1, "emuleCount": 1}
+                    ],
+                },
+                {
+                    "channel": "server",
+                    "direction": "recv",
+                    "shared": [
+                        {"protocolMarker": 0xE3, "opcode": 0x33, "rustCount": 2, "emuleCount": 1}
+                    ],
+                },
+            ]
+        },
+    }
+    scenario = runner.cs.ConvergedScenario(name="server", search_method=runner.cs.SEARCH_SERVER)
+
+    gate = runner.build_live_action_coverage(packet_diff, scenario)
+
+    assert gate["ok"] is True
+    assert gate["diagnosticFullOpcodeCoverageOk"] is False
+    assert [row["label"] for row in gate["required"]] == ["server-search-request", "server-search-result"]
+
+
+def test_converged_runner_server_search_action_gate_fails_missing_result() -> None:
+    runner = _load_converged_runner()
+    packet_diff = {
+        "coverageOk": True,
+        "opcodeCoverage": {
+            "channels": [
+                {
+                    "channel": "server",
+                    "direction": "send",
+                    "shared": [
+                        {"protocolMarker": 0xE3, "opcode": 0x16, "rustCount": 1, "emuleCount": 1}
+                    ],
+                }
+            ]
+        },
+    }
+    scenario = runner.cs.ConvergedScenario(name="server", search_method=runner.cs.SEARCH_SERVER)
+
+    gate = runner.build_live_action_coverage(packet_diff, scenario)
+
+    assert gate["ok"] is False
+    assert gate["required"][1]["presentOnBoth"] is False
+
+
 def test_select_search_terms_is_gentle() -> None:
     terms = ["  a  ", "b", "", "c", "d"]
     assert clw.select_search_terms(terms, max_terms=2) == ["a", "b"]
