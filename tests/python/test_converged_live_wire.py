@@ -147,6 +147,26 @@ def test_converged_runner_environment_parity_profile_counts_shared_inputs() -> N
     assert profile["persistedProfiles"] is True
 
 
+def test_converged_runner_polls_mfc_search_until_complete() -> None:
+    runner = _load_converged_runner()
+
+    class _FakeRestSmoke:
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+
+        def http_request(self, _base_url: str, path: str, **_kwargs: object) -> dict[str, object]:
+            self.paths.append(path)
+            return {"json": {"status": "complete", "items": [{"name": "one"}, {"name": "two"}]}}
+
+        def compact_http_result(self, result: dict[str, object]) -> dict[str, object]:
+            return result
+
+    rest_smoke = _FakeRestSmoke()
+    result = runner.poll_mfc_search_page(rest_smoke, "http://127.0.0.1:4732", "42")
+    assert result["json"]["status"] == "complete"
+    assert rest_smoke.paths == ["/api/v1/searches/42"]
+
+
 def test_select_search_terms_is_gentle() -> None:
     terms = ["  a  ", "b", "", "c", "d"]
     assert clw.select_search_terms(terms, max_terms=2) == ["a", "b"]

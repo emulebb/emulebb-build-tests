@@ -155,6 +155,13 @@ def _unwrap_api_data(payload: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else payload
 
 
+def _compact_json_data(compact_result: dict[str, Any]) -> dict[str, Any]:
+    """Returns the compact HTTP result's JSON body, unwrapping ``data``."""
+
+    payload = compact_result.get("json")
+    return _unwrap_api_data(payload) if isinstance(payload, dict) else {}
+
+
 def _poll_rust_search_results(base_url: str, search_id: str) -> int:
     """Polls one rust search page LOCALLY until terminal, then counts ``items``."""
 
@@ -198,6 +205,24 @@ def run_rust_search(base_url: str, terms: list[str], method: str) -> dict[str, A
         total_results += result_count
         searches.append({"query": term, "searchId": search_id, "resultCount": result_count})
     return {"method": method, "searches": searches, "totalResults": total_results}
+
+
+def poll_mfc_search_page(rest_smoke: ModuleType, base_url: str, search_id: str) -> dict[str, Any]:
+    """Polls one MFC search page until terminal and returns a compact result."""
+
+    def completed_page() -> dict[str, Any] | None:
+        page = rest_smoke.compact_http_result(
+            rest_smoke.http_request(
+                base_url,
+                f"/api/v1/searches/{search_id}",
+                api_key=MFC_API_KEY,
+                request_timeout_seconds=30.0,
+            )
+        )
+        status = str(_compact_json_data(page).get("status") or "")
+        return page if status in {"complete", "completed"} else None
+
+    return wait_until(f"mfc search {search_id}", 60.0, completed_page)
 
 
 def run_rust_side(
@@ -489,7 +514,31 @@ def run_mfc_side(
                 json_body={"query": term, "method": scenario.search_method, "type": ""},
                 request_timeout_seconds=45.0,
             )
-            searches.append(rest_smoke.compact_http_result(created))
+            created_compact = rest_smoke.compact_http_result(created)
+            created_data = _compact_json_data(created_compact)
+            search_id = str(created_data.get("id") or "")
+            search_entry: dict[str, Any] = {
+                "query": term,
+                "searchId": search_id,
+                "created": created_compact,
+                "status": str(created_data.get("status") or ""),
+                "resultCount": 0,
+            }
+            if search_id:
+                try:
+                    final_compact = poll_mfc_search_page(rest_smoke, base_url, search_id)
+                    final_data = _compact_json_data(final_compact)
+                    items = final_data.get("items")
+                    search_entry.update(
+                        {
+                            "final": final_compact,
+                            "status": str(final_data.get("status") or ""),
+                            "resultCount": len(items) if isinstance(items, list) else int(final_data.get("total") or 0),
+                        }
+                    )
+                except RuntimeError as exc:
+                    search_entry["pollError"] = str(exc)
+            searches.append(search_entry)
         evidence["searches"] = searches
     except Exception as exc:  # noqa: BLE001 - record and continue to the diff
         evidence["error"] = f"{type(exc).__name__}: {exc}"
@@ -708,7 +757,7 @@ def run_one_scenario(
         mfc_connected=bool(mfc_evidence.get("ed2kConnected")),
         mfc_high_id=bool(mfc_evidence.get("ed2kHighId")),
         rust_result_count=int(rust_search.get("totalResults") or 0),
-        mfc_result_count=len(mfc_searches),
+        mfc_result_count=sum(int(search.get("resultCount") or 0) for search in mfc_searches if isinstance(search, dict)),
         packet_diff=packet_diff,
         diag_diff=diag_diff,
         both_traces_captured=bool(report["traces"]["bothCaptured"]),
