@@ -244,3 +244,23 @@ def test_write_action_report_persists_json(tmp_path) -> None:
     path = sad.write_action_report(report, tmp_path / "actions")
     assert path.exists()
     assert path.name.startswith("00007-search-ubuntu")
+
+
+def test_write_action_report_sanitizes_windows_reserved_filename_chars(tmp_path) -> None:
+    report = sad.build_action_report(
+        {
+            "kind": "search",
+            "key": 'http://example.invalid/a:b?c*"',
+            "label": "synthetic url",
+            "verdict": "unpaired",
+        },
+        campaign_id="camp-1",
+        seq=8,
+    )
+    path = sad.write_action_report(report, tmp_path / "actions")
+    assert path.exists()
+    assert path.suffix == ".json"
+    assert ":" not in path.name
+    assert "?" not in path.name
+    assert "*" not in path.name
+    assert '"' not in path.name

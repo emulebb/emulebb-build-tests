@@ -33,6 +33,7 @@ only as an informational ``byteMatch`` flag.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,6 +51,7 @@ DOWNLOAD = "download"
 DEFAULT_LEAD_SECONDS = 8.0
 DEFAULT_SETTLE_SECONDS = 45.0
 DEFAULT_CORRELATION_WINDOW_SECONDS = 90.0
+_WINDOWS_RESERVED_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 def parse_ts(value: Any) -> datetime | None:
@@ -362,12 +364,21 @@ def build_action_report(action_diff: dict[str, Any], *, campaign_id: str, seq: i
     return {"schema": "soak_action_diff_v1", "campaignId": campaign_id, "seq": seq, **action_diff}
 
 
+def safe_report_key(value: Any) -> str:
+    """Returns a short filename-safe action key for report paths."""
+
+    text = str(value or "action").strip() or "action"
+    text = _WINDOWS_RESERVED_FILENAME_CHARS.sub("_", text)
+    text = text.rstrip(" .") or "action"
+    return text[:32]
+
+
 def write_action_report(report: dict[str, Any], actions_dir: Path) -> Path:
     """Writes one per-action report to ``actions_dir`` and returns its path."""
 
     actions_dir.mkdir(parents=True, exist_ok=True)
     seq = report.get("seq", 0)
-    key = (report.get("key") or "action").replace("/", "_").replace("\\", "_")[:32]
+    key = safe_report_key(report.get("key"))
     path = actions_dir / f"{seq:05d}-{report.get('kind', 'action')}-{key}.json"
     path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     return path
