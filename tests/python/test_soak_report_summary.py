@@ -143,6 +143,7 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
     assert summary["driver"]["downloadOk"] == 1
     assert summary["driver"]["downloadFailed"] == 1
     assert summary["driver"]["downloadFailureReasons"] == {"no common safe candidate": 1}
+    assert summary["actionReports"] == {"expected": 1, "loaded": 1, "missing": 0}
     assert summary["actions"]["verdictCounts"] == {"divergence": 1}
     assert summary["actions"]["divergenceSamples"][0]["opcodeGapChannels"] == [
         {
@@ -167,3 +168,16 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
 def test_parse_checkpoint_lines_tolerates_missing_log(tmp_path: Path) -> None:
     assert soak_report_summary.parse_checkpoint_lines(tmp_path / "missing.log") == []
     assert soak_report_summary.log_finished(tmp_path / "missing.log") is False
+
+
+def test_summarize_report_flags_missing_action_reports(tmp_path: Path) -> None:
+    report_dir = tmp_path / "report"
+    _write_json(report_dir / "summary.json", {"campaignId": "camp-1", "totals": {"actions": 2}})
+    _write_json(
+        report_dir / "actions" / "00001-search.json",
+        {"seq": 1, "kind": "search", "verdict": "divergence"},
+    )
+
+    summary = soak_report_summary.summarize_report(report_dir)
+
+    assert summary["actionReports"] == {"expected": 2, "loaded": 1, "missing": 1}

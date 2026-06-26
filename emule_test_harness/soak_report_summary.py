@@ -141,6 +141,22 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def summarize_action_report_inventory(
+    summary: dict[str, Any], reports: list[dict[str, Any]]
+) -> dict[str, int | None]:
+    """Compares summary action totals with loadable per-action JSON reports."""
+
+    totals = summary.get("totals") if isinstance(summary.get("totals"), dict) else {}
+    expected = totals.get("actions")
+    expected_count = int(expected) if isinstance(expected, int) else None
+    loaded_count = len(reports)
+    return {
+        "expected": expected_count,
+        "loaded": loaded_count,
+        "missing": max(expected_count - loaded_count, 0) if expected_count is not None else None,
+    }
+
+
 def summarize_driver(summary: dict[str, Any]) -> dict[str, Any]:
     """Builds a compact driver-cycle aggregate from ``summary.json``."""
 
@@ -262,6 +278,7 @@ def summarize_report(report_dir: Path, *, log_path: Path | None = None) -> dict[
             "bindIpPresent": bool(summary.get("bindIp") or (summary.get("vpn") or {}).get("sameBindIp")),
         },
         "environmentParity": summary.get("environmentParity"),
+        "actionReports": summarize_action_report_inventory(summary, action_reports),
         "actions": summarize_actions(action_reports),
         "checkpoints": summarize_checkpoints(checkpoint_reports, log_checkpoints),
     }
