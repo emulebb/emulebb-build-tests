@@ -303,6 +303,19 @@ def _shared_opcode_present(
     return False
 
 
+def _shared_any_opcode_present(packet_diff: dict[str, Any], alternatives: list[dict[str, Any]]) -> bool:
+    for alternative in alternatives:
+        if _shared_opcode_present(
+            packet_diff,
+            channel=str(alternative["channel"]),
+            direction=str(alternative["direction"]),
+            protocol_marker=int(alternative["protocolMarker"]),
+            opcode=int(alternative["opcode"]),
+        ):
+            return True
+    return False
+
+
 def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, Any]:
     """Builds the action-specific live coverage gate for one soak action."""
 
@@ -326,6 +339,80 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
                 "opcodeName": "OP_SEARCHRESULT",
             },
         ]
+    elif kind == DOWNLOAD:
+        required = [
+            {
+                "label": "server-found-sources",
+                "alternatives": [
+                    {
+                        "channel": "server",
+                        "direction": "recv",
+                        "protocolMarker": 0xE3,
+                        "opcode": 0x42,
+                        "opcodeName": "OP_FOUNDSOURCES",
+                    },
+                    {
+                        "channel": "server",
+                        "direction": "recv",
+                        "protocolMarker": 0xE3,
+                        "opcode": 0x44,
+                        "opcodeName": "OP_FOUNDSOURCES_OBFU",
+                    },
+                ],
+            },
+            {
+                "label": "client-request-parts",
+                "alternatives": [
+                    {
+                        "channel": "client",
+                        "direction": "send",
+                        "protocolMarker": 0xE3,
+                        "opcode": 0x47,
+                        "opcodeName": "OP_REQUESTPARTS",
+                    },
+                    {
+                        "channel": "client",
+                        "direction": "send",
+                        "protocolMarker": 0xC5,
+                        "opcode": 0xA3,
+                        "opcodeName": "OP_REQUESTPARTS_I64",
+                    },
+                ],
+            },
+            {
+                "label": "client-part-payload",
+                "alternatives": [
+                    {
+                        "channel": "client",
+                        "direction": "recv",
+                        "protocolMarker": 0xE3,
+                        "opcode": 0x46,
+                        "opcodeName": "OP_SENDINGPART",
+                    },
+                    {
+                        "channel": "client",
+                        "direction": "recv",
+                        "protocolMarker": 0xC5,
+                        "opcode": 0x40,
+                        "opcodeName": "OP_COMPRESSEDPART",
+                    },
+                    {
+                        "channel": "client",
+                        "direction": "recv",
+                        "protocolMarker": 0xC5,
+                        "opcode": 0xA1,
+                        "opcodeName": "OP_COMPRESSEDPART_I64",
+                    },
+                    {
+                        "channel": "client",
+                        "direction": "recv",
+                        "protocolMarker": 0xC5,
+                        "opcode": 0xA2,
+                        "opcodeName": "OP_SENDINGPART_I64",
+                    },
+                ],
+            },
+        ]
 
     if not required:
         return {
@@ -336,13 +423,17 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
 
     checked: list[dict[str, Any]] = []
     for row in required:
-        present = _shared_opcode_present(
-            packet_diff,
-            channel=str(row["channel"]),
-            direction=str(row["direction"]),
-            protocol_marker=int(row["protocolMarker"]),
-            opcode=int(row["opcode"]),
-        )
+        alternatives = row.get("alternatives")
+        if isinstance(alternatives, list):
+            present = _shared_any_opcode_present(packet_diff, alternatives)
+        else:
+            present = _shared_opcode_present(
+                packet_diff,
+                channel=str(row["channel"]),
+                direction=str(row["direction"]),
+                protocol_marker=int(row["protocolMarker"]),
+                opcode=int(row["opcode"]),
+            )
         checked.append({**row, "presentOnBoth": present})
     return {
         "ok": all(row["presentOnBoth"] for row in checked),
