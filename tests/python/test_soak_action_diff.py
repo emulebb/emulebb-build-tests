@@ -264,3 +264,21 @@ def test_write_action_report_sanitizes_windows_reserved_filename_chars(tmp_path)
     assert "?" not in path.name
     assert "*" not in path.name
     assert '"' not in path.name
+    assert "example.invalid" not in path.name
+
+
+def test_write_action_report_redacts_hash_keys_from_filename(tmp_path) -> None:
+    report = sad.build_action_report(
+        {
+            "kind": "download",
+            "key": "a" * 32,
+            "label": "synthetic transfer",
+            "verdict": "coverage-parity",
+        },
+        campaign_id="camp-1",
+        seq=9,
+    )
+    path = sad.write_action_report(report, tmp_path / "actions")
+    assert path.exists()
+    assert path.name == "00009-download-hash.json"
+    assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in path.name

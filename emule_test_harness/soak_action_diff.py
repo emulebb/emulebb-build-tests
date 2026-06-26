@@ -52,6 +52,7 @@ DEFAULT_LEAD_SECONDS = 8.0
 DEFAULT_SETTLE_SECONDS = 45.0
 DEFAULT_CORRELATION_WINDOW_SECONDS = 90.0
 _WINDOWS_RESERVED_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_HEX_REPORT_KEY = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
 
 
 def parse_ts(value: Any) -> datetime | None:
@@ -368,6 +369,11 @@ def safe_report_key(value: Any) -> str:
     """Returns a short filename-safe action key for report paths."""
 
     text = str(value or "action").strip() or "action"
+    normalized = text.lower()
+    if _HEX_REPORT_KEY.fullmatch(normalized):
+        return "hash"
+    if "://" in normalized or normalized.startswith("www."):
+        return "url"
     text = _WINDOWS_RESERVED_FILENAME_CHARS.sub("_", text)
     text = text.rstrip(" .") or "action"
     return text[:32]
