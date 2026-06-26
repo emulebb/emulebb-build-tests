@@ -13,13 +13,15 @@ def _ts(seconds: float) -> datetime:
     return datetime(2026, 6, 24, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=seconds)
 
 
-def _pkt(flow: str, direction: str, opcode: int, payload_hex: str, ts: datetime) -> dict:
+def _pkt(
+    flow: str, direction: str, opcode: int, payload_hex: str, ts: datetime, *, marker: int = 229
+) -> dict:
     return {
         "schema": "ed2k_packet_v1",
         "ts_utc": ts.isoformat().replace("+00:00", "Z"),
         "flow": flow,
         "direction": direction,
-        "protocol_marker": 229,
+        "protocol_marker": marker,
         "opcode": opcode,
         "opcode_name": f"OP_{opcode:02X}",
         "payload_len": len(payload_hex) // 2,
@@ -180,16 +182,23 @@ def test_diff_action_coverage_parity_when_same_opcodes() -> None:
         rust=_action("rust", "ubuntu", _ts(0)),
         mfc=_action("mfc", "ubuntu", _ts(2)),
     )
-    # Same opcode set on both sides (different payloads / counts is fine for live).
-    rust_packets = [_pkt("server", "send", 0x16, "aabb", _ts(1))]
-    mfc_packets = [_pkt("server", "send", 0x16, "ccdd", _ts(3))]
+    # Same search action opcodes on both sides (different payloads / counts is fine for live).
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aabb", _ts(1), marker=0xE3),
+        _pkt("server", "recv", 0x33, "ee", _ts(2), marker=0xE3),
+    ]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "ccdd", _ts(3), marker=0xE3),
+        _pkt("server", "recv", 0x33, "ff", _ts(4), marker=0xE3),
+    ]
     report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
     assert report["verdict"] == "coverage-parity"
     assert report["coverageOk"] is True
+    assert report["actionCoverage"]["mode"] == "action-required-opcodes"
     assert report["byteMatch"] is False  # payload differs — expected for live clients
 
 
-def test_diff_action_divergence_on_only_one_side_opcode() -> None:
+def test_diff_action_search_gate_ignores_unrelated_background_opcodes() -> None:
     pair = sad.ActionPair(
         kind=sad.SEARCH,
         key="ubuntu",
@@ -197,10 +206,32 @@ def test_diff_action_divergence_on_only_one_side_opcode() -> None:
         mfc=_action("mfc", "ubuntu", _ts(2)),
     )
     rust_packets = [
-        _pkt("server", "send", 0x16, "aa", _ts(1)),
-        _pkt("server", "send", 0x98, "bb", _ts(1)),  # opcode only rust uses
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+        _pkt("server", "recv", 0x33, "bb", _ts(2), marker=0xE3),
+        _pkt("client", "recv", 0x47, "cc", _ts(2)),  # unrelated background transfer
     ]
-    mfc_packets = [_pkt("server", "send", 0x16, "cc", _ts(3))]
+    mfc_packets = [
+        _pkt("server", "send", 0x16, "dd", _ts(3), marker=0xE3),
+        _pkt("server", "recv", 0x33, "ee", _ts(4), marker=0xE3),
+    ]
+    report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
+    assert report["verdict"] == "coverage-parity"
+    assert report["coverageOk"] is True
+    assert report["fullCoverageOk"] is False
+
+
+def test_diff_action_divergence_when_required_search_result_is_missing() -> None:
+    pair = sad.ActionPair(
+        kind=sad.SEARCH,
+        key="ubuntu",
+        rust=_action("rust", "ubuntu", _ts(0)),
+        mfc=_action("mfc", "ubuntu", _ts(2)),
+    )
+    rust_packets = [
+        _pkt("server", "send", 0x16, "aa", _ts(1), marker=0xE3),
+        _pkt("server", "send", 0x98, "bb", _ts(1), marker=0xE3),  # opcode only rust uses
+    ]
+    mfc_packets = [_pkt("server", "send", 0x16, "cc", _ts(3), marker=0xE3)]
     report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
     assert report["verdict"] == "divergence"
     assert report["coverageOk"] is False

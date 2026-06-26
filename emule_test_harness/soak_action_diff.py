@@ -275,8 +275,85 @@ def slice_trace(
     return sliced
 
 
-def _classify(
+def _shared_opcode_present(
     packet_diff: dict[str, Any],
+    *,
+    channel: str,
+    direction: str,
+    protocol_marker: int,
+    opcode: int,
+) -> bool:
+    coverage = packet_diff.get("opcodeCoverage")
+    channels = coverage.get("channels") if isinstance(coverage, dict) else None
+    if not isinstance(channels, list):
+        return False
+    for item in channels:
+        if not isinstance(item, dict):
+            continue
+        if item.get("channel") != channel or item.get("direction") != direction:
+            continue
+        shared = item.get("shared")
+        if not isinstance(shared, list):
+            return False
+        for row in shared:
+            if not isinstance(row, dict):
+                continue
+            if int(row.get("protocolMarker") or 0) == protocol_marker and int(row.get("opcode") or 0) == opcode:
+                return int(row.get("rustCount") or 0) > 0 and int(row.get("emuleCount") or 0) > 0
+    return False
+
+
+def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, Any]:
+    """Builds the action-specific live coverage gate for one soak action."""
+
+    required: list[dict[str, Any]] = []
+    if kind == SEARCH:
+        required = [
+            {
+                "label": "server-search-request",
+                "channel": "server",
+                "direction": "send",
+                "protocolMarker": 0xE3,
+                "opcode": 0x16,
+                "opcodeName": "OP_SEARCHREQUEST",
+            },
+            {
+                "label": "server-search-result",
+                "channel": "server",
+                "direction": "recv",
+                "protocolMarker": 0xE3,
+                "opcode": 0x33,
+                "opcodeName": "OP_SEARCHRESULT",
+            },
+        ]
+
+    if not required:
+        return {
+            "ok": bool(packet_diff.get("coverageOk")),
+            "mode": "full-opcode-coverage",
+            "required": [],
+        }
+
+    checked: list[dict[str, Any]] = []
+    for row in required:
+        present = _shared_opcode_present(
+            packet_diff,
+            channel=str(row["channel"]),
+            direction=str(row["direction"]),
+            protocol_marker=int(row["protocolMarker"]),
+            opcode=int(row["opcode"]),
+        )
+        checked.append({**row, "presentOnBoth": present})
+    return {
+        "ok": all(row["presentOnBoth"] for row in checked),
+        "mode": "action-required-opcodes",
+        "required": checked,
+        "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
+    }
+
+
+def _classify(
+    action_coverage: dict[str, Any],
     diag_diff: dict[str, Any] | None,
     rust_count: int,
     mfc_count: int,
@@ -292,7 +369,7 @@ def _classify(
         return "no-traffic"
     if rust_count == 0 or mfc_count == 0:
         return "one-sided"
-    coverage_ok = bool(packet_diff.get("coverageOk"))
+    coverage_ok = bool(action_coverage.get("ok"))
     diag_ok = diag_diff is None or bool(diag_diff.get("ok"))
     return "coverage-parity" if coverage_ok and diag_ok else "divergence"
 
@@ -326,7 +403,8 @@ def diff_action(
             slice_trace(mfc_diag or [], t0, t1),
         )
 
-    verdict = _classify(packet_diff, diag_diff, len(rust_slice), len(mfc_slice))
+    action_coverage = build_action_coverage(pair.kind, packet_diff)
+    verdict = _classify(action_coverage, diag_diff, len(rust_slice), len(mfc_slice))
     return {
         "kind": pair.kind,
         "key": pair.key,
@@ -338,9 +416,11 @@ def diff_action(
         },
         "packets": {"rust": len(rust_slice), "mfc": len(mfc_slice)},
         "verdict": verdict,
-        "coverageOk": bool(packet_diff.get("coverageOk")),
+        "coverageOk": bool(action_coverage.get("ok")),
+        "fullCoverageOk": bool(packet_diff.get("coverageOk")),
         "byteMatch": bool(packet_diff.get("ok")),
         "diagOk": diag_diff is None or bool(diag_diff.get("ok")),
+        "actionCoverage": action_coverage,
         "packetDiff": packet_diff,
         "diagDiff": diag_diff,
     }
