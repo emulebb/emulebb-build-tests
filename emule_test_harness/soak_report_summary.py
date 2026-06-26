@@ -32,6 +32,16 @@ def load_action_reports(report_dir: Path) -> list[dict[str, Any]]:
     return sorted(reports, key=lambda report: int(report.get("seq") or 0))
 
 
+def load_checkpoint_reports(report_dir: Path) -> list[dict[str, Any]]:
+    """Loads structured checkpoint reports from a converged soak report directory."""
+
+    checkpoints_dir = report_dir / "checkpoints"
+    if not checkpoints_dir.is_dir():
+        return []
+    reports = [read_json(path) for path in sorted(checkpoints_dir.glob("*.json"))]
+    return sorted(reports, key=lambda report: str(report.get("ts_utc") or ""))
+
+
 def parse_checkpoint_lines(log_path: Path | None) -> list[dict[str, int]]:
     """Extracts packet/action checkpoint counters from the runner log."""
 
@@ -156,12 +166,81 @@ def summarize_driver(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rest_status(checkpoint: dict[str, Any], client: str) -> dict[str, Any]:
+    rest_status = checkpoint.get("restStatus")
+    if not isinstance(rest_status, dict):
+        return {}
+    status = rest_status.get(client)
+    return status if isinstance(status, dict) else {}
+
+
+def summarize_checkpoints(
+    checkpoint_reports: list[dict[str, Any]], log_checkpoints: list[dict[str, int]]
+) -> dict[str, Any]:
+    """Builds upload/share/process stability evidence from checkpoints."""
+
+    if not checkpoint_reports:
+        return {
+            "count": len(log_checkpoints),
+            "last": log_checkpoints[-1] if log_checkpoints else None,
+            "structuredCount": 0,
+        }
+
+    rust_statuses = [_rest_status(checkpoint, "rust") for checkpoint in checkpoint_reports]
+    mfc_statuses = [_rest_status(checkpoint, "mfc") for checkpoint in checkpoint_reports]
+    last = checkpoint_reports[-1]
+    last_rust = rust_statuses[-1] if rust_statuses else {}
+    last_mfc = mfc_statuses[-1] if mfc_statuses else {}
+    error_hits = [
+        hit
+        for checkpoint in checkpoint_reports
+        for hit in (checkpoint.get("errorLogHits") or [])
+        if isinstance(hit, dict)
+    ]
+    return {
+        "count": len(log_checkpoints),
+        "last": log_checkpoints[-1] if log_checkpoints else None,
+        "structuredCount": len(checkpoint_reports),
+        "firstTsUtc": checkpoint_reports[0].get("ts_utc"),
+        "lastTsUtc": last.get("ts_utc"),
+        "rustAliveAll": all(bool(checkpoint.get("rustAlive")) for checkpoint in checkpoint_reports),
+        "connectedAll": {
+            "rust": all(status.get("connected") is True for status in rust_statuses),
+            "mfc": all(status.get("connected") is True for status in mfc_statuses),
+        },
+        "lowIdObserved": {
+            "rust": any(status.get("lowId") is True for status in rust_statuses),
+            "mfc": any(status.get("lowId") is True for status in mfc_statuses),
+        },
+        "activeUploadMax": {
+            "rust": max((int(status.get("activeUploads") or 0) for status in rust_statuses), default=0),
+            "mfc": max((int(status.get("activeUploads") or 0) for status in mfc_statuses), default=0),
+        },
+        "lastRestStatus": {
+            "rust": {
+                "activeUploads": last_rust.get("activeUploads"),
+                "waitingUploads": last_rust.get("waitingUploads"),
+                "sharedFileCount": last_rust.get("sharedFileCount"),
+                "sharedHashingCount": last_rust.get("sharedHashingCount"),
+            },
+            "mfc": {
+                "activeUploads": last_mfc.get("activeUploads"),
+                "waitingUploads": last_mfc.get("waitingUploads"),
+                "sharedFileCount": last_mfc.get("sharedFileCount"),
+                "sharedHashingCount": last_mfc.get("sharedHashingCount"),
+            },
+        },
+        "errorLogHitCount": len(error_hits),
+    }
+
+
 def summarize_report(report_dir: Path, *, log_path: Path | None = None) -> dict[str, Any]:
     """Returns a sanitized summary for one converged soak report directory."""
 
     summary = read_json(report_dir / "summary.json")
     action_reports = load_action_reports(report_dir)
-    checkpoints = parse_checkpoint_lines(log_path)
+    log_checkpoints = parse_checkpoint_lines(log_path)
+    checkpoint_reports = load_checkpoint_reports(report_dir)
     return {
         "schema": "converged_soak_report_summary_v1",
         "campaignId": summary.get("campaignId"),
@@ -177,8 +256,5 @@ def summarize_report(report_dir: Path, *, log_path: Path | None = None) -> dict[
         },
         "environmentParity": summary.get("environmentParity"),
         "actions": summarize_actions(action_reports),
-        "checkpoints": {
-            "count": len(checkpoints),
-            "last": checkpoints[-1] if checkpoints else None,
-        },
+        "checkpoints": summarize_checkpoints(checkpoint_reports, log_checkpoints),
     }

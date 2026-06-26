@@ -65,6 +65,60 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
             },
         },
     )
+    _write_json(
+        report_dir / "checkpoints" / "120000Z.json",
+        {
+            "schema": "soak_checkpoint_v1",
+            "ts_utc": "2026-06-26T12:00:00+00:00",
+            "rustAlive": True,
+            "restStatus": {
+                "rust": {
+                    "connected": True,
+                    "lowId": False,
+                    "activeUploads": 2,
+                    "waitingUploads": 0,
+                    "sharedFileCount": 10,
+                    "sharedHashingCount": 0,
+                },
+                "mfc": {
+                    "connected": True,
+                    "lowId": False,
+                    "activeUploads": 1,
+                    "waitingUploads": 0,
+                    "sharedFileCount": 8,
+                    "sharedHashingCount": 2,
+                },
+            },
+            "errorLogHits": [],
+        },
+    )
+    _write_json(
+        report_dir / "checkpoints" / "120500Z.json",
+        {
+            "schema": "soak_checkpoint_v1",
+            "ts_utc": "2026-06-26T12:05:00+00:00",
+            "rustAlive": True,
+            "restStatus": {
+                "rust": {
+                    "connected": True,
+                    "lowId": False,
+                    "activeUploads": 3,
+                    "waitingUploads": 1,
+                    "sharedFileCount": 10,
+                    "sharedHashingCount": 0,
+                },
+                "mfc": {
+                    "connected": True,
+                    "lowId": False,
+                    "activeUploads": 2,
+                    "waitingUploads": 0,
+                    "sharedFileCount": 10,
+                    "sharedHashingCount": 0,
+                },
+            },
+            "errorLogHits": [{"path": "daemon.out", "pattern": "warning"}],
+        },
+    )
     log_path = tmp_path / "runner.log"
     log_path.write_text(
         "\n".join(
@@ -92,6 +146,13 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
         }
     ]
     assert summary["checkpoints"]["last"] == {"rustPackets": 10, "mfcPackets": 20, "actions": 1}
+    assert summary["checkpoints"]["structuredCount"] == 2
+    assert summary["checkpoints"]["rustAliveAll"] is True
+    assert summary["checkpoints"]["connectedAll"] == {"rust": True, "mfc": True}
+    assert summary["checkpoints"]["lowIdObserved"] == {"rust": False, "mfc": False}
+    assert summary["checkpoints"]["activeUploadMax"] == {"rust": 3, "mfc": 2}
+    assert summary["checkpoints"]["lastRestStatus"]["mfc"]["sharedHashingCount"] == 0
+    assert summary["checkpoints"]["errorLogHitCount"] == 1
     assert "private live term" not in serialized
     assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in serialized
 
