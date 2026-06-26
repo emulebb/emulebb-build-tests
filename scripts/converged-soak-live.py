@@ -1,0 +1,806 @@
+"""Long-soak, human-driven rust<->MFC converged parity campaign.
+
+Unlike ``converged-live-wire-diff.py`` (which *issues* one gentle automated pass
+to both clients and diffs the whole capture), this orchestrator brings both
+diagnostics builds up on **persistent, isolated** profiles under
+``$EMULEBB_WORKSPACE_OUTPUT_ROOT/soak/`` and leaves them running for a long soak.
+Both connect to the SAME operator eD2K server, bootstrap Kad from the SAME
+nodes.dat, and share the SAME library roots from the gitignored live-wire inputs.
+
+A human then drives interactive searches/downloads through each client's own UI
+(the MFC native GUI window this script opens, and TrackMuleBB pointed at the rust
+REST). Because the actions originate in two independent UIs, the harness cannot
+issue them - it OBSERVES them: it polls both ``/api/v1/searches`` and
+``/api/v1/transfers``, correlates the same search term / ed2k hash across the two
+clients within a window, and runs the converged ``ed2k_packet_v1`` /
+``diag_event_v1`` diff over each action's time window (see
+``emule_test_harness.soak_action_diff``). A manual ``begin``/``end`` marker brackets
+actions the auto-correlator can't pair.
+
+REST control plane binds ``X_LOCAL_IP``; the P2P data plane binds the hide.me
+tunnel; build artifacts and the soak profiles live under
+``EMULEBB_WORKSPACE_OUTPUT_ROOT``. Nothing machine-specific is baked in.
+
+GENTLE LIVE DISCIPLINE: the operator drives the pace by hand; keep searches few
+and widely spaced, and confirm before starting a live campaign.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import re
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness import diag_event_diff, live_process_monitor, packet_trace_diff
+from emule_test_harness import converged_live_wire as clw
+from emule_test_harness import soak_action_diff as sad
+from emule_test_harness import soak_launch
+from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
+from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
+from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
+from emule_test_harness.rust_client import stop_process_tree
+from emule_test_harness.soak_launch import (
+    DEFAULT_MFC_SEED_CONFIG_DIR,
+    DEFAULT_SERVER_MET_URL,
+    MFC_API_KEY,
+    OPERATOR_SERVER,
+    RUST_API_KEY,
+    bring_up_mfc,
+    bring_up_rust,
+    log,
+)
+from emule_test_harness.vm_guest_profiles import retry_http_json
+
+SCENARIO = "emulebb.flow.converged.soak.hideme.v1"
+
+
+def parse_duration(text: str) -> float:
+    """Parses ``2h`` / ``90m`` / ``3600s`` / ``0`` (run until quit) into seconds."""
+
+    text = text.strip().lower()
+    if text in ("", "0", "forever", "inf"):
+        return 0.0
+    unit = text[-1]
+    factor = {"s": 1.0, "m": 60.0, "h": 3600.0}.get(unit)
+    if factor is None:
+        return float(text)  # bare seconds
+    return float(text[:-1]) * factor
+
+
+# --------------------------------------------------------------------------- #
+# REST list extraction (both clients share the /api/v1 envelope shape).
+# --------------------------------------------------------------------------- #
+
+
+def _extract_items(payload: Any, *keys: str) -> list[dict[str, Any]]:
+    """Extracts a list from an eMuleBB REST list response, tolerating shapes.
+
+    Accepts a bare list, ``{"items": [...]}``, ``{"data": {"items": [...]}}``, or a
+    named collection key (``searches`` / ``transfers``) at either level.
+    """
+
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    containers: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        containers.append(payload)
+        data = payload.get("data")
+        if isinstance(data, dict):
+            containers.append(data)
+        elif isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+    for container in containers:
+        for key in ("items", *keys):
+            value = container.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _get_list(base_url: str, path: str, api_key: str, *keys: str) -> list[dict[str, Any]]:
+    try:
+        payload = retry_http_json(
+            f"poll {path}", 1, base_url, path, api_key=api_key, timeout_seconds=10.0
+        )
+    except RuntimeError:
+        return []
+    return _extract_items(payload, *keys)
+
+
+def _api_data(payload: dict[str, Any]) -> dict[str, Any]:
+    data = payload.get("data")
+    return data if isinstance(data, dict) else payload
+
+
+def _row_hash(row: dict[str, Any]) -> str:
+    return str(row.get("hash") or row.get("fileHash") or "").strip().lower()
+
+
+def safe_common_download_candidate(
+    rust_rows: list[dict[str, Any]],
+    mfc_rows: list[dict[str, Any]],
+    *,
+    rust_mod: Any,
+) -> dict[str, Any] | None:
+    """Selects one safe result hash present on both clients' search pages."""
+
+    mfc_hashes = {_row_hash(row) for row in mfc_rows if _row_hash(row)}
+    candidates: list[dict[str, Any]] = []
+    for row in rust_rows:
+        file_hash = _row_hash(row)
+        if not file_hash or file_hash not in mfc_hashes:
+            continue
+        if rust_mod.safe_download_rejection_reason(row) is None:
+            candidates.append(row)
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda row: (
+            int(row.get("sources") or row.get("completeSources") or 0),
+            -int(row.get("sizeBytes") or row.get("size") or 0),
+        ),
+    )
+
+
+def create_search(base_url: str, api_key: str, *, query: str, method: str) -> str:
+    created = retry_http_json(
+        "soak search create",
+        2,
+        base_url,
+        "/api/v1/searches",
+        api_key=api_key,
+        method="POST",
+        body={"query": query, "method": method, "type": ""},
+        timeout_seconds=45.0,
+    )
+    return str(_api_data(created).get("id") or "")
+
+
+def poll_search_results(base_url: str, api_key: str, search_id: str, *, timeout_seconds: float) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout_seconds
+    last_rows: list[dict[str, Any]] = []
+    while time.monotonic() < deadline:
+        page = retry_http_json(
+            "soak search poll",
+            2,
+            base_url,
+            f"/api/v1/searches/{search_id}",
+            api_key=api_key,
+            timeout_seconds=30.0,
+        )
+        data = _api_data(page)
+        rows = _extract_items(data, "items")
+        if rows:
+            last_rows = rows
+        if str(data.get("status") or "").casefold() in {"complete", "completed"}:
+            return rows
+        time.sleep(2.0)
+    return last_rows
+
+
+def trigger_download(base_url: str, api_key: str, search_id: str, file_hash: str) -> dict[str, Any]:
+    download = retry_http_json(
+        "soak download",
+        2,
+        base_url,
+        f"/api/v1/searches/{search_id}/results/{file_hash}/operations/download",
+        api_key=api_key,
+        method="POST",
+        body={"paused": False, "categoryId": 0},
+        timeout_seconds=30.0,
+    )
+    try:
+        retry_http_json(
+            "soak download resume",
+            1,
+            base_url,
+            f"/api/v1/transfers/{file_hash}/operations/resume",
+            api_key=api_key,
+            method="POST",
+            body={},
+            timeout_seconds=15.0,
+        )
+    except RuntimeError:
+        pass
+    return download
+
+
+def drive_automatic_cycle(
+    *,
+    cycle_index: int,
+    query: str,
+    method: str,
+    rust_base: str,
+    mfc_base: str,
+    rust_mod: Any,
+    download: bool,
+    search_timeout_seconds: float,
+) -> dict[str, Any]:
+    """Runs one gentle synchronized search, optionally followed by one common download."""
+
+    cycle: dict[str, Any] = {
+        "cycle": cycle_index,
+        "queryIndex": cycle_index - 1,
+        "method": method,
+        "query": query,
+        "downloadRequested": download,
+    }
+    rust_search_id = create_search(rust_base, RUST_API_KEY, query=query, method=method)
+    mfc_search_id = create_search(mfc_base, MFC_API_KEY, query=query, method=method)
+    cycle["searchIds"] = {"rust": rust_search_id, "mfc": mfc_search_id}
+    rust_rows = poll_search_results(rust_base, RUST_API_KEY, rust_search_id, timeout_seconds=search_timeout_seconds)
+    mfc_rows = poll_search_results(mfc_base, MFC_API_KEY, mfc_search_id, timeout_seconds=search_timeout_seconds)
+    cycle["resultCounts"] = {"rust": len(rust_rows), "mfc": len(mfc_rows)}
+    if download:
+        candidate = safe_common_download_candidate(rust_rows, mfc_rows, rust_mod=rust_mod)
+        if candidate is None:
+            cycle["download"] = {"ok": False, "reason": "no common safe candidate"}
+        else:
+            file_hash = _row_hash(candidate)
+            cycle["download"] = {
+                "ok": True,
+                "hash": file_hash,
+                "sizeBytes": candidate.get("sizeBytes") or candidate.get("size"),
+                "sources": candidate.get("sources"),
+                "rust": trigger_download(rust_base, RUST_API_KEY, rust_search_id, file_hash),
+                "mfc": trigger_download(mfc_base, MFC_API_KEY, mfc_search_id, file_hash),
+            }
+    return cycle
+
+
+def status_snapshot(base_url: str, api_key: str) -> dict[str, Any]:
+    try:
+        status = retry_http_json("soak status", 1, base_url, "/api/v1/status", api_key=api_key, timeout_seconds=10.0)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    data = _api_data(status)
+    runtime = data.get("runtimeDiagnostics") if isinstance(data.get("runtimeDiagnostics"), dict) else {}
+    servers = data.get("servers") if isinstance(data.get("servers"), dict) else {}
+    return {
+        "connected": bool(servers.get("connected")),
+        "lowId": servers.get("lowId"),
+        "activeUploads": runtime.get("activeUploads"),
+        "waitingUploads": runtime.get("waitingUploads"),
+        "sharedFileCount": runtime.get("sharedFileCount"),
+        "sharedHashingCount": runtime.get("sharedHashingCount"),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Trace loading (dumps grow during the soak; load + concat current contents).
+# --------------------------------------------------------------------------- #
+
+
+def _glob_all(dump_dir: Path, globs: tuple[str, ...]) -> list[Path]:
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in globs:
+        for path in sorted(dump_dir.glob(pattern)):
+            if path not in seen:
+                seen.add(path)
+                found.append(path)
+    return found
+
+
+def load_packets(dump_dir: Path, *, side: str) -> list[dict[str, Any]]:
+    globs = clw.RUST_PACKET_DUMP_GLOBS if side == "rust" else clw.EMULE_PACKET_DUMP_GLOBS
+    records: list[dict[str, Any]] = []
+    for path in _glob_all(dump_dir, globs):
+        records.extend(packet_trace_diff.load_trace(path))
+    return records
+
+
+def load_diag(dump_dir: Path, *, side: str) -> list[dict[str, Any]]:
+    globs = clw.RUST_DIAG_DUMP_GLOBS if side == "rust" else clw.EMULE_DIAG_DUMP_GLOBS
+    records: list[dict[str, Any]] = []
+    for path in _glob_all(dump_dir, globs):
+        records.extend(diag_event_diff.load_trace(path))
+    return records
+
+
+# --------------------------------------------------------------------------- #
+# Action tracker: detect new actions per poll, correlate across clients.
+# --------------------------------------------------------------------------- #
+
+
+class ActionTracker:
+    """Accumulates observed actions and yields settled, correlated pairs.
+
+    ``tick`` is fed each poll's normalized REST snapshots; it returns the action
+    pairs whose capture window has elapsed (ready to diff) and the actions that
+    have aged out of the correlation window with no counterpart (manual-marker
+    candidates), each at most once.
+    """
+
+    def __init__(self, *, window_seconds: float, settle_seconds: float, lead_seconds: float) -> None:
+        self.window = window_seconds
+        self.settle = settle_seconds
+        self.lead = lead_seconds
+        self.seen: dict[tuple[str, str], set[str]] = {}
+        self.rust: list[sad.Action] = []
+        self.mfc: list[sad.Action] = []
+        self.processed: set[str] = set()
+
+    def _ingest(self, client: str, kind: str, items: list[dict[str, str]], now: datetime) -> None:
+        key = (client, kind)
+        fresh, self.seen[key] = sad.detect_actions(
+            self.seen.get(key), items, client=client, kind=kind, observed_at=now
+        )
+        bucket = self.rust if client == "rust" else self.mfc
+        bucket.extend(fresh)
+        for action in fresh:
+            log(f"observed {client} {kind}: {action.label!r}")
+
+    def tick(
+        self,
+        now: datetime,
+        *,
+        rust_searches: list[dict[str, str]],
+        rust_transfers: list[dict[str, str]],
+        mfc_searches: list[dict[str, str]],
+        mfc_transfers: list[dict[str, str]],
+    ) -> tuple[list[sad.ActionPair], list[sad.Action]]:
+        self._ingest("rust", sad.SEARCH, rust_searches, now)
+        self._ingest("rust", sad.DOWNLOAD, rust_transfers, now)
+        self._ingest("mfc", sad.SEARCH, mfc_searches, now)
+        self._ingest("mfc", sad.DOWNLOAD, mfc_transfers, now)
+
+        active_rust = [a for a in self.rust if a.action_id not in self.processed]
+        active_mfc = [a for a in self.mfc if a.action_id not in self.processed]
+        pairs, unpaired_rust, unpaired_mfc = sad.correlate_actions(
+            active_rust, active_mfc, window_seconds=self.window
+        )
+
+        ready_pairs: list[sad.ActionPair] = []
+        for pair in pairs:
+            _, t1 = pair.window(lead_seconds=self.lead, settle_seconds=self.settle)
+            if now >= t1:
+                self.processed.add(pair.rust.action_id)
+                self.processed.add(pair.mfc.action_id)
+                ready_pairs.append(pair)
+
+        aged_unpaired: list[sad.Action] = []
+        for action in (*unpaired_rust, *unpaired_mfc):
+            age = (now - action.observed_at).total_seconds()
+            if age > self.window + self.settle:
+                self.processed.add(action.action_id)
+                aged_unpaired.append(action)
+        return ready_pairs, aged_unpaired
+
+
+# --------------------------------------------------------------------------- #
+# Stdin marker thread.
+# --------------------------------------------------------------------------- #
+
+
+def _stdin_reader(commands: "queue.Queue[str]") -> None:
+    for line in sys.stdin:
+        commands.put(line.strip())
+
+
+# --------------------------------------------------------------------------- #
+# Process monitoring (best-effort; Windows handle-based sampler).
+# --------------------------------------------------------------------------- #
+
+
+class ProcMonitor:
+    """Wraps live_process_monitor sampling for one process (no-op off Windows)."""
+
+    def __init__(self, name: str, pid: int) -> None:
+        self.name = name
+        self.pid = pid
+        self.started = time.monotonic()
+        self.last_mono: float | None = None
+        self.last_cpu: float | None = None
+        self.rows: list[dict[str, Any]] = []
+        self.handle: int | None = None
+        try:
+            self.handle = live_process_monitor.open_process(pid)
+        except Exception:  # noqa: BLE001 - monitoring is best-effort
+            self.handle = None
+
+    def sample(self) -> dict[str, Any] | None:
+        if self.handle is None:
+            return None
+        try:
+            row = live_process_monitor.sample_process_metrics(
+                handle=self.handle,
+                started_monotonic=self.started,
+                last_sample_monotonic=self.last_mono,
+                last_cpu_seconds=self.last_cpu,
+            )
+        except OSError:
+            return None
+        self.last_mono = time.monotonic()
+        cpu = row.get("cpu_seconds")
+        self.last_cpu = float(cpu) if isinstance(cpu, (int, float)) else 0.0
+        self.rows.append(row)
+        return row
+
+    def summary(self) -> dict[str, Any]:
+        return live_process_monitor.summarize_metric_rows(self.rows)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--inputs", required=True, help="Path to live-wire-inputs.local.json (shared roots).")
+    parser.add_argument("--duration", default="0", help="Soak length: 2h / 90m / 3600s / 0 (until quit).")
+    parser.add_argument("--poll-interval", type=float, default=5.0, help="REST poll cadence (s).")
+    parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")
+    parser.add_argument("--correlation-window", type=float, default=sad.DEFAULT_CORRELATION_WINDOW_SECONDS, help="Max gap to pair the same action across clients (s).")
+    parser.add_argument("--settle-seconds", type=float, default=sad.DEFAULT_SETTLE_SECONDS, help="Window padding after an action before diffing (s).")
+    parser.add_argument("--lead-seconds", type=float, default=sad.DEFAULT_LEAD_SECONDS, help="Window padding before an action (s).")
+    parser.add_argument("--rust-rest-port", type=int, default=4731)
+    parser.add_argument("--mfc-rest-port", type=int, default=4732)
+    parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both clients).")
+    parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
+    parser.add_argument("--bootstrap-limit", type=int, default=40)
+    parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
+    parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
+    parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
+    parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
+    parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
+    parser.add_argument("--trackmulebb-cmd", help="Optional command to launch TrackMuleBB pointed at the rust REST.")
+    parser.add_argument("--auto-drive", action="store_true", help="Unattended gentle driver: issue synchronized searches/downloads over REST.")
+    parser.add_argument("--search-profile", default="generic_open", help="live-wire search_terms profile for --auto-drive.")
+    parser.add_argument("--auto-method", choices=("server", "kad", "automatic"), default="server", help="Search method for --auto-drive.")
+    parser.add_argument("--auto-start-delay", type=float, default=60.0, help="Seconds to wait before the first automated action.")
+    parser.add_argument("--auto-search-interval", type=float, default=1800.0, help="Gentle interval between automated search cycles.")
+    parser.add_argument("--auto-search-timeout", type=float, default=90.0, help="Seconds to wait for each client's search page.")
+    parser.add_argument("--auto-download-every", type=int, default=2, help="Start one common safe download every N automated search cycles; 0 disables.")
+    parser.add_argument("--auto-max-cycles", type=int, default=0, help="Maximum automated cycles; 0 means bounded only by --duration/quit.")
+    return parser
+
+
+def write_summary(summary: dict[str, Any], path: Path) -> None:
+    path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    duration = parse_duration(args.duration)
+    obfuscation = not args.no_obfuscation
+
+    rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
+    if not rest_addr:
+        raise RuntimeError("X_LOCAL_IP must be set (REST control plane binds the LAN IP).")
+    output_root = get_workspace_output_root()
+
+    rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
+    mfc_exe = clw.resolve_mfc_diagnostics_exe(
+        output_root, variant=args.mfc_variant, arch=args.mfc_arch, configuration=args.mfc_configuration
+    )
+
+    mods = soak_launch.load_helper_modules("observer")
+    rust_mod = mods["rust"]
+    live_common = mods["live_common"]
+    rest_smoke = mods["rest_smoke"]
+    shared_dirs_mod = mods["shared_dirs"]
+
+    inputs_path = Path(args.inputs).resolve()
+    shared_roots = rust_mod.load_shared_roots(inputs_path)
+    if not shared_roots:
+        raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to soak-share.")
+    auto_terms: list[str] = []
+    if args.auto_drive:
+        if args.auto_download_every < 0:
+            raise ValueError("--auto-download-every must be zero or greater.")
+        if args.auto_max_cycles < 0:
+            raise ValueError("--auto-max-cycles must be zero or greater.")
+        if args.auto_search_interval < 300.0:
+            raise ValueError("--auto-search-interval must be at least 300 seconds to keep public live traffic gentle.")
+        auto_terms = clw.select_search_terms(
+            rust_mod.load_search_terms(inputs_path, args.search_profile),
+            max_terms=1000,
+        )
+
+    campaign_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    soak_root = output_root / "soak"
+    rust_runtime = soak_root / "rust-runtime"
+    rust_packet_dump = rust_runtime / "packet-dump"
+    mfc_artifacts = soak_root / "mfc-profile"
+    report_dir = soak_root / "reports" / campaign_id
+    actions_dir = report_dir / "actions"
+    reject_windows_temp_path(report_dir, "soak report directory")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = report_dir / "summary.json"
+    summary = sad.empty_summary(campaign_id)
+    summary["driver"] = {
+        "autoDrive": bool(args.auto_drive),
+        "searchProfile": args.search_profile if args.auto_drive else None,
+        "method": args.auto_method if args.auto_drive else None,
+        "searchIntervalSeconds": args.auto_search_interval if args.auto_drive else None,
+        "downloadEvery": args.auto_download_every if args.auto_drive else None,
+        "maxCycles": args.auto_max_cycles if args.auto_drive else None,
+        "cycles": [],
+    }
+
+    log(f"campaign {campaign_id} - sharing {len(shared_roots)} library root(s) on both clients")
+    log(f"reports under {report_dir}")
+
+    log("ensuring hide.me split tunnel for both clients...")
+    rust_vpn = ensure_vpn_ready(rust_exe, name="eMuleBB Rust")
+    mfc_vpn = ensure_vpn_ready(mfc_exe, name="eMuleBB MFC")
+    bind_ip = soak_launch.require_same_vpn_bind_ip(rust_vpn, mfc_vpn)
+    log(f"hide.me bind IP: {bind_ip}")
+
+    bootstrap_nodes = fetch_bootstrap_endpoints(args.nodes_url, limit=args.bootstrap_limit)
+    log(f"Kad bootstrap from {args.nodes_url}: {len(bootstrap_nodes)} contacts")
+    summary["vpn"] = {
+        "rust": {
+            "exe": rust_exe.name,
+            "whitelistAdded": bool(rust_vpn.get("whitelistAdded")),
+            "bindIp": rust_vpn.get("bindIp"),
+        },
+        "mfc": {
+            "exe": mfc_exe.name,
+            "whitelistAdded": bool(mfc_vpn.get("whitelistAdded")),
+            "bindIp": mfc_vpn.get("bindIp"),
+        },
+        "sameBindIp": True,
+    }
+    summary["environmentParity"] = {
+        "server": OPERATOR_SERVER,
+        "sameServer": True,
+        "serverMetUrl": args.server_met_url,
+        "nodesDatUrl": args.nodes_url,
+        "sameKadBootstrap": True,
+        "bootstrapLimit": args.bootstrap_limit,
+        "bootstrapContactCount": len(bootstrap_nodes),
+        "sameShareSet": True,
+        "sharedRootCount": len(shared_roots),
+        "restLanAddress": rest_addr,
+        "rustRestPort": args.rust_rest_port,
+        "mfcRestPort": args.mfc_rest_port,
+    }
+    write_summary(summary, summary_path)
+
+    seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR
+    timeouts = {"rest": 60.0, "connect": 240.0}
+
+    rust_handles: dict[str, Any] | None = None
+    mfc_handles: dict[str, Any] | None = None
+    trackmulebb_proc: subprocess.Popen | None = None
+    try:
+        rust_handles = bring_up_rust(
+            rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
+            rest_port=args.rust_rest_port, runtime_dir=rust_runtime, packet_dump_dir=rust_packet_dump,
+            bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
+            server_met_url=args.server_met_url, obfuscation=obfuscation, timeouts=timeouts,
+        )
+        mfc_handles = bring_up_mfc(
+            live_common=live_common, rest_smoke=rest_smoke, shared_dirs_mod=shared_dirs_mod,
+            exe_path=mfc_exe, seed_config_dir=seed_config_dir, artifacts_dir=mfc_artifacts,
+            rest_host=rest_addr, rest_port=args.mfc_rest_port, shared_roots=shared_roots,
+            obfuscation=obfuscation, timeouts=timeouts,
+        )
+
+        rust_proc = rust_handles["process"]
+        mfc_app = mfc_handles["app"]
+        rust_base = rust_handles["baseUrl"]
+        mfc_base = mfc_handles["baseUrl"]
+        rust_dump_dir = Path(rust_handles["packetDumpDir"])
+        mfc_dump_dir = Path(mfc_handles["packetDumpDir"])
+
+        if args.trackmulebb_cmd:
+            log(f"launching TrackMuleBB: {args.trackmulebb_cmd}")
+            trackmulebb_proc = subprocess.Popen(args.trackmulebb_cmd, shell=True)
+        log("=" * 70)
+        log("SOAK LIVE. Drive searches/downloads via the MFC GUI and via TrackMuleBB:")
+        log(f"  rust REST : {rust_base}   (X-API-Key: {RUST_API_KEY})")
+        log(f"  MFC  REST : {mfc_base}   (X-API-Key: {MFC_API_KEY})")
+        log("Console commands: 'begin [label]' / 'end' to bracket a manual action, "
+            "'status', 'quit'.")
+        log("=" * 70)
+
+        tracker = ActionTracker(
+            window_seconds=args.correlation_window,
+            settle_seconds=args.settle_seconds,
+            lead_seconds=args.lead_seconds,
+        )
+        rust_mon = ProcMonitor("rust", rust_proc.pid)
+        mfc_pid = getattr(mfc_app, "pid", None)
+        mfc_mon = ProcMonitor("mfc", mfc_pid) if isinstance(mfc_pid, int) else None
+        log_offsets: dict[str, int] = {}
+        error_patterns = [re.compile(p, re.I) for p in ("panic", "assert", "fatal", "exception")]
+
+        commands: "queue.Queue[str]" = queue.Queue()
+        threading.Thread(target=_stdin_reader, args=(commands,), daemon=True).start()
+
+        seq = 0
+        marker_t0: datetime | None = None
+        marker_label = ""
+        started = time.monotonic()
+        last_checkpoint = started
+        auto_cycle = 0
+        next_auto = started + args.auto_start_delay if args.auto_drive else float("inf")
+
+        def process_report(report: dict[str, Any]) -> None:
+            nonlocal seq
+            seq += 1
+            full = sad.build_action_report(report, campaign_id=campaign_id, seq=seq)
+            path = sad.write_action_report(full, actions_dir)
+            sad.append_to_summary(summary, full)
+            write_summary(summary, summary_path)
+            log(f"action #{seq} [{full.get('verdict')}] {full.get('kind')} {full.get('key')} -> {path.name}")
+
+        while True:
+            now = datetime.now(timezone.utc)
+            if (
+                args.auto_drive
+                and time.monotonic() >= next_auto
+                and (args.auto_max_cycles == 0 or auto_cycle < args.auto_max_cycles)
+            ):
+                auto_cycle += 1
+                query = auto_terms[(auto_cycle - 1) % len(auto_terms)]
+                should_download = args.auto_download_every > 0 and auto_cycle % args.auto_download_every == 0
+                log(
+                    f"auto cycle {auto_cycle}: synchronized {args.auto_method} search "
+                    f"(download={str(should_download).lower()})"
+                )
+                try:
+                    cycle = drive_automatic_cycle(
+                        cycle_index=auto_cycle,
+                        query=query,
+                        method=args.auto_method,
+                        rust_base=rust_base,
+                        mfc_base=mfc_base,
+                        rust_mod=rust_mod,
+                        download=should_download,
+                        search_timeout_seconds=args.auto_search_timeout,
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
+                    cycle = {
+                        "cycle": auto_cycle,
+                        "queryIndex": auto_cycle - 1,
+                        "method": args.auto_method,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                    log(f"auto cycle {auto_cycle}: {cycle['error']}")
+                summary["driver"]["cycles"].append(cycle)
+                write_summary(summary, summary_path)
+                next_auto = time.monotonic() + args.auto_search_interval
+
+            pairs, aged_unpaired = tracker.tick(
+                now,
+                rust_searches=sad.normalize_search_items(_get_list(rust_base, "/api/v1/searches", RUST_API_KEY, "searches")),
+                rust_transfers=sad.normalize_transfer_items(_get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers")),
+                mfc_searches=sad.normalize_search_items(_get_list(mfc_base, "/api/v1/searches", MFC_API_KEY, "searches")),
+                mfc_transfers=sad.normalize_transfer_items(_get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers")),
+            )
+            if pairs:
+                rust_pkts = load_packets(rust_dump_dir, side="rust")
+                mfc_pkts = load_packets(mfc_dump_dir, side="emule")
+                rust_dg = load_diag(rust_dump_dir, side="rust")
+                mfc_dg = load_diag(mfc_dump_dir, side="emule")
+                for pair in pairs:
+                    process_report(
+                        sad.diff_action(
+                            pair, rust_packets=rust_pkts, mfc_packets=mfc_pkts,
+                            rust_diag=rust_dg, mfc_diag=mfc_dg,
+                            lead_seconds=args.lead_seconds, settle_seconds=args.settle_seconds,
+                        )
+                    )
+            for action in aged_unpaired:
+                process_report(sad.unpaired_record(action))
+
+            # Drain console commands (manual marker + control).
+            try:
+                while True:
+                    cmd = commands.get_nowait()
+                    if cmd.startswith("begin"):
+                        marker_t0 = now
+                        marker_label = cmd[len("begin"):].strip() or "marker"
+                        log(f"marker '{marker_label}' started at {now.isoformat()}")
+                    elif cmd == "end" and marker_t0 is not None:
+                        pair = sad.ActionPair(
+                            kind="marker",
+                            key=marker_label,
+                            rust=sad.Action(
+                                client="rust", kind="marker", action_id="marker",
+                                key=marker_label, label=marker_label, observed_at=marker_t0,
+                            ),
+                            mfc=sad.Action(
+                                client="mfc", kind="marker", action_id="marker",
+                                key=marker_label, label=marker_label, observed_at=now,
+                            ),
+                        )
+                        process_report(
+                            sad.diff_action(
+                                pair,
+                                rust_packets=load_packets(rust_dump_dir, side="rust"),
+                                mfc_packets=load_packets(mfc_dump_dir, side="emule"),
+                                rust_diag=load_diag(rust_dump_dir, side="rust"),
+                                mfc_diag=load_diag(mfc_dump_dir, side="emule"),
+                                lead_seconds=0.0, settle_seconds=0.0,
+                            )
+                        )
+                        marker_t0 = None
+                    elif cmd == "status":
+                        log(f"status: {json.dumps(summary['totals'])}")
+                    elif cmd == "quit":
+                        raise KeyboardInterrupt
+            except queue.Empty:
+                pass
+
+            # Periodic stability + coverage checkpoint.
+            if time.monotonic() - last_checkpoint >= args.checkpoint_interval:
+                last_checkpoint = time.monotonic()
+                checkpoint = {
+                    "schema": "soak_checkpoint_v1",
+                    "ts_utc": now.isoformat(),
+                    "rustAlive": rust_proc.poll() is None,
+                    "rust": rust_mon.sample(),
+                    "mfc": mfc_mon.sample() if mfc_mon else None,
+                    "packetRecords": {
+                        "rust": len(load_packets(rust_dump_dir, side="rust")),
+                        "mfc": len(load_packets(mfc_dump_dir, side="emule")),
+                    },
+                    "restStatus": {
+                        "rust": status_snapshot(rust_base, RUST_API_KEY),
+                        "mfc": status_snapshot(mfc_base, MFC_API_KEY),
+                    },
+                    "errorLogHits": live_process_monitor.scan_log_markers(
+                        [rust_runtime / "daemon.out"], log_offsets, error_patterns
+                    ),
+                    "totals": summary["totals"],
+                }
+                (report_dir / "checkpoints").mkdir(exist_ok=True)
+                (report_dir / "checkpoints" / f"{now.strftime('%H%M%SZ')}.json").write_text(
+                    json.dumps(checkpoint, indent=2, sort_keys=True), encoding="utf-8"
+                )
+                log(f"checkpoint: packets rust={checkpoint['packetRecords']['rust']} "
+                    f"mfc={checkpoint['packetRecords']['mfc']} actions={summary['totals']['actions']}")
+                if not checkpoint["rustAlive"]:
+                    log("rust daemon exited - ending soak.")
+                    break
+
+            if duration and (time.monotonic() - started) >= duration:
+                log("soak duration reached - winding down.")
+                break
+            time.sleep(args.poll_interval)
+    except KeyboardInterrupt:
+        log("interrupted - winding down.")
+    finally:
+        if trackmulebb_proc is not None:
+            stop_process_tree(trackmulebb_proc)
+        if mfc_handles is not None and mfc_handles.get("app") is not None:
+            try:
+                live_common.close_app_cleanly(mfc_handles["app"])
+            except Exception:  # noqa: BLE001
+                try:
+                    mfc_handles["app"].kill()
+                except Exception:  # noqa: BLE001
+                    pass
+        if rust_handles is not None:
+            stop_process_tree(rust_handles["process"])
+            try:
+                rust_handles["logHandle"].close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    summary["server"] = OPERATOR_SERVER
+    summary["bindIp"] = bind_ip
+    write_summary(summary, summary_path)
+    log(f"final summary: {summary_path}")
+    print(json.dumps({"scenario": SCENARIO, "campaignId": campaign_id, "totals": summary["totals"], "report": str(summary_path)}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
