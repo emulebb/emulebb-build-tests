@@ -167,6 +167,23 @@ def test_converged_runner_polls_mfc_search_until_complete() -> None:
     assert rest_smoke.paths == ["/api/v1/searches/42"]
 
 
+def test_converged_runner_clears_mfc_append_only_diagnostic_logs(tmp_path: Path) -> None:
+    runner = _load_converged_runner()
+    packet_log = tmp_path / "emulebb-diagnostics-packet.log"
+    diag_log = tmp_path / "emulebb-diagnostics-diag.log"
+    keep_log = tmp_path / "other.log"
+    packet_log.write_text("{}\n", encoding="utf-8")
+    diag_log.write_text("{}\n", encoding="utf-8")
+    keep_log.write_text("keep\n", encoding="utf-8")
+
+    removed = runner.clear_mfc_diagnostic_logs(tmp_path)
+
+    assert sorted(removed) == ["emulebb-diagnostics-diag.log", "emulebb-diagnostics-packet.log"]
+    assert not packet_log.exists()
+    assert not diag_log.exists()
+    assert keep_log.exists()
+
+
 def test_select_search_terms_is_gentle() -> None:
     terms = ["  a  ", "b", "", "c", "d"]
     assert clw.select_search_terms(terms, max_terms=2) == ["a", "b"]

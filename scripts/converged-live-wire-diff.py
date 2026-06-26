@@ -225,6 +225,19 @@ def poll_mfc_search_page(rest_smoke: ModuleType, base_url: str, search_id: str) 
     return wait_until(f"mfc search {search_id}", 60.0, completed_page)
 
 
+def clear_mfc_diagnostic_logs(packet_dump_dir: Path) -> list[str]:
+    """Removes append-only MFC diagnostics logs so one run owns one trace."""
+
+    removed: list[str] = []
+    packet_dump_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("emulebb-diagnostics-packet.log", "emulebb-diagnostics-diag.log"):
+        path = packet_dump_dir / name
+        if path.exists():
+            path.unlink()
+            removed.append(name)
+    return removed
+
+
 def run_rust_side(
     *,
     rust_mod: ModuleType,
@@ -443,6 +456,7 @@ def run_mfc_side(
     # flavor. There is no runtime env-var override for the dump path, so we read
     # the profile log dir rather than setting EMULEBB_PACKET_DIAGNOSTICS_DIR.
     packet_dump_dir = Path(str(profile["log_dir"]))
+    cleared_logs = clear_mfc_diagnostic_logs(packet_dump_dir)
     # REST bound to X_LOCAL_IP, P2P bound to the hide.me tunnel interface, both
     # eD2K + Kad enabled for the live exchange. configure_webserver_profile and
     # apply_p2p_bind_interface_override both persist the live network policy
@@ -458,7 +472,12 @@ def run_mfc_side(
         # server assigns a LowID (apply_live_network_policy left EnableUPnP=1).
         live_common.apply_section_preferences(config_dir, "UPnP", (("EnableUPnP", "0"),))
 
-    evidence: dict[str, Any] = {"client": "emule", "baseUrl": base_url, "scenario": scenario.name}
+    evidence: dict[str, Any] = {
+        "client": "emule",
+        "baseUrl": base_url,
+        "scenario": scenario.name,
+        "clearedDiagnosticsLogs": cleared_logs,
+    }
     app = None
     try:
         app = live_common.launch_app(exe_path, Path(str(profile["profile_base"])))
