@@ -121,7 +121,10 @@ def test_cross_client_requirements_accept_unicode_and_manifest_metadata() -> Non
                 "rust_emulebb_manifest_metadata": {
                     "canonicalName": "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin",
                     "sourceUserHashCount": 1,
+                    "expectedHashsetCount": 2,
+                    "md4HashsetAcquired": True,
                     "md4HashsetCount": 2,
+                    "aichHashsetAcquired": True,
                     "aichHashsetCount": 2,
                 }
             },
@@ -132,6 +135,34 @@ def test_cross_client_requirements_accept_unicode_and_manifest_metadata() -> Non
     assert requirements["unicodeFixtureNames"] is True
     assert requirements["recursiveSharedTreeUpload"] is True
     assert requirements["rustPersistedSourceUserHash"] is True
+    assert requirements["rustPersistedMd4Hashset"] is True
+    assert requirements["rustPersistedAichHashset"] is True
+
+
+def test_cross_client_requirements_accept_single_part_empty_hashsets() -> None:
+    module = load_suite_module()
+    shared_tree_name = "emulebb-rust-shared-tree-Unicode-\u00e9-\u6f22.bin"
+
+    requirements = module.require_cross_client_requirements(
+        {
+            "fixture": {"name": "emulebb-rust-to-emulebb-Unicode-\u00e9-\u6f22.bin"},
+            "emulebb_fixture": {"name": "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin"},
+            "rust_shared_tree": {"name": shared_tree_name, "recursive": True},
+            "checks": {
+                "rust_shared_tree_publish": {"sharedFiles": {"matched": {"name": shared_tree_name}}},
+                "rust_emulebb_manifest_metadata": {
+                    "canonicalName": "emulebb-to-emulebb-rust-Unicode-\u00e9-\u6f22.bin",
+                    "sourceUserHashCount": 1,
+                    "expectedHashsetCount": 0,
+                    "md4HashsetAcquired": True,
+                    "md4HashsetCount": 0,
+                    "aichHashsetAcquired": True,
+                    "aichHashsetCount": 0,
+                },
+            },
+        }
+    )
+
     assert requirements["rustPersistedMd4Hashset"] is True
     assert requirements["rustPersistedAichHashset"] is True
 
@@ -157,7 +188,10 @@ def test_cross_client_requirements_reject_ascii_fixture_names() -> None:
                     "rust_emulebb_manifest_metadata": {
                         "canonicalName": "emulebb-to-emulebb-rust.bin",
                         "sourceUserHashCount": 1,
+                        "expectedHashsetCount": 2,
+                        "md4HashsetAcquired": True,
                         "md4HashsetCount": 2,
+                        "aichHashsetAcquired": True,
                         "aichHashsetCount": 2,
                     }
                 },

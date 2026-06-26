@@ -459,7 +459,13 @@ def require_cross_client_requirements(report: dict[str, object]) -> dict[str, ob
         raise RuntimeError("Rust/eMuleBB cross-client manifest did not preserve the Unicode canonical name.")
     if int(manifest_metadata.get("sourceUserHashCount") or 0) < 1:
         raise RuntimeError("Rust/eMuleBB cross-client manifest did not persist source userHash metadata.")
-    if int(manifest_metadata.get("md4HashsetCount") or 0) < 1 or int(manifest_metadata.get("aichHashsetCount") or 0) < 1:
+    expected_hashset_count = int(manifest_metadata.get("expectedHashsetCount") or 0)
+    if (
+        manifest_metadata.get("md4HashsetAcquired") is not True
+        or int(manifest_metadata.get("md4HashsetCount") or 0) != expected_hashset_count
+        or manifest_metadata.get("aichHashsetAcquired") is not True
+        or int(manifest_metadata.get("aichHashsetCount") or 0) != expected_hashset_count
+    ):
         raise RuntimeError("Rust/eMuleBB cross-client manifest did not persist MD4/AICH hashset metadata.")
     return {
         "bidirectionalTransfers": True,
