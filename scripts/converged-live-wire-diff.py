@@ -688,9 +688,7 @@ def main(argv: list[str] | None = None) -> int:
     rest_addr = require_env("X_LOCAL_IP")
     output_root = get_workspace_output_root()
 
-    rust_exe = output_root / "builds" / "rust" / "target" / "release" / "emulebb-rust.exe"
-    if not rust_exe.is_file():
-        raise RuntimeError(f"Rust release binary missing: {rust_exe}. Build emulebb-rust (release) first.")
+    rust_exe = clw.resolve_rust_diagnostics_exe(output_root)
     mfc_exe = clw.resolve_mfc_diagnostics_exe(
         output_root, variant=args.mfc_variant, arch=args.mfc_arch, configuration=args.mfc_configuration
     )
@@ -719,7 +717,7 @@ def main(argv: list[str] | None = None) -> int:
 
     log(f"ensuring hide.me split tunnel for both clients ({rust_exe.name}, {mfc_exe.name})...")
     rust_vpn = ensure_vpn_ready(rust_exe, name="eMuleBB Rust")
-    ensure_vpn_ready(mfc_exe, name="eMuleBB MFC")
+    mfc_vpn = ensure_vpn_ready(mfc_exe, name="eMuleBB MFC")
     bind_ip = rust_vpn["bindIp"]
     log(f"hide.me bind IP: {bind_ip}")
 
@@ -771,6 +769,19 @@ def main(argv: list[str] | None = None) -> int:
     combined = cs.aggregate_scenario_summary(results)
     combined["runId"] = run_id
     combined["scenario"] = SCENARIO
+    combined["vpn"] = {
+        "rust": {
+            "exe": rust_exe.name,
+            "whitelistAdded": bool(rust_vpn.get("whitelistAdded")),
+            "bindIp": rust_vpn.get("bindIp"),
+        },
+        "mfc": {
+            "exe": mfc_exe.name,
+            "whitelistAdded": bool(mfc_vpn.get("whitelistAdded")),
+            "bindIp": mfc_vpn.get("bindIp"),
+        },
+        "sameBindIp": rust_vpn.get("bindIp") == mfc_vpn.get("bindIp"),
+    }
     summary_path = report_dir / "report.json"
     summary_path.write_text(json.dumps(combined, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     log(f"combined report: {summary_path}")
