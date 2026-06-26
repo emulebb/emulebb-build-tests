@@ -186,7 +186,9 @@ def test_rust_live_wire_uses_orchestrated_staged_runtime() -> None:
     """The live-wire launcher must run the binary staged by build orchestration."""
 
     text = read_text(SCRIPT_ROOT / "rust-live-wire-hideme.py")
-    assert '"tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"' in text
+    assert 'Path("tools") / "emulebb-rust" / "bin"' in text
+    assert "emulebb-rust.exe" in text
+    assert "emulebb-rust-diagnostics.exe" in text
     assert '"builds" / "rust" / "target" / "release" / "emulebb-rust.exe"' not in text
 
 

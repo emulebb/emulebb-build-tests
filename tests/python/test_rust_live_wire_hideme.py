@@ -58,6 +58,30 @@ def test_p2p_bound_to_uses_python_socket_inventory(monkeypatch) -> None:
     assert not module.p2p_bound_to("192.0.2.11")
 
 
+def test_resolve_rust_live_wire_exe_uses_plain_release_by_default(tmp_path: Path) -> None:
+    module = load_live_wire_module()
+    exe = tmp_path / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"plain")
+
+    resolved = module.resolve_rust_live_wire_exe(tmp_path, require_packet_diagnostics=False)
+
+    assert resolved == exe
+
+
+def test_resolve_rust_live_wire_exe_uses_diagnostics_when_required(tmp_path: Path) -> None:
+    module = load_live_wire_module()
+    plain = tmp_path / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
+    diagnostics = tmp_path / "tools" / "emulebb-rust" / "bin" / "emulebb-rust-diagnostics.exe"
+    diagnostics.parent.mkdir(parents=True)
+    plain.write_bytes(b"plain")
+    diagnostics.write_bytes(b"diagnostics")
+
+    resolved = module.resolve_rust_live_wire_exe(tmp_path, require_packet_diagnostics=True)
+
+    assert resolved == diagnostics
+
+
 def test_source_exchange_summary_counts_embedded_sx2_requests(tmp_path: Path) -> None:
     module = load_live_wire_module()
     dump_path = tmp_path / "emulebb-rust-ed2k-tcp-dump-test.jsonl"

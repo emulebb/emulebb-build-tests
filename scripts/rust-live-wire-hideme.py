@@ -58,6 +58,9 @@ DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 ED2K_PORT = 41662
 KAD_PORT = 41672
 API_KEY = "live-wire"
+RUST_TOOL_BIN_DIR = Path("tools") / "emulebb-rust" / "bin"
+RUST_RELEASE_EXE_NAME = "emulebb-rust.exe"
+RUST_DIAGNOSTICS_EXE_NAME = "emulebb-rust-diagnostics.exe"
 # DEBUG on the transfer/peer path so we can see source acquisition (GETSOURCES,
 # peer connect/callback) when diagnosing why a live download isn't pulling bytes.
 RUST_LOG = (
@@ -292,6 +295,19 @@ def require_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"{name} must be set (no local fallbacks are baked in).")
     return value
+
+
+def resolve_rust_live_wire_exe(output_root: Path, *, require_packet_diagnostics: bool) -> Path:
+    exe_name = RUST_DIAGNOSTICS_EXE_NAME if require_packet_diagnostics else RUST_RELEASE_EXE_NAME
+    exe_path = output_root / RUST_TOOL_BIN_DIR / exe_name
+    if exe_path.is_file():
+        return exe_path
+    if require_packet_diagnostics:
+        raise RuntimeError(
+            f"Diagnostics binary missing: {exe_path}. Build it with: "
+            "python -m emule_workspace build clients --client emulebb-rust --diagnostics."
+        )
+    raise RuntimeError(f"Release binary missing: {exe_path}. Build emulebb-rust (release) first.")
 
 
 def get_stats(base_url: str) -> dict[str, Any]:
@@ -945,9 +961,10 @@ def main(argv: list[str] | None = None) -> int:
 
     rest_addr = require_env("X_LOCAL_IP")
     output_root = get_workspace_output_root()
-    exe_path = output_root / "tools" / "emulebb-rust" / "bin" / "emulebb-rust.exe"
-    if not exe_path.is_file():
-        raise RuntimeError(f"Release binary missing: {exe_path}. Build emulebb-rust (release) first.")
+    exe_path = resolve_rust_live_wire_exe(
+        output_root,
+        require_packet_diagnostics=args.require_packet_diagnostics,
+    )
 
     inputs_path = Path(args.inputs).resolve()
     terms = load_search_terms(inputs_path, args.profile)
