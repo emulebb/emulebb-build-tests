@@ -198,3 +198,30 @@ def test_tracker_records_synchronized_download_action() -> None:
 
     assert [(action.client, action.key) for action in tracker.rust] == [("rust", "e" * 32)]
     assert [(action.client, action.key) for action in tracker.mfc] == [("mfc", "e" * 32)]
+
+
+def test_tracker_suppresses_rest_echo_of_synchronized_download() -> None:
+    runner = _load_soak_runner()
+    tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
+    now = runner.datetime.now(runner.timezone.utc)
+    file_hash = "f" * 32
+
+    tracker.record_synchronized_action(
+        kind=runner.sad.DOWNLOAD,
+        key=file_hash,
+        label=file_hash,
+        observed_at=now,
+        action_id="auto-download-1",
+    )
+    tracker.processed = {action.action_id for action in tracker.rust + tracker.mfc}
+    pairs, unpaired = tracker.tick(
+        now,
+        rust_searches=[],
+        rust_transfers=[],
+        mfc_searches=[],
+        mfc_transfers=[{"id": "mfc-transfer", "key": file_hash, "label": "Private Title.pdf"}],
+    )
+
+    assert pairs == []
+    assert unpaired == []
+    assert [action.action_id for action in tracker.mfc] == ["mfc:auto-download-1"]

@@ -362,12 +362,14 @@ class ActionTracker:
         self.rust: list[sad.Action] = []
         self.mfc: list[sad.Action] = []
         self.processed: set[str] = set()
+        self.synchronized_keys: set[tuple[str, str]] = set()
 
     def _ingest(self, client: str, kind: str, items: list[dict[str, str]], now: datetime) -> None:
         key = (client, kind)
         fresh, self.seen[key] = sad.detect_actions(
             self.seen.get(key), items, client=client, kind=kind, observed_at=now
         )
+        fresh = [action for action in fresh if (action.kind, action.key) not in self.synchronized_keys]
         bucket = self.rust if client == "rust" else self.mfc
         bucket.extend(fresh)
         for action in fresh:
@@ -409,6 +411,7 @@ class ActionTracker:
     ) -> None:
         """Records an action the auto-driver successfully issued to both clients."""
 
+        self.synchronized_keys.add((kind, key))
         self.rust.append(
             sad.Action(
                 client="rust",
