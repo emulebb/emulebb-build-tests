@@ -100,6 +100,8 @@ def _gap_counts(report: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _action_coverage(report: dict[str, Any]) -> dict[str, Any]:
+    if report.get("verdict") == "unpaired":
+        return {"ok": None, "mode": "unpaired", "required": []}
     coverage = report.get("actionCoverage")
     if isinstance(coverage, dict):
         return coverage
@@ -108,6 +110,8 @@ def _action_coverage(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _action_verdict(report: dict[str, Any], action_coverage: dict[str, Any]) -> str:
+    if report.get("verdict") == "unpaired":
+        return "unpaired"
     packets = report.get("packets") if isinstance(report.get("packets"), dict) else {}
     rust_count = int(packets.get("rust") or 0)
     mfc_count = int(packets.get("mfc") or 0)
@@ -145,7 +149,7 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
             diag_failures += 1
         if report.get("coverageOk") is False:
             coverage_failures += 1
-        if action_coverage.get("ok") is False:
+        if action_coverage.get("ok") is False and action_verdict != "unpaired":
             action_coverage_failures += 1
         if verdict != "coverage-parity" and len(divergence_samples) < 10:
             divergence_samples.append(

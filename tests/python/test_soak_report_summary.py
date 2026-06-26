@@ -208,3 +208,21 @@ def test_summarize_report_flags_missing_action_reports(tmp_path: Path) -> None:
     summary = soak_report_summary.summarize_report(report_dir)
 
     assert summary["actionReports"] == {"expected": 2, "loaded": 1, "missing": 1}
+
+
+def test_summarize_report_keeps_unpaired_separate_from_action_coverage_failure(
+    tmp_path: Path,
+) -> None:
+    report_dir = tmp_path / "report"
+    _write_json(report_dir / "summary.json", {"campaignId": "camp-1", "totals": {"actions": 1}})
+    _write_json(
+        report_dir / "actions" / "00001-search.json",
+        {"seq": 1, "kind": "search", "verdict": "unpaired"},
+    )
+
+    summary = soak_report_summary.summarize_report(report_dir)
+
+    assert summary["actions"]["actionVerdictCounts"] == {"unpaired": 1}
+    assert summary["actions"]["actionCoverageFailures"] == 0
+    assert summary["actions"]["actionDivergenceSamples"][0]["verdict"] == "unpaired"
+    assert summary["actions"]["actionDivergenceSamples"][0]["actionCoverageOk"] is None
