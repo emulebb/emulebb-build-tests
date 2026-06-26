@@ -35,7 +35,12 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
                         "query": "private live term",
                         "downloadRequested": True,
                         "download": {"hash": "a" * 32, "ok": True},
-                    }
+                    },
+                    {
+                        "query": "private live term 2",
+                        "downloadRequested": True,
+                        "download": {"ok": False, "reason": "no common safe candidate"},
+                    },
                 ],
             },
         },
@@ -134,8 +139,10 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
     serialized = json.dumps(summary, sort_keys=True)
 
     assert summary["finished"] is True
-    assert summary["driver"]["cycles"] == 1
+    assert summary["driver"]["cycles"] == 2
     assert summary["driver"]["downloadOk"] == 1
+    assert summary["driver"]["downloadFailed"] == 1
+    assert summary["driver"]["downloadFailureReasons"] == {"no common safe candidate": 1}
     assert summary["actions"]["verdictCounts"] == {"divergence": 1}
     assert summary["actions"]["divergenceSamples"][0]["opcodeGapChannels"] == [
         {

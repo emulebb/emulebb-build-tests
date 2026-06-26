@@ -151,6 +151,12 @@ def summarize_driver(summary: dict[str, Any]) -> dict[str, Any]:
         for cycle in cycles
         if isinstance(cycle, dict) and isinstance(cycle.get("download"), dict)
     ]
+    failure_reasons: Counter[str] = Counter()
+    for download in downloads:
+        if download.get("ok") is not False:
+            continue
+        reason = download.get("reason") or str(download.get("error") or "").split(":", 1)[0]
+        failure_reasons[str(reason or "unknown")] += 1
     return {
         "autoDrive": bool(driver.get("autoDrive")),
         "cycles": len(cycles),
@@ -163,6 +169,7 @@ def summarize_driver(summary: dict[str, Any]) -> dict[str, Any]:
         "downloadOk": sum(1 for download in downloads if download.get("ok") is True),
         "downloadFailed": sum(1 for download in downloads if download.get("ok") is False),
         "downloadPending": sum(1 for download in downloads if download.get("ok") is None),
+        "downloadFailureReasons": _counter_dict(failure_reasons),
     }
 
 
