@@ -202,6 +202,8 @@ def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(mon
                     }
                 ]
             }
+        if path == "/api/v1/status":
+            return {"stats": {"sharedHashingCount": 0}}
         raise AssertionError(path)
 
     monkeypatch.setattr(module, "request_json", fake_request_json)
@@ -211,6 +213,7 @@ def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(mon
         "key",
         root=tmp_path / "shared-tree",
         file_name="Nested.bin",
+        timeout_seconds=1.0,
     )
 
     assert calls[0] == (
@@ -220,6 +223,7 @@ def test_publish_rust_shared_tree_configures_recursive_root_and_returns_link(mon
     )
     assert calls[1] == ("POST", "/api/v1/shared-directories/operations/reload", None)
     assert calls[2] == ("GET", "/api/v1/shared-files", None)
+    assert calls[3] == ("GET", "/api/v1/status", None)
     assert result["sharedFiles"]["matched"]["name"] == "Nested.bin"
 
 
@@ -256,6 +260,7 @@ def test_rust_emulebb_manifest_metadata_requires_md4_aich_and_source_identity(tm
     )
 
     assert metadata["expectedPartCount"] == 2
+    assert metadata["expectedHashsetCount"] == 2
     assert metadata["md4HashsetCount"] == 2
     assert metadata["aichHashsetAcquired"] is True
     assert metadata["aichHashsetCount"] == 2
@@ -273,7 +278,7 @@ def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: 
         size_bytes=module.ED2K_PART_SIZE_BYTES,
         piece_size=module.ED2K_PART_SIZE_BYTES,
         md4_hashset_acquired=True,
-        md4_hashset=["0123456789abcdef0123456789abcdef"],
+        md4_hashset=[],
         aich_hashset_acquired=False,
         aich_hashset=[],
         sources=[{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": "31719b50f40e503c1d533d9af3ef6fb8"}],
@@ -287,6 +292,40 @@ def test_rust_emulebb_manifest_metadata_rejects_missing_required_aich(tmp_path: 
             expected_size=module.ED2K_PART_SIZE_BYTES,
             require_aich_hashset=True,
         )
+
+
+def test_rust_emulebb_manifest_metadata_accepts_empty_single_part_hashsets(tmp_path: Path) -> None:
+    module = load_suite_module()
+    transfer_hash = "00112233445566778899aabbccddeeff"
+    rust_metadata.create_metadata_db(_rust_repo(), tmp_path / "metadata.sqlite")
+    rust_metadata.seed_transfer_manifest(
+        tmp_path / "metadata.sqlite",
+        ed2k_hash=transfer_hash,
+        name="emulebb-to-emulebb-rust.bin",
+        size_bytes=module.ED2K_PART_SIZE_BYTES,
+        piece_size=module.ED2K_PART_SIZE_BYTES,
+        md4_hashset_acquired=True,
+        md4_hashset=[],
+        aich_hashset_acquired=True,
+        aich_root="59ba286e4c4b8f0019c9fd89806d7212b37c82d6",
+        aich_hashset=[],
+        sources=[{"ip": "192.0.2.44", "tcp_port": 4662, "user_hash": "31719b50f40e503c1d533d9af3ef6fb8"}],
+    )
+
+    metadata = module.require_rust_download_manifest_metadata(
+        tmp_path,
+        transfer_hash=transfer_hash,
+        expected_name="emulebb-to-emulebb-rust.bin",
+        expected_size=module.ED2K_PART_SIZE_BYTES,
+        require_aich_hashset=True,
+    )
+
+    assert metadata["expectedPartCount"] == 1
+    assert metadata["expectedHashsetCount"] == 0
+    assert metadata["md4HashsetAcquired"] is True
+    assert metadata["md4HashsetCount"] == 0
+    assert metadata["aichHashsetAcquired"] is True
+    assert metadata["aichHashsetCount"] == 0
 
 
 def test_cross_client_uses_shared_goed2k_launcher_and_stops_it_on_failure(monkeypatch, tmp_path: Path) -> None:

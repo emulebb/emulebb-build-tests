@@ -229,6 +229,7 @@ def require_rust_download_manifest_metadata(
     if manifest is None:
         raise RuntimeError(f"Rust cross-client manifest is missing for {transfer_hash}.")
     expected_part_count = max(1, (expected_size + ED2K_PART_SIZE_BYTES - 1) // ED2K_PART_SIZE_BYTES)
+    expected_hashset_count = expected_part_count if expected_part_count > 1 else 0
     md4_hashset = manifest.get("md4_hashset")
     aich_hashset = manifest.get("aich_hashset")
     sources = manifest.get("sources")
@@ -240,16 +241,16 @@ def require_rust_download_manifest_metadata(
         raise RuntimeError("Rust cross-client manifest did not preserve the file size.")
     if manifest.get("md4_hashset_acquired") is not True or not isinstance(md4_hashset, list):
         raise RuntimeError("Rust did not acquire the MD4 hashset from the cross-client source.")
-    if len(md4_hashset) != expected_part_count:
+    if len(md4_hashset) != expected_hashset_count:
         raise RuntimeError(
-            f"Rust acquired {len(md4_hashset)} MD4 parts from the cross-client source, expected {expected_part_count}."
+            f"Rust acquired {len(md4_hashset)} MD4 parts from the cross-client source, expected {expected_hashset_count}."
         )
     if require_aich_hashset:
         if manifest.get("aich_hashset_acquired") is not True or not isinstance(aich_hashset, list):
             raise RuntimeError("Rust did not acquire the AICH hashset from the cross-client source.")
-        if len(aich_hashset) != expected_part_count:
+        if len(aich_hashset) != expected_hashset_count:
             raise RuntimeError(
-                f"Rust acquired {len(aich_hashset)} AICH parts from the cross-client source, expected {expected_part_count}."
+                f"Rust acquired {len(aich_hashset)} AICH parts from the cross-client source, expected {expected_hashset_count}."
             )
     if not isinstance(sources, list) or not sources:
         raise RuntimeError("Rust cross-client manifest did not persist any transfer source.")
@@ -266,6 +267,7 @@ def require_rust_download_manifest_metadata(
         "canonicalName": manifest.get("canonical_name"),
         "fileSize": int(manifest.get("file_size") or 0),
         "expectedPartCount": expected_part_count,
+        "expectedHashsetCount": expected_hashset_count,
         "md4HashsetAcquired": bool(manifest.get("md4_hashset_acquired")),
         "md4HashsetCount": len(md4_hashset),
         "aichRoot": str(manifest.get("aich_root") or ""),
