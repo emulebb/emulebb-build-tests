@@ -8,6 +8,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from . import soak_action_diff
+
 CHECKPOINT_RE = re.compile(
     r"\[soak\] checkpoint: packets rust=(?P<rust>\d+) mfc=(?P<mfc>\d+) actions=(?P<actions>\d+)"
 )
@@ -97,25 +99,54 @@ def _gap_counts(report: dict[str, Any]) -> list[dict[str, Any]]:
     return gaps
 
 
+def _action_coverage(report: dict[str, Any]) -> dict[str, Any]:
+    coverage = report.get("actionCoverage")
+    if isinstance(coverage, dict):
+        return coverage
+    packet_diff = report.get("packetDiff") if isinstance(report.get("packetDiff"), dict) else {}
+    return soak_action_diff.build_action_coverage(str(report.get("kind") or ""), packet_diff)
+
+
+def _action_verdict(report: dict[str, Any], action_coverage: dict[str, Any]) -> str:
+    packets = report.get("packets") if isinstance(report.get("packets"), dict) else {}
+    rust_count = int(packets.get("rust") or 0)
+    mfc_count = int(packets.get("mfc") or 0)
+    if rust_count == 0 and mfc_count == 0:
+        return "no-traffic"
+    if rust_count == 0 or mfc_count == 0:
+        return "one-sided"
+    if bool(action_coverage.get("ok")) and report.get("diagOk") is not False:
+        return "coverage-parity"
+    return "divergence"
+
+
 def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
     """Builds a privacy-safe aggregate over per-action reports."""
 
     verdict_counts: Counter[str] = Counter()
+    action_verdict_counts: Counter[str] = Counter()
     kind_counts: Counter[str] = Counter()
     verdicts_by_kind: dict[str, Counter[str]] = defaultdict(Counter)
     diag_failures = 0
     coverage_failures = 0
+    action_coverage_failures = 0
     divergence_samples: list[dict[str, Any]] = []
+    action_divergence_samples: list[dict[str, Any]] = []
     for report in reports:
         kind = str(report.get("kind") or "unknown")
         verdict = str(report.get("verdict") or "unknown")
+        action_coverage = _action_coverage(report)
+        action_verdict = _action_verdict(report, action_coverage)
         kind_counts[kind] += 1
         verdict_counts[verdict] += 1
+        action_verdict_counts[action_verdict] += 1
         verdicts_by_kind[kind][verdict] += 1
         if report.get("diagOk") is False:
             diag_failures += 1
         if report.get("coverageOk") is False:
             coverage_failures += 1
+        if action_coverage.get("ok") is False:
+            action_coverage_failures += 1
         if verdict != "coverage-parity" and len(divergence_samples) < 10:
             divergence_samples.append(
                 {
@@ -123,6 +154,22 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
                     "kind": kind,
                     "verdict": verdict,
                     "coverageOk": report.get("coverageOk"),
+                    "actionCoverageOk": action_coverage.get("ok"),
+                    "actionCoverageMode": action_coverage.get("mode"),
+                    "fullCoverageOk": report.get("fullCoverageOk", report.get("coverageOk")),
+                    "diagOk": report.get("diagOk"),
+                    "packets": report.get("packets"),
+                    "opcodeGapChannels": _gap_counts(report),
+                }
+            )
+        if action_verdict != "coverage-parity" and len(action_divergence_samples) < 10:
+            action_divergence_samples.append(
+                {
+                    "seq": report.get("seq"),
+                    "kind": kind,
+                    "verdict": action_verdict,
+                    "actionCoverageOk": action_coverage.get("ok"),
+                    "actionCoverageMode": action_coverage.get("mode"),
                     "diagOk": report.get("diagOk"),
                     "packets": report.get("packets"),
                     "opcodeGapChannels": _gap_counts(report),
@@ -132,12 +179,15 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
         "actions": len(reports),
         "kindCounts": _counter_dict(kind_counts),
         "verdictCounts": _counter_dict(verdict_counts),
+        "actionVerdictCounts": _counter_dict(action_verdict_counts),
         "verdictsByKind": {
             kind: _counter_dict(counter) for kind, counter in sorted(verdicts_by_kind.items())
         },
         "coverageFailures": coverage_failures,
+        "actionCoverageFailures": action_coverage_failures,
         "diagFailures": diag_failures,
         "divergenceSamples": divergence_samples,
+        "actionDivergenceSamples": action_divergence_samples,
     }
 
 

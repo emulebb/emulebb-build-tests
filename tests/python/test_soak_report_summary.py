@@ -61,7 +61,29 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
                     "channels": [
                         {
                             "channel": "server",
+                            "direction": "recv",
+                            "shared": [
+                                {
+                                    "protocolMarker": 0xE3,
+                                    "opcode": 0x33,
+                                    "rustCount": 1,
+                                    "emuleCount": 1,
+                                }
+                            ],
+                            "onlyRust": [],
+                            "onlyEmule": [],
+                        },
+                        {
+                            "channel": "server",
                             "direction": "send",
+                            "shared": [
+                                {
+                                    "protocolMarker": 0xE3,
+                                    "opcode": 0x16,
+                                    "rustCount": 1,
+                                    "emuleCount": 1,
+                                }
+                            ],
                             "onlyRust": [{"opcode": 1}],
                             "onlyEmule": [{"opcode": 2}, {"opcode": 3}],
                         }
@@ -145,6 +167,9 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
     assert summary["driver"]["downloadFailureReasons"] == {"no common safe candidate": 1}
     assert summary["actionReports"] == {"expected": 1, "loaded": 1, "missing": 0}
     assert summary["actions"]["verdictCounts"] == {"divergence": 1}
+    assert summary["actions"]["actionVerdictCounts"] == {"coverage-parity": 1}
+    assert summary["actions"]["coverageFailures"] == 1
+    assert summary["actions"]["actionCoverageFailures"] == 0
     assert summary["actions"]["divergenceSamples"][0]["opcodeGapChannels"] == [
         {
             "channel": "server",
@@ -153,6 +178,8 @@ def test_summarize_report_omits_live_action_labels_and_hashes(tmp_path: Path) ->
             "onlyMfcOpcodes": 2,
         }
     ]
+    assert summary["actions"]["divergenceSamples"][0]["actionCoverageOk"] is True
+    assert summary["actions"]["actionDivergenceSamples"] == []
     assert summary["checkpoints"]["last"] == {"rustPackets": 10, "mfcPackets": 20, "actions": 1}
     assert summary["checkpoints"]["structuredCount"] == 2
     assert summary["checkpoints"]["rustAliveAll"] is True
