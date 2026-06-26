@@ -1,4 +1,4 @@
-"""Long-soak, human-driven rust<->MFC converged parity campaign.
+"""Long-soak rust<->MFC converged parity campaign.
 
 Unlike ``converged-live-wire-diff.py`` (which *issues* one gentle automated pass
 to both clients and diffs the whole capture), this orchestrator brings both
@@ -7,22 +7,23 @@ diagnostics builds up on **persistent, isolated** profiles under
 Both connect to the SAME operator eD2K server, bootstrap Kad from the SAME
 nodes.dat, and share the SAME library roots from the gitignored live-wire inputs.
 
-A human then drives interactive searches/downloads through each client's own UI
+A human can drive interactive searches/downloads through each client's own UI
 (the MFC native GUI window this script opens, and TrackMuleBB pointed at the rust
-REST). Because the actions originate in two independent UIs, the harness cannot
-issue them - it OBSERVES them: it polls both ``/api/v1/searches`` and
-``/api/v1/transfers``, correlates the same search term / ed2k hash across the two
-clients within a window, and runs the converged ``ed2k_packet_v1`` /
-``diag_event_v1`` diff over each action's time window (see
-``emule_test_harness.soak_action_diff``). A manual ``begin``/``end`` marker brackets
-actions the auto-correlator can't pair.
+REST), or ``--auto-drive`` can issue sparse synchronized REST searches/downloads
+for an unattended overnight run. In both modes the harness OBSERVES the clients:
+it polls both ``/api/v1/searches`` and ``/api/v1/transfers``, correlates the same
+search term / ed2k hash across the two clients within a window, and runs the
+converged ``ed2k_packet_v1`` / ``diag_event_v1`` diff over each action's time
+window (see ``emule_test_harness.soak_action_diff``). A manual ``begin``/``end``
+marker brackets actions the auto-correlator can't pair.
 
 REST control plane binds ``X_LOCAL_IP``; the P2P data plane binds the hide.me
 tunnel; build artifacts and the soak profiles live under
 ``EMULEBB_WORKSPACE_OUTPUT_ROOT``. Nothing machine-specific is baked in.
 
-GENTLE LIVE DISCIPLINE: the operator drives the pace by hand; keep searches few
-and widely spaced, and confirm before starting a live campaign.
+GENTLE LIVE DISCIPLINE: keep searches few and widely spaced. The unattended driver
+enforces a minimum five-minute search interval and defaults to a much slower
+half-hour cadence.
 """
 
 from __future__ import annotations
