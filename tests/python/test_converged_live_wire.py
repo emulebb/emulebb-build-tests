@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -12,6 +15,16 @@ from emule_test_harness import live_profile_seed
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
+CONVERGED_RUNNER = REPO_ROOT / "scripts" / "converged-live-wire-diff.py"
+
+
+def _load_converged_runner() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("converged_live_wire_diff_script", CONVERGED_RUNNER)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_default_mfc_seed_config_dir_passes_allowlist_validation() -> None:
@@ -90,6 +103,48 @@ def test_build_shared_directory_patch_payload_does_not_double_separator() -> Non
 
     payload = clw.build_shared_directory_patch_payload(_FakeDir())  # type: ignore[arg-type]
     assert payload["roots"][0] == "C:\\share\\seed\\"
+
+
+def test_converged_runner_requires_same_vpn_bind_ip() -> None:
+    runner = _load_converged_runner()
+    assert runner.require_same_vpn_bind_ip({"bindIp": "10.8.0.2"}, {"bindIp": "10.8.0.2"}) == "10.8.0.2"
+    with pytest.raises(RuntimeError, match="bind IP mismatch"):
+        runner.require_same_vpn_bind_ip({"bindIp": "10.8.0.2"}, {"bindIp": "10.8.0.3"})
+    with pytest.raises(RuntimeError, match="bind IP missing"):
+        runner.require_same_vpn_bind_ip({"bindIp": ""}, {"bindIp": "10.8.0.2"})
+
+
+def test_converged_runner_environment_parity_profile_counts_shared_inputs() -> None:
+    runner = _load_converged_runner()
+    args = argparse.Namespace(
+        server_met_url="https://upd.emule-security.org/server.met",
+        nodes_url="https://nodes.example.test/nodes.dat",
+        bootstrap_limit=40,
+        profile="generic_open",
+        max_terms=2,
+        persisted=True,
+        rust_rest_port=4731,
+        mfc_rest_port=4732,
+    )
+    profile = runner.build_environment_parity_profile(
+        args=args,
+        bootstrap_nodes=["1.2.3.4:4662", "5.6.7.8:4662"],
+        terms=["ubuntu", "debian"],
+        shared_roots=["C:\\share\\a", "D:\\share\\b"],
+    )
+    assert profile["server"] == runner.OPERATOR_SERVER
+    assert profile["sameServer"] is True
+    assert profile["serverMetUrl"] == "https://upd.emule-security.org/server.met"
+    assert profile["nodesDatUrl"] == "https://nodes.example.test/nodes.dat"
+    assert profile["sameKadBootstrap"] is True
+    assert profile["bootstrapContactCount"] == 2
+    assert profile["searchProfile"] == "generic_open"
+    assert profile["sameSearchTerms"] is True
+    assert profile["selectedTermCount"] == 2
+    assert profile["shareMode"] == "full-shares"
+    assert profile["sameShareSet"] is True
+    assert profile["sharedRootCount"] == 2
+    assert profile["persistedProfiles"] is True
 
 
 def test_select_search_terms_is_gentle() -> None:

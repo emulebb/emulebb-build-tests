@@ -551,6 +551,52 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def require_same_vpn_bind_ip(rust_vpn: dict[str, Any], mfc_vpn: dict[str, Any]) -> str:
+    """Returns the common hide.me bind IP or raises when the clients diverge."""
+
+    rust_bind_ip = str(rust_vpn.get("bindIp") or "").strip()
+    mfc_bind_ip = str(mfc_vpn.get("bindIp") or "").strip()
+    if not rust_bind_ip or not mfc_bind_ip:
+        raise RuntimeError(f"hide.me split-tunnel bind IP missing: rust={rust_bind_ip!r}, mfc={mfc_bind_ip!r}.")
+    if rust_bind_ip != mfc_bind_ip:
+        raise RuntimeError(
+            "hide.me split-tunnel bind IP mismatch: "
+            f"rust={rust_bind_ip!r}, mfc={mfc_bind_ip!r}. Both clients must use the same VPN adapter."
+        )
+    return rust_bind_ip
+
+
+def build_environment_parity_profile(
+    *,
+    args: argparse.Namespace,
+    bootstrap_nodes: list[str],
+    terms: list[str],
+    shared_roots: list[str] | None,
+) -> dict[str, Any]:
+    """Builds compact same-input evidence for the rust-vs-MFC live pass."""
+
+    share_mode = "full-shares" if shared_roots is not None else "seed"
+    return {
+        "server": OPERATOR_SERVER,
+        "sameServer": True,
+        "serverMetUrl": args.server_met_url,
+        "nodesDatUrl": args.nodes_url,
+        "sameKadBootstrap": True,
+        "bootstrapLimit": args.bootstrap_limit,
+        "bootstrapContactCount": len(bootstrap_nodes),
+        "searchProfile": args.profile,
+        "sameSearchTerms": True,
+        "maxTerms": args.max_terms,
+        "selectedTermCount": len(terms),
+        "shareMode": share_mode,
+        "sameShareSet": True,
+        "sharedRootCount": len(shared_roots or []),
+        "persistedProfiles": bool(args.persisted),
+        "rustRestPort": args.rust_rest_port,
+        "mfcRestPort": args.mfc_rest_port,
+    }
+
+
 def diff_scenario_traces(
     rust_evidence: dict[str, Any], mfc_evidence: dict[str, Any]
 ) -> tuple[Path | None, Path | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -593,6 +639,7 @@ def run_one_scenario(
     bind_ip: str,
     bootstrap_nodes: list[str],
     terms: list[str],
+    environment_parity: dict[str, Any],
     scenario_dir: Path,
     timeouts: dict[str, float],
     persist_rust_runtime: Path | None = None,
@@ -643,6 +690,7 @@ def run_one_scenario(
             "ed2kPort": ED2K_PORT,
             "kadPort": KAD_PORT,
             "searchProfile": args.profile,
+            "environmentParity": environment_parity,
             "seedFile": str(seed_file),
             "rust": rust_evidence,
             "emule": mfc_evidence,
@@ -665,9 +713,10 @@ def run_one_scenario(
         diag_diff=diag_diff,
         both_traces_captured=bool(report["traces"]["bothCaptured"]),
         error=rust_evidence.get("error") or mfc_evidence.get("error"),
+        extra={"environmentParity": environment_parity},
     )
     log(
-        f"scenario '{scenario.name}': verdict={result.packet_verdict()} "
+        f"scenario '{scenario.name}': coverage={result.coverage_verdict()} byte={result.packet_verdict()} "
         f"rust(conn={result.rust_connected},high={result.rust_high_id}) "
         f"mfc(conn={result.mfc_connected},high={result.mfc_high_id})"
     )
@@ -718,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
     log(f"ensuring hide.me split tunnel for both clients ({rust_exe.name}, {mfc_exe.name})...")
     rust_vpn = ensure_vpn_ready(rust_exe, name="eMuleBB Rust")
     mfc_vpn = ensure_vpn_ready(mfc_exe, name="eMuleBB MFC")
-    bind_ip = rust_vpn["bindIp"]
+    bind_ip = require_same_vpn_bind_ip(rust_vpn, mfc_vpn)
     log(f"hide.me bind IP: {bind_ip}")
 
     log(f"seeding Kad from {args.nodes_url}...")
@@ -744,9 +793,17 @@ def main(argv: list[str] | None = None) -> int:
     persist_mfc_artifacts = (persisted_root / "mfc-runtime") if args.persisted else None
     shared_roots = rust_mod.load_shared_roots(inputs_path) if args.full_shares else None
     if args.full_shares:
+        if not shared_roots:
+            raise RuntimeError("--full-shares requires at least one shared root in live-wire inputs.")
         log(f"full-shares: {len(shared_roots or [])} library root(s) on both clients")
     if args.persisted:
         log(f"persisted profiles under {persisted_root}")
+    environment_parity = build_environment_parity_profile(
+        args=args,
+        bootstrap_nodes=bootstrap_nodes,
+        terms=terms,
+        shared_roots=shared_roots,
+    )
 
     results: list[cs.ScenarioResult] = []
     for scenario in selected:
@@ -757,6 +814,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_smoke=rest_smoke, shared_dirs_mod=shared_dirs_mod, rust_exe=rust_exe,
             mfc_exe=mfc_exe, seed_config_dir=seed_config_dir, rest_addr=rest_addr,
             args=args, bind_ip=bind_ip, bootstrap_nodes=bootstrap_nodes, terms=terms,
+            environment_parity=environment_parity,
             scenario_dir=scenario_dir, timeouts=timeouts,
             persist_rust_runtime=persist_rust_runtime,
             persist_mfc_artifacts=persist_mfc_artifacts, shared_roots=shared_roots,
@@ -769,6 +827,7 @@ def main(argv: list[str] | None = None) -> int:
     combined = cs.aggregate_scenario_summary(results)
     combined["runId"] = run_id
     combined["scenario"] = SCENARIO
+    combined["environmentParity"] = environment_parity
     combined["vpn"] = {
         "rust": {
             "exe": rust_exe.name,
