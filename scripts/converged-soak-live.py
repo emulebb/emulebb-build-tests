@@ -232,7 +232,7 @@ def drive_automatic_cycle(
     download: bool,
     search_timeout_seconds: float,
 ) -> dict[str, Any]:
-    """Runs one gentle synchronized search, optionally followed by one common download."""
+    """Runs one gentle synchronized search and records one candidate for later download."""
 
     cycle: dict[str, Any] = {
         "cycle": cycle_index,
@@ -254,14 +254,34 @@ def drive_automatic_cycle(
         else:
             file_hash = _row_hash(candidate)
             cycle["download"] = {
-                "ok": True,
+                "ok": None,
+                "scheduled": True,
                 "hash": file_hash,
                 "sizeBytes": candidate.get("sizeBytes") or candidate.get("size"),
                 "sources": candidate.get("sources"),
-                "rust": trigger_download(rust_base, RUST_API_KEY, rust_search_id, file_hash),
-                "mfc": trigger_download(mfc_base, MFC_API_KEY, mfc_search_id, file_hash),
+                "searchIds": {"rust": rust_search_id, "mfc": mfc_search_id},
             }
     return cycle
+
+
+def execute_scheduled_download(
+    *,
+    rust_base: str,
+    mfc_base: str,
+    download: dict[str, Any],
+) -> dict[str, Any]:
+    """Triggers a previously selected common download on both clients."""
+
+    file_hash = str(download.get("hash") or "").strip().lower()
+    search_ids = download.get("searchIds") if isinstance(download.get("searchIds"), dict) else {}
+    rust_search_id = str(search_ids.get("rust") or "")
+    mfc_search_id = str(search_ids.get("mfc") or "")
+    if not file_hash or not rust_search_id or not mfc_search_id:
+        raise RuntimeError("scheduled download is missing hash or search ids")
+    return {
+        "rust": trigger_download(rust_base, RUST_API_KEY, rust_search_id, file_hash),
+        "mfc": trigger_download(mfc_base, MFC_API_KEY, mfc_search_id, file_hash),
+    }
 
 
 def status_snapshot(base_url: str, api_key: str) -> dict[str, Any]:
@@ -371,6 +391,39 @@ class ActionTracker:
             "mfcSearches": len(mfc_searches),
             "mfcTransfers": len(mfc_transfers),
         }
+
+    def record_synchronized_action(
+        self,
+        *,
+        kind: str,
+        key: str,
+        label: str,
+        observed_at: datetime,
+        action_id: str,
+    ) -> None:
+        """Records an action the auto-driver successfully issued to both clients."""
+
+        self.rust.append(
+            sad.Action(
+                client="rust",
+                kind=kind,
+                action_id=f"rust:{action_id}",
+                key=key,
+                label=label,
+                observed_at=observed_at,
+            )
+        )
+        self.mfc.append(
+            sad.Action(
+                client="mfc",
+                kind=kind,
+                action_id=f"mfc:{action_id}",
+                key=key,
+                label=label,
+                observed_at=observed_at,
+            )
+        )
+        log(f"observed synchronized {kind}: {label!r}")
 
     def tick(
         self,
@@ -489,6 +542,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-search-interval", type=float, default=1800.0, help="Gentle interval between automated search cycles.")
     parser.add_argument("--auto-search-timeout", type=float, default=90.0, help="Seconds to wait for each client's search page.")
     parser.add_argument("--auto-download-every", type=int, default=2, help="Start one common safe download every N automated search cycles; 0 disables.")
+    parser.add_argument("--auto-download-delay", type=float, default=90.0, help="Seconds to wait after selecting a download candidate before starting it.")
     parser.add_argument("--auto-max-cycles", type=int, default=0, help="Maximum automated cycles; 0 means bounded only by --duration/quit.")
     return parser
 
@@ -530,10 +584,16 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--auto-max-cycles must be zero or greater.")
         if args.auto_search_interval < 300.0:
             raise ValueError("--auto-search-interval must be at least 300 seconds to keep public live traffic gentle.")
+        if args.auto_download_delay < 0.0:
+            raise ValueError("--auto-download-delay must be zero or greater.")
         auto_terms = clw.select_search_terms(
             rust_mod.load_search_terms(inputs_path, args.search_profile),
             max_terms=1000,
         )
+    auto_download_delay = max(
+        float(args.auto_download_delay),
+        float(args.lead_seconds + args.settle_seconds + args.poll_interval),
+    )
 
     campaign_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     soak_root = output_root / "soak"
@@ -552,6 +612,7 @@ def main(argv: list[str] | None = None) -> int:
         "method": args.auto_method if args.auto_drive else None,
         "searchIntervalSeconds": args.auto_search_interval if args.auto_drive else None,
         "downloadEvery": args.auto_download_every if args.auto_drive else None,
+        "downloadDelaySeconds": auto_download_delay if args.auto_drive else None,
         "maxCycles": args.auto_max_cycles if args.auto_drive else None,
         "cycles": [],
     }
@@ -676,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
         last_checkpoint = started
         auto_cycle = 0
         next_auto = started + args.auto_start_delay if args.auto_drive else float("inf")
+        pending_downloads: list[dict[str, Any]] = []
 
         def process_report(report: dict[str, Any]) -> None:
             nonlocal seq
@@ -688,6 +750,35 @@ def main(argv: list[str] | None = None) -> int:
 
         while True:
             now = datetime.now(timezone.utc)
+            for pending in list(pending_downloads):
+                if time.monotonic() < float(pending["dueAtMono"]):
+                    continue
+                download = pending["download"]
+                file_hash = str(download.get("hash") or "").strip().lower()
+                log(f"auto cycle {pending['cycle']}: starting delayed download {file_hash}")
+                try:
+                    result = execute_scheduled_download(
+                        rust_base=rust_base,
+                        mfc_base=mfc_base,
+                        download=download,
+                    )
+                    download.update(result)
+                    download["ok"] = True
+                    download["triggeredAt"] = now.isoformat()
+                    tracker.record_synchronized_action(
+                        kind=sad.DOWNLOAD,
+                        key=file_hash,
+                        label=file_hash,
+                        observed_at=now,
+                        action_id=f"auto-download-{pending['cycle']}-{file_hash}",
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
+                    download["ok"] = False
+                    download["error"] = f"{type(exc).__name__}: {exc}"
+                    log(f"auto cycle {pending['cycle']}: delayed download failed: {download['error']}")
+                pending_downloads.remove(pending)
+                write_summary(summary, summary_path)
+
             if (
                 args.auto_drive
                 and time.monotonic() >= next_auto
@@ -720,6 +811,16 @@ def main(argv: list[str] | None = None) -> int:
                     }
                     log(f"auto cycle {auto_cycle}: {cycle['error']}")
                 summary["driver"]["cycles"].append(cycle)
+                download = cycle.get("download")
+                if isinstance(download, dict) and download.get("scheduled"):
+                    pending_downloads.append(
+                        {
+                            "cycle": auto_cycle,
+                            "download": download,
+                            "dueAtMono": time.monotonic() + auto_download_delay,
+                        }
+                    )
+                    download["delaySeconds"] = auto_download_delay
                 write_summary(summary, summary_path)
                 next_auto = time.monotonic() + args.auto_search_interval
 

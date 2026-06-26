@@ -107,3 +107,60 @@ def test_action_tracker_prime_suppresses_existing_rows() -> None:
     assert unpaired == []
     assert [action.key for action in tracker.rust] == ["python"]
     assert [action.key for action in tracker.mfc] == ["python"]
+
+
+def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_soak_runner()
+    triggered: list[str] = []
+
+    class _RustFilter:
+        @staticmethod
+        def safe_download_rejection_reason(_row: dict[str, object]) -> str | None:
+            return None
+
+    monkeypatch.setattr(
+        runner,
+        "create_search",
+        lambda base_url, api_key, *, query, method: "rust-search"
+        if api_key == runner.RUST_API_KEY
+        else "mfc-search",
+    )
+    monkeypatch.setattr(
+        runner,
+        "poll_search_results",
+        lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+    )
+    monkeypatch.setattr(runner, "trigger_download", lambda *_args, **_kwargs: triggered.append("download"))
+
+    cycle = runner.drive_automatic_cycle(
+        cycle_index=1,
+        query="python",
+        method="server",
+        rust_base="http://rust",
+        mfc_base="http://mfc",
+        rust_mod=_RustFilter,
+        download=True,
+        search_timeout_seconds=1.0,
+    )
+
+    assert triggered == []
+    assert cycle["download"]["scheduled"] is True
+    assert cycle["download"]["ok"] is None
+    assert cycle["download"]["searchIds"] == {"rust": "rust-search", "mfc": "mfc-search"}
+
+
+def test_tracker_records_synchronized_download_action() -> None:
+    runner = _load_soak_runner()
+    tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
+    now = runner.datetime.now(runner.timezone.utc)
+
+    tracker.record_synchronized_action(
+        kind=runner.sad.DOWNLOAD,
+        key="e" * 32,
+        label="e" * 32,
+        observed_at=now,
+        action_id="auto-download-1",
+    )
+
+    assert [(action.client, action.key) for action in tracker.rust] == [("rust", "e" * 32)]
+    assert [(action.client, action.key) for action in tracker.mfc] == [("mfc", "e" * 32)]
