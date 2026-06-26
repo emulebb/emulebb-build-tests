@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import timedelta
 from pathlib import Path
 from types import ModuleType
 
@@ -198,6 +199,45 @@ def test_tracker_records_synchronized_download_action() -> None:
 
     assert [(action.client, action.key) for action in tracker.rust] == [("rust", "e" * 32)]
     assert [(action.client, action.key) for action in tracker.mfc] == [("mfc", "e" * 32)]
+
+
+def test_tracker_uses_download_specific_settle_window() -> None:
+    runner = _load_soak_runner()
+    tracker = runner.ActionTracker(
+        window_seconds=90.0,
+        settle_seconds=45.0,
+        lead_seconds=8.0,
+        download_settle_seconds=300.0,
+    )
+    now = runner.datetime.now(runner.timezone.utc)
+
+    tracker.record_synchronized_action(
+        kind=runner.sad.DOWNLOAD,
+        key="e" * 32,
+        label="e" * 32,
+        observed_at=now,
+        action_id="auto-download-1",
+    )
+
+    pairs, unpaired = tracker.tick(
+        now + timedelta(seconds=100),
+        rust_searches=[],
+        rust_transfers=[],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+    assert pairs == []
+    assert unpaired == []
+
+    pairs, unpaired = tracker.tick(
+        now + timedelta(seconds=301),
+        rust_searches=[],
+        rust_transfers=[],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+    assert [(pair.kind, pair.key) for pair in pairs] == [(runner.sad.DOWNLOAD, "e" * 32)]
+    assert unpaired == []
 
 
 def test_tracker_suppresses_rest_echo_of_synchronized_download() -> None:

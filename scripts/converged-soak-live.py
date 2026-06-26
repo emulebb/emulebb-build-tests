@@ -354,15 +354,30 @@ class ActionTracker:
     candidates), each at most once.
     """
 
-    def __init__(self, *, window_seconds: float, settle_seconds: float, lead_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        window_seconds: float,
+        settle_seconds: float,
+        lead_seconds: float,
+        download_settle_seconds: float | None = None,
+    ) -> None:
         self.window = window_seconds
         self.settle = settle_seconds
+        self.download_settle = (
+            download_settle_seconds if download_settle_seconds is not None else settle_seconds
+        )
         self.lead = lead_seconds
         self.seen: dict[tuple[str, str], set[str]] = {}
         self.rust: list[sad.Action] = []
         self.mfc: list[sad.Action] = []
         self.processed: set[str] = set()
         self.synchronized_keys: set[tuple[str, str]] = set()
+
+    def settle_seconds_for(self, kind: str) -> float:
+        """Returns the post-action capture padding for one action kind."""
+
+        return self.download_settle if kind == sad.DOWNLOAD else self.settle
 
     def _ingest(self, client: str, kind: str, items: list[dict[str, str]], now: datetime) -> None:
         key = (client, kind)
@@ -456,7 +471,10 @@ class ActionTracker:
 
         ready_pairs: list[sad.ActionPair] = []
         for pair in pairs:
-            _, t1 = pair.window(lead_seconds=self.lead, settle_seconds=self.settle)
+            _, t1 = pair.window(
+                lead_seconds=self.lead,
+                settle_seconds=self.settle_seconds_for(pair.kind),
+            )
             if now >= t1:
                 self.processed.add(pair.rust.action_id)
                 self.processed.add(pair.mfc.action_id)
@@ -532,6 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")
     parser.add_argument("--correlation-window", type=float, default=sad.DEFAULT_CORRELATION_WINDOW_SECONDS, help="Max gap to pair the same action across clients (s).")
     parser.add_argument("--settle-seconds", type=float, default=sad.DEFAULT_SETTLE_SECONDS, help="Window padding after an action before diffing (s).")
+    parser.add_argument("--download-settle-seconds", type=float, default=300.0, help="Window padding after a download action before diffing (s).")
     parser.add_argument("--lead-seconds", type=float, default=sad.DEFAULT_LEAD_SECONDS, help="Window padding before an action (s).")
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
@@ -564,6 +583,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     duration = parse_duration(args.duration)
     obfuscation = not args.no_obfuscation
+    if args.lead_seconds < 0.0:
+        raise ValueError("--lead-seconds must be zero or greater.")
+    if args.settle_seconds < 0.0:
+        raise ValueError("--settle-seconds must be zero or greater.")
+    if args.download_settle_seconds < 0.0:
+        raise ValueError("--download-settle-seconds must be zero or greater.")
 
     rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
     if not rest_addr:
@@ -708,6 +733,7 @@ def main(argv: list[str] | None = None) -> int:
             window_seconds=args.correlation_window,
             settle_seconds=args.settle_seconds,
             lead_seconds=args.lead_seconds,
+            download_settle_seconds=args.download_settle_seconds,
         )
         baseline = tracker.prime(
             rust_searches=sad.normalize_search_items(
@@ -851,7 +877,8 @@ def main(argv: list[str] | None = None) -> int:
                         sad.diff_action(
                             pair, rust_packets=rust_pkts, mfc_packets=mfc_pkts,
                             rust_diag=rust_dg, mfc_diag=mfc_dg,
-                            lead_seconds=args.lead_seconds, settle_seconds=args.settle_seconds,
+                            lead_seconds=args.lead_seconds,
+                            settle_seconds=tracker.settle_seconds_for(pair.kind),
                         )
                     )
             for action in aged_unpaired:
