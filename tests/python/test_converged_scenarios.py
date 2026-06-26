@@ -98,7 +98,7 @@ def _matched_result(scenario: cs.ConvergedScenario, **kwargs: object) -> cs.Scen
         "mfc_connected": True,
         "mfc_high_id": scenario.expects_high_id(),
         "both_traces_captured": True,
-        "packet_diff": {"ok": True},
+        "packet_diff": {"ok": True, "coverageOk": True},
         "diag_diff": {"ok": True},
     }
     base.update(kwargs)
@@ -114,6 +114,13 @@ def test_packet_verdict_states() -> None:
     assert _matched_result(scenario, packet_diff=None).packet_verdict() == "no-diff"
 
 
+def test_coverage_verdict_uses_opcode_coverage_for_live_gate() -> None:
+    scenario = cs.ConvergedScenario(name="s")
+    assert _matched_result(scenario, packet_diff={"ok": False, "coverageOk": True}).coverage_verdict() == "matched"
+    assert _matched_result(scenario, packet_diff={"ok": True, "coverageOk": False}).coverage_verdict() == "diff"
+    assert _matched_result(scenario, packet_diff={"ok": True}).coverage_verdict() == "matched"
+
+
 def test_low_id_expectation() -> None:
     high = cs.ConvergedScenario(name="hi")
     low = cs.ConvergedScenario(name="lo", low_id=True)
@@ -126,7 +133,7 @@ def test_low_id_expectation() -> None:
         rust_high_id=False,
         mfc_high_id=False,
         both_traces_captured=True,
-        packet_diff={"ok": True},
+        packet_diff={"ok": True, "coverageOk": True},
     )
     assert low_ok.low_id_observed_as_expected() is True
     low_bad = cs.ScenarioResult(scenario=low, rust_high_id=True, mfc_high_id=True)
@@ -138,17 +145,38 @@ def test_aggregate_scenario_summary_ok_when_all_matched() -> None:
     results = [_matched_result(scenario) for scenario in scenarios]
     summary = cs.aggregate_scenario_summary(results)
     assert summary["ok"] is True
+    assert summary["gate"] == "opcodeCoverage"
     assert summary["scenarioCount"] == 2
     assert summary["verdictCounts"] == {"matched": 2}
+    assert summary["coverageVerdictCounts"] == {"matched": 2}
+    assert summary["byteExactOk"] is True
     assert len(summary["scenarios"]) == 2
 
 
-def test_aggregate_scenario_summary_not_ok_on_any_diff() -> None:
+def test_aggregate_scenario_summary_ok_on_byte_diff_when_coverage_matches() -> None:
     scenarios = cs.select_scenarios(["ed2k-server-search", "kad-search"])
-    results = [_matched_result(scenarios[0]), _matched_result(scenarios[1], packet_diff={"ok": False})]
+    results = [
+        _matched_result(scenarios[0]),
+        _matched_result(scenarios[1], packet_diff={"ok": False, "coverageOk": True}),
+    ]
+    summary = cs.aggregate_scenario_summary(results)
+    assert summary["ok"] is True
+    assert summary["byteExactOk"] is False
+    assert summary["verdictCounts"] == {"diff": 1, "matched": 1}
+    assert summary["coverageVerdictCounts"] == {"matched": 2}
+    assert summary["scenarios"][1]["packetVerdict"] == "diff"
+    assert summary["scenarios"][1]["coverageVerdict"] == "matched"
+    assert summary["scenarios"][1]["coverageOk"] is True
+    assert summary["scenarios"][1]["byteExactOk"] is False
+
+
+def test_aggregate_scenario_summary_not_ok_on_any_coverage_diff() -> None:
+    scenarios = cs.select_scenarios(["ed2k-server-search", "kad-search"])
+    results = [_matched_result(scenarios[0]), _matched_result(scenarios[1], packet_diff={"ok": True, "coverageOk": False})]
     summary = cs.aggregate_scenario_summary(results)
     assert summary["ok"] is False
-    assert summary["verdictCounts"] == {"diff": 1, "matched": 1}
+    assert summary["verdictCounts"] == {"matched": 2}
+    assert summary["coverageVerdictCounts"] == {"diff": 1, "matched": 1}
 
 
 def test_aggregate_scenario_summary_empty_is_not_ok() -> None:

@@ -235,7 +235,7 @@ class ScenarioResult:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def packet_verdict(self) -> str:
-        """Returns a coarse packet-diff verdict for this scenario."""
+        """Returns the strict byte-level packet-diff verdict for this scenario."""
 
         if self.error is not None:
             return "error"
@@ -244,6 +244,17 @@ class ScenarioResult:
         if self.packet_diff is None:
             return "no-diff"
         return "matched" if self.packet_diff.get("ok") else "diff"
+
+    def coverage_verdict(self) -> str:
+        """Returns the live-wire gate verdict based on opcode coverage parity."""
+
+        if self.error is not None:
+            return "error"
+        if not self.both_traces_captured:
+            return "missing-trace"
+        if self.packet_diff is None:
+            return "no-diff"
+        return "matched" if self.packet_diff.get("coverageOk", self.packet_diff.get("ok")) else "diff"
 
     def low_id_observed_as_expected(self) -> bool:
         """Reports whether the observed HighID/LowID matches the scenario intent.
@@ -273,6 +284,9 @@ class ScenarioResult:
                 "resultCount": self.mfc_result_count,
             },
             "packetVerdict": self.packet_verdict(),
+            "coverageVerdict": self.coverage_verdict(),
+            "coverageOk": self.coverage_verdict() == "matched",
+            "byteExactOk": self.packet_verdict() == "matched",
             "packetDiff": self.packet_diff,
             "diagDiff": self.diag_diff,
             "bothTracesCaptured": self.both_traces_captured,
@@ -286,24 +300,33 @@ def aggregate_scenario_summary(results: list[ScenarioResult]) -> dict[str, Any]:
     """Builds the combined per-scenario parity summary from scenario results.
 
     ``ok`` is true only when every selected scenario captured both traces, its
-    packet diff matched, and its HighID/LowID intent was observed.
+    opcode coverage matched, and its HighID/LowID intent was observed. The
+    strict byte-level packet diff remains reported as diagnostics because public
+    live clients can see different peer timing while still proving protocol
+    coverage parity.
     """
 
     rows = [result.summary() for result in results]
     all_ok = bool(results) and all(
         result.error is None
         and result.both_traces_captured
-        and result.packet_verdict() == "matched"
+        and result.coverage_verdict() == "matched"
         and result.low_id_observed_as_expected()
         for result in results
     )
     verdict_counts: dict[str, int] = {}
+    coverage_verdict_counts: dict[str, int] = {}
     for result in results:
         verdict = result.packet_verdict()
         verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+        coverage_verdict = result.coverage_verdict()
+        coverage_verdict_counts[coverage_verdict] = coverage_verdict_counts.get(coverage_verdict, 0) + 1
     return {
         "ok": all_ok,
+        "gate": "opcodeCoverage",
         "scenarioCount": len(results),
         "verdictCounts": dict(sorted(verdict_counts.items())),
+        "coverageVerdictCounts": dict(sorted(coverage_verdict_counts.items())),
+        "byteExactOk": bool(results) and all(result.packet_verdict() == "matched" for result in results),
         "scenarios": rows,
     }
