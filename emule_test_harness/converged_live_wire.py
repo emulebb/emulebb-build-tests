@@ -101,6 +101,42 @@ def resolve_mfc_diagnostics_exe(
     return exe_path
 
 
+# The eMuleBB Rust diagnostics build (cargo `packet-diagnostics` feature) is staged
+# under a distinct name so it is never confused with the plain release binary (cargo
+# emits both as `emulebb-rust.exe`). `emule_workspace build clients --client
+# emulebb-rust --diagnostics` writes it next to the cargo output (target-triple
+# release dir) and into the staged tools bin; search both, plus the no-triple dir.
+RUST_DIAGNOSTICS_EXE_NAME = "emulebb-rust-diagnostics.exe"
+RUST_DIAGNOSTICS_EXE_GLOBS = (
+    "builds/rust/target/*/release/emulebb-rust-diagnostics.exe",
+    "builds/rust/target/release/emulebb-rust-diagnostics.exe",
+    "tools/emulebb-rust/bin/emulebb-rust-diagnostics.exe",
+)
+
+
+def resolve_rust_diagnostics_exe(output_root: Path, *, require_exists: bool = True) -> Path:
+    """Resolves the eMuleBB Rust diagnostics exe from the output build layout.
+
+    Searches the known staged/build-tree locations for ``emulebb-rust-diagnostics.exe``
+    and returns the most recently built match. When ``require_exists`` is true and
+    none is found, raises with the exact build command so the operator knows how to
+    produce it.
+    """
+
+    matches: list[Path] = []
+    for pattern in RUST_DIAGNOSTICS_EXE_GLOBS:
+        matches.extend(p for p in output_root.glob(pattern) if p.is_file())
+    if matches:
+        return max(matches, key=lambda p: p.stat().st_mtime)
+    if require_exists:
+        raise RuntimeError(
+            f"eMuleBB Rust diagnostics exe '{RUST_DIAGNOSTICS_EXE_NAME}' was not found under "
+            f"'{output_root}'. Build it with: python -m emule_workspace build clients "
+            "--client emulebb-rust --diagnostics."
+        )
+    return output_root / "builds" / "rust" / "target" / "release" / RUST_DIAGNOSTICS_EXE_NAME
+
+
 def build_search_payload(term: str) -> dict[str, Any]:
     """Builds the shared ``POST /api/v1/searches`` body used by both clients."""
 

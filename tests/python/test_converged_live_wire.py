@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import ModuleType
 
@@ -71,6 +72,29 @@ def test_resolve_mfc_diagnostics_exe_raises_with_expected_path(tmp_path: Path) -
     message = str(excinfo.value)
     assert "diagnostics" in message
     assert clw.MFC_EXE_NAME in message
+
+
+def test_resolve_rust_diagnostics_exe_picks_newest_staged_match(tmp_path: Path) -> None:
+    older = tmp_path / "builds" / "rust" / "target" / "release" / clw.RUST_DIAGNOSTICS_EXE_NAME
+    newer = tmp_path / "tools" / "emulebb-rust" / "bin" / clw.RUST_DIAGNOSTICS_EXE_NAME
+    older.parent.mkdir(parents=True)
+    newer.parent.mkdir(parents=True)
+    older.write_bytes(b"MZ-old")
+    newer.write_bytes(b"MZ-new")
+    os.utime(older, (1_000_000_000, 1_000_000_000))
+    os.utime(newer, (1_000_000_100, 1_000_000_100))
+
+    resolved = clw.resolve_rust_diagnostics_exe(tmp_path)
+
+    assert resolved == newer
+
+
+def test_resolve_rust_diagnostics_exe_raises_with_build_hint(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError) as excinfo:
+        clw.resolve_rust_diagnostics_exe(tmp_path)
+    message = str(excinfo.value)
+    assert clw.RUST_DIAGNOSTICS_EXE_NAME in message
+    assert "--client emulebb-rust --diagnostics" in message
 
 
 def test_build_search_payload_shape() -> None:
