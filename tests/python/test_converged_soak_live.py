@@ -109,6 +109,40 @@ def test_action_tracker_prime_suppresses_existing_rows() -> None:
     assert [action.key for action in tracker.mfc] == ["python"]
 
 
+def test_action_tracker_logs_redacted_action_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_soak_runner()
+    messages: list[str] = []
+    monkeypatch.setattr(runner, "log", messages.append)
+    tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
+
+    tracker.tick(
+        runner.datetime.now(runner.timezone.utc),
+        rust_searches=[{"id": "rs", "key": "private search", "label": "Private Search"}],
+        rust_transfers=[
+            {"id": "rt", "key": "a" * 32, "label": "Private Download Title.pdf"}
+        ],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+    tracker.record_synchronized_action(
+        kind=runner.sad.DOWNLOAD,
+        key="b" * 32,
+        label="Another Private Download Title.pdf",
+        observed_at=runner.datetime.now(runner.timezone.utc),
+        action_id="auto-download-1",
+    )
+
+    joined = "\n".join(messages)
+    assert "Private Search" not in joined
+    assert "Private Download Title" not in joined
+    assert "Another Private" not in joined
+    assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in joined
+    assert "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" not in joined
+    assert "observed rust search action" in joined
+    assert "observed rust download action" in joined
+    assert "observed synchronized download action" in joined
+
+
 def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_soak_runner()
     triggered: list[str] = []

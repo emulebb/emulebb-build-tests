@@ -547,7 +547,7 @@ def safe_report_key(value: Any) -> str:
         return "url"
     text = _WINDOWS_RESERVED_FILENAME_CHARS.sub("_", text)
     text = text.rstrip(" .") or "action"
-    return text[:32]
+    return "term" if text != "action" else "action"
 
 
 def write_action_report(report: dict[str, Any], actions_dir: Path) -> Path:

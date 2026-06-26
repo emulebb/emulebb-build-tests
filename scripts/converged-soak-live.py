@@ -334,6 +334,12 @@ def load_diag(dump_dir: Path, *, side: str) -> list[dict[str, Any]]:
     return records
 
 
+def public_action_label(kind: str) -> str:
+    """Returns a privacy-safe label for retained soak logs."""
+
+    return f"{kind} action"
+
+
 # --------------------------------------------------------------------------- #
 # Action tracker: detect new actions per poll, correlate across clients.
 # --------------------------------------------------------------------------- #
@@ -365,7 +371,7 @@ class ActionTracker:
         bucket = self.rust if client == "rust" else self.mfc
         bucket.extend(fresh)
         for action in fresh:
-            log(f"observed {client} {kind}: {action.label!r}")
+            log(f"observed {client} {public_action_label(kind)}")
 
     def prime(
         self,
@@ -423,7 +429,7 @@ class ActionTracker:
                 observed_at=observed_at,
             )
         )
-        log(f"observed synchronized {kind}: {label!r}")
+        log(f"observed synchronized {public_action_label(kind)}")
 
     def tick(
         self,
@@ -746,7 +752,8 @@ def main(argv: list[str] | None = None) -> int:
             path = sad.write_action_report(full, actions_dir)
             sad.append_to_summary(summary, full)
             write_summary(summary, summary_path)
-            log(f"action #{seq} [{full.get('verdict')}] {full.get('kind')} {full.get('key')} -> {path.name}")
+            action_label = public_action_label(str(full.get("kind") or "action"))
+            log(f"action #{seq} [{full.get('verdict')}] {action_label} -> {path.name}")
 
         while True:
             now = datetime.now(timezone.utc)
@@ -755,7 +762,7 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 download = pending["download"]
                 file_hash = str(download.get("hash") or "").strip().lower()
-                log(f"auto cycle {pending['cycle']}: starting delayed download {file_hash}")
+                log(f"auto cycle {pending['cycle']}: starting delayed download action")
                 try:
                     result = execute_scheduled_download(
                         rust_base=rust_base,
@@ -854,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
                     if cmd.startswith("begin"):
                         marker_t0 = now
                         marker_label = cmd[len("begin"):].strip() or "marker"
-                        log(f"marker '{marker_label}' started at {now.isoformat()}")
+                        log(f"manual marker started at {now.isoformat()}")
                     elif cmd == "end" and marker_t0 is not None:
                         pair = sad.ActionPair(
                             kind="marker",

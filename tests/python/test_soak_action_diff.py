@@ -328,7 +328,8 @@ def test_write_action_report_persists_json(tmp_path) -> None:
     )
     path = sad.write_action_report(report, tmp_path / "actions")
     assert path.exists()
-    assert path.name.startswith("00007-search-ubuntu")
+    assert path.name == "00007-search-term.json"
+    assert "ubuntu" not in path.name
 
 
 def test_write_action_report_sanitizes_windows_reserved_filename_chars(tmp_path) -> None:
@@ -344,6 +345,7 @@ def test_write_action_report_sanitizes_windows_reserved_filename_chars(tmp_path)
     )
     path = sad.write_action_report(report, tmp_path / "actions")
     assert path.exists()
+    assert path.name == "00008-search-url.json"
     assert path.suffix == ".json"
     assert ":" not in path.name
     assert "?" not in path.name
