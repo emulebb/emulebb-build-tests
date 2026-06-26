@@ -330,13 +330,59 @@ def require_shared_file_item(shared_files: dict[str, object], file_name: str) ->
     items = shared_files.get("items")
     if not isinstance(items, list):
         raise RuntimeError("Rust shared-files response did not expose an items list.")
+    item = find_shared_file_item(items, file_name)
+    if item is not None:
+        return item
+    raise RuntimeError(f"Rust shared-files response did not include {file_name}.")
+
+
+def find_shared_file_item(items: list[object], file_name: str) -> dict[str, object] | None:
+    """Returns a matching Rust shared-file row without treating a miss as fatal."""
+
     for item in items:
         if isinstance(item, dict) and item.get("name") == file_name:
             link = str(item.get("ed2kLink") or "")
             if not link.startswith("ed2k://|file|"):
                 raise RuntimeError(f"Rust shared-file row for {file_name} did not expose an ED2K link.")
             return item
-    raise RuntimeError(f"Rust shared-files response did not include {file_name}.")
+    return None
+
+
+def wait_for_rust_shared_file(
+    base_url: str,
+    api_key: str,
+    *,
+    file_name: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Waits for detached Rust shared-directory hashing to expose one file row."""
+
+    observations: list[dict[str, object]] = []
+
+    def resolve():
+        shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
+        items = shared_files.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError("Rust shared-files response did not expose an items list.")
+        status = request_json(base_url, "GET", "/api/v1/status", api_key)
+        stats = status.get("stats") if isinstance(status, dict) else None
+        matched = find_shared_file_item(items, file_name)
+        observations.append(
+            {
+                "count": len(items),
+                "hashingCount": stats.get("sharedHashingCount") if isinstance(stats, dict) else None,
+                "observed_at": round(time.time(), 3),
+            }
+        )
+        if matched is None:
+            return None
+        return {
+            "count": len(items),
+            "matched": matched,
+            "observations": observations[-20:],
+        }
+
+    return live_common.wait_for(resolve, timeout_seconds, 1.0, f"Rust shared-file {file_name!r}")
 
 
 def publish_rust_shared_tree(
@@ -345,6 +391,7 @@ def publish_rust_shared_tree(
     *,
     root: Path,
     file_name: str,
+    timeout_seconds: float,
 ) -> dict[str, object]:
     """Configures and reloads one recursive Rust shared directory root."""
 
@@ -364,15 +411,16 @@ def publish_rust_shared_tree(
         "/api/v1/shared-directories/operations/reload",
         api_key,
     )
-    shared_files = request_json(base_url, "GET", "/api/v1/shared-files", api_key)
-    shared_file = require_shared_file_item(shared_files, file_name)
+    shared_files = wait_for_rust_shared_file(
+        base_url,
+        api_key,
+        file_name=file_name,
+        timeout_seconds=timeout_seconds,
+    )
     return {
         "directories": directories,
         "reload": reload_result,
-        "sharedFiles": {
-            "count": len(shared_files.get("items", [])) if isinstance(shared_files.get("items"), list) else 0,
-            "matched": shared_file,
-        },
+        "sharedFiles": shared_files,
     }
 
 
@@ -541,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
             args.api_key,
             root=Path(str(rust_shared_tree["root"])),
             file_name=str(rust_shared_tree["name"]),
+            timeout_seconds=args.link_export_timeout_seconds,
         )
         rust_file = report["checks"]["rust_shared_tree_publish"]["sharedFiles"]["matched"]
         link = str(rust_file["ed2kLink"])
