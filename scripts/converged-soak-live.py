@@ -51,7 +51,7 @@ from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
-from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints
+from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
 from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
 from emule_test_harness.rust_client import stop_process_tree
 from emule_test_harness.soak_launch import (
@@ -663,7 +663,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
     parser.add_argument("--mfc-kad-port", type=int, default=MFC_KAD_PORT)
     parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
-    parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both clients).")
+    parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL fallback when no local nodes.dat is selected.")
+    parser.add_argument("--nodes-file", help="Optional local nodes.dat to seed Rust Kad bootstrap; defaults to the MFC profile file when available.")
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
     parser.add_argument("--rust-server", default=OPERATOR_SERVER, help="eD2K server endpoint for Rust, host:port.")
     parser.add_argument("--mfc-server", default=OPERATOR_SERVER, help="eD2K server endpoint for MFC, host:port.")
@@ -803,6 +804,45 @@ def import_mfc_known_met_for_rust_profile(
     }
 
 
+def resolve_kad_bootstrap_endpoints(
+    *,
+    mfc_profile_dir: Path | None,
+    nodes_file: Path | None,
+    nodes_url: str,
+    limit: int,
+) -> dict[str, Any]:
+    """Resolve Rust Kad bootstrap from the exact MFC nodes.dat when available."""
+
+    selected_nodes_file = nodes_file
+    source = "explicit-file" if selected_nodes_file is not None else "url"
+    if selected_nodes_file is None and mfc_profile_dir is not None:
+        profile_nodes_file = mfc_profile_dir / "config" / "nodes.dat"
+        if profile_nodes_file.is_file():
+            selected_nodes_file = profile_nodes_file
+            source = "mfc-profile"
+
+    if selected_nodes_file is not None:
+        if not selected_nodes_file.is_file():
+            raise RuntimeError("--nodes-file does not exist.")
+        endpoints = load_bootstrap_endpoints(selected_nodes_file, limit=limit)
+        return {
+            "source": source,
+            "sourceKind": "file",
+            "endpoints": endpoints,
+            "nodesDatUrl": None,
+            "nodesDatFileSelected": True,
+        }
+
+    endpoints = fetch_bootstrap_endpoints(nodes_url, limit=limit)
+    return {
+        "source": "url",
+        "sourceKind": "url",
+        "endpoints": endpoints,
+        "nodesDatUrl": nodes_url,
+        "nodesDatFileSelected": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     duration = parse_duration(args.duration)
@@ -853,6 +893,7 @@ def main(argv: list[str] | None = None) -> int:
     mfc_profile_dir = Path(args.mfc_profile_dir).resolve() if args.mfc_profile_dir else None
     rust_incoming_dir = Path(args.rust_incoming_dir).resolve() if args.rust_incoming_dir else None
     shared_dir_file = Path(args.shared_dir_file).resolve() if args.shared_dir_file else None
+    nodes_file = Path(args.nodes_file).resolve() if args.nodes_file else None
     if shared_dir_file is None and mfc_profile_dir is not None:
         shared_dir_file = mfc_profile_dir / "config" / "shareddir.dat"
     if shared_dir_file is not None:
@@ -932,8 +973,18 @@ def main(argv: list[str] | None = None) -> int:
     bind_ip = soak_launch.require_same_vpn_bind_ip(rust_vpn, mfc_vpn)
     log(f"hide.me bind IP: {bind_ip}")
 
-    bootstrap_nodes = fetch_bootstrap_endpoints(args.nodes_url, limit=args.bootstrap_limit)
-    log(f"Kad bootstrap from {args.nodes_url}: {len(bootstrap_nodes)} contacts")
+    bootstrap_selection = resolve_kad_bootstrap_endpoints(
+        mfc_profile_dir=mfc_profile_dir,
+        nodes_file=nodes_file,
+        nodes_url=args.nodes_url,
+        limit=args.bootstrap_limit,
+    )
+    bootstrap_nodes = list(bootstrap_selection["endpoints"])
+    log(
+        "Kad bootstrap from "
+        f"{bootstrap_selection['sourceKind']} source ({bootstrap_selection['source']}): "
+        f"{len(bootstrap_nodes)} contacts"
+    )
     summary["vpn"] = {
         "rust": {
             "exe": rust_exe.name,
@@ -953,7 +1004,10 @@ def main(argv: list[str] | None = None) -> int:
         "mfcServer": args.mfc_server,
         "sameServer": args.rust_server == args.mfc_server,
         "serverMetUrl": args.server_met_url,
-        "nodesDatUrl": args.nodes_url,
+        "nodesDatUrl": bootstrap_selection["nodesDatUrl"],
+        "nodesDatSource": bootstrap_selection["source"],
+        "nodesDatSourceKind": bootstrap_selection["sourceKind"],
+        "nodesDatFileSelected": bootstrap_selection["nodesDatFileSelected"],
         "sameKadBootstrap": True,
         "bootstrapLimit": args.bootstrap_limit,
         "bootstrapContactCount": len(bootstrap_nodes),

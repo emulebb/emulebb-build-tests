@@ -12,6 +12,7 @@ from __future__ import annotations
 import ipaddress
 import struct
 import urllib.request
+from pathlib import Path
 from typing import NamedTuple
 
 # Public mirror of the always-current Kad node set.
@@ -131,7 +132,22 @@ def fetch_bootstrap_endpoints(
 ) -> list[str]:
     """Downloads + parses ``nodes.dat`` and returns up to ``limit`` ``ip:udpPort`` strings."""
 
-    contacts = parse_nodes_dat(download_nodes_dat(url, timeout_seconds=timeout_seconds))
+    return bootstrap_endpoints_from_nodes_dat(
+        download_nodes_dat(url, timeout_seconds=timeout_seconds),
+        limit=limit,
+    )
+
+
+def load_bootstrap_endpoints(path: Path, *, limit: int = 40) -> list[str]:
+    """Reads a local ``nodes.dat`` and returns up to ``limit`` ``ip:udpPort`` strings."""
+
+    return bootstrap_endpoints_from_nodes_dat(path.read_bytes(), limit=limit)
+
+
+def bootstrap_endpoints_from_nodes_dat(data: bytes, *, limit: int = 40) -> list[str]:
+    """Parses a ``nodes.dat`` payload and returns deduplicated bootstrap endpoints."""
+
+    contacts = parse_nodes_dat(data)
     seen: set[str] = set()
     endpoints: list[str] = []
     for contact in contacts:

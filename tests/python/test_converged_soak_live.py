@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import struct
 from datetime import timedelta
 from pathlib import Path
 from types import ModuleType
@@ -143,6 +144,68 @@ def test_converged_soak_poll_rest_timeout_default_covers_hashing_load() -> None:
     args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json"])
 
     assert args.poll_rest_timeout == 90.0
+
+
+def _nodes_dat_with_one_contact() -> bytes:
+    entry = (
+        b"\x11" * 16
+        + bytes([4, 3, 2, 1])
+        + struct.pack("<HHB", 4662, 4661, 8)
+    )
+    return struct.pack("<I", 1) + entry
+
+
+def test_converged_soak_prefers_mfc_profile_nodes_dat(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+    mfc_profile = tmp_path / "mfc"
+    nodes_dat = mfc_profile / "config" / "nodes.dat"
+    nodes_dat.parent.mkdir(parents=True)
+    nodes_dat.write_bytes(_nodes_dat_with_one_contact())
+
+    selection = runner.resolve_kad_bootstrap_endpoints(
+        mfc_profile_dir=mfc_profile,
+        nodes_file=None,
+        nodes_url="https://nodes.example.test/nodes.dat",
+        limit=40,
+    )
+
+    assert selection == {
+        "source": "mfc-profile",
+        "sourceKind": "file",
+        "endpoints": ["1.2.3.4:4662"],
+        "nodesDatUrl": None,
+        "nodesDatFileSelected": True,
+    }
+
+
+def test_converged_soak_falls_back_to_nodes_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+    calls: list[tuple[str, int]] = []
+
+    def fake_fetch(url: str, *, limit: int) -> list[str]:
+        calls.append((url, limit))
+        return ["1.2.3.4:4662"]
+
+    monkeypatch.setattr(runner, "fetch_bootstrap_endpoints", fake_fetch)
+
+    selection = runner.resolve_kad_bootstrap_endpoints(
+        mfc_profile_dir=tmp_path / "missing-profile",
+        nodes_file=None,
+        nodes_url="https://nodes.example.test/nodes.dat",
+        limit=12,
+    )
+
+    assert calls == [("https://nodes.example.test/nodes.dat", 12)]
+    assert selection == {
+        "source": "url",
+        "sourceKind": "url",
+        "endpoints": ["1.2.3.4:4662"],
+        "nodesDatUrl": "https://nodes.example.test/nodes.dat",
+        "nodesDatFileSelected": False,
+    }
 
 
 def test_converged_soak_poll_list_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
