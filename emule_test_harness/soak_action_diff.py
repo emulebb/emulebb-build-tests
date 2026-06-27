@@ -358,25 +358,6 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
     elif kind == DOWNLOAD:
         required = [
             {
-                "label": "server-found-sources",
-                "alternatives": [
-                    {
-                        "channel": "server",
-                        "direction": "recv",
-                        "protocolMarker": 0xE3,
-                        "opcode": 0x42,
-                        "opcodeName": "OP_FOUNDSOURCES",
-                    },
-                    {
-                        "channel": "server",
-                        "direction": "recv",
-                        "protocolMarker": 0xE3,
-                        "opcode": 0x44,
-                        "opcodeName": "OP_FOUNDSOURCES_OBFU",
-                    },
-                ],
-            },
-            {
                 "label": "client-request-parts",
                 "alternatives": [
                     {
@@ -397,6 +378,25 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
             },
         ]
         optional = [
+            {
+                "label": "server-found-sources",
+                "alternatives": [
+                    {
+                        "channel": "server",
+                        "direction": "recv",
+                        "protocolMarker": 0xE3,
+                        "opcode": 0x42,
+                        "opcodeName": "OP_FOUNDSOURCES",
+                    },
+                    {
+                        "channel": "server",
+                        "direction": "recv",
+                        "protocolMarker": 0xE3,
+                        "opcode": 0x44,
+                        "opcodeName": "OP_FOUNDSOURCES_OBFU",
+                    },
+                ],
+            },
             {
                 "label": "client-part-payload",
                 "alternatives": [
@@ -434,13 +434,21 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
         checked_required = _check_action_requirements(required, packet_diff)
         checked_optional = _check_action_requirements(optional, packet_diff)
         start_ok = all(row["presentOnBoth"] for row in checked_required)
-        payload_ok = all(row["presentOnBoth"] for row in checked_optional)
+        source_ok = next(
+            (row["presentOnBoth"] for row in checked_optional if row["label"] == "server-found-sources"),
+            False,
+        )
+        payload_ok = next(
+            (row["presentOnBoth"] for row in checked_optional if row["label"] == "client-part-payload"),
+            False,
+        )
         return {
             "ok": start_ok,
             "mode": "action-required-opcodes",
             "required": checked_required,
             "optional": checked_optional,
             "downloadStartOk": start_ok,
+            "downloadSourceOk": source_ok,
             "downloadPayloadOk": payload_ok,
             "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
         }
