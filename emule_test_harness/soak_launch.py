@@ -29,6 +29,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 # Same lab wiring as the converged single-pass orchestrator so both campaigns are
 # like-for-like (operator server, high ports, REST api keys, server.met source).
 OPERATOR_SERVER = "45.82.80.155:5687"
+OPERATOR_SERVER_NAME = "operator-parity"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
 ED2K_PORT = 42662
@@ -121,6 +122,90 @@ def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> 
         body={"uploadLimitKiBps": upload_limit_kibps},
         timeout_seconds=15.0,
     )
+
+
+def api_items(payload: Any, key: str) -> list[Any]:
+    """Extracts list rows from common eMuleBB REST envelope shapes."""
+
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        items = data.get("items")
+        if isinstance(items, list):
+            return items
+        keyed_items = data.get(key)
+        if isinstance(keyed_items, list):
+            return keyed_items
+    items = payload.get("items")
+    if isinstance(items, list):
+        return items
+    keyed_items = payload.get(key)
+    return keyed_items if isinstance(keyed_items, list) else []
+
+
+def operator_server_parts() -> tuple[str, int]:
+    """Returns the configured live eD2K operator server as address and port."""
+
+    address, port_text = OPERATOR_SERVER.rsplit(":", 1)
+    return address, int(port_text)
+
+
+def ensure_operator_server(base_url: str, api_key: str) -> dict[str, Any]:
+    """Ensures the configured live eD2K operator server is present before connect."""
+
+    address, port = operator_server_parts()
+    server = {"address": address, "port": port, "name": OPERATOR_SERVER_NAME}
+    servers = retry_http_json(
+        "operator server list",
+        3,
+        base_url,
+        "/api/v1/servers",
+        api_key=api_key,
+        timeout_seconds=15.0,
+    )
+    rows = api_items(servers, "servers")
+    matching = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("address") or "").casefold() == address.casefold()
+        and int(row.get("port") or 0) == port
+    ]
+    if matching:
+        return {"preloaded": True, "server": dict(matching[0])}
+    add_result = retry_http_json(
+        "operator server add",
+        3,
+        base_url,
+        "/api/v1/servers",
+        api_key=api_key,
+        method="POST",
+        body=server,
+        timeout_seconds=15.0,
+    )
+    return {"preloaded": False, "server": server, "add": add_result}
+
+
+def connect_operator_server(base_url: str, api_key: str, *, description: str) -> dict[str, Any]:
+    """Connects one client to the configured live eD2K operator server."""
+
+    ensured = ensure_operator_server(base_url, api_key)
+    connected = retry_http_json(
+        description,
+        3,
+        base_url,
+        f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
+        api_key=api_key,
+        method="POST",
+        body={},
+        timeout_seconds=15.0,
+    )
+    return {"ensure": ensured, "connect": connected}
 
 
 def apply_mfc_soak_preferences(
@@ -234,12 +319,9 @@ def bring_up_rust(
         "rust kad start", 3, base_url, "/api/v1/kad/operations/start",
         api_key=RUST_API_KEY, method="POST", body={},
     )
-    retry_http_json(
-        "rust server connect", 3, base_url,
-        f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
-        api_key=RUST_API_KEY, method="POST", body={}, timeout_seconds=15.0,
-    )
+    connect_operator_server(base_url, RUST_API_KEY, description="rust server connect")
     rust_mod.share_directories(base_url, shared_roots)
+    connect_operator_server(base_url, RUST_API_KEY, description="rust server reconnect after share import")
 
     def connected() -> dict[str, Any] | None:
         stats = rust_mod.get_stats(base_url)

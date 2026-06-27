@@ -57,6 +57,60 @@ def test_existing_shared_roots_counts_inaccessible_entries(tmp_path: Path) -> No
     assert skipped == 1
 
 
+def test_ensure_operator_server_reuses_existing_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_retry(_description: str, _attempts: int, _base_url: str, path: str, **kwargs: object) -> object:
+        calls.append((str(kwargs.get("method") or "GET"), path))
+        return {
+            "data": {
+                "items": [
+                    {
+                        "address": soak_launch.operator_server_parts()[0],
+                        "port": soak_launch.operator_server_parts()[1],
+                        "name": "preloaded",
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(soak_launch, "retry_http_json", fake_retry)
+
+    result = soak_launch.ensure_operator_server("http://client", "key")
+
+    assert result["preloaded"] is True
+    assert calls == [("GET", "/api/v1/servers")]
+
+
+def test_ensure_operator_server_adds_missing_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, object | None]] = []
+
+    def fake_retry(_description: str, _attempts: int, _base_url: str, path: str, **kwargs: object) -> object:
+        method = str(kwargs.get("method") or "GET")
+        calls.append((method, path, kwargs.get("body")))
+        if method == "GET":
+            return {"data": {"items": []}}
+        return {"data": {"added": True}}
+
+    monkeypatch.setattr(soak_launch, "retry_http_json", fake_retry)
+
+    result = soak_launch.ensure_operator_server("http://client", "key")
+
+    assert result["preloaded"] is False
+    assert calls == [
+        ("GET", "/api/v1/servers", None),
+        (
+            "POST",
+            "/api/v1/servers",
+            {
+                "address": soak_launch.operator_server_parts()[0],
+                "port": soak_launch.operator_server_parts()[1],
+                "name": soak_launch.OPERATOR_SERVER_NAME,
+            },
+        ),
+    ]
+
+
 def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
     runner = _load_soak_runner()
 
