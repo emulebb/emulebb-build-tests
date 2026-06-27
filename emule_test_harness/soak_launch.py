@@ -159,7 +159,7 @@ def ensure_operator_server(base_url: str, api_key: str) -> dict[str, Any]:
     """Ensures the configured live eD2K operator server is present before connect."""
 
     address, port = operator_server_parts()
-    server = {"address": address, "port": port, "name": OPERATOR_SERVER_NAME}
+    server = {"address": address, "port": port, "name": OPERATOR_SERVER_NAME, "static": True}
     servers = retry_http_json(
         "operator server list",
         3,

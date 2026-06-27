@@ -106,6 +106,7 @@ def test_ensure_operator_server_adds_missing_row(monkeypatch: pytest.MonkeyPatch
                 "address": soak_launch.operator_server_parts()[0],
                 "port": soak_launch.operator_server_parts()[1],
                 "name": soak_launch.OPERATOR_SERVER_NAME,
+                "static": True,
             },
         ),
     ]
