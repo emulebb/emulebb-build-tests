@@ -69,6 +69,7 @@ def test_ensure_operator_server_reuses_existing_row(monkeypatch: pytest.MonkeyPa
                         "address": soak_launch.operator_server_parts()[0],
                         "port": soak_launch.operator_server_parts()[1],
                         "name": "preloaded",
+                        "static": True,
                     }
                 ]
             }
@@ -79,7 +80,41 @@ def test_ensure_operator_server_reuses_existing_row(monkeypatch: pytest.MonkeyPa
     result = soak_launch.ensure_operator_server("http://client", "key")
 
     assert result["preloaded"] is True
+    assert result["staticUpdated"] is False
     assert calls == [("GET", "/api/v1/servers")]
+
+
+def test_ensure_operator_server_promotes_preloaded_row_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, object | None]] = []
+
+    def fake_retry(_description: str, _attempts: int, _base_url: str, path: str, **kwargs: object) -> object:
+        method = str(kwargs.get("method") or "GET")
+        calls.append((method, path, kwargs.get("body")))
+        if method == "GET":
+            return {
+                "data": {
+                    "items": [
+                        {
+                            "address": soak_launch.operator_server_parts()[0],
+                            "port": soak_launch.operator_server_parts()[1],
+                            "name": "preloaded",
+                            "static": False,
+                        }
+                    ]
+                }
+            }
+        return {"data": {"static": True}}
+
+    monkeypatch.setattr(soak_launch, "retry_http_json", fake_retry)
+
+    result = soak_launch.ensure_operator_server("http://client", "key")
+
+    assert result["preloaded"] is True
+    assert result["staticUpdated"] is True
+    assert calls == [
+        ("GET", "/api/v1/servers", None),
+        ("PATCH", f"/api/v1/servers/{soak_launch.OPERATOR_SERVER}", {"static": True}),
+    ]
 
 
 def test_ensure_operator_server_adds_missing_row(monkeypatch: pytest.MonkeyPatch) -> None:

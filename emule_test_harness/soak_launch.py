@@ -177,7 +177,25 @@ def ensure_operator_server(base_url: str, api_key: str) -> dict[str, Any]:
         and int(row.get("port") or 0) == port
     ]
     if matching:
-        return {"preloaded": True, "server": dict(matching[0])}
+        server_info = dict(matching[0])
+        if not bool(server_info.get("static")):
+            update_result = retry_http_json(
+                "operator server static",
+                3,
+                base_url,
+                f"/api/v1/servers/{OPERATOR_SERVER}",
+                api_key=api_key,
+                method="PATCH",
+                body={"static": True},
+                timeout_seconds=15.0,
+            )
+            return {
+                "preloaded": True,
+                "server": server_info,
+                "staticUpdated": True,
+                "update": update_result,
+            }
+        return {"preloaded": True, "server": server_info, "staticUpdated": False}
     add_result = retry_http_json(
         "operator server add",
         3,
