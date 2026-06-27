@@ -682,9 +682,11 @@ def main(argv: list[str] | None = None) -> int:
             shared_dir_file,
             extra_roots=[rust_incoming_dir] if rust_incoming_dir is not None else None,
         )
+        shared_roots, skipped_inaccessible_shared_roots = soak_launch.existing_shared_roots(shared_roots)
         shared_root_source = "shareddir.dat"
     else:
         shared_roots = rust_mod.load_shared_roots(inputs_path)
+        skipped_inaccessible_shared_roots = 0
         shared_root_source = "live-wire inputs"
     if not shared_roots:
         raise RuntimeError("No shared roots resolved for the soak run.")
@@ -764,6 +766,7 @@ def main(argv: list[str] | None = None) -> int:
         "sameShareSet": True,
         "sharedRootCount": len(shared_roots),
         "sharedRootSource": shared_root_source,
+        "skippedInaccessibleSharedRootCount": skipped_inaccessible_shared_roots,
         "rustIncomingDirConfigured": rust_incoming_dir is not None,
         "directMfcProfile": mfc_profile_dir is not None,
         "freshRustRuntime": bool(args.fresh_rust_runtime),

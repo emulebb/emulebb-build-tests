@@ -45,6 +45,18 @@ def test_load_shareddir_roots_deduplicates_and_adds_incoming(tmp_path: Path) -> 
     assert roots == ["C:\\ShareA\\", "D:\\ShareB\\", "E:\\Incoming\\"]
 
 
+def test_existing_shared_roots_counts_inaccessible_entries(tmp_path: Path) -> None:
+    present = tmp_path / "present"
+    present.mkdir()
+
+    roots, skipped = soak_launch.existing_shared_roots(
+        [str(present) + "\\", str(tmp_path / "missing") + "\\"]
+    )
+
+    assert roots == [str(present) + "\\"]
+    assert skipped == 1
+
+
 def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
     runner = _load_soak_runner()
 

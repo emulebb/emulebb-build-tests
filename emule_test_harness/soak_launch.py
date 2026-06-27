@@ -35,7 +35,7 @@ ED2K_PORT = 42662
 KAD_PORT = 42672
 RUST_API_KEY = "converged-soak"
 MFC_API_KEY = "converged-soak-mfc"
-DEFAULT_UPLOAD_LIMIT_KIBPS = 384
+DEFAULT_UPLOAD_LIMIT_KIBPS = 3072
 DEFAULT_LOG_TRIM_BYTES = 64 * 1024 * 1024
 
 
@@ -93,6 +93,19 @@ def load_shareddir_roots(path: Path, *, extra_roots: list[Path] | None = None) -
     for extra_root in extra_roots or []:
         roots.append(str(extra_root))
     return dedupe_shared_roots(roots)
+
+
+def existing_shared_roots(roots: list[str]) -> tuple[list[str], int]:
+    """Returns existing directory roots plus the number skipped as inaccessible."""
+
+    existing: list[str] = []
+    skipped = 0
+    for root in roots:
+        if Path(root).is_dir():
+            existing.append(root)
+        else:
+            skipped += 1
+    return existing, skipped
 
 
 def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> dict[str, Any]:
