@@ -210,6 +210,36 @@ def test_summarize_report_flags_missing_action_reports(tmp_path: Path) -> None:
     assert summary["actionReports"] == {"expected": 2, "loaded": 1, "missing": 1}
 
 
+def test_summarize_actions_counts_download_payload_gap_separately() -> None:
+    summary = soak_report_summary.summarize_actions(
+        [
+            {
+                "seq": 1,
+                "kind": "download",
+                "verdict": "divergence",
+                "diagOk": True,
+                "packets": {"rust": 10, "mfc": 12},
+                "actionCoverage": {
+                    "ok": True,
+                    "mode": "action-required-opcodes",
+                    "downloadStartOk": True,
+                    "downloadPayloadOk": False,
+                    "required": [],
+                    "optional": [],
+                },
+            }
+        ]
+    )
+
+    assert summary["actionVerdictCounts"] == {"coverage-parity": 1}
+    assert summary["actionCoverageFailures"] == 0
+    assert summary["downloadCoverage"] == {
+        "startParity": 1,
+        "payloadParity": 0,
+        "payloadMissingAfterStartParity": 1,
+    }
+
+
 def test_summarize_report_keeps_unpaired_separate_from_action_coverage_failure(
     tmp_path: Path,
 ) -> None:

@@ -134,6 +134,9 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
     diag_failures = 0
     coverage_failures = 0
     action_coverage_failures = 0
+    download_start_ok = 0
+    download_payload_ok = 0
+    download_payload_missing = 0
     divergence_samples: list[dict[str, Any]] = []
     action_divergence_samples: list[dict[str, Any]] = []
     for report in reports:
@@ -151,6 +154,13 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
             coverage_failures += 1
         if action_coverage.get("ok") is False and action_verdict != "unpaired":
             action_coverage_failures += 1
+        if kind == soak_action_diff.DOWNLOAD and action_coverage.get("mode") == "action-required-opcodes":
+            if action_coverage.get("downloadStartOk") is True:
+                download_start_ok += 1
+                if action_coverage.get("downloadPayloadOk") is True:
+                    download_payload_ok += 1
+                else:
+                    download_payload_missing += 1
         if verdict != "coverage-parity" and len(divergence_samples) < 10:
             divergence_samples.append(
                 {
@@ -160,6 +170,8 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
                     "coverageOk": report.get("coverageOk"),
                     "actionCoverageOk": action_coverage.get("ok"),
                     "actionCoverageMode": action_coverage.get("mode"),
+                    "downloadStartOk": action_coverage.get("downloadStartOk"),
+                    "downloadPayloadOk": action_coverage.get("downloadPayloadOk"),
                     "fullCoverageOk": report.get("fullCoverageOk", report.get("coverageOk")),
                     "diagOk": report.get("diagOk"),
                     "packets": report.get("packets"),
@@ -174,6 +186,8 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
                     "verdict": action_verdict,
                     "actionCoverageOk": action_coverage.get("ok"),
                     "actionCoverageMode": action_coverage.get("mode"),
+                    "downloadStartOk": action_coverage.get("downloadStartOk"),
+                    "downloadPayloadOk": action_coverage.get("downloadPayloadOk"),
                     "diagOk": report.get("diagOk"),
                     "packets": report.get("packets"),
                     "opcodeGapChannels": _gap_counts(report),
@@ -189,6 +203,11 @@ def summarize_actions(reports: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "coverageFailures": coverage_failures,
         "actionCoverageFailures": action_coverage_failures,
+        "downloadCoverage": {
+            "startParity": download_start_ok,
+            "payloadParity": download_payload_ok,
+            "payloadMissingAfterStartParity": download_payload_missing,
+        },
         "diagFailures": diag_failures,
         "divergenceSamples": divergence_samples,
         "actionDivergenceSamples": action_divergence_samples,

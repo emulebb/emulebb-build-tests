@@ -264,11 +264,12 @@ def test_diff_action_download_gate_accepts_core_transfer_opcodes() -> None:
     assert [row["label"] for row in report["actionCoverage"]["required"]] == [
         "server-found-sources",
         "client-request-parts",
-        "client-part-payload",
     ]
+    assert [row["label"] for row in report["actionCoverage"]["optional"]] == ["client-part-payload"]
+    assert report["actionCoverage"]["downloadPayloadOk"] is True
 
 
-def test_diff_action_download_gate_fails_without_part_payload() -> None:
+def test_diff_action_download_gate_tracks_missing_part_payload_as_optional() -> None:
     pair = sad.ActionPair(
         kind=sad.DOWNLOAD,
         key="a" * 32,
@@ -286,9 +287,28 @@ def test_diff_action_download_gate_fails_without_part_payload() -> None:
 
     report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
 
+    assert report["verdict"] == "coverage-parity"
+    assert report["coverageOk"] is True
+    assert report["actionCoverage"]["downloadStartOk"] is True
+    assert report["actionCoverage"]["downloadPayloadOk"] is False
+    assert report["actionCoverage"]["optional"][0]["presentOnBoth"] is False
+
+
+def test_diff_action_download_gate_fails_without_request_parts() -> None:
+    pair = sad.ActionPair(
+        kind=sad.DOWNLOAD,
+        key="a" * 32,
+        rust=_action("rust", "a" * 32, _ts(0), kind=sad.DOWNLOAD),
+        mfc=_action("mfc", "a" * 32, _ts(2), kind=sad.DOWNLOAD),
+    )
+    rust_packets = [_pkt("server", "recv", 0x44, "aa", _ts(1), marker=0xE3)]
+    mfc_packets = [_pkt("server", "recv", 0x44, "ee", _ts(3), marker=0xE3)]
+
+    report = sad.diff_action(pair, rust_packets=rust_packets, mfc_packets=mfc_packets)
+
     assert report["verdict"] == "divergence"
     assert report["coverageOk"] is False
-    assert report["actionCoverage"]["required"][2]["presentOnBoth"] is False
+    assert report["actionCoverage"]["required"][1]["presentOnBoth"] is False
 
 
 def test_diff_action_no_traffic_and_one_sided() -> None:

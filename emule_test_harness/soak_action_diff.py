@@ -379,6 +379,8 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
                     },
                 ],
             },
+        ]
+        optional = [
             {
                 "label": "client-part-payload",
                 "alternatives": [
@@ -413,6 +415,19 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
                 ],
             },
         ]
+        checked_required = _check_action_requirements(required, packet_diff)
+        checked_optional = _check_action_requirements(optional, packet_diff)
+        start_ok = all(row["presentOnBoth"] for row in checked_required)
+        payload_ok = all(row["presentOnBoth"] for row in checked_optional)
+        return {
+            "ok": start_ok,
+            "mode": "action-required-opcodes",
+            "required": checked_required,
+            "optional": checked_optional,
+            "downloadStartOk": start_ok,
+            "downloadPayloadOk": payload_ok,
+            "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
+        }
 
     if not required:
         return {
@@ -421,8 +436,20 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
             "required": [],
         }
 
+    checked = _check_action_requirements(required, packet_diff)
+    return {
+        "ok": all(row["presentOnBoth"] for row in checked),
+        "mode": "action-required-opcodes",
+        "required": checked,
+        "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
+    }
+
+
+def _check_action_requirements(
+    requirements: list[dict[str, Any]], packet_diff: dict[str, Any]
+) -> list[dict[str, Any]]:
     checked: list[dict[str, Any]] = []
-    for row in required:
+    for row in requirements:
         alternatives = row.get("alternatives")
         if isinstance(alternatives, list):
             present = _shared_any_opcode_present(packet_diff, alternatives)
@@ -435,12 +462,7 @@ def build_action_coverage(kind: str, packet_diff: dict[str, Any]) -> dict[str, A
                 opcode=int(row["opcode"]),
             )
         checked.append({**row, "presentOnBoth": present})
-    return {
-        "ok": all(row["presentOnBoth"] for row in checked),
-        "mode": "action-required-opcodes",
-        "required": checked,
-        "diagnosticFullOpcodeCoverageOk": bool(packet_diff.get("coverageOk")),
-    }
+    return checked
 
 
 def _classify(
