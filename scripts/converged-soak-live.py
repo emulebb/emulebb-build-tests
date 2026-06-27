@@ -46,7 +46,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from emule_test_harness import diag_event_diff, live_process_monitor, packet_trace_diff
+from emule_test_harness import diag_event_diff, live_process_monitor, mfc_known_met, packet_trace_diff
 from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import soak_action_diff as sad
 from emule_test_harness import soak_launch
@@ -72,6 +72,7 @@ from emule_test_harness.soak_launch import (
     log,
 )
 from emule_test_harness.vm_guest_profiles import retry_http_json
+from emule_test_harness.workspace_layout import get_default_workspace_root, resolve_workspace_repo
 
 SCENARIO = "emulebb.flow.converged.soak.hideme.v1"
 
@@ -650,6 +651,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bootstrap-limit", type=int, default=40)
     parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
     parser.add_argument("--mfc-profile-dir", help="Launch MFC directly with this profile directory instead of a copied seed profile.")
+    parser.add_argument(
+        "--skip-mfc-known-met-import",
+        action="store_true",
+        help="Skip pre-seeding Rust metadata from the MFC profile's config/known.met before launch.",
+    )
     parser.add_argument("--upload-limit-kibps", type=int, default=DEFAULT_UPLOAD_LIMIT_KIBPS, help="Upload cap to apply to both clients.")
     parser.add_argument("--log-trim-bytes", type=int, default=DEFAULT_LOG_TRIM_BYTES, help="Best-effort log tail-trim threshold; 0 disables.")
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
@@ -733,6 +739,48 @@ def resolve_rust_runtime_paths(soak_root: Path, campaign_id: str, *, fresh: bool
         "packetDumpDir": runtime_dir / "packet-dump",
         "mode": "fresh-campaign" if fresh else "persistent",
         "fresh": fresh,
+    }
+
+
+def resolve_rust_repo() -> Path:
+    """Resolves the active emulebb-rust repo from the generated workspace manifest."""
+
+    return resolve_workspace_repo(get_default_workspace_root(REPO_ROOT), "emulebb_rust")
+
+
+def import_mfc_known_met_for_rust_profile(
+    *,
+    mfc_profile_dir: Path | None,
+    rust_runtime_dir: Path,
+    shared_roots: list[str],
+    enabled: bool,
+) -> dict[str, Any]:
+    """Pre-seed Rust metadata from MFC known.met without leaking file names/paths."""
+
+    if not enabled:
+        return {"enabled": False, "status": "skipped", "reason": "disabled"}
+    if mfc_profile_dir is None:
+        return {"enabled": True, "status": "skipped", "reason": "no-mfc-profile-dir"}
+
+    known_met = mfc_profile_dir / "config" / "known.met"
+    if not known_met.is_file():
+        return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
+
+    raw = mfc_known_met.import_mfc_known_met_hashes(
+        rust_repo=resolve_rust_repo(),
+        metadata_db=rust_runtime_dir / "metadata.sqlite",
+        known_met=known_met,
+        shared_roots=[Path(root) for root in shared_roots],
+    )
+    return {
+        "enabled": True,
+        "status": "imported",
+        "knownMetRecords": raw["knownMetRecords"],
+        "sharedFilesScanned": raw["sharedFilesScanned"],
+        "matchedRecords": raw["matchedRecords"],
+        "importedRecords": raw["importedRecords"],
+        "dryRun": raw["dryRun"],
+        "skipped": raw["skipped"],
     }
 
 
@@ -902,6 +950,21 @@ def main(argv: list[str] | None = None) -> int:
         "mfcRestPort": args.mfc_rest_port,
         "endpointPorts": endpoint_ports,
     }
+    known_met_import = import_mfc_known_met_for_rust_profile(
+        mfc_profile_dir=mfc_profile_dir,
+        rust_runtime_dir=rust_runtime,
+        shared_roots=shared_roots,
+        enabled=not bool(args.skip_mfc_known_met_import),
+    )
+    summary["mfcKnownMetImport"] = known_met_import
+    if known_met_import["status"] == "imported":
+        log(
+            "imported MFC known.met into Rust metadata: "
+            f"{known_met_import['importedRecords']} safe record(s), "
+            f"{known_met_import['sharedFilesScanned']} shared file(s) scanned"
+        )
+    else:
+        log(f"MFC known.met import skipped: {known_met_import['reason']}")
     write_summary(summary, summary_path)
 
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR
