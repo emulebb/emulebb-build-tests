@@ -309,7 +309,10 @@ def bring_up_mfc(
 
     app = live_common.launch_app(exe_path, profile_base)
     rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
-    patch_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
+    try:
+        patch_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
+    except RuntimeError as exc:
+        log(f"MFC upload cap REST patch skipped after persisted profile cap: {type(exc).__name__}")
 
     rest_smoke.http_request(
         base_url, f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
