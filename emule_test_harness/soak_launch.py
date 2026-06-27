@@ -195,18 +195,30 @@ def api_items(payload: Any, key: str) -> list[Any]:
     return keyed_items if isinstance(keyed_items, list) else []
 
 
-def operator_server_parts() -> tuple[str, int]:
-    """Returns the configured live eD2K operator server as address and port."""
+def server_endpoint_parts(endpoint: str) -> tuple[str, int]:
+    """Returns one live eD2K server endpoint as address and port."""
 
-    address, port_text = OPERATOR_SERVER.rsplit(":", 1)
+    address, port_text = endpoint.rsplit(":", 1)
     return address, int(port_text)
 
 
-def ensure_operator_server(base_url: str, api_key: str) -> dict[str, Any]:
-    """Ensures the configured live eD2K operator server is present before connect."""
+def operator_server_parts() -> tuple[str, int]:
+    """Returns the default live eD2K operator server as address and port."""
 
-    address, port = operator_server_parts()
-    server = {"address": address, "port": port, "name": OPERATOR_SERVER_NAME, "static": True}
+    return server_endpoint_parts(OPERATOR_SERVER)
+
+
+def ensure_operator_server(
+    base_url: str,
+    api_key: str,
+    *,
+    endpoint: str = OPERATOR_SERVER,
+    name: str = OPERATOR_SERVER_NAME,
+) -> dict[str, Any]:
+    """Ensures one configured live eD2K server is present before connect."""
+
+    address, port = server_endpoint_parts(endpoint)
+    server = {"address": address, "port": port, "name": name, "static": True}
     servers = retry_http_json(
         "operator server list",
         3,
@@ -230,7 +242,7 @@ def ensure_operator_server(base_url: str, api_key: str) -> dict[str, Any]:
                 "operator server static",
                 3,
                 base_url,
-                f"/api/v1/servers/{OPERATOR_SERVER}",
+                f"/api/v1/servers/{endpoint}",
                 api_key=api_key,
                 method="PATCH",
                 body={"static": True},
@@ -256,15 +268,22 @@ def ensure_operator_server(base_url: str, api_key: str) -> dict[str, Any]:
     return {"preloaded": False, "server": server, "add": add_result}
 
 
-def connect_operator_server(base_url: str, api_key: str, *, description: str) -> dict[str, Any]:
-    """Connects one client to the configured live eD2K operator server."""
+def connect_operator_server(
+    base_url: str,
+    api_key: str,
+    *,
+    description: str,
+    endpoint: str = OPERATOR_SERVER,
+    name: str = OPERATOR_SERVER_NAME,
+) -> dict[str, Any]:
+    """Connects one client to the configured live eD2K server."""
 
-    ensured = ensure_operator_server(base_url, api_key)
+    ensured = ensure_operator_server(base_url, api_key, endpoint=endpoint, name=name)
     connected = retry_http_json(
         description,
         3,
         base_url,
-        f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
+        f"/api/v1/servers/{endpoint}/operations/connect",
         api_key=api_key,
         method="POST",
         body={},
@@ -362,6 +381,7 @@ def bring_up_rust(
     bootstrap_nodes: list[str],
     shared_roots: list[str],
     server_met_url: str,
+    server_endpoint: str,
     obfuscation: bool,
     timeouts: dict[str, float],
     upload_limit_kibps: int = DEFAULT_UPLOAD_LIMIT_KIBPS,
@@ -386,7 +406,7 @@ def bring_up_rust(
         p2p_bind_interface="hide.me",
         ed2k_port=ed2k_port,
         kad_port=kad_port,
-        server_endpoint=OPERATOR_SERVER,
+        server_endpoint=server_endpoint,
         obfuscation_enabled=obfuscation,
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
@@ -406,9 +426,19 @@ def bring_up_rust(
         "rust kad start", 3, base_url, "/api/v1/kad/operations/start",
         api_key=RUST_API_KEY, method="POST", body={},
     )
-    connect_operator_server(base_url, RUST_API_KEY, description="rust server connect")
+    connect_operator_server(
+        base_url,
+        RUST_API_KEY,
+        description="rust server connect",
+        endpoint=server_endpoint,
+    )
     rust_mod.share_directories(base_url, shared_roots)
-    connect_operator_server(base_url, RUST_API_KEY, description="rust server reconnect after share import")
+    connect_operator_server(
+        base_url,
+        RUST_API_KEY,
+        description="rust server reconnect after share import",
+        endpoint=server_endpoint,
+    )
 
     def connected() -> dict[str, Any] | None:
         stats = rust_mod.get_stats(base_url)
@@ -436,6 +466,7 @@ def bring_up_mfc(
     rest_host: str,
     rest_port: int,
     shared_roots: list[str],
+    server_endpoint: str,
     obfuscation: bool,
     timeouts: dict[str, float],
     upload_limit_kibps: int = DEFAULT_UPLOAD_LIMIT_KIBPS,
@@ -493,9 +524,11 @@ def bring_up_mfc(
     except RuntimeError as exc:
         log(f"MFC upload cap REST patch skipped after persisted profile cap: {type(exc).__name__}")
 
-    rest_smoke.http_request(
-        base_url, f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
-        method="POST", api_key=MFC_API_KEY, json_body={}, request_timeout_seconds=15.0,
+    connect_operator_server(
+        base_url,
+        MFC_API_KEY,
+        description="MFC server connect",
+        endpoint=server_endpoint,
     )
     rest_smoke.observe_server_connect_attempt(base_url, MFC_API_KEY, min(timeouts["connect"], 120.0))
     rest_smoke.http_request(

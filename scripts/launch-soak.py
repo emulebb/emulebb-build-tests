@@ -76,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
     parser.add_argument("--mfc-kad-port", type=int, default=MFC_KAD_PORT)
     parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
+    parser.add_argument("--rust-server", default=OPERATOR_SERVER, help="eD2K server endpoint for Rust, host:port.")
+    parser.add_argument("--mfc-server", default=OPERATOR_SERVER, help="eD2K server endpoint for MFC, host:port.")
     parser.add_argument("--no-mfc", action="store_true", help="Do not launch the MFC diagnostics GUI.")
     parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-start TrackMuleBB.")
     parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
@@ -250,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             rest_port=args.rust_rest_port, runtime_dir=rust_runtime,
             packet_dump_dir=rust_runtime / "packet-dump", bootstrap_nodes=bootstrap_nodes,
             shared_roots=shared_roots, server_met_url=args.server_met_url,
-            obfuscation=obfuscation, timeouts=timeouts,
+            server_endpoint=args.rust_server, obfuscation=obfuscation, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
         )
         rust_proc = rust_handles["process"]
@@ -263,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
                 shared_dirs_mod=mods["shared_dirs"], exe_path=mfc_exe,
                 seed_config_dir=seed_config_dir, artifacts_dir=mfc_artifacts,
                 rest_host=rest_addr, rest_port=args.mfc_rest_port, shared_roots=shared_roots,
-                obfuscation=obfuscation, timeouts=timeouts,
+                server_endpoint=args.mfc_server, obfuscation=obfuscation, timeouts=timeouts,
                 ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
                 server_udp_port=args.mfc_server_udp_port,
             )

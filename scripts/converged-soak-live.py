@@ -312,20 +312,26 @@ def status_snapshot(base_url: str, api_key: str) -> dict[str, Any]:
     }
 
 
-def operator_connected(status: dict[str, Any]) -> bool:
+def operator_connected(status: dict[str, Any], *, endpoint: str = OPERATOR_SERVER) -> bool:
     """Returns true when a redacted status snapshot is on the required server."""
 
     if not status.get("connected"):
         return False
-    address, port_text = OPERATOR_SERVER.rsplit(":", 1)
+    address, port_text = endpoint.rsplit(":", 1)
     return str(status.get("serverAddress") or "") == address and int(status.get("serverPort") or 0) == int(port_text)
 
 
-def connectivity_gate(rust_status: dict[str, Any], mfc_status: dict[str, Any]) -> dict[str, Any]:
-    """Summarizes whether an action can be compared under same-server parity."""
+def connectivity_gate(
+    rust_status: dict[str, Any],
+    mfc_status: dict[str, Any],
+    *,
+    rust_endpoint: str = OPERATOR_SERVER,
+    mfc_endpoint: str = OPERATOR_SERVER,
+) -> dict[str, Any]:
+    """Summarizes whether an action can be compared under configured-server parity."""
 
-    rust_ok = operator_connected(rust_status)
-    mfc_ok = operator_connected(mfc_status)
+    rust_ok = operator_connected(rust_status, endpoint=rust_endpoint)
+    mfc_ok = operator_connected(mfc_status, endpoint=mfc_endpoint)
     return {
         "ok": rust_ok and mfc_ok,
         "rustConnected": bool(rust_status.get("connected")),
@@ -335,18 +341,25 @@ def connectivity_gate(rust_status: dict[str, Any], mfc_status: dict[str, Any]) -
     }
 
 
-def checkpoint_operator_reconnect(base_url: str, api_key: str, status: dict[str, Any]) -> dict[str, Any]:
+def checkpoint_operator_reconnect(
+    base_url: str,
+    api_key: str,
+    status: dict[str, Any],
+    *,
+    endpoint: str = OPERATOR_SERVER,
+) -> dict[str, Any]:
     """Attempts a live operator-server reconnect when a checkpoint sees disconnect."""
 
     if status.get("error"):
         return {"attempted": False, "reason": "status_error"}
-    if status.get("connected"):
+    if operator_connected(status, endpoint=endpoint):
         return {"attempted": False, "reason": "already_connected"}
     try:
         result = soak_launch.connect_operator_server(
             base_url,
             api_key,
             description="checkpoint operator server reconnect",
+            endpoint=endpoint,
         )
     except RuntimeError as exc:
         return {"attempted": True, "ok": False, "error": str(exc)}
@@ -624,6 +637,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both clients).")
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
+    parser.add_argument("--rust-server", default=OPERATOR_SERVER, help="eD2K server endpoint for Rust, host:port.")
+    parser.add_argument("--mfc-server", default=OPERATOR_SERVER, help="eD2K server endpoint for MFC, host:port.")
     parser.add_argument("--bootstrap-limit", type=int, default=40)
     parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
     parser.add_argument("--mfc-profile-dir", help="Launch MFC directly with this profile directory instead of a copied seed profile.")
@@ -837,7 +852,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     summary["environmentParity"] = {
         "server": OPERATOR_SERVER,
-        "sameServer": True,
+        "rustServer": args.rust_server,
+        "mfcServer": args.mfc_server,
+        "sameServer": args.rust_server == args.mfc_server,
         "serverMetUrl": args.server_met_url,
         "nodesDatUrl": args.nodes_url,
         "sameKadBootstrap": True,
@@ -870,7 +887,7 @@ def main(argv: list[str] | None = None) -> int:
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
             rest_port=args.rust_rest_port, runtime_dir=rust_runtime, packet_dump_dir=rust_packet_dump,
             incoming_dir=rust_incoming_dir, bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
-            server_met_url=args.server_met_url, obfuscation=obfuscation,
+            server_met_url=args.server_met_url, server_endpoint=args.rust_server, obfuscation=obfuscation,
             upload_limit_kibps=args.upload_limit_kibps, timeouts=timeouts,
             ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
         )
@@ -879,7 +896,7 @@ def main(argv: list[str] | None = None) -> int:
             exe_path=mfc_exe, seed_config_dir=seed_config_dir, artifacts_dir=mfc_artifacts,
             direct_profile_dir=mfc_profile_dir,
             rest_host=rest_addr, rest_port=args.mfc_rest_port, shared_roots=shared_roots,
-            obfuscation=obfuscation, upload_limit_kibps=args.upload_limit_kibps,
+            server_endpoint=args.mfc_server, obfuscation=obfuscation, upload_limit_kibps=args.upload_limit_kibps,
             log_trim_bytes=args.log_trim_bytes, timeouts=timeouts,
             ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
             server_udp_port=args.mfc_server_udp_port,
@@ -963,14 +980,19 @@ def main(argv: list[str] | None = None) -> int:
             nonlocal last_connectivity_reconnect
             if time.monotonic() - last_connectivity_reconnect < min(60.0, args.checkpoint_interval):
                 return
-            checkpoint_operator_reconnect(rust_base, RUST_API_KEY, status)
+            checkpoint_operator_reconnect(rust_base, RUST_API_KEY, status, endpoint=args.rust_server)
             last_connectivity_reconnect = time.monotonic()
 
         while True:
             now = datetime.now(timezone.utc)
             rust_loop_status = status_snapshot(rust_base, RUST_API_KEY)
             mfc_loop_status = status_snapshot(mfc_base, MFC_API_KEY)
-            gate = connectivity_gate(rust_loop_status, mfc_loop_status)
+            gate = connectivity_gate(
+                rust_loop_status,
+                mfc_loop_status,
+                rust_endpoint=args.rust_server,
+                mfc_endpoint=args.mfc_server,
+            )
             for pending in list(pending_downloads):
                 if time.monotonic() < float(pending["dueAtMono"]):
                     continue
@@ -1150,7 +1172,12 @@ def main(argv: list[str] | None = None) -> int:
                         "mfc": mfc_status,
                     },
                     "reconnect": {
-                        "rust": checkpoint_operator_reconnect(rust_base, RUST_API_KEY, rust_status),
+                        "rust": checkpoint_operator_reconnect(
+                            rust_base,
+                            RUST_API_KEY,
+                            rust_status,
+                            endpoint=args.rust_server,
+                        ),
                     },
                     "errorLogHits": live_process_monitor.scan_log_markers(
                         [rust_runtime / "daemon.out"], log_offsets, error_patterns
@@ -1196,6 +1223,8 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     summary["server"] = OPERATOR_SERVER
+    summary["rustServer"] = args.rust_server
+    summary["mfcServer"] = args.mfc_server
     summary["bindIp"] = bind_ip
     write_summary(summary, summary_path)
     log(f"final summary: {summary_path}")

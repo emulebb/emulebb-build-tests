@@ -361,7 +361,7 @@ def test_checkpoint_operator_reconnect_skips_connected_client() -> None:
     result = runner.checkpoint_operator_reconnect(
         "http://client",
         "key",
-        {"connected": True},
+        {"connected": True, "serverAddress": "45.82.80.155", "serverPort": 5687},
     )
 
     assert result == {"attempted": False, "reason": "already_connected"}
@@ -378,6 +378,10 @@ def test_operator_connected_requires_configured_server() -> None:
     )
     assert not runner.operator_connected(
         {"connected": False, "serverAddress": "45.82.80.155", "serverPort": 5687}
+    )
+    assert runner.operator_connected(
+        {"connected": True, "serverAddress": "198.51.100.2", "serverPort": 4661},
+        endpoint="198.51.100.2:4661",
     )
 
 
@@ -398,12 +402,35 @@ def test_connectivity_gate_requires_both_clients_on_operator() -> None:
     }
 
 
+def test_connectivity_gate_supports_split_servers() -> None:
+    runner = _load_soak_runner()
+    rust_status = {"connected": True, "serverAddress": "198.51.100.2", "serverPort": 4661}
+    mfc_status = {"connected": True, "serverAddress": "45.82.80.155", "serverPort": 5687}
+
+    gate = runner.connectivity_gate(
+        rust_status,
+        mfc_status,
+        rust_endpoint="198.51.100.2:4661",
+        mfc_endpoint="45.82.80.155:5687",
+    )
+
+    assert gate["ok"] is True
+    assert gate["rustOnOperator"] is True
+    assert gate["mfcOnOperator"] is True
+
+
 def test_checkpoint_operator_reconnect_triggers_disconnected_client(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_soak_runner()
-    calls: list[tuple[str, str, str]] = []
+    calls: list[tuple[str, str, str, str]] = []
 
-    def fake_connect(base_url: str, api_key: str, *, description: str) -> dict[str, object]:
-        calls.append((base_url, api_key, description))
+    def fake_connect(
+        base_url: str,
+        api_key: str,
+        *,
+        description: str,
+        endpoint: str,
+    ) -> dict[str, object]:
+        calls.append((base_url, api_key, description, endpoint))
         return {"connect": {"data": {"connected": False, "connecting": True, "serverCount": 1}}}
 
     monkeypatch.setattr(runner.soak_launch, "connect_operator_server", fake_connect)
@@ -412,9 +439,10 @@ def test_checkpoint_operator_reconnect_triggers_disconnected_client(monkeypatch:
         "http://client",
         "key",
         {"connected": False},
+        endpoint="198.51.100.2:4661",
     )
 
-    assert calls == [("http://client", "key", "checkpoint operator server reconnect")]
+    assert calls == [("http://client", "key", "checkpoint operator server reconnect", "198.51.100.2:4661")]
     assert result == {
         "attempted": True,
         "ok": True,
