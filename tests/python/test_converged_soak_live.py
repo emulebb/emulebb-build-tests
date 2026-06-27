@@ -389,6 +389,110 @@ def test_mfc_known_met_import_records_redacted_counts(
     }
 
 
+def test_mfc_shared_files_inventory_import_skips_without_inventory(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+
+    result = runner.import_mfc_shared_files_inventory_for_rust_profile(
+        mfc_profile_dir=tmp_path / "mfc",
+        rust_runtime_dir=tmp_path / "rust-runtime",
+        shared_roots=[],
+        inventory_path=None,
+    )
+
+    assert result == {"enabled": False, "status": "skipped", "reason": "no-inventory"}
+
+
+def test_mfc_shared_files_inventory_import_records_redacted_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+    mfc_profile = tmp_path / "mfc"
+    known_met = mfc_profile / "config" / "known.met"
+    known_met.parent.mkdir(parents=True)
+    known_met.write_bytes(b"placeholder")
+    inventory = tmp_path / "inventory.json"
+    inventory.write_text('{"data":{"items":[]}}', encoding="utf-8")
+    rust_repo = tmp_path / "emulebb-rust"
+    monkeypatch.setattr(runner, "resolve_rust_repo", lambda: rust_repo)
+    calls: list[dict[str, object]] = []
+
+    def fake_load(path: Path) -> list[dict[str, object]]:
+        calls.append({"load": path})
+        return [{"hash": "a" * 32, "path": str(tmp_path / "share" / "file.bin"), "sizeBytes": 4}]
+
+    def fake_import(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {
+            "knownMetRecords": 5,
+            "sharedFileRows": 4,
+            "matchedRows": 3,
+            "importedRows": 3,
+            "dryRun": False,
+            "metadataDb": str(tmp_path / "private" / "metadata.sqlite"),
+            "skipped": {
+                "invalid_row": 0,
+                "path_outside_shared_roots": 0,
+                "path_missing": 1,
+                "size_mismatch": 0,
+                "missing_known_met_entry": 0,
+                "md4_count_mismatch": 0,
+                "aich_count_mismatch": 0,
+            },
+        }
+
+    monkeypatch.setattr(runner.mfc_known_met, "load_shared_file_rows_json", fake_load)
+    monkeypatch.setattr(runner.mfc_known_met, "import_mfc_shared_file_rows_hashes", fake_import)
+
+    result = runner.import_mfc_shared_files_inventory_for_rust_profile(
+        mfc_profile_dir=mfc_profile,
+        rust_runtime_dir=tmp_path / "rust-runtime",
+        shared_roots=[str(tmp_path / "share")],
+        inventory_path=inventory,
+    )
+
+    assert calls == [
+        {"load": inventory},
+        {
+            "rust_repo": rust_repo,
+            "metadata_db": tmp_path / "rust-runtime" / "metadata.sqlite",
+            "known_met": known_met,
+            "shared_file_rows": [
+                {"hash": "a" * 32, "path": str(tmp_path / "share" / "file.bin"), "sizeBytes": 4}
+            ],
+            "shared_roots": [tmp_path / "share"],
+        },
+    ]
+    assert result == {
+        "enabled": True,
+        "status": "imported",
+        "knownMetRecords": 5,
+        "sharedFileRows": 4,
+        "matchedRows": 3,
+        "importedRows": 3,
+        "dryRun": False,
+        "skipped": {
+            "invalid_row": 0,
+            "path_outside_shared_roots": 0,
+            "path_missing": 1,
+            "size_mismatch": 0,
+            "missing_known_met_entry": 0,
+            "md4_count_mismatch": 0,
+            "aich_count_mismatch": 0,
+        },
+    }
+
+
+def test_converged_soak_accepts_mfc_shared_files_inventory_arg() -> None:
+    runner = _load_soak_runner()
+
+    args = runner.build_parser().parse_args(
+        ["--inputs", "live-wire-inputs.local.json", "--mfc-shared-files-inventory", "inventory.json"]
+    )
+
+    assert args.mfc_shared_files_inventory == "inventory.json"
+
+
 def test_ensure_operator_server_reuses_existing_row(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str]] = []
 

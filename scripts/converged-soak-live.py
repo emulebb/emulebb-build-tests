@@ -676,6 +676,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip pre-seeding Rust metadata from the MFC profile's config/known.met before launch.",
     )
+    parser.add_argument(
+        "--mfc-shared-files-inventory",
+        help=(
+            "Optional JSON captured from MFC /api/v1/shared-files. When present, "
+            "pre-seed Rust metadata by exact shared-file path/hash before launch."
+        ),
+    )
     parser.add_argument("--upload-limit-kibps", type=int, default=DEFAULT_UPLOAD_LIMIT_KIBPS, help="Upload cap to apply to both clients.")
     parser.add_argument("--log-trim-bytes", type=int, default=DEFAULT_LOG_TRIM_BYTES, help="Best-effort log tail-trim threshold; 0 disables.")
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
@@ -804,6 +811,46 @@ def import_mfc_known_met_for_rust_profile(
     }
 
 
+def import_mfc_shared_files_inventory_for_rust_profile(
+    *,
+    mfc_profile_dir: Path | None,
+    rust_runtime_dir: Path,
+    shared_roots: list[str],
+    inventory_path: Path | None,
+) -> dict[str, Any]:
+    """Pre-seed Rust metadata from an exact MFC REST shared-files inventory."""
+
+    if inventory_path is None:
+        return {"enabled": False, "status": "skipped", "reason": "no-inventory"}
+    if mfc_profile_dir is None:
+        return {"enabled": True, "status": "skipped", "reason": "no-mfc-profile-dir"}
+    if not inventory_path.is_file():
+        return {"enabled": True, "status": "skipped", "reason": "inventory-missing"}
+
+    known_met = mfc_profile_dir / "config" / "known.met"
+    if not known_met.is_file():
+        return {"enabled": True, "status": "skipped", "reason": "known-met-missing"}
+
+    rows = mfc_known_met.load_shared_file_rows_json(inventory_path)
+    raw = mfc_known_met.import_mfc_shared_file_rows_hashes(
+        rust_repo=resolve_rust_repo(),
+        metadata_db=rust_runtime_dir / "metadata.sqlite",
+        known_met=known_met,
+        shared_file_rows=rows,
+        shared_roots=[Path(root) for root in shared_roots],
+    )
+    return {
+        "enabled": True,
+        "status": "imported",
+        "knownMetRecords": raw["knownMetRecords"],
+        "sharedFileRows": raw["sharedFileRows"],
+        "matchedRows": raw["matchedRows"],
+        "importedRows": raw["importedRows"],
+        "dryRun": raw["dryRun"],
+        "skipped": raw["skipped"],
+    }
+
+
 def resolve_kad_bootstrap_endpoints(
     *,
     mfc_profile_dir: Path | None,
@@ -894,6 +941,9 @@ def main(argv: list[str] | None = None) -> int:
     rust_incoming_dir = Path(args.rust_incoming_dir).resolve() if args.rust_incoming_dir else None
     shared_dir_file = Path(args.shared_dir_file).resolve() if args.shared_dir_file else None
     nodes_file = Path(args.nodes_file).resolve() if args.nodes_file else None
+    mfc_shared_files_inventory = (
+        Path(args.mfc_shared_files_inventory).resolve() if args.mfc_shared_files_inventory else None
+    )
     if shared_dir_file is None and mfc_profile_dir is not None:
         shared_dir_file = mfc_profile_dir / "config" / "shareddir.dat"
     if shared_dir_file is not None:
@@ -1043,6 +1093,21 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         log(f"MFC known.met import skipped: {known_met_import['reason']}")
+    shared_files_inventory_import = import_mfc_shared_files_inventory_for_rust_profile(
+        mfc_profile_dir=mfc_profile_dir,
+        rust_runtime_dir=rust_runtime,
+        shared_roots=shared_roots,
+        inventory_path=mfc_shared_files_inventory,
+    )
+    summary["mfcSharedFilesInventoryImport"] = shared_files_inventory_import
+    if shared_files_inventory_import["status"] == "imported":
+        log(
+            "imported MFC shared-files inventory into Rust metadata: "
+            f"{shared_files_inventory_import['importedRows']} exact row(s), "
+            f"{shared_files_inventory_import['sharedFileRows']} row(s) loaded"
+        )
+    elif shared_files_inventory_import.get("enabled"):
+        log(f"MFC shared-files inventory import skipped: {shared_files_inventory_import['reason']}")
     write_summary(summary, summary_path)
 
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR
