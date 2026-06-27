@@ -124,6 +124,8 @@ def import_mfc_known_met_hashes(
         "missing_identity": 0,
         "md4_count_mismatch": 0,
         "no_unique_path_match": 0,
+        "no_path_match": 0,
+        "ambiguous_path_match": 0,
         "aich_count_mismatch": 0,
     }
     imported = 0
@@ -136,8 +138,13 @@ def import_mfc_known_met_hashes(
             reason_counts["md4_count_mismatch"] += 1
             continue
         matches = by_key.get((entry.name.casefold(), entry.size_bytes, entry.modified_s), [])
-        if len(matches) != 1:
+        if len(matches) == 0:
             reason_counts["no_unique_path_match"] += 1
+            reason_counts["no_path_match"] += 1
+            continue
+        if len(matches) > 1:
+            reason_counts["no_unique_path_match"] += 1
+            reason_counts["ambiguous_path_match"] += 1
             continue
         if entry.aich_root is not None and len(entry.aich_hashset) != expected_aich_hash_count(entry.size_bytes):
             reason_counts["aich_count_mismatch"] += 1

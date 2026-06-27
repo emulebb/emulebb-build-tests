@@ -284,6 +284,8 @@ def test_mfc_known_met_import_records_redacted_counts(
                 "missing_identity": 0,
                 "md4_count_mismatch": 0,
                 "no_unique_path_match": 1,
+                "no_path_match": 1,
+                "ambiguous_path_match": 0,
                 "aich_count_mismatch": 0,
             },
         }
@@ -317,6 +319,8 @@ def test_mfc_known_met_import_records_redacted_counts(
             "missing_identity": 0,
             "md4_count_mismatch": 0,
             "no_unique_path_match": 1,
+            "no_path_match": 1,
+            "ambiguous_path_match": 0,
             "aich_count_mismatch": 0,
         },
     }

@@ -152,3 +152,35 @@ def test_import_known_met_skips_ambiguous_path_match(tmp_path: Path) -> None:
 
     assert summary["matchedRecords"] == 0
     assert summary["skipped"]["no_unique_path_match"] == 1
+    assert summary["skipped"]["no_path_match"] == 0
+    assert summary["skipped"]["ambiguous_path_match"] == 1
+
+
+def test_import_known_met_reports_missing_path_match(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    known_met = tmp_path / "known.met"
+    _write_known_met(
+        known_met,
+        [
+            _known_record(
+                modified_s=1_700_000_000,
+                ed2k_hash="00112233445566778899aabbccddeeff",
+                name="Missing.bin",
+                size_bytes=4,
+            )
+        ],
+    )
+
+    summary = mfc_known_met.import_mfc_known_met_hashes(
+        rust_repo=_rust_repo(),
+        metadata_db=tmp_path / "metadata.sqlite",
+        known_met=known_met,
+        shared_roots=[shared],
+        dry_run=True,
+    )
+
+    assert summary["matchedRecords"] == 0
+    assert summary["skipped"]["no_unique_path_match"] == 1
+    assert summary["skipped"]["no_path_match"] == 1
+    assert summary["skipped"]["ambiguous_path_match"] == 0
