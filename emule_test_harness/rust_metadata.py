@@ -19,6 +19,8 @@ import time
 import unicodedata
 from pathlib import Path
 
+ED2K_PART_SIZE = 9_728_000
+
 
 def _metadata_src_dir(rust_repo: Path) -> Path:
     return rust_repo / "crates" / "emulebb-metadata" / "src"
@@ -128,6 +130,8 @@ def seed_transfer_manifest(
     auto_upload_priority: bool = False,
     comment: str = "",
     rating: int = 0,
+    source_path: str | None = None,
+    source_mtime_ms: int | None = None,
 ) -> None:
     """Seed a full ED2K transfer manifest (mirrors ``MetadataStore::upsert_transfer_manifest``).
 
@@ -160,6 +164,22 @@ def seed_transfer_manifest(
                 first_seen_ms, last_seen_ms, updated_at_ms
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ed2k_hash) DO UPDATE SET
+                content_object_id = excluded.content_object_id,
+                size_bytes = excluded.size_bytes,
+                canonical_name = excluded.canonical_name,
+                part_size = excluded.part_size,
+                part_count = excluded.part_count,
+                completed = excluded.completed,
+                md4_hashset_acquired = excluded.md4_hashset_acquired,
+                aich_hashset_acquired = excluded.aich_hashset_acquired,
+                aich_root = excluded.aich_root,
+                upload_priority = excluded.upload_priority,
+                auto_upload_priority = excluded.auto_upload_priority,
+                comment = excluded.comment,
+                rating = excluded.rating,
+                last_seen_ms = excluded.last_seen_ms,
+                updated_at_ms = excluded.updated_at_ms
             """,
             (
                 content_object_id,
@@ -188,18 +208,43 @@ def seed_transfer_manifest(
             """
             INSERT INTO transfers(
                 known_file_id, visible_state, control_state, priority,
-                payload_directory, created_at_ms, updated_at_ms, completed_at_ms
+                payload_directory, source_path, source_mtime_ms,
+                created_at_ms, updated_at_ms, completed_at_ms
             )
-            VALUES (?, ?, ?, 'normal', ?, ?, ?, ?)
+            VALUES (?, ?, ?, 'normal', ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(known_file_id) DO UPDATE SET
+                visible_state = excluded.visible_state,
+                control_state = excluded.control_state,
+                payload_directory = excluded.payload_directory,
+                source_path = excluded.source_path,
+                source_mtime_ms = excluded.source_mtime_ms,
+                updated_at_ms = excluded.updated_at_ms,
+                completed_at_ms = excluded.completed_at_ms,
+                removed_at_ms = NULL
             """,
-            (known_file_id, visible_state, control_state, ed2k_hash, now, now, now if completed else None),
+            (
+                known_file_id,
+                visible_state,
+                control_state,
+                ed2k_hash,
+                source_path,
+                source_mtime_ms,
+                now,
+                now,
+                now if completed else None,
+            ),
         )
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
+        conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
+        conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
+        conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
+        conn.execute("DELETE FROM verified_ranges WHERE known_file_id = ?", (known_file_id,))
+        conn.execute("DELETE FROM transfer_sources WHERE transfer_id = ?", (transfer_id,))
         for piece_index in range(piece_count):
             state = "Verified" if completed else "Missing"
-            written = piece_size if completed else 0
+            written = expected_piece_length(size_bytes, piece_size, piece_index) if completed else 0
             conn.execute(
                 """
                 INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
@@ -233,7 +278,57 @@ def seed_transfer_manifest(
                     now,
                 ),
             )
+        if completed:
+            conn.execute(
+                """
+                INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, source_kind, created_at_ms)
+                VALUES (?, 0, ?, 'ed2k_transfer', ?)
+                """,
+                (known_file_id, size_bytes, now),
+            )
         conn.commit()
+
+
+def seed_share_in_place_manifest(
+    db_path: Path,
+    *,
+    ed2k_hash: str,
+    name: str,
+    size_bytes: int,
+    source_path: str,
+    source_mtime_ms: int,
+    md4_hashset: list[str] | None = None,
+    aich_root: str | None = None,
+    aich_hashset: list[str] | None = None,
+) -> None:
+    """Seed a completed shared-file manifest that Rust can reload without hashing.
+
+    The row mirrors Rust's local ingest result: completed transfer, verified
+    pieces and ranges, original ``source_path``, and source mtime. A later
+    shared-directory reload skips hashing only when path, size, and mtime still
+    match the scanned file.
+    """
+
+    seed_transfer_manifest(
+        db_path,
+        ed2k_hash=ed2k_hash,
+        name=name,
+        size_bytes=size_bytes,
+        piece_size=ED2K_PART_SIZE,
+        completed=True,
+        md4_hashset_acquired=True,
+        md4_hashset=md4_hashset or [],
+        aich_hashset_acquired=aich_root is not None,
+        aich_root=aich_root,
+        aich_hashset=aich_hashset or [],
+        source_path=source_path,
+        source_mtime_ms=source_mtime_ms,
+    )
+
+
+def expected_piece_length(file_size: int, piece_size: int, piece_index: int) -> int:
+    start = piece_index * piece_size
+    return max(0, min(start + piece_size, file_size) - start)
 
 
 def seed_remembered_source_transfer(
@@ -279,7 +374,8 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
                    known_files.aich_hashset_acquired,
                    CASE WHEN known_files.aich_root IS NULL THEN NULL
                         ELSE lower(hex(known_files.aich_root)) END,
-                   known_files.upload_priority, known_files.comment, known_files.rating
+                   known_files.upload_priority, known_files.comment, known_files.rating,
+                   transfers.source_path, transfers.source_mtime_ms
             FROM known_files
             LEFT JOIN transfers ON transfers.known_file_id = known_files.id
             WHERE known_files.ed2k_hash = ?
@@ -335,6 +431,8 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         "upload_priority": row[10],
         "comment": row[11],
         "rating": row[12],
+        "source_path": row[13],
+        "source_mtime_ms": row[14],
         "md4_hashset": md4_hashset,
         "aich_hashset": aich_hashset,
         "sources": sources,

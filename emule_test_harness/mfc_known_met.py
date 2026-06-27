@@ -1,0 +1,299 @@
+"""Import MFC ``known.met`` shared-file hashes into Rust metadata.
+
+``known.met`` does not store source paths, so imports are deliberately
+conservative: a record is imported only when a scan of the configured shared
+roots finds exactly one file with the same basename, byte size, and whole-second
+mtime as the MFC record. The Rust row stores the actual scanned mtime in
+milliseconds so the normal share-in-place reload skip can avoid hashing later.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from emule_test_harness import rust_metadata
+
+MET_HEADER = 0x0E
+MET_HEADER_I64TAGS = 0x0F
+FT_FILENAME = 0x01
+FT_FILESIZE = 0x02
+FT_AICHHASHSET = 0x35
+TAGTYPE_STRING = 0x02
+TAGTYPE_UINT32 = 0x03
+TAGTYPE_FLOAT32 = 0x04
+TAGTYPE_BOOL = 0x05
+TAGTYPE_BOOLARRAY = 0x06
+TAGTYPE_BLOB = 0x07
+TAGTYPE_UINT16 = 0x08
+TAGTYPE_UINT8 = 0x09
+TAGTYPE_UINT64 = 0x0B
+TAGTYPE_STR1 = 0x11
+TAGTYPE_STR16 = 0x20
+
+
+@dataclass(frozen=True)
+class KnownMetEntry:
+    modified_s: int
+    ed2k_hash: str
+    md4_hashset: list[str]
+    name: str | None
+    size_bytes: int | None
+    aich_root: str | None
+    aich_hashset: list[str]
+
+
+@dataclass(frozen=True)
+class SharedFileCandidate:
+    path: Path
+    size_bytes: int
+    mtime_s: int
+    mtime_ms: int
+
+
+class BinaryReader:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.pos = 0
+
+    def remaining(self) -> int:
+        return len(self.data) - self.pos
+
+    def read(self, count: int) -> bytes:
+        if count < 0 or self.pos + count > len(self.data):
+            raise ValueError("truncated known.met")
+        chunk = self.data[self.pos : self.pos + count]
+        self.pos += count
+        return chunk
+
+    def u8(self) -> int:
+        return self.read(1)[0]
+
+    def u16(self) -> int:
+        return int.from_bytes(self.read(2), "little")
+
+    def u32(self) -> int:
+        return int.from_bytes(self.read(4), "little")
+
+    def u64(self) -> int:
+        return int.from_bytes(self.read(8), "little")
+
+
+def parse_known_met(path: Path) -> list[KnownMetEntry]:
+    reader = BinaryReader(path.read_bytes())
+    header = reader.u8()
+    if header not in {MET_HEADER, MET_HEADER_I64TAGS}:
+        raise ValueError(f"unsupported known.met header 0x{header:02x}")
+    record_count = reader.u32()
+    entries = []
+    for _ in range(record_count):
+        entries.append(_read_known_met_record(reader))
+    if reader.remaining() != 0:
+        raise ValueError("known.met has trailing bytes")
+    return entries
+
+
+def import_mfc_known_met_hashes(
+    *,
+    rust_repo: Path,
+    metadata_db: Path,
+    known_met: Path,
+    shared_roots: list[Path],
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    if not dry_run and not metadata_db.exists():
+        rust_metadata.create_metadata_db(rust_repo, metadata_db)
+
+    entries = parse_known_met(known_met)
+    candidates = scan_shared_file_candidates(shared_roots)
+    by_key: dict[tuple[str, int, int], list[SharedFileCandidate]] = {}
+    for candidate in candidates:
+        by_key.setdefault(
+            (
+                candidate.path.name.casefold(),
+                candidate.size_bytes,
+                candidate.mtime_s,
+            ),
+            [],
+        ).append(candidate)
+
+    reason_counts = {
+        "missing_identity": 0,
+        "md4_count_mismatch": 0,
+        "no_unique_path_match": 0,
+        "aich_count_mismatch": 0,
+    }
+    imported = 0
+    matched = 0
+    for entry in entries:
+        if entry.name is None or entry.size_bytes is None:
+            reason_counts["missing_identity"] += 1
+            continue
+        if len(entry.md4_hashset) != expected_md4_hash_count(entry.size_bytes):
+            reason_counts["md4_count_mismatch"] += 1
+            continue
+        matches = by_key.get((entry.name.casefold(), entry.size_bytes, entry.modified_s), [])
+        if len(matches) != 1:
+            reason_counts["no_unique_path_match"] += 1
+            continue
+        if entry.aich_root is not None and len(entry.aich_hashset) != expected_aich_hash_count(entry.size_bytes):
+            reason_counts["aich_count_mismatch"] += 1
+            continue
+
+        matched += 1
+        if not dry_run:
+            candidate = matches[0]
+            rust_metadata.seed_share_in_place_manifest(
+                metadata_db,
+                ed2k_hash=entry.ed2k_hash,
+                name=entry.name,
+                size_bytes=entry.size_bytes,
+                source_path=str(candidate.path),
+                source_mtime_ms=candidate.mtime_ms,
+                md4_hashset=entry.md4_hashset,
+                aich_root=entry.aich_root,
+                aich_hashset=entry.aich_hashset,
+            )
+            imported += 1
+
+    return {
+        "knownMetRecords": len(entries),
+        "sharedFilesScanned": len(candidates),
+        "matchedRecords": matched,
+        "importedRecords": imported,
+        "dryRun": dry_run,
+        "skipped": reason_counts,
+        "metadataDb": str(metadata_db),
+    }
+
+
+def scan_shared_file_candidates(roots: list[Path]) -> list[SharedFileCandidate]:
+    candidates: list[SharedFileCandidate] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for dirpath, _, filenames in os.walk(root):
+            for filename in filenames:
+                path = Path(dirpath) / filename
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if not path.is_file():
+                    continue
+                candidates.append(
+                    SharedFileCandidate(
+                        path=path,
+                        size_bytes=stat.st_size,
+                        mtime_s=int(stat.st_mtime),
+                        mtime_ms=stat.st_mtime_ns // 1_000_000,
+                    )
+                )
+    return candidates
+
+
+def expected_md4_hash_count(file_size: int) -> int:
+    if file_size == 0:
+        return 0
+    whole_parts = file_size // rust_metadata.ED2K_PART_SIZE
+    return whole_parts + int(whole_parts > 0)
+
+
+def expected_aich_hash_count(file_size: int) -> int:
+    if file_size <= rust_metadata.ED2K_PART_SIZE:
+        return 0
+    return (file_size + rust_metadata.ED2K_PART_SIZE - 1) // rust_metadata.ED2K_PART_SIZE
+
+
+def _read_known_met_record(reader: BinaryReader) -> KnownMetEntry:
+    modified_s = reader.u32()
+    ed2k_hash = reader.read(16).hex()
+    part_count = reader.u16()
+    md4_hashset = [reader.read(16).hex() for _ in range(part_count)]
+    tags = [_read_tag(reader) for _ in range(reader.u32())]
+    name = _first_tag_value(tags, FT_FILENAME, str)
+    size = _first_tag_value(tags, FT_FILESIZE, int)
+    aich_blob = _first_tag_value(tags, FT_AICHHASHSET, bytes)
+    aich_root, aich_hashset = _parse_aich_hashset_blob(aich_blob) if aich_blob else (None, [])
+    return KnownMetEntry(
+        modified_s=modified_s,
+        ed2k_hash=ed2k_hash,
+        md4_hashset=md4_hashset,
+        name=name,
+        size_bytes=size,
+        aich_root=aich_root,
+        aich_hashset=aich_hashset,
+    )
+
+
+def _read_tag(reader: BinaryReader) -> tuple[int | str, Any]:
+    tag_type = reader.u8()
+    if tag_type & 0x80:
+        tag_type &= 0x7F
+        name: int | str = reader.u8()
+    else:
+        name_len = reader.u16()
+        if name_len == 1:
+            name = reader.u8()
+        else:
+            name = reader.read(name_len).decode("ascii", errors="replace")
+
+    if tag_type == TAGTYPE_STRING:
+        return name, _decode_mfc_string(reader.read(reader.u16()))
+    if TAGTYPE_STR1 <= tag_type <= TAGTYPE_STR16:
+        return name, _decode_mfc_string(reader.read(tag_type - TAGTYPE_STR1 + 1))
+    if tag_type == TAGTYPE_UINT32:
+        return name, reader.u32()
+    if tag_type == TAGTYPE_UINT64:
+        return name, reader.u64()
+    if tag_type == TAGTYPE_UINT16:
+        return name, reader.u16()
+    if tag_type == TAGTYPE_UINT8:
+        return name, reader.u8()
+    if tag_type == TAGTYPE_FLOAT32:
+        return name, reader.read(4)
+    if tag_type == TAGTYPE_BOOL:
+        return name, bool(reader.u8())
+    if tag_type == TAGTYPE_BOOLARRAY:
+        bit_count = reader.u16()
+        return name, reader.read((bit_count // 8) + 1)
+    if tag_type == TAGTYPE_BLOB:
+        return name, reader.read(reader.u32())
+    raise ValueError(f"unsupported known.met tag type 0x{tag_type:02x}")
+
+
+def _decode_mfc_string(raw: bytes) -> str:
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    for encoding in ("mbcs", "cp1252", "utf-8"):
+        try:
+            return raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _first_tag_value(tags: list[tuple[int | str, Any]], name_id: int, expected_type: type) -> Any | None:
+    for name, value in tags:
+        if name == name_id and isinstance(value, expected_type):
+            return value
+    return None
+
+
+def _parse_aich_hashset_blob(blob: bytes) -> tuple[str, list[str]]:
+    if len(blob) < 22:
+        raise ValueError("truncated AICH hashset blob")
+    reader = BinaryReader(blob)
+    root = reader.read(20).hex()
+    part_count = reader.u16()
+    expected_len = 20 + 2 + (20 * part_count)
+    if len(blob) != expected_len:
+        raise ValueError("AICH hashset blob length mismatch")
+    return root, [reader.read(20).hex() for _ in range(part_count)]
+
+
+def summary_json(summary: dict[str, Any]) -> str:
+    return json.dumps(summary, indent=2, sort_keys=True)
