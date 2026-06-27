@@ -60,8 +60,13 @@ from emule_test_harness.soak_launch import (
     DEFAULT_SERVER_MET_URL,
     DEFAULT_UPLOAD_LIMIT_KIBPS,
     MFC_API_KEY,
+    MFC_ED2K_PORT,
+    MFC_KAD_PORT,
+    MFC_SERVER_UDP_PORT,
     OPERATOR_SERVER,
     RUST_API_KEY,
+    RUST_ED2K_PORT,
+    RUST_KAD_PORT,
     bring_up_mfc,
     bring_up_rust,
     log,
@@ -612,6 +617,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lead-seconds", type=float, default=sad.DEFAULT_LEAD_SECONDS, help="Window padding before an action (s).")
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
+    parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
+    parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
+    parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
+    parser.add_argument("--mfc-kad-port", type=int, default=MFC_KAD_PORT)
+    parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
     parser.add_argument("--nodes-url", default=DEFAULT_NODES_DAT_URL, help="Kad nodes.dat URL (same source for both clients).")
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
     parser.add_argument("--bootstrap-limit", type=int, default=40)
@@ -709,6 +719,13 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--rest-timeout must be greater than zero.")
     if args.connect_timeout <= 0.0:
         raise ValueError("--connect-timeout must be greater than zero.")
+    endpoint_ports = soak_launch.require_distinct_endpoint_ports(
+        rust_ed2k_port=args.rust_ed2k_port,
+        rust_kad_port=args.rust_kad_port,
+        mfc_ed2k_port=args.mfc_ed2k_port,
+        mfc_kad_port=args.mfc_kad_port,
+        mfc_server_udp_port=args.mfc_server_udp_port,
+    )
 
     rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
     if not rest_addr:
@@ -790,6 +807,11 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     log(f"campaign {campaign_id} - sharing {len(shared_roots)} library root(s) on both clients")
+    log(
+        "P2P endpoint ports: "
+        f"rust TCP {args.rust_ed2k_port}/UDP {args.rust_kad_port}; "
+        f"MFC TCP {args.mfc_ed2k_port}/UDP {args.mfc_kad_port}"
+    )
     log(f"reports under {report_dir}")
 
     log("ensuring hide.me split tunnel for both clients...")
@@ -833,6 +855,7 @@ def main(argv: list[str] | None = None) -> int:
         "restLanAddress": rest_addr,
         "rustRestPort": args.rust_rest_port,
         "mfcRestPort": args.mfc_rest_port,
+        "endpointPorts": endpoint_ports,
     }
     write_summary(summary, summary_path)
 
@@ -849,6 +872,7 @@ def main(argv: list[str] | None = None) -> int:
             incoming_dir=rust_incoming_dir, bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
             server_met_url=args.server_met_url, obfuscation=obfuscation,
             upload_limit_kibps=args.upload_limit_kibps, timeouts=timeouts,
+            ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
         )
         mfc_handles = bring_up_mfc(
             live_common=live_common, rest_smoke=rest_smoke, shared_dirs_mod=shared_dirs_mod,
@@ -857,6 +881,8 @@ def main(argv: list[str] | None = None) -> int:
             rest_host=rest_addr, rest_port=args.mfc_rest_port, shared_roots=shared_roots,
             obfuscation=obfuscation, upload_limit_kibps=args.upload_limit_kibps,
             log_trim_bytes=args.log_trim_bytes, timeouts=timeouts,
+            ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
+            server_udp_port=args.mfc_server_udp_port,
         )
 
         rust_proc = rust_handles["process"]

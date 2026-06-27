@@ -44,9 +44,14 @@ from emule_test_harness.rust_client import stop_process_tree
 from emule_test_harness.soak_launch import (
     DEFAULT_MFC_SEED_CONFIG_DIR,
     DEFAULT_SERVER_MET_URL,
+    MFC_ED2K_PORT,
     MFC_API_KEY,
+    MFC_KAD_PORT,
+    MFC_SERVER_UDP_PORT,
     OPERATOR_SERVER,
+    RUST_ED2K_PORT,
     RUST_API_KEY,
+    RUST_KAD_PORT,
     bring_up_mfc,
     bring_up_rust,
     log,
@@ -66,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)
+    parser.add_argument("--rust-ed2k-port", type=int, default=RUST_ED2K_PORT)
+    parser.add_argument("--rust-kad-port", type=int, default=RUST_KAD_PORT)
+    parser.add_argument("--mfc-ed2k-port", type=int, default=MFC_ED2K_PORT)
+    parser.add_argument("--mfc-kad-port", type=int, default=MFC_KAD_PORT)
+    parser.add_argument("--mfc-server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
     parser.add_argument("--no-mfc", action="store_true", help="Do not launch the MFC diagnostics GUI.")
     parser.add_argument("--no-trackmulebb", action="store_true", help="Do not auto-start TrackMuleBB.")
     parser.add_argument("--no-obfuscation", action="store_true", help="Disable protocol obfuscation on both clients.")
@@ -174,6 +184,13 @@ def graceful_teardown(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     obfuscation = not args.no_obfuscation
+    endpoint_ports = soak_launch.require_distinct_endpoint_ports(
+        rust_ed2k_port=args.rust_ed2k_port,
+        rust_kad_port=args.rust_kad_port,
+        mfc_ed2k_port=args.mfc_ed2k_port,
+        mfc_kad_port=args.mfc_kad_port,
+        mfc_server_udp_port=args.mfc_server_udp_port,
+    )
 
     rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
     if not rest_addr:
@@ -199,6 +216,11 @@ def main(argv: list[str] | None = None) -> int:
     rust_runtime = soak_root / "rust-runtime"
     mfc_artifacts = soak_root / "mfc-profile"
     log(f"persistent profiles under {soak_root} - sharing {len(shared_roots)} library root(s)")
+    log(
+        "P2P endpoint ports: "
+        f"rust TCP {endpoint_ports['rust']['ed2kTcpPort']}/UDP {endpoint_ports['rust']['kadUdpPort']}; "
+        f"MFC TCP {endpoint_ports['mfc']['ed2kTcpPort']}/UDP {endpoint_ports['mfc']['kadUdpPort']}"
+    )
 
     log("ensuring hide.me split tunnel...")
     rust_vpn = ensure_vpn_ready(rust_exe, name="eMuleBB Rust")
@@ -229,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             packet_dump_dir=rust_runtime / "packet-dump", bootstrap_nodes=bootstrap_nodes,
             shared_roots=shared_roots, server_met_url=args.server_met_url,
             obfuscation=obfuscation, timeouts=timeouts,
+            ed2k_port=args.rust_ed2k_port, kad_port=args.rust_kad_port,
         )
         rust_proc = rust_handles["process"]
         rust_base = rust_handles["baseUrl"]
@@ -241,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
                 seed_config_dir=seed_config_dir, artifacts_dir=mfc_artifacts,
                 rest_host=rest_addr, rest_port=args.mfc_rest_port, shared_roots=shared_roots,
                 obfuscation=obfuscation, timeouts=timeouts,
+                ed2k_port=args.mfc_ed2k_port, kad_port=args.mfc_kad_port,
+                server_udp_port=args.mfc_server_udp_port,
             )
             mfc_base = mfc_handles["baseUrl"]
 

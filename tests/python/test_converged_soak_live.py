@@ -30,6 +30,60 @@ def test_soak_launch_requires_same_vpn_bind_ip() -> None:
         soak_launch.require_same_vpn_bind_ip({"bindIp": ""}, {"bindIp": "10.0.0.5"})
 
 
+def test_soak_endpoint_ports_are_distinct_by_default() -> None:
+    ports = soak_launch.require_distinct_endpoint_ports(
+        rust_ed2k_port=soak_launch.RUST_ED2K_PORT,
+        rust_kad_port=soak_launch.RUST_KAD_PORT,
+        mfc_ed2k_port=soak_launch.MFC_ED2K_PORT,
+        mfc_kad_port=soak_launch.MFC_KAD_PORT,
+        mfc_server_udp_port=soak_launch.MFC_SERVER_UDP_PORT,
+    )
+
+    assert ports == {
+        "rust": {"ed2kTcpPort": 42662, "kadUdpPort": 42672},
+        "mfc": {"ed2kTcpPort": 43662, "kadUdpPort": 43672, "serverUdpPort": 43673},
+    }
+
+
+def test_soak_endpoint_ports_reject_duplicates() -> None:
+    with pytest.raises(ValueError, match="must be distinct"):
+        soak_launch.require_distinct_endpoint_ports(
+            rust_ed2k_port=42662,
+            rust_kad_port=42672,
+            mfc_ed2k_port=42662,
+            mfc_kad_port=43672,
+            mfc_server_udp_port=43673,
+        )
+
+
+def test_apply_mfc_endpoint_ports_persists_emule_preferences(tmp_path: Path) -> None:
+    calls: list[tuple[Path, tuple[tuple[str, str], ...]]] = []
+
+    class _LiveCommon:
+        @staticmethod
+        def apply_emule_preferences(config_dir: Path, values: tuple[tuple[str, str], ...]) -> None:
+            calls.append((config_dir, values))
+
+    soak_launch.apply_mfc_endpoint_ports(
+        live_common=_LiveCommon,
+        config_dir=tmp_path,
+        ed2k_port=43662,
+        kad_port=43672,
+        server_udp_port=43673,
+    )
+
+    assert calls == [
+        (
+            tmp_path,
+            (
+                ("Port", "43662"),
+                ("UDPPort", "43672"),
+                ("ServerUDPPort", "43673"),
+            ),
+        )
+    ]
+
+
 def test_load_shareddir_roots_deduplicates_and_adds_incoming(tmp_path: Path) -> None:
     shareddir = tmp_path / "shareddir.dat"
     shareddir.write_text(

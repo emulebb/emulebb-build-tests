@@ -32,8 +32,14 @@ OPERATOR_SERVER = "45.82.80.155:5687"
 OPERATOR_SERVER_NAME = "operator-parity"
 DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met"
 DEFAULT_MFC_SEED_CONFIG_DIR = REPO_ROOT / "manifests" / "live-profile-seed" / "config"
-ED2K_PORT = 42662
-KAD_PORT = 42672
+RUST_ED2K_PORT = 42662
+RUST_KAD_PORT = 42672
+MFC_ED2K_PORT = 43662
+MFC_KAD_PORT = 43672
+MFC_SERVER_UDP_PORT = 43673
+# Compatibility aliases for older helper imports.
+ED2K_PORT = RUST_ED2K_PORT
+KAD_PORT = RUST_KAD_PORT
 RUST_API_KEY = "converged-soak"
 MFC_API_KEY = "converged-soak-mfc"
 DEFAULT_UPLOAD_LIMIT_KIBPS = 3072
@@ -57,6 +63,47 @@ def require_same_vpn_bind_ip(rust_vpn: dict[str, Any], mfc_vpn: dict[str, Any]) 
             f"rust={rust_bind_ip!r}, mfc={mfc_bind_ip!r}. Both clients must use the same VPN adapter."
         )
     return rust_bind_ip
+
+
+def require_distinct_endpoint_ports(
+    *,
+    rust_ed2k_port: int,
+    rust_kad_port: int,
+    mfc_ed2k_port: int,
+    mfc_kad_port: int,
+    mfc_server_udp_port: int,
+) -> dict[str, dict[str, int]]:
+    """Validates and reports the public P2P endpoint ports used by both clients."""
+
+    ports = {
+        "rust": {
+            "ed2kTcpPort": rust_ed2k_port,
+            "kadUdpPort": rust_kad_port,
+        },
+        "mfc": {
+            "ed2kTcpPort": mfc_ed2k_port,
+            "kadUdpPort": mfc_kad_port,
+            "serverUdpPort": mfc_server_udp_port,
+        },
+    }
+    flattened: list[tuple[str, int]] = [
+        (f"{client}.{name}", int(port))
+        for client, values in ports.items()
+        for name, port in values.items()
+    ]
+    for name, port in flattened:
+        if port < 1 or port > 65535:
+            raise ValueError(f"{name} must be in the range 1..65535, got {port}.")
+    seen: dict[int, str] = {}
+    duplicates: list[str] = []
+    for name, port in flattened:
+        existing = seen.get(port)
+        if existing is not None:
+            duplicates.append(f"{existing} and {name} both use {port}")
+        seen[port] = name
+    if duplicates:
+        raise ValueError("Soak client P2P ports must be distinct: " + "; ".join(duplicates))
+    return ports
 
 
 def normalize_shared_root(path: str) -> str:
@@ -251,6 +298,26 @@ def apply_mfc_soak_preferences(
     )
 
 
+def apply_mfc_endpoint_ports(
+    *,
+    live_common: ModuleType,
+    config_dir: Path,
+    ed2k_port: int,
+    kad_port: int,
+    server_udp_port: int,
+) -> None:
+    """Persists the MFC P2P endpoint ports before launch."""
+
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("Port", str(ed2k_port)),
+            ("UDPPort", str(kad_port)),
+            ("ServerUDPPort", str(server_udp_port)),
+        ),
+    )
+
+
 def load_scripts_module(module_name: str, filename: str) -> ModuleType:
     """Loads one hyphenated helper script from ``scripts/`` as an importable module."""
 
@@ -296,8 +363,10 @@ def bring_up_rust(
     shared_roots: list[str],
     server_met_url: str,
     obfuscation: bool,
-    upload_limit_kibps: int,
     timeouts: dict[str, float],
+    upload_limit_kibps: int = DEFAULT_UPLOAD_LIMIT_KIBPS,
+    ed2k_port: int = RUST_ED2K_PORT,
+    kad_port: int = RUST_KAD_PORT,
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent runtime and returns live handles."""
 
@@ -315,8 +384,8 @@ def bring_up_rust(
         api_key=RUST_API_KEY,
         p2p_bind_ip=bind_ip,
         p2p_bind_interface="hide.me",
-        ed2k_port=ED2K_PORT,
-        kad_port=KAD_PORT,
+        ed2k_port=ed2k_port,
+        kad_port=kad_port,
         server_endpoint=OPERATOR_SERVER,
         obfuscation_enabled=obfuscation,
         kad_bootstrap_nodes=bootstrap_nodes,
@@ -368,9 +437,12 @@ def bring_up_mfc(
     rest_port: int,
     shared_roots: list[str],
     obfuscation: bool,
-    upload_limit_kibps: int,
-    log_trim_bytes: int,
     timeouts: dict[str, float],
+    upload_limit_kibps: int = DEFAULT_UPLOAD_LIMIT_KIBPS,
+    log_trim_bytes: int = DEFAULT_LOG_TRIM_BYTES,
+    ed2k_port: int = MFC_ED2K_PORT,
+    kad_port: int = MFC_KAD_PORT,
+    server_udp_port: int = MFC_SERVER_UDP_PORT,
 ) -> dict[str, Any]:
     """Launches the MFC diagnostics GUI on the persistent profile (left open)."""
 
@@ -398,6 +470,13 @@ def bring_up_mfc(
         replace_shared_roots = False
 
     rest_smoke.configure_webserver_profile(config_dir, exe_path, MFC_API_KEY, rest_port, rest_host)
+    apply_mfc_endpoint_ports(
+        live_common=live_common,
+        config_dir=config_dir,
+        ed2k_port=ed2k_port,
+        kad_port=kad_port,
+        server_udp_port=server_udp_port,
+    )
     rest_smoke.apply_p2p_bind_interface_override(config_dir, "hide.me")
     live_common.apply_private_harness_obfuscation(config_dir, obfuscation)
     apply_mfc_soak_preferences(
