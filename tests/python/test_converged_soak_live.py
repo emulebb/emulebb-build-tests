@@ -313,6 +313,37 @@ def test_checkpoint_operator_reconnect_skips_connected_client() -> None:
     assert result == {"attempted": False, "reason": "already_connected"}
 
 
+def test_operator_connected_requires_configured_server() -> None:
+    runner = _load_soak_runner()
+
+    assert runner.operator_connected(
+        {"connected": True, "serverAddress": "45.82.80.155", "serverPort": 5687}
+    )
+    assert not runner.operator_connected(
+        {"connected": True, "serverAddress": "198.51.100.2", "serverPort": 5687}
+    )
+    assert not runner.operator_connected(
+        {"connected": False, "serverAddress": "45.82.80.155", "serverPort": 5687}
+    )
+
+
+def test_connectivity_gate_requires_both_clients_on_operator() -> None:
+    runner = _load_soak_runner()
+    connected = {"connected": True, "serverAddress": "45.82.80.155", "serverPort": 5687}
+    disconnected = {"connected": False}
+
+    assert runner.connectivity_gate(connected, connected)["ok"] is True
+
+    gate = runner.connectivity_gate(disconnected, connected)
+    assert gate == {
+        "ok": False,
+        "rustConnected": False,
+        "mfcConnected": True,
+        "rustOnOperator": False,
+        "mfcOnOperator": True,
+    }
+
+
 def test_checkpoint_operator_reconnect_triggers_disconnected_client(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_soak_runner()
     calls: list[tuple[str, str, str]] = []

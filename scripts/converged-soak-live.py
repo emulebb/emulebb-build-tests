@@ -294,13 +294,39 @@ def status_snapshot(base_url: str, api_key: str) -> dict[str, Any]:
     data = _api_data(status)
     runtime = data.get("runtimeDiagnostics") if isinstance(data.get("runtimeDiagnostics"), dict) else {}
     servers = data.get("servers") if isinstance(data.get("servers"), dict) else {}
+    current_server = servers.get("currentServer") if isinstance(servers.get("currentServer"), dict) else {}
     return {
         "connected": bool(servers.get("connected")),
         "lowId": servers.get("lowId"),
+        "serverAddress": current_server.get("address"),
+        "serverPort": current_server.get("port"),
         "activeUploads": runtime.get("activeUploads"),
         "waitingUploads": runtime.get("waitingUploads"),
         "sharedFileCount": runtime.get("sharedFileCount"),
         "sharedHashingCount": runtime.get("sharedHashingCount"),
+    }
+
+
+def operator_connected(status: dict[str, Any]) -> bool:
+    """Returns true when a redacted status snapshot is on the required server."""
+
+    if not status.get("connected"):
+        return False
+    address, port_text = OPERATOR_SERVER.rsplit(":", 1)
+    return str(status.get("serverAddress") or "") == address and int(status.get("serverPort") or 0) == int(port_text)
+
+
+def connectivity_gate(rust_status: dict[str, Any], mfc_status: dict[str, Any]) -> dict[str, Any]:
+    """Summarizes whether an action can be compared under same-server parity."""
+
+    rust_ok = operator_connected(rust_status)
+    mfc_ok = operator_connected(mfc_status)
+    return {
+        "ok": rust_ok and mfc_ok,
+        "rustConnected": bool(rust_status.get("connected")),
+        "mfcConnected": bool(mfc_status.get("connected")),
+        "rustOnOperator": rust_ok,
+        "mfcOnOperator": mfc_ok,
     }
 
 
@@ -760,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
         "downloadDelaySeconds": auto_download_delay if args.auto_drive else None,
         "maxCycles": args.auto_max_cycles if args.auto_drive else None,
         "cycles": [],
+        "connectivitySkips": [],
     }
 
     log(f"campaign {campaign_id} - sharing {len(shared_roots)} library root(s) on both clients")
@@ -894,6 +921,7 @@ def main(argv: list[str] | None = None) -> int:
         auto_cycle = 0
         next_auto = started + args.auto_start_delay if args.auto_drive else float("inf")
         pending_downloads: list[dict[str, Any]] = []
+        last_connectivity_reconnect = 0.0
 
         def process_report(report: dict[str, Any]) -> None:
             nonlocal seq
@@ -905,12 +933,31 @@ def main(argv: list[str] | None = None) -> int:
             action_label = public_action_label(str(full.get("kind") or "action"))
             log(f"action #{seq} [{full.get('verdict')}] {action_label} -> {path.name}")
 
+        def maybe_reconnect_rust(status: dict[str, Any]) -> None:
+            nonlocal last_connectivity_reconnect
+            if time.monotonic() - last_connectivity_reconnect < min(60.0, args.checkpoint_interval):
+                return
+            checkpoint_operator_reconnect(rust_base, RUST_API_KEY, status)
+            last_connectivity_reconnect = time.monotonic()
+
         while True:
             now = datetime.now(timezone.utc)
+            rust_loop_status = status_snapshot(rust_base, RUST_API_KEY)
+            mfc_loop_status = status_snapshot(mfc_base, MFC_API_KEY)
+            gate = connectivity_gate(rust_loop_status, mfc_loop_status)
             for pending in list(pending_downloads):
                 if time.monotonic() < float(pending["dueAtMono"]):
                     continue
                 download = pending["download"]
+                if not gate["ok"]:
+                    pending["dueAtMono"] = time.monotonic() + min(60.0, args.auto_search_interval)
+                    download["connectivityDelayed"] = int(download.get("connectivityDelayed") or 0) + 1
+                    summary["driver"]["connectivitySkips"].append(
+                        {"ts": now.isoformat(), "cycle": pending["cycle"], "kind": "download", **gate}
+                    )
+                    maybe_reconnect_rust(rust_loop_status)
+                    write_summary(summary, summary_path)
+                    continue
                 file_hash = str(download.get("hash") or "").strip().lower()
                 log(f"auto cycle {pending['cycle']}: starting delayed download action")
                 try:
@@ -941,53 +988,66 @@ def main(argv: list[str] | None = None) -> int:
                 and time.monotonic() >= next_auto
                 and (args.auto_max_cycles == 0 or auto_cycle < args.auto_max_cycles)
             ):
-                auto_cycle += 1
-                query = auto_terms[(auto_cycle - 1) % len(auto_terms)]
-                should_download = args.auto_download_every > 0 and auto_cycle % args.auto_download_every == 0
-                log(
-                    f"auto cycle {auto_cycle}: synchronized {args.auto_method} search "
-                    f"(download={str(should_download).lower()})"
-                )
-                try:
-                    cycle = drive_automatic_cycle(
-                        cycle_index=auto_cycle,
-                        query=query,
-                        method=args.auto_method,
-                        rust_base=rust_base,
-                        mfc_base=mfc_base,
-                        rust_mod=rust_mod,
-                        download=should_download,
-                        search_timeout_seconds=args.auto_search_timeout,
+                if not gate["ok"]:
+                    summary["driver"]["connectivitySkips"].append(
+                        {"ts": now.isoformat(), "kind": "search", **gate}
                     )
-                except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
-                    cycle = {
-                        "cycle": auto_cycle,
-                        "queryIndex": auto_cycle - 1,
-                        "method": args.auto_method,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                    log(f"auto cycle {auto_cycle}: {cycle['error']}")
-                summary["driver"]["cycles"].append(cycle)
-                download = cycle.get("download")
-                if isinstance(download, dict) and download.get("scheduled"):
-                    pending_downloads.append(
-                        {
+                    maybe_reconnect_rust(rust_loop_status)
+                    write_summary(summary, summary_path)
+                    next_auto = time.monotonic() + min(60.0, args.auto_search_interval)
+                    log("auto cycle delayed: both clients are not connected to the operator server")
+                else:
+                    auto_cycle += 1
+                    query = auto_terms[(auto_cycle - 1) % len(auto_terms)]
+                    should_download = args.auto_download_every > 0 and auto_cycle % args.auto_download_every == 0
+                    log(
+                        f"auto cycle {auto_cycle}: synchronized {args.auto_method} search "
+                        f"(download={str(should_download).lower()})"
+                    )
+                    try:
+                        cycle = drive_automatic_cycle(
+                            cycle_index=auto_cycle,
+                            query=query,
+                            method=args.auto_method,
+                            rust_base=rust_base,
+                            mfc_base=mfc_base,
+                            rust_mod=rust_mod,
+                            download=should_download,
+                            search_timeout_seconds=args.auto_search_timeout,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - keep the overnight soak alive
+                        cycle = {
                             "cycle": auto_cycle,
-                            "download": download,
-                            "dueAtMono": time.monotonic() + auto_download_delay,
+                            "queryIndex": auto_cycle - 1,
+                            "method": args.auto_method,
+                            "error": f"{type(exc).__name__}: {exc}",
                         }
-                    )
-                    download["delaySeconds"] = auto_download_delay
-                write_summary(summary, summary_path)
-                next_auto = time.monotonic() + args.auto_search_interval
+                        log(f"auto cycle {auto_cycle}: {cycle['error']}")
+                    summary["driver"]["cycles"].append(cycle)
+                    download = cycle.get("download")
+                    if isinstance(download, dict) and download.get("scheduled"):
+                        pending_downloads.append(
+                            {
+                                "cycle": auto_cycle,
+                                "download": download,
+                                "dueAtMono": time.monotonic() + auto_download_delay,
+                            }
+                        )
+                        download["delaySeconds"] = auto_download_delay
+                    write_summary(summary, summary_path)
+                    next_auto = time.monotonic() + args.auto_search_interval
 
-            pairs, aged_unpaired = tracker.tick(
-                now,
-                rust_searches=sad.normalize_search_items(_get_list(rust_base, "/api/v1/searches", RUST_API_KEY, "searches")),
-                rust_transfers=sad.normalize_transfer_items(_get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers")),
-                mfc_searches=sad.normalize_search_items(_get_list(mfc_base, "/api/v1/searches", MFC_API_KEY, "searches")),
-                mfc_transfers=sad.normalize_transfer_items(_get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers")),
-            )
+            if gate["ok"]:
+                pairs, aged_unpaired = tracker.tick(
+                    now,
+                    rust_searches=sad.normalize_search_items(_get_list(rust_base, "/api/v1/searches", RUST_API_KEY, "searches")),
+                    rust_transfers=sad.normalize_transfer_items(_get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers")),
+                    mfc_searches=sad.normalize_search_items(_get_list(mfc_base, "/api/v1/searches", MFC_API_KEY, "searches")),
+                    mfc_transfers=sad.normalize_transfer_items(_get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers")),
+                )
+            else:
+                maybe_reconnect_rust(rust_loop_status)
+                pairs, aged_unpaired = [], []
             if pairs:
                 rust_pkts = load_packets(rust_dump_dir, side="rust")
                 mfc_pkts = load_packets(mfc_dump_dir, side="emule")
