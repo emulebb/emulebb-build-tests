@@ -137,6 +137,93 @@ def test_converged_soak_fresh_rust_runtime_is_campaign_scoped(tmp_path: Path) ->
     }
 
 
+def test_converged_soak_poll_list_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_soak_runner()
+    calls: list[dict[str, object]] = []
+
+    def fake_retry(description: str, attempts: int, base_url: str, path: str, **kwargs: object) -> object:
+        calls.append(
+            {
+                "description": description,
+                "attempts": attempts,
+                "base_url": base_url,
+                "path": path,
+                "timeout_seconds": kwargs.get("timeout_seconds"),
+            }
+        )
+        return {"data": {"items": [{"id": "one"}]}}
+
+    monkeypatch.setattr(runner, "retry_http_json", fake_retry)
+
+    rows = runner._get_list("http://client", "/api/v1/searches", "key", "searches", timeout_seconds=42.5)
+
+    assert rows == [{"id": "one"}]
+    assert calls == [
+        {
+            "description": "poll /api/v1/searches",
+            "attempts": 1,
+            "base_url": "http://client",
+            "path": "/api/v1/searches",
+            "timeout_seconds": 42.5,
+        }
+    ]
+
+
+def test_converged_soak_status_snapshot_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_soak_runner()
+    calls: list[dict[str, object]] = []
+
+    def fake_retry(description: str, attempts: int, base_url: str, path: str, **kwargs: object) -> object:
+        calls.append(
+            {
+                "description": description,
+                "attempts": attempts,
+                "base_url": base_url,
+                "path": path,
+                "timeout_seconds": kwargs.get("timeout_seconds"),
+            }
+        )
+        return {
+            "data": {
+                "servers": {
+                    "connected": True,
+                    "lowId": False,
+                    "currentServer": {"address": "45.87.41.16", "port": 6262},
+                },
+                "runtimeDiagnostics": {
+                    "activeUploads": 1,
+                    "waitingUploads": 2,
+                    "sharedFileCount": 3,
+                    "sharedHashingCount": 4,
+                },
+            }
+        }
+
+    monkeypatch.setattr(runner, "retry_http_json", fake_retry)
+
+    status = runner.status_snapshot("http://client", "key", timeout_seconds=37.0)
+
+    assert status == {
+        "connected": True,
+        "lowId": False,
+        "serverAddress": "45.87.41.16",
+        "serverPort": 6262,
+        "activeUploads": 1,
+        "waitingUploads": 2,
+        "sharedFileCount": 3,
+        "sharedHashingCount": 4,
+    }
+    assert calls == [
+        {
+            "description": "soak status",
+            "attempts": 1,
+            "base_url": "http://client",
+            "path": "/api/v1/status",
+            "timeout_seconds": 37.0,
+        }
+    ]
+
+
 def test_mfc_known_met_import_skips_without_direct_mfc_profile(tmp_path: Path) -> None:
     runner = _load_soak_runner()
 

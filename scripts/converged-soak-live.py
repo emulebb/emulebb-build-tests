@@ -120,10 +120,16 @@ def _extract_items(payload: Any, *keys: str) -> list[dict[str, Any]]:
     return []
 
 
-def _get_list(base_url: str, path: str, api_key: str, *keys: str) -> list[dict[str, Any]]:
+def _get_list(
+    base_url: str,
+    path: str,
+    api_key: str,
+    *keys: str,
+    timeout_seconds: float = 10.0,
+) -> list[dict[str, Any]]:
     try:
         payload = retry_http_json(
-            f"poll {path}", 1, base_url, path, api_key=api_key, timeout_seconds=10.0
+            f"poll {path}", 1, base_url, path, api_key=api_key, timeout_seconds=timeout_seconds
         )
     except RuntimeError:
         return []
@@ -292,9 +298,16 @@ def execute_scheduled_download(
     }
 
 
-def status_snapshot(base_url: str, api_key: str) -> dict[str, Any]:
+def status_snapshot(base_url: str, api_key: str, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
     try:
-        status = retry_http_json("soak status", 1, base_url, "/api/v1/status", api_key=api_key, timeout_seconds=10.0)
+        status = retry_http_json(
+            "soak status",
+            1,
+            base_url,
+            "/api/v1/status",
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
     except RuntimeError as exc:
         return {"error": str(exc)}
     data = _api_data(status)
@@ -630,6 +643,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--duration", default="0", help="Soak length: 2h / 90m / 3600s / 0 (until quit).")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="REST poll cadence (s).")
+    parser.add_argument(
+        "--poll-rest-timeout",
+        type=float,
+        default=30.0,
+        help="Per-request timeout for steady-state REST polls (s).",
+    )
     parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")
     parser.add_argument("--rest-timeout", type=float, default=60.0, help="Seconds to wait for each client's REST startup.")
     parser.add_argument("--connect-timeout", type=float, default=240.0, help="Seconds to wait for eD2K connection evidence.")
@@ -788,6 +807,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     duration = parse_duration(args.duration)
     obfuscation = not args.no_obfuscation
+    if args.poll_interval <= 0.0:
+        raise ValueError("--poll-interval must be greater than zero.")
+    if args.poll_rest_timeout <= 0.0:
+        raise ValueError("--poll-rest-timeout must be greater than zero.")
     if args.lead_seconds < 0.0:
         raise ValueError("--lead-seconds must be zero or greater.")
     if args.settle_seconds < 0.0:
@@ -945,6 +968,7 @@ def main(argv: list[str] | None = None) -> int:
         "rustRuntimeDirName": rust_runtime.name,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "logTrimBytes": args.log_trim_bytes,
+        "pollRestTimeoutSeconds": args.poll_rest_timeout,
         "restLanAddress": rest_addr,
         "rustRestPort": args.rust_rest_port,
         "mfcRestPort": args.mfc_rest_port,
@@ -1019,16 +1043,40 @@ def main(argv: list[str] | None = None) -> int:
         )
         baseline = tracker.prime(
             rust_searches=sad.normalize_search_items(
-                _get_list(rust_base, "/api/v1/searches", RUST_API_KEY, "searches")
+                _get_list(
+                    rust_base,
+                    "/api/v1/searches",
+                    RUST_API_KEY,
+                    "searches",
+                    timeout_seconds=args.poll_rest_timeout,
+                )
             ),
             rust_transfers=sad.normalize_transfer_items(
-                _get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers")
+                _get_list(
+                    rust_base,
+                    "/api/v1/transfers",
+                    RUST_API_KEY,
+                    "transfers",
+                    timeout_seconds=args.poll_rest_timeout,
+                )
             ),
             mfc_searches=sad.normalize_search_items(
-                _get_list(mfc_base, "/api/v1/searches", MFC_API_KEY, "searches")
+                _get_list(
+                    mfc_base,
+                    "/api/v1/searches",
+                    MFC_API_KEY,
+                    "searches",
+                    timeout_seconds=args.poll_rest_timeout,
+                )
             ),
             mfc_transfers=sad.normalize_transfer_items(
-                _get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers")
+                _get_list(
+                    mfc_base,
+                    "/api/v1/transfers",
+                    MFC_API_KEY,
+                    "transfers",
+                    timeout_seconds=args.poll_rest_timeout,
+                )
             ),
         )
         summary["baseline"] = baseline
@@ -1076,8 +1124,8 @@ def main(argv: list[str] | None = None) -> int:
 
         while True:
             now = datetime.now(timezone.utc)
-            rust_loop_status = status_snapshot(rust_base, RUST_API_KEY)
-            mfc_loop_status = status_snapshot(mfc_base, MFC_API_KEY)
+            rust_loop_status = status_snapshot(rust_base, RUST_API_KEY, timeout_seconds=args.poll_rest_timeout)
+            mfc_loop_status = status_snapshot(mfc_base, MFC_API_KEY, timeout_seconds=args.poll_rest_timeout)
             gate = connectivity_gate(
                 rust_loop_status,
                 mfc_loop_status,
@@ -1179,10 +1227,42 @@ def main(argv: list[str] | None = None) -> int:
             if gate["ok"]:
                 pairs, aged_unpaired = tracker.tick(
                     now,
-                    rust_searches=sad.normalize_search_items(_get_list(rust_base, "/api/v1/searches", RUST_API_KEY, "searches")),
-                    rust_transfers=sad.normalize_transfer_items(_get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers")),
-                    mfc_searches=sad.normalize_search_items(_get_list(mfc_base, "/api/v1/searches", MFC_API_KEY, "searches")),
-                    mfc_transfers=sad.normalize_transfer_items(_get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers")),
+                    rust_searches=sad.normalize_search_items(
+                        _get_list(
+                            rust_base,
+                            "/api/v1/searches",
+                            RUST_API_KEY,
+                            "searches",
+                            timeout_seconds=args.poll_rest_timeout,
+                        )
+                    ),
+                    rust_transfers=sad.normalize_transfer_items(
+                        _get_list(
+                            rust_base,
+                            "/api/v1/transfers",
+                            RUST_API_KEY,
+                            "transfers",
+                            timeout_seconds=args.poll_rest_timeout,
+                        )
+                    ),
+                    mfc_searches=sad.normalize_search_items(
+                        _get_list(
+                            mfc_base,
+                            "/api/v1/searches",
+                            MFC_API_KEY,
+                            "searches",
+                            timeout_seconds=args.poll_rest_timeout,
+                        )
+                    ),
+                    mfc_transfers=sad.normalize_transfer_items(
+                        _get_list(
+                            mfc_base,
+                            "/api/v1/transfers",
+                            MFC_API_KEY,
+                            "transfers",
+                            timeout_seconds=args.poll_rest_timeout,
+                        )
+                    ),
                 )
             else:
                 maybe_reconnect_rust(rust_loop_status)
@@ -1246,8 +1326,8 @@ def main(argv: list[str] | None = None) -> int:
             # Periodic stability + coverage checkpoint.
             if time.monotonic() - last_checkpoint >= args.checkpoint_interval:
                 last_checkpoint = time.monotonic()
-                rust_status = status_snapshot(rust_base, RUST_API_KEY)
-                mfc_status = status_snapshot(mfc_base, MFC_API_KEY)
+                rust_status = status_snapshot(rust_base, RUST_API_KEY, timeout_seconds=args.poll_rest_timeout)
+                mfc_status = status_snapshot(mfc_base, MFC_API_KEY, timeout_seconds=args.poll_rest_timeout)
                 checkpoint = {
                     "schema": "soak_checkpoint_v1",
                     "ts_utc": now.isoformat(),
