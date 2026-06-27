@@ -127,6 +127,22 @@ def normalize_transfer_items(items: Any) -> list[dict[str, str]]:
     for item in items or []:
         if not isinstance(item, dict):
             continue
+        state = str(_first(item, "state", "status") or "").strip().lower()
+        try:
+            size_bytes = int(_first(item, "sizeBytes", "size") or 0)
+            completed_bytes = int(_first(item, "completedBytes", "completed") or 0)
+            sources = int(_first(item, "sources", "sourceCount") or 0)
+            sources_transferring = int(_first(item, "sourcesTransferring", "activeSources") or 0)
+        except (TypeError, ValueError):
+            size_bytes = completed_bytes = sources = sources_transferring = 0
+        if (
+            state in {"complete", "completed"}
+            and size_bytes > 0
+            and completed_bytes >= size_bytes
+            and sources <= 0
+            and sources_transferring <= 0
+        ):
+            continue
         file_hash = _first(
             item, "hash", "fileHash", "file_hash", "ed2kHash", "md4", "fileHashHex"
         )

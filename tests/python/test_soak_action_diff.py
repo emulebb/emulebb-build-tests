@@ -70,6 +70,32 @@ def test_normalize_transfer_items_keys_on_hash() -> None:
     assert items[0]["label"] == "thing.iso"
 
 
+def test_normalize_transfer_items_ignores_completed_zero_source_seed_rows() -> None:
+    items = sad.normalize_transfer_items(
+        [
+            {
+                "hash": "aa",
+                "name": "Seeded File",
+                "state": "completed",
+                "sizeBytes": 100,
+                "completedBytes": 100,
+                "sources": 0,
+                "sourcesTransferring": 0,
+            },
+            {
+                "hash": "bb",
+                "name": "Active Download",
+                "state": "downloading",
+                "sizeBytes": 100,
+                "completedBytes": 10,
+                "sources": 3,
+                "sourcesTransferring": 1,
+            },
+        ]
+    )
+    assert items == [{"id": "bb", "key": "bb", "label": "Active Download"}]
+
+
 def test_normalize_skips_unusable_rows() -> None:
     assert sad.normalize_search_items([{"id": "x"}]) == []  # no query
     assert sad.normalize_transfer_items([{"id": "x"}]) == []  # no hash
