@@ -111,6 +111,32 @@ def test_existing_shared_roots_counts_inaccessible_entries(tmp_path: Path) -> No
     assert skipped == 1
 
 
+def test_converged_soak_defaults_to_persistent_rust_runtime(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+
+    selection = runner.resolve_rust_runtime_paths(tmp_path / "soak", "20260627T120000Z", fresh=False)
+
+    assert selection == {
+        "runtimeDir": tmp_path / "soak" / "rust-runtime",
+        "packetDumpDir": tmp_path / "soak" / "rust-runtime" / "packet-dump",
+        "mode": "persistent",
+        "fresh": False,
+    }
+
+
+def test_converged_soak_fresh_rust_runtime_is_campaign_scoped(tmp_path: Path) -> None:
+    runner = _load_soak_runner()
+
+    selection = runner.resolve_rust_runtime_paths(tmp_path / "soak", "20260627T120000Z", fresh=True)
+
+    assert selection == {
+        "runtimeDir": tmp_path / "soak" / "rust-runtime-20260627T120000Z",
+        "packetDumpDir": tmp_path / "soak" / "rust-runtime-20260627T120000Z" / "packet-dump",
+        "mode": "fresh-campaign",
+        "fresh": True,
+    }
+
+
 def test_ensure_operator_server_reuses_existing_row(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str]] = []
 

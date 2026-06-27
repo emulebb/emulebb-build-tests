@@ -618,7 +618,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--inputs", required=True, help="Path to live-wire-inputs.local.json (shared roots).")
     parser.add_argument("--shared-dir-file", help="Optional MFC shareddir.dat to use as the parity share source.")
     parser.add_argument("--rust-incoming-dir", help="Optional Rust incomingDir; also added to the parity share set.")
-    parser.add_argument("--fresh-rust-runtime", action="store_true", help="Use a campaign-scoped Rust runtime instead of the persistent soak runtime.")
+    parser.add_argument(
+        "--fresh-rust-runtime",
+        action="store_true",
+        help=(
+            "Use a campaign-scoped Rust runtime instead of the persistent "
+            "soak/rust-runtime profile. This intentionally discards the Rust "
+            "shared-file hash cache for the run."
+        ),
+    )
     parser.add_argument("--duration", default="0", help="Soak length: 2h / 90m / 3600s / 0 (until quit).")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="REST poll cadence (s).")
     parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")
@@ -716,6 +724,18 @@ def trim_log_tree(paths: list[Path], *, max_bytes: int) -> list[dict[str, Any]]:
     return results
 
 
+def resolve_rust_runtime_paths(soak_root: Path, campaign_id: str, *, fresh: bool) -> dict[str, Path | str | bool]:
+    """Returns the Rust runtime/cache path selection for a converged soak run."""
+
+    runtime_dir = soak_root / (f"rust-runtime-{campaign_id}" if fresh else "rust-runtime")
+    return {
+        "runtimeDir": runtime_dir,
+        "packetDumpDir": runtime_dir / "packet-dump",
+        "mode": "fresh-campaign" if fresh else "persistent",
+        "fresh": fresh,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     duration = parse_duration(args.duration)
@@ -800,8 +820,13 @@ def main(argv: list[str] | None = None) -> int:
 
     campaign_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     soak_root = output_root / "soak"
-    rust_runtime = soak_root / (f"rust-runtime-{campaign_id}" if args.fresh_rust_runtime else "rust-runtime")
-    rust_packet_dump = rust_runtime / "packet-dump"
+    rust_runtime_selection = resolve_rust_runtime_paths(
+        soak_root,
+        campaign_id,
+        fresh=bool(args.fresh_rust_runtime),
+    )
+    rust_runtime = Path(rust_runtime_selection["runtimeDir"])
+    rust_packet_dump = Path(rust_runtime_selection["packetDumpDir"])
     mfc_artifacts = soak_root / "mfc-profile"
     report_dir = soak_root / "reports" / campaign_id
     actions_dir = report_dir / "actions"
@@ -822,6 +847,7 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     log(f"campaign {campaign_id} - sharing {len(shared_roots)} library root(s) on both clients")
+    log(f"rust runtime mode: {rust_runtime_selection['mode']} ({rust_runtime.name})")
     log(
         "P2P endpoint ports: "
         f"rust TCP {args.rust_ed2k_port}/UDP {args.rust_kad_port}; "
@@ -867,6 +893,8 @@ def main(argv: list[str] | None = None) -> int:
         "rustIncomingDirConfigured": rust_incoming_dir is not None,
         "directMfcProfile": mfc_profile_dir is not None,
         "freshRustRuntime": bool(args.fresh_rust_runtime),
+        "rustRuntimeMode": rust_runtime_selection["mode"],
+        "rustRuntimeDirName": rust_runtime.name,
         "uploadLimitKiBps": args.upload_limit_kibps,
         "logTrimBytes": args.log_trim_bytes,
         "restLanAddress": rest_addr,
