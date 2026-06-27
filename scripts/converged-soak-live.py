@@ -646,7 +646,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--poll-rest-timeout",
         type=float,
-        default=30.0,
+        default=90.0,
         help="Per-request timeout for steady-state REST polls (s).",
     )
     parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")

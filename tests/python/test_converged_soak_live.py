@@ -137,6 +137,14 @@ def test_converged_soak_fresh_rust_runtime_is_campaign_scoped(tmp_path: Path) ->
     }
 
 
+def test_converged_soak_poll_rest_timeout_default_covers_hashing_load() -> None:
+    runner = _load_soak_runner()
+
+    args = runner.build_parser().parse_args(["--inputs", "live-wire-inputs.local.json"])
+
+    assert args.poll_rest_timeout == 90.0
+
+
 def test_converged_soak_poll_list_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_soak_runner()
     calls: list[dict[str, object]] = []
