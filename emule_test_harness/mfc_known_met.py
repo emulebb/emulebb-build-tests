@@ -54,6 +54,14 @@ class SharedFileCandidate:
     mtime_ms: int
 
 
+@dataclass(frozen=True)
+class MfcSharedFileRow:
+    path: Path
+    name: str
+    ed2k_hash: str
+    size_bytes: int
+
+
 class BinaryReader:
     def __init__(self, data: bytes) -> None:
         self.data = data
@@ -177,6 +185,111 @@ def import_mfc_known_met_hashes(
     }
 
 
+def import_mfc_shared_file_rows_hashes(
+    *,
+    rust_repo: Path,
+    metadata_db: Path,
+    known_met: Path,
+    shared_file_rows: list[dict[str, Any]],
+    shared_roots: list[Path],
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Import MFC REST shared-file rows into Rust metadata by exact source path.
+
+    MFC's ``/api/v1/shared-files`` rows expose the full local path and ED2K hash,
+    which removes the basename/size/mtime ambiguity inherent in raw
+    ``known.met``. We still require the matching ``known.met`` entry so large
+    files keep their MD4/AICH part hashsets when Rust skips hashing.
+    """
+
+    if not dry_run and not metadata_db.exists():
+        rust_metadata.create_metadata_db(rust_repo, metadata_db)
+
+    known_entries = {entry.ed2k_hash: entry for entry in parse_known_met(known_met)}
+    roots = [_canonical_existing_root(root) for root in shared_roots if root.is_dir()]
+    parsed_rows: list[MfcSharedFileRow] = []
+    reason_counts = {
+        "invalid_row": 0,
+        "path_outside_shared_roots": 0,
+        "path_missing": 0,
+        "size_mismatch": 0,
+        "missing_known_met_entry": 0,
+        "md4_count_mismatch": 0,
+        "aich_count_mismatch": 0,
+    }
+    for row in shared_file_rows:
+        parsed = _parse_mfc_shared_file_row(row)
+        if parsed is None:
+            reason_counts["invalid_row"] += 1
+            continue
+        if roots and not _path_is_under_roots(parsed.path, roots):
+            reason_counts["path_outside_shared_roots"] += 1
+            continue
+        try:
+            stat = parsed.path.stat()
+        except OSError:
+            reason_counts["path_missing"] += 1
+            continue
+        if not parsed.path.is_file():
+            reason_counts["path_missing"] += 1
+            continue
+        if stat.st_size != parsed.size_bytes:
+            reason_counts["size_mismatch"] += 1
+            continue
+        entry = known_entries.get(parsed.ed2k_hash)
+        if entry is None:
+            reason_counts["missing_known_met_entry"] += 1
+            continue
+        if len(entry.md4_hashset) != expected_md4_hash_count(parsed.size_bytes):
+            reason_counts["md4_count_mismatch"] += 1
+            continue
+        if entry.aich_root is not None and len(entry.aich_hashset) != expected_aich_hash_count(parsed.size_bytes):
+            reason_counts["aich_count_mismatch"] += 1
+            continue
+        parsed_rows.append(parsed)
+        if not dry_run:
+            rust_metadata.seed_share_in_place_manifest(
+                metadata_db,
+                ed2k_hash=parsed.ed2k_hash,
+                name=parsed.name,
+                size_bytes=parsed.size_bytes,
+                source_path=str(parsed.path),
+                source_mtime_ms=stat.st_mtime_ns // 1_000_000,
+                md4_hashset=entry.md4_hashset,
+                aich_root=entry.aich_root,
+                aich_hashset=entry.aich_hashset,
+            )
+
+    return {
+        "knownMetRecords": len(known_entries),
+        "sharedFileRows": len(shared_file_rows),
+        "matchedRows": len(parsed_rows),
+        "importedRows": 0 if dry_run else len(parsed_rows),
+        "dryRun": dry_run,
+        "skipped": reason_counts,
+        "metadataDb": str(metadata_db),
+    }
+
+
+def load_shared_file_rows_json(path: Path) -> list[dict[str, Any]]:
+    """Load shared-file rows from a REST envelope, ``{"items": [...]}``, or list."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if isinstance(data, dict):
+        items = data.get("items")
+        if isinstance(items, list):
+            return [row for row in items if isinstance(row, dict)]
+    items = payload.get("items")
+    if isinstance(items, list):
+        return [row for row in items if isinstance(row, dict)]
+    return []
+
+
 def scan_shared_file_candidates(roots: list[Path]) -> list[SharedFileCandidate]:
     candidates: list[SharedFileCandidate] = []
     for root in roots:
@@ -200,6 +313,47 @@ def scan_shared_file_candidates(roots: list[Path]) -> list[SharedFileCandidate]:
                     )
                 )
     return candidates
+
+
+def _parse_mfc_shared_file_row(row: dict[str, Any]) -> MfcSharedFileRow | None:
+    raw_hash = str(row.get("hash") or row.get("fileHash") or "").strip().lower()
+    raw_path = str(row.get("path") or "").strip()
+    raw_name = str(row.get("name") or "").strip()
+    raw_size = row.get("sizeBytes", row.get("size"))
+    if len(raw_hash) != 32:
+        return None
+    try:
+        bytes.fromhex(raw_hash)
+    except ValueError:
+        return None
+    if not raw_path:
+        return None
+    try:
+        size_bytes = int(raw_size)
+    except (TypeError, ValueError):
+        return None
+    if size_bytes < 0:
+        return None
+    path = Path(raw_path)
+    name = raw_name or path.name
+    if not name:
+        return None
+    return MfcSharedFileRow(path=path, name=name, ed2k_hash=raw_hash, size_bytes=size_bytes)
+
+
+def _canonical_existing_root(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _path_is_under_roots(path: Path, roots: list[str]) -> bool:
+    candidate = os.path.normcase(os.path.abspath(str(path)))
+    for root in roots:
+        try:
+            if os.path.commonpath([candidate, root]) == root:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def expected_md4_hash_count(file_size: int) -> int:
