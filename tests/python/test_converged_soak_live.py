@@ -265,6 +265,44 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
     assert cycle["download"]["searchIds"] == {"rust": "rust-search", "mfc": "mfc-search"}
 
 
+def test_checkpoint_operator_reconnect_skips_connected_client() -> None:
+    runner = _load_soak_runner()
+
+    result = runner.checkpoint_operator_reconnect(
+        "http://client",
+        "key",
+        {"connected": True},
+    )
+
+    assert result == {"attempted": False, "reason": "already_connected"}
+
+
+def test_checkpoint_operator_reconnect_triggers_disconnected_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_soak_runner()
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_connect(base_url: str, api_key: str, *, description: str) -> dict[str, object]:
+        calls.append((base_url, api_key, description))
+        return {"connect": {"data": {"connected": False, "connecting": True, "serverCount": 1}}}
+
+    monkeypatch.setattr(runner.soak_launch, "connect_operator_server", fake_connect)
+
+    result = runner.checkpoint_operator_reconnect(
+        "http://client",
+        "key",
+        {"connected": False},
+    )
+
+    assert calls == [("http://client", "key", "checkpoint operator server reconnect")]
+    assert result == {
+        "attempted": True,
+        "ok": True,
+        "connected": False,
+        "connecting": True,
+        "serverCount": 1,
+    }
+
+
 def test_tracker_records_synchronized_download_action() -> None:
     runner = _load_soak_runner()
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)

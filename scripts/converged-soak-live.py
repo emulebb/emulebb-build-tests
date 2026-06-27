@@ -304,6 +304,31 @@ def status_snapshot(base_url: str, api_key: str) -> dict[str, Any]:
     }
 
 
+def checkpoint_operator_reconnect(base_url: str, api_key: str, status: dict[str, Any]) -> dict[str, Any]:
+    """Attempts a live operator-server reconnect when a checkpoint sees disconnect."""
+
+    if status.get("error"):
+        return {"attempted": False, "reason": "status_error"}
+    if status.get("connected"):
+        return {"attempted": False, "reason": "already_connected"}
+    try:
+        result = soak_launch.connect_operator_server(
+            base_url,
+            api_key,
+            description="checkpoint operator server reconnect",
+        )
+    except RuntimeError as exc:
+        return {"attempted": True, "ok": False, "error": str(exc)}
+    connect_data = _api_data(result.get("connect") if isinstance(result, dict) else result)
+    return {
+        "attempted": True,
+        "ok": True,
+        "connected": bool(connect_data.get("connected")),
+        "connecting": bool(connect_data.get("connecting")),
+        "serverCount": connect_data.get("serverCount"),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Trace loading (dumps grow during the soak; load + concat current contents).
 # --------------------------------------------------------------------------- #
@@ -1022,6 +1047,8 @@ def main(argv: list[str] | None = None) -> int:
             # Periodic stability + coverage checkpoint.
             if time.monotonic() - last_checkpoint >= args.checkpoint_interval:
                 last_checkpoint = time.monotonic()
+                rust_status = status_snapshot(rust_base, RUST_API_KEY)
+                mfc_status = status_snapshot(mfc_base, MFC_API_KEY)
                 checkpoint = {
                     "schema": "soak_checkpoint_v1",
                     "ts_utc": now.isoformat(),
@@ -1033,8 +1060,11 @@ def main(argv: list[str] | None = None) -> int:
                         "mfc": len(load_packets(mfc_dump_dir, side="emule")),
                     },
                     "restStatus": {
-                        "rust": status_snapshot(rust_base, RUST_API_KEY),
-                        "mfc": status_snapshot(mfc_base, MFC_API_KEY),
+                        "rust": rust_status,
+                        "mfc": mfc_status,
+                    },
+                    "reconnect": {
+                        "rust": checkpoint_operator_reconnect(rust_base, RUST_API_KEY, rust_status),
                     },
                     "errorLogHits": live_process_monitor.scan_log_markers(
                         [rust_runtime / "daemon.out"], log_offsets, error_patterns
