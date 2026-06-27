@@ -30,6 +30,21 @@ def test_soak_launch_requires_same_vpn_bind_ip() -> None:
         soak_launch.require_same_vpn_bind_ip({"bindIp": ""}, {"bindIp": "10.0.0.5"})
 
 
+def test_load_shareddir_roots_deduplicates_and_adds_incoming(tmp_path: Path) -> None:
+    shareddir = tmp_path / "shareddir.dat"
+    shareddir.write_text(
+        "C:\\ShareA\\\r\n"
+        "c:\\sharea\r\n"
+        "D:\\ShareB/\r\n"
+        "\r\n",
+        encoding="utf-8",
+    )
+
+    roots = soak_launch.load_shareddir_roots(shareddir, extra_roots=[Path("E:/Incoming")])
+
+    assert roots == ["C:\\ShareA\\", "D:\\ShareB\\", "E:\\Incoming\\"]
+
+
 def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
     runner = _load_soak_runner()
 

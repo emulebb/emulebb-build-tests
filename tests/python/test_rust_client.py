@@ -37,6 +37,22 @@ def test_write_rust_config_supports_rest_only_profile(tmp_path: Path) -> None:
     assert "[ed2k]" not in text
 
 
+def test_write_rust_config_supports_incoming_dir(tmp_path: Path) -> None:
+    config_path = tmp_path / "emulebb-rust.toml"
+
+    rust_client.write_rust_config(
+        config_path,
+        runtime_dir=tmp_path / "runtime",
+        incoming_dir=tmp_path / "incoming",
+        rest_addr="192.0.2.10",
+        rest_port=4711,
+        api_key="key",
+    )
+
+    text = config_path.read_text(encoding="utf-8")
+    assert f'incomingDir = "{(tmp_path / "incoming").as_posix()}"' in text
+
+
 def test_live_wire_report_separates_completed_and_partial_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_rust_live_wire_module()
 

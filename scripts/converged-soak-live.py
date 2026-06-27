@@ -55,8 +55,10 @@ from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_
 from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
 from emule_test_harness.rust_client import stop_process_tree
 from emule_test_harness.soak_launch import (
+    DEFAULT_LOG_TRIM_BYTES,
     DEFAULT_MFC_SEED_CONFIG_DIR,
     DEFAULT_SERVER_MET_URL,
+    DEFAULT_UPLOAD_LIMIT_KIBPS,
     MFC_API_KEY,
     OPERATOR_SERVER,
     RUST_API_KEY,
@@ -545,6 +547,9 @@ class ProcMonitor:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--inputs", required=True, help="Path to live-wire-inputs.local.json (shared roots).")
+    parser.add_argument("--shared-dir-file", help="Optional MFC shareddir.dat to use as the parity share source.")
+    parser.add_argument("--rust-incoming-dir", help="Optional Rust incomingDir; also added to the parity share set.")
+    parser.add_argument("--fresh-rust-runtime", action="store_true", help="Use a campaign-scoped Rust runtime instead of the persistent soak runtime.")
     parser.add_argument("--duration", default="0", help="Soak length: 2h / 90m / 3600s / 0 (until quit).")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="REST poll cadence (s).")
     parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")
@@ -558,6 +563,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-met-url", default=DEFAULT_SERVER_MET_URL, help="server.met URL for rust import (empty to skip).")
     parser.add_argument("--bootstrap-limit", type=int, default=40)
     parser.add_argument("--profile-seed-dir", help="MFC profile seed config directory.")
+    parser.add_argument("--mfc-profile-dir", help="Launch MFC directly with this profile directory instead of a copied seed profile.")
+    parser.add_argument("--upload-limit-kibps", type=int, default=DEFAULT_UPLOAD_LIMIT_KIBPS, help="Upload cap to apply to both clients.")
+    parser.add_argument("--log-trim-bytes", type=int, default=DEFAULT_LOG_TRIM_BYTES, help="Best-effort log tail-trim threshold; 0 disables.")
     parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
     parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
     parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
@@ -579,6 +587,57 @@ def write_summary(summary: dict[str, Any], path: Path) -> None:
     path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def trim_oversized_file(path: Path, *, max_bytes: int) -> dict[str, Any] | None:
+    """Best-effort tail trim for long-running diagnostic output files."""
+
+    if max_bytes <= 0 or not path.is_file():
+        return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size <= max_bytes:
+        return None
+    keep = max(max_bytes // 2, 1024 * 1024)
+    try:
+        with path.open("rb+") as handle:
+            handle.seek(max(0, size - keep))
+            data = handle.read()
+            newline = data.find(b"\n")
+            if newline > 0:
+                data = data[newline + 1:]
+            handle.seek(0)
+            handle.truncate()
+            handle.write(data)
+    except OSError as exc:
+        return {"path": str(path), "beforeBytes": size, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        after = path.stat().st_size
+    except OSError:
+        after = None
+    return {"path": str(path), "beforeBytes": size, "afterBytes": after}
+
+
+def trim_log_tree(paths: list[Path], *, max_bytes: int) -> list[dict[str, Any]]:
+    """Trims known soak output logs and returns compact evidence rows."""
+
+    if max_bytes <= 0:
+        return []
+    candidates: list[Path] = []
+    for path in paths:
+        if path.is_file():
+            candidates.append(path)
+        elif path.is_dir():
+            for pattern in ("*.log", "*.jsonl", "daemon.out"):
+                candidates.extend(path.glob(pattern))
+    results: list[dict[str, Any]] = []
+    for candidate in sorted(set(candidates)):
+        result = trim_oversized_file(candidate, max_bytes=max_bytes)
+        if result is not None:
+            results.append(result)
+    return results
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     duration = parse_duration(args.duration)
@@ -589,6 +648,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--settle-seconds must be zero or greater.")
     if args.download_settle_seconds < 0.0:
         raise ValueError("--download-settle-seconds must be zero or greater.")
+    if args.upload_limit_kibps < 0:
+        raise ValueError("--upload-limit-kibps must be zero or greater.")
+    if args.log_trim_bytes < 0:
+        raise ValueError("--log-trim-bytes must be zero or greater.")
 
     rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
     if not rest_addr:
@@ -607,9 +670,24 @@ def main(argv: list[str] | None = None) -> int:
     shared_dirs_mod = mods["shared_dirs"]
 
     inputs_path = Path(args.inputs).resolve()
-    shared_roots = rust_mod.load_shared_roots(inputs_path)
+    mfc_profile_dir = Path(args.mfc_profile_dir).resolve() if args.mfc_profile_dir else None
+    rust_incoming_dir = Path(args.rust_incoming_dir).resolve() if args.rust_incoming_dir else None
+    shared_dir_file = Path(args.shared_dir_file).resolve() if args.shared_dir_file else None
+    if shared_dir_file is None and mfc_profile_dir is not None:
+        shared_dir_file = mfc_profile_dir / "config" / "shareddir.dat"
+    if shared_dir_file is not None:
+        if not shared_dir_file.is_file():
+            raise RuntimeError(f"--shared-dir-file does not exist: {shared_dir_file}")
+        shared_roots = soak_launch.load_shareddir_roots(
+            shared_dir_file,
+            extra_roots=[rust_incoming_dir] if rust_incoming_dir is not None else None,
+        )
+        shared_root_source = "shareddir.dat"
+    else:
+        shared_roots = rust_mod.load_shared_roots(inputs_path)
+        shared_root_source = "live-wire inputs"
     if not shared_roots:
-        raise RuntimeError("No shared_directories.roots in the live-wire inputs - nothing to soak-share.")
+        raise RuntimeError("No shared roots resolved for the soak run.")
     auto_terms: list[str] = []
     if args.auto_drive:
         if args.auto_download_every < 0:
@@ -631,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
 
     campaign_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     soak_root = output_root / "soak"
-    rust_runtime = soak_root / "rust-runtime"
+    rust_runtime = soak_root / (f"rust-runtime-{campaign_id}" if args.fresh_rust_runtime else "rust-runtime")
     rust_packet_dump = rust_runtime / "packet-dump"
     mfc_artifacts = soak_root / "mfc-profile"
     report_dir = soak_root / "reports" / campaign_id
@@ -685,6 +763,12 @@ def main(argv: list[str] | None = None) -> int:
         "bootstrapContactCount": len(bootstrap_nodes),
         "sameShareSet": True,
         "sharedRootCount": len(shared_roots),
+        "sharedRootSource": shared_root_source,
+        "rustIncomingDirConfigured": rust_incoming_dir is not None,
+        "directMfcProfile": mfc_profile_dir is not None,
+        "freshRustRuntime": bool(args.fresh_rust_runtime),
+        "uploadLimitKiBps": args.upload_limit_kibps,
+        "logTrimBytes": args.log_trim_bytes,
         "restLanAddress": rest_addr,
         "rustRestPort": args.rust_rest_port,
         "mfcRestPort": args.mfc_rest_port,
@@ -701,14 +785,17 @@ def main(argv: list[str] | None = None) -> int:
         rust_handles = bring_up_rust(
             rust_mod=rust_mod, exe_path=rust_exe, bind_ip=bind_ip, rest_addr=rest_addr,
             rest_port=args.rust_rest_port, runtime_dir=rust_runtime, packet_dump_dir=rust_packet_dump,
-            bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
-            server_met_url=args.server_met_url, obfuscation=obfuscation, timeouts=timeouts,
+            incoming_dir=rust_incoming_dir, bootstrap_nodes=bootstrap_nodes, shared_roots=shared_roots,
+            server_met_url=args.server_met_url, obfuscation=obfuscation,
+            upload_limit_kibps=args.upload_limit_kibps, timeouts=timeouts,
         )
         mfc_handles = bring_up_mfc(
             live_common=live_common, rest_smoke=rest_smoke, shared_dirs_mod=shared_dirs_mod,
             exe_path=mfc_exe, seed_config_dir=seed_config_dir, artifacts_dir=mfc_artifacts,
+            direct_profile_dir=mfc_profile_dir,
             rest_host=rest_addr, rest_port=args.mfc_rest_port, shared_roots=shared_roots,
-            obfuscation=obfuscation, timeouts=timeouts,
+            obfuscation=obfuscation, upload_limit_kibps=args.upload_limit_kibps,
+            log_trim_bytes=args.log_trim_bytes, timeouts=timeouts,
         )
 
         rust_proc = rust_handles["process"]
@@ -942,6 +1029,10 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "errorLogHits": live_process_monitor.scan_log_markers(
                         [rust_runtime / "daemon.out"], log_offsets, error_patterns
+                    ),
+                    "logTrim": trim_log_tree(
+                        [rust_runtime / "daemon.out", rust_dump_dir, mfc_dump_dir],
+                        max_bytes=args.log_trim_bytes,
                     ),
                     "totals": summary["totals"],
                 }

@@ -20,6 +20,7 @@ from types import ModuleType
 from typing import Any
 
 from .rust_client import start_rust_client_executable_with_output, write_rust_config
+from .ini import read_ini_text
 from .vm_guest_profiles import retry_http_json, wait_until
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +35,8 @@ ED2K_PORT = 42662
 KAD_PORT = 42672
 RUST_API_KEY = "converged-soak"
 MFC_API_KEY = "converged-soak-mfc"
+DEFAULT_UPLOAD_LIMIT_KIBPS = 384
+DEFAULT_LOG_TRIM_BYTES = 64 * 1024 * 1024
 
 
 def log(message: str) -> None:
@@ -53,6 +56,83 @@ def require_same_vpn_bind_ip(rust_vpn: dict[str, Any], mfc_vpn: dict[str, Any]) 
             f"rust={rust_bind_ip!r}, mfc={mfc_bind_ip!r}. Both clients must use the same VPN adapter."
         )
     return rust_bind_ip
+
+
+def normalize_shared_root(path: str) -> str:
+    """Returns a REST shared-root path with one trailing Windows separator."""
+
+    root = path.strip().replace("/", "\\")
+    while root.endswith(("\\", "/")):
+        root = root[:-1]
+    return f"{root}\\"
+
+
+def dedupe_shared_roots(roots: list[str]) -> list[str]:
+    """Deduplicates shared roots case-insensitively while preserving order."""
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for root in roots:
+        normalized = normalize_shared_root(root)
+        key = normalized.casefold()
+        if not normalized.strip("\\") or key in seen:
+            continue
+        seen.add(key)
+        unique.append(normalized)
+    return unique
+
+
+def load_shareddir_roots(path: Path, *, extra_roots: list[Path] | None = None) -> list[str]:
+    """Loads MFC ``shareddir.dat`` roots plus optional operator content roots."""
+
+    roots = [
+        line.strip()
+        for line in read_ini_text(path).splitlines()
+        if line.strip()
+    ]
+    for extra_root in extra_roots or []:
+        roots.append(str(extra_root))
+    return dedupe_shared_roots(roots)
+
+
+def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> dict[str, Any]:
+    """Applies the shared REST upload cap preference to one live client."""
+
+    return retry_http_json(
+        "soak upload limit",
+        2,
+        base_url,
+        "/api/v1/app/preferences",
+        api_key=api_key,
+        method="PATCH",
+        body={"uploadLimitKiBps": upload_limit_kibps},
+        timeout_seconds=15.0,
+    )
+
+
+def apply_mfc_soak_preferences(
+    *,
+    live_common: ModuleType,
+    config_dir: Path,
+    upload_limit_kibps: int,
+    log_trim_bytes: int,
+) -> None:
+    """Persists MFC live-soak preferences that must be true before launch."""
+
+    live_common.apply_emule_preferences(
+        config_dir,
+        (
+            ("MaxUpload", str(upload_limit_kibps)),
+            ("SaveLogToDisk", "1"),
+            ("SaveDebugToDisk", "1"),
+            ("VerboseOptions", "1"),
+            ("Verbose", "1"),
+            ("FullVerbose", "1"),
+            ("MaxLogFileSize", str(log_trim_bytes)),
+            ("MaxLogBuff", "256"),
+            ("LogFileFormat", "0"),
+        ),
+    )
 
 
 def load_scripts_module(module_name: str, filename: str) -> ModuleType:
@@ -95,10 +175,12 @@ def bring_up_rust(
     rest_port: int,
     runtime_dir: Path,
     packet_dump_dir: Path,
+    incoming_dir: Path | None,
     bootstrap_nodes: list[str],
     shared_roots: list[str],
     server_met_url: str,
     obfuscation: bool,
+    upload_limit_kibps: int,
     timeouts: dict[str, float],
 ) -> dict[str, Any]:
     """Starts the rust daemon on the persistent runtime and returns live handles."""
@@ -111,6 +193,7 @@ def bring_up_rust(
     write_rust_config(
         config_path,
         runtime_dir=runtime_dir,
+        incoming_dir=incoming_dir,
         rest_addr=rest_addr,
         rest_port=rest_port,
         api_key=RUST_API_KEY,
@@ -131,6 +214,7 @@ def bring_up_rust(
     process = start_rust_client_executable_with_output(exe_path, config_path, handle)
 
     wait_until("rust REST ready", timeouts["rest"], lambda: rust_mod.get_stats(base_url) or None)
+    patch_upload_limit(base_url, RUST_API_KEY, upload_limit_kibps)
     if server_met_url:
         rust_mod.import_server_met(base_url, server_met_url)
     retry_http_json(
@@ -164,34 +248,55 @@ def bring_up_mfc(
     rest_smoke: ModuleType,
     shared_dirs_mod: ModuleType,
     exe_path: Path,
-    seed_config_dir: Path,
     artifacts_dir: Path,
+    seed_config_dir: Path,
+    direct_profile_dir: Path | None = None,
     rest_host: str,
     rest_port: int,
     shared_roots: list[str],
     obfuscation: bool,
+    upload_limit_kibps: int,
+    log_trim_bytes: int,
     timeouts: dict[str, float],
 ) -> dict[str, Any]:
     """Launches the MFC diagnostics GUI on the persistent profile (left open)."""
 
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://{rest_host}:{rest_port}"
-    profile = live_common.prepare_profile_base(
-        seed_config_dir,
-        artifacts_dir,
-        shared_dirs=list(shared_roots),
-        scenario_id="converged-soak",
-        reuse_existing=True,
-    )
-    config_dir = Path(str(profile["config_dir"]))
-    packet_dump_dir = Path(str(profile["log_dir"]))
+    if direct_profile_dir is None:
+        profile = live_common.prepare_profile_base(
+            seed_config_dir,
+            artifacts_dir,
+            shared_dirs=list(shared_roots),
+            scenario_id="converged-soak",
+            reuse_existing=True,
+        )
+        config_dir = Path(str(profile["config_dir"]))
+        profile_base = Path(str(profile["profile_base"]))
+        packet_dump_dir = Path(str(profile["log_dir"]))
+        replace_shared_roots = True
+    else:
+        profile_base = direct_profile_dir
+        config_dir = profile_base / "config"
+        if not (config_dir / "preferences.ini").is_file():
+            raise RuntimeError(f"Direct MFC profile is missing config/preferences.ini: {config_dir}")
+        packet_dump_dir = profile_base / "logs"
+        packet_dump_dir.mkdir(parents=True, exist_ok=True)
+        replace_shared_roots = False
 
     rest_smoke.configure_webserver_profile(config_dir, exe_path, MFC_API_KEY, rest_port, rest_host)
     rest_smoke.apply_p2p_bind_interface_override(config_dir, "hide.me")
     live_common.apply_private_harness_obfuscation(config_dir, obfuscation)
+    apply_mfc_soak_preferences(
+        live_common=live_common,
+        config_dir=config_dir,
+        upload_limit_kibps=upload_limit_kibps,
+        log_trim_bytes=log_trim_bytes,
+    )
 
-    app = live_common.launch_app(exe_path, Path(str(profile["profile_base"])))
+    app = live_common.launch_app(exe_path, profile_base)
     rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
+    patch_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
 
     rest_smoke.http_request(
         base_url, f"/api/v1/servers/{OPERATOR_SERVER}/operations/connect",
@@ -201,10 +306,11 @@ def bring_up_mfc(
     rest_smoke.http_request(
         base_url, "/api/v1/kad/operations/start", method="POST", api_key=MFC_API_KEY, json_body={}
     )
-    roots_payload = {
-        "confirmReplaceRoots": True,
-        "roots": [r if r.endswith(("\\", "/")) else r + "\\" for r in shared_roots],
-    }
-    shared_dirs_mod.patch_shared_directories(base_url, MFC_API_KEY, roots_payload)
-    log(f"MFC diagnostics GUI up - REST {base_url}, profile {profile['profile_base']}")
+    if replace_shared_roots:
+        roots_payload = {
+            "confirmReplaceRoots": True,
+            "roots": [normalize_shared_root(r) for r in shared_roots],
+        }
+        shared_dirs_mod.patch_shared_directories(base_url, MFC_API_KEY, roots_payload)
+    log(f"MFC diagnostics GUI up - REST {base_url}, profile {profile_base}")
     return {"app": app, "baseUrl": base_url, "packetDumpDir": packet_dump_dir}

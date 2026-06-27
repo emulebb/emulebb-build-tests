@@ -24,6 +24,7 @@ def write_rust_config(
     path: Path,
     *,
     runtime_dir: Path,
+    incoming_dir: Path | None = None,
     rest_addr: str,
     rest_port: int,
     api_key: str,
@@ -48,6 +49,8 @@ def write_rust_config(
     lines = [
         f'runtimeDir = "{runtime_dir.as_posix()}"',
     ]
+    if incoming_dir is not None:
+        lines.append(f'incomingDir = "{incoming_dir.as_posix()}"')
     if server_endpoint is not None:
         if (p2p_bind_ip is None and p2p_bind_interface is None) or ed2k_port is None or kad_port is None:
             raise ValueError(
