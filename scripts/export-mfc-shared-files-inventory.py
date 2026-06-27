@@ -92,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", required=True, help="MFC REST base URL, e.g. http://192.168.1.210:4732")
     parser.add_argument("--api-key", default=MFC_API_KEY)
     parser.add_argument("--output", required=True, help="Output JSON path.")
-    parser.add_argument("--page-size", type=int, default=5000)
+    parser.add_argument("--page-size", type=int, default=1000)
     parser.add_argument("--timeout-seconds", type=float, default=120.0)
     parser.add_argument("--sleep-seconds", type=float, default=0.1)
     return parser
