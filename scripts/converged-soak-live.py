@@ -553,6 +553,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration", default="0", help="Soak length: 2h / 90m / 3600s / 0 (until quit).")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="REST poll cadence (s).")
     parser.add_argument("--checkpoint-interval", type=float, default=300.0, help="Stability/coverage checkpoint cadence (s).")
+    parser.add_argument("--rest-timeout", type=float, default=60.0, help="Seconds to wait for each client's REST startup.")
+    parser.add_argument("--connect-timeout", type=float, default=240.0, help="Seconds to wait for eD2K connection evidence.")
     parser.add_argument("--correlation-window", type=float, default=sad.DEFAULT_CORRELATION_WINDOW_SECONDS, help="Max gap to pair the same action across clients (s).")
     parser.add_argument("--settle-seconds", type=float, default=sad.DEFAULT_SETTLE_SECONDS, help="Window padding after an action before diffing (s).")
     parser.add_argument("--download-settle-seconds", type=float, default=300.0, help="Window padding after a download action before diffing (s).")
@@ -652,6 +654,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--upload-limit-kibps must be zero or greater.")
     if args.log_trim_bytes < 0:
         raise ValueError("--log-trim-bytes must be zero or greater.")
+    if args.rest_timeout <= 0.0:
+        raise ValueError("--rest-timeout must be greater than zero.")
+    if args.connect_timeout <= 0.0:
+        raise ValueError("--connect-timeout must be greater than zero.")
 
     rest_addr = os.environ.get("X_LOCAL_IP", "").strip()
     if not rest_addr:
@@ -779,7 +785,7 @@ def main(argv: list[str] | None = None) -> int:
     write_summary(summary, summary_path)
 
     seed_config_dir = Path(args.profile_seed_dir).resolve() if args.profile_seed_dir else DEFAULT_MFC_SEED_CONFIG_DIR
-    timeouts = {"rest": 60.0, "connect": 240.0}
+    timeouts = {"rest": args.rest_timeout, "connect": args.connect_timeout}
 
     rust_handles: dict[str, Any] | None = None
     mfc_handles: dict[str, Any] | None = None
