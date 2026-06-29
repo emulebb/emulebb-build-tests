@@ -135,13 +135,7 @@ def normalize_transfer_items(items: Any) -> list[dict[str, str]]:
             sources_transferring = int(_first(item, "sourcesTransferring", "activeSources") or 0)
         except (TypeError, ValueError):
             size_bytes = completed_bytes = sources = sources_transferring = 0
-        if (
-            state in {"complete", "completed"}
-            and size_bytes > 0
-            and completed_bytes >= size_bytes
-            and sources <= 0
-            and sources_transferring <= 0
-        ):
+        if state in {"complete", "completed"} and size_bytes > 0 and completed_bytes >= size_bytes:
             continue
         file_hash = _first(
             item, "hash", "fileHash", "file_hash", "ed2kHash", "md4", "fileHashHex"

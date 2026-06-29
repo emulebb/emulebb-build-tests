@@ -70,7 +70,7 @@ def test_normalize_transfer_items_keys_on_hash() -> None:
     assert items[0]["label"] == "thing.iso"
 
 
-def test_normalize_transfer_items_ignores_completed_zero_source_seed_rows() -> None:
+def test_normalize_transfer_items_ignores_completed_seed_rows() -> None:
     items = sad.normalize_transfer_items(
         [
             {
@@ -79,7 +79,7 @@ def test_normalize_transfer_items_ignores_completed_zero_source_seed_rows() -> N
                 "state": "completed",
                 "sizeBytes": 100,
                 "completedBytes": 100,
-                "sources": 0,
+                "sources": 3,
                 "sourcesTransferring": 0,
             },
             {
