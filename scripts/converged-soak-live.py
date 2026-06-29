@@ -916,6 +916,8 @@ def import_mfc_shared_files_inventory_for_rust_profile(
         "sharedFileRows": raw["sharedFileRows"],
         "matchedRows": raw["matchedRows"],
         "importedRows": raw["importedRows"],
+        "seededRows": raw["seededRows"],
+        "updatedExistingRows": raw["updatedExistingRows"],
         "dryRun": raw["dryRun"],
         "skipped": raw["skipped"],
     }

@@ -210,7 +210,7 @@ def import_mfc_shared_file_rows_hashes(
 
     known_entries = {entry.ed2k_hash: entry for entry in parse_known_met(known_met)}
     roots = [_canonical_existing_root(root) for root in shared_roots if root.is_dir()]
-    parsed_rows: list[MfcSharedFileRow] = []
+    parsed_rows: list[tuple[MfcSharedFileRow, KnownMetEntry, int]] = []
     reason_counts = {
         "invalid_row": 0,
         "path_outside_shared_roots": 0,
@@ -249,15 +249,26 @@ def import_mfc_shared_file_rows_hashes(
         if entry.aich_root is not None and len(entry.aich_hashset) != expected_aich_hash_count(parsed.size_bytes):
             reason_counts["aich_count_mismatch"] += 1
             continue
-        parsed_rows.append(parsed)
-        if not dry_run:
+        parsed_rows.append((parsed, entry, stat.st_mtime_ns // 1_000_000))
+
+    seeded_rows = 0
+    updated_existing_rows = 0
+    if not dry_run:
+        existing = rust_metadata.read_existing_share_in_place_keys(metadata_db)
+        metadata_updates: list[dict[str, Any]] = []
+        for parsed, entry, source_mtime_ms in parsed_rows:
+            existing_key = existing.get(parsed.ed2k_hash)
+            if existing_key == (parsed.size_bytes, str(parsed.path), source_mtime_ms):
+                metadata_updates.append(_upload_metadata_update(parsed))
+                updated_existing_rows += 1
+                continue
             rust_metadata.seed_share_in_place_manifest(
                 metadata_db,
                 ed2k_hash=parsed.ed2k_hash,
                 name=parsed.name,
                 size_bytes=parsed.size_bytes,
                 source_path=str(parsed.path),
-                source_mtime_ms=stat.st_mtime_ns // 1_000_000,
+                source_mtime_ms=source_mtime_ms,
                 md4_hashset=entry.md4_hashset,
                 aich_root=entry.aich_root,
                 aich_hashset=entry.aich_hashset,
@@ -265,12 +276,16 @@ def import_mfc_shared_file_rows_hashes(
                 auto_upload_priority=parsed.auto_upload_priority,
                 all_time_uploaded_bytes=parsed.all_time_uploaded_bytes,
             )
+            seeded_rows += 1
+        rust_metadata.update_known_file_upload_metadata_bulk(metadata_db, metadata_updates)
 
     return {
         "knownMetRecords": len(known_entries),
         "sharedFileRows": len(shared_file_rows),
         "matchedRows": len(parsed_rows),
         "importedRows": 0 if dry_run else len(parsed_rows),
+        "seededRows": 0 if dry_run else seeded_rows,
+        "updatedExistingRows": 0 if dry_run else updated_existing_rows,
         "dryRun": dry_run,
         "skipped": reason_counts,
         "metadataDb": str(metadata_db),
@@ -356,6 +371,15 @@ def _parse_mfc_shared_file_row(row: dict[str, Any]) -> MfcSharedFileRow | None:
         auto_upload_priority=_parse_mfc_auto_upload_priority(raw_auto_priority, raw_priority),
         all_time_uploaded_bytes=_parse_non_negative_int(raw_all_time_transferred),
     )
+
+
+def _upload_metadata_update(row: MfcSharedFileRow) -> dict[str, Any]:
+    return {
+        "ed2k_hash": row.ed2k_hash,
+        "upload_priority": row.upload_priority,
+        "auto_upload_priority": row.auto_upload_priority,
+        "all_time_uploaded_bytes": row.all_time_uploaded_bytes,
+    }
 
 
 def _parse_mfc_upload_priority(value: str) -> str:
