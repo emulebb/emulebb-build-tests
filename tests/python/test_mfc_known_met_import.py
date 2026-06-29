@@ -223,6 +223,9 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
                 "name": "Duplicate.bin",
                 "path": str(payload),
                 "sizeBytes": payload.stat().st_size,
+                "priority": "auto",
+                "autoUploadPriority": True,
+                "allTimeTransferred": 123456789,
             }
         ],
         shared_roots=[root],
@@ -235,6 +238,9 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
     assert manifest["completed"] is True
     assert manifest["source_path"] == str(payload)
     assert manifest["source_mtime_ms"] // 1000 == modified_s
+    assert manifest["upload_priority"] == "auto"
+    assert manifest["auto_upload_priority"] is True
+    assert manifest["all_time_uploaded_bytes"] == 123456789
 
 
 def test_import_mfc_shared_file_rows_rejects_outside_shared_roots(tmp_path: Path) -> None:

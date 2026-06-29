@@ -60,6 +60,9 @@ class MfcSharedFileRow:
     name: str
     ed2k_hash: str
     size_bytes: int
+    upload_priority: str
+    auto_upload_priority: bool
+    all_time_uploaded_bytes: int
 
 
 class BinaryReader:
@@ -258,6 +261,9 @@ def import_mfc_shared_file_rows_hashes(
                 md4_hashset=entry.md4_hashset,
                 aich_root=entry.aich_root,
                 aich_hashset=entry.aich_hashset,
+                upload_priority=parsed.upload_priority,
+                auto_upload_priority=parsed.auto_upload_priority,
+                all_time_uploaded_bytes=parsed.all_time_uploaded_bytes,
             )
 
     return {
@@ -320,6 +326,9 @@ def _parse_mfc_shared_file_row(row: dict[str, Any]) -> MfcSharedFileRow | None:
     raw_path = str(row.get("path") or "").strip()
     raw_name = str(row.get("name") or "").strip()
     raw_size = row.get("sizeBytes", row.get("size"))
+    raw_priority = str(row.get("priority") or "").strip().lower()
+    raw_auto_priority = row.get("autoUploadPriority")
+    raw_all_time_transferred = row.get("allTimeTransferred", 0)
     if len(raw_hash) != 32:
         return None
     try:
@@ -338,7 +347,43 @@ def _parse_mfc_shared_file_row(row: dict[str, Any]) -> MfcSharedFileRow | None:
     name = raw_name or path.name
     if not name:
         return None
-    return MfcSharedFileRow(path=path, name=name, ed2k_hash=raw_hash, size_bytes=size_bytes)
+    return MfcSharedFileRow(
+        path=path,
+        name=name,
+        ed2k_hash=raw_hash,
+        size_bytes=size_bytes,
+        upload_priority=_parse_mfc_upload_priority(raw_priority),
+        auto_upload_priority=_parse_mfc_auto_upload_priority(raw_auto_priority, raw_priority),
+        all_time_uploaded_bytes=_parse_non_negative_int(raw_all_time_transferred),
+    )
+
+
+def _parse_mfc_upload_priority(value: str) -> str:
+    if value in {"auto", "verylow", "low", "normal", "high", "veryhigh", "release"}:
+        return value
+    return "normal"
+
+
+def _parse_mfc_auto_upload_priority(value: object, raw_priority: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        folded = value.strip().casefold()
+        if folded in {"1", "true", "yes", "on"}:
+            return True
+        if folded in {"0", "false", "no", "off"}:
+            return False
+    return raw_priority == "auto"
+
+
+def _parse_non_negative_int(value: object) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(parsed, 0)
 
 
 def _canonical_existing_root(path: Path) -> str:

@@ -128,6 +128,7 @@ def seed_transfer_manifest(
     control_state: str | None = None,
     upload_priority: str = "normal",
     auto_upload_priority: bool = False,
+    all_time_uploaded_bytes: int = 0,
     comment: str = "",
     rating: int = 0,
     source_path: str | None = None,
@@ -160,10 +161,10 @@ def seed_transfer_manifest(
                 content_object_id, ed2k_hash, size_bytes, canonical_name,
                 part_size, part_count, completed, md4_hashset_acquired,
                 aich_hashset_acquired, aich_root, upload_priority,
-                auto_upload_priority, comment, rating,
+                auto_upload_priority, comment, rating, all_time_uploaded_bytes,
                 first_seen_ms, last_seen_ms, updated_at_ms
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ed2k_hash) DO UPDATE SET
                 content_object_id = excluded.content_object_id,
                 size_bytes = excluded.size_bytes,
@@ -178,6 +179,7 @@ def seed_transfer_manifest(
                 auto_upload_priority = excluded.auto_upload_priority,
                 comment = excluded.comment,
                 rating = excluded.rating,
+                all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
                 last_seen_ms = excluded.last_seen_ms,
                 updated_at_ms = excluded.updated_at_ms
             """,
@@ -196,6 +198,7 @@ def seed_transfer_manifest(
                 1 if auto_upload_priority else 0,
                 comment,
                 rating,
+                all_time_uploaded_bytes,
                 now,
                 now,
                 now,
@@ -300,6 +303,9 @@ def seed_share_in_place_manifest(
     md4_hashset: list[str] | None = None,
     aich_root: str | None = None,
     aich_hashset: list[str] | None = None,
+    upload_priority: str = "normal",
+    auto_upload_priority: bool = False,
+    all_time_uploaded_bytes: int = 0,
 ) -> None:
     """Seed a completed shared-file manifest that Rust can reload without hashing.
 
@@ -321,6 +327,9 @@ def seed_share_in_place_manifest(
         aich_hashset_acquired=aich_root is not None,
         aich_root=aich_root,
         aich_hashset=aich_hashset or [],
+        upload_priority=upload_priority,
+        auto_upload_priority=auto_upload_priority,
+        all_time_uploaded_bytes=all_time_uploaded_bytes,
         source_path=source_path,
         source_mtime_ms=source_mtime_ms,
     )
@@ -375,6 +384,7 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
                    CASE WHEN known_files.aich_root IS NULL THEN NULL
                         ELSE lower(hex(known_files.aich_root)) END,
                    known_files.upload_priority, known_files.comment, known_files.rating,
+                   known_files.auto_upload_priority, known_files.all_time_uploaded_bytes,
                    transfers.source_path, transfers.source_mtime_ms
             FROM known_files
             LEFT JOIN transfers ON transfers.known_file_id = known_files.id
@@ -431,8 +441,10 @@ def read_transfer_manifest(db_path: Path, ed2k_hash: str) -> dict | None:
         "upload_priority": row[10],
         "comment": row[11],
         "rating": row[12],
-        "source_path": row[13],
-        "source_mtime_ms": row[14],
+        "auto_upload_priority": bool(row[13]),
+        "all_time_uploaded_bytes": row[14],
+        "source_path": row[15],
+        "source_mtime_ms": row[16],
         "md4_hashset": md4_hashset,
         "aich_hashset": aich_hashset,
         "sources": sources,
