@@ -292,6 +292,31 @@ def connect_operator_server(
     return {"ensure": ensured, "connect": connected}
 
 
+def wait_for_mfc_core_rest_ready(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, Any]:
+    """Waits for MFC REST surfaces that lag behind the listener on large profiles."""
+
+    def core_ready() -> dict[str, Any] | None:
+        status = retry_http_json(
+            "MFC status readiness",
+            1,
+            base_url,
+            "/api/v1/status",
+            api_key=api_key,
+            timeout_seconds=15.0,
+        )
+        servers = retry_http_json(
+            "MFC server-list readiness",
+            1,
+            base_url,
+            "/api/v1/servers",
+            api_key=api_key,
+            timeout_seconds=15.0,
+        )
+        return {"status": status, "servers": servers}
+
+    return wait_until("MFC core REST readiness", timeout_seconds, core_ready)
+
+
 def apply_mfc_soak_preferences(
     *,
     live_common: ModuleType,
@@ -519,6 +544,7 @@ def bring_up_mfc(
 
     app = live_common.launch_app(exe_path, profile_base)
     rest_smoke.wait_for_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
+    wait_for_mfc_core_rest_ready(base_url, MFC_API_KEY, timeouts["rest"])
     try:
         patch_upload_limit(base_url, MFC_API_KEY, upload_limit_kibps)
     except RuntimeError as exc:
