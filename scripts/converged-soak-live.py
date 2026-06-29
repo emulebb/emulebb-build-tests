@@ -145,19 +145,29 @@ def _row_hash(row: dict[str, Any]) -> str:
     return str(row.get("hash") or row.get("fileHash") or "").strip().lower()
 
 
+def transfer_hashes(rows: list[dict[str, Any]]) -> set[str]:
+    """Returns all transfer hashes visible in a raw REST transfer list."""
+
+    return {file_hash for row in rows if (file_hash := _row_hash(row))}
+
+
 def safe_common_download_candidate(
     rust_rows: list[dict[str, Any]],
     mfc_rows: list[dict[str, Any]],
     *,
     rust_mod: Any,
+    existing_hashes: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Selects one safe result hash present on both clients' search pages."""
+    """Selects one safe, not-yet-present result hash from both search pages."""
 
     mfc_hashes = {_row_hash(row) for row in mfc_rows if _row_hash(row)}
+    existing_hashes = {item.strip().lower() for item in (existing_hashes or set()) if item}
     candidates: list[dict[str, Any]] = []
     for row in rust_rows:
         file_hash = _row_hash(row)
         if not file_hash or file_hash not in mfc_hashes:
+            continue
+        if file_hash in existing_hashes:
             continue
         if rust_mod.safe_download_rejection_reason(row) is None:
             candidates.append(row)
@@ -262,7 +272,24 @@ def drive_automatic_cycle(
     mfc_rows = poll_search_results(mfc_base, MFC_API_KEY, mfc_search_id, timeout_seconds=search_timeout_seconds)
     cycle["resultCounts"] = {"rust": len(rust_rows), "mfc": len(mfc_rows)}
     if download:
-        candidate = safe_common_download_candidate(rust_rows, mfc_rows, rust_mod=rust_mod)
+        rust_transfer_hashes = transfer_hashes(
+            _get_list(rust_base, "/api/v1/transfers", RUST_API_KEY, "transfers", timeout_seconds=30.0)
+        )
+        mfc_transfer_hashes = transfer_hashes(
+            _get_list(mfc_base, "/api/v1/transfers", MFC_API_KEY, "transfers", timeout_seconds=30.0)
+        )
+        existing_hashes = rust_transfer_hashes | mfc_transfer_hashes
+        cycle["downloadExistingHashCounts"] = {
+            "rust": len(rust_transfer_hashes),
+            "mfc": len(mfc_transfer_hashes),
+            "combined": len(existing_hashes),
+        }
+        candidate = safe_common_download_candidate(
+            rust_rows,
+            mfc_rows,
+            rust_mod=rust_mod,
+            existing_hashes=existing_hashes,
+        )
         if candidate is None:
             cycle["download"] = {"ok": False, "reason": "no common safe candidate"}
         else:

@@ -609,6 +609,31 @@ def test_safe_common_download_candidate_requires_hash_on_both_clients() -> None:
     assert candidate["hash"] == "b" * 32
 
 
+def test_safe_common_download_candidate_skips_existing_hashes() -> None:
+    runner = _load_soak_runner()
+
+    class _RustFilter:
+        @staticmethod
+        def safe_download_rejection_reason(_row: dict[str, object]) -> str | None:
+            return None
+
+    candidate = runner.safe_common_download_candidate(
+        [
+            {"hash": "a" * 32, "safe": True, "sources": 10, "sizeBytes": 1024},
+            {"hash": "b" * 32, "safe": True, "sources": 4, "sizeBytes": 2048},
+        ],
+        [
+            {"hash": "a" * 32},
+            {"hash": "b" * 32},
+        ],
+        rust_mod=_RustFilter,
+        existing_hashes={"a" * 32},
+    )
+
+    assert candidate is not None
+    assert candidate["hash"] == "b" * 32
+
+
 def test_safe_common_download_candidate_returns_none_without_common_safe_hash() -> None:
     runner = _load_soak_runner()
 
@@ -718,6 +743,7 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
         "poll_search_results",
         lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
     )
+    monkeypatch.setattr(runner, "_get_list", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(runner, "trigger_download", lambda *_args, **_kwargs: triggered.append("download"))
 
     cycle = runner.drive_automatic_cycle(
@@ -735,6 +761,59 @@ def test_automatic_cycle_schedules_download_without_triggering(monkeypatch: pyte
     assert cycle["download"]["scheduled"] is True
     assert cycle["download"]["ok"] is None
     assert cycle["download"]["searchIds"] == {"rust": "rust-search", "mfc": "mfc-search"}
+    assert cycle["downloadExistingHashCounts"] == {"rust": 0, "mfc": 0, "combined": 0}
+
+
+def test_automatic_cycle_does_not_schedule_existing_transfer_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_soak_runner()
+
+    class _RustFilter:
+        @staticmethod
+        def safe_download_rejection_reason(_row: dict[str, object]) -> str | None:
+            return None
+
+    monkeypatch.setattr(
+        runner,
+        "create_search",
+        lambda base_url, api_key, *, query, method: "rust-search"
+        if api_key == runner.RUST_API_KEY
+        else "mfc-search",
+    )
+    monkeypatch.setattr(
+        runner,
+        "poll_search_results",
+        lambda *_args, **_kwargs: [{"hash": "d" * 32, "sources": 3, "sizeBytes": 2048}],
+    )
+
+    def fake_get_list(
+        _base_url: str,
+        _path: str,
+        api_key: str,
+        *_keys: str,
+        timeout_seconds: float = 10.0,
+    ) -> list[dict[str, object]]:
+        del timeout_seconds
+        if api_key == runner.RUST_API_KEY:
+            return [{"hash": "d" * 32, "state": "completed"}]
+        return []
+
+    monkeypatch.setattr(runner, "_get_list", fake_get_list)
+
+    cycle = runner.drive_automatic_cycle(
+        cycle_index=1,
+        query="python",
+        method="server",
+        rust_base="http://rust",
+        mfc_base="http://mfc",
+        rust_mod=_RustFilter,
+        download=True,
+        search_timeout_seconds=1.0,
+    )
+
+    assert cycle["download"] == {"ok": False, "reason": "no common safe candidate"}
+    assert cycle["downloadExistingHashCounts"] == {"rust": 1, "mfc": 0, "combined": 1}
 
 
 def test_checkpoint_operator_reconnect_skips_connected_client() -> None:
