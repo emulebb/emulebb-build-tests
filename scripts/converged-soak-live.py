@@ -39,7 +39,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parent.parent
@@ -151,12 +151,36 @@ def transfer_hashes(rows: list[dict[str, Any]]) -> set[str]:
     return {file_hash for row in rows if (file_hash := _row_hash(row))}
 
 
+def transfer_exists(
+    base_url: str,
+    api_key: str,
+    file_hash: str,
+    *,
+    timeout_seconds: float = 5.0,
+) -> bool:
+    """Returns whether a client already exposes a transfer/known-file hash."""
+
+    try:
+        payload = retry_http_json(
+            "probe transfer",
+            1,
+            base_url,
+            f"/api/v1/transfers/{file_hash}",
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
+    except RuntimeError:
+        return False
+    return bool(_api_data(payload))
+
+
 def safe_common_download_candidate(
     rust_rows: list[dict[str, Any]],
     mfc_rows: list[dict[str, Any]],
     *,
     rust_mod: Any,
     existing_hashes: set[str] | None = None,
+    existing_probe: Callable[[str], bool] | None = None,
 ) -> dict[str, Any] | None:
     """Selects one safe, not-yet-present result hash from both search pages."""
 
@@ -168,6 +192,8 @@ def safe_common_download_candidate(
         if not file_hash or file_hash not in mfc_hashes:
             continue
         if file_hash in existing_hashes:
+            continue
+        if existing_probe is not None and existing_probe(file_hash):
             continue
         if rust_mod.safe_download_rejection_reason(row) is None:
             candidates.append(row)
@@ -284,12 +310,29 @@ def drive_automatic_cycle(
             "mfc": len(mfc_transfer_hashes),
             "combined": len(existing_hashes),
         }
+
+        probe_skips = {"rust": 0, "mfc": 0, "combined": 0}
+
+        def existing_hash_probe(file_hash: str) -> bool:
+            rust_known = transfer_exists(rust_base, RUST_API_KEY, file_hash)
+            mfc_known = transfer_exists(mfc_base, MFC_API_KEY, file_hash)
+            if rust_known:
+                probe_skips["rust"] += 1
+            if mfc_known:
+                probe_skips["mfc"] += 1
+            if rust_known or mfc_known:
+                probe_skips["combined"] += 1
+                return True
+            return False
+
         candidate = safe_common_download_candidate(
             rust_rows,
             mfc_rows,
             rust_mod=rust_mod,
             existing_hashes=existing_hashes,
+            existing_probe=existing_hash_probe,
         )
+        cycle["downloadExistingHashProbeSkips"] = probe_skips
         if candidate is None:
             cycle["download"] = {"ok": False, "reason": "no common safe candidate"}
         else:
