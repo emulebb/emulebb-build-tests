@@ -18,7 +18,6 @@ import sqlite3
 import time
 import unicodedata
 from pathlib import Path
-from typing import Any
 
 ED2K_PART_SIZE = 9_728_000
 
@@ -334,69 +333,6 @@ def seed_share_in_place_manifest(
         source_path=source_path,
         source_mtime_ms=source_mtime_ms,
     )
-
-
-def read_existing_share_in_place_keys(db_path: Path) -> dict[str, tuple[int, str, int]]:
-    """Return exact persisted share manifests keyed by lowercase ED2K hash.
-
-    Values are ``(size_bytes, source_path, source_mtime_ms)``. This is used by
-    live profile importers to avoid rebuilding piece/range rows for manifests
-    Rust can already reload without hashing.
-    """
-
-    if not db_path.exists():
-        return {}
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT lower(hex(known_files.ed2k_hash)), known_files.size_bytes,
-                   transfers.source_path, transfers.source_mtime_ms
-            FROM known_files
-            JOIN transfers ON transfers.known_file_id = known_files.id
-            WHERE known_files.completed = 1
-              AND known_files.md4_hashset_acquired = 1
-              AND transfers.source_path IS NOT NULL
-              AND transfers.source_mtime_ms IS NOT NULL
-              AND transfers.removed_at_ms IS NULL
-            """
-        )
-        return {
-            row[0]: (int(row[1]), str(row[2]), int(row[3]))
-            for row in rows
-            if isinstance(row[0], str)
-        }
-
-
-def update_known_file_upload_metadata_bulk(db_path: Path, rows: list[dict[str, Any]]) -> int:
-    """Bulk update upload-priority/history fields for existing known files."""
-
-    if not rows:
-        return 0
-    now = _now_ms()
-    params = [
-        (
-            str(row["upload_priority"]),
-            1 if bool(row["auto_upload_priority"]) else 0,
-            int(row["all_time_uploaded_bytes"]),
-            now,
-            bytes.fromhex(str(row["ed2k_hash"])),
-        )
-        for row in rows
-    ]
-    with sqlite3.connect(db_path) as conn:
-        conn.executemany(
-            """
-            UPDATE known_files
-            SET upload_priority = ?,
-                auto_upload_priority = ?,
-                all_time_uploaded_bytes = ?,
-                updated_at_ms = ?
-            WHERE ed2k_hash = ?
-            """,
-            params,
-        )
-        conn.commit()
-        return conn.total_changes
 
 
 def expected_piece_length(file_size: int, piece_size: int, piece_index: int) -> int:

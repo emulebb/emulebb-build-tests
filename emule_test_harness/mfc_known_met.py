@@ -60,9 +60,6 @@ class MfcSharedFileRow:
     name: str
     ed2k_hash: str
     size_bytes: int
-    upload_priority: str
-    auto_upload_priority: bool
-    all_time_uploaded_bytes: int
 
 
 class BinaryReader:
@@ -251,17 +248,8 @@ def import_mfc_shared_file_rows_hashes(
             continue
         parsed_rows.append((parsed, entry, stat.st_mtime_ns // 1_000_000))
 
-    seeded_rows = 0
-    updated_existing_rows = 0
     if not dry_run:
-        existing = rust_metadata.read_existing_share_in_place_keys(metadata_db)
-        metadata_updates: list[dict[str, Any]] = []
         for parsed, entry, source_mtime_ms in parsed_rows:
-            existing_key = existing.get(parsed.ed2k_hash)
-            if existing_key == (parsed.size_bytes, str(parsed.path), source_mtime_ms):
-                metadata_updates.append(_upload_metadata_update(parsed))
-                updated_existing_rows += 1
-                continue
             rust_metadata.seed_share_in_place_manifest(
                 metadata_db,
                 ed2k_hash=parsed.ed2k_hash,
@@ -272,20 +260,13 @@ def import_mfc_shared_file_rows_hashes(
                 md4_hashset=entry.md4_hashset,
                 aich_root=entry.aich_root,
                 aich_hashset=entry.aich_hashset,
-                upload_priority=parsed.upload_priority,
-                auto_upload_priority=parsed.auto_upload_priority,
-                all_time_uploaded_bytes=parsed.all_time_uploaded_bytes,
             )
-            seeded_rows += 1
-        rust_metadata.update_known_file_upload_metadata_bulk(metadata_db, metadata_updates)
 
     return {
         "knownMetRecords": len(known_entries),
         "sharedFileRows": len(shared_file_rows),
         "matchedRows": len(parsed_rows),
         "importedRows": 0 if dry_run else len(parsed_rows),
-        "seededRows": 0 if dry_run else seeded_rows,
-        "updatedExistingRows": 0 if dry_run else updated_existing_rows,
         "dryRun": dry_run,
         "skipped": reason_counts,
         "metadataDb": str(metadata_db),
@@ -341,9 +322,6 @@ def _parse_mfc_shared_file_row(row: dict[str, Any]) -> MfcSharedFileRow | None:
     raw_path = str(row.get("path") or "").strip()
     raw_name = str(row.get("name") or "").strip()
     raw_size = row.get("sizeBytes", row.get("size"))
-    raw_priority = str(row.get("priority") or "").strip().lower()
-    raw_auto_priority = row.get("autoUploadPriority")
-    raw_all_time_transferred = row.get("allTimeTransferred", 0)
     if len(raw_hash) != 32:
         return None
     try:
@@ -367,47 +345,7 @@ def _parse_mfc_shared_file_row(row: dict[str, Any]) -> MfcSharedFileRow | None:
         name=name,
         ed2k_hash=raw_hash,
         size_bytes=size_bytes,
-        upload_priority=_parse_mfc_upload_priority(raw_priority),
-        auto_upload_priority=_parse_mfc_auto_upload_priority(raw_auto_priority, raw_priority),
-        all_time_uploaded_bytes=_parse_non_negative_int(raw_all_time_transferred),
     )
-
-
-def _upload_metadata_update(row: MfcSharedFileRow) -> dict[str, Any]:
-    return {
-        "ed2k_hash": row.ed2k_hash,
-        "upload_priority": row.upload_priority,
-        "auto_upload_priority": row.auto_upload_priority,
-        "all_time_uploaded_bytes": row.all_time_uploaded_bytes,
-    }
-
-
-def _parse_mfc_upload_priority(value: str) -> str:
-    if value in {"auto", "verylow", "low", "normal", "high", "veryhigh", "release"}:
-        return value
-    return "normal"
-
-
-def _parse_mfc_auto_upload_priority(value: object, raw_priority: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        folded = value.strip().casefold()
-        if folded in {"1", "true", "yes", "on"}:
-            return True
-        if folded in {"0", "false", "no", "off"}:
-            return False
-    return raw_priority == "auto"
-
-
-def _parse_non_negative_int(value: object) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return max(parsed, 0)
 
 
 def _canonical_existing_root(path: Path) -> str:

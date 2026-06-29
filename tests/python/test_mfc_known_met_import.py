@@ -232,44 +232,15 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
     )
 
     assert summary["importedRows"] == 1
-    assert summary["seededRows"] == 1
-    assert summary["updatedExistingRows"] == 0
     assert summary["skipped"]["path_outside_shared_roots"] == 0
     manifest = rust_metadata.read_transfer_manifest(db_path, "00112233445566778899aabbccddeeff")
     assert manifest is not None
     assert manifest["completed"] is True
     assert manifest["source_path"] == str(payload)
     assert manifest["source_mtime_ms"] // 1000 == modified_s
-    assert manifest["upload_priority"] == "auto"
-    assert manifest["auto_upload_priority"] is True
-    assert manifest["all_time_uploaded_bytes"] == 123456789
-
-    incremental_summary = mfc_known_met.import_mfc_shared_file_rows_hashes(
-        rust_repo=_rust_repo(),
-        metadata_db=db_path,
-        known_met=known_met,
-        shared_file_rows=[
-            {
-                "hash": "00112233445566778899aabbccddeeff",
-                "name": "Duplicate.bin",
-                "path": str(payload),
-                "sizeBytes": payload.stat().st_size,
-                "priority": "release",
-                "autoUploadPriority": False,
-                "allTimeTransferred": 987654321,
-            }
-        ],
-        shared_roots=[root],
-    )
-
-    assert incremental_summary["importedRows"] == 1
-    assert incremental_summary["seededRows"] == 0
-    assert incremental_summary["updatedExistingRows"] == 1
-    updated_manifest = rust_metadata.read_transfer_manifest(db_path, "00112233445566778899aabbccddeeff")
-    assert updated_manifest is not None
-    assert updated_manifest["upload_priority"] == "release"
-    assert updated_manifest["auto_upload_priority"] is False
-    assert updated_manifest["all_time_uploaded_bytes"] == 987654321
+    assert manifest["upload_priority"] == "normal"
+    assert manifest["auto_upload_priority"] is False
+    assert manifest["all_time_uploaded_bytes"] == 0
 
 
 def test_import_mfc_shared_file_rows_rejects_outside_shared_roots(tmp_path: Path) -> None:

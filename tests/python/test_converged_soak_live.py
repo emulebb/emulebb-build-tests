@@ -428,8 +428,6 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
             "sharedFileRows": 4,
             "matchedRows": 3,
             "importedRows": 3,
-            "seededRows": 1,
-            "updatedExistingRows": 2,
             "dryRun": False,
             "metadataDb": str(tmp_path / "private" / "metadata.sqlite"),
             "skipped": {
@@ -469,13 +467,11 @@ def test_mfc_shared_files_inventory_import_records_redacted_counts(
         "enabled": True,
         "status": "imported",
         "knownMetRecords": 5,
-            "sharedFileRows": 4,
-            "matchedRows": 3,
-            "importedRows": 3,
-            "seededRows": 1,
-            "updatedExistingRows": 2,
-            "dryRun": False,
-            "skipped": {
+        "sharedFileRows": 4,
+        "matchedRows": 3,
+        "importedRows": 3,
+        "dryRun": False,
+        "skipped": {
             "invalid_row": 0,
             "path_outside_shared_roots": 0,
             "path_missing": 1,
