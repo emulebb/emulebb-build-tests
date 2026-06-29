@@ -595,7 +595,7 @@ class ActionTracker:
         aged_unpaired: list[sad.Action] = []
         for action in (*unpaired_rust, *unpaired_mfc):
             age = (now - action.observed_at).total_seconds()
-            if age > self.window + self.settle:
+            if age > self.window + self.settle_seconds_for(action.kind):
                 self.processed.add(action.action_id)
                 aged_unpaired.append(action)
         return ready_pairs, aged_unpaired
@@ -681,7 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--connect-timeout", type=float, default=240.0, help="Seconds to wait for eD2K connection evidence.")
     parser.add_argument("--correlation-window", type=float, default=sad.DEFAULT_CORRELATION_WINDOW_SECONDS, help="Max gap to pair the same action across clients (s).")
     parser.add_argument("--settle-seconds", type=float, default=sad.DEFAULT_SETTLE_SECONDS, help="Window padding after an action before diffing (s).")
-    parser.add_argument("--download-settle-seconds", type=float, default=300.0, help="Window padding after a download action before diffing (s).")
+    parser.add_argument("--download-settle-seconds", type=float, default=600.0, help="Window padding after a download action before diffing (s).")
     parser.add_argument("--lead-seconds", type=float, default=sad.DEFAULT_LEAD_SECONDS, help="Window padding before an action (s).")
     parser.add_argument("--rust-rest-port", type=int, default=4731)
     parser.add_argument("--mfc-rest-port", type=int, default=4732)

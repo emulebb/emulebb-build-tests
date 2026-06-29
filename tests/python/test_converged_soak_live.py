@@ -969,6 +969,47 @@ def test_tracker_uses_download_specific_settle_window() -> None:
     assert unpaired == []
 
 
+def test_tracker_uses_download_specific_settle_window_for_unpaired_actions() -> None:
+    runner = _load_soak_runner()
+    tracker = runner.ActionTracker(
+        window_seconds=90.0,
+        settle_seconds=45.0,
+        lead_seconds=8.0,
+        download_settle_seconds=300.0,
+    )
+    now = runner.datetime.now(runner.timezone.utc)
+    tracker.rust.append(
+        runner.sad.Action(
+            client="rust",
+            kind=runner.sad.DOWNLOAD,
+            action_id="rust-transfer",
+            key="e" * 32,
+            label="e" * 32,
+            observed_at=now,
+        )
+    )
+
+    pairs, unpaired = tracker.tick(
+        now + timedelta(seconds=200),
+        rust_searches=[],
+        rust_transfers=[],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+    assert pairs == []
+    assert unpaired == []
+
+    pairs, unpaired = tracker.tick(
+        now + timedelta(seconds=391),
+        rust_searches=[],
+        rust_transfers=[],
+        mfc_searches=[],
+        mfc_transfers=[],
+    )
+    assert pairs == []
+    assert [(action.kind, action.key) for action in unpaired] == [(runner.sad.DOWNLOAD, "e" * 32)]
+
+
 def test_tracker_suppresses_rest_echo_of_synchronized_download() -> None:
     runner = _load_soak_runner()
     tracker = runner.ActionTracker(window_seconds=90.0, settle_seconds=45.0, lead_seconds=8.0)
