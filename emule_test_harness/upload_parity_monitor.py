@@ -177,6 +177,8 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
         "payloadAccountingEvents": 0,
         "servedBytes": 0,
         "throttleDelayMs": 0,
+        "verifiedReaderOpenMs": 0,
+        "payloadReadMs": 0,
         "lastCapacity": None,
     }
     if path is None or not path.exists():
@@ -189,6 +191,8 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
     payload_accounting_events = 0
     served_bytes = 0
     throttle_delay_ms = 0
+    verified_reader_open_ms = 0
+    payload_read_ms = 0
     last_capacity: dict[str, object] | None = None
 
     for line in tail_lines(path, max_bytes=tail_bytes):
@@ -224,6 +228,8 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
             request_outcomes[str(body.get("outcome") or "unknown")] += 1
             served_bytes += int(body.get("servedBytes") or 0)
             throttle_delay_ms += int(body.get("throttleDelayMs") or 0)
+            verified_reader_open_ms += int(body.get("verifiedReaderOpenMs") or 0)
+            payload_read_ms += int(body.get("payloadReadMs") or 0)
         elif event == "upload_payload_accounting":
             payload_accounting_events += 1
 
@@ -234,6 +240,8 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
     summary["payloadAccountingEvents"] = payload_accounting_events
     summary["servedBytes"] = served_bytes
     summary["throttleDelayMs"] = throttle_delay_ms
+    summary["verifiedReaderOpenMs"] = verified_reader_open_ms
+    summary["payloadReadMs"] = payload_read_ms
     summary["lastCapacity"] = last_capacity
     return summary
 

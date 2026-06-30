@@ -150,7 +150,13 @@ def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> Non
                         "family": "sched",
                         "event": "upload_request_outcome",
                         "keys": {"peer": "hidden", "fileHash": "hidden"},
-                        "body": {"outcome": "served", "servedBytes": 4096, "throttleDelayMs": 25},
+                        "body": {
+                            "outcome": "served",
+                            "servedBytes": 4096,
+                            "throttleDelayMs": 25,
+                            "verifiedReaderOpenMs": 3,
+                            "payloadReadMs": 7,
+                        },
                     }
                 ),
                 json.dumps(
@@ -179,6 +185,8 @@ def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> Non
     assert summary["requestOutcomes"] == {"served": 1}
     assert summary["servedBytes"] == 4096
     assert summary["throttleDelayMs"] == 25
+    assert summary["verifiedReaderOpenMs"] == 3
+    assert summary["payloadReadMs"] == 7
     assert summary["lastCapacity"]["waitingSessions"] == 2
     assert "hidden" not in json.dumps(summary)
 
