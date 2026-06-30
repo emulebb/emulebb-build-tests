@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,7 @@ class MonitorConfig:
 
     rust_base_url: str
     rust_api_key: str
+    rust_diag_log: Path | None
     mfc_upload_log: Path
     output_dir: Path
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS
@@ -160,6 +162,80 @@ def mfc_upload_summary(path: Path, *, tail_bytes: int = DEFAULT_TAIL_BYTES) -> d
     return summary
 
 
+def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTES) -> dict[str, object]:
+    """Summarizes Rust scheduler diag events without retaining peer or file identifiers."""
+
+    summary: dict[str, object] = {
+        "logPresent": path is not None and path.exists(),
+        "logLastWrite": None,
+        "schedEvents": 0,
+        "eventCounts": {},
+        "requestOutcomes": {},
+        "recycleReasons": {},
+        "payloadAccountingEvents": 0,
+        "servedBytes": 0,
+        "throttleDelayMs": 0,
+        "lastCapacity": None,
+    }
+    if path is None or not path.exists():
+        return summary
+
+    summary["logLastWrite"] = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    event_counts: Counter[str] = Counter()
+    request_outcomes: Counter[str] = Counter()
+    recycle_reasons: Counter[str] = Counter()
+    payload_accounting_events = 0
+    served_bytes = 0
+    throttle_delay_ms = 0
+    last_capacity: dict[str, object] | None = None
+
+    for line in tail_lines(path, max_bytes=tail_bytes):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("family") != "sched":
+            continue
+        event = str(record.get("event") or "")
+        body = record.get("body") or {}
+        if not isinstance(body, dict):
+            body = {}
+        event_counts[event] += 1
+        if event == "capacity_snapshot":
+            last_capacity = {
+                key: body.get(key)
+                for key in (
+                    "activeSlots",
+                    "baseSlots",
+                    "effectiveSlotCap",
+                    "elasticSlots",
+                    "elasticUnderfill",
+                    "underfillSinceMs",
+                    "uploadLimitBytesPerSec",
+                    "uploadRateBytesPerSec",
+                    "waitingSessions",
+                )
+            }
+        elif event == "upload_slot_recycled":
+            recycle_reasons[str(body.get("reason") or "unknown")] += 1
+        elif event == "upload_request_outcome":
+            request_outcomes[str(body.get("outcome") or "unknown")] += 1
+            served_bytes += int(body.get("servedBytes") or 0)
+            throttle_delay_ms += int(body.get("throttleDelayMs") or 0)
+        elif event == "upload_payload_accounting":
+            payload_accounting_events += 1
+
+    summary["schedEvents"] = sum(event_counts.values())
+    summary["eventCounts"] = dict(event_counts)
+    summary["requestOutcomes"] = dict(request_outcomes)
+    summary["recycleReasons"] = dict(recycle_reasons)
+    summary["payloadAccountingEvents"] = payload_accounting_events
+    summary["servedBytes"] = served_bytes
+    summary["throttleDelayMs"] = throttle_delay_ms
+    summary["lastCapacity"] = last_capacity
+    return summary
+
+
 def fetch_json(base_url: str, path: str, *, api_key: str, timeout_seconds: float = 8.0) -> dict[str, object]:
     """Fetches one JSON REST endpoint from a running emulebb-rust instance."""
 
@@ -224,6 +300,7 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     """Builds one aggregate parity record."""
 
     rust = rust_summary(config)
+    rust_sched = rust_sched_summary(config.rust_diag_log, tail_bytes=config.tail_bytes)
     mfc = mfc_upload_summary(config.mfc_upload_log, tail_bytes=config.tail_bytes)
     rust_kibps = float(rust["uploadSpeedKiBps"])
     mfc_kibps = float(mfc["sumRateKiBps"])
@@ -249,7 +326,7 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     )
     action["relativeThroughputGap"] = action["mfcSaturating"] and relative_gap
     action["parityGap"] = action["mfcSaturating"] and (action["rustUnderfilled"] or relative_gap)
-    return {"timestamp": now_iso(), "rust": rust, "mfc": mfc, "action": action}
+    return {"timestamp": now_iso(), "rust": rust, "rustSched": rust_sched, "mfc": mfc, "action": action}
 
 
 def append_record(config: MonitorConfig, record: dict[str, object]) -> None:
@@ -300,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust-base-url", required=True, help="Base Rust REST URL, for example http://host:port/api/v1.")
     parser.add_argument("--rust-api-key", required=True)
+    parser.add_argument("--rust-diag-log", type=Path)
     parser.add_argument("--mfc-upload-log", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--interval-seconds", type=float, default=DEFAULT_INTERVAL_SECONDS)
@@ -318,6 +396,7 @@ def config_from_args(args: argparse.Namespace) -> MonitorConfig:
     return MonitorConfig(
         rust_base_url=args.rust_base_url,
         rust_api_key=args.rust_api_key,
+        rust_diag_log=args.rust_diag_log,
         mfc_upload_log=args.mfc_upload_log,
         output_dir=args.output_dir,
         interval_seconds=args.interval_seconds,

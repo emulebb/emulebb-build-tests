@@ -52,6 +52,7 @@ def test_append_record_writes_jsonl_and_heartbeat(tmp_path: Path) -> None:
     config = upload_parity_monitor.MonitorConfig(
         rust_base_url="http://example.invalid/api/v1",
         rust_api_key="placeholder",
+        rust_diag_log=None,
         mfc_upload_log=tmp_path / "missing.log",
         output_dir=tmp_path / "out",
     )
@@ -75,6 +76,7 @@ def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any
     config = upload_parity_monitor.MonitorConfig(
         rust_base_url="http://example.invalid/api/v1",
         rust_api_key="placeholder",
+        rust_diag_log=None,
         mfc_upload_log=tmp_path / "missing.log",
         output_dir=tmp_path / "out",
     )
@@ -107,3 +109,73 @@ def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any
     assert record["action"]["relativeThroughputGap"] is True
     assert record["action"]["parityGap"] is True
     assert record["action"]["rustVisibilityMaturing"] is True
+
+
+def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> None:
+    log = tmp_path / "emulebb-rust-diag.jsonl"
+    log.write_text(
+        "\n".join(
+            [
+                json.dumps({"family": "other", "event": "ignored", "body": {"peer": "hidden"}}),
+                json.dumps(
+                    {
+                        "family": "sched",
+                        "event": "capacity_snapshot",
+                        "keys": {"peer": "hidden"},
+                        "body": {
+                            "activeSlots": 22,
+                            "baseSlots": 12,
+                            "effectiveSlotCap": 22,
+                            "elasticSlots": 10,
+                            "elasticUnderfill": True,
+                            "underfillSinceMs": 541542,
+                            "uploadLimitBytesPerSec": 3145728,
+                            "uploadRateBytesPerSec": 2252002,
+                            "waitingSessions": 2,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "family": "sched",
+                        "event": "upload_slot_recycled",
+                        "keys": {"peer": "hidden", "fileHash": "hidden"},
+                        "body": {"reason": "slowUnderfill", "slotRateBytesPerSec": 12624},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "family": "sched",
+                        "event": "upload_request_outcome",
+                        "keys": {"peer": "hidden", "fileHash": "hidden"},
+                        "body": {"outcome": "served", "servedBytes": 4096, "throttleDelayMs": 25},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "family": "sched",
+                        "event": "upload_payload_accounting",
+                        "keys": {"peer": "hidden", "fileHash": "hidden"},
+                        "body": {"sentPayloadBytes": 4096},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = upload_parity_monitor.rust_sched_summary(log)
+
+    assert summary["schedEvents"] == 4
+    assert summary["eventCounts"] == {
+        "capacity_snapshot": 1,
+        "upload_slot_recycled": 1,
+        "upload_request_outcome": 1,
+        "upload_payload_accounting": 1,
+    }
+    assert summary["recycleReasons"] == {"slowUnderfill": 1}
+    assert summary["requestOutcomes"] == {"served": 1}
+    assert summary["servedBytes"] == 4096
+    assert summary["throttleDelayMs"] == 25
+    assert summary["lastCapacity"]["waitingSessions"] == 2
+    assert "hidden" not in json.dumps(summary)
