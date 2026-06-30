@@ -56,7 +56,11 @@ def default_runtime_dir() -> Path:
 def default_executable() -> Path:
     """Returns the diagnostics executable built by the workspace orchestrator."""
 
-    return output_root() / "builds" / "rust" / "target" / "release" / "emulebb-rust-diagnostics.exe"
+    target = output_root() / "builds" / "rust" / "target"
+    target_triple = target / "x86_64-pc-windows-msvc" / "release" / "emulebb-rust-diagnostics.exe"
+    if target_triple.exists():
+        return target_triple
+    return target / "release" / "emulebb-rust-diagnostics.exe"
 
 
 def default_base_url() -> str:
