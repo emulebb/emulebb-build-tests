@@ -40,6 +40,9 @@ from emule_test_harness.windows_processes import (
     terminate_process_tree,
 )
 
+ED2K_OFFER_BATCH_SIZE = 200
+ED2K_OFFER_INTERVAL_SECONDS = 60
+
 
 def output_root() -> Path:
     """Returns the configured workspace output root."""
@@ -106,6 +109,35 @@ def request_json(
     raise RuntimeError(f"Rust REST returned a non-object payload for {method} {path}: {parsed!r}")
 
 
+def safe_int(value: object) -> int | None:
+    """Converts JSON-ish values to int when possible."""
+
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def ed2k_visibility_projection(published: object, pending: object) -> dict[str, object]:
+    """Estimates remaining ED2K server visibility at the MFC-compatible cadence."""
+
+    published_count = safe_int(published)
+    pending_count = safe_int(pending)
+    if published_count is None or pending_count is None:
+        return {}
+    total = published_count + pending_count
+    percent = round((published_count / total) * 100.0, 2) if total > 0 else 100.0
+    batches_remaining = (pending_count + ED2K_OFFER_BATCH_SIZE - 1) // ED2K_OFFER_BATCH_SIZE
+    return {
+        "ed2kOfferBatchSize": ED2K_OFFER_BATCH_SIZE,
+        "ed2kOfferIntervalSeconds": ED2K_OFFER_INTERVAL_SECONDS,
+        "ed2kVisibilityPercent": percent,
+        "ed2kVisibilityEtaSeconds": batches_remaining * ED2K_OFFER_INTERVAL_SECONDS,
+    }
+
+
 def sanitize_status(status: dict[str, object]) -> dict[str, object]:
     """Extracts parity-relevant counters without file names, paths, or peer IDs."""
 
@@ -115,7 +147,9 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
     runtime = status.get("runtimeDiagnostics") if isinstance(status.get("runtimeDiagnostics"), dict) else {}
     ed2k_publish = runtime.get("ed2kPublish") if isinstance(runtime.get("ed2kPublish"), dict) else {}
     kad_publish = runtime.get("kadPublish") if isinstance(runtime.get("kadPublish"), dict) else {}
-    return {
+    ed2k_published = ed2k_publish.get("publishedEntries")
+    ed2k_pending = ed2k_publish.get("pendingEntries")
+    sanitized = {
         "ed2kConnected": servers.get("connected"),
         "ed2kHighId": not bool(servers.get("lowId")),
         "kadConnected": kad.get("connected"),
@@ -130,8 +164,8 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "sharedHashingCount": stats.get("sharedHashingCount"),
         "knownFileCount": runtime.get("knownFileCount"),
         "sharedFileCount": runtime.get("sharedFileCount"),
-        "ed2kPublishedEntries": ed2k_publish.get("publishedEntries"),
-        "ed2kPendingEntries": ed2k_publish.get("pendingEntries"),
+        "ed2kPublishedEntries": ed2k_published,
+        "ed2kPendingEntries": ed2k_pending,
         "ed2kPublishPhase": ed2k_publish.get("phase"),
         "kadPublishPhase": kad_publish.get("phase"),
         "kadGateAllowed": kad_publish.get("gateAllowed"),
@@ -161,6 +195,8 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "kadKeywordContactTimeoutsTotal": kad_publish.get("keywordContactTimeoutsTotal"),
         "kadKeywordFailed": kad_publish.get("keywordFailed"),
     }
+    sanitized.update(ed2k_visibility_projection(ed2k_published, ed2k_pending))
+    return sanitized
 
 
 def sample(base_url: str, api_key: str) -> dict[str, object]:
