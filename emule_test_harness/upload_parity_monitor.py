@@ -202,6 +202,7 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
         "kadIndexedSources": kad.get("indexedSources") if isinstance(kad, dict) else None,
         "kadIndexedKeywords": kad.get("indexedKeywords") if isinstance(kad, dict) else None,
         "knownFileCount": runtime.get("knownFileCount"),
+        "sharedFileCount": runtime.get("sharedFileCount"),
         "ed2kPublishedEntries": ed2k_publish.get("publishedEntries"),
         "ed2kPendingEntries": ed2k_publish.get("pendingEntries"),
         "ed2kPublishQueuedCount": ed2k_publish.get("queuedCount"),
