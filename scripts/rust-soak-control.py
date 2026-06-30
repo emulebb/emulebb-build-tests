@@ -302,6 +302,29 @@ def stop_rust(args: argparse.Namespace) -> dict[str, object]:
     return {"rustPid": args.pid, "stopped": not args.pid or not pid_exists(args.pid)}
 
 
+def rust_processes(_: argparse.Namespace) -> dict[str, object]:
+    """Returns current eMuleBB Rust process rows through the Python WMI helper."""
+
+    matches = [
+        process
+        for process in collect_processes()
+        if process.name.lower().startswith("emulebb-rust")
+    ]
+    matches.sort(key=lambda process: (process.name.lower(), process.pid))
+    return {
+        "processes": [
+            {
+                "pid": process.pid,
+                "parentPid": process.parent_pid,
+                "name": process.name,
+                "creationDate": process.creation_date,
+                "commandLine": process.command_line,
+            }
+            for process in matches
+        ]
+    }
+
+
 def stop_upload_monitor(output_dir: Path, timeout_seconds: float = 20.0) -> dict[str, object]:
     """Requests the upload parity monitor to stop through its stop file."""
 
@@ -571,6 +594,9 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser.add_argument("--pid", type=int, required=True)
     stop_parser.add_argument("--shutdown-timeout-seconds", type=float, default=45.0)
     stop_parser.set_defaults(func=stop_rust)
+
+    rust_processes_parser = sub.add_parser("rust-processes", help="List Rust process rows through Python WMI.")
+    rust_processes_parser.set_defaults(func=rust_processes)
 
     start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted runtime.")
     start_parser.add_argument("--runtime-dir", type=Path, default=default_runtime_dir())
