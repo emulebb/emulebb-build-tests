@@ -16,6 +16,8 @@ from urllib.request import Request, urlopen
 DEFAULT_INTERVAL_SECONDS = 300.0
 DEFAULT_RUST_UNDERFILL_KIBPS = 2048.0
 DEFAULT_MFC_SATURATED_KIBPS = 2500.0
+DEFAULT_RUST_MFC_RATIO_FLOOR = 0.85
+DEFAULT_MIN_PARITY_GAP_KIBPS = 512.0
 DEFAULT_TAIL_BYTES = 2_000_000
 
 SLOT_RE = re.compile(
@@ -38,6 +40,8 @@ class MonitorConfig:
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS
     rust_underfill_kibps: float = DEFAULT_RUST_UNDERFILL_KIBPS
     mfc_saturated_kibps: float = DEFAULT_MFC_SATURATED_KIBPS
+    rust_mfc_ratio_floor: float = DEFAULT_RUST_MFC_RATIO_FLOOR
+    min_parity_gap_kibps: float = DEFAULT_MIN_PARITY_GAP_KIBPS
     tail_bytes: int = DEFAULT_TAIL_BYTES
     once: bool = False
 
@@ -221,14 +225,30 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
 
     rust = rust_summary(config)
     mfc = mfc_upload_summary(config.mfc_upload_log, tail_bytes=config.tail_bytes)
+    rust_kibps = float(rust["uploadSpeedKiBps"])
+    mfc_kibps = float(mfc["sumRateKiBps"])
+    throughput_gap_kibps = round(max(0.0, mfc_kibps - rust_kibps), 2)
+    rust_mfc_ratio = round(rust_kibps / mfc_kibps, 4) if mfc_kibps > 0.0 else None
+    rust_ed2k_pending = int(rust.get("ed2kPendingEntries") or 0)
+    rust_ed2k_total = int(rust.get("ed2kPublishedEntries") or 0) + rust_ed2k_pending
+    mfc_ed2k_pending = int(mfc.get("ed2kPendingFiles") or 0)
     action = {
-        "rustUnderfilled": float(rust["uploadSpeedKiBps"]) < config.rust_underfill_kibps,
-        "rustDemandStarved": rust["waitingUploads"] == 0
-        and float(rust["uploadSpeedKiBps"]) < config.rust_underfill_kibps,
-        "mfcSaturating": float(mfc["sumRateKiBps"]) > config.mfc_saturated_kibps,
-        "parityGap": float(mfc["sumRateKiBps"]) > config.mfc_saturated_kibps
-        and float(rust["uploadSpeedKiBps"]) < config.rust_underfill_kibps,
+        "throughputGapKiBps": throughput_gap_kibps,
+        "rustMfcThroughputRatio": rust_mfc_ratio,
+        "rustUnderfilled": rust_kibps < config.rust_underfill_kibps,
+        "rustDemandStarved": rust["waitingUploads"] == 0 and rust_kibps < config.rust_underfill_kibps,
+        "mfcSaturating": mfc_kibps > config.mfc_saturated_kibps,
+        "rustEd2kPublishComplete": rust_ed2k_total > 0 and rust_ed2k_pending == 0,
+        "mfcEd2kPublishComplete": mfc.get("summaryPresent") is True and mfc_ed2k_pending == 0,
+        "rustVisibilityMaturing": rust_ed2k_pending > 0,
     }
+    relative_gap = (
+        rust_mfc_ratio is not None
+        and rust_mfc_ratio < config.rust_mfc_ratio_floor
+        and throughput_gap_kibps >= config.min_parity_gap_kibps
+    )
+    action["relativeThroughputGap"] = action["mfcSaturating"] and relative_gap
+    action["parityGap"] = action["mfcSaturating"] and (action["rustUnderfilled"] or relative_gap)
     return {"timestamp": now_iso(), "rust": rust, "mfc": mfc, "action": action}
 
 
@@ -285,6 +305,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval-seconds", type=float, default=DEFAULT_INTERVAL_SECONDS)
     parser.add_argument("--rust-underfill-kibps", type=float, default=DEFAULT_RUST_UNDERFILL_KIBPS)
     parser.add_argument("--mfc-saturated-kibps", type=float, default=DEFAULT_MFC_SATURATED_KIBPS)
+    parser.add_argument("--rust-mfc-ratio-floor", type=float, default=DEFAULT_RUST_MFC_RATIO_FLOOR)
+    parser.add_argument("--min-parity-gap-kibps", type=float, default=DEFAULT_MIN_PARITY_GAP_KIBPS)
     parser.add_argument("--tail-bytes", type=int, default=DEFAULT_TAIL_BYTES)
     parser.add_argument("--once", action="store_true")
     return parser
@@ -301,6 +323,8 @@ def config_from_args(args: argparse.Namespace) -> MonitorConfig:
         interval_seconds=args.interval_seconds,
         rust_underfill_kibps=args.rust_underfill_kibps,
         mfc_saturated_kibps=args.mfc_saturated_kibps,
+        rust_mfc_ratio_floor=args.rust_mfc_ratio_floor,
+        min_parity_gap_kibps=args.min_parity_gap_kibps,
         tail_bytes=args.tail_bytes,
         once=args.once,
     )

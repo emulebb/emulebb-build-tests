@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from emule_test_harness import upload_parity_monitor
 
@@ -68,3 +69,41 @@ def test_append_record_writes_jsonl_and_heartbeat(tmp_path: Path) -> None:
         "rustUploads=3 mfcKiBps=3072.0 parityGap=True"
     )
     assert json.loads(config.jsonl_path.read_text(encoding="utf-8")) == record
+
+
+def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any, tmp_path: Path) -> None:
+    config = upload_parity_monitor.MonitorConfig(
+        rust_base_url="http://example.invalid/api/v1",
+        rust_api_key="placeholder",
+        mfc_upload_log=tmp_path / "missing.log",
+        output_dir=tmp_path / "out",
+    )
+
+    monkeypatch.setattr(
+        upload_parity_monitor,
+        "rust_summary",
+        lambda _config: {
+            "uploadSpeedKiBps": 2400.0,
+            "activeUploads": 22,
+            "waitingUploads": 0,
+            "ed2kPublishedEntries": 64000,
+            "ed2kPendingEntries": 2960,
+        },
+    )
+    monkeypatch.setattr(
+        upload_parity_monitor,
+        "mfc_upload_summary",
+        lambda _path, *, tail_bytes: {
+            "sumRateKiBps": 3100.0,
+            "summaryPresent": True,
+            "ed2kPendingFiles": 0,
+        },
+    )
+
+    record = upload_parity_monitor.build_record(config)
+
+    assert record["action"]["throughputGapKiBps"] == 700.0
+    assert record["action"]["rustMfcThroughputRatio"] == 0.7742
+    assert record["action"]["relativeThroughputGap"] is True
+    assert record["action"]["parityGap"] is True
+    assert record["action"]["rustVisibilityMaturing"] is True
