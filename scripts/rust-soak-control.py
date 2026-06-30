@@ -767,7 +767,19 @@ def stop_watch_loop(args: argparse.Namespace) -> dict[str, object]:
 
     args.watch_stop_file.parent.mkdir(parents=True, exist_ok=True)
     args.watch_stop_file.write_text(datetime.now(UTC).isoformat() + "\n", encoding="utf-8", newline="\n")
-    return {"watchStopFile": str(args.watch_stop_file), "stopRequested": True}
+    pid = None
+    if args.watch_pid_file.exists():
+        text = args.watch_pid_file.read_text(encoding="utf-8", errors="replace").strip()
+        if text.isdigit():
+            pid = int(text)
+    if args.terminate and pid is not None:
+        terminate_pid_tree(pid, markers=("rust-soak-control.py", "watch-loop"), timeout_seconds=15.0)
+    return {
+        "watchPid": pid,
+        "watchAlive": pid_exists(pid) if pid is not None else False,
+        "watchStopFile": str(args.watch_stop_file),
+        "stopRequested": True,
+    }
 
 
 def latest_jsonl_record(path: Path) -> dict[str, object] | None:
@@ -955,10 +967,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     stop_watch_loop_parser = sub.add_parser("stop-watch-loop", help="Request the detached soak watch loop to stop.")
     stop_watch_loop_parser.add_argument(
+        "--watch-pid-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.pid",
+    )
+    stop_watch_loop_parser.add_argument(
         "--watch-stop-file",
         type=Path,
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
+    stop_watch_loop_parser.add_argument("--terminate", action="store_true")
     stop_watch_loop_parser.set_defaults(func=stop_watch_loop)
 
     watch_status_parser = sub.add_parser("watch-status", help="Print detached soak watch loop health.")
