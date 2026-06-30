@@ -770,6 +770,50 @@ def stop_watch_loop(args: argparse.Namespace) -> dict[str, object]:
     return {"watchStopFile": str(args.watch_stop_file), "stopRequested": True}
 
 
+def latest_jsonl_record(path: Path) -> dict[str, object] | None:
+    """Returns the last JSONL record from a retained evidence file."""
+
+    if not path.exists():
+        return None
+    with path.open("rb") as handle:
+        size = path.stat().st_size
+        if size > 1_000_000:
+            handle.seek(-1_000_000, os.SEEK_END)
+            handle.readline()
+        lines = handle.read().decode("utf-8", errors="replace").splitlines()
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def watch_status(args: argparse.Namespace) -> dict[str, object]:
+    """Returns detached soak watch loop health without shell process listings."""
+
+    pid = None
+    if args.watch_pid_file.exists():
+        text = args.watch_pid_file.read_text(encoding="utf-8", errors="replace").strip()
+        if text.isdigit():
+            pid = int(text)
+    heartbeat = args.watch_heartbeat.read_text(encoding="utf-8", errors="replace") if args.watch_heartbeat.exists() else ""
+    latest = latest_jsonl_record(args.watch_jsonl)
+    return {
+        "watchPid": pid,
+        "watchAlive": pid_exists(pid) if pid is not None else False,
+        "watchPidFile": str(args.watch_pid_file),
+        "watchJsonl": str(args.watch_jsonl),
+        "watchHeartbeat": heartbeat,
+        "watchStopFilePresent": args.watch_stop_file.exists(),
+        "latestRecord": latest,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the command-line parser."""
 
@@ -916,6 +960,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
     stop_watch_loop_parser.set_defaults(func=stop_watch_loop)
+
+    watch_status_parser = sub.add_parser("watch-status", help="Print detached soak watch loop health.")
+    watch_status_parser.add_argument(
+        "--watch-pid-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.pid",
+    )
+    watch_status_parser.add_argument(
+        "--watch-jsonl",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.jsonl",
+    )
+    watch_status_parser.add_argument(
+        "--watch-heartbeat",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.heartbeat.txt",
+    )
+    watch_status_parser.add_argument(
+        "--watch-stop-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
+    )
+    watch_status_parser.set_defaults(func=watch_status)
     return parser
 
 
