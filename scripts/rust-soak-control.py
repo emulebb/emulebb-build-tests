@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -32,7 +33,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.soak_launch import RUST_API_KEY
-from emule_test_harness.windows_processes import collect_processes, process_creation_date, terminate_process_tree
+from emule_test_harness.windows_processes import (
+    collect_processes,
+    process_command_line,
+    process_creation_date,
+    terminate_process_tree,
+)
 
 
 def output_root() -> Path:
@@ -310,6 +316,30 @@ def stop_upload_monitor(output_dir: Path, timeout_seconds: float = 20.0) -> dict
     return {"monitorPid": pid or None, "stopped": not pid or not pid_exists(pid)}
 
 
+def extract_command_line_option(command_line: str, option: str) -> str:
+    """Extracts a quoted or unquoted option value from a process command line."""
+
+    pattern = rf"(?:^|\s){re.escape(option)}\s+(?:\"([^\"]+)\"|(\S+))"
+    match = re.search(pattern, command_line)
+    if match is None:
+        return ""
+    return match.group(1) or match.group(2) or ""
+
+
+def existing_monitor_mfc_upload_log(output_dir: Path) -> Path | None:
+    """Returns the current monitor's MFC upload log argument without exposing it."""
+
+    pid_path = output_dir / "upload-parity-monitor.pid"
+    pid = int(pid_path.read_text(encoding="ascii").strip()) if pid_path.exists() else 0
+    if not pid:
+        return None
+    command_line = process_command_line(pid)
+    if not command_line:
+        return None
+    value = extract_command_line_option(command_line, "--mfc-upload-log")
+    return Path(value) if value else None
+
+
 def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
     """Starts the existing upload parity monitor as a detached helper."""
 
@@ -320,8 +350,11 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         stop_path.unlink()
     diag_log = args.rust_diag_log or latest_diag_log(args.log_dir, args.rust_pid)
     script = SCRIPT_PATH.parent / "upload-parity-monitor.py"
+    mfc_upload_log = args.mfc_upload_log or existing_monitor_mfc_upload_log(output_dir)
     if diag_log is None:
         raise RuntimeError(f"No Rust diagnostics log found under {args.log_dir}.")
+    if mfc_upload_log is None:
+        raise RuntimeError("No MFC upload diagnostics log was provided and no reusable monitor command line was found.")
     stdout = (output_dir / "upload-parity-monitor.stdout.log").open("ab", buffering=0)
     stderr = (output_dir / "upload-parity-monitor.stderr.log").open("ab", buffering=0)
     creationflags = 0
@@ -337,7 +370,7 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         "--rust-diag-log",
         str(diag_log),
         "--mfc-upload-log",
-        str(args.mfc_upload_log),
+        str(mfc_upload_log),
         "--output-dir",
         str(output_dir),
         "--interval-seconds",
@@ -356,6 +389,8 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
 def restart_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
     """Stops then starts the upload parity monitor."""
 
+    if args.mfc_upload_log is None:
+        args.mfc_upload_log = existing_monitor_mfc_upload_log(args.output_dir)
     stopped = stop_upload_monitor(args.output_dir)
     started = start_upload_monitor(args)
     return {"stopped": stopped, "started": started}
@@ -504,7 +539,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample_monitor_parser.set_defaults(func=upload_monitor_sample)
 
     monitor_parser = sub.add_parser("restart-monitor", help="Restart the upload parity monitor.")
-    monitor_parser.add_argument("--mfc-upload-log", type=Path, required=True)
+    monitor_parser.add_argument("--mfc-upload-log", type=Path)
     monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
     monitor_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
     monitor_parser.add_argument("--rust-pid", type=int)
