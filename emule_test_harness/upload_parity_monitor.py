@@ -159,6 +159,8 @@ def mfc_upload_summary(path: Path, *, tail_bytes: int = DEFAULT_TAIL_BYTES) -> d
         ):
             if key in latest_summary:
                 summary[key] = latest_summary[key]
+        if "datarateBytesPerSec" in latest_summary:
+            summary["summaryRateKiBps"] = round(latest_summary["datarateBytesPerSec"] / 1024, 2)
     return summary
 
 
@@ -303,7 +305,7 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     rust_sched = rust_sched_summary(config.rust_diag_log, tail_bytes=config.tail_bytes)
     mfc = mfc_upload_summary(config.mfc_upload_log, tail_bytes=config.tail_bytes)
     rust_kibps = float(rust["uploadSpeedKiBps"])
-    mfc_kibps = float(mfc["sumRateKiBps"])
+    mfc_kibps = float(mfc.get("summaryRateKiBps") or mfc["sumRateKiBps"])
     throughput_gap_kibps = round(max(0.0, mfc_kibps - rust_kibps), 2)
     rust_mfc_ratio = round(rust_kibps / mfc_kibps, 4) if mfc_kibps > 0.0 else None
     rust_ed2k_pending = int(rust.get("ed2kPendingEntries") or 0)
@@ -312,6 +314,7 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     action = {
         "throughputGapKiBps": throughput_gap_kibps,
         "rustMfcThroughputRatio": rust_mfc_ratio,
+        "mfcEffectiveKiBps": mfc_kibps,
         "rustUnderfilled": rust_kibps < config.rust_underfill_kibps,
         "rustDemandStarved": rust["waitingUploads"] == 0 and rust_kibps < config.rust_underfill_kibps,
         "mfcSaturating": mfc_kibps > config.mfc_saturated_kibps,
@@ -346,7 +349,7 @@ def append_record(config: MonitorConfig, record: dict[str, object]) -> None:
             f"lastSample={record['timestamp']} "
             f"rustKiBps={rust['uploadSpeedKiBps']} "
             f"rustUploads={rust['activeUploads']} "
-            f"mfcKiBps={mfc['sumRateKiBps']} "
+            f"mfcKiBps={action.get('mfcEffectiveKiBps', mfc['sumRateKiBps'])} "
             f"parityGap={action['parityGap']}\n"
         )
     config.heartbeat_path.write_text(text, encoding="utf-8")

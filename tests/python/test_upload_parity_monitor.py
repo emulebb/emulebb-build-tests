@@ -42,6 +42,7 @@ def test_mfc_upload_summary_keeps_only_aggregate_slot_counters(tmp_path: Path) -
     assert summary["waiting"] == 9
     assert summary["effectiveSlotCap"] == 22
     assert summary["toNetworkBytesPerSec"] == 3038450
+    assert summary["summaryRateKiBps"] == 2967.24
     assert summary["ed2kPublishedFiles"] == 66654
     assert summary["ed2kPendingFiles"] == 0
     assert summary["kadSourceDueFiles"] == 64769
