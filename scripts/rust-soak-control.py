@@ -360,6 +360,85 @@ def restart_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
     return {"stopped": stopped, "started": started}
 
 
+def latest_monitor_record(output_dir: Path) -> dict[str, object]:
+    """Returns the most recent upload parity monitor JSONL record."""
+
+    jsonl_path = output_dir / "upload-parity-monitor.jsonl"
+    if not jsonl_path.exists():
+        return {}
+    latest = ""
+    with jsonl_path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - 1024 * 1024), os.SEEK_SET)
+        if size > 1024 * 1024:
+            handle.readline()
+        for line in handle.read().decode("utf-8", errors="replace").splitlines():
+            if line.strip():
+                latest = line
+    return json.loads(latest) if latest else {}
+
+
+def upload_monitor_sample(args: argparse.Namespace) -> dict[str, object]:
+    """Returns a sanitized summary of the live upload parity monitor state."""
+
+    output_dir = args.output_dir
+    heartbeat_path = output_dir / "upload-parity-monitor.heartbeat.txt"
+    pid_path = output_dir / "upload-parity-monitor.pid"
+    heartbeat = heartbeat_path.read_text(encoding="utf-8", errors="replace").strip() if heartbeat_path.exists() else ""
+    pid = int(pid_path.read_text(encoding="ascii").strip()) if pid_path.exists() else 0
+    record = latest_monitor_record(output_dir)
+    if not record:
+        return {
+            "heartbeat": heartbeat,
+            "monitorPid": pid or None,
+            "monitorAlive": pid_exists(pid) if pid else False,
+            "latestRecord": None,
+        }
+    if "error" in record:
+        latest: dict[str, object] = {
+            "timestamp": record.get("timestamp"),
+            "error": record.get("error"),
+        }
+    else:
+        rust = record.get("rust") if isinstance(record.get("rust"), dict) else {}
+        sched = record.get("rustSched") if isinstance(record.get("rustSched"), dict) else {}
+        action = record.get("action") if isinstance(record.get("action"), dict) else {}
+        latest = {
+            "timestamp": record.get("timestamp"),
+            "rustKiBps": rust.get("uploadSpeedKiBps"),
+            "rustUploads": rust.get("activeUploads"),
+            "rustWaiting": rust.get("waitingUploads"),
+            "mfcKiBps": action.get("mfcEffectiveKiBps"),
+            "mfcWaiting": action.get("mfcWaitingDemand"),
+            "parityGap": action.get("parityGap"),
+            "postVisibilityDemandGap": action.get("postVisibilityDemandGap"),
+            "rustEd2kPending": rust.get("ed2kPendingEntries"),
+            "rustKadFirewalled": rust.get("kadFirewalled"),
+            "rustKadSource": {
+                "published": rust.get("kadSourcePublishedTotal"),
+                "attemptedContacts": rust.get("kadSourceAttemptedContactsTotal"),
+                "ackedContacts": rust.get("kadSourceAckedContactsTotal"),
+                "timeouts": rust.get("kadSourceContactTimeoutsTotal"),
+                "failed": rust.get("kadSourceFailed"),
+            },
+            "diagKadPublish": {
+                "events": sched.get("kadPublishEvents"),
+                "attemptedContacts": sched.get("kadPublishAttemptedContacts"),
+                "ackedContacts": sched.get("kadPublishAckedContacts"),
+                "timeouts": sched.get("kadPublishTimedOutContacts"),
+                "failedContacts": sched.get("kadPublishFailedContacts"),
+            },
+            "lastCapacity": sched.get("lastCapacity"),
+        }
+    return {
+        "heartbeat": heartbeat,
+        "monitorPid": pid or None,
+        "monitorAlive": pid_exists(pid) if pid else False,
+        "latestRecord": latest,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the command-line parser."""
 
@@ -392,6 +471,10 @@ def build_parser() -> argparse.ArgumentParser:
     stop_monitor_parser = sub.add_parser("stop-monitor", help="Stop the upload parity monitor via its stop file.")
     stop_monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
     stop_monitor_parser.set_defaults(func=lambda args: stop_upload_monitor(args.output_dir))
+
+    sample_monitor_parser = sub.add_parser("monitor-sample", help="Print the latest upload parity monitor summary.")
+    sample_monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
+    sample_monitor_parser.set_defaults(func=upload_monitor_sample)
 
     monitor_parser = sub.add_parser("restart-monitor", help="Restart the upload parity monitor.")
     monitor_parser.add_argument("--mfc-upload-log", type=Path, required=True)
