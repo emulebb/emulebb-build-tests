@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -379,6 +380,20 @@ def latest_monitor_record(output_dir: Path) -> dict[str, object]:
     return json.loads(latest) if latest else {}
 
 
+def timestamp_age_seconds(timestamp: object) -> float | None:
+    """Returns the age in seconds for an ISO-8601 timestamp."""
+
+    if not isinstance(timestamp, str) or not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return max(0.0, (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds())
+
+
 def upload_monitor_sample(args: argparse.Namespace) -> dict[str, object]:
     """Returns a sanitized summary of the live upload parity monitor state."""
 
@@ -388,9 +403,13 @@ def upload_monitor_sample(args: argparse.Namespace) -> dict[str, object]:
     heartbeat = heartbeat_path.read_text(encoding="utf-8", errors="replace").strip() if heartbeat_path.exists() else ""
     pid = int(pid_path.read_text(encoding="ascii").strip()) if pid_path.exists() else 0
     record = latest_monitor_record(output_dir)
+    latest_age_seconds = timestamp_age_seconds(record.get("timestamp")) if record else None
+    monitor_stale = latest_age_seconds is None or latest_age_seconds > args.stale_seconds
     if not record:
         return {
             "heartbeat": heartbeat,
+            "latestAgeSeconds": latest_age_seconds,
+            "monitorStale": monitor_stale,
             "monitorPid": pid or None,
             "monitorAlive": pid_exists(pid) if pid else False,
             "latestRecord": None,
@@ -433,6 +452,8 @@ def upload_monitor_sample(args: argparse.Namespace) -> dict[str, object]:
         }
     return {
         "heartbeat": heartbeat,
+        "latestAgeSeconds": latest_age_seconds,
+        "monitorStale": monitor_stale,
         "monitorPid": pid or None,
         "monitorAlive": pid_exists(pid) if pid else False,
         "latestRecord": latest,
@@ -474,6 +495,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sample_monitor_parser = sub.add_parser("monitor-sample", help="Print the latest upload parity monitor summary.")
     sample_monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
+    sample_monitor_parser.add_argument(
+        "--stale-seconds",
+        type=float,
+        default=600.0,
+        help="Age threshold for reporting the latest monitor sample as stale.",
+    )
     sample_monitor_parser.set_defaults(func=upload_monitor_sample)
 
     monitor_parser = sub.add_parser("restart-monitor", help="Restart the upload parity monitor.")
