@@ -1,0 +1,411 @@
+"""Control and sample a persisted emulebb-rust soak profile.
+
+This is intentionally operational glue, not a scenario runner. It keeps the
+common long-soak chores reusable:
+
+* sample sanitized Rust REST counters;
+* gracefully restart the diagnostics daemon against an existing runtime dir;
+* restart the upload parity monitor with the current PID-specific Rust diag log.
+
+Private operator paths, such as the MFC upload diagnostics log, must be passed at
+runtime and are never embedded here.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness.soak_launch import RUST_API_KEY
+from emule_test_harness.windows_processes import collect_processes, process_creation_date, terminate_process_tree
+
+
+def output_root() -> Path:
+    """Returns the configured workspace output root."""
+
+    return get_workspace_output_root()
+
+
+def default_runtime_dir() -> Path:
+    """Returns the persistent Rust soak runtime directory."""
+
+    return output_root() / "soak" / "rust-runtime"
+
+
+def default_executable() -> Path:
+    """Returns the diagnostics executable built by the workspace orchestrator."""
+
+    return output_root() / "builds" / "rust" / "target" / "release" / "emulebb-rust-diagnostics.exe"
+
+
+def default_base_url() -> str:
+    """Builds the default Rust REST base URL from X_LOCAL_IP when available."""
+
+    host = os.environ.get("X_LOCAL_IP", "127.0.0.1").strip() or "127.0.0.1"
+    return f"http://{host}:4731/api/v1"
+
+
+def api_url(base_url: str, path: str) -> str:
+    """Combines a base URL and API path without double slashes."""
+
+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
+def request_json(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str,
+    method: str = "GET",
+    body: dict[str, object] | None = None,
+    timeout_seconds: float = 8.0,
+) -> dict[str, object]:
+    """Runs one authenticated Rust REST request and unwraps the v1 data envelope."""
+
+    payload = None if body is None else json.dumps(body).encode("utf-8")
+    request = Request(
+        api_url(base_url, path),
+        data=payload,
+        method=method,
+        headers={"X-API-Key": api_key, "Accept": "application/json"},
+    )
+    if payload is not None:
+        request.add_header("Content-Type", "application/json; charset=utf-8")
+    with urlopen(request, timeout=timeout_seconds) as response:
+        text = response.read().decode("utf-8")
+    parsed = json.loads(text) if text else {}
+    if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
+        return parsed["data"]  # type: ignore[return-value]
+    if isinstance(parsed, dict):
+        return parsed
+    raise RuntimeError(f"Rust REST returned a non-object payload for {method} {path}: {parsed!r}")
+
+
+def sanitize_status(status: dict[str, object]) -> dict[str, object]:
+    """Extracts parity-relevant counters without file names, paths, or peer IDs."""
+
+    stats = status.get("stats") if isinstance(status.get("stats"), dict) else {}
+    kad = status.get("kad") if isinstance(status.get("kad"), dict) else {}
+    servers = status.get("servers") if isinstance(status.get("servers"), dict) else {}
+    runtime = status.get("runtimeDiagnostics") if isinstance(status.get("runtimeDiagnostics"), dict) else {}
+    ed2k_publish = runtime.get("ed2kPublish") if isinstance(runtime.get("ed2kPublish"), dict) else {}
+    kad_publish = runtime.get("kadPublish") if isinstance(runtime.get("kadPublish"), dict) else {}
+    return {
+        "ed2kConnected": servers.get("connected"),
+        "ed2kHighId": not bool(servers.get("lowId")),
+        "kadConnected": kad.get("connected"),
+        "kadFirewalled": kad.get("firewalled"),
+        "activeUploads": stats.get("activeUploads"),
+        "waitingUploads": stats.get("waitingUploads"),
+        "uploadSpeedKiBps": round(float(stats.get("uploadSpeedKiBps") or 0.0), 2),
+        "sharedHashingActive": stats.get("sharedHashingActive"),
+        "sharedHashingCount": stats.get("sharedHashingCount"),
+        "knownFileCount": runtime.get("knownFileCount"),
+        "sharedFileCount": runtime.get("sharedFileCount"),
+        "ed2kPublishedEntries": ed2k_publish.get("publishedEntries"),
+        "ed2kPendingEntries": ed2k_publish.get("pendingEntries"),
+        "ed2kPublishPhase": ed2k_publish.get("phase"),
+        "kadPublishPhase": kad_publish.get("phase"),
+        "kadGateAllowed": kad_publish.get("gateAllowed"),
+        "kadGateBlockReason": kad_publish.get("gateBlockReason"),
+        "kadSourcePublishedTotal": kad_publish.get("sourcePublishedTotal"),
+        "kadSourceAckedContactsTotal": kad_publish.get("sourceAckedContactsTotal"),
+        "kadKeywordPublishedTotal": kad_publish.get("keywordPublishedTotal"),
+        "kadKeywordAckedContactsTotal": kad_publish.get("keywordAckedContactsTotal"),
+    }
+
+
+def sample(base_url: str, api_key: str) -> dict[str, object]:
+    """Returns a sanitized live Rust status sample."""
+
+    return sanitize_status(request_json(base_url, "/status", api_key=api_key))
+
+
+def pid_exists(pid: int) -> bool:
+    """Returns whether a process id is currently live."""
+
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        return any(process.pid == pid for process in collect_processes())
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def wait_pid_exit(pid: int, timeout_seconds: float) -> bool:
+    """Waits for one process id to exit."""
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not pid_exists(pid):
+            return True
+        time.sleep(0.5)
+    return not pid_exists(pid)
+
+
+def terminate_pid_tree(pid: int, *, markers: tuple[str, ...] = (), timeout_seconds: float = 15.0) -> None:
+    """Terminates one process tree after optional command-line marker checks."""
+
+    if pid <= 0 or not pid_exists(pid):
+        return
+    if os.name == "nt":
+        terminate_process_tree(
+            pid,
+            timeout_seconds=timeout_seconds,
+            expected_command_line_markers=markers,
+            expected_root_creation_date=process_creation_date(pid),
+        )
+        return
+    os.kill(pid, signal.SIGTERM)
+    if not wait_pid_exit(pid, timeout_seconds):
+        os.kill(pid, signal.SIGKILL)
+
+
+def request_rust_shutdown(base_url: str, api_key: str) -> None:
+    """Requests Rust's graceful network/profile shutdown."""
+
+    try:
+        request_json(
+            base_url,
+            "/app/shutdown",
+            api_key=api_key,
+            method="POST",
+            body={"confirmShutdown": True},
+            timeout_seconds=10.0,
+        )
+    except (HTTPError, URLError, TimeoutError, OSError, RuntimeError):
+        pass
+
+
+def wait_rest_ready(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
+    """Waits until Rust REST responds to /stats."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            return request_json(base_url, "/stats", api_key=api_key, timeout_seconds=5.0)
+        except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
+            last_error = exc
+            time.sleep(1.0)
+    raise RuntimeError(f"Timed out waiting for Rust REST readiness: {last_error}")
+
+
+def wait_connected(base_url: str, api_key: str, timeout_seconds: float) -> dict[str, object]:
+    """Waits until Rust reports both ED2K and Kad connected."""
+
+    deadline = time.monotonic() + timeout_seconds
+    latest: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        latest = sample(base_url, api_key)
+        if latest.get("ed2kConnected") is True and latest.get("kadConnected") is True:
+            return latest
+        time.sleep(2.0)
+    raise RuntimeError(f"Timed out waiting for ED2K+Kad connected: {latest}")
+
+
+def latest_diag_log(log_dir: Path, rust_pid: int | None = None) -> Path | None:
+    """Returns the PID-specific Rust diagnostics JSONL when available."""
+
+    if rust_pid is not None:
+        candidate = log_dir / f"emulebb-rust-diag-{rust_pid}.jsonl"
+        if candidate.exists():
+            return candidate
+    matches = sorted(log_dir.glob("emulebb-rust-diag-*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
+def start_rust(args: argparse.Namespace) -> dict[str, object]:
+    """Starts the diagnostics daemon against the persisted runtime."""
+
+    runtime_dir = args.runtime_dir
+    log_dir = args.log_dir or runtime_dir / "packet-dump"
+    config_path = args.config or runtime_dir / "emulebb-rust.toml"
+    exe = args.exe
+    if not exe.is_file():
+        raise RuntimeError(f"Rust diagnostics executable was not found: {exe}")
+    if not config_path.is_file():
+        raise RuntimeError(f"Rust config was not found: {config_path}")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
+    stdout = (runtime_dir / "daemon.out").open("ab", buffering=0)
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
+    process = subprocess.Popen(
+        [str(exe), "--config", str(config_path)],
+        cwd=str(runtime_dir),
+        env=env,
+        stdout=stdout,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+    wait_rest_ready(args.base_url, args.api_key, args.rest_timeout_seconds)
+    if args.start_kad:
+        request_json(args.base_url, "/kad/operations/start", api_key=args.api_key, method="POST", body={})
+    connected = wait_connected(args.base_url, args.api_key, args.connect_timeout_seconds) if args.wait_connected else {}
+    diag = None
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        diag = latest_diag_log(log_dir, process.pid)
+        if diag is not None:
+            break
+        time.sleep(1.0)
+    return {
+        "rustPid": process.pid,
+        "runtimeDir": str(runtime_dir),
+        "logDir": str(log_dir),
+        "diagLog": str(diag) if diag is not None else None,
+        "connected": connected,
+    }
+
+
+def stop_rust(args: argparse.Namespace) -> dict[str, object]:
+    """Stops Rust gracefully and falls back to exact process-tree termination."""
+
+    request_rust_shutdown(args.base_url, args.api_key)
+    exited = wait_pid_exit(args.pid, args.shutdown_timeout_seconds) if args.pid else True
+    if args.pid and not exited:
+        terminate_pid_tree(args.pid, markers=("emulebb-rust-diagnostics",), timeout_seconds=15.0)
+    return {"rustPid": args.pid, "stopped": not args.pid or not pid_exists(args.pid)}
+
+
+def stop_upload_monitor(output_dir: Path, timeout_seconds: float = 20.0) -> dict[str, object]:
+    """Requests the upload parity monitor to stop through its stop file."""
+
+    pid_path = output_dir / "upload-parity-monitor.pid"
+    stop_path = output_dir / "upload-parity-monitor.stop"
+    pid = int(pid_path.read_text(encoding="ascii").strip()) if pid_path.exists() else 0
+    stop_path.parent.mkdir(parents=True, exist_ok=True)
+    stop_path.write_text("stop\n", encoding="ascii")
+    stopped = wait_pid_exit(pid, timeout_seconds) if pid else True
+    if pid and not stopped:
+        terminate_pid_tree(pid, markers=("upload-parity-monitor.py",), timeout_seconds=15.0)
+    return {"monitorPid": pid or None, "stopped": not pid or not pid_exists(pid)}
+
+
+def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
+    """Starts the existing upload parity monitor as a detached helper."""
+
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stop_path = output_dir / "upload-parity-monitor.stop"
+    if stop_path.exists():
+        stop_path.unlink()
+    diag_log = args.rust_diag_log or latest_diag_log(args.log_dir, args.rust_pid)
+    script = SCRIPT_PATH.parent / "upload-parity-monitor.py"
+    if diag_log is None:
+        raise RuntimeError(f"No Rust diagnostics log found under {args.log_dir}.")
+    stdout = (output_dir / "upload-parity-monitor.stdout.log").open("ab", buffering=0)
+    stderr = (output_dir / "upload-parity-monitor.stderr.log").open("ab", buffering=0)
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
+    command = [
+        sys.executable,
+        str(script),
+        "--rust-base-url",
+        args.base_url,
+        "--rust-api-key",
+        args.api_key,
+        "--rust-diag-log",
+        str(diag_log),
+        "--mfc-upload-log",
+        str(args.mfc_upload_log),
+        "--output-dir",
+        str(output_dir),
+        "--interval-seconds",
+        str(args.interval_seconds),
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=str(REPO_ROOT),
+        stdout=stdout,
+        stderr=stderr,
+        creationflags=creationflags,
+    )
+    return {"monitorPid": process.pid, "rustDiagLog": str(diag_log), "outputDir": str(output_dir)}
+
+
+def restart_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
+    """Stops then starts the upload parity monitor."""
+
+    stopped = stop_upload_monitor(args.output_dir)
+    started = start_upload_monitor(args)
+    return {"stopped": stopped, "started": started}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Builds the command-line parser."""
+
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--base-url", default=default_base_url())
+    parser.add_argument("--api-key", default=RUST_API_KEY)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sample_parser = sub.add_parser("sample", help="Print sanitized Rust status counters.")
+    sample_parser.set_defaults(func=lambda args: sample(args.base_url, args.api_key))
+
+    stop_parser = sub.add_parser("stop-rust", help="Gracefully stop a running Rust diagnostics daemon.")
+    stop_parser.add_argument("--pid", type=int, required=True)
+    stop_parser.add_argument("--shutdown-timeout-seconds", type=float, default=45.0)
+    stop_parser.set_defaults(func=stop_rust)
+
+    start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted runtime.")
+    start_parser.add_argument("--runtime-dir", type=Path, default=default_runtime_dir())
+    start_parser.add_argument("--log-dir", type=Path)
+    start_parser.add_argument("--config", type=Path)
+    start_parser.add_argument("--exe", type=Path, default=default_executable())
+    start_parser.add_argument("--rest-timeout-seconds", type=float, default=90.0)
+    start_parser.add_argument("--connect-timeout-seconds", type=float, default=180.0)
+    start_parser.add_argument("--start-kad", action="store_true", default=True)
+    start_parser.add_argument("--no-start-kad", action="store_false", dest="start_kad")
+    start_parser.add_argument("--wait-connected", action="store_true", default=True)
+    start_parser.add_argument("--no-wait-connected", action="store_false", dest="wait_connected")
+    start_parser.set_defaults(func=start_rust)
+
+    stop_monitor_parser = sub.add_parser("stop-monitor", help="Stop the upload parity monitor via its stop file.")
+    stop_monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
+    stop_monitor_parser.set_defaults(func=lambda args: stop_upload_monitor(args.output_dir))
+
+    monitor_parser = sub.add_parser("restart-monitor", help="Restart the upload parity monitor.")
+    monitor_parser.add_argument("--mfc-upload-log", type=Path, required=True)
+    monitor_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
+    monitor_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    monitor_parser.add_argument("--rust-pid", type=int)
+    monitor_parser.add_argument("--rust-diag-log", type=Path)
+    monitor_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    monitor_parser.set_defaults(func=restart_upload_monitor)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Runs the helper CLI."""
+
+    args = build_parser().parse_args(argv)
+    result = args.func(args)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
