@@ -679,6 +679,8 @@ def watch_loop(args: argparse.Namespace) -> dict[str, object]:
     sample_count = 0
     last_result: dict[str, object] | None = None
     while args.max_samples <= 0 or sample_count < args.max_samples:
+        if args.watch_stop_file.exists():
+            break
         last_result = watch_once(args)
         append_jsonl(args.watch_jsonl, last_result)
         write_watch_heartbeat(args.watch_heartbeat, last_result)
@@ -694,6 +696,78 @@ def watch_loop(args: argparse.Namespace) -> dict[str, object]:
         "watchHeartbeat": str(args.watch_heartbeat),
         "lastResult": last_result,
     }
+
+
+def start_watch_loop(args: argparse.Namespace) -> dict[str, object]:
+    """Starts the retained soak watch loop as a detached Python process."""
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.watch_stop_file.unlink(missing_ok=True)
+    stdout = (args.output_dir / "rust-soak-watch.stdout.log").open("ab", buffering=0)
+    stderr = (args.output_dir / "rust-soak-watch.stderr.log").open("ab", buffering=0)
+    command = [
+        sys.executable,
+        str(SCRIPT_PATH),
+        "--base-url",
+        args.base_url,
+        "--api-key",
+        args.api_key,
+        "watch-loop",
+        "--output-dir",
+        str(args.output_dir),
+        "--stale-seconds",
+        str(args.stale_seconds),
+        "--log-dir",
+        str(args.log_dir),
+        "--interval-seconds",
+        str(args.interval_seconds),
+        "--watch-interval-seconds",
+        str(args.watch_interval_seconds),
+        "--max-samples",
+        str(args.max_samples),
+        "--watch-jsonl",
+        str(args.watch_jsonl),
+        "--watch-heartbeat",
+        str(args.watch_heartbeat),
+        "--watch-stop-file",
+        str(args.watch_stop_file),
+    ]
+    if args.rust_pid is not None:
+        command.extend(["--rust-pid", str(args.rust_pid)])
+    if args.rust_diag_log is not None:
+        command.extend(["--rust-diag-log", str(args.rust_diag_log)])
+    if args.mfc_upload_log is not None:
+        command.extend(["--mfc-upload-log", str(args.mfc_upload_log)])
+    if not args.restart_stale_monitor:
+        command.append("--no-restart-stale-monitor")
+
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    process = subprocess.Popen(
+        command,
+        cwd=str(REPO_ROOT),
+        stdout=stdout,
+        stderr=stderr,
+        stdin=subprocess.DEVNULL,
+        close_fds=False,
+        creationflags=creationflags,
+    )
+    pid_path = args.output_dir / "rust-soak-watch.pid"
+    pid_path.write_text(f"{process.pid}\n", encoding="utf-8", newline="\n")
+    return {
+        "watchPid": process.pid,
+        "watchPidFile": str(pid_path),
+        "watchJsonl": str(args.watch_jsonl),
+        "watchHeartbeat": str(args.watch_heartbeat),
+        "watchStopFile": str(args.watch_stop_file),
+    }
+
+
+def stop_watch_loop(args: argparse.Namespace) -> dict[str, object]:
+    """Requests a detached soak watch loop to stop."""
+
+    args.watch_stop_file.parent.mkdir(parents=True, exist_ok=True)
+    args.watch_stop_file.write_text(datetime.now(UTC).isoformat() + "\n", encoding="utf-8", newline="\n")
+    return {"watchStopFile": str(args.watch_stop_file), "stopRequested": True}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -795,7 +869,53 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.heartbeat.txt",
     )
+    watch_loop_parser.add_argument(
+        "--watch-stop-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
+    )
     watch_loop_parser.set_defaults(func=watch_loop)
+
+    start_watch_loop_parser = sub.add_parser("start-watch-loop", help="Start detached repeated soak checks.")
+    start_watch_loop_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
+    start_watch_loop_parser.add_argument("--stale-seconds", type=float, default=900.0)
+    start_watch_loop_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    start_watch_loop_parser.add_argument("--rust-pid", type=int)
+    start_watch_loop_parser.add_argument("--rust-diag-log", type=Path)
+    start_watch_loop_parser.add_argument("--mfc-upload-log", type=Path)
+    start_watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    start_watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
+    start_watch_loop_parser.add_argument(
+        "--no-restart-stale-monitor",
+        action="store_false",
+        dest="restart_stale_monitor",
+    )
+    start_watch_loop_parser.add_argument("--watch-interval-seconds", type=float, default=300.0)
+    start_watch_loop_parser.add_argument("--max-samples", type=int, default=0)
+    start_watch_loop_parser.add_argument(
+        "--watch-jsonl",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.jsonl",
+    )
+    start_watch_loop_parser.add_argument(
+        "--watch-heartbeat",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.heartbeat.txt",
+    )
+    start_watch_loop_parser.add_argument(
+        "--watch-stop-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
+    )
+    start_watch_loop_parser.set_defaults(func=start_watch_loop)
+
+    stop_watch_loop_parser = sub.add_parser("stop-watch-loop", help="Request the detached soak watch loop to stop.")
+    stop_watch_loop_parser.add_argument(
+        "--watch-stop-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
+    )
+    stop_watch_loop_parser.set_defaults(func=stop_watch_loop)
     return parser
 
 
