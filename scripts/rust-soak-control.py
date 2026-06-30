@@ -495,6 +495,67 @@ def upload_monitor_sample(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def watch_findings(rust: dict[str, object], monitor: dict[str, object]) -> list[str]:
+    """Returns compact operator-facing findings for one soak cadence check."""
+
+    findings: list[str] = []
+    latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
+    if monitor.get("monitorAlive") is False:
+        findings.append("monitor-not-running")
+    if monitor.get("monitorStale") is True:
+        findings.append("monitor-stale")
+    if rust.get("sharedHashingActive") is True or int(rust.get("sharedHashingCount") or 0) > 0:
+        findings.append("rust-hashing-active")
+    if rust.get("ed2kConnected") is not True:
+        findings.append("rust-ed2k-disconnected")
+    if rust.get("ed2kHighId") is not True:
+        findings.append("rust-ed2k-not-high-id")
+    if rust.get("kadConnected") is not True:
+        findings.append("rust-kad-disconnected")
+    if rust.get("kadFirewalled") is True:
+        findings.append("rust-kad-firewalled")
+    if rust.get("kadGateAllowed") is False:
+        findings.append("rust-kad-publish-gated")
+    if latest.get("postVisibilityDemandGap") is True:
+        findings.append("post-visibility-demand-gap")
+    if latest.get("parityGap") is True and int(rust.get("ed2kPendingEntries") or 0) > 0:
+        findings.append("visibility-still-maturing")
+    elif latest.get("parityGap") is True:
+        findings.append("upload-parity-gap")
+    return findings
+
+
+def watch_once(args: argparse.Namespace) -> dict[str, object]:
+    """Runs one reusable long-soak cadence check and optional monitor repair."""
+
+    rust = sample(args.base_url, args.api_key)
+    monitor_args = argparse.Namespace(output_dir=args.output_dir, stale_seconds=args.stale_seconds)
+    monitor = upload_monitor_sample(monitor_args)
+    action: dict[str, object] = {"monitorRestarted": False}
+    if args.restart_stale_monitor and (
+        monitor.get("monitorAlive") is False or monitor.get("monitorStale") is True
+    ):
+        restart_args = argparse.Namespace(
+            base_url=args.base_url,
+            api_key=args.api_key,
+            output_dir=args.output_dir,
+            log_dir=args.log_dir,
+            rust_pid=args.rust_pid,
+            rust_diag_log=args.rust_diag_log,
+            mfc_upload_log=args.mfc_upload_log,
+            interval_seconds=args.interval_seconds,
+        )
+        action = {"monitorRestarted": True, "restart": restart_upload_monitor(restart_args)}
+        monitor = upload_monitor_sample(monitor_args)
+    return {
+        "timestampUtc": datetime.now(UTC).isoformat(),
+        "rust": rust,
+        "monitor": monitor,
+        "findings": watch_findings(rust, monitor),
+        "action": action,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the command-line parser."""
 
@@ -546,6 +607,18 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser.add_argument("--rust-diag-log", type=Path)
     monitor_parser.add_argument("--interval-seconds", type=float, default=300.0)
     monitor_parser.set_defaults(func=restart_upload_monitor)
+
+    watch_parser = sub.add_parser("watch-once", help="Run one long-soak cadence check and optional monitor repair.")
+    watch_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
+    watch_parser.add_argument("--stale-seconds", type=float, default=900.0)
+    watch_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    watch_parser.add_argument("--rust-pid", type=int)
+    watch_parser.add_argument("--rust-diag-log", type=Path)
+    watch_parser.add_argument("--mfc-upload-log", type=Path)
+    watch_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
+    watch_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
+    watch_parser.set_defaults(func=watch_once)
     return parser
 
 
