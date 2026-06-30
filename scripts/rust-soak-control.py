@@ -5,7 +5,8 @@ common long-soak chores reusable:
 
 * sample sanitized Rust REST counters;
 * gracefully restart the diagnostics daemon against an existing runtime dir;
-* restart the upload parity monitor with the current PID-specific Rust diag log.
+* restart the upload parity monitor with the current PID-specific Rust diag log;
+* run reusable long-soak cadence checks without shell loops.
 
 Private operator paths, such as the MFC upload diagnostics log, must be passed at
 runtime and are never embedded here.
@@ -639,6 +640,62 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def append_jsonl(path: Path, payload: dict[str, object]) -> None:
+    """Appends one JSON record to a retained soak evidence file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, sort_keys=True))
+        handle.write("\n")
+
+
+def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
+    """Writes a compact heartbeat for a long-running watch loop."""
+
+    rust = payload.get("rust") if isinstance(payload.get("rust"), dict) else {}
+    monitor = payload.get("monitor") if isinstance(payload.get("monitor"), dict) else {}
+    latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
+    lines = [
+        f"timestampUtc={payload.get('timestampUtc')}",
+        f"findings={','.join(str(item) for item in payload.get('findings', []))}",
+        f"rustKiBps={rust.get('uploadSpeedKiBps')}",
+        f"rustUploads={rust.get('activeUploads')}",
+        f"rustWaiting={rust.get('waitingUploads')}",
+        f"ed2kPublished={rust.get('ed2kPublishedEntries')}",
+        f"ed2kPending={rust.get('ed2kPendingEntries')}",
+        f"ed2kVisibilityPercent={rust.get('ed2kVisibilityPercent')}",
+        f"kadFirewalled={rust.get('kadFirewalled')}",
+        f"monitorSample={latest.get('timestamp')}",
+        f"monitorParityGap={latest.get('parityGap')}",
+        f"monitorPostVisibilityDemandGap={latest.get('postVisibilityDemandGap')}",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def watch_loop(args: argparse.Namespace) -> dict[str, object]:
+    """Runs repeated long-soak cadence checks and retains JSONL evidence."""
+
+    sample_count = 0
+    last_result: dict[str, object] | None = None
+    while args.max_samples <= 0 or sample_count < args.max_samples:
+        last_result = watch_once(args)
+        append_jsonl(args.watch_jsonl, last_result)
+        write_watch_heartbeat(args.watch_heartbeat, last_result)
+        sample_count += 1
+        print(json.dumps(last_result, sort_keys=True), flush=True)
+        if args.max_samples > 0 and sample_count >= args.max_samples:
+            break
+        time.sleep(args.watch_interval_seconds)
+
+    return {
+        "samples": sample_count,
+        "watchJsonl": str(args.watch_jsonl),
+        "watchHeartbeat": str(args.watch_heartbeat),
+        "lastResult": last_result,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the command-line parser."""
 
@@ -705,6 +762,40 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     watch_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
     watch_parser.set_defaults(func=watch_once)
+
+    watch_loop_parser = sub.add_parser("watch-loop", help="Run repeated long-soak cadence checks.")
+    watch_loop_parser.add_argument("--output-dir", type=Path, default=output_root() / "soak" / "parity-monitor")
+    watch_loop_parser.add_argument("--stale-seconds", type=float, default=900.0)
+    watch_loop_parser.add_argument("--log-dir", type=Path, default=default_runtime_dir() / "packet-dump")
+    watch_loop_parser.add_argument("--rust-pid", type=int)
+    watch_loop_parser.add_argument("--rust-diag-log", type=Path)
+    watch_loop_parser.add_argument("--mfc-upload-log", type=Path)
+    watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
+    watch_loop_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
+    watch_loop_parser.add_argument(
+        "--watch-interval-seconds",
+        type=float,
+        default=300.0,
+        help="Seconds to sleep between watch samples.",
+    )
+    watch_loop_parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=0,
+        help="Maximum samples to take; 0 means run until interrupted.",
+    )
+    watch_loop_parser.add_argument(
+        "--watch-jsonl",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.jsonl",
+    )
+    watch_loop_parser.add_argument(
+        "--watch-heartbeat",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.heartbeat.txt",
+    )
+    watch_loop_parser.set_defaults(func=watch_loop)
     return parser
 
 
