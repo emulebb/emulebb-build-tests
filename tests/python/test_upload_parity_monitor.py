@@ -110,6 +110,7 @@ def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any
     assert record["action"]["relativeThroughputGap"] is True
     assert record["action"]["parityGap"] is True
     assert record["action"]["rustVisibilityMaturing"] is True
+    assert record["action"]["postVisibilityDemandGap"] is False
 
 
 def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> None:
@@ -180,3 +181,44 @@ def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> Non
     assert summary["throttleDelayMs"] == 25
     assert summary["lastCapacity"]["waitingSessions"] == 2
     assert "hidden" not in json.dumps(summary)
+
+
+def test_build_record_flags_post_visibility_demand_gap(monkeypatch: Any, tmp_path: Path) -> None:
+    config = upload_parity_monitor.MonitorConfig(
+        rust_base_url="http://example.invalid/api/v1",
+        rust_api_key="placeholder",
+        rust_diag_log=None,
+        mfc_upload_log=tmp_path / "missing.log",
+        output_dir=tmp_path / "out",
+    )
+
+    monkeypatch.setattr(
+        upload_parity_monitor,
+        "rust_summary",
+        lambda _config: {
+            "uploadSpeedKiBps": 1900.0,
+            "activeUploads": 20,
+            "waitingUploads": 0,
+            "ed2kPublishedEntries": 66960,
+            "ed2kPendingEntries": 0,
+        },
+    )
+    monkeypatch.setattr(
+        upload_parity_monitor,
+        "mfc_upload_summary",
+        lambda _path, *, tail_bytes: {
+            "summaryRateKiBps": 3050.0,
+            "sumRateKiBps": 3100.0,
+            "summaryPresent": True,
+            "ed2kPendingFiles": 0,
+            "waiting": 7,
+        },
+    )
+
+    record = upload_parity_monitor.build_record(config)
+
+    assert record["action"]["rustEd2kPublishComplete"] is True
+    assert record["action"]["mfcEd2kPublishComplete"] is True
+    assert record["action"]["rustWaitingDemand"] == 0
+    assert record["action"]["mfcWaitingDemand"] == 7
+    assert record["action"]["postVisibilityDemandGap"] is True

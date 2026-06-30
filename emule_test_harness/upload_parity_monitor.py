@@ -311,16 +311,20 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     rust_ed2k_pending = int(rust.get("ed2kPendingEntries") or 0)
     rust_ed2k_total = int(rust.get("ed2kPublishedEntries") or 0) + rust_ed2k_pending
     mfc_ed2k_pending = int(mfc.get("ed2kPendingFiles") or 0)
+    rust_waiting = int(rust.get("waitingUploads") or 0)
+    mfc_waiting = int(mfc.get("waiting") or 0)
     action = {
         "throughputGapKiBps": throughput_gap_kibps,
         "rustMfcThroughputRatio": rust_mfc_ratio,
         "mfcEffectiveKiBps": mfc_kibps,
         "rustUnderfilled": rust_kibps < config.rust_underfill_kibps,
-        "rustDemandStarved": rust["waitingUploads"] == 0 and rust_kibps < config.rust_underfill_kibps,
+        "rustDemandStarved": rust_waiting == 0 and rust_kibps < config.rust_underfill_kibps,
         "mfcSaturating": mfc_kibps > config.mfc_saturated_kibps,
         "rustEd2kPublishComplete": rust_ed2k_total > 0 and rust_ed2k_pending == 0,
         "mfcEd2kPublishComplete": mfc.get("summaryPresent") is True and mfc_ed2k_pending == 0,
         "rustVisibilityMaturing": rust_ed2k_pending > 0,
+        "rustWaitingDemand": rust_waiting,
+        "mfcWaitingDemand": mfc_waiting,
     }
     relative_gap = (
         rust_mfc_ratio is not None
@@ -329,6 +333,13 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     )
     action["relativeThroughputGap"] = action["mfcSaturating"] and relative_gap
     action["parityGap"] = action["mfcSaturating"] and (action["rustUnderfilled"] or relative_gap)
+    action["postVisibilityDemandGap"] = (
+        action["parityGap"]
+        and action["rustEd2kPublishComplete"]
+        and action["mfcEd2kPublishComplete"]
+        and rust_waiting == 0
+        and mfc_waiting > 0
+    )
     return {"timestamp": now_iso(), "rust": rust, "rustSched": rust_sched, "mfc": mfc, "action": action}
 
 
