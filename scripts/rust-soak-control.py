@@ -148,6 +148,7 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
     runtime = status.get("runtimeDiagnostics") if isinstance(status.get("runtimeDiagnostics"), dict) else {}
     ed2k_publish = runtime.get("ed2kPublish") if isinstance(runtime.get("ed2kPublish"), dict) else {}
     kad_publish = runtime.get("kadPublish") if isinstance(runtime.get("kadPublish"), dict) else {}
+    shared_reload = runtime.get("sharedReload") if isinstance(runtime.get("sharedReload"), dict) else {}
     ed2k_published = ed2k_publish.get("publishedEntries")
     ed2k_pending = ed2k_publish.get("pendingEntries")
     sanitized = {
@@ -165,6 +166,13 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "sharedHashingCount": stats.get("sharedHashingCount"),
         "knownFileCount": runtime.get("knownFileCount"),
         "sharedFileCount": runtime.get("sharedFileCount"),
+        "sharedReloadPhase": shared_reload.get("phase"),
+        "sharedReloadScannedCount": shared_reload.get("scannedCount"),
+        "sharedReloadPlannedHashCount": shared_reload.get("plannedHashCount"),
+        "sharedReloadReusedCount": shared_reload.get("reusedCount"),
+        "sharedReloadSkippedFailedCount": shared_reload.get("skippedFailedCount"),
+        "sharedReloadSkippedIntakeCount": shared_reload.get("skippedIntakeCount"),
+        "sharedReloadPrunedCount": shared_reload.get("prunedCount"),
         "ed2kPublishedEntries": ed2k_published,
         "ed2kPendingEntries": ed2k_pending,
         "ed2kPublishPhase": ed2k_publish.get("phase"),
