@@ -19,7 +19,7 @@ DEFAULT_RUST_UNDERFILL_KIBPS = 2048.0
 DEFAULT_MFC_SATURATED_KIBPS = 2500.0
 DEFAULT_RUST_MFC_RATIO_FLOOR = 0.85
 DEFAULT_MIN_PARITY_GAP_KIBPS = 512.0
-DEFAULT_TAIL_BYTES = 2_000_000
+DEFAULT_TAIL_BYTES = 16_000_000
 
 SLOT_RE = re.compile(
     r"UploadSlotDiagnostics: slot=(?P<slot>\d+) live=(?P<live>\d+).*?"
@@ -172,6 +172,12 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
         "logLastWrite": None,
         "schedEvents": 0,
         "eventCounts": {},
+        "kadPublishEvents": {},
+        "kadPublishFailureClasses": {},
+        "kadPublishAttemptedContacts": {},
+        "kadPublishAckedContacts": {},
+        "kadPublishTimedOutContacts": {},
+        "kadPublishFailedContacts": {},
         "requestOutcomes": {},
         "recycleReasons": {},
         "payloadAccountingEvents": 0,
@@ -186,6 +192,12 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
 
     summary["logLastWrite"] = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
     event_counts: Counter[str] = Counter()
+    kad_publish_events: Counter[str] = Counter()
+    kad_publish_failure_classes: Counter[str] = Counter()
+    kad_publish_attempted_contacts: Counter[str] = Counter()
+    kad_publish_acked_contacts: Counter[str] = Counter()
+    kad_publish_timed_out_contacts: Counter[str] = Counter()
+    kad_publish_failed_contacts: Counter[str] = Counter()
     request_outcomes: Counter[str] = Counter()
     recycle_reasons: Counter[str] = Counter()
     payload_accounting_events = 0
@@ -200,12 +212,25 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("family") != "sched":
-            continue
+        family = record.get("family")
         event = str(record.get("event") or "")
         body = record.get("body") or {}
         if not isinstance(body, dict):
             body = {}
+        if family == "kad_event" and event in {"kad_keyword_publish", "kad_source_publish", "kad_notes_publish"}:
+            publish_kind = str(body.get("publishKind") or event.removeprefix("kad_").removesuffix("_publish"))
+            milestone = str(body.get("milestone") or "")
+            kad_publish_events[f"{publish_kind}:{milestone}"] += 1
+            failure_class = str(body.get("failureClass") or "")
+            if failure_class:
+                kad_publish_failure_classes[f"{publish_kind}:{failure_class}"] += 1
+            kad_publish_attempted_contacts[publish_kind] += int(body.get("attemptedContacts") or 0)
+            kad_publish_acked_contacts[publish_kind] += int(body.get("ackedContacts") or 0)
+            kad_publish_timed_out_contacts[publish_kind] += int(body.get("timedOutContacts") or 0)
+            kad_publish_failed_contacts[publish_kind] += int(body.get("failedContacts") or 0)
+            continue
+        if family != "sched":
+            continue
         event_counts[event] += 1
         if event == "capacity_snapshot":
             last_capacity = {
@@ -235,6 +260,12 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
 
     summary["schedEvents"] = sum(event_counts.values())
     summary["eventCounts"] = dict(event_counts)
+    summary["kadPublishEvents"] = dict(kad_publish_events)
+    summary["kadPublishFailureClasses"] = dict(kad_publish_failure_classes)
+    summary["kadPublishAttemptedContacts"] = dict(kad_publish_attempted_contacts)
+    summary["kadPublishAckedContacts"] = dict(kad_publish_acked_contacts)
+    summary["kadPublishTimedOutContacts"] = dict(kad_publish_timed_out_contacts)
+    summary["kadPublishFailedContacts"] = dict(kad_publish_failed_contacts)
     summary["requestOutcomes"] = dict(request_outcomes)
     summary["recycleReasons"] = dict(recycle_reasons)
     summary["payloadAccountingEvents"] = payload_accounting_events
@@ -298,7 +329,16 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
         "ed2kPublishQueuedCount": ed2k_publish.get("queuedCount"),
         "ed2kPublishPhase": ed2k_publish.get("phase"),
         "kadSourcePublishedTotal": kad_publish.get("sourcePublishedTotal"),
+        "kadSourceAttemptedContactsTotal": kad_publish.get("sourceAttemptedContactsTotal"),
+        "kadSourceAckedContactsTotal": kad_publish.get("sourceAckedContactsTotal"),
+        "kadSourceContactTimeoutsTotal": kad_publish.get("sourceContactTimeoutsTotal"),
+        "kadSourceFailed": kad_publish.get("sourceFailed"),
         "kadSourceDueCount": kad_publish.get("sourceDueCount"),
+        "kadKeywordPublishedTotal": kad_publish.get("keywordPublishedTotal"),
+        "kadKeywordAttemptedContactsTotal": kad_publish.get("keywordAttemptedContactsTotal"),
+        "kadKeywordAckedContactsTotal": kad_publish.get("keywordAckedContactsTotal"),
+        "kadKeywordContactTimeoutsTotal": kad_publish.get("keywordContactTimeoutsTotal"),
+        "kadKeywordFailed": kad_publish.get("keywordFailed"),
         "kadGateAllowed": kad_publish.get("gateAllowed"),
         "kadGateBlockReason": kad_publish.get("gateBlockReason"),
         "uploadRows": len(uploads),

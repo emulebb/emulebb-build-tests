@@ -123,9 +123,15 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "kadGateAllowed": kad_publish.get("gateAllowed"),
         "kadGateBlockReason": kad_publish.get("gateBlockReason"),
         "kadSourcePublishedTotal": kad_publish.get("sourcePublishedTotal"),
+        "kadSourceAttemptedContactsTotal": kad_publish.get("sourceAttemptedContactsTotal"),
         "kadSourceAckedContactsTotal": kad_publish.get("sourceAckedContactsTotal"),
+        "kadSourceContactTimeoutsTotal": kad_publish.get("sourceContactTimeoutsTotal"),
+        "kadSourceFailed": kad_publish.get("sourceFailed"),
         "kadKeywordPublishedTotal": kad_publish.get("keywordPublishedTotal"),
+        "kadKeywordAttemptedContactsTotal": kad_publish.get("keywordAttemptedContactsTotal"),
         "kadKeywordAckedContactsTotal": kad_publish.get("keywordAckedContactsTotal"),
+        "kadKeywordContactTimeoutsTotal": kad_publish.get("keywordContactTimeoutsTotal"),
+        "kadKeywordFailed": kad_publish.get("keywordFailed"),
     }
 
 
