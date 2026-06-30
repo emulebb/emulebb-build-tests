@@ -116,6 +116,9 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "ed2kHighId": not bool(servers.get("lowId")),
         "kadConnected": kad.get("connected"),
         "kadFirewalled": kad.get("firewalled"),
+        "kadContactCount": kad.get("contactCount"),
+        "kadUsers": kad.get("users"),
+        "kadFiles": kad.get("files"),
         "activeUploads": stats.get("activeUploads"),
         "waitingUploads": stats.get("waitingUploads"),
         "uploadSpeedKiBps": round(float(stats.get("uploadSpeedKiBps") or 0.0), 2),
@@ -129,6 +132,20 @@ def sanitize_status(status: dict[str, object]) -> dict[str, object]:
         "kadPublishPhase": kad_publish.get("phase"),
         "kadGateAllowed": kad_publish.get("gateAllowed"),
         "kadGateBlockReason": kad_publish.get("gateBlockReason"),
+        "kadInFlightCount": kad_publish.get("inFlightCount"),
+        "kadInFlightBudget": kad_publish.get("inFlightBudget"),
+        "kadAvailableSearchPermits": kad_publish.get("availableSearchPermits"),
+        "kadActiveKeywordPublishes": kad_publish.get("activeKeywordPublishes"),
+        "kadActiveSourcePublishes": kad_publish.get("activeSourcePublishes"),
+        "kadActiveNotesPublishes": kad_publish.get("activeNotesPublishes"),
+        "kadKeywordDueCount": kad_publish.get("keywordDueCount"),
+        "kadSourceDueCount": kad_publish.get("sourceDueCount"),
+        "kadNotesDueCount": kad_publish.get("notesDueCount"),
+        "kadKeywordAttempted": kad_publish.get("keywordAttempted"),
+        "kadSourceAttempted": kad_publish.get("sourceAttempted"),
+        "kadNotesAttempted": kad_publish.get("notesAttempted"),
+        "kadBusyCount": kad_publish.get("busyCount"),
+        "kadTimedOutCount": kad_publish.get("timedOutCount"),
         "kadSourcePublishedTotal": kad_publish.get("sourcePublishedTotal"),
         "kadSourceAttemptedContactsTotal": kad_publish.get("sourceAttemptedContactsTotal"),
         "kadSourceAckedContactsTotal": kad_publish.get("sourceAckedContactsTotal"),
@@ -537,7 +554,10 @@ def watch_findings(rust: dict[str, object], monitor: dict[str, object]) -> list[
         findings.append("rust-kad-disconnected")
     if rust.get("kadFirewalled") is True:
         findings.append("rust-kad-firewalled")
-    if rust.get("kadGateAllowed") is False:
+    gate_reason = str(rust.get("kadGateBlockReason") or "")
+    if gate_reason == "dhtSearchBusy":
+        findings.append("rust-kad-search-capacity-busy")
+    elif rust.get("kadGateAllowed") is False:
         findings.append("rust-kad-publish-gated")
     if latest.get("postVisibilityDemandGap") is True:
         findings.append("post-visibility-demand-gap")
