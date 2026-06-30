@@ -23,6 +23,8 @@ SLOT_RE = re.compile(
     r"state=(?P<state>\S+).*?rateBytesPerSec=(?P<rate>\d+).*?"
     r"pendingIO=(?P<pending>\d+).*?reqRejected=(?P<rejected>\d+)"
 )
+SUMMARY_PREFIX = "UploadSlotDiagnostics: summary "
+SUMMARY_FIELD_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>\S+)")
 
 
 @dataclass(frozen=True)
@@ -89,13 +91,21 @@ def mfc_upload_summary(path: Path, *, tail_bytes: int = DEFAULT_TAIL_BYTES) -> d
         "sumRateKiBps": 0.0,
         "pendingIOSum": 0,
         "reqRejectedSum": 0,
+        "summaryPresent": False,
     }
     if not path.exists():
         return summary
 
     summary["logLastWrite"] = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
     latest: dict[int, dict[str, int | str]] = {}
+    latest_summary: dict[str, int] = {}
     for line in tail_lines(path, max_bytes=tail_bytes):
+        if SUMMARY_PREFIX in line:
+            latest_summary = {
+                match.group("key"): int(match.group("value"))
+                for match in SUMMARY_FIELD_RE.finditer(line)
+                if match.group("value").lstrip("-").isdigit()
+            }
         match = SLOT_RE.search(line)
         if not match:
             continue
@@ -116,6 +126,33 @@ def mfc_upload_summary(path: Path, *, tail_bytes: int = DEFAULT_TAIL_BYTES) -> d
     summary["sumRateKiBps"] = round(sum(int(row["rateBps"]) for row in rows) / 1024, 2)
     summary["pendingIOSum"] = sum(int(row["pendingIO"]) for row in rows)
     summary["reqRejectedSum"] = sum(int(row["reqRejected"]) for row in rows)
+    if latest_summary:
+        summary["summaryPresent"] = True
+        for key in (
+            "waiting",
+            "waitingEligible",
+            "activeSlots",
+            "baseSlotTarget",
+            "effectiveSlotCap",
+            "cap",
+            "configuredBudgetBytesPerSec",
+            "toNetworkBytesPerSec",
+            "datarateBytesPerSec",
+            "underfilled",
+            "sharedFiles",
+            "ed2kPublishedFiles",
+            "ed2kPendingFiles",
+            "ed2kPendingLargeUnsupportedFiles",
+            "kadPublishReady",
+            "kadSourceDueFiles",
+            "kadSourceBackoffFiles",
+            "kadSourceSearches",
+            "kadSourceSearchCap",
+            "kadKeywordSearches",
+            "kadKeywordSearchCap",
+        ):
+            if key in latest_summary:
+                summary[key] = latest_summary[key]
     return summary
 
 
@@ -139,6 +176,7 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
     status = status_payload["data"]  # type: ignore[index]
     uploads = uploads_payload["data"].get("items", [])  # type: ignore[union-attr]
     runtime = status.get("runtimeDiagnostics", {})  # type: ignore[union-attr]
+    kad = status.get("kad", {})  # type: ignore[union-attr]
     ed2k_publish = runtime.get("ed2kPublish", {}) or {}
     kad_publish = runtime.get("kadPublish", {}) or {}
 
@@ -159,10 +197,19 @@ def rust_summary(config: MonitorConfig) -> dict[str, object]:
         "ed2kHighId": stats.get("ed2kHighId"),  # type: ignore[union-attr]
         "kadConnected": stats.get("kadConnected"),  # type: ignore[union-attr]
         "kadFirewalled": stats.get("kadFirewalled"),  # type: ignore[union-attr]
+        "kadFirewalledStatus": kad.get("firewalled") if isinstance(kad, dict) else None,
+        "kadContactCount": kad.get("contactCount") if isinstance(kad, dict) else None,
+        "kadIndexedSources": kad.get("indexedSources") if isinstance(kad, dict) else None,
+        "kadIndexedKeywords": kad.get("indexedKeywords") if isinstance(kad, dict) else None,
         "knownFileCount": runtime.get("knownFileCount"),
         "ed2kPublishedEntries": ed2k_publish.get("publishedEntries"),
         "ed2kPendingEntries": ed2k_publish.get("pendingEntries"),
+        "ed2kPublishQueuedCount": ed2k_publish.get("queuedCount"),
+        "ed2kPublishPhase": ed2k_publish.get("phase"),
         "kadSourcePublishedTotal": kad_publish.get("sourcePublishedTotal"),
+        "kadSourceDueCount": kad_publish.get("sourceDueCount"),
+        "kadGateAllowed": kad_publish.get("gateAllowed"),
+        "kadGateBlockReason": kad_publish.get("gateBlockReason"),
         "uploadRows": len(uploads),
         "nonzeroUploadRows": sum(1 for row in uploads if float(row.get("uploadSpeedKiBps") or 0) > 0),
     }

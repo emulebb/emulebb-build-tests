@@ -17,6 +17,12 @@ def test_mfc_upload_summary_keeps_only_aggregate_slot_counters(tmp_path: Path) -
                 "rateBytesPerSec=2048 sessionUp=2.00 MB pendingIO=1 reqRejected=3",
                 "UploadSlotDiagnostics: slot=1 live=1 client=ignored state=Uploading "
                 "rateBytesPerSec=4096 sessionUp=3.00 MB pendingIO=0 reqRejected=0",
+                "UploadSlotDiagnostics: summary uploadSlots=22 waiting=9 waitingEligible=6 "
+                "activeSlots=22 baseSlotTarget=12 effectiveSlotCap=22 cap=22 "
+                "configuredBudgetBytesPerSec=3145728 toNetworkBytesPerSec=3038450 "
+                "datarateBytesPerSec=3038450 underfilled=1 sharedFiles=66654 "
+                "ed2kPublishedFiles=66654 ed2kPendingFiles=0 kadPublishReady=1 "
+                "kadSourceDueFiles=64769 kadSourceSearches=4 kadSourceSearchCap=4",
             ]
         ),
         encoding="utf-8",
@@ -31,6 +37,13 @@ def test_mfc_upload_summary_keeps_only_aggregate_slot_counters(tmp_path: Path) -
     assert summary["sumRateKiBps"] == 6.0
     assert summary["pendingIOSum"] == 1
     assert summary["reqRejectedSum"] == 3
+    assert summary["summaryPresent"] is True
+    assert summary["waiting"] == 9
+    assert summary["effectiveSlotCap"] == 22
+    assert summary["toNetworkBytesPerSec"] == 3038450
+    assert summary["ed2kPublishedFiles"] == 66654
+    assert summary["ed2kPendingFiles"] == 0
+    assert summary["kadSourceDueFiles"] == 64769
     assert "client" not in json.dumps(summary)
 
 
