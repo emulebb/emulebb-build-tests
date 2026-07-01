@@ -350,3 +350,67 @@ def test_mfc_upload_log_discovery_prefers_newest_fresh_candidate(tmp_path: Path)
         "emulebb-diagnostics-upload-slot-old.log",
     ]
     assert discovered == fresh.resolve()
+
+
+def test_watch_findings_reports_mfc_status_gaps() -> None:
+    control = _load_rust_soak_control()
+
+    findings = control.watch_findings(
+        {
+            "sharedHashingActive": False,
+            "sharedHashingCount": 0,
+            "ed2kConnected": True,
+            "ed2kHighId": True,
+            "kadConnected": True,
+            "kadFirewalled": False,
+        },
+        {"monitorAlive": True, "monitorStale": False, "latestRecord": {}},
+        {
+            "sharedHashingActive": True,
+            "sharedHashingCount": 12,
+            "ed2kConnected": True,
+            "ed2kHighId": False,
+            "kadConnected": True,
+            "kadFirewalled": True,
+        },
+    )
+
+    assert "mfc-hashing-active" in findings
+    assert "mfc-ed2k-not-high-id" in findings
+    assert "mfc-kad-firewalled" in findings
+
+
+def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    heartbeat = tmp_path / "heartbeat.txt"
+
+    control.write_watch_heartbeat(
+        heartbeat,
+        {
+            "timestampUtc": "2026-01-01T00:00:00+00:00",
+            "findings": ["mfc-hashing-active"],
+            "rust": {
+                "uploadSpeedKiBps": 1.0,
+                "activeUploads": 1,
+                "waitingUploads": 0,
+                "ed2kPublishedEntries": 2,
+                "ed2kPendingEntries": 3,
+                "ed2kVisibilityPercent": 4.0,
+                "kadFirewalled": False,
+            },
+            "monitor": {"latestRecord": {"mfcLogStale": False}},
+            "mfc": {
+                "uploadSpeedKiBps": 0.5,
+                "activeUploads": 1,
+                "sharedFileCount": 100,
+                "sharedHashingCount": 12,
+                "ed2kHighId": False,
+                "kadFirewalled": True,
+            },
+        },
+    )
+
+    text = heartbeat.read_text(encoding="utf-8")
+    assert "mfcHashing=12" in text
+    assert "mfcEd2kHighId=False" in text
+    assert "mfcKadFirewalled=True" in text

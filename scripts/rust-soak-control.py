@@ -1910,7 +1910,11 @@ def upload_monitor_sample(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def watch_findings(rust: dict[str, object], monitor: dict[str, object]) -> list[str]:
+def watch_findings(
+    rust: dict[str, object],
+    monitor: dict[str, object],
+    mfc: dict[str, object] | None = None,
+) -> list[str]:
     """Returns compact operator-facing findings for one soak cadence check."""
 
     findings: list[str] = []
@@ -1942,6 +1946,20 @@ def watch_findings(rust: dict[str, object], monitor: dict[str, object]) -> list[
         findings.append("visibility-still-maturing")
     elif latest.get("parityGap") is True:
         findings.append("upload-parity-gap")
+    if mfc is not None:
+        if "error" in mfc:
+            findings.append("mfc-status-error")
+        else:
+            if mfc.get("sharedHashingActive") is True or int(mfc.get("sharedHashingCount") or 0) > 0:
+                findings.append("mfc-hashing-active")
+            if mfc.get("ed2kConnected") is not True:
+                findings.append("mfc-ed2k-disconnected")
+            if mfc.get("ed2kHighId") is not True:
+                findings.append("mfc-ed2k-not-high-id")
+            if mfc.get("kadConnected") is not True:
+                findings.append("mfc-kad-disconnected")
+            if mfc.get("kadFirewalled") is True:
+                findings.append("mfc-kad-firewalled")
     return findings
 
 
@@ -1949,6 +1967,12 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
     """Runs one reusable long-soak cadence check and optional monitor repair."""
 
     rust = sample(args.base_url, args.api_key)
+    mfc: dict[str, object] | None = None
+    if args.mfc_base_url:
+        try:
+            mfc = sample(args.mfc_base_url, args.mfc_api_key)
+        except Exception as error:
+            mfc = {"error": f"{type(error).__name__}: {error}"}
     monitor_args = argparse.Namespace(output_dir=args.output_dir, stale_seconds=args.stale_seconds)
     monitor = upload_monitor_sample(monitor_args)
     action: dict[str, object] = {"monitorRestarted": False}
@@ -1970,13 +1994,16 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
             monitor = upload_monitor_sample(monitor_args)
         except Exception as error:
             action = {"monitorRestarted": False, "monitorRestartError": str(error)}
-    return {
+    payload = {
         "timestampUtc": datetime.now(UTC).isoformat(),
         "rust": rust,
         "monitor": monitor,
-        "findings": watch_findings(rust, monitor),
+        "findings": watch_findings(rust, monitor, mfc),
         "action": action,
     }
+    if mfc is not None:
+        payload["mfc"] = mfc
+    return payload
 
 
 def append_jsonl(path: Path, payload: dict[str, object]) -> None:
@@ -1992,6 +2019,7 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
     """Writes a compact heartbeat for a long-running watch loop."""
 
     rust = payload.get("rust") if isinstance(payload.get("rust"), dict) else {}
+    mfc = payload.get("mfc") if isinstance(payload.get("mfc"), dict) else {}
     monitor = payload.get("monitor") if isinstance(payload.get("monitor"), dict) else {}
     latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
     lines = [
@@ -2009,6 +2037,17 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
         f"monitorPostVisibilityDemandGap={latest.get('postVisibilityDemandGap')}",
         f"monitorMfcLogStale={latest.get('mfcLogStale')}",
     ]
+    if mfc:
+        lines.extend(
+            [
+                f"mfcKiBps={mfc.get('uploadSpeedKiBps')}",
+                f"mfcUploads={mfc.get('activeUploads')}",
+                f"mfcSharedFiles={mfc.get('sharedFileCount')}",
+                f"mfcHashing={mfc.get('sharedHashingCount')}",
+                f"mfcEd2kHighId={mfc.get('ed2kHighId')}",
+                f"mfcKadFirewalled={mfc.get('kadFirewalled')}",
+            ]
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
@@ -2078,6 +2117,8 @@ def start_watch_loop(args: argparse.Namespace) -> dict[str, object]:
         command.extend(["--rust-diag-log", str(args.rust_diag_log)])
     if args.mfc_upload_log is not None:
         command.extend(["--mfc-upload-log", str(args.mfc_upload_log)])
+    if args.mfc_base_url:
+        command.extend(["--mfc-base-url", args.mfc_base_url, "--mfc-api-key", args.mfc_api_key])
     command.extend(["--mfc-log-stale-seconds", str(args.mfc_log_stale_seconds)])
     if not args.restart_stale_monitor:
         command.append("--no-restart-stale-monitor")
@@ -2369,6 +2410,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--rust-pid", type=int)
     watch_parser.add_argument("--rust-diag-log", type=Path)
     watch_parser.add_argument("--mfc-upload-log", type=Path)
+    watch_parser.add_argument("--mfc-base-url", default=None)
+    watch_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     watch_parser.add_argument("--interval-seconds", type=float, default=300.0)
     watch_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
@@ -2382,6 +2425,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch_loop_parser.add_argument("--rust-pid", type=int)
     watch_loop_parser.add_argument("--rust-diag-log", type=Path)
     watch_loop_parser.add_argument("--mfc-upload-log", type=Path)
+    watch_loop_parser.add_argument("--mfc-base-url", default=None)
+    watch_loop_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
     watch_loop_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
@@ -2422,6 +2467,8 @@ def build_parser() -> argparse.ArgumentParser:
     start_watch_loop_parser.add_argument("--rust-pid", type=int)
     start_watch_loop_parser.add_argument("--rust-diag-log", type=Path)
     start_watch_loop_parser.add_argument("--mfc-upload-log", type=Path)
+    start_watch_loop_parser.add_argument("--mfc-base-url", default=None)
+    start_watch_loop_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     start_watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
     start_watch_loop_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     start_watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
