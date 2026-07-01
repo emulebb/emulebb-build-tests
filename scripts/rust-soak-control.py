@@ -1988,6 +1988,7 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
             rust_diag_log=args.rust_diag_log,
             mfc_upload_log=args.mfc_upload_log,
             interval_seconds=args.interval_seconds,
+            mfc_log_stale_seconds=args.mfc_log_stale_seconds,
         )
         try:
             action = {"monitorRestarted": True, "restart": restart_upload_monitor(restart_args)}
@@ -2337,9 +2338,20 @@ def watch_status(args: argparse.Namespace) -> dict[str, object]:
             pid = int(text)
     heartbeat = args.watch_heartbeat.read_text(encoding="utf-8", errors="replace") if args.watch_heartbeat.exists() else ""
     latest = latest_jsonl_record(args.watch_jsonl)
+    latest_age_seconds = timestamp_age_seconds(latest.get("timestampUtc")) if latest else None
+    watch_alive = pid_exists(pid) if pid is not None else False
+    watch_stale = latest_age_seconds is None or latest_age_seconds > args.stale_seconds
+    findings: list[str] = []
+    if not watch_alive:
+        findings.append("watch-not-running")
+    if watch_stale:
+        findings.append("watch-stale")
     return {
         "watchPid": pid,
-        "watchAlive": pid_exists(pid) if pid is not None else False,
+        "watchAlive": watch_alive,
+        "watchStale": watch_stale,
+        "latestAgeSeconds": latest_age_seconds,
+        "findings": findings,
         "watchPidFile": str(args.watch_pid_file),
         "watchJsonl": str(args.watch_jsonl),
         "watchHeartbeat": heartbeat,
@@ -2651,6 +2663,12 @@ def build_parser() -> argparse.ArgumentParser:
     stop_watch_loop_parser.set_defaults(func=stop_watch_loop)
 
     watch_status_parser = sub.add_parser("watch-status", help="Print detached soak watch loop health.")
+    watch_status_parser.add_argument(
+        "--stale-seconds",
+        type=float,
+        default=900.0,
+        help="Age threshold for reporting the latest watch sample as stale.",
+    )
     watch_status_parser.add_argument(
         "--watch-pid-file",
         type=Path,

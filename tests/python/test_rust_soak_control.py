@@ -468,3 +468,34 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
     assert trend["counters"]["mfcHashingRemaining"]["delta"] == -60.0
     assert trend["counters"]["mfcHashingRemaining"]["completedDelta"] == 60.0
     assert trend["counters"]["mfcHashingRemaining"]["completedPerMinute"] == 6.0
+
+
+def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    pid_file = tmp_path / "watch.pid"
+    jsonl = tmp_path / "watch.jsonl"
+    heartbeat = tmp_path / "watch.heartbeat.txt"
+    stop_file = tmp_path / "watch.stop"
+    pid_file.write_text("1234\n", encoding="utf-8")
+    heartbeat.write_text("old heartbeat\n", encoding="utf-8")
+    jsonl.write_text(
+        control.json.dumps({"timestampUtc": "2026-01-01T00:00:00+00:00"}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(control, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(control, "timestamp_age_seconds", lambda timestamp: 901.0)
+
+    status = control.watch_status(
+        SimpleNamespace(
+            watch_pid_file=pid_file,
+            watch_jsonl=jsonl,
+            watch_heartbeat=heartbeat,
+            watch_stop_file=stop_file,
+            stale_seconds=900.0,
+        )
+    )
+
+    assert status["watchAlive"] is True
+    assert status["watchStale"] is True
+    assert status["latestAgeSeconds"] == 901.0
+    assert status["findings"] == ["watch-stale"]
