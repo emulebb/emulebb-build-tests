@@ -685,14 +685,33 @@ def load_shared_roots(inputs_path: Path) -> list[str]:
     return paths
 
 
-def share_directories(base_url: str, roots: list[str]) -> dict[str, Any]:
+def _shared_root_path(root: object) -> str:
+    if isinstance(root, dict):
+        return str(root.get("path") or "")
+    return str(root or "")
+
+
+def _shared_root_is_recursive(root: object) -> bool:
+    return bool(root.get("recursive")) if isinstance(root, dict) else False
+
+
+def _normalize_shared_root_entry(root: object) -> object:
+    path = _shared_root_path(root).strip()
+    if not path.endswith(("\\", "/")):
+        path += "\\"
+    if _shared_root_is_recursive(root):
+        return {"path": path, "recursive": True}
+    return path
+
+
+def share_directories(base_url: str, roots: list[object]) -> dict[str, Any]:
     """Shares `roots` via PATCH /api/v1/shared-directories (same body shape both
     clients accept). With a persisted runtime the daemon reuses cached MD4/AICH
     hashes (incremental reload), so re-sharing across launches is cheap."""
 
     if not roots:
         return {"shared": False, "reason": "no shared_directories.roots in inputs"}
-    normalized = [r if r.endswith(("\\", "/")) else r + "\\" for r in roots]
+    normalized = [_normalize_shared_root_entry(root) for root in roots]
     body = {"confirmReplaceRoots": True, "roots": normalized}
     result = retry_http_json(
         "share dirs", 2, base_url, "/api/v1/shared-directories",
@@ -720,7 +739,7 @@ def run_pass(
     enable_reask: bool = False,
     require_packet_diagnostics: bool = False,
     soak_seconds: float = 0.0,
-    shared_roots: list[str] | None = None,
+    shared_roots: list[object] | None = None,
     persist_runtime_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Runs one obfuscation pass end-to-end and returns its evidence."""

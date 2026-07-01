@@ -100,6 +100,26 @@ def test_load_shareddir_roots_deduplicates_and_adds_incoming(tmp_path: Path) -> 
     assert roots == ["C:\\ShareA\\", "D:\\ShareB\\", "E:\\Incoming\\"]
 
 
+def test_load_shareddir_root_entries_preserves_recursive_mfc_roots(tmp_path: Path) -> None:
+    shareddir = tmp_path / "shareddir.dat"
+    shareddir.write_text(
+        "C:\\Flat\\\r\n"
+        "C:\\Tree\\\r\n"
+        "C:\\Tree\\Child\\\r\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "shareddir.monitored.dat").write_text("C:\\Tree\\\r\n", encoding="utf-8")
+    (tmp_path / "shareddir.monitor-owned.dat").write_text("C:\\Tree\\Child\\\r\n", encoding="utf-8")
+
+    roots = soak_launch.load_shareddir_root_entries(shareddir, extra_roots=[Path("E:/Incoming")])
+
+    assert roots == [
+        "C:\\Flat\\",
+        {"path": "C:\\Tree\\", "recursive": True},
+        "E:\\Incoming\\",
+    ]
+
+
 def test_existing_shared_roots_counts_inaccessible_entries(tmp_path: Path) -> None:
     present = tmp_path / "present"
     present.mkdir()

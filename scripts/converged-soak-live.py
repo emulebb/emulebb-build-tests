@@ -849,7 +849,7 @@ def import_mfc_known_met_for_rust_profile(
     *,
     mfc_profile_dir: Path | None,
     rust_runtime_dir: Path,
-    shared_roots: list[str],
+    shared_roots: list[object],
     enabled: bool,
 ) -> dict[str, Any]:
     """Pre-seed Rust metadata from MFC known.met without leaking file names/paths."""
@@ -867,7 +867,7 @@ def import_mfc_known_met_for_rust_profile(
         rust_repo=resolve_rust_repo(),
         metadata_db=rust_runtime_dir / "metadata.sqlite",
         known_met=known_met,
-        shared_roots=[Path(root) for root in shared_roots],
+        shared_roots=[Path(root) for root in soak_launch.shared_root_paths(shared_roots)],
     )
     return {
         "enabled": True,
@@ -885,7 +885,7 @@ def import_mfc_shared_files_inventory_for_rust_profile(
     *,
     mfc_profile_dir: Path | None,
     rust_runtime_dir: Path,
-    shared_roots: list[str],
+    shared_roots: list[object],
     inventory_path: Path | None,
 ) -> dict[str, Any]:
     """Pre-seed Rust metadata from an exact MFC REST shared-files inventory."""
@@ -907,7 +907,7 @@ def import_mfc_shared_files_inventory_for_rust_profile(
         metadata_db=rust_runtime_dir / "metadata.sqlite",
         known_met=known_met,
         shared_file_rows=rows,
-        shared_roots=[Path(root) for root in shared_roots],
+        shared_roots=[Path(root) for root in soak_launch.shared_root_paths(shared_roots)],
     )
     return {
         "enabled": True,
@@ -1019,7 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
     if shared_dir_file is not None:
         if not shared_dir_file.is_file():
             raise RuntimeError(f"--shared-dir-file does not exist: {shared_dir_file}")
-        shared_roots = soak_launch.load_shareddir_roots(
+        shared_roots = soak_launch.load_shareddir_root_entries(
             shared_dir_file,
             extra_roots=[rust_incoming_dir] if rust_incoming_dir is not None else None,
         )

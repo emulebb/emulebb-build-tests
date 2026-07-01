@@ -115,17 +115,47 @@ def normalize_shared_root(path: str) -> str:
     return f"{root}\\"
 
 
-def dedupe_shared_roots(roots: list[str]) -> list[str]:
+def shared_root_path(root: object) -> str:
+    """Returns the path component from a shared-root entry."""
+
+    if isinstance(root, dict):
+        return str(root.get("path") or "")
+    return str(root or "")
+
+
+def shared_root_is_recursive(root: object) -> bool:
+    """Returns whether a shared-root entry is recursive."""
+
+    return bool(root.get("recursive")) if isinstance(root, dict) else False
+
+
+def normalize_shared_root_entry(root: object) -> object:
+    """Returns one REST shared-root payload entry with normalized path spelling."""
+
+    path = normalize_shared_root(shared_root_path(root))
+    if shared_root_is_recursive(root):
+        return {"path": path, "recursive": True}
+    return path
+
+
+def dedupe_shared_roots(roots: list[object]) -> list[object]:
     """Deduplicates shared roots case-insensitively while preserving order."""
 
-    seen: set[str] = set()
-    unique: list[str] = []
+    positions: dict[str, int] = {}
+    unique: list[object] = []
     for root in roots:
-        normalized = normalize_shared_root(root)
-        key = normalized.casefold()
-        if not normalized.strip("\\") or key in seen:
+        normalized = normalize_shared_root_entry(root)
+        path = shared_root_path(normalized)
+        recursive = shared_root_is_recursive(normalized)
+        key = path.casefold()
+        if not path.strip("\\"):
             continue
-        seen.add(key)
+        existing = positions.get(key)
+        if existing is not None:
+            if recursive and not shared_root_is_recursive(unique[existing]):
+                unique[existing] = normalized
+            continue
+        positions[key] = len(unique)
         unique.append(normalized)
     return unique
 
@@ -140,16 +170,50 @@ def load_shareddir_roots(path: Path, *, extra_roots: list[Path] | None = None) -
     ]
     for extra_root in extra_roots or []:
         roots.append(str(extra_root))
+    return [shared_root_path(root) for root in dedupe_shared_roots(roots)]
+
+
+def load_shareddir_root_entries(path: Path, *, extra_roots: list[Path] | None = None) -> list[object]:
+    """Loads MFC shared roots while preserving monitored recursive-root intent."""
+
+    shared = load_shareddir_roots(path)
+    monitored_file = path.with_name("shareddir.monitored.dat")
+    monitor_owned_file = path.with_name("shareddir.monitor-owned.dat")
+    monitored_text = read_ini_text(monitored_file) if monitored_file.is_file() else ""
+    monitor_owned_text = read_ini_text(monitor_owned_file) if monitor_owned_file.is_file() else ""
+    monitored = {normalize_shared_root(line).casefold() for line in monitored_text.splitlines() if line.strip()}
+    monitor_owned = {
+        normalize_shared_root(line).casefold()
+        for line in monitor_owned_text.splitlines()
+        if line.strip()
+    }
+    roots: list[object] = []
+    for root in shared:
+        key = normalize_shared_root(root).casefold()
+        if key in monitor_owned:
+            continue
+        if key in monitored:
+            roots.append({"path": root, "recursive": True})
+        else:
+            roots.append(root)
+    for extra_root in extra_roots or []:
+        roots.append(str(extra_root))
     return dedupe_shared_roots(roots)
 
 
-def existing_shared_roots(roots: list[str]) -> tuple[list[str], int]:
+def shared_root_paths(roots: list[object]) -> list[str]:
+    """Returns only the path component for shared-root entries."""
+
+    return [shared_root_path(root) for root in roots]
+
+
+def existing_shared_roots(roots: list[object]) -> tuple[list[object], int]:
     """Returns existing directory roots plus the number skipped as inaccessible."""
 
-    existing: list[str] = []
+    existing: list[object] = []
     skipped = 0
     for root in roots:
-        if Path(root).is_dir():
+        if Path(shared_root_path(root)).is_dir():
             existing.append(root)
         else:
             skipped += 1
@@ -404,7 +468,7 @@ def bring_up_rust(
     packet_dump_dir: Path,
     incoming_dir: Path | None,
     bootstrap_nodes: list[str],
-    shared_roots: list[str],
+    shared_roots: list[object],
     server_met_url: str,
     server_endpoint: str,
     obfuscation: bool,
@@ -490,7 +554,7 @@ def bring_up_mfc(
     direct_profile_dir: Path | None = None,
     rest_host: str,
     rest_port: int,
-    shared_roots: list[str],
+    shared_roots: list[object],
     server_endpoint: str,
     obfuscation: bool,
     timeouts: dict[str, float],
@@ -508,7 +572,7 @@ def bring_up_mfc(
         profile = live_common.prepare_profile_base(
             seed_config_dir,
             artifacts_dir,
-            shared_dirs=list(shared_roots),
+            shared_dirs=shared_root_paths(shared_roots),
             scenario_id="converged-soak",
             reuse_existing=True,
         )
@@ -563,7 +627,7 @@ def bring_up_mfc(
     if replace_shared_roots:
         roots_payload = {
             "confirmReplaceRoots": True,
-            "roots": [normalize_shared_root(r) for r in shared_roots],
+            "roots": [normalize_shared_root_entry(root) for root in shared_roots],
         }
         shared_dirs_mod.patch_shared_directories(base_url, MFC_API_KEY, roots_payload)
     log(f"MFC diagnostics GUI up - REST {base_url}, profile {profile_base}")
