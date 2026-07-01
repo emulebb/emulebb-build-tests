@@ -518,6 +518,103 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
     assert "192.0.2.10" not in rendered
 
 
+def test_diagnostics_summary_uses_rust_jsonl_ts_field(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "emulebb-rust-diag-123.jsonl"
+    log_file.write_text(
+        "\n".join(
+            [
+                json.dumps({"schema": "diag_event_v1", "event": "capacity_snapshot", "ts": "2026-01-01T00:00:00Z"}),
+                json.dumps({"schema": "diag_event_v1", "event": "capacity_snapshot", "ts": "2026-01-01T00:01:00Z"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = control.diagnostics_summary(
+        SimpleNamespace(log_dir=logs_dir, log_file=None, limit=10, max_bytes=2048)
+    )
+
+    assert result["files"][0]["jsonTimeRange"] == {
+        "firstUtc": "2026-01-01T00:00:00+00:00",
+        "lastUtc": "2026-01-01T00:01:00+00:00",
+    }
+
+
+def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "emulebb-rust-diag-123.jsonl"
+    log_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "anti_flood_drop",
+                        "severity": "medium",
+                        "ts": "2026-01-01T00:00:00Z",
+                        "keys": {"peer": "203.0.113.10:4662"},
+                        "body": {"repeatCount": 3},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "anti_flood_drop",
+                        "severity": "medium",
+                        "ts": "2026-01-01T00:00:05Z",
+                        "keys": {"peer": "203.0.113.10:4662"},
+                        "body": {"repeatCount": 4},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "anti_flood_ban",
+                        "severity": "high",
+                        "ts": "2026-01-01T00:01:00Z",
+                        "keys": {"peer": "203.0.113.11:4662"},
+                        "body": {"repeatCount": 9},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = control.anti_flood_summary(
+        SimpleNamespace(
+            log_dir=[logs_dir],
+            log_file=None,
+            limit=10,
+            max_bytes=2048,
+            peer_limit=10,
+            event_limit=10,
+        )
+    )
+
+    assert result["totalEvents"] == 3
+    assert result["uniquePeers"] == 2
+    assert result["maxRepeatCount"] == 9
+    assert result["severityCounts"] == {"medium": 2, "high": 1}
+    assert result["topPeers"][0]["events"] == 2
+    assert result["topPeers"][0]["dropEvents"] == 2
+    assert result["topPeers"][0]["maxRepeatCount"] == 4
+    assert result["timeRange"] == {
+        "firstUtc": "2026-01-01T00:00:00+00:00",
+        "lastUtc": "2026-01-01T00:01:00+00:00",
+    }
+    rendered = repr(result)
+    assert "203.0.113.10" not in rendered
+    assert "203.0.113.11" not in rendered
+
+
 def test_vpn_allowlist_status_reports_sanitized_executable_state(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     exe = tmp_path / "bin" / "emulebb-rust-diagnostics.exe"

@@ -393,7 +393,9 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
                 number = diagnostic_json_numeric_value(body.get(field))
                 if number is not None:
                     json_body_numeric.setdefault(f"{event}.{field}", []).append(number)
-        timestamp = parse_iso_timestamp(parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc"))
+        timestamp = parse_iso_timestamp(
+            parsed.get("ts") or parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc")
+        )
         if timestamp is not None:
             timestamps.append(timestamp)
 
@@ -474,6 +476,118 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
         "aggregateJsonCounts": aggregate_json_counts,
         "files": files,
     }
+
+
+def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Summarizes anti-flood diagnostics bursts with sanitized peer identities."""
+
+    log_files = list(args.log_file or [])
+    raw_log_dirs = args.log_dir or []
+    log_dirs = list(raw_log_dirs) if isinstance(raw_log_dirs, list) else [raw_log_dirs]
+    for log_dir in log_dirs:
+        if log_dir.is_dir():
+            log_files.extend(path for path in log_dir.glob("emulebb*.log") if path.is_file())
+            log_files.extend(path for path in log_dir.glob("emulebb*.jsonl") if path.is_file())
+    unique_files = sorted(
+        {path.resolve() for path in log_files if path.is_file()},
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    selected = unique_files[: args.limit]
+    peers: dict[str, dict[str, object]] = {}
+    recent_events: list[dict[str, object]] = []
+    total_events = 0
+    max_repeat_count = 0
+    timestamps: list[datetime] = []
+    severity_counts: Counter[str] = Counter()
+    for path in selected:
+        for line in tail_text_lines(path, max_bytes=args.max_bytes):
+            stripped = line.strip()
+            if not stripped.startswith("{") or "anti_flood" not in stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict) or parsed.get("event") not in {"anti_flood_drop", "anti_flood_ban"}:
+                continue
+            total_events += 1
+            severity = diagnostic_json_value(parsed.get("severity")) or "unknown"
+            severity_counts[severity] += 1
+            body = parsed.get("body") if isinstance(parsed.get("body"), dict) else {}
+            repeat_count = diagnostic_json_numeric_value(body.get("repeatCount")) if isinstance(body, dict) else None
+            if repeat_count is not None:
+                max_repeat_count = max(max_repeat_count, int(repeat_count))
+            timestamp = parse_iso_timestamp(
+                parsed.get("ts") or parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc")
+            )
+            if timestamp is not None:
+                timestamps.append(timestamp)
+            keys = parsed.get("keys") if isinstance(parsed.get("keys"), dict) else {}
+            peer = keys.get("peer") if isinstance(keys, dict) else None
+            peer_fingerprint = private_path_fingerprint(peer or "")
+            peer_row = peers.setdefault(
+                peer_fingerprint,
+                {
+                    "peerFingerprint": peer_fingerprint,
+                    "events": 0,
+                    "dropEvents": 0,
+                    "banEvents": 0,
+                    "maxRepeatCount": 0,
+                    "firstUtc": None,
+                    "lastUtc": None,
+                },
+            )
+            peer_row["events"] = int(peer_row["events"]) + 1
+            if parsed.get("event") == "anti_flood_drop":
+                peer_row["dropEvents"] = int(peer_row["dropEvents"]) + 1
+            if parsed.get("event") == "anti_flood_ban":
+                peer_row["banEvents"] = int(peer_row["banEvents"]) + 1
+            if repeat_count is not None:
+                peer_row["maxRepeatCount"] = max(int(peer_row["maxRepeatCount"]), int(repeat_count))
+            if timestamp is not None:
+                timestamp_text = timestamp.isoformat()
+                first_utc = peer_row.get("firstUtc")
+                last_utc = peer_row.get("lastUtc")
+                if first_utc is None or timestamp_text < str(first_utc):
+                    peer_row["firstUtc"] = timestamp_text
+                if last_utc is None or timestamp_text > str(last_utc):
+                    peer_row["lastUtc"] = timestamp_text
+            recent_events.append(
+                {
+                    "timestampUtc": timestamp.isoformat() if timestamp is not None else None,
+                    "event": parsed.get("event"),
+                    "severity": severity,
+                    "peerFingerprint": peer_fingerprint,
+                    "repeatCount": int(repeat_count) if repeat_count is not None else None,
+                    "sourceFile": path.name,
+                }
+            )
+    recent_events.sort(key=lambda row: str(row.get("timestampUtc") or ""))
+    peer_rows = sorted(
+        peers.values(),
+        key=lambda row: (int(row.get("events", 0)), int(row.get("maxRepeatCount", 0))),
+        reverse=True,
+    )[: args.peer_limit]
+    result: dict[str, object] = {
+        "logDir": str(log_dirs[0]) if len(log_dirs) == 1 else None,
+        "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
+        "limit": args.limit,
+        "maxBytes": args.max_bytes,
+        "fileCount": len(selected),
+        "totalEvents": total_events,
+        "uniquePeers": len(peers),
+        "maxRepeatCount": max_repeat_count,
+        "severityCounts": dict(severity_counts.most_common()),
+        "topPeers": peer_rows,
+        "recentEvents": recent_events[-args.event_limit :],
+    }
+    if timestamps:
+        result["timeRange"] = {
+            "firstUtc": min(timestamps).isoformat(),
+            "lastUtc": max(timestamps).isoformat(),
+        }
+    return result
 
 
 def aggregate_diagnostics_json_counts(files: list[dict[str, object]]) -> dict[str, dict[str, int]]:
@@ -3372,6 +3486,18 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics_parser.add_argument("--limit", type=int, default=12)
     diagnostics_parser.add_argument("--max-bytes", type=int, default=1_048_576)
     diagnostics_parser.set_defaults(func=diagnostics_summary)
+
+    anti_flood_parser = sub.add_parser(
+        "anti-flood-summary",
+        help="Summarize anti-flood diagnostics bursts with sanitized peer fingerprints.",
+    )
+    anti_flood_parser.add_argument("--log-dir", type=Path, action="append")
+    anti_flood_parser.add_argument("--log-file", type=Path, action="append")
+    anti_flood_parser.add_argument("--limit", type=int, default=12)
+    anti_flood_parser.add_argument("--max-bytes", type=int, default=1_048_576)
+    anti_flood_parser.add_argument("--peer-limit", type=int, default=12)
+    anti_flood_parser.add_argument("--event-limit", type=int, default=12)
+    anti_flood_parser.set_defaults(func=anti_flood_summary)
 
     vpn_parser = sub.add_parser(
         "vpn-allowlist-status",
