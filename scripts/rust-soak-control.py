@@ -1271,6 +1271,16 @@ def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | 
     )
     if int(upload_efficiency.get("rowCount") or 0) > 0:
         result["uploadEfficiencySummary"] = compact_upload_efficiency_summary(upload_efficiency)
+    rust_offers = rust_ed2k_offer_summary(
+        argparse.Namespace(
+            log_dir=log_dirs,
+            log_file=log_files,
+            limit=limit,
+            max_bytes=max_bytes,
+        )
+    )
+    if int(rust_offers.get("rowCount") or 0) > 0:
+        result["rustEd2kOfferSummary"] = compact_rust_ed2k_offer_summary(rust_offers)
     return result
 
 
@@ -3506,12 +3516,30 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
             ]
         )
     if diagnostics:
+        rust_offers = (
+            diagnostics.get("rustEd2kOfferSummary")
+            if isinstance(diagnostics.get("rustEd2kOfferSummary"), dict)
+            else {}
+        )
+        latest_offer = (
+            rust_offers.get("latestBatch")
+            if isinstance(rust_offers.get("latestBatch"), dict)
+            else {}
+        )
         lines.extend(
             [
                 f"diagnosticsFiles={diagnostics.get('fileCount')}",
                 f"diagnosticsPatterns={','.join(sorted((diagnostics.get('aggregatePatternCounts') or {}).keys()))}",
             ]
         )
+        if rust_offers:
+            lines.extend(
+                [
+                    f"rustOfferRows={rust_offers.get('rowCount')}",
+                    f"rustOfferObservedEntries={rust_offers.get('observedEntriesSent')}",
+                    f"rustOfferLatestCursor={latest_offer.get('nextCursor')}",
+                ]
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
@@ -4005,6 +4033,39 @@ def compact_mfc_upload_summary(summary: dict[str, object]) -> dict[str, object]:
     return compact
 
 
+def compact_rust_ed2k_offer_summary(summary: dict[str, object]) -> dict[str, object]:
+    """Returns Rust ED2K offer-cycle fields suitable for live watch briefs."""
+
+    compact: dict[str, object] = {
+        "source": "rustDiagLog",
+        "rowCount": summary.get("rowCount"),
+        "observedEntriesSent": summary.get("observedEntriesSent"),
+        "serverFingerprints": summary.get("serverFingerprints"),
+        "timeRange": summary.get("timeRange"),
+        "latestBatch": summary.get("latestBatch"),
+        "booleanCounts": summary.get("booleanCounts"),
+    }
+    interval = summary.get("batchIntervalSeconds")
+    if isinstance(interval, dict):
+        compact["batchIntervalSeconds"] = {
+            key: interval.get(key)
+            for key in ("count", "sum", "average", "min", "max", "p50", "p95")
+            if interval.get(key) is not None
+        }
+    numeric = summary.get("numeric")
+    if isinstance(numeric, dict):
+        compact["numeric"] = {
+            field: {
+                key: stats.get(key)
+                for key in ("count", "sum", "average", "min", "max")
+                if stats.get(key) is not None
+            }
+            for field, stats in sorted(numeric.items())
+            if isinstance(stats, dict)
+        }
+    return {key: value for key, value in compact.items() if value is not None}
+
+
 def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes retained soak watch JSONL counters over a bounded window."""
 
@@ -4155,6 +4216,11 @@ def watch_brief_from_record(
         )
         upload_efficiency = compact_upload_efficiency_summary(current_upload)
     mfc_upload = latest.get("mfcUploadSummary") if isinstance(latest.get("mfcUploadSummary"), dict) else None
+    rust_offers = (
+        diagnostics.get("rustEd2kOfferSummary")
+        if isinstance(diagnostics.get("rustEd2kOfferSummary"), dict)
+        else None
+    )
     mfc_upload_log = getattr(args, "mfc_upload_log", None)
     if mfc_upload_log is not None:
         current_mfc_upload = mfc_upload_summary(
@@ -4239,6 +4305,7 @@ def watch_brief_from_record(
             "antiFlood": compact_watch_anti_flood_summary(diagnostics.get("antiFloodSummary")),
             "uploadEfficiency": upload_efficiency,
             "mfcUpload": mfc_upload,
+            "rustEd2kOffers": rust_offers,
         },
         "trend": {
             "sampleCount": trend.get("sampleCount"),

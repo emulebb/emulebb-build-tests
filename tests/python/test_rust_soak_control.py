@@ -1860,6 +1860,18 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
                     "event": {"upload_request_outcome": 2, "anti_flood_drop": 1},
                     "severity": {"info": 2, "medium": 1},
                 },
+                "rustEd2kOfferSummary": {
+                    "source": "rustDiagLog",
+                    "rowCount": 2,
+                    "observedEntriesSent": 400,
+                    "latestBatch": {
+                        "entriesSent": 200,
+                        "totalEntries": 1000,
+                        "nextCursor": 400,
+                        "wrapped": False,
+                    },
+                    "batchIntervalSeconds": {"count": 1, "average": 60.0},
+                },
                 "antiFloodSummary": {
                     "totalEvents": 1,
                     "maxRepeatCount": 3,
@@ -1995,6 +2007,8 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
     assert brief["diagnostics"]["uploadEfficiency"]["servedToRequestedRatio"] == 0.5
     assert brief["diagnostics"]["mfcUpload"]["rowCount"] == 8
     assert brief["diagnostics"]["mfcUpload"]["outcomes"] == {"sent": 8}
+    assert brief["diagnostics"]["rustEd2kOffers"]["observedEntriesSent"] == 400
+    assert brief["diagnostics"]["rustEd2kOffers"]["latestBatch"]["nextCursor"] == 400
     assert brief["diagnostics"]["antiFlood"]["udpTrackerDrops"]["bucketCounts"] == {
         "search_req": 1,
         "publish_source_req": 1,
@@ -2062,6 +2076,12 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
                 "event": {"upload_request_outcome": 2, "anti_flood_drop": 30},
                 "severity": {"info": 2, "medium": 1},
             },
+            "rustEd2kOfferSummary": {
+                "source": "rustDiagLog",
+                "rowCount": 3,
+                "observedEntriesSent": 600,
+                "latestBatch": {"nextCursor": 600},
+            },
             "files": [{"name": "emulebb-rust-diag-123.jsonl"}],
         },
     )
@@ -2114,12 +2134,15 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert retained["recommendations"] == result["recommendations"]
     assert retained["diagnostics"]["fileCount"] == 1
     assert retained["diagnostics"]["aggregateJsonCounts"]["event"]["anti_flood_drop"] == 30
+    assert retained["diagnostics"]["rustEd2kOfferSummary"]["observedEntriesSent"] == 600
     assert retained["vpn"]["adapterUp"] is True
     heartbeat_text = heartbeat.read_text(encoding="utf-8")
     assert "mfcHashing=10" in heartbeat_text
     assert "preserve-mfc-hashing-before-connectivity-restart" in heartbeat_text
     assert "vpnAllWhitelisted=True" in heartbeat_text
     assert "diagnosticsFiles=1" in heartbeat_text
+    assert "rustOfferObservedEntries=600" in heartbeat_text
+    assert "rustOfferLatestCursor=600" in heartbeat_text
 
 
 def test_watch_once_brief_report_keeps_retained_evidence_full(tmp_path: Path, monkeypatch) -> None:
