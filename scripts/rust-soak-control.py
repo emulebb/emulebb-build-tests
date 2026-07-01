@@ -2440,7 +2440,11 @@ def watch_recommendations(
         or vpn.get("bindIpPresent") is False
     ):
         recommendations.append("repair-vpn-before-p2p")
-    rust_findings = [finding for finding in findings if finding.startswith("rust-")]
+    rust_findings = [
+        finding
+        for finding in findings
+        if finding.startswith("rust-") and not finding.startswith("rust-anti-flood-")
+    ]
     if rust_findings:
         recommendations.append("inspect-rust-p2p")
     if any(finding.startswith("rust-anti-flood-") for finding in findings):

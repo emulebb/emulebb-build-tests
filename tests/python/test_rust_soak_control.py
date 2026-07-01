@@ -1166,7 +1166,6 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert "mfc-hashing-active" in result["findings"]
     assert "rust-anti-flood-drop-observed" in result["findings"]
     assert result["recommendations"] == [
-        "inspect-rust-p2p",
         "review-rust-anti-flood-diagnostics",
         "preserve-mfc-hashing-before-connectivity-restart",
     ]
