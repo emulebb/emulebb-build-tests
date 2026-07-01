@@ -131,3 +131,62 @@ def test_shared_file_catalog_comparison_reports_path_and_hash_gaps() -> None:
     assert comparison["rustOnlyPathFingerprints"] == ["rust-only"]
     assert comparison["mfcOnlyPathFingerprints"] == ["mfc-only"]
     assert comparison["changedPathFingerprints"] == ["changed"]
+
+
+def test_shared_file_root_group_comparison_reports_largest_deltas() -> None:
+    control = _load_rust_soak_control()
+
+    comparison = control.compare_shared_file_root_groups(
+        {
+            "groups": [
+                {"rootFingerprint": "root-a", "rowCount": 10, "uniqueHashCount": 10},
+                {"rootFingerprint": "root-b", "rowCount": 3, "uniqueHashCount": 3},
+            ]
+        },
+        {
+            "groups": [
+                {"rootFingerprint": "root-a", "rowCount": 12, "uniqueHashCount": 12},
+                {"rootFingerprint": "root-c", "rowCount": 7, "uniqueHashCount": 7},
+            ]
+        },
+    )
+
+    assert comparison["rootGroupsMatch"] is False
+    assert comparison["differingRootGroupCount"] == 3
+    assert comparison["topDeltas"][0]["rootFingerprint"] == "root-c"
+    assert comparison["topDeltas"][0]["rowDeltaRustMinusMfc"] == -7
+
+
+def test_compact_shared_root_catalog_summary_keeps_bounded_top_groups() -> None:
+    control = _load_rust_soak_control()
+
+    compact = control.compact_shared_root_catalog_summary(
+        {
+            "total": 4,
+            "rowCount": 4,
+            "rootCount": 2,
+            "groupCount": 3,
+            "groups": [
+                {"rootFingerprint": "root-a", "rowCount": 3},
+                {"rootFingerprint": "root-b", "rowCount": 1},
+                {"rootFingerprint": "root-c", "rowCount": 0},
+            ],
+        },
+        sample_limit=2,
+    )
+
+    assert "groups" not in compact
+    assert compact["topGroups"] == [
+        {"rootFingerprint": "root-a", "rowCount": 3},
+        {"rootFingerprint": "root-b", "rowCount": 1},
+    ]
+
+
+def test_shared_root_for_path_uses_longest_matching_root() -> None:
+    control = _load_rust_soak_control()
+    roots = [r"f:\share", r"f:\share\nested"]
+
+    assert control.shared_root_for_path(r"f:\share\nested\file.bin", roots) == control.private_path_fingerprint(
+        r"f:\share\nested"
+    )
+    assert control.shared_root_for_path(r"f:\other\file.bin", roots) == "unmatched"

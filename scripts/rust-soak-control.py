@@ -552,12 +552,185 @@ def fetch_shared_file_catalog(
     }
 
 
+def shared_root_paths(directories: dict[str, object]) -> list[str]:
+    """Returns normalized share roots used for path grouping."""
+
+    rows = directories.get("items")
+    if not isinstance(rows, list):
+        rows = directories.get("roots")
+    if not isinstance(rows, list):
+        return []
+    roots = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("shareable") is False or row.get("accessible") is False:
+            continue
+        root = normalize_private_path(row.get("path"))
+        if root:
+            roots.append(root)
+    return sorted(set(roots), key=lambda value: (-len(value), value))
+
+
+def shared_root_for_path(path: str, roots: list[str]) -> str:
+    """Returns the longest matching normalized root for one normalized path."""
+
+    for root in sorted(roots, key=lambda value: (-len(value), value)):
+        if path == root or path.startswith(root + "\\"):
+            return private_path_fingerprint(root)
+    return "unmatched"
+
+
+def fetch_shared_file_catalog_by_root(
+    base_url: str,
+    api_key: str,
+    *,
+    page_size: int,
+    timeout_seconds: float,
+    sleep_seconds: float,
+) -> dict[str, object]:
+    """Fetches shared-file catalog counts grouped by sanitized shared root."""
+
+    directories = request_json(base_url, "/shared-directories", api_key=api_key)
+    roots = shared_root_paths(directories)
+    groups: dict[str, dict[str, object]] = {}
+    row_count = 0
+    offset = 0
+    total: int | None = None
+    while total is None or row_count < total:
+        page, page_total = shared_file_page_items(
+            request_json(
+                base_url,
+                f"/shared-files?offset={offset}&limit={page_size}",
+                api_key=api_key,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if total is None:
+            total = page_total
+        for row in page:
+            file_hash = shared_file_row_hash(row)
+            path = shared_file_row_path(row)
+            if not file_hash or not path:
+                continue
+            root = shared_root_for_path(path, roots)
+            group = groups.setdefault(
+                root,
+                {
+                    "rootFingerprint": root,
+                    "rowCount": 0,
+                    "pathFingerprints": set(),
+                    "hashes": set(),
+                },
+            )
+            group["rowCount"] = int(group["rowCount"]) + 1
+            path_fingerprints = group["pathFingerprints"]
+            hashes = group["hashes"]
+            assert isinstance(path_fingerprints, set)
+            assert isinstance(hashes, set)
+            path_fingerprints.add(private_path_fingerprint(path))
+            hashes.add(file_hash)
+        row_count += len(page)
+        if not page:
+            break
+        offset += len(page)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    compact_groups = []
+    for group in groups.values():
+        path_fingerprints = group["pathFingerprints"]
+        hashes = group["hashes"]
+        assert isinstance(path_fingerprints, set)
+        assert isinstance(hashes, set)
+        compact_groups.append(
+            {
+                "rootFingerprint": group["rootFingerprint"],
+                "rowCount": group["rowCount"],
+                "pathCount": len(path_fingerprints),
+                "uniqueHashCount": len(hashes),
+            }
+        )
+    compact_groups.sort(key=lambda group: (-int(group["rowCount"]), str(group["rootFingerprint"])))
+    return {
+        "total": total,
+        "rowCount": row_count,
+        "rootCount": len(roots),
+        "groupCount": len(compact_groups),
+        "groups": compact_groups,
+    }
+
+
 def compact_shared_catalog_summary(summary: dict[str, object]) -> dict[str, object]:
     """Drops path-to-hash maps from a shared-file catalog summary."""
 
     compact = dict(summary)
     compact.pop("byPath", None)
     return compact
+
+
+def compact_shared_root_catalog_summary(
+    summary: dict[str, object],
+    *,
+    sample_limit: int = 20,
+) -> dict[str, object]:
+    """Keeps root-group diagnostics bounded unless a full dump is requested."""
+
+    compact = dict(summary)
+    groups = compact.pop("groups", [])
+    compact["topGroups"] = groups[:sample_limit] if isinstance(groups, list) else []
+    return compact
+
+
+def compare_shared_file_root_groups(
+    rust: dict[str, object],
+    mfc: dict[str, object],
+) -> dict[str, object]:
+    """Compares per-root shared-file catalog counts."""
+
+    rust_groups = {
+        str(group.get("rootFingerprint")): group
+        for group in rust.get("groups", [])
+        if isinstance(group, dict)
+    }
+    mfc_groups = {
+        str(group.get("rootFingerprint")): group
+        for group in mfc.get("groups", [])
+        if isinstance(group, dict)
+    }
+    roots = sorted(set(rust_groups) | set(mfc_groups))
+    deltas = []
+    for root in roots:
+        rust_group = rust_groups.get(root, {})
+        mfc_group = mfc_groups.get(root, {})
+        rust_rows = safe_int(rust_group.get("rowCount")) or 0
+        mfc_rows = safe_int(mfc_group.get("rowCount")) or 0
+        rust_hashes = safe_int(rust_group.get("uniqueHashCount")) or 0
+        mfc_hashes = safe_int(mfc_group.get("uniqueHashCount")) or 0
+        if rust_rows == mfc_rows and rust_hashes == mfc_hashes:
+            continue
+        deltas.append(
+            {
+                "rootFingerprint": root,
+                "rustRows": rust_rows,
+                "mfcRows": mfc_rows,
+                "rowDeltaRustMinusMfc": rust_rows - mfc_rows,
+                "rustUniqueHashes": rust_hashes,
+                "mfcUniqueHashes": mfc_hashes,
+                "uniqueHashDeltaRustMinusMfc": rust_hashes - mfc_hashes,
+            }
+        )
+    deltas.sort(
+        key=lambda row: (
+            -abs(int(row["rowDeltaRustMinusMfc"])),
+            str(row["rootFingerprint"]),
+        )
+    )
+    return {
+        "enabled": True,
+        "rootGroupsMatch": not deltas,
+        "differingRootGroupCount": len(deltas),
+        "topDeltas": deltas[:20],
+    }
 
 
 def compare_shared_file_catalogs(
@@ -698,6 +871,38 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
             "rust": compact_shared_catalog_summary(rust_catalog),
             "mfc": compact_shared_catalog_summary(mfc_catalog),
             "comparison": compare_shared_file_catalogs(rust_catalog, mfc_catalog),
+        }
+    if args.compare_shared_file_roots:
+        if not args.mfc_base_url:
+            raise RuntimeError("--compare-shared-file-roots requires --mfc-base-url")
+        rust_root_catalog = fetch_shared_file_catalog_by_root(
+            args.base_url,
+            args.api_key,
+            page_size=args.shared_file_page_size,
+            timeout_seconds=args.shared_file_timeout_seconds,
+            sleep_seconds=args.shared_file_sleep_seconds,
+        )
+        mfc_root_catalog = fetch_shared_file_catalog_by_root(
+            args.mfc_base_url,
+            args.mfc_api_key,
+            page_size=args.shared_file_page_size,
+            timeout_seconds=args.shared_file_timeout_seconds,
+            sleep_seconds=args.shared_file_sleep_seconds,
+        )
+        result["sharedFileRootGroups"] = {
+            "rust": rust_root_catalog
+            if args.include_root_groups
+            else compact_shared_root_catalog_summary(
+                rust_root_catalog,
+                sample_limit=args.fingerprint_sample_limit,
+            ),
+            "mfc": mfc_root_catalog
+            if args.include_root_groups
+            else compact_shared_root_catalog_summary(
+                mfc_root_catalog,
+                sample_limit=args.fingerprint_sample_limit,
+            ),
+            "comparison": compare_shared_file_root_groups(rust_root_catalog, mfc_root_catalog),
         }
     return result
 
@@ -1361,6 +1566,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--compare-shared-file-paths",
         action="store_true",
         help="Fetch all shared-file pages and compare path fingerprints to hashes.",
+    )
+    shared_summary_parser.add_argument(
+        "--compare-shared-file-roots",
+        action="store_true",
+        help="Fetch all shared-file pages and compare sanitized per-root catalog counts.",
+    )
+    shared_summary_parser.add_argument(
+        "--include-root-groups",
+        action="store_true",
+        help="Include every sanitized per-root group when comparing shared-file roots.",
     )
     shared_summary_parser.add_argument("--shared-file-page-size", type=int, default=1000)
     shared_summary_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
