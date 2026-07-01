@@ -589,7 +589,14 @@ def bring_up_mfc(
         packet_dump_dir.mkdir(parents=True, exist_ok=True)
         replace_shared_roots = False
 
-    rest_smoke.configure_webserver_profile(config_dir, exe_path, MFC_API_KEY, rest_port, rest_host)
+    rest_smoke.configure_webserver_profile(
+        config_dir,
+        exe_path,
+        MFC_API_KEY,
+        rest_port,
+        rest_host,
+        enable_crash_test_endpoint=True,
+    )
     apply_mfc_endpoint_ports(
         live_common=live_common,
         config_dir=config_dir,

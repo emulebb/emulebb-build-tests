@@ -85,6 +85,109 @@ def test_apply_mfc_endpoint_ports_persists_emule_preferences(tmp_path: Path) -> 
     ]
 
 
+def test_bring_up_mfc_enables_diagnostic_rest_for_direct_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_dir = tmp_path / "profile"
+    config_dir = profile_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "preferences.ini").write_text("[eMule]\n[WebServer]\n", encoding="utf-16")
+    exe_path = tmp_path / "app" / "bin" / "emulebb-diagnostics.exe"
+
+    configure_calls: list[dict[str, object]] = []
+
+    class _LiveCommon:
+        @staticmethod
+        def apply_emule_preferences(_config_dir: Path, _values: tuple[tuple[str, str], ...]) -> None:
+            return None
+
+        @staticmethod
+        def apply_p2p_bind_interface_override(_config_dir: Path, _interface_name: str) -> None:
+            return None
+
+        @staticmethod
+        def apply_private_harness_obfuscation(_config_dir: Path, _enabled: bool) -> None:
+            return None
+
+        @staticmethod
+        def launch_app(_exe_path: Path, _profile_base: Path) -> object:
+            return object()
+
+    class _RestSmoke:
+        @staticmethod
+        def configure_webserver_profile(
+            config_dir_arg: Path,
+            app_exe_arg: Path,
+            api_key_arg: str,
+            port_arg: int,
+            bind_addr_arg: str,
+            **kwargs: object,
+        ) -> None:
+            configure_calls.append(
+                {
+                    "config_dir": config_dir_arg,
+                    "app_exe": app_exe_arg,
+                    "api_key": api_key_arg,
+                    "port": port_arg,
+                    "bind_addr": bind_addr_arg,
+                    **kwargs,
+                }
+            )
+
+        @staticmethod
+        def apply_p2p_bind_interface_override(_config_dir: Path, _interface_name: str) -> None:
+            return None
+
+        @staticmethod
+        def wait_for_rest_ready(_base_url: str, _api_key: str, _timeout_seconds: float) -> None:
+            return None
+
+        @staticmethod
+        def observe_server_connect_attempt(_base_url: str, _api_key: str, _timeout_seconds: float) -> None:
+            return None
+
+        @staticmethod
+        def http_request(
+            _base_url: str,
+            _path: str,
+            *,
+            method: str,
+            api_key: str,
+            json_body: dict[str, object],
+        ) -> dict[str, object]:
+            return {"method": method, "api_key": api_key, "json_body": json_body}
+
+    monkeypatch.setattr(soak_launch, "wait_for_mfc_core_rest_ready", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(soak_launch, "patch_upload_limit", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(soak_launch, "connect_operator_server", lambda *_args, **_kwargs: {})
+
+    result = soak_launch.bring_up_mfc(
+        live_common=_LiveCommon,
+        rest_smoke=_RestSmoke,
+        shared_dirs_mod=object(),
+        exe_path=exe_path,
+        artifacts_dir=tmp_path / "artifacts",
+        seed_config_dir=tmp_path / "seed",
+        direct_profile_dir=profile_dir,
+        rest_host="192.0.2.10",
+        rest_port=4732,
+        shared_roots=[],
+        server_endpoint="192.0.2.20:4661",
+        obfuscation=True,
+        timeouts={"rest": 0.1, "connect": 0.1},
+    )
+
+    assert result["packetDumpDir"] == profile_dir / "logs"
+    assert configure_calls == [
+        {
+            "config_dir": config_dir,
+            "app_exe": exe_path,
+            "api_key": soak_launch.MFC_API_KEY,
+            "port": 4732,
+            "bind_addr": "192.0.2.10",
+            "enable_crash_test_endpoint": True,
+        }
+    ]
+
+
 def test_load_shareddir_roots_deduplicates_and_adds_incoming(tmp_path: Path) -> None:
     shareddir = tmp_path / "shareddir.dat"
     shareddir.write_text(
