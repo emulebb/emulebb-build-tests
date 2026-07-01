@@ -2344,6 +2344,7 @@ def watch_findings(
     rust: dict[str, object],
     monitor: dict[str, object],
     mfc: dict[str, object] | None = None,
+    diagnostics: dict[str, object] | None = None,
 ) -> list[str]:
     """Returns compact operator-facing findings for one soak cadence check."""
 
@@ -2376,6 +2377,7 @@ def watch_findings(
         findings.append("visibility-still-maturing")
     elif latest.get("parityGap") is True:
         findings.append("upload-parity-gap")
+    findings.extend(watch_diagnostic_findings(diagnostics))
     if mfc is not None:
         if "error" in mfc:
             findings.append("mfc-status-error")
@@ -2390,6 +2392,32 @@ def watch_findings(
                 findings.append("mfc-kad-disconnected")
             if mfc.get("kadFirewalled") is True:
                 findings.append("mfc-kad-firewalled")
+    return findings
+
+
+def diagnostics_count(diagnostics: dict[str, object] | None, group: str, name: str) -> int:
+    """Reads an aggregate diagnostics counter without exposing raw log content."""
+
+    if not isinstance(diagnostics, dict):
+        return 0
+    counts = diagnostics.get("aggregateJsonCounts")
+    if not isinstance(counts, dict):
+        return 0
+    group_counts = counts.get(group)
+    if not isinstance(group_counts, dict):
+        return 0
+    value = group_counts.get(name)
+    return int(value) if isinstance(value, int) else 0
+
+
+def watch_diagnostic_findings(diagnostics: dict[str, object] | None) -> list[str]:
+    """Returns compact findings derived from retained diagnostics counters."""
+
+    findings: list[str] = []
+    if diagnostics_count(diagnostics, "event", "anti_flood_drop") > 0:
+        findings.append("rust-anti-flood-drop-observed")
+    if diagnostics_count(diagnostics, "event", "anti_flood_ban") > 0:
+        findings.append("rust-anti-flood-ban-observed")
     return findings
 
 
@@ -2415,6 +2443,8 @@ def watch_recommendations(
     rust_findings = [finding for finding in findings if finding.startswith("rust-")]
     if rust_findings:
         recommendations.append("inspect-rust-p2p")
+    if any(finding.startswith("rust-anti-flood-") for finding in findings):
+        recommendations.append("review-rust-anti-flood-diagnostics")
     mfc_connectivity_gap = any(
         finding in findings
         for finding in (
@@ -2472,7 +2502,7 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
             action = {"monitorRestarted": False, "monitorRestartError": str(error)}
     diagnostics = optional_watch_diagnostics(args)
     vpn = optional_watch_vpn(args)
-    findings = watch_findings(rust, monitor, mfc)
+    findings = watch_findings(rust, monitor, mfc, diagnostics)
     payload = {
         "timestampUtc": datetime.now(UTC).isoformat(),
         "rust": rust,
@@ -3082,6 +3112,7 @@ def watch_brief_from_record(
     vpn = latest.get("vpn") if isinstance(latest.get("vpn"), dict) else {}
     counters = trend.get("counters") if isinstance(trend.get("counters"), dict) else {}
     findings = list(latest.get("findings") if isinstance(latest.get("findings"), list) else [])
+    findings.extend(watch_diagnostic_findings(diagnostics))
     if not watch_alive:
         findings.append("watch-not-running")
     if watch_stale:

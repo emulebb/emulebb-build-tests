@@ -1055,7 +1055,7 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
 
     assert brief["watch"]["alive"] is True
     assert brief["watch"]["stale"] is False
-    assert brief["findings"] == ["mfc-hashing-active"]
+    assert brief["findings"] == ["mfc-hashing-active", "rust-anti-flood-drop-observed"]
     assert brief["rust"]["uploadSpeedKiBps"] == 200.0
     assert brief["rust"]["ed2kHighId"] is True
     assert brief["mfc"]["sharedHashingCount"] == 840
@@ -1164,7 +1164,12 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     )
 
     assert "mfc-hashing-active" in result["findings"]
-    assert result["recommendations"] == ["preserve-mfc-hashing-before-connectivity-restart"]
+    assert "rust-anti-flood-drop-observed" in result["findings"]
+    assert result["recommendations"] == [
+        "inspect-rust-p2p",
+        "review-rust-anti-flood-diagnostics",
+        "preserve-mfc-hashing-before-connectivity-restart",
+    ]
     assert result["diagnostics"]["aggregatePatternCounts"] == {"ed2k": 2}
     assert result["vpn"]["allWhitelisted"] is True
     retained = control.latest_jsonl_record(jsonl)
@@ -1176,7 +1181,7 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert retained["vpn"]["adapterUp"] is True
     heartbeat_text = heartbeat.read_text(encoding="utf-8")
     assert "mfcHashing=10" in heartbeat_text
-    assert "recommendations=preserve-mfc-hashing-before-connectivity-restart" in heartbeat_text
+    assert "preserve-mfc-hashing-before-connectivity-restart" in heartbeat_text
     assert "vpnAllWhitelisted=True" in heartbeat_text
     assert "diagnosticsFiles=1" in heartbeat_text
 
