@@ -20,6 +20,7 @@ DEFAULT_MFC_SATURATED_KIBPS = 2500.0
 DEFAULT_RUST_MFC_RATIO_FLOOR = 0.85
 DEFAULT_MIN_PARITY_GAP_KIBPS = 512.0
 DEFAULT_TAIL_BYTES = 16_000_000
+DEFAULT_MFC_LOG_STALE_SECONDS = 900.0
 
 SLOT_RE = re.compile(
     r"UploadSlotDiagnostics: slot=(?P<slot>\d+) live=(?P<live>\d+).*?"
@@ -44,6 +45,7 @@ class MonitorConfig:
     mfc_saturated_kibps: float = DEFAULT_MFC_SATURATED_KIBPS
     rust_mfc_ratio_floor: float = DEFAULT_RUST_MFC_RATIO_FLOOR
     min_parity_gap_kibps: float = DEFAULT_MIN_PARITY_GAP_KIBPS
+    mfc_log_stale_seconds: float = DEFAULT_MFC_LOG_STALE_SECONDS
     tail_bytes: int = DEFAULT_TAIL_BYTES
     once: bool = False
 
@@ -68,6 +70,20 @@ def now_iso() -> str:
     """Returns the current UTC timestamp for monitor artifacts."""
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def iso_age_seconds(value: object) -> float | None:
+    """Returns the age in seconds for an ISO-8601 timestamp."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())
 
 
 def tail_lines(path: Path, *, max_bytes: int = DEFAULT_TAIL_BYTES) -> list[str]:
@@ -361,15 +377,22 @@ def build_record(config: MonitorConfig) -> dict[str, object]:
     mfc_ed2k_pending = int(mfc.get("ed2kPendingFiles") or 0)
     rust_waiting = int(rust.get("waitingUploads") or 0)
     mfc_waiting = int(mfc.get("waiting") or 0)
+    mfc_log_age_seconds = iso_age_seconds(mfc.get("logLastWrite"))
+    mfc_log_stale = mfc_log_age_seconds is None or mfc_log_age_seconds > config.mfc_log_stale_seconds
+    mfc_diagnostics_fresh = not mfc_log_stale
     action = {
         "throughputGapKiBps": throughput_gap_kibps,
         "rustMfcThroughputRatio": rust_mfc_ratio,
         "mfcEffectiveKiBps": mfc_kibps,
+        "mfcLogLastWrite": mfc.get("logLastWrite"),
+        "mfcLogAgeSeconds": round(mfc_log_age_seconds, 2) if mfc_log_age_seconds is not None else None,
+        "mfcLogStale": mfc_log_stale,
+        "mfcDiagnosticsFresh": mfc_diagnostics_fresh,
         "rustUnderfilled": rust_kibps < config.rust_underfill_kibps,
         "rustDemandStarved": rust_waiting == 0 and rust_kibps < config.rust_underfill_kibps,
-        "mfcSaturating": mfc_kibps > config.mfc_saturated_kibps,
+        "mfcSaturating": mfc_diagnostics_fresh and mfc_kibps > config.mfc_saturated_kibps,
         "rustEd2kPublishComplete": rust_ed2k_total > 0 and rust_ed2k_pending == 0,
-        "mfcEd2kPublishComplete": mfc.get("summaryPresent") is True and mfc_ed2k_pending == 0,
+        "mfcEd2kPublishComplete": mfc_diagnostics_fresh and mfc.get("summaryPresent") is True and mfc_ed2k_pending == 0,
         "rustVisibilityMaturing": rust_ed2k_pending > 0,
         "rustWaitingDemand": rust_waiting,
         "mfcWaitingDemand": mfc_waiting,
@@ -447,6 +470,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mfc-saturated-kibps", type=float, default=DEFAULT_MFC_SATURATED_KIBPS)
     parser.add_argument("--rust-mfc-ratio-floor", type=float, default=DEFAULT_RUST_MFC_RATIO_FLOOR)
     parser.add_argument("--min-parity-gap-kibps", type=float, default=DEFAULT_MIN_PARITY_GAP_KIBPS)
+    parser.add_argument("--mfc-log-stale-seconds", type=float, default=DEFAULT_MFC_LOG_STALE_SECONDS)
     parser.add_argument("--tail-bytes", type=int, default=DEFAULT_TAIL_BYTES)
     parser.add_argument("--once", action="store_true")
     return parser
@@ -466,6 +490,7 @@ def config_from_args(args: argparse.Namespace) -> MonitorConfig:
         mfc_saturated_kibps=args.mfc_saturated_kibps,
         rust_mfc_ratio_floor=args.rust_mfc_ratio_floor,
         min_parity_gap_kibps=args.min_parity_gap_kibps,
+        mfc_log_stale_seconds=args.mfc_log_stale_seconds,
         tail_bytes=args.tail_bytes,
         once=args.once,
     )

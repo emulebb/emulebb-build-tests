@@ -62,6 +62,13 @@ def output_root() -> Path:
     return get_workspace_output_root()
 
 
+def default_mfc_upload_log_search_roots() -> list[Path]:
+    """Returns bounded generated-output roots likely to contain MFC diagnostics."""
+
+    root = output_root()
+    return [root / "soak", root / "logs"]
+
+
 def default_runtime_dir() -> Path:
     """Returns the persistent Rust soak runtime directory."""
 
@@ -128,6 +135,62 @@ def discover_mfc_known_met_from_soak_output() -> Path | None:
         if candidates:
             return candidates[0]
     return None
+
+
+def mfc_upload_log_candidates(search_roots: list[Path], *, limit: int = 20) -> list[dict[str, object]]:
+    """Returns newest MFC upload-slot diagnostics logs under the given roots."""
+
+    candidates: dict[Path, tuple[float, int]] = {}
+    for search_root in search_roots:
+        if not search_root.is_dir():
+            continue
+        for path in search_root.glob("**/emulebb-diagnostics-upload-slot*.log"):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+                candidates[path.resolve()] = (stat.st_mtime, stat.st_size)
+            except OSError:
+                continue
+    rows = []
+    for path, (mtime, size) in sorted(candidates.items(), key=lambda item: item[1][0], reverse=True)[:limit]:
+        last_write = datetime.fromtimestamp(mtime, UTC)
+        rows.append(
+            {
+                "path": str(path),
+                "lastWriteUtc": last_write.isoformat(),
+                "ageSeconds": round(max(0.0, (datetime.now(UTC) - last_write).total_seconds()), 2),
+                "length": size,
+            }
+        )
+    return rows
+
+
+def discover_mfc_upload_log(search_roots: list[Path], *, max_age_seconds: float = 900.0) -> Path | None:
+    """Finds the newest non-stale MFC upload-slot diagnostics log."""
+
+    for row in mfc_upload_log_candidates(search_roots, limit=25):
+        age = row.get("ageSeconds")
+        path = row.get("path")
+        if isinstance(age, (int, float)) and age <= max_age_seconds and isinstance(path, str):
+            return Path(path)
+    return None
+
+
+def mfc_upload_logs(args: argparse.Namespace) -> dict[str, object]:
+    """Lists MFC upload-slot diagnostics log candidates for parity monitoring."""
+
+    roots = args.search_root or default_mfc_upload_log_search_roots()
+    rows = mfc_upload_log_candidates(roots, limit=args.limit)
+    for row in rows:
+        age = row.get("ageSeconds")
+        row["stale"] = not isinstance(age, (int, float)) or age > args.fresh_seconds
+    return {
+        "searchRoots": [str(path) for path in roots],
+        "freshSeconds": args.fresh_seconds,
+        "count": len(rows),
+        "logs": rows,
+    }
 
 
 def default_executable() -> Path:
@@ -1503,10 +1566,18 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
     diag_log = args.rust_diag_log or latest_diag_log(args.log_dir, args.rust_pid)
     script = SCRIPT_PATH.parent / "upload-parity-monitor.py"
     mfc_upload_log = args.mfc_upload_log or existing_monitor_mfc_upload_log(output_dir)
+    if mfc_upload_log is None:
+        mfc_upload_log = discover_mfc_upload_log(
+            default_mfc_upload_log_search_roots(),
+            max_age_seconds=getattr(args, "mfc_log_stale_seconds", 900.0),
+        )
     if diag_log is None:
         raise RuntimeError(f"No Rust diagnostics log found under {args.log_dir}.")
     if mfc_upload_log is None:
-        raise RuntimeError("No MFC upload diagnostics log was provided and no reusable monitor command line was found.")
+        raise RuntimeError(
+            "No fresh MFC upload diagnostics log was provided, discovered, or reusable from the monitor command line. "
+            "Run mfc-upload-logs to inspect candidates."
+        )
     stdout = (output_dir / "upload-parity-monitor.stdout.log").open("ab", buffering=0)
     stderr = (output_dir / "upload-parity-monitor.stderr.log").open("ab", buffering=0)
     creationflags = 0
@@ -1527,6 +1598,8 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         str(output_dir),
         "--interval-seconds",
         str(args.interval_seconds),
+        "--mfc-log-stale-seconds",
+        str(getattr(args, "mfc_log_stale_seconds", 900.0)),
     ]
     process = subprocess.Popen(
         command,
@@ -1617,6 +1690,10 @@ def upload_monitor_sample(args: argparse.Namespace) -> dict[str, object]:
             "rustWaiting": rust.get("waitingUploads"),
             "mfcKiBps": action.get("mfcEffectiveKiBps"),
             "mfcWaiting": action.get("mfcWaitingDemand"),
+            "mfcLogLastWrite": action.get("mfcLogLastWrite"),
+            "mfcLogAgeSeconds": action.get("mfcLogAgeSeconds"),
+            "mfcLogStale": action.get("mfcLogStale"),
+            "mfcDiagnosticsFresh": action.get("mfcDiagnosticsFresh"),
             "parityGap": action.get("parityGap"),
             "postVisibilityDemandGap": action.get("postVisibilityDemandGap"),
             "rustEd2kPending": rust.get("ed2kPendingEntries"),
@@ -1656,6 +1733,8 @@ def watch_findings(rust: dict[str, object], monitor: dict[str, object]) -> list[
         findings.append("monitor-not-running")
     if monitor.get("monitorStale") is True:
         findings.append("monitor-stale")
+    if latest.get("mfcLogStale") is True:
+        findings.append("mfc-upload-log-stale")
     if rust.get("sharedHashingActive") is True or int(rust.get("sharedHashingCount") or 0) > 0:
         findings.append("rust-hashing-active")
     if rust.get("ed2kConnected") is not True:
@@ -1742,6 +1821,7 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
         f"monitorSample={latest.get('timestamp')}",
         f"monitorParityGap={latest.get('parityGap')}",
         f"monitorPostVisibilityDemandGap={latest.get('postVisibilityDemandGap')}",
+        f"monitorMfcLogStale={latest.get('mfcLogStale')}",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
@@ -1812,6 +1892,7 @@ def start_watch_loop(args: argparse.Namespace) -> dict[str, object]:
         command.extend(["--rust-diag-log", str(args.rust_diag_log)])
     if args.mfc_upload_log is not None:
         command.extend(["--mfc-upload-log", str(args.mfc_upload_log)])
+    command.extend(["--mfc-log-stale-seconds", str(args.mfc_log_stale_seconds)])
     if not args.restart_stale_monitor:
         command.append("--no-restart-stale-monitor")
 
@@ -2008,6 +2089,12 @@ def build_parser() -> argparse.ArgumentParser:
     mfc_processes_parser = sub.add_parser("mfc-processes", help="List sanitized MFC process rows through Python WMI.")
     mfc_processes_parser.set_defaults(func=mfc_processes)
 
+    mfc_logs_parser = sub.add_parser("mfc-upload-logs", help="List MFC upload-slot diagnostics log candidates.")
+    mfc_logs_parser.add_argument("--search-root", type=Path, action="append")
+    mfc_logs_parser.add_argument("--fresh-seconds", type=float, default=900.0)
+    mfc_logs_parser.add_argument("--limit", type=int, default=20)
+    mfc_logs_parser.set_defaults(func=mfc_upload_logs)
+
     start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted runtime.")
     start_parser.add_argument("--runtime-dir", type=Path, default=default_runtime_dir())
     start_parser.add_argument("--log-dir", type=Path)
@@ -2042,6 +2129,7 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_parser.add_argument("--rust-pid", type=int)
     monitor_parser.add_argument("--rust-diag-log", type=Path)
     monitor_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    monitor_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     monitor_parser.set_defaults(func=restart_upload_monitor)
 
     watch_parser = sub.add_parser("watch-once", help="Run one long-soak cadence check and optional monitor repair.")
@@ -2052,6 +2140,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--rust-diag-log", type=Path)
     watch_parser.add_argument("--mfc-upload-log", type=Path)
     watch_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    watch_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     watch_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
     watch_parser.set_defaults(func=watch_once)
@@ -2064,6 +2153,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_loop_parser.add_argument("--rust-diag-log", type=Path)
     watch_loop_parser.add_argument("--mfc-upload-log", type=Path)
     watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    watch_loop_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     watch_loop_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
     watch_loop_parser.add_argument(
@@ -2103,6 +2193,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_watch_loop_parser.add_argument("--rust-diag-log", type=Path)
     start_watch_loop_parser.add_argument("--mfc-upload-log", type=Path)
     start_watch_loop_parser.add_argument("--interval-seconds", type=float, default=300.0)
+    start_watch_loop_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     start_watch_loop_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     start_watch_loop_parser.add_argument(
         "--no-restart-stale-monitor",

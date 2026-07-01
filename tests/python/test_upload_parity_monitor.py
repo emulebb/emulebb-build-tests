@@ -97,6 +97,7 @@ def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any
         upload_parity_monitor,
         "mfc_upload_summary",
         lambda _path, *, tail_bytes: {
+            "logLastWrite": upload_parity_monitor.now_iso(),
             "sumRateKiBps": 3100.0,
             "summaryPresent": True,
             "ed2kPendingFiles": 0,
@@ -109,6 +110,7 @@ def test_build_record_flags_relative_gap_when_rust_is_below_mfc(monkeypatch: Any
     assert record["action"]["rustMfcThroughputRatio"] == 0.7742
     assert record["action"]["relativeThroughputGap"] is True
     assert record["action"]["parityGap"] is True
+    assert record["action"]["mfcLogStale"] is False
     assert record["action"]["rustVisibilityMaturing"] is True
     assert record["action"]["postVisibilityDemandGap"] is False
 
@@ -215,6 +217,7 @@ def test_build_record_flags_post_visibility_demand_gap(monkeypatch: Any, tmp_pat
         upload_parity_monitor,
         "mfc_upload_summary",
         lambda _path, *, tail_bytes: {
+            "logLastWrite": upload_parity_monitor.now_iso(),
             "summaryRateKiBps": 3050.0,
             "sumRateKiBps": 3100.0,
             "summaryPresent": True,
@@ -230,3 +233,46 @@ def test_build_record_flags_post_visibility_demand_gap(monkeypatch: Any, tmp_pat
     assert record["action"]["rustWaitingDemand"] == 0
     assert record["action"]["mfcWaitingDemand"] == 7
     assert record["action"]["postVisibilityDemandGap"] is True
+
+
+def test_build_record_suppresses_parity_gap_when_mfc_log_is_stale(monkeypatch: Any, tmp_path: Path) -> None:
+    config = upload_parity_monitor.MonitorConfig(
+        rust_base_url="http://example.invalid/api/v1",
+        rust_api_key="placeholder",
+        rust_diag_log=None,
+        mfc_upload_log=tmp_path / "missing.log",
+        output_dir=tmp_path / "out",
+        mfc_log_stale_seconds=1.0,
+    )
+
+    monkeypatch.setattr(
+        upload_parity_monitor,
+        "rust_summary",
+        lambda _config: {
+            "uploadSpeedKiBps": 0.0,
+            "activeUploads": 0,
+            "waitingUploads": 0,
+            "ed2kPublishedEntries": 64000,
+            "ed2kPendingEntries": 0,
+        },
+    )
+    monkeypatch.setattr(
+        upload_parity_monitor,
+        "mfc_upload_summary",
+        lambda _path, *, tail_bytes: {
+            "logLastWrite": "2000-01-01T00:00:00+00:00",
+            "summaryRateKiBps": 3050.0,
+            "sumRateKiBps": 3100.0,
+            "summaryPresent": True,
+            "ed2kPendingFiles": 0,
+            "waiting": 7,
+        },
+    )
+
+    record = upload_parity_monitor.build_record(config)
+
+    assert record["action"]["mfcLogStale"] is True
+    assert record["action"]["mfcDiagnosticsFresh"] is False
+    assert record["action"]["mfcSaturating"] is False
+    assert record["action"]["parityGap"] is False
+    assert record["action"]["postVisibilityDemandGap"] is False

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -211,3 +213,25 @@ def test_shared_root_for_path_uses_longest_matching_root() -> None:
         r"f:\share\nested"
     )
     assert control.shared_root_for_path(r"f:\other\file.bin", roots) == "unmatched"
+
+
+def test_mfc_upload_log_discovery_prefers_newest_fresh_candidate(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    stale = logs_dir / "emulebb-diagnostics-upload-slot-old.log"
+    fresh = logs_dir / "emulebb-diagnostics-upload-slot.log"
+    stale.write_text("old\n", encoding="utf-8")
+    fresh.write_text("fresh\n", encoding="utf-8")
+    now = time.time()
+    os.utime(stale, (now - 3600, now - 3600))
+    os.utime(fresh, (now, now))
+
+    candidates = control.mfc_upload_log_candidates([tmp_path], limit=5)
+    discovered = control.discover_mfc_upload_log([tmp_path], max_age_seconds=900.0)
+
+    assert [Path(row["path"]).name for row in candidates] == [
+        "emulebb-diagnostics-upload-slot.log",
+        "emulebb-diagnostics-upload-slot-old.log",
+    ]
+    assert discovered == fresh.resolve()
