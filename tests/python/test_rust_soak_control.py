@@ -823,7 +823,41 @@ def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -
     rust_logs.mkdir()
     mfc_logs.mkdir()
     (rust_logs / "emulebb-rust-diag-1.jsonl").write_text(
-        '{"schema":"diag_event_v1","event":"packet","severity":"info"} ED2K\n',
+        "\n".join(
+            [
+                '{"schema":"diag_event_v1","event":"packet","severity":"info"} ED2K',
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "anti_flood_drop",
+                        "severity": "medium",
+                        "ts": "2026-01-01T00:00:00Z",
+                        "keys": {"peer": "203.0.113.20:4672"},
+                        "body": {
+                            "action": "drop",
+                            "behavior": "anti_flood_drop",
+                            "reason": "drop",
+                            "repeatCount": 3,
+                            "windowSeconds": 60,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "udp_packet_v1",
+                        "ts": "2026-01-01T00:00:00Z",
+                        "peer": "203.0.113.20:4672",
+                        "drop_reason": "tracker_drop",
+                        "tracker_bucket": "search_req",
+                        "tracker_action": "drop",
+                        "tracker_observed_packets": 3,
+                        "tracker_max_packets": 3,
+                        "opcode_name": "KADEMLIA2_SEARCH_SOURCE_REQ",
+                    }
+                ),
+            ]
+        )
+        + "\n",
         encoding="utf-8",
     )
     (mfc_logs / "emulebb-diagnostics-kad.log").write_text(
@@ -848,8 +882,12 @@ def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -
     assert result["aggregatePatternCounts"]["ed2k"] == 1
     assert result["aggregatePatternCounts"]["firewall"] == 1
     assert result["aggregatePatternCounts"]["kad"] == 1
+    anti_flood = result["antiFloodSummary"]
+    assert anti_flood["totalEvents"] == 1
+    assert anti_flood["udpTrackerDrops"]["bucketCounts"] == {"search_req": 1}
     rendered = repr(result)
     assert str(tmp_path) not in rendered
+    assert "203.0.113.20" not in rendered
 
 
 def test_watch_findings_reports_mfc_status_gaps() -> None:
@@ -1285,6 +1323,26 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
                     "event": {"upload_request_outcome": 2, "anti_flood_drop": 1},
                     "severity": {"info": 2, "medium": 1},
                 },
+                "antiFloodSummary": {
+                    "totalEvents": 1,
+                    "maxRepeatCount": 3,
+                    "actionCounts": {"drop": 1},
+                    "behaviorCounts": {"anti_flood_drop": 1},
+                    "reasonCounts": {"drop": 1},
+                    "windowSecondsCounts": {"60": 1},
+                    "recentEvents": [{"peerFingerprint": "abc"}],
+                    "udpTrackerDrops": {
+                        "rows": 2,
+                        "bucketCounts": {"search_req": 1, "publish_source_req": 1},
+                        "actionCounts": {"drop": 2},
+                        "reasonCounts": {"tracker_drop": 2},
+                        "opcodeCounts": {
+                            "KADEMLIA2_SEARCH_SOURCE_REQ": 1,
+                            "KADEMLIA2_PUBLISH_SOURCE_REQ": 1,
+                        },
+                        "recent": [{"peerFingerprint": "abc"}],
+                    },
+                },
                 "files": [
                     {
                         "jsonBodyCounts": {
@@ -1388,6 +1446,12 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
     assert brief["vpn"]["allWhitelisted"] is True
     assert brief["diagnostics"]["jsonCounts"]["event"]["anti_flood_drop"] == 1
     assert brief["diagnostics"]["uploadEfficiency"]["servedToRequestedRatio"] == 0.5
+    assert brief["diagnostics"]["antiFlood"]["udpTrackerDrops"]["bucketCounts"] == {
+        "search_req": 1,
+        "publish_source_req": 1,
+    }
+    assert "recentEvents" not in brief["diagnostics"]["antiFlood"]
+    assert "recent" not in brief["diagnostics"]["antiFlood"]["udpTrackerDrops"]
     assert brief["trend"]["rustEd2kPending"]["remainingEtaMinutes"] == 440.0
     assert "latestRecord" not in brief
     assert "files" not in brief["diagnostics"]

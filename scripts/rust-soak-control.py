@@ -983,7 +983,17 @@ def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | 
             for bucket, count in counts.items():
                 if isinstance(bucket, str) and isinstance(count, int):
                     counter[bucket] += count
-    return {
+    anti_flood = anti_flood_summary(
+        argparse.Namespace(
+            log_dir=log_dirs,
+            log_file=log_files,
+            limit=limit,
+            max_bytes=max_bytes,
+            peer_limit=8,
+            event_limit=8,
+        )
+    )
+    result: dict[str, object] = {
         "fileCount": len(files),
         "aggregatePatternCounts": dict(sorted(aggregate_patterns.items())),
         "aggregateJsonCounts": {
@@ -994,6 +1004,12 @@ def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | 
         "sources": sources,
         "files": files[:limit],
     }
+    if (
+        int(anti_flood.get("totalEvents") or 0) > 0
+        or int((anti_flood.get("udpTrackerDrops") or {}).get("rows") or 0) > 0
+    ):
+        result["antiFloodSummary"] = anti_flood
+    return result
 
 
 def optional_watch_vpn(args: argparse.Namespace) -> dict[str, object] | None:
@@ -3550,6 +3566,7 @@ def watch_brief_from_record(
             "fileCount": diagnostics.get("fileCount"),
             "patterns": diagnostics.get("aggregatePatternCounts"),
             "jsonCounts": diagnostics.get("aggregateJsonCounts"),
+            "antiFlood": compact_watch_anti_flood_summary(diagnostics.get("antiFloodSummary")),
             "uploadEfficiency": trend.get("latestUploadEfficiency"),
         },
         "trend": {
@@ -3564,6 +3581,30 @@ def watch_brief_from_record(
             "mfcUploadKiBps": counters.get("mfcUploadKiBps"),
         },
     }
+
+
+def compact_watch_anti_flood_summary(summary: object) -> dict[str, object] | None:
+    """Returns the compact anti-flood fields useful in regular watch briefs."""
+
+    if not isinstance(summary, dict):
+        return None
+    udp = summary.get("udpTrackerDrops") if isinstance(summary.get("udpTrackerDrops"), dict) else {}
+    result: dict[str, object] = {
+        "totalEvents": summary.get("totalEvents"),
+        "maxRepeatCount": summary.get("maxRepeatCount"),
+        "actionCounts": summary.get("actionCounts"),
+        "behaviorCounts": summary.get("behaviorCounts"),
+        "reasonCounts": summary.get("reasonCounts"),
+        "windowSecondsCounts": summary.get("windowSecondsCounts"),
+        "udpTrackerDrops": {
+            "rows": udp.get("rows"),
+            "bucketCounts": udp.get("bucketCounts"),
+            "actionCounts": udp.get("actionCounts"),
+            "reasonCounts": udp.get("reasonCounts"),
+            "opcodeCounts": udp.get("opcodeCounts"),
+        },
+    }
+    return result
 
 
 def add_watch_evidence_args(parser: argparse.ArgumentParser) -> None:
