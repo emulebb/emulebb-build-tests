@@ -277,6 +277,9 @@ DIAGNOSTIC_BODY_NUMERIC_FIELDS: dict[str, tuple[str, ...]] = {
         "payloadReadMs",
         "requestedBytes",
         "requestedRanges",
+        "readCacheHits",
+        "readCacheMisses",
+        "readDiskBytes",
         "servedBytes",
         "servedRanges",
         "skippedRanges",
@@ -592,6 +595,9 @@ def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
         row.pop("_sortPayloadReadMs", None)
     requested_bytes = sum(numeric.get("requestedBytes", []))
     served_bytes = sum(numeric.get("servedBytes", []))
+    read_cache_hits = sum(numeric.get("readCacheHits", []))
+    read_cache_misses = sum(numeric.get("readCacheMisses", []))
+    read_disk_bytes = sum(numeric.get("readDiskBytes", []))
     result: dict[str, object] = {
         "logDir": None,
         "logDirFingerprint": private_path_fingerprint(str(log_dirs[0])) if len(log_dirs) == 1 else None,
@@ -615,6 +621,10 @@ def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
         result["slowReadRatio"] = round(slow_read_count / row_count, 4)
     if requested_bytes > 0:
         result["servedToRequestedRatio"] = round(served_bytes / requested_bytes, 4)
+    if read_cache_hits + read_cache_misses > 0:
+        result["readCacheHitRatio"] = round(read_cache_hits / (read_cache_hits + read_cache_misses), 4)
+    if served_bytes > 0 and read_disk_bytes > 0:
+        result["readDiskToServedRatio"] = round(read_disk_bytes / served_bytes, 4)
     if timestamps:
         result["timeRange"] = {
             "firstUtc": min(timestamps).isoformat(),
@@ -3354,6 +3364,15 @@ def latest_upload_efficiency(
     throttle_ms = safe_float(
         body_numeric.get("upload_request_outcome.throttleDelayMs", {}).get("average")
     )
+    read_cache_hits = safe_float(
+        body_numeric.get("upload_request_outcome.readCacheHits", {}).get("sum")
+    )
+    read_cache_misses = safe_float(
+        body_numeric.get("upload_request_outcome.readCacheMisses", {}).get("sum")
+    )
+    read_disk_bytes = safe_float(
+        body_numeric.get("upload_request_outcome.readDiskBytes", {}).get("sum")
+    )
     outcome_counts = body_counts.get("upload_request_outcome.outcome", {})
     skip_counts = body_counts.get("upload_request_outcome.firstSkipReason", {})
     efficiency: dict[str, object] = {
@@ -3379,6 +3398,18 @@ def latest_upload_efficiency(
         efficiency["averagePayloadReadMs"] = read_ms
     if throttle_ms is not None:
         efficiency["averageThrottleDelayMs"] = throttle_ms
+    if read_cache_hits is not None:
+        efficiency["readCacheHits"] = read_cache_hits
+    if read_cache_misses is not None:
+        efficiency["readCacheMisses"] = read_cache_misses
+    if read_cache_hits is not None and read_cache_misses is not None:
+        read_cache_total = read_cache_hits + read_cache_misses
+        if read_cache_total > 0:
+            efficiency["readCacheHitRatio"] = round(read_cache_hits / read_cache_total, 4)
+    if read_disk_bytes is not None:
+        efficiency["readDiskBytes"] = read_disk_bytes
+    if read_disk_bytes is not None and served_bytes and served_bytes > 0:
+        efficiency["readDiskToServedRatio"] = round(read_disk_bytes / served_bytes, 4)
     if isinstance(outcome_counts, dict) and outcome_counts:
         total_outcomes = sum(count for count in outcome_counts.values() if isinstance(count, int))
         duplicate_done = skip_counts.get("duplicateDone") if isinstance(skip_counts, dict) else None

@@ -660,6 +660,9 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
                 "requestedBytes": 1000,
                 "servedBytes": 1000,
                 "payloadReadMs": 2,
+                "readCacheHits": 2,
+                "readCacheMisses": 1,
+                "readDiskBytes": 3000,
                 "throttleDelayMs": 10,
             },
         },
@@ -673,6 +676,9 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
                 "requestedBytes": 1000,
                 "servedBytes": 500,
                 "payloadReadMs": 130,
+                "readCacheHits": 1,
+                "readCacheMisses": 1,
+                "readDiskBytes": 1000,
                 "throttleDelayMs": 20,
             },
         },
@@ -685,6 +691,9 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
                 "requestedBytes": 1000,
                 "servedBytes": 1000,
                 "payloadReadMs": 10,
+                "readCacheHits": 0,
+                "readCacheMisses": 1,
+                "readDiskBytes": 1000,
                 "throttleDelayMs": 30,
             },
         },
@@ -697,6 +706,9 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
                 "requestedBytes": 1000,
                 "servedBytes": 1000,
                 "payloadReadMs": 400,
+                "readCacheHits": 3,
+                "readCacheMisses": 1,
+                "readDiskBytes": 2000,
                 "throttleDelayMs": 40,
             },
         },
@@ -720,12 +732,17 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
     assert result["slowReadCount"] == 2
     assert result["slowReadRatio"] == 0.5
     assert result["servedToRequestedRatio"] == 0.875
+    assert result["readCacheHitRatio"] == 0.6
+    assert result["readDiskToServedRatio"] == 2.0
     assert result["outcomes"] == {"served": 3, "partial": 1}
     assert result["firstSkipReasons"] == {"duplicateDone": 1}
     read_stats = result["numeric"]["payloadReadMs"]
     assert read_stats["average"] == 135.5
     assert read_stats["p50"] == 70.0
     assert read_stats["p90"] == 319.0
+    assert result["numeric"]["readCacheHits"]["sum"] == 6.0
+    assert result["numeric"]["readCacheMisses"]["sum"] == 4.0
+    assert result["numeric"]["readDiskBytes"]["sum"] == 7000.0
     assert [row["payloadReadMs"] for row in result["worstPayloadReads"]] == [400.0, 130.0]
     assert result["timeRange"] == {
         "firstUtc": "2026-01-01T00:00:00+00:00",
@@ -1176,6 +1193,27 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
                                 "min": 3.0,
                                 "max": 7.0,
                                 "average": 5.0,
+                            },
+                            "upload_request_outcome.readCacheHits": {
+                                "count": 3,
+                                "sum": 3.0,
+                                "min": 0.0,
+                                "max": 2.0,
+                                "average": 1.0,
+                            },
+                            "upload_request_outcome.readCacheMisses": {
+                                "count": 3,
+                                "sum": 2.0,
+                                "min": 0.0,
+                                "max": 1.0,
+                                "average": 0.667,
+                            },
+                            "upload_request_outcome.readDiskBytes": {
+                                "count": 3,
+                                "sum": 600.0,
+                                "min": 0.0,
+                                "max": 300.0,
+                                "average": 200.0,
                             }
                         }
                     },
@@ -1226,6 +1264,27 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
                                 "min": 8.0,
                                 "max": 12.0,
                                 "average": 10.0,
+                            },
+                            "upload_request_outcome.readCacheHits": {
+                                "count": 2,
+                                "sum": 1.0,
+                                "min": 0.0,
+                                "max": 1.0,
+                                "average": 0.5,
+                            },
+                            "upload_request_outcome.readCacheMisses": {
+                                "count": 2,
+                                "sum": 4.0,
+                                "min": 2.0,
+                                "max": 2.0,
+                                "average": 2.0,
+                            },
+                            "upload_request_outcome.readDiskBytes": {
+                                "count": 2,
+                                "sum": 900.0,
+                                "min": 400.0,
+                                "max": 500.0,
+                                "average": 450.0,
                             }
                         }
                     },
@@ -1280,6 +1339,8 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
     assert trend["latestUploadEfficiency"]["payloadOverheadRatio"] == 0.1
     assert trend["latestUploadEfficiency"]["averagePayloadReadMs"] == 4.8
     assert trend["latestUploadEfficiency"]["averageThrottleDelayMs"] == 7.0
+    assert trend["latestUploadEfficiency"]["readCacheHitRatio"] == 0.4
+    assert trend["latestUploadEfficiency"]["readDiskToServedRatio"] == 3.3333
     assert trend["latestUploadEfficiency"]["duplicateDoneOutcomeRatio"] == 0.5
     assert trend["counters"]["rustEd2kPublished"]["delta"] == 200.0
     assert trend["counters"]["rustEd2kPublished"]["perMinute"] == 20.0
