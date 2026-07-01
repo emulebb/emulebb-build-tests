@@ -128,6 +128,10 @@ def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> Non
                         "keys": {"peer": "hidden"},
                         "body": {
                             "activeSlots": 22,
+                            "activeGrantedSessions": 21,
+                            "activeUploadingSessions": 20,
+                            "activeNeverUploadedSessions": 1,
+                            "activeProductiveSessions": 19,
                             "baseSlots": 12,
                             "effectiveSlotCap": 22,
                             "elasticSlots": 10,
@@ -190,6 +194,10 @@ def test_rust_sched_summary_keeps_only_aggregate_counters(tmp_path: Path) -> Non
     assert summary["verifiedReaderOpenMs"] == 3
     assert summary["payloadReadMs"] == 7
     assert summary["lastCapacity"]["waitingSessions"] == 2
+    assert summary["lastCapacity"]["activeGrantedSessions"] == 21
+    assert summary["lastCapacity"]["activeUploadingSessions"] == 20
+    assert summary["lastCapacity"]["activeNeverUploadedSessions"] == 1
+    assert summary["lastCapacity"]["activeProductiveSessions"] == 19
     assert "hidden" not in json.dumps(summary)
 
 

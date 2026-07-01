@@ -252,7 +252,11 @@ def rust_sched_summary(path: Path | None, *, tail_bytes: int = DEFAULT_TAIL_BYTE
             last_capacity = {
                 key: body.get(key)
                 for key in (
+                    "activeGrantedSessions",
+                    "activeNeverUploadedSessions",
+                    "activeProductiveSessions",
                     "activeSlots",
+                    "activeUploadingSessions",
                     "baseSlots",
                     "effectiveSlotCap",
                     "elasticSlots",

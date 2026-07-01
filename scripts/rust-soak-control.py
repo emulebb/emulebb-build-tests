@@ -252,7 +252,11 @@ DIAGNOSTIC_BODY_BUCKET_FIELDS: dict[str, tuple[str, ...]] = {
 
 DIAGNOSTIC_BODY_NUMERIC_FIELDS: dict[str, tuple[str, ...]] = {
     "capacity_snapshot": (
+        "activeGrantedSessions",
+        "activeNeverUploadedSessions",
+        "activeProductiveSessions",
         "activeSlots",
+        "activeUploadingSessions",
         "baseSlots",
         "effectiveSlotCap",
         "elasticSlots",

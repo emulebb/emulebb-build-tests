@@ -627,7 +627,13 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
                     {
                         "schema": "diag_event_v1",
                         "event": "capacity_snapshot",
-                        "body": {"elasticUnderfill": True},
+                        "body": {
+                            "activeGrantedSessions": 7,
+                            "activeUploadingSessions": 6,
+                            "activeNeverUploadedSessions": 1,
+                            "activeProductiveSessions": 5,
+                            "elasticUnderfill": True,
+                        },
                     }
                 ),
             ]
@@ -652,6 +658,10 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
         "max": 184320.0,
         "average": 138240.0,
     }
+    assert body_numeric["capacity_snapshot.activeGrantedSessions"]["sum"] == 7.0
+    assert body_numeric["capacity_snapshot.activeUploadingSessions"]["sum"] == 6.0
+    assert body_numeric["capacity_snapshot.activeNeverUploadedSessions"]["sum"] == 1.0
+    assert body_numeric["capacity_snapshot.activeProductiveSessions"]["sum"] == 5.0
     assert body_numeric["upload_request_outcome.payloadReadMs"]["average"] == 6.0
     assert body_numeric["upload_request_outcome.throttleDelayMs"]["sum"] == 30.0
     rendered = repr(result)

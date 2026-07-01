@@ -84,7 +84,11 @@ _COMPARABLE_BODY: dict[str, tuple[str, ...]] = {
         "baseSlots",
         "elasticSlots",
         "effectiveSlotCap",
+        "activeGrantedSessions",
+        "activeNeverUploadedSessions",
+        "activeProductiveSessions",
         "activeSlots",
+        "activeUploadingSessions",
         "waitingSessions",
     ),
 }
