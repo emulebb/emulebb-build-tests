@@ -2997,6 +2997,101 @@ def watch_status(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def watch_brief(args: argparse.Namespace) -> dict[str, object]:
+    """Returns a compact long-soak status summary for regular monitoring."""
+
+    latest = latest_jsonl_record(args.watch_jsonl) or {}
+    trend = watch_trend(argparse.Namespace(watch_jsonl=args.watch_jsonl, limit=args.limit))
+    pid = None
+    if args.watch_pid_file.exists():
+        text = args.watch_pid_file.read_text(encoding="utf-8", errors="replace").strip()
+        if text.isdigit():
+            pid = int(text)
+    latest_age_seconds = timestamp_age_seconds(latest.get("timestampUtc")) if latest else None
+    watch_alive = pid_exists(pid) if pid is not None else False
+    watch_stale = latest_age_seconds is None or latest_age_seconds > args.stale_seconds
+    rust = latest.get("rust") if isinstance(latest.get("rust"), dict) else {}
+    mfc = latest.get("mfc") if isinstance(latest.get("mfc"), dict) else {}
+    monitor = latest.get("monitor") if isinstance(latest.get("monitor"), dict) else {}
+    monitor_latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
+    diagnostics = latest.get("diagnostics") if isinstance(latest.get("diagnostics"), dict) else {}
+    vpn = latest.get("vpn") if isinstance(latest.get("vpn"), dict) else {}
+    counters = trend.get("counters") if isinstance(trend.get("counters"), dict) else {}
+    findings = list(latest.get("findings") if isinstance(latest.get("findings"), list) else [])
+    if not watch_alive:
+        findings.append("watch-not-running")
+    if watch_stale:
+        findings.append("watch-stale")
+    return {
+        "watch": {
+            "pid": pid,
+            "alive": watch_alive,
+            "stale": watch_stale,
+            "latestAgeSeconds": latest_age_seconds,
+            "stopFilePresent": args.watch_stop_file.exists(),
+        },
+        "timestampUtc": latest.get("timestampUtc"),
+        "findings": sorted(set(str(item) for item in findings)),
+        "recommendations": latest.get("recommendations") if isinstance(latest.get("recommendations"), list) else [],
+        "rust": {
+            "uploadSpeedKiBps": rust.get("uploadSpeedKiBps"),
+            "activeUploads": rust.get("activeUploads"),
+            "waitingUploads": rust.get("waitingUploads"),
+            "sharedHashingCount": rust.get("sharedHashingCount"),
+            "ed2kConnected": rust.get("ed2kConnected"),
+            "ed2kHighId": rust.get("ed2kHighId"),
+            "ed2kPublishedEntries": rust.get("ed2kPublishedEntries"),
+            "ed2kPendingEntries": rust.get("ed2kPendingEntries"),
+            "ed2kVisibilityPercent": rust.get("ed2kVisibilityPercent"),
+            "kadConnected": rust.get("kadConnected"),
+            "kadFirewalled": rust.get("kadFirewalled"),
+            "kadSourcePublishedTotal": rust.get("kadSourcePublishedTotal"),
+        },
+        "mfc": {
+            "uploadSpeedKiBps": mfc.get("uploadSpeedKiBps"),
+            "activeUploads": mfc.get("activeUploads"),
+            "sharedFileCount": mfc.get("sharedFileCount"),
+            "sharedHashingCount": mfc.get("sharedHashingCount"),
+            "ed2kConnected": mfc.get("ed2kConnected"),
+            "ed2kHighId": mfc.get("ed2kHighId"),
+            "kadConnected": mfc.get("kadConnected"),
+            "kadFirewalled": mfc.get("kadFirewalled"),
+        },
+        "monitor": {
+            "alive": monitor.get("monitorAlive"),
+            "stale": monitor.get("monitorStale"),
+            "latestAgeSeconds": monitor.get("latestAgeSeconds"),
+            "rustKiBps": monitor_latest.get("rustKiBps"),
+            "rustUploads": monitor_latest.get("rustUploads"),
+            "mfcKiBps": monitor_latest.get("mfcKiBps"),
+            "mfcWaiting": monitor_latest.get("mfcWaiting"),
+            "parityGap": monitor_latest.get("parityGap"),
+            "mfcLogStale": monitor_latest.get("mfcLogStale"),
+        },
+        "vpn": {
+            "allWhitelisted": vpn.get("allWhitelisted"),
+            "adapterUp": vpn.get("adapterUp"),
+            "bindIpPresent": vpn.get("bindIpPresent"),
+        },
+        "diagnostics": {
+            "fileCount": diagnostics.get("fileCount"),
+            "patterns": diagnostics.get("aggregatePatternCounts"),
+            "uploadEfficiency": trend.get("latestUploadEfficiency"),
+        },
+        "trend": {
+            "sampleCount": trend.get("sampleCount"),
+            "window": trend.get("window"),
+            "rustUploadKiBps": counters.get("rustUploadKiBps"),
+            "monitorRustUploadKiBps": counters.get("monitorRustUploadKiBps"),
+            "rustEd2kPending": counters.get("rustEd2kPending"),
+            "rustEd2kPublished": counters.get("rustEd2kPublished"),
+            "rustKadSourcePublished": counters.get("rustKadSourcePublished"),
+            "mfcHashingRemaining": counters.get("mfcHashingRemaining"),
+            "mfcUploadKiBps": counters.get("mfcUploadKiBps"),
+        },
+    }
+
+
 def add_watch_evidence_args(parser: argparse.ArgumentParser) -> None:
     """Adds optional retained evidence knobs shared by watch commands."""
 
@@ -3377,6 +3472,31 @@ def build_parser() -> argparse.ArgumentParser:
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
     watch_status_parser.set_defaults(func=watch_status)
+
+    watch_brief_parser = sub.add_parser("watch-brief", help="Print compact long-soak watch health and trend summary.")
+    watch_brief_parser.add_argument(
+        "--stale-seconds",
+        type=float,
+        default=900.0,
+        help="Age threshold for reporting the latest watch sample as stale.",
+    )
+    watch_brief_parser.add_argument(
+        "--watch-pid-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.pid",
+    )
+    watch_brief_parser.add_argument(
+        "--watch-jsonl",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.jsonl",
+    )
+    watch_brief_parser.add_argument(
+        "--watch-stop-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
+    )
+    watch_brief_parser.add_argument("--limit", type=int, default=12)
+    watch_brief_parser.set_defaults(func=watch_brief)
 
     watch_trend_parser = sub.add_parser("watch-trend", help="Summarize retained soak watch JSONL trends.")
     watch_trend_parser.add_argument(

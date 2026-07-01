@@ -915,6 +915,145 @@ def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -
     assert status["findings"] == ["watch-stale"]
 
 
+def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    pid_file = tmp_path / "watch.pid"
+    jsonl = tmp_path / "watch.jsonl"
+    stop_file = tmp_path / "watch.stop"
+    pid_file.write_text("1234\n", encoding="utf-8")
+    records = [
+        {
+            "timestampUtc": "2026-01-01T00:00:00+00:00",
+            "rust": {
+                "uploadSpeedKiBps": 100.0,
+                "activeUploads": 2,
+                "waitingUploads": 1,
+                "ed2kPublishedEntries": 1000,
+                "ed2kPendingEntries": 9000,
+                "kadSourcePublishedTotal": 10,
+            },
+            "mfc": {
+                "sharedFileCount": 100,
+                "sharedHashingCount": 900,
+                "uploadSpeedKiBps": 1.0,
+                "activeUploads": 1,
+            },
+            "monitor": {"latestRecord": {"rustKiBps": 90.0, "mfcKiBps": 2.0}},
+        },
+        {
+            "timestampUtc": "2026-01-01T00:10:00+00:00",
+            "findings": ["mfc-hashing-active"],
+            "recommendations": ["preserve-mfc-hashing-before-connectivity-restart"],
+            "diagnostics": {
+                "fileCount": 2,
+                "aggregatePatternCounts": {"ed2k": 3},
+                "files": [
+                    {
+                        "jsonBodyCounts": {
+                            "upload_request_outcome.firstSkipReason": {"duplicateDone": 1},
+                            "upload_request_outcome.outcome": {"partial": 1, "served": 1},
+                        },
+                        "jsonBodyNumeric": {
+                            "upload_payload_accounting.sentFileBytes": {
+                                "count": 2,
+                                "sum": 200.0,
+                                "min": 50.0,
+                                "max": 150.0,
+                                "average": 100.0,
+                            },
+                            "upload_payload_accounting.sentPayloadBytes": {
+                                "count": 2,
+                                "sum": 210.0,
+                                "min": 55.0,
+                                "max": 155.0,
+                                "average": 105.0,
+                            },
+                            "upload_request_outcome.requestedBytes": {
+                                "count": 2,
+                                "sum": 400.0,
+                                "min": 100.0,
+                                "max": 300.0,
+                                "average": 200.0,
+                            },
+                            "upload_request_outcome.servedBytes": {
+                                "count": 2,
+                                "sum": 200.0,
+                                "min": 50.0,
+                                "max": 150.0,
+                                "average": 100.0,
+                            },
+                        },
+                    }
+                ],
+            },
+            "rust": {
+                "uploadSpeedKiBps": 200.0,
+                "activeUploads": 4,
+                "waitingUploads": 0,
+                "ed2kConnected": True,
+                "ed2kHighId": True,
+                "ed2kPublishedEntries": 1200,
+                "ed2kPendingEntries": 8800,
+                "ed2kVisibilityPercent": 12.0,
+                "kadConnected": True,
+                "kadFirewalled": False,
+                "kadSourcePublishedTotal": 14,
+            },
+            "mfc": {
+                "sharedFileCount": 160,
+                "sharedHashingCount": 840,
+                "uploadSpeedKiBps": 2.0,
+                "activeUploads": 1,
+                "ed2kConnected": True,
+                "ed2kHighId": False,
+                "kadConnected": True,
+                "kadFirewalled": True,
+            },
+            "monitor": {
+                "monitorAlive": True,
+                "monitorStale": False,
+                "latestAgeSeconds": 20.0,
+                "latestRecord": {
+                    "rustKiBps": 180.0,
+                    "rustUploads": 4,
+                    "mfcKiBps": 10.0,
+                    "mfcWaiting": 0,
+                    "parityGap": False,
+                    "mfcLogStale": False,
+                },
+            },
+            "vpn": {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+        },
+    ]
+    jsonl.write_text("\n".join(control.json.dumps(record, sort_keys=True) for record in records) + "\n", encoding="utf-8")
+    monkeypatch.setattr(control, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(control, "timestamp_age_seconds", lambda timestamp: 60.0)
+
+    brief = control.watch_brief(
+        SimpleNamespace(
+            watch_pid_file=pid_file,
+            watch_jsonl=jsonl,
+            watch_stop_file=stop_file,
+            stale_seconds=900.0,
+            limit=10,
+        )
+    )
+
+    assert brief["watch"]["alive"] is True
+    assert brief["watch"]["stale"] is False
+    assert brief["findings"] == ["mfc-hashing-active"]
+    assert brief["rust"]["uploadSpeedKiBps"] == 200.0
+    assert brief["rust"]["ed2kHighId"] is True
+    assert brief["mfc"]["sharedHashingCount"] == 840
+    assert brief["mfc"]["kadFirewalled"] is True
+    assert brief["monitor"]["rustKiBps"] == 180.0
+    assert brief["vpn"]["allWhitelisted"] is True
+    assert brief["diagnostics"]["uploadEfficiency"]["servedToRequestedRatio"] == 0.5
+    assert brief["trend"]["rustEd2kPending"]["remainingEtaMinutes"] == 440.0
+    assert "latestRecord" not in brief
+    assert "files" not in brief["diagnostics"]
+
+
 def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) -> None:
     control = _load_rust_soak_control()
     jsonl = tmp_path / "watch.jsonl"
