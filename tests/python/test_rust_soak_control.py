@@ -428,6 +428,57 @@ def test_diagnostics_summary_combines_multiple_log_dirs(tmp_path: Path) -> None:
     assert str(mfc_logs) not in rendered
 
 
+def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "emulebb-rust-diag-123.jsonl"
+    log_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "upload_slot_recycled",
+                        "body": {
+                            "reason": "slowUnderfill",
+                            "fileName": "Private Operator Title.mkv",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "upload_request_outcome",
+                        "body": {"outcome": "served", "peer": "192.0.2.10:4662"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "capacity_snapshot",
+                        "body": {"elasticUnderfill": True},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = control.diagnostics_summary(
+        SimpleNamespace(log_dir=logs_dir, log_file=None, limit=10, max_bytes=2048)
+    )
+
+    body_counts = result["files"][0]["jsonBodyCounts"]
+    assert body_counts["upload_slot_recycled.reason"] == {"slowUnderfill": 1}
+    assert body_counts["upload_request_outcome.outcome"] == {"served": 1}
+    assert body_counts["capacity_snapshot.elasticUnderfill"] == {"true": 1}
+    rendered = repr(result)
+    assert "Private Operator Title" not in rendered
+    assert "192.0.2.10" not in rendered
+
+
 def test_vpn_allowlist_status_reports_sanitized_executable_state(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     exe = tmp_path / "bin" / "emulebb-rust-diagnostics.exe"

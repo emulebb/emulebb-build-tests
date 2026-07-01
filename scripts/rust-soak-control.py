@@ -241,6 +241,14 @@ DIAGNOSTIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ban", re.compile(r"\bban(?:ned|ning)?\b", re.IGNORECASE)),
 )
 
+DIAGNOSTIC_BODY_BUCKET_FIELDS: dict[str, tuple[str, ...]] = {
+    "anti_flood_ban": ("action", "behavior"),
+    "anti_flood_drop": ("action", "behavior"),
+    "capacity_snapshot": ("elasticUnderfill",),
+    "upload_request_outcome": ("outcome", "firstSkipReason"),
+    "upload_slot_recycled": ("reason",),
+}
+
 
 def tail_text_lines(path: Path, *, max_bytes: int) -> list[str]:
     """Reads a bounded text tail without returning file content to callers."""
@@ -267,6 +275,16 @@ def diagnostic_json_value(value: object) -> str | None:
     return value
 
 
+def diagnostic_json_bucket_value(value: object) -> str | None:
+    """Returns a safe aggregate bucket for selected diagnostics body fields."""
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return diagnostic_json_value(value)
+
+
 def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object]:
     """Summarizes one diagnostics log without exposing raw lines or private names."""
 
@@ -280,6 +298,7 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
         "severity": Counter(),
         "action": Counter(),
     }
+    json_body_counts: dict[str, Counter[str]] = {}
     json_rows = 0
     malformed_json_rows = 0
     timestamps: list[datetime] = []
@@ -302,6 +321,13 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
             bucket = diagnostic_json_value(parsed.get(field))
             if bucket is not None:
                 counter[bucket] += 1
+        event = diagnostic_json_value(parsed.get("event"))
+        body = parsed.get("body")
+        if event is not None and isinstance(body, dict):
+            for field in DIAGNOSTIC_BODY_BUCKET_FIELDS.get(event, ()):
+                bucket = diagnostic_json_bucket_value(body.get(field))
+                if bucket is not None:
+                    json_body_counts.setdefault(f"{event}.{field}", Counter())[bucket] += 1
         timestamp = parse_iso_timestamp(parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc"))
         if timestamp is not None:
             timestamps.append(timestamp)
@@ -331,6 +357,13 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
     }
     if compact_json_counts:
         result["jsonCounts"] = compact_json_counts
+    compact_body_counts = {
+        field: dict(counter.most_common(12))
+        for field, counter in json_body_counts.items()
+        if counter
+    }
+    if compact_body_counts:
+        result["jsonBodyCounts"] = compact_body_counts
     return result
 
 
