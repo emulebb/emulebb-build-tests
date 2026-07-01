@@ -715,30 +715,102 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
                 "files": [
                     {
                         "jsonBodyCounts": {
+                            "upload_request_outcome.firstSkipReason": {"duplicateDone": 2},
                             "upload_request_outcome.outcome": {"served": 3},
                             "upload_slot_recycled.reason": {"uploadTimeout": 1},
                         },
                         "jsonBodyNumeric": {
+                            "upload_payload_accounting.sentFileBytes": {
+                                "count": 3,
+                                "sum": 300.0,
+                                "min": 50.0,
+                                "max": 150.0,
+                                "average": 100.0,
+                            },
+                            "upload_payload_accounting.sentPayloadBytes": {
+                                "count": 3,
+                                "sum": 330.0,
+                                "min": 60.0,
+                                "max": 160.0,
+                                "average": 110.0,
+                            },
                             "upload_request_outcome.servedBytes": {
                                 "count": 3,
                                 "sum": 300.0,
                                 "min": 50.0,
                                 "max": 150.0,
                                 "average": 100.0,
+                            },
+                            "upload_request_outcome.requestedBytes": {
+                                "count": 3,
+                                "sum": 600.0,
+                                "min": 100.0,
+                                "max": 300.0,
+                                "average": 200.0,
+                            },
+                            "upload_request_outcome.payloadReadMs": {
+                                "count": 3,
+                                "sum": 12.0,
+                                "min": 2.0,
+                                "max": 6.0,
+                                "average": 4.0,
+                            },
+                            "upload_request_outcome.throttleDelayMs": {
+                                "count": 3,
+                                "sum": 15.0,
+                                "min": 3.0,
+                                "max": 7.0,
+                                "average": 5.0,
                             }
                         }
                     },
                     {
                         "jsonBodyCounts": {
+                            "upload_request_outcome.firstSkipReason": {"duplicateDone": 1},
                             "upload_request_outcome.outcome": {"partial": 1, "served": 2}
                         },
                         "jsonBodyNumeric": {
+                            "upload_payload_accounting.sentFileBytes": {
+                                "count": 2,
+                                "sum": 150.0,
+                                "min": 25.0,
+                                "max": 125.0,
+                                "average": 75.0,
+                            },
+                            "upload_payload_accounting.sentPayloadBytes": {
+                                "count": 2,
+                                "sum": 165.0,
+                                "min": 30.0,
+                                "max": 135.0,
+                                "average": 82.5,
+                            },
                             "upload_request_outcome.servedBytes": {
                                 "count": 2,
                                 "sum": 150.0,
                                 "min": 25.0,
                                 "max": 125.0,
                                 "average": 75.0,
+                            },
+                            "upload_request_outcome.requestedBytes": {
+                                "count": 2,
+                                "sum": 300.0,
+                                "min": 75.0,
+                                "max": 225.0,
+                                "average": 150.0,
+                            },
+                            "upload_request_outcome.payloadReadMs": {
+                                "count": 2,
+                                "sum": 12.0,
+                                "min": 4.0,
+                                "max": 8.0,
+                                "average": 6.0,
+                            },
+                            "upload_request_outcome.throttleDelayMs": {
+                                "count": 2,
+                                "sum": 20.0,
+                                "min": 8.0,
+                                "max": 12.0,
+                                "average": 10.0,
                             }
                         }
                     },
@@ -777,6 +849,9 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
         "served": 5,
         "partial": 1,
     }
+    assert trend["latestDiagnosticsBodyCounts"]["upload_request_outcome.firstSkipReason"] == {
+        "duplicateDone": 3
+    }
     assert trend["latestDiagnosticsBodyCounts"]["upload_slot_recycled.reason"] == {"uploadTimeout": 1}
     assert trend["latestDiagnosticsBodyNumeric"]["upload_request_outcome.servedBytes"] == {
         "count": 5,
@@ -785,6 +860,12 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
         "max": 150.0,
         "average": 90.0,
     }
+    assert trend["latestUploadEfficiency"]["servedToRequestedRatio"] == 0.5
+    assert trend["latestUploadEfficiency"]["payloadOverheadBytes"] == 45.0
+    assert trend["latestUploadEfficiency"]["payloadOverheadRatio"] == 0.1
+    assert trend["latestUploadEfficiency"]["averagePayloadReadMs"] == 4.8
+    assert trend["latestUploadEfficiency"]["averageThrottleDelayMs"] == 7.0
+    assert trend["latestUploadEfficiency"]["duplicateDoneOutcomeRatio"] == 0.5
     assert trend["counters"]["rustEd2kPublished"]["delta"] == 200.0
     assert trend["counters"]["rustEd2kPublished"]["perMinute"] == 20.0
     assert trend["counters"]["rustEd2kPending"]["perMinute"] == -20.0

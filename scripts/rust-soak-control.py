@@ -2846,6 +2846,59 @@ def latest_diagnostics_body_numeric(record: dict[str, object]) -> dict[str, dict
     }
 
 
+def latest_upload_efficiency(
+    body_counts: dict[str, dict[str, int]],
+    body_numeric: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    """Returns derived upload-efficiency ratios from retained diagnostics stats."""
+
+    requested_bytes = safe_float(
+        body_numeric.get("upload_request_outcome.requestedBytes", {}).get("sum")
+    )
+    served_bytes = safe_float(body_numeric.get("upload_request_outcome.servedBytes", {}).get("sum"))
+    sent_payload_bytes = safe_float(
+        body_numeric.get("upload_payload_accounting.sentPayloadBytes", {}).get("sum")
+    )
+    sent_file_bytes = safe_float(
+        body_numeric.get("upload_payload_accounting.sentFileBytes", {}).get("sum")
+    )
+    read_ms = safe_float(body_numeric.get("upload_request_outcome.payloadReadMs", {}).get("average"))
+    throttle_ms = safe_float(
+        body_numeric.get("upload_request_outcome.throttleDelayMs", {}).get("average")
+    )
+    outcome_counts = body_counts.get("upload_request_outcome.outcome", {})
+    skip_counts = body_counts.get("upload_request_outcome.firstSkipReason", {})
+    efficiency: dict[str, object] = {
+        "outcomes": outcome_counts,
+        "firstSkipReasons": skip_counts,
+    }
+    if requested_bytes is not None:
+        efficiency["requestedBytes"] = requested_bytes
+    if served_bytes is not None:
+        efficiency["servedBytes"] = served_bytes
+    if requested_bytes and served_bytes is not None:
+        efficiency["servedToRequestedRatio"] = round(served_bytes / requested_bytes, 4)
+    if sent_payload_bytes is not None:
+        efficiency["sentPayloadBytes"] = sent_payload_bytes
+    if sent_file_bytes is not None:
+        efficiency["sentFileBytes"] = sent_file_bytes
+    if sent_payload_bytes is not None and sent_file_bytes is not None:
+        overhead = max(0.0, sent_payload_bytes - sent_file_bytes)
+        efficiency["payloadOverheadBytes"] = round(overhead, 3)
+        if sent_file_bytes > 0:
+            efficiency["payloadOverheadRatio"] = round(overhead / sent_file_bytes, 6)
+    if read_ms is not None:
+        efficiency["averagePayloadReadMs"] = read_ms
+    if throttle_ms is not None:
+        efficiency["averageThrottleDelayMs"] = throttle_ms
+    if isinstance(outcome_counts, dict) and outcome_counts:
+        total_outcomes = sum(count for count in outcome_counts.values() if isinstance(count, int))
+        duplicate_done = skip_counts.get("duplicateDone") if isinstance(skip_counts, dict) else None
+        if total_outcomes > 0 and isinstance(duplicate_done, int):
+            efficiency["duplicateDoneOutcomeRatio"] = round(duplicate_done / total_outcomes, 4)
+    return efficiency
+
+
 def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes retained soak watch JSONL counters over a bounded window."""
 
@@ -2862,6 +2915,7 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     )
     latest_body_counts = latest_diagnostics_body_counts(latest)
     latest_body_numeric = latest_diagnostics_body_numeric(latest)
+    latest_upload = latest_upload_efficiency(latest_body_counts, latest_body_numeric)
     counters = {
         "rustUploadKiBps": trend_counter(records, ("rust", "uploadSpeedKiBps")),
         "rustActiveUploads": trend_counter(records, ("rust", "activeUploads")),
@@ -2906,6 +2960,7 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         "latestRecommendations": latest_recommendations,
         "latestDiagnosticsBodyCounts": latest_body_counts,
         "latestDiagnosticsBodyNumeric": latest_body_numeric,
+        "latestUploadEfficiency": latest_upload,
         "counters": counters,
     }
 
