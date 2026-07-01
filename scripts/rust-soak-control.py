@@ -636,14 +636,66 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
     max_repeat_count = 0
     timestamps: list[datetime] = []
     severity_counts: Counter[str] = Counter()
+    action_counts: Counter[str] = Counter()
+    behavior_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    window_counts: Counter[str] = Counter()
+    udp_tracker_rows = 0
+    udp_tracker_bucket_counts: Counter[str] = Counter()
+    udp_tracker_action_counts: Counter[str] = Counter()
+    udp_tracker_reason_counts: Counter[str] = Counter()
+    udp_tracker_opcode_counts: Counter[str] = Counter()
+    recent_udp_tracker_drops: list[dict[str, object]] = []
     for path in selected:
         for line in tail_text_lines(path, max_bytes=args.max_bytes):
             stripped = line.strip()
-            if not stripped.startswith("{") or "anti_flood" not in stripped:
+            if not stripped.startswith("{") or (
+                "anti_flood" not in stripped and "tracker_action" not in stripped
+            ):
                 continue
             try:
                 parsed = json.loads(stripped)
             except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and parsed.get("schema") == "udp_packet_v1":
+                tracker_action = diagnostic_json_bucket_value(parsed.get("tracker_action"))
+                if tracker_action not in {"drop", "massive_drop"}:
+                    continue
+                udp_tracker_rows += 1
+                tracker_bucket = diagnostic_json_bucket_value(parsed.get("tracker_bucket"))
+                drop_reason = diagnostic_json_bucket_value(parsed.get("drop_reason"))
+                opcode_name = diagnostic_json_bucket_value(parsed.get("opcode_name"))
+                observed_packets = diagnostic_json_numeric_value(parsed.get("tracker_observed_packets"))
+                max_packets = diagnostic_json_numeric_value(parsed.get("tracker_max_packets"))
+                timestamp = parse_iso_timestamp(
+                    parsed.get("ts")
+                    or parsed.get("ts_utc")
+                    or parsed.get("timestamp")
+                    or parsed.get("timestampUtc")
+                )
+                peer = parsed.get("peer") if isinstance(parsed.get("peer"), str) else ""
+                peer_fingerprint = private_path_fingerprint(peer)
+                if tracker_bucket is not None:
+                    udp_tracker_bucket_counts[tracker_bucket] += 1
+                if tracker_action is not None:
+                    udp_tracker_action_counts[tracker_action] += 1
+                if drop_reason is not None:
+                    udp_tracker_reason_counts[drop_reason] += 1
+                if opcode_name is not None:
+                    udp_tracker_opcode_counts[opcode_name] += 1
+                recent_udp_tracker_drops.append(
+                    {
+                        "timestampUtc": timestamp.isoformat() if timestamp is not None else None,
+                        "peerFingerprint": peer_fingerprint,
+                        "trackerBucket": tracker_bucket,
+                        "trackerAction": tracker_action,
+                        "dropReason": drop_reason,
+                        "opcodeName": opcode_name,
+                        "observedPackets": int(observed_packets) if observed_packets is not None else None,
+                        "maxPackets": int(max_packets) if max_packets is not None else None,
+                        "sourceFile": path.name,
+                    }
+                )
                 continue
             if not isinstance(parsed, dict) or parsed.get("event") not in {"anti_flood_drop", "anti_flood_ban"}:
                 continue
@@ -652,6 +704,12 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
             severity = diagnostic_json_value(parsed.get("severity")) or "unknown"
             body = parsed.get("body") if isinstance(parsed.get("body"), dict) else {}
             repeat_count = diagnostic_json_numeric_value(body.get("repeatCount")) if isinstance(body, dict) else None
+            action = diagnostic_json_bucket_value(body.get("action")) if isinstance(body, dict) else None
+            behavior = diagnostic_json_bucket_value(body.get("behavior")) if isinstance(body, dict) else None
+            reason = diagnostic_json_bucket_value(body.get("reason")) if isinstance(body, dict) else None
+            window_seconds = (
+                diagnostic_json_numeric_value(body.get("windowSeconds")) if isinstance(body, dict) else None
+            )
             timestamp = parse_iso_timestamp(
                 parsed.get("ts") or parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc")
             )
@@ -664,6 +722,10 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
                 timestamp.isoformat() if timestamp is not None else None,
                 peer_fingerprint,
                 int(repeat_count) if repeat_count is not None else None,
+                action,
+                behavior,
+                reason,
+                int(window_seconds) if window_seconds is not None else None,
             )
             if event_key in seen_events:
                 duplicate_event_rows += 1
@@ -675,6 +737,14 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
                 max_repeat_count = max(max_repeat_count, int(repeat_count))
             if timestamp is not None:
                 timestamps.append(timestamp)
+            if action is not None:
+                action_counts[action] += 1
+            if behavior is not None:
+                behavior_counts[behavior] += 1
+            if reason is not None:
+                reason_counts[reason] += 1
+            if window_seconds is not None:
+                window_counts[str(int(window_seconds))] += 1
             peer_row = peers.setdefault(
                 peer_fingerprint,
                 {
@@ -709,10 +779,15 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
                     "severity": severity,
                     "peerFingerprint": peer_fingerprint,
                     "repeatCount": int(repeat_count) if repeat_count is not None else None,
+                    "action": action,
+                    "behavior": behavior,
+                    "reason": reason,
+                    "windowSeconds": int(window_seconds) if window_seconds is not None else None,
                     "sourceFile": path.name,
                 }
             )
     recent_events.sort(key=lambda row: str(row.get("timestampUtc") or ""))
+    recent_udp_tracker_drops.sort(key=lambda row: str(row.get("timestampUtc") or ""))
     peer_rows = sorted(
         peers.values(),
         key=lambda row: (int(row.get("events", 0)), int(row.get("maxRepeatCount", 0))),
@@ -731,6 +806,18 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
         "uniquePeers": len(peers),
         "maxRepeatCount": max_repeat_count,
         "severityCounts": dict(severity_counts.most_common()),
+        "actionCounts": dict(action_counts.most_common()),
+        "behaviorCounts": dict(behavior_counts.most_common()),
+        "reasonCounts": dict(reason_counts.most_common()),
+        "windowSecondsCounts": dict(window_counts.most_common()),
+        "udpTrackerDrops": {
+            "rows": udp_tracker_rows,
+            "bucketCounts": dict(udp_tracker_bucket_counts.most_common(12)),
+            "actionCounts": dict(udp_tracker_action_counts.most_common(12)),
+            "reasonCounts": dict(udp_tracker_reason_counts.most_common(12)),
+            "opcodeCounts": dict(udp_tracker_opcode_counts.most_common(12)),
+            "recent": recent_udp_tracker_drops[-args.event_limit :],
+        },
         "topPeers": peer_rows,
         "recentEvents": recent_events[-args.event_limit :],
     }

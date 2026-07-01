@@ -653,7 +653,13 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                         "severity": "medium",
                         "ts": "2026-01-01T00:00:00Z",
                         "keys": {"peer": "203.0.113.10:4662"},
-                        "body": {"repeatCount": 3},
+                        "body": {
+                            "action": "drop",
+                            "behavior": "anti_flood_drop",
+                            "reason": "tracker_drop",
+                            "repeatCount": 3,
+                            "windowSeconds": 60,
+                        },
                     }
                 ),
                 json.dumps(
@@ -663,7 +669,13 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                         "severity": "medium",
                         "ts": "2026-01-01T00:00:00Z",
                         "keys": {"peer": "203.0.113.10:4662"},
-                        "body": {"repeatCount": 3},
+                        "body": {
+                            "action": "drop",
+                            "behavior": "anti_flood_drop",
+                            "reason": "tracker_drop",
+                            "repeatCount": 3,
+                            "windowSeconds": 60,
+                        },
                     }
                 ),
                 json.dumps(
@@ -673,7 +685,13 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                         "severity": "medium",
                         "ts": "2026-01-01T00:00:05Z",
                         "keys": {"peer": "203.0.113.10:4662"},
-                        "body": {"repeatCount": 4},
+                        "body": {
+                            "action": "drop",
+                            "behavior": "anti_flood_drop",
+                            "reason": "tracker_drop",
+                            "repeatCount": 4,
+                            "windowSeconds": 60,
+                        },
                     }
                 ),
                 json.dumps(
@@ -683,7 +701,39 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                         "severity": "high",
                         "ts": "2026-01-01T00:01:00Z",
                         "keys": {"peer": "203.0.113.11:4662"},
-                        "body": {"repeatCount": 9},
+                        "body": {
+                            "action": "drop",
+                            "behavior": "anti_flood_ban",
+                            "reason": "tracker_massive_drop",
+                            "repeatCount": 9,
+                            "windowSeconds": 60,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "udp_packet_v1",
+                        "ts": "2026-01-01T00:00:05Z",
+                        "peer": "203.0.113.10:4662",
+                        "drop_reason": "tracker_drop",
+                        "tracker_bucket": "search_req",
+                        "tracker_action": "drop",
+                        "tracker_observed_packets": 3,
+                        "tracker_max_packets": 3,
+                        "opcode_name": "KADEMLIA2_SEARCH_SOURCE_REQ",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "udp_packet_v1",
+                        "ts": "2026-01-01T00:00:05Z",
+                        "peer": "203.0.113.10:4662",
+                        "drop_reason": "tracker_drop",
+                        "tracker_bucket": "publish_source_req",
+                        "tracker_action": "drop",
+                        "tracker_observed_packets": 3,
+                        "tracker_max_packets": 3,
+                        "opcode_name": "KADEMLIA2_PUBLISH_SOURCE_REQ",
                     }
                 ),
             ]
@@ -709,9 +759,24 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
     assert result["uniquePeers"] == 2
     assert result["maxRepeatCount"] == 9
     assert result["severityCounts"] == {"medium": 2, "high": 1}
+    assert result["actionCounts"] == {"drop": 3}
+    assert result["behaviorCounts"] == {"anti_flood_drop": 2, "anti_flood_ban": 1}
+    assert result["reasonCounts"] == {"tracker_drop": 2, "tracker_massive_drop": 1}
+    assert result["windowSecondsCounts"] == {"60": 3}
+    assert result["udpTrackerDrops"]["rows"] == 2
+    assert result["udpTrackerDrops"]["bucketCounts"] == {
+        "search_req": 1,
+        "publish_source_req": 1,
+    }
+    assert result["udpTrackerDrops"]["actionCounts"] == {"drop": 2}
+    assert result["udpTrackerDrops"]["reasonCounts"] == {"tracker_drop": 2}
+    assert result["udpTrackerDrops"]["recent"][0]["observedPackets"] == 3
+    assert result["udpTrackerDrops"]["recent"][0]["maxPackets"] == 3
     assert result["topPeers"][0]["events"] == 2
     assert result["topPeers"][0]["dropEvents"] == 2
     assert result["topPeers"][0]["maxRepeatCount"] == 4
+    assert result["recentEvents"][0]["reason"] == "tracker_drop"
+    assert result["recentEvents"][-1]["behavior"] == "anti_flood_ban"
     assert result["timeRange"] == {
         "firstUtc": "2026-01-01T00:00:00+00:00",
         "lastUtc": "2026-01-01T00:01:00+00:00",
