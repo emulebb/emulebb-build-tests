@@ -493,6 +493,32 @@ def test_watch_findings_reports_mfc_status_gaps() -> None:
     assert "mfc-kad-firewalled" in findings
 
 
+def test_watch_recommendations_preserve_mfc_hashing_before_restart() -> None:
+    control = _load_rust_soak_control()
+
+    assert control.watch_recommendations(
+        ["mfc-hashing-active", "mfc-ed2k-not-high-id", "mfc-kad-firewalled"],
+        {},
+        {},
+        {"sharedHashingCount": 12},
+        {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+    ) == ["preserve-mfc-hashing-before-connectivity-restart"]
+    assert control.watch_recommendations(
+        ["mfc-ed2k-not-high-id", "mfc-kad-firewalled"],
+        {},
+        {},
+        {"sharedHashingCount": 0},
+        {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+    ) == ["restart-mfc-connectivity-path"]
+    assert control.watch_recommendations(
+        [],
+        {},
+        {},
+        None,
+        {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+    ) == ["continue-soak"]
+
+
 def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     heartbeat = tmp_path / "heartbeat.txt"
@@ -502,6 +528,7 @@ def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
         {
             "timestampUtc": "2026-01-01T00:00:00+00:00",
             "findings": ["mfc-hashing-active"],
+            "recommendations": ["continue-mfc-hashing"],
             "rust": {
                 "uploadSpeedKiBps": 1.0,
                 "activeUploads": 1,
@@ -536,6 +563,7 @@ def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
     assert "mfcHashing=12" in text
     assert "mfcEd2kHighId=False" in text
     assert "mfcKadFirewalled=True" in text
+    assert "recommendations=continue-mfc-hashing" in text
     assert "vpnAllWhitelisted=True" in text
     assert "vpnAdapterUp=True" in text
     assert "diagnosticsFiles=2" in text
@@ -723,14 +751,17 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     )
 
     assert "mfc-hashing-active" in result["findings"]
+    assert result["recommendations"] == ["preserve-mfc-hashing-before-connectivity-restart"]
     assert result["diagnostics"]["aggregatePatternCounts"] == {"ed2k": 2}
     assert result["vpn"]["allWhitelisted"] is True
     retained = control.latest_jsonl_record(jsonl)
     assert retained is not None
     assert retained["findings"] == result["findings"]
+    assert retained["recommendations"] == result["recommendations"]
     assert retained["diagnostics"]["fileCount"] == 1
     assert retained["vpn"]["adapterUp"] is True
     heartbeat_text = heartbeat.read_text(encoding="utf-8")
     assert "mfcHashing=10" in heartbeat_text
+    assert "recommendations=preserve-mfc-hashing-before-connectivity-restart" in heartbeat_text
     assert "vpnAllWhitelisted=True" in heartbeat_text
     assert "diagnosticsFiles=1" in heartbeat_text

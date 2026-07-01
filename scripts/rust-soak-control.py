@@ -2240,6 +2240,51 @@ def watch_findings(
     return findings
 
 
+def watch_recommendations(
+    findings: list[str],
+    rust: dict[str, object],
+    monitor: dict[str, object],
+    mfc: dict[str, object] | None = None,
+    vpn: dict[str, object] | None = None,
+) -> list[str]:
+    """Returns compact next-action guidance for one soak sample."""
+
+    del rust, monitor
+    recommendations: list[str] = []
+    if "monitor-not-running" in findings or "monitor-stale" in findings or "mfc-upload-log-stale" in findings:
+        recommendations.append("repair-upload-monitor")
+    if vpn is not None and (
+        vpn.get("allWhitelisted") is False
+        or vpn.get("adapterUp") is False
+        or vpn.get("bindIpPresent") is False
+    ):
+        recommendations.append("repair-vpn-before-p2p")
+    rust_findings = [finding for finding in findings if finding.startswith("rust-")]
+    if rust_findings:
+        recommendations.append("inspect-rust-p2p")
+    mfc_connectivity_gap = any(
+        finding in findings
+        for finding in (
+            "mfc-ed2k-disconnected",
+            "mfc-ed2k-not-high-id",
+            "mfc-kad-disconnected",
+            "mfc-kad-firewalled",
+        )
+    )
+    mfc_hashing_active = "mfc-hashing-active" in findings
+    if mfc_hashing_active and mfc_connectivity_gap:
+        recommendations.append("preserve-mfc-hashing-before-connectivity-restart")
+    elif mfc_connectivity_gap:
+        recommendations.append("restart-mfc-connectivity-path")
+    elif mfc_hashing_active:
+        recommendations.append("continue-mfc-hashing")
+    if mfc is not None and "error" in mfc:
+        recommendations.append("repair-mfc-status-sampling")
+    if not recommendations:
+        recommendations.append("continue-soak")
+    return recommendations
+
+
 def watch_once(args: argparse.Namespace) -> dict[str, object]:
     """Runs one reusable long-soak cadence check and optional monitor repair."""
 
@@ -2272,19 +2317,21 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
             monitor = upload_monitor_sample(monitor_args)
         except Exception as error:
             action = {"monitorRestarted": False, "monitorRestartError": str(error)}
+    diagnostics = optional_watch_diagnostics(args)
+    vpn = optional_watch_vpn(args)
+    findings = watch_findings(rust, monitor, mfc)
     payload = {
         "timestampUtc": datetime.now(UTC).isoformat(),
         "rust": rust,
         "monitor": monitor,
-        "findings": watch_findings(rust, monitor, mfc),
+        "findings": findings,
+        "recommendations": watch_recommendations(findings, rust, monitor, mfc, vpn),
         "action": action,
     }
     if mfc is not None:
         payload["mfc"] = mfc
-    diagnostics = optional_watch_diagnostics(args)
     if diagnostics is not None:
         payload["diagnostics"] = diagnostics
-    vpn = optional_watch_vpn(args)
     if vpn is not None:
         payload["vpn"] = vpn
     if getattr(args, "append_jsonl", False):
@@ -2314,6 +2361,7 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
     lines = [
         f"timestampUtc={payload.get('timestampUtc')}",
         f"findings={','.join(str(item) for item in payload.get('findings', []))}",
+        f"recommendations={','.join(str(item) for item in payload.get('recommendations', []))}",
         f"rustKiBps={rust.get('uploadSpeedKiBps')}",
         f"rustUploads={rust.get('activeUploads')}",
         f"rustWaiting={rust.get('waitingUploads')}",
