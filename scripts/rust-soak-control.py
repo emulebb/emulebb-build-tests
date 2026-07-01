@@ -2650,7 +2650,12 @@ def safe_float(value: object) -> float | None:
         return None
 
 
-def trend_counter(records: list[dict[str, object]], path: tuple[str, ...]) -> dict[str, object]:
+def trend_counter(
+    records: list[dict[str, object]],
+    path: tuple[str, ...],
+    *,
+    include_remaining_eta: bool = False,
+) -> dict[str, object]:
     """Returns first/last/delta/rate metadata for one nested numeric counter."""
 
     numeric: list[tuple[float, datetime | None]] = []
@@ -2686,7 +2691,7 @@ def trend_counter(records: list[dict[str, object]], path: tuple[str, ...]) -> di
     if elapsed_seconds > 0 and len(numeric) >= 2:
         per_minute = delta * 60.0 / elapsed_seconds
         result["perMinute"] = round(per_minute, 3)
-        if last > 0 and per_minute < 0:
+        if include_remaining_eta and last > 0 and per_minute < 0:
             remaining_minutes = last / abs(per_minute)
             result["remainingEtaMinutes"] = round(remaining_minutes, 2)
             result["remainingEtaHours"] = round(remaining_minutes / 60.0, 2)
@@ -2742,7 +2747,11 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         "rustUploadKiBps": trend_counter(records, ("rust", "uploadSpeedKiBps")),
         "rustActiveUploads": trend_counter(records, ("rust", "activeUploads")),
         "rustEd2kPublished": trend_counter(records, ("rust", "ed2kPublishedEntries")),
-        "rustEd2kPending": trend_counter(records, ("rust", "ed2kPendingEntries")),
+        "rustEd2kPending": trend_counter(
+            records,
+            ("rust", "ed2kPendingEntries"),
+            include_remaining_eta=True,
+        ),
         "rustKadSourcePublished": trend_counter(records, ("rust", "kadSourcePublishedTotal")),
         "mfcSharedFiles": trend_counter(records, ("mfc", "sharedFileCount")),
         "mfcHashingRemaining": trend_counter(records, ("mfc", "sharedHashingCount")),

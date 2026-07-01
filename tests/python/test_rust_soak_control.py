@@ -746,6 +746,7 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
     assert trend["counters"]["monitorRustUploadKiBps"]["perMinute"] == 9.0
     assert trend["counters"]["monitorMfcUploadKiBps"]["last"] == 10.0
     assert trend["counters"]["monitorMfcUploadKiBps"]["perMinute"] == 0.6
+    assert "remainingEtaMinutes" not in trend["counters"]["monitorMfcUploadKiBps"]
 
 
 def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -> None:
