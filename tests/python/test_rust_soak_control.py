@@ -567,6 +567,16 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
                         "schema": "diag_event_v1",
                         "event": "anti_flood_drop",
                         "severity": "medium",
+                        "ts": "2026-01-01T00:00:00Z",
+                        "keys": {"peer": "203.0.113.10:4662"},
+                        "body": {"repeatCount": 3},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "anti_flood_drop",
+                        "severity": "medium",
                         "ts": "2026-01-01T00:00:05Z",
                         "keys": {"peer": "203.0.113.10:4662"},
                         "body": {"repeatCount": 4},
@@ -600,6 +610,8 @@ def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
     )
 
     assert result["totalEvents"] == 3
+    assert result["rawEventRows"] == 4
+    assert result["duplicateEventRows"] == 1
     assert result["uniquePeers"] == 2
     assert result["maxRepeatCount"] == 9
     assert result["severityCounts"] == {"medium": 2, "high": 1}

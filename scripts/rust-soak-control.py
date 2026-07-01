@@ -496,6 +496,9 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
     selected = unique_files[: args.limit]
     peers: dict[str, dict[str, object]] = {}
     recent_events: list[dict[str, object]] = []
+    seen_events: set[tuple[object, ...]] = set()
+    raw_event_rows = 0
+    duplicate_event_rows = 0
     total_events = 0
     max_repeat_count = 0
     timestamps: list[datetime] = []
@@ -511,21 +514,34 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
                 continue
             if not isinstance(parsed, dict) or parsed.get("event") not in {"anti_flood_drop", "anti_flood_ban"}:
                 continue
+            raw_event_rows += 1
             total_events += 1
             severity = diagnostic_json_value(parsed.get("severity")) or "unknown"
-            severity_counts[severity] += 1
             body = parsed.get("body") if isinstance(parsed.get("body"), dict) else {}
             repeat_count = diagnostic_json_numeric_value(body.get("repeatCount")) if isinstance(body, dict) else None
-            if repeat_count is not None:
-                max_repeat_count = max(max_repeat_count, int(repeat_count))
             timestamp = parse_iso_timestamp(
                 parsed.get("ts") or parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc")
             )
-            if timestamp is not None:
-                timestamps.append(timestamp)
             keys = parsed.get("keys") if isinstance(parsed.get("keys"), dict) else {}
             peer = keys.get("peer") if isinstance(keys, dict) else None
             peer_fingerprint = private_path_fingerprint(peer or "")
+            event_key = (
+                path.name,
+                parsed.get("event"),
+                timestamp.isoformat() if timestamp is not None else None,
+                peer_fingerprint,
+                int(repeat_count) if repeat_count is not None else None,
+            )
+            if event_key in seen_events:
+                duplicate_event_rows += 1
+                total_events -= 1
+                continue
+            seen_events.add(event_key)
+            severity_counts[severity] += 1
+            if repeat_count is not None:
+                max_repeat_count = max(max_repeat_count, int(repeat_count))
+            if timestamp is not None:
+                timestamps.append(timestamp)
             peer_row = peers.setdefault(
                 peer_fingerprint,
                 {
@@ -576,6 +592,8 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
         "maxBytes": args.max_bytes,
         "fileCount": len(selected),
         "totalEvents": total_events,
+        "rawEventRows": raw_event_rows,
+        "duplicateEventRows": duplicate_event_rows,
         "uniquePeers": len(peers),
         "maxRepeatCount": max_repeat_count,
         "severityCounts": dict(severity_counts.most_common()),
