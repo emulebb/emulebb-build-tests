@@ -1372,6 +1372,8 @@ def compare_shared_summaries(rust: dict[str, object], mfc: dict[str, object] | N
 
     if mfc is None:
         return {"enabled": False}
+    if mfc.get("available") is False or mfc.get("error"):
+        return {"enabled": False, "reason": "mfc-unavailable"}
     rust_roots = rust.get("roots") if isinstance(rust.get("roots"), dict) else {}
     mfc_roots = mfc.get("roots") if isinstance(mfc.get("roots"), dict) else {}
     rust_fingerprints = set(rust.get("rootFingerprints") or rust_roots.get("fingerprints") or [])
@@ -1411,6 +1413,16 @@ def compact_shared_endpoint_summary(summary: dict[str, object], sample_limit: in
                 row["fingerprintSample"] = fingerprints[:sample_limit]
             compact[key] = row
     return compact
+
+
+def unavailable_shared_endpoint_summary(label: str, exc: BaseException) -> dict[str, object]:
+    """Returns a sanitized optional endpoint failure for retained soak evidence."""
+
+    return {
+        "label": label,
+        "available": False,
+        "error": exc.__class__.__name__,
+    }
 
 
 def shared_file_row_hash(row: dict[str, object]) -> str:
@@ -1888,17 +1900,18 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
         include_fingerprints=True,
         sample_limit=args.fingerprint_sample_limit,
     )
-    mfc = (
-        summarize_shared_directories(
-            args.mfc_base_url,
-            args.mfc_api_key,
-            "mfc",
-            include_fingerprints=True,
-            sample_limit=args.fingerprint_sample_limit,
-        )
-        if args.mfc_base_url
-        else None
-    )
+    mfc = None
+    if args.mfc_base_url:
+        try:
+            mfc = summarize_shared_directories(
+                args.mfc_base_url,
+                args.mfc_api_key,
+                "mfc",
+                include_fingerprints=True,
+                sample_limit=args.fingerprint_sample_limit,
+            )
+        except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
+            mfc = unavailable_shared_endpoint_summary("mfc", exc)
     comparison = compare_shared_summaries(rust, mfc)
     if not args.include_fingerprints:
         rust = compact_shared_endpoint_summary(rust, args.fingerprint_sample_limit)
@@ -1907,6 +1920,8 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
     if args.compare_shared_file_hashes:
         if not args.mfc_base_url:
             raise RuntimeError("--compare-shared-file-hashes requires --mfc-base-url")
+        if mfc is not None and mfc.get("available") is False:
+            raise RuntimeError("MFC shared summary unavailable; cannot compare shared-file hashes")
         rust_hashes = fetch_shared_file_hashes(
             args.base_url,
             args.api_key,
@@ -1929,6 +1944,8 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
     if args.compare_shared_file_paths:
         if not args.mfc_base_url:
             raise RuntimeError("--compare-shared-file-paths requires --mfc-base-url")
+        if mfc is not None and mfc.get("available") is False:
+            raise RuntimeError("MFC shared summary unavailable; cannot compare shared-file paths")
         rust_catalog = fetch_shared_file_catalog(
             args.base_url,
             args.api_key,
@@ -1951,6 +1968,8 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
     if args.compare_shared_file_roots:
         if not args.mfc_base_url:
             raise RuntimeError("--compare-shared-file-roots requires --mfc-base-url")
+        if mfc is not None and mfc.get("available") is False:
+            raise RuntimeError("MFC shared summary unavailable; cannot compare shared-file roots")
         rust_root_catalog = fetch_shared_file_catalog_by_root(
             args.base_url,
             args.api_key,

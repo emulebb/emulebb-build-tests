@@ -8,6 +8,8 @@ from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 RUST_SOAK_CONTROL = REPO_ROOT / "scripts" / "rust-soak-control.py"
 
@@ -78,6 +80,103 @@ def test_shared_summary_compare_reports_root_and_count_delta() -> None:
         "mfcOnlyRootFingerprints": [mfc_only],
         "sharedFilesDeltaRustMinusMfc": -2,
     }
+
+
+def test_shared_summary_compare_disables_for_unavailable_mfc() -> None:
+    control = _load_rust_soak_control()
+
+    comparison = control.compare_shared_summaries(
+        {"sharedFilesTotal": 10, "roots": {"fingerprints": ["same"]}},
+        {"label": "mfc", "available": False, "error": "TimeoutError"},
+    )
+
+    assert comparison == {"enabled": False, "reason": "mfc-unavailable"}
+
+
+def test_shared_summary_tolerates_optional_mfc_timeout(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+
+    def fake_summarize(base_url: str, api_key: str, label: str, **kwargs) -> dict[str, object]:
+        del api_key, kwargs
+        if label == "mfc":
+            raise TimeoutError(r"timed out at http://private.example/F:\Private\Library")
+        return {
+            "label": label,
+            "baseUrl": base_url,
+            "sharedFilesTotal": 10,
+            "roots": {"fingerprints": ["root-a"]},
+            "items": {"fingerprints": ["root-a"]},
+            "rootFingerprints": ["root-a"],
+            "itemFingerprints": ["root-a"],
+            "rootsMissingFromItems": [],
+            "itemsMissingFromRoots": [],
+        }
+
+    monkeypatch.setattr(control, "summarize_shared_directories", fake_summarize)
+
+    result = control.shared_summary(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            mfc_base_url="http://private.example:4732/api/v1",
+            mfc_api_key="mfc",
+            include_fingerprints=False,
+            fingerprint_sample_limit=20,
+            compare_shared_file_hashes=False,
+            compare_shared_file_paths=False,
+            compare_shared_file_roots=False,
+            include_root_groups=False,
+            shared_file_page_size=1000,
+            shared_file_timeout_seconds=120.0,
+            shared_file_sleep_seconds=0.05,
+        )
+    )
+
+    assert result["rust"]["sharedFilesTotal"] == 10
+    assert result["mfc"] == {"label": "mfc", "available": False, "error": "TimeoutError"}
+    assert result["comparison"] == {"enabled": False, "reason": "mfc-unavailable"}
+    assert "private.example" not in repr(result)
+    assert "Private" not in repr(result)
+
+
+def test_shared_summary_requires_mfc_for_deep_compare_after_timeout(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+
+    def fake_summarize(base_url: str, api_key: str, label: str, **kwargs) -> dict[str, object]:
+        del base_url, api_key, kwargs
+        if label == "mfc":
+            raise TimeoutError("timed out")
+        return {
+            "label": label,
+            "sharedFilesTotal": 10,
+            "roots": {"fingerprints": ["root-a"]},
+            "items": {"fingerprints": ["root-a"]},
+            "rootFingerprints": ["root-a"],
+            "itemFingerprints": ["root-a"],
+            "rootsMissingFromItems": [],
+            "itemsMissingFromRoots": [],
+        }
+
+    monkeypatch.setattr(control, "summarize_shared_directories", fake_summarize)
+
+    with pytest.raises(RuntimeError, match="cannot compare shared-file hashes"):
+        control.shared_summary(
+            SimpleNamespace(
+                base_url="http://192.0.2.10:4731/api/v1",
+                api_key="rust",
+                mfc_base_url="http://192.0.2.20:4732/api/v1",
+                mfc_api_key="mfc",
+                include_fingerprints=False,
+                fingerprint_sample_limit=20,
+                compare_shared_file_hashes=True,
+                compare_shared_file_paths=False,
+                compare_shared_file_roots=False,
+                include_root_groups=False,
+                shared_file_page_size=1000,
+                shared_file_timeout_seconds=120.0,
+                shared_file_sleep_seconds=0.05,
+            )
+        )
 
 
 def test_private_path_fingerprint_normalizes_windows_verbatim_prefix() -> None:
