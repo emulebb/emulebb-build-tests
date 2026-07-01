@@ -2282,7 +2282,12 @@ def trend_counter(records: list[dict[str, object]], path: tuple[str, ...]) -> di
     if len(numeric) >= 2:
         result["elapsedSeconds"] = round(max(0.0, elapsed_seconds), 3)
     if elapsed_seconds > 0 and len(numeric) >= 2:
-        result["perMinute"] = round(delta * 60.0 / elapsed_seconds, 3)
+        per_minute = delta * 60.0 / elapsed_seconds
+        result["perMinute"] = round(per_minute, 3)
+        if last > 0 and per_minute < 0:
+            remaining_minutes = last / abs(per_minute)
+            result["remainingEtaMinutes"] = round(remaining_minutes, 2)
+            result["remainingEtaHours"] = round(remaining_minutes / 60.0, 2)
     return result
 
 
@@ -2311,10 +2316,16 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         mfc_hashing["completedDelta"] = -float(mfc_hashing["delta"])
         counter_elapsed_seconds = safe_float(mfc_hashing.get("elapsedSeconds")) or 0.0
         if counter_elapsed_seconds > 0 and int(mfc_hashing.get("samples") or 0) >= 2:
+            completed_per_minute = -float(mfc_hashing["delta"]) * 60.0 / counter_elapsed_seconds
             mfc_hashing["completedPerMinute"] = round(
-                -float(mfc_hashing["delta"]) * 60.0 / counter_elapsed_seconds,
+                completed_per_minute,
                 3,
             )
+            remaining = safe_float(mfc_hashing.get("last")) or 0.0
+            if remaining > 0 and completed_per_minute > 0:
+                remaining_minutes = remaining / completed_per_minute
+                mfc_hashing["remainingEtaMinutes"] = round(remaining_minutes, 2)
+                mfc_hashing["remainingEtaHours"] = round(remaining_minutes / 60.0, 2)
     return {
         "watchJsonl": str(args.watch_jsonl),
         "sampleCount": len(records),

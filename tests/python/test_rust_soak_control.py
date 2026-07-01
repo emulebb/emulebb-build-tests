@@ -464,10 +464,15 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
     assert trend["latestFindings"] == ["mfc-hashing-active", "mfc-kad-firewalled"]
     assert trend["counters"]["rustEd2kPublished"]["delta"] == 200.0
     assert trend["counters"]["rustEd2kPublished"]["perMinute"] == 20.0
+    assert trend["counters"]["rustEd2kPending"]["perMinute"] == -20.0
+    assert trend["counters"]["rustEd2kPending"]["remainingEtaMinutes"] == 440.0
+    assert trend["counters"]["rustEd2kPending"]["remainingEtaHours"] == 7.33
     assert trend["counters"]["mfcSharedFiles"]["delta"] == 60.0
     assert trend["counters"]["mfcHashingRemaining"]["delta"] == -60.0
     assert trend["counters"]["mfcHashingRemaining"]["completedDelta"] == 60.0
     assert trend["counters"]["mfcHashingRemaining"]["completedPerMinute"] == 6.0
+    assert trend["counters"]["mfcHashingRemaining"]["remainingEtaMinutes"] == 140.0
+    assert trend["counters"]["mfcHashingRemaining"]["remainingEtaHours"] == 2.33
 
 
 def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -> None:
