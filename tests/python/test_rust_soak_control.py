@@ -450,7 +450,26 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
                     {
                         "schema": "diag_event_v1",
                         "event": "upload_request_outcome",
-                        "body": {"outcome": "served", "peer": "192.0.2.10:4662"},
+                        "body": {
+                            "outcome": "served",
+                            "peer": "192.0.2.10:4662",
+                            "servedBytes": 184320,
+                            "sentPayloadBytes": 184400,
+                            "payloadReadMs": 3,
+                            "throttleDelayMs": 0,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "upload_request_outcome",
+                        "body": {
+                            "outcome": "served",
+                            "servedBytes": 92160,
+                            "payloadReadMs": 9,
+                            "throttleDelayMs": 30,
+                        },
                     }
                 ),
                 json.dumps(
@@ -472,8 +491,18 @@ def test_diagnostics_summary_reports_safe_body_buckets(tmp_path: Path) -> None:
 
     body_counts = result["files"][0]["jsonBodyCounts"]
     assert body_counts["upload_slot_recycled.reason"] == {"slowUnderfill": 1}
-    assert body_counts["upload_request_outcome.outcome"] == {"served": 1}
+    assert body_counts["upload_request_outcome.outcome"] == {"served": 2}
     assert body_counts["capacity_snapshot.elasticUnderfill"] == {"true": 1}
+    body_numeric = result["files"][0]["jsonBodyNumeric"]
+    assert body_numeric["upload_request_outcome.servedBytes"] == {
+        "count": 2,
+        "sum": 276480.0,
+        "min": 92160.0,
+        "max": 184320.0,
+        "average": 138240.0,
+    }
+    assert body_numeric["upload_request_outcome.payloadReadMs"]["average"] == 6.0
+    assert body_numeric["upload_request_outcome.throttleDelayMs"]["sum"] == 30.0
     rendered = repr(result)
     assert "Private Operator Title" not in rendered
     assert "192.0.2.10" not in rendered
@@ -688,11 +717,29 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
                         "jsonBodyCounts": {
                             "upload_request_outcome.outcome": {"served": 3},
                             "upload_slot_recycled.reason": {"uploadTimeout": 1},
+                        },
+                        "jsonBodyNumeric": {
+                            "upload_request_outcome.servedBytes": {
+                                "count": 3,
+                                "sum": 300.0,
+                                "min": 50.0,
+                                "max": 150.0,
+                                "average": 100.0,
+                            }
                         }
                     },
                     {
                         "jsonBodyCounts": {
                             "upload_request_outcome.outcome": {"partial": 1, "served": 2}
+                        },
+                        "jsonBodyNumeric": {
+                            "upload_request_outcome.servedBytes": {
+                                "count": 2,
+                                "sum": 150.0,
+                                "min": 25.0,
+                                "max": 125.0,
+                                "average": 75.0,
+                            }
                         }
                     },
                 ]
@@ -731,6 +778,13 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
         "partial": 1,
     }
     assert trend["latestDiagnosticsBodyCounts"]["upload_slot_recycled.reason"] == {"uploadTimeout": 1}
+    assert trend["latestDiagnosticsBodyNumeric"]["upload_request_outcome.servedBytes"] == {
+        "count": 5,
+        "sum": 450.0,
+        "min": 25.0,
+        "max": 150.0,
+        "average": 90.0,
+    }
     assert trend["counters"]["rustEd2kPublished"]["delta"] == 200.0
     assert trend["counters"]["rustEd2kPublished"]["perMinute"] == 20.0
     assert trend["counters"]["rustEd2kPending"]["perMinute"] == -20.0

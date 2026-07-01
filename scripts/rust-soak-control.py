@@ -249,6 +249,42 @@ DIAGNOSTIC_BODY_BUCKET_FIELDS: dict[str, tuple[str, ...]] = {
     "upload_slot_recycled": ("reason",),
 }
 
+DIAGNOSTIC_BODY_NUMERIC_FIELDS: dict[str, tuple[str, ...]] = {
+    "capacity_snapshot": (
+        "activeSlots",
+        "baseSlots",
+        "effectiveSlotCap",
+        "elasticSlots",
+        "underfillSinceMs",
+        "uploadLimitBytesPerSec",
+        "uploadRateBytesPerSec",
+        "waitingSessions",
+    ),
+    "shared_publish_offer_batch": (
+        "entriesSent",
+        "totalEntries",
+        "cursorBefore",
+        "nextCursor",
+    ),
+    "upload_payload_accounting": (
+        "sentCompleteFileBytes",
+        "sentFileBytes",
+        "sentPartFileBytes",
+        "sentPayloadBytes",
+    ),
+    "upload_request_outcome": (
+        "payloadPackets",
+        "payloadReadMs",
+        "requestedBytes",
+        "requestedRanges",
+        "servedBytes",
+        "servedRanges",
+        "skippedRanges",
+        "throttleDelayMs",
+        "verifiedReaderOpenMs",
+    ),
+}
+
 
 def tail_text_lines(path: Path, *, max_bytes: int) -> list[str]:
     """Reads a bounded text tail without returning file content to callers."""
@@ -285,6 +321,30 @@ def diagnostic_json_bucket_value(value: object) -> str | None:
     return diagnostic_json_value(value)
 
 
+def diagnostic_json_numeric_value(value: object) -> float | None:
+    """Returns a numeric diagnostics value while rejecting bool-like buckets."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number != number:
+        return None
+    return number
+
+
+def compact_numeric_values(values: list[float]) -> dict[str, object]:
+    """Builds compact descriptive stats for one diagnostics numeric field."""
+
+    total = sum(values)
+    return {
+        "count": len(values),
+        "sum": round(total, 3),
+        "min": round(min(values), 3),
+        "max": round(max(values), 3),
+        "average": round(total / len(values), 3),
+    }
+
+
 def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object]:
     """Summarizes one diagnostics log without exposing raw lines or private names."""
 
@@ -299,6 +359,7 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
         "action": Counter(),
     }
     json_body_counts: dict[str, Counter[str]] = {}
+    json_body_numeric: dict[str, list[float]] = {}
     json_rows = 0
     malformed_json_rows = 0
     timestamps: list[datetime] = []
@@ -328,6 +389,10 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
                 bucket = diagnostic_json_bucket_value(body.get(field))
                 if bucket is not None:
                     json_body_counts.setdefault(f"{event}.{field}", Counter())[bucket] += 1
+            for field in DIAGNOSTIC_BODY_NUMERIC_FIELDS.get(event, ()):
+                number = diagnostic_json_numeric_value(body.get(field))
+                if number is not None:
+                    json_body_numeric.setdefault(f"{event}.{field}", []).append(number)
         timestamp = parse_iso_timestamp(parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc"))
         if timestamp is not None:
             timestamps.append(timestamp)
@@ -364,6 +429,13 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
     }
     if compact_body_counts:
         result["jsonBodyCounts"] = compact_body_counts
+    compact_body_numeric = {
+        field: compact_numeric_values(values)
+        for field, values in sorted(json_body_numeric.items())
+        if values
+    }
+    if compact_body_numeric:
+        result["jsonBodyNumeric"] = compact_body_numeric
     return result
 
 
@@ -2728,6 +2800,52 @@ def latest_diagnostics_body_counts(record: dict[str, object]) -> dict[str, dict[
     }
 
 
+def latest_diagnostics_body_numeric(record: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Aggregates safe numeric body stats from the latest retained diagnostics sample."""
+
+    diagnostics = record.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {}
+    files = diagnostics.get("files")
+    if not isinstance(files, list):
+        return {}
+    aggregate: dict[str, dict[str, float]] = {}
+    for file_summary in files:
+        if not isinstance(file_summary, dict):
+            continue
+        body_numeric = file_summary.get("jsonBodyNumeric")
+        if not isinstance(body_numeric, dict):
+            continue
+        for field, stats in body_numeric.items():
+            if not isinstance(field, str) or not isinstance(stats, dict):
+                continue
+            count = safe_float(stats.get("count"))
+            total = safe_float(stats.get("sum"))
+            minimum = safe_float(stats.get("min"))
+            maximum = safe_float(stats.get("max"))
+            if count is None or total is None or minimum is None or maximum is None or count <= 0:
+                continue
+            current = aggregate.setdefault(
+                field,
+                {"count": 0.0, "sum": 0.0, "min": minimum, "max": maximum},
+            )
+            current["count"] += count
+            current["sum"] += total
+            current["min"] = min(current["min"], minimum)
+            current["max"] = max(current["max"], maximum)
+    return {
+        field: {
+            "count": int(stats["count"]),
+            "sum": round(stats["sum"], 3),
+            "min": round(stats["min"], 3),
+            "max": round(stats["max"], 3),
+            "average": round(stats["sum"] / stats["count"], 3),
+        }
+        for field, stats in sorted(aggregate.items())
+        if stats["count"] > 0
+    }
+
+
 def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes retained soak watch JSONL counters over a bounded window."""
 
@@ -2743,6 +2861,7 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         else []
     )
     latest_body_counts = latest_diagnostics_body_counts(latest)
+    latest_body_numeric = latest_diagnostics_body_numeric(latest)
     counters = {
         "rustUploadKiBps": trend_counter(records, ("rust", "uploadSpeedKiBps")),
         "rustActiveUploads": trend_counter(records, ("rust", "activeUploads")),
@@ -2786,6 +2905,7 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         "latestFindings": latest_findings,
         "latestRecommendations": latest_recommendations,
         "latestDiagnosticsBodyCounts": latest_body_counts,
+        "latestDiagnosticsBodyNumeric": latest_body_numeric,
         "counters": counters,
     }
 
