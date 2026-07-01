@@ -286,6 +286,50 @@ def test_write_mfc_shareddir_from_rest_writes_three_profile_files(tmp_path: Path
     ]
 
 
+def test_resolve_mfc_start_profile_prefers_existing_persisted_profile(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    profile_dir = tmp_path / "profile-base"
+    config_dir = profile_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "preferences.ini").write_text("[eMule]\n", encoding="utf-8")
+    monkeypatch.setattr(control, "default_mfc_profile_dir", lambda: profile_dir)
+
+    resolved, mode = control.resolve_mfc_start_profile(
+        SimpleNamespace(direct_profile_dir=None, rebuild_profile_from_inputs=False)
+    )
+
+    assert resolved == profile_dir
+    assert mode == "default-direct"
+
+
+def test_resolve_mfc_start_profile_allows_explicit_input_rebuild(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    profile_dir = tmp_path / "profile-base"
+    config_dir = profile_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "preferences.ini").write_text("[eMule]\n", encoding="utf-8")
+    monkeypatch.setattr(control, "default_mfc_profile_dir", lambda: profile_dir)
+
+    resolved, mode = control.resolve_mfc_start_profile(
+        SimpleNamespace(direct_profile_dir=None, rebuild_profile_from_inputs=True)
+    )
+
+    assert resolved is None
+    assert mode == "prepared-from-inputs"
+
+
+def test_resolve_mfc_start_profile_honors_explicit_direct_profile(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    profile_dir = tmp_path / "explicit-profile"
+
+    resolved, mode = control.resolve_mfc_start_profile(
+        SimpleNamespace(direct_profile_dir=profile_dir, rebuild_profile_from_inputs=True)
+    )
+
+    assert resolved == profile_dir
+    assert mode == "explicit-direct"
+
+
 def test_mfc_upload_log_discovery_prefers_newest_fresh_candidate(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     logs_dir = tmp_path / "logs"

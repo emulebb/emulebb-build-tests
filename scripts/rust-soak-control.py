@@ -102,6 +102,19 @@ def default_mfc_profile_dir() -> Path:
     return output_root() / "soak" / "mfc-profile" / "profiles" / "converged-soak" / "profile-base"
 
 
+def resolve_mfc_start_profile(args: argparse.Namespace) -> tuple[Path | None, str]:
+    """Chooses the MFC profile mode for a soak restart."""
+
+    if args.direct_profile_dir is not None:
+        return args.direct_profile_dir, "explicit-direct"
+    if args.rebuild_profile_from_inputs:
+        return None, "prepared-from-inputs"
+    candidate = default_mfc_profile_dir()
+    if (candidate / "config" / "preferences.ini").is_file():
+        return candidate, "default-direct"
+    return None, "prepared-from-inputs"
+
+
 def discover_mfc_shareddir_file() -> Path | None:
     """Finds the newest shareddir.dat below the generated soak output tree."""
 
@@ -1649,11 +1662,15 @@ def start_mfc(args: argparse.Namespace) -> dict[str, object]:
     if not args.skip_vpn_check:
         ensure_vpn_ready(exe_path, name="eMuleBB MFC")
     mods = soak_launch.load_helper_modules("mfc-restart")
-    inputs_path = args.inputs or default_live_wire_inputs()
-    rust_mod = mods["rust"]
-    shared_roots = rust_mod.load_shared_roots(inputs_path)
-    if not shared_roots:
-        raise RuntimeError(f"No shared roots found in {inputs_path}")
+    direct_profile_dir, profile_mode = resolve_mfc_start_profile(args)
+    if direct_profile_dir is None:
+        inputs_path = args.inputs or default_live_wire_inputs()
+        rust_mod = mods["rust"]
+        shared_roots = rust_mod.load_shared_roots(inputs_path)
+        if not shared_roots:
+            raise RuntimeError(f"No shared roots found in {inputs_path}")
+    else:
+        shared_roots = []
     handles = soak_launch.bring_up_mfc(
         live_common=mods["live_common"],
         rest_smoke=mods["rest_smoke"],
@@ -1661,7 +1678,7 @@ def start_mfc(args: argparse.Namespace) -> dict[str, object]:
         exe_path=exe_path,
         artifacts_dir=args.artifacts_dir,
         seed_config_dir=args.profile_seed_dir,
-        direct_profile_dir=args.direct_profile_dir,
+        direct_profile_dir=direct_profile_dir,
         rest_host=rest_addr,
         rest_port=args.rest_port,
         shared_roots=shared_roots,
@@ -1679,6 +1696,8 @@ def start_mfc(args: argparse.Namespace) -> dict[str, object]:
     return {
         "mfcPid": mfc_pid,
         "baseUrl": handles["baseUrl"],
+        "profileMode": profile_mode,
+        "profileDir": str(direct_profile_dir) if direct_profile_dir is not None else None,
         "logDir": str(log_dir),
         "uploadLog": str(log_dir / "emulebb-diagnostics-upload-slot.log"),
     }
@@ -2280,6 +2299,11 @@ def build_parser() -> argparse.ArgumentParser:
     start_mfc_parser.add_argument("--artifacts-dir", type=Path, default=output_root() / "soak" / "mfc-profile")
     start_mfc_parser.add_argument("--profile-seed-dir", type=Path, default=DEFAULT_MFC_SEED_CONFIG_DIR)
     start_mfc_parser.add_argument("--direct-profile-dir", type=Path)
+    start_mfc_parser.add_argument(
+        "--rebuild-profile-from-inputs",
+        action="store_true",
+        help="Prepare or replace the persistent MFC profile from --inputs instead of reusing an existing profile-base.",
+    )
     start_mfc_parser.add_argument("--exe", type=Path)
     start_mfc_parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
     start_mfc_parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
