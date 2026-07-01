@@ -544,6 +544,100 @@ def test_diagnostics_summary_uses_rust_jsonl_ts_field(tmp_path: Path) -> None:
     }
 
 
+def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "emulebb-rust-diag-123.jsonl"
+    rows = [
+        {
+            "schema": "diag_event_v1",
+            "event": "upload_request_outcome",
+            "ts": "2026-01-01T00:00:00Z",
+            "body": {
+                "outcome": "served",
+                "peer": "192.0.2.55:4662",
+                "fileName": "Private Operator Title.mkv",
+                "requestedBytes": 1000,
+                "servedBytes": 1000,
+                "payloadReadMs": 2,
+                "throttleDelayMs": 10,
+            },
+        },
+        {
+            "schema": "diag_event_v1",
+            "event": "upload_request_outcome",
+            "ts": "2026-01-01T00:01:00Z",
+            "body": {
+                "outcome": "partial",
+                "firstSkipReason": "duplicateDone",
+                "requestedBytes": 1000,
+                "servedBytes": 500,
+                "payloadReadMs": 130,
+                "throttleDelayMs": 20,
+            },
+        },
+        {
+            "schema": "diag_event_v1",
+            "event": "upload_request_outcome",
+            "ts": "2026-01-01T00:02:00Z",
+            "body": {
+                "outcome": "served",
+                "requestedBytes": 1000,
+                "servedBytes": 1000,
+                "payloadReadMs": 10,
+                "throttleDelayMs": 30,
+            },
+        },
+        {
+            "schema": "diag_event_v1",
+            "event": "upload_request_outcome",
+            "ts": "2026-01-01T00:03:00Z",
+            "body": {
+                "outcome": "served",
+                "requestedBytes": 1000,
+                "servedBytes": 1000,
+                "payloadReadMs": 400,
+                "throttleDelayMs": 40,
+            },
+        },
+    ]
+    log_file.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    result = control.upload_efficiency_summary(
+        SimpleNamespace(
+            log_dir=logs_dir,
+            log_file=None,
+            limit=10,
+            max_bytes=4096,
+            slow_read_ms=100.0,
+            outlier_limit=2,
+        )
+    )
+
+    assert result["rowCount"] == 4
+    assert result["logDir"] is None
+    assert result["logDirFingerprint"] == control.private_path_fingerprint(str(logs_dir))
+    assert result["slowReadCount"] == 2
+    assert result["slowReadRatio"] == 0.5
+    assert result["servedToRequestedRatio"] == 0.875
+    assert result["outcomes"] == {"served": 3, "partial": 1}
+    assert result["firstSkipReasons"] == {"duplicateDone": 1}
+    read_stats = result["numeric"]["payloadReadMs"]
+    assert read_stats["average"] == 135.5
+    assert read_stats["p50"] == 70.0
+    assert read_stats["p90"] == 319.0
+    assert [row["payloadReadMs"] for row in result["worstPayloadReads"]] == [400.0, 130.0]
+    assert result["timeRange"] == {
+        "firstUtc": "2026-01-01T00:00:00+00:00",
+        "lastUtc": "2026-01-01T00:03:00+00:00",
+    }
+    rendered = repr(result)
+    assert "Private Operator Title" not in rendered
+    assert "192.0.2.55" not in rendered
+    assert str(logs_dir) not in rendered
+
+
 def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     logs_dir = tmp_path / "logs"

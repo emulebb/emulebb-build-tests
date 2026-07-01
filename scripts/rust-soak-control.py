@@ -345,6 +345,49 @@ def compact_numeric_values(values: list[float]) -> dict[str, object]:
     }
 
 
+def compact_numeric_distribution(values: list[float]) -> dict[str, object]:
+    """Builds compact stats plus percentiles for soak performance evidence."""
+
+    stats = compact_numeric_values(values)
+    ordered = sorted(values)
+    for percentile in (50, 90, 95, 99):
+        stats[f"p{percentile}"] = percentile_value(ordered, percentile)
+    return stats
+
+
+def percentile_value(ordered_values: list[float], percentile: int) -> float:
+    """Returns a rounded percentile from an already sorted numeric series."""
+
+    if not ordered_values:
+        return 0.0
+    if len(ordered_values) == 1:
+        return round(ordered_values[0], 3)
+    rank = (len(ordered_values) - 1) * percentile / 100.0
+    lower_index = int(rank)
+    upper_index = min(len(ordered_values) - 1, lower_index + 1)
+    fraction = rank - lower_index
+    value = ordered_values[lower_index] * (1.0 - fraction) + ordered_values[upper_index] * fraction
+    return round(value, 3)
+
+
+def selected_diagnostics_logs(args: argparse.Namespace) -> tuple[list[Path], list[Path]]:
+    """Returns newest diagnostics logs from explicit files and directories."""
+
+    log_files = list(args.log_file or [])
+    raw_log_dirs = args.log_dir or []
+    log_dirs = list(raw_log_dirs) if isinstance(raw_log_dirs, list) else [raw_log_dirs]
+    for log_dir in log_dirs:
+        if log_dir.is_dir():
+            log_files.extend(path for path in log_dir.glob("emulebb*.log") if path.is_file())
+            log_files.extend(path for path in log_dir.glob("emulebb*.jsonl") if path.is_file())
+    unique_files = sorted(
+        {path.resolve() for path in log_files if path.is_file()},
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return unique_files[: args.limit], log_dirs
+
+
 def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object]:
     """Summarizes one diagnostics log without exposing raw lines or private names."""
 
@@ -444,19 +487,7 @@ def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object
 def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes diagnostics logs while keeping operator-owned content private."""
 
-    log_files = list(args.log_file or [])
-    raw_log_dirs = args.log_dir or []
-    log_dirs = list(raw_log_dirs) if isinstance(raw_log_dirs, list) else [raw_log_dirs]
-    for log_dir in log_dirs:
-        if log_dir.is_dir():
-            log_files.extend(path for path in log_dir.glob("emulebb*.log") if path.is_file())
-            log_files.extend(path for path in log_dir.glob("emulebb*.jsonl") if path.is_file())
-    unique_files = sorted(
-        {path.resolve() for path in log_files if path.is_file()},
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    selected = unique_files[: args.limit]
+    selected, log_dirs = selected_diagnostics_logs(args)
     files = [summarize_diagnostics_log(path, max_bytes=args.max_bytes) for path in selected]
     aggregate_patterns: Counter[str] = Counter()
     for file_summary in files:
@@ -467,7 +498,8 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
                     aggregate_patterns[name] += count
     aggregate_json_counts = aggregate_diagnostics_json_counts(files)
     return {
-        "logDir": str(log_dirs[0]) if len(log_dirs) == 1 else None,
+        "logDir": None,
+        "logDirFingerprint": private_path_fingerprint(str(log_dirs[0])) if len(log_dirs) == 1 else None,
         "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
         "limit": args.limit,
         "maxBytes": args.max_bytes,
@@ -478,22 +510,123 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def safe_upload_outcome_row(path: Path, parsed: dict[str, object]) -> dict[str, object]:
+    """Builds a privacy-safe upload outcome row for worst-case diagnostics."""
+
+    body = parsed.get("body") if isinstance(parsed.get("body"), dict) else {}
+    row: dict[str, object] = {
+        "logName": path.name,
+        "pathFingerprint": private_path_fingerprint(str(path)),
+    }
+    timestamp = parse_iso_timestamp(
+        parsed.get("ts") or parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc")
+    )
+    if timestamp is not None:
+        row["timestampUtc"] = timestamp.isoformat()
+    outcome = diagnostic_json_bucket_value(body.get("outcome"))
+    first_skip = diagnostic_json_bucket_value(body.get("firstSkipReason"))
+    if outcome is not None:
+        row["outcome"] = outcome
+    if first_skip is not None:
+        row["firstSkipReason"] = first_skip
+    for field in DIAGNOSTIC_BODY_NUMERIC_FIELDS["upload_request_outcome"]:
+        number = diagnostic_json_numeric_value(body.get(field))
+        if number is not None:
+            row[field] = round(number, 3)
+    return row
+
+
+def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Summarizes upload outcome latency and efficiency without raw live data."""
+
+    selected, log_dirs = selected_diagnostics_logs(args)
+    numeric: dict[str, list[float]] = {}
+    outcomes: Counter[str] = Counter()
+    first_skip_reasons: Counter[str] = Counter()
+    timestamps: list[datetime] = []
+    worst_rows: list[dict[str, object]] = []
+    row_count = 0
+    slow_read_count = 0
+    for path in selected:
+        for line in tail_text_lines(path, max_bytes=args.max_bytes):
+            stripped = line.strip()
+            if not stripped.startswith("{") or "upload_request_outcome" not in stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict) or parsed.get("event") != "upload_request_outcome":
+                continue
+            body = parsed.get("body")
+            if not isinstance(body, dict):
+                continue
+            row_count += 1
+            timestamp = parse_iso_timestamp(
+                parsed.get("ts")
+                or parsed.get("ts_utc")
+                or parsed.get("timestamp")
+                or parsed.get("timestampUtc")
+            )
+            if timestamp is not None:
+                timestamps.append(timestamp)
+            outcome = diagnostic_json_bucket_value(body.get("outcome"))
+            first_skip = diagnostic_json_bucket_value(body.get("firstSkipReason"))
+            if outcome is not None:
+                outcomes[outcome] += 1
+            if first_skip is not None:
+                first_skip_reasons[first_skip] += 1
+            for field in DIAGNOSTIC_BODY_NUMERIC_FIELDS["upload_request_outcome"]:
+                number = diagnostic_json_numeric_value(body.get(field))
+                if number is not None:
+                    numeric.setdefault(field, []).append(number)
+            read_ms = diagnostic_json_numeric_value(body.get("payloadReadMs"))
+            if read_ms is not None and read_ms >= args.slow_read_ms:
+                slow_read_count += 1
+            if read_ms is not None:
+                row = safe_upload_outcome_row(path, parsed)
+                row["_sortPayloadReadMs"] = read_ms
+                worst_rows.append(row)
+    worst_rows.sort(key=lambda row: safe_float(row.get("_sortPayloadReadMs")) or 0.0, reverse=True)
+    for row in worst_rows:
+        row.pop("_sortPayloadReadMs", None)
+    requested_bytes = sum(numeric.get("requestedBytes", []))
+    served_bytes = sum(numeric.get("servedBytes", []))
+    result: dict[str, object] = {
+        "logDir": None,
+        "logDirFingerprint": private_path_fingerprint(str(log_dirs[0])) if len(log_dirs) == 1 else None,
+        "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
+        "limit": args.limit,
+        "maxBytes": args.max_bytes,
+        "fileCount": len(selected),
+        "rowCount": row_count,
+        "slowReadThresholdMs": args.slow_read_ms,
+        "slowReadCount": slow_read_count,
+        "outcomes": dict(outcomes.most_common(12)),
+        "firstSkipReasons": dict(first_skip_reasons.most_common(12)),
+        "numeric": {
+            field: compact_numeric_distribution(values)
+            for field, values in sorted(numeric.items())
+            if values
+        },
+        "worstPayloadReads": worst_rows[: args.outlier_limit],
+    }
+    if row_count > 0:
+        result["slowReadRatio"] = round(slow_read_count / row_count, 4)
+    if requested_bytes > 0:
+        result["servedToRequestedRatio"] = round(served_bytes / requested_bytes, 4)
+    if timestamps:
+        result["timeRange"] = {
+            "firstUtc": min(timestamps).isoformat(),
+            "lastUtc": max(timestamps).isoformat(),
+        }
+    return result
+
+
 def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes anti-flood diagnostics bursts with sanitized peer identities."""
 
-    log_files = list(args.log_file or [])
-    raw_log_dirs = args.log_dir or []
-    log_dirs = list(raw_log_dirs) if isinstance(raw_log_dirs, list) else [raw_log_dirs]
-    for log_dir in log_dirs:
-        if log_dir.is_dir():
-            log_files.extend(path for path in log_dir.glob("emulebb*.log") if path.is_file())
-            log_files.extend(path for path in log_dir.glob("emulebb*.jsonl") if path.is_file())
-    unique_files = sorted(
-        {path.resolve() for path in log_files if path.is_file()},
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    selected = unique_files[: args.limit]
+    selected, log_dirs = selected_diagnostics_logs(args)
     peers: dict[str, dict[str, object]] = {}
     recent_events: list[dict[str, object]] = []
     seen_events: set[tuple[object, ...]] = set()
@@ -586,7 +719,8 @@ def anti_flood_summary(args: argparse.Namespace) -> dict[str, object]:
         reverse=True,
     )[: args.peer_limit]
     result: dict[str, object] = {
-        "logDir": str(log_dirs[0]) if len(log_dirs) == 1 else None,
+        "logDir": None,
+        "logDirFingerprint": private_path_fingerprint(str(log_dirs[0])) if len(log_dirs) == 1 else None,
         "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
         "limit": args.limit,
         "maxBytes": args.max_bytes,
@@ -3525,6 +3659,18 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics_parser.add_argument("--limit", type=int, default=12)
     diagnostics_parser.add_argument("--max-bytes", type=int, default=1_048_576)
     diagnostics_parser.set_defaults(func=diagnostics_summary)
+
+    upload_efficiency_parser = sub.add_parser(
+        "upload-efficiency-summary",
+        help="Summarize upload outcome latency and efficiency from diagnostics logs.",
+    )
+    upload_efficiency_parser.add_argument("--log-dir", type=Path, action="append")
+    upload_efficiency_parser.add_argument("--log-file", type=Path, action="append")
+    upload_efficiency_parser.add_argument("--limit", type=int, default=12)
+    upload_efficiency_parser.add_argument("--max-bytes", type=int, default=1_048_576)
+    upload_efficiency_parser.add_argument("--slow-read-ms", type=float, default=100.0)
+    upload_efficiency_parser.add_argument("--outlier-limit", type=int, default=8)
+    upload_efficiency_parser.set_defaults(func=upload_efficiency_summary)
 
     anti_flood_parser = sub.add_parser(
         "anti-flood-summary",
