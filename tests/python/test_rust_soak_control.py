@@ -387,6 +387,11 @@ def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
     assert result["aggregatePatternCounts"]["upnp"] == 1
     assert result["aggregatePatternCounts"]["ed2k"] == 1
     assert result["aggregatePatternCounts"]["kad"] == 1
+    assert result["aggregateJsonCounts"]["event"] == {
+        "fake_file_search_detected": 1,
+        "capacity_snapshot": 1,
+    }
+    assert result["aggregateJsonCounts"]["severity"] == {"medium": 1, "info": 1}
     event_counts = {
         file_summary["name"]: file_summary["jsonCounts"]["event"]
         for file_summary in result["files"]
@@ -423,6 +428,11 @@ def test_diagnostics_summary_combines_multiple_log_dirs(tmp_path: Path) -> None:
     assert len(result["logDirs"]) == 2
     assert result["aggregatePatternCounts"]["kad"] == 1
     assert result["aggregatePatternCounts"]["ed2k"] == 1
+    assert result["aggregateJsonCounts"]["schema"] == {
+        "diag_event_v1": 1,
+        "ed2k_packet_v1": 1,
+    }
+    assert result["aggregateJsonCounts"]["event"] == {"routing_summary": 1}
     rendered = repr(result)
     assert str(rust_logs) not in rendered
     assert str(mfc_logs) not in rendered
@@ -947,6 +957,10 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
             "diagnostics": {
                 "fileCount": 2,
                 "aggregatePatternCounts": {"ed2k": 3},
+                "aggregateJsonCounts": {
+                    "event": {"upload_request_outcome": 2, "anti_flood_drop": 1},
+                    "severity": {"info": 2, "medium": 1},
+                },
                 "files": [
                     {
                         "jsonBodyCounts": {
@@ -1048,6 +1062,7 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
     assert brief["mfc"]["kadFirewalled"] is True
     assert brief["monitor"]["rustKiBps"] == 180.0
     assert brief["vpn"]["allWhitelisted"] is True
+    assert brief["diagnostics"]["jsonCounts"]["event"]["anti_flood_drop"] == 1
     assert brief["diagnostics"]["uploadEfficiency"]["servedToRequestedRatio"] == 0.5
     assert brief["trend"]["rustEd2kPending"]["remainingEtaMinutes"] == 440.0
     assert "latestRecord" not in brief
@@ -1106,6 +1121,10 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
         lambda args: {
             "fileCount": 1,
             "aggregatePatternCounts": {"ed2k": 2},
+            "aggregateJsonCounts": {
+                "event": {"upload_request_outcome": 2, "anti_flood_drop": 1},
+                "severity": {"info": 2, "medium": 1},
+            },
             "files": [{"name": "emulebb-rust-diag-123.jsonl"}],
         },
     )
@@ -1153,6 +1172,7 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert retained["findings"] == result["findings"]
     assert retained["recommendations"] == result["recommendations"]
     assert retained["diagnostics"]["fileCount"] == 1
+    assert retained["diagnostics"]["aggregateJsonCounts"]["event"]["anti_flood_drop"] == 1
     assert retained["vpn"]["adapterUp"] is True
     heartbeat_text = heartbeat.read_text(encoding="utf-8")
     assert "mfcHashing=10" in heartbeat_text

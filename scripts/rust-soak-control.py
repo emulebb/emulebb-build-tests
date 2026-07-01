@@ -463,6 +463,7 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
             for name, count in pattern_counts.items():
                 if isinstance(name, str) and isinstance(count, int):
                     aggregate_patterns[name] += count
+    aggregate_json_counts = aggregate_diagnostics_json_counts(files)
     return {
         "logDir": str(log_dirs[0]) if len(log_dirs) == 1 else None,
         "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
@@ -470,7 +471,30 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
         "maxBytes": args.max_bytes,
         "fileCount": len(files),
         "aggregatePatternCounts": dict(sorted(aggregate_patterns.items())),
+        "aggregateJsonCounts": aggregate_json_counts,
         "files": files,
+    }
+
+
+def aggregate_diagnostics_json_counts(files: list[dict[str, object]]) -> dict[str, dict[str, int]]:
+    """Aggregates safe JSON count buckets across diagnostics file summaries."""
+
+    aggregate: dict[str, Counter[str]] = {}
+    for file_summary in files:
+        json_counts = file_summary.get("jsonCounts")
+        if not isinstance(json_counts, dict):
+            continue
+        for field, counts in json_counts.items():
+            if not isinstance(field, str) or not isinstance(counts, dict):
+                continue
+            counter = aggregate.setdefault(field, Counter())
+            for bucket, count in counts.items():
+                if isinstance(bucket, str) and isinstance(count, int):
+                    counter[bucket] += count
+    return {
+        field: dict(counter.most_common(24))
+        for field, counter in sorted(aggregate.items())
+        if counter
     }
 
 
@@ -540,6 +564,7 @@ def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | 
     files: list[dict[str, object]] = []
     sources: list[dict[str, object]] = []
     aggregate_patterns: Counter[str] = Counter()
+    aggregate_json_counts: dict[str, Counter[str]] = {}
     limit = int(getattr(args, "diagnostics_limit", 8) or 8)
     max_bytes = int(getattr(args, "diagnostics_max_bytes", 262_144) or 262_144)
     for log_dir in log_dirs:
@@ -567,6 +592,13 @@ def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | 
         for name, count in summary_patterns.items():
             if isinstance(name, str) and isinstance(count, int):
                 aggregate_patterns[name] += count
+        for field, counts in (summary.get("aggregateJsonCounts") or {}).items():
+            if not isinstance(field, str) or not isinstance(counts, dict):
+                continue
+            counter = aggregate_json_counts.setdefault(field, Counter())
+            for bucket, count in counts.items():
+                if isinstance(bucket, str) and isinstance(count, int):
+                    counter[bucket] += count
     if log_files:
         summary = diagnostics_summary(
             argparse.Namespace(
@@ -591,9 +623,21 @@ def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | 
         for name, count in summary_patterns.items():
             if isinstance(name, str) and isinstance(count, int):
                 aggregate_patterns[name] += count
+        for field, counts in (summary.get("aggregateJsonCounts") or {}).items():
+            if not isinstance(field, str) or not isinstance(counts, dict):
+                continue
+            counter = aggregate_json_counts.setdefault(field, Counter())
+            for bucket, count in counts.items():
+                if isinstance(bucket, str) and isinstance(count, int):
+                    counter[bucket] += count
     return {
         "fileCount": len(files),
         "aggregatePatternCounts": dict(sorted(aggregate_patterns.items())),
+        "aggregateJsonCounts": {
+            field: dict(counter.most_common(24))
+            for field, counter in sorted(aggregate_json_counts.items())
+            if counter
+        },
         "sources": sources,
         "files": files[:limit],
     }
@@ -3076,6 +3120,7 @@ def watch_brief(args: argparse.Namespace) -> dict[str, object]:
         "diagnostics": {
             "fileCount": diagnostics.get("fileCount"),
             "patterns": diagnostics.get("aggregatePatternCounts"),
+            "jsonCounts": diagnostics.get("aggregateJsonCounts"),
             "uploadEfficiency": trend.get("latestUploadEfficiency"),
         },
         "trend": {
