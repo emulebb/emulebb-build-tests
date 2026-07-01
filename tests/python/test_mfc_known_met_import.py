@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import struct
 from pathlib import Path
 
@@ -119,6 +120,16 @@ def test_import_known_met_seeds_share_in_place_manifest(tmp_path: Path) -> None:
     assert manifest["source_path"] == str(payload)
     assert manifest["source_mtime_ms"] // 1000 == modified_s
     assert manifest["md4_hashset_acquired"] is True
+    with sqlite3.connect(db_path) as conn:
+        source_row = conn.execute(
+            """
+            SELECT file_size, source_mtime_ms
+            FROM share_in_place_sources
+            WHERE source_path = ?
+            """,
+            (str(payload),),
+        ).fetchone()
+    assert source_row == (payload.stat().st_size, manifest["source_mtime_ms"])
 
 
 def test_import_known_met_skips_ambiguous_path_match(tmp_path: Path) -> None:
@@ -241,6 +252,16 @@ def test_import_mfc_shared_file_rows_uses_exact_rest_path(tmp_path: Path) -> Non
     assert manifest["upload_priority"] == "normal"
     assert manifest["auto_upload_priority"] is False
     assert manifest["all_time_uploaded_bytes"] == 0
+    with sqlite3.connect(db_path) as conn:
+        source_row = conn.execute(
+            """
+            SELECT file_size, source_mtime_ms
+            FROM share_in_place_sources
+            WHERE source_path = ?
+            """,
+            (str(payload),),
+        ).fetchone()
+    assert source_row == (payload.stat().st_size, manifest["source_mtime_ms"])
 
 
 def test_import_mfc_shared_file_rows_rejects_outside_shared_roots(tmp_path: Path) -> None:

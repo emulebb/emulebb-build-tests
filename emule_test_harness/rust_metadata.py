@@ -240,6 +240,23 @@ def seed_transfer_manifest(
         transfer_id = conn.execute(
             "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
         ).fetchone()[0]
+        if source_path is not None:
+            conn.execute(
+                """
+                INSERT INTO share_in_place_sources(
+                    known_file_id, source_path, file_size, source_mtime_ms,
+                    created_at_ms, updated_at_ms
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_path) DO UPDATE SET
+                    known_file_id = excluded.known_file_id,
+                    file_size = excluded.file_size,
+                    source_mtime_ms = excluded.source_mtime_ms,
+                    updated_at_ms = excluded.updated_at_ms
+                """,
+                (known_file_id, source_path, size_bytes, source_mtime_ms, now, now),
+            )
+            conn.execute("DELETE FROM shared_source_failures WHERE source_path = ?", (source_path,))
         conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
         conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
         conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
@@ -436,6 +453,22 @@ def _seed_share_in_place_manifest_conn(
     transfer_id = conn.execute(
         "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
     ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO share_in_place_sources(
+            known_file_id, source_path, file_size, source_mtime_ms,
+            created_at_ms, updated_at_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_path) DO UPDATE SET
+            known_file_id = excluded.known_file_id,
+            file_size = excluded.file_size,
+            source_mtime_ms = excluded.source_mtime_ms,
+            updated_at_ms = excluded.updated_at_ms
+        """,
+        (known_file_id, source_path, size_bytes, source_mtime_ms, now, now),
+    )
+    conn.execute("DELETE FROM shared_source_failures WHERE source_path = ?", (source_path,))
     conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
     conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
     conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
