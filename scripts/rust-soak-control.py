@@ -2329,6 +2329,8 @@ def repair_rust_metadata_from_mfc_rest(args: argparse.Namespace) -> dict[str, ob
         collection="items",
     )
     shared_roots = [Path(shared_root_path(root)) for root in root_entries]
+    for extra_root in args.extra_root or []:
+        shared_roots.append(Path(shared_root_path(normalize_shared_root_entry(str(extra_root)))))
     raw = mfc_known_met.import_mfc_shared_file_rows_hashes(
         rust_repo=args.rust_repo,
         metadata_db=args.metadata_db,
@@ -3928,6 +3930,7 @@ def build_parser() -> argparse.ArgumentParser:
     repair_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
     repair_parser.add_argument("--rust-repo", type=Path, default=default_rust_repo())
     repair_parser.add_argument("--known-met", type=Path)
+    repair_parser.add_argument("--extra-root", action="append", type=Path, default=[])
     repair_parser.add_argument("--allow-known-met-fallback", action="store_true")
     repair_parser.add_argument("--dry-run", action="store_true")
     repair_parser.add_argument("--shared-file-page-size", type=int, default=1000)

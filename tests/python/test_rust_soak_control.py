@@ -386,6 +386,48 @@ def test_write_mfc_shareddir_from_rest_writes_three_profile_files(tmp_path: Path
     ]
 
 
+def test_repair_rust_metadata_accepts_extra_shared_roots(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    known_met = tmp_path / "known.met"
+    known_met.write_bytes(b"\x00")
+    captured = {}
+
+    monkeypatch.setattr(control, "fetch_shared_file_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(control, "mfc_rest_shared_root_entries", lambda *args, **kwargs: [r"C:\Shared"])
+
+    def fake_import(**kwargs):
+        captured["shared_roots"] = kwargs["shared_roots"]
+        return {
+            "knownMetRecords": 0,
+            "sharedFileRows": 0,
+            "matchedRows": 0,
+            "importedRows": 0,
+            "dryRun": True,
+            "skipped": {},
+        }
+
+    monkeypatch.setattr(control.mfc_known_met, "import_mfc_shared_file_rows_hashes", fake_import)
+
+    result = control.repair_rust_metadata_from_mfc_rest(
+        SimpleNamespace(
+            known_met=known_met,
+            allow_known_met_fallback=False,
+            mfc_base_url="http://192.0.2.20:4732/api/v1",
+            mfc_api_key="mfc",
+            metadata_db=tmp_path / "metadata.sqlite",
+            rust_repo=tmp_path / "emulebb-rust",
+            shared_file_page_size=1000,
+            shared_file_timeout_seconds=1.0,
+            shared_file_sleep_seconds=0.0,
+            extra_root=[Path(r"C:\Incoming")],
+            dry_run=True,
+        )
+    )
+
+    assert result["status"] == "dry-run"
+    assert [str(path) for path in captured["shared_roots"]] == ["C:\\Shared", "C:\\Incoming"]
+
+
 def test_resolve_mfc_start_profile_prefers_existing_persisted_profile(tmp_path: Path, monkeypatch) -> None:
     control = _load_rust_soak_control()
     profile_dir = tmp_path / "profile-base"
