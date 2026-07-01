@@ -886,6 +886,58 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
     assert str(logs_dir) not in rendered
 
 
+def test_mfc_upload_summary_reports_payload_counters_and_redacts_rows(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "mfc-logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "emulebb-diagnostics-upload-slot.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                (
+                    "2026-01-01 00:00:00 UploadSlotDiagnostics: payload outcome=sent "
+                    "peer=198.51.100.10:4662 fileHash=abcdefabcdefabcdefabcdefabcdefab "
+                    'fileName="Sample Payload.bin" '
+                    "sentFileBytes=1000 sentPayloadBytes=1100 pendingIO=2 "
+                    "socketStdQueue=3 rateBytesPerSec=4000"
+                ),
+                (
+                    "2026-01-01 00:00:01 UploadSlotDiagnostics: payload outcome=sent "
+                    "peer=198.51.100.11:4662 sourcePath=synthetic/shared/SamplePayload.bin "
+                    "sentFileBytes=500 sentPayloadBytes=550 pendingIO=0 "
+                    "socketStdQueue=1 rateBytesPerSec=2000"
+                ),
+                "2026-01-01 00:00:02 unrelated peer=198.51.100.12",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = control.mfc_upload_summary(
+        SimpleNamespace(log_dir=logs_dir, log_file=None, limit=10, max_bytes=4096)
+    )
+
+    assert result["rowCount"] == 2
+    assert result["logDir"] is None
+    assert result["logDirFingerprint"] == control.private_path_fingerprint(str(logs_dir))
+    assert result["categories"] == {"payload": 2}
+    assert result["outcomes"] == {"sent": 2}
+    assert result["numeric"]["sentFileBytes"]["sum"] == 1500.0
+    assert result["numeric"]["sentPayloadBytes"]["sum"] == 1650.0
+    assert result["numeric"]["pendingIO"]["max"] == 2.0
+    assert result["numeric"]["socketStdQueue"]["average"] == 2.0
+    assert result["numeric"]["rateBytesPerSec"]["average"] == 3000.0
+    assert result["fileToPayloadRatio"] == 0.9091
+    assert result["payloadOverheadRatio"] == 0.0909
+    rendered = repr(result)
+    assert "198.51.100" not in rendered
+    assert "Sample Payload" not in rendered
+    assert "abcdef" not in rendered
+    assert "synthetic/shared" not in rendered
+    assert str(logs_dir) not in rendered
+
+
 def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     logs_dir = tmp_path / "logs"
@@ -1823,6 +1875,16 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
                     "mfcLogStale": False,
                 },
             },
+            "mfcUploadSummary": {
+                "source": "mfcUploadSlotLog",
+                "rowCount": 8,
+                "categories": {"payload": 8},
+                "outcomes": {"sent": 8},
+                "pendingIO": {"count": 8, "sum": 2.0, "average": 0.25, "max": 1.0},
+                "socketStdQueue": {"count": 8, "sum": 4.0, "average": 0.5, "max": 2.0},
+                "fileToPayloadRatio": 0.99,
+                "payloadOverheadRatio": 0.01,
+            },
             "vpn": {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
         },
     ]
@@ -1851,6 +1913,8 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
     assert brief["vpn"]["allWhitelisted"] is True
     assert brief["diagnostics"]["jsonCounts"]["event"]["anti_flood_drop"] == 1
     assert brief["diagnostics"]["uploadEfficiency"]["servedToRequestedRatio"] == 0.5
+    assert brief["diagnostics"]["mfcUpload"]["rowCount"] == 8
+    assert brief["diagnostics"]["mfcUpload"]["outcomes"] == {"sent": 8}
     assert brief["diagnostics"]["antiFlood"]["udpTrackerDrops"]["bucketCounts"] == {
         "search_req": 1,
         "publish_source_req": 1,

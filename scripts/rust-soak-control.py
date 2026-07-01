@@ -303,6 +303,18 @@ DIAGNOSTIC_BODY_NUMERIC_FIELDS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+MFC_UPLOAD_SLOT_NUMERIC_FIELDS: tuple[str, ...] = (
+    "pendingIO",
+    "rateBytesPerSec",
+    "sentFileBytes",
+    "sentPayloadBytes",
+    "socketControlQueue",
+    "socketStdQueue",
+    "socketTrickleQueue",
+)
+
+MFC_UPLOAD_SLOT_KEY_VALUE_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)=([^\s]+)")
+
 
 def tail_text_lines(path: Path, *, max_bytes: int) -> list[str]:
     """Reads a bounded text tail without returning file content to callers."""
@@ -649,6 +661,91 @@ def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
             "firstUtc": min(timestamps).isoformat(),
             "lastUtc": max(timestamps).isoformat(),
         }
+    return result
+
+
+def parse_mfc_upload_slot_fields(line: str) -> dict[str, object] | None:
+    """Extracts privacy-safe aggregate fields from one MFC upload-slot text row."""
+
+    marker = "UploadSlotDiagnostics:"
+    marker_index = line.find(marker)
+    if marker_index < 0:
+        return None
+    tail = line[marker_index + len(marker) :].strip()
+    if not tail:
+        return None
+    parts = tail.split()
+    category = diagnostic_json_bucket_value(parts[0]) if parts else None
+    fields: dict[str, object] = {}
+    if category is not None:
+        fields["category"] = category
+    for match in MFC_UPLOAD_SLOT_KEY_VALUE_RE.finditer(tail):
+        key = match.group(1)
+        raw_value = match.group(2).strip('"')
+        if key == "outcome":
+            outcome = diagnostic_json_bucket_value(raw_value)
+            if outcome is not None:
+                fields["outcome"] = outcome
+            continue
+        if key not in MFC_UPLOAD_SLOT_NUMERIC_FIELDS:
+            continue
+        try:
+            number = float(raw_value)
+        except ValueError:
+            continue
+        if number == number:
+            fields[key] = number
+    return fields
+
+
+def mfc_upload_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Summarizes MFC upload-slot text diagnostics without raw live data."""
+
+    selected, log_dirs = selected_diagnostics_logs(args)
+    numeric: dict[str, list[float]] = {}
+    categories: Counter[str] = Counter()
+    outcomes: Counter[str] = Counter()
+    row_count = 0
+    for path in selected:
+        for line in tail_text_lines(path, max_bytes=args.max_bytes):
+            fields = parse_mfc_upload_slot_fields(line)
+            if fields is None:
+                continue
+            row_count += 1
+            category = fields.get("category")
+            outcome = fields.get("outcome")
+            if isinstance(category, str):
+                categories[category] += 1
+            if isinstance(outcome, str):
+                outcomes[outcome] += 1
+            for field in MFC_UPLOAD_SLOT_NUMERIC_FIELDS:
+                value = fields.get(field)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    numeric.setdefault(field, []).append(float(value))
+    sent_file_bytes = sum(numeric.get("sentFileBytes", []))
+    sent_payload_bytes = sum(numeric.get("sentPayloadBytes", []))
+    result: dict[str, object] = {
+        "logDir": None,
+        "logDirFingerprint": private_path_fingerprint(str(log_dirs[0])) if len(log_dirs) == 1 else None,
+        "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
+        "limit": args.limit,
+        "maxBytes": args.max_bytes,
+        "fileCount": len(selected),
+        "rowCount": row_count,
+        "categories": dict(categories.most_common(12)),
+        "outcomes": dict(outcomes.most_common(12)),
+        "numeric": {
+            field: compact_numeric_distribution(values)
+            for field, values in sorted(numeric.items())
+            if values
+        },
+    }
+    if sent_payload_bytes > 0:
+        result["fileToPayloadRatio"] = round(sent_file_bytes / sent_payload_bytes, 4)
+        result["payloadOverheadRatio"] = round(
+            max(sent_payload_bytes - sent_file_bytes, 0.0) / sent_payload_bytes,
+            4,
+        )
     return result
 
 
@@ -3187,6 +3284,16 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
         except Exception as error:
             action = {"monitorRestarted": False, "monitorRestartError": str(error)}
     diagnostics = optional_watch_diagnostics(args)
+    mfc_upload = None
+    if args.mfc_upload_log is not None:
+        mfc_upload = mfc_upload_summary(
+            argparse.Namespace(
+                log_dir=None,
+                log_file=[args.mfc_upload_log],
+                limit=1,
+                max_bytes=getattr(args, "diagnostics_max_bytes", 4_194_304),
+            )
+        )
     vpn = optional_watch_vpn(args)
     findings = watch_findings(rust, monitor, mfc, diagnostics)
     payload = {
@@ -3201,6 +3308,8 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
         payload["mfc"] = mfc
     if diagnostics is not None:
         payload["diagnostics"] = diagnostics
+    if isinstance(mfc_upload, dict) and int(mfc_upload.get("rowCount") or 0) > 0:
+        payload["mfcUploadSummary"] = compact_mfc_upload_summary(mfc_upload)
     if vpn is not None:
         payload["vpn"] = vpn
     if getattr(args, "append_jsonl", False):
@@ -3747,6 +3856,31 @@ def compact_upload_efficiency_summary(summary: dict[str, object]) -> dict[str, o
     return compact
 
 
+def compact_mfc_upload_summary(summary: dict[str, object]) -> dict[str, object]:
+    """Returns MFC upload-slot fields suitable for compact live watch briefs."""
+
+    compact: dict[str, object] = {
+        "source": "mfcUploadSlotLog",
+        "rowCount": summary.get("rowCount"),
+        "categories": summary.get("categories"),
+        "outcomes": summary.get("outcomes"),
+    }
+    numeric = summary.get("numeric")
+    if isinstance(numeric, dict):
+        for field in MFC_UPLOAD_SLOT_NUMERIC_FIELDS:
+            stats = numeric.get(field)
+            if isinstance(stats, dict):
+                compact[field] = {
+                    key: stats.get(key)
+                    for key in ("count", "sum", "average", "max")
+                    if stats.get(key) is not None
+                }
+    for field in ("fileToPayloadRatio", "payloadOverheadRatio"):
+        if field in summary:
+            compact[field] = summary[field]
+    return compact
+
+
 def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes retained soak watch JSONL counters over a bounded window."""
 
@@ -3896,6 +4030,19 @@ def watch_brief_from_record(
             )
         )
         upload_efficiency = compact_upload_efficiency_summary(current_upload)
+    mfc_upload = latest.get("mfcUploadSummary") if isinstance(latest.get("mfcUploadSummary"), dict) else None
+    mfc_upload_log = getattr(args, "mfc_upload_log", None)
+    if mfc_upload_log is not None:
+        current_mfc_upload = mfc_upload_summary(
+            argparse.Namespace(
+                log_dir=None,
+                log_file=[mfc_upload_log],
+                limit=1,
+                max_bytes=getattr(args, "mfc_upload_max_bytes", 4_194_304),
+            )
+        )
+        if int(current_mfc_upload.get("rowCount") or 0) > 0:
+            mfc_upload = compact_mfc_upload_summary(current_mfc_upload)
     vpn = latest.get("vpn") if isinstance(latest.get("vpn"), dict) else {}
     counters = trend.get("counters") if isinstance(trend.get("counters"), dict) else {}
     findings = list(latest.get("findings") if isinstance(latest.get("findings"), list) else [])
@@ -3967,6 +4114,7 @@ def watch_brief_from_record(
             "jsonCounts": diagnostics.get("aggregateJsonCounts"),
             "antiFlood": compact_watch_anti_flood_summary(diagnostics.get("antiFloodSummary")),
             "uploadEfficiency": upload_efficiency,
+            "mfcUpload": mfc_upload,
         },
         "trend": {
             "sampleCount": trend.get("sampleCount"),
@@ -4213,6 +4361,16 @@ def build_parser() -> argparse.ArgumentParser:
     upload_efficiency_parser.add_argument("--slow-read-ms", type=float, default=100.0)
     upload_efficiency_parser.add_argument("--outlier-limit", type=int, default=8)
     upload_efficiency_parser.set_defaults(func=upload_efficiency_summary)
+
+    mfc_upload_parser = sub.add_parser(
+        "mfc-upload-summary",
+        help="Summarize MFC upload-slot text diagnostics without exposing private live data.",
+    )
+    mfc_upload_parser.add_argument("--log-dir", type=Path, action="append")
+    mfc_upload_parser.add_argument("--log-file", type=Path, action="append")
+    mfc_upload_parser.add_argument("--limit", type=int, default=12)
+    mfc_upload_parser.add_argument("--max-bytes", type=int, default=1_048_576)
+    mfc_upload_parser.set_defaults(func=mfc_upload_summary)
 
     anti_flood_parser = sub.add_parser(
         "anti-flood-summary",
@@ -4478,10 +4636,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Current Rust diagnostics JSONL log to use for upload-efficiency evidence.",
     )
     watch_brief_parser.add_argument(
+        "--mfc-upload-log",
+        type=Path,
+        help="Current MFC upload-slot text log to use for compact upload evidence.",
+    )
+    watch_brief_parser.add_argument(
         "--upload-efficiency-max-bytes",
         type=int,
         default=33_554_432,
         help="Bytes to scan from --rust-diag-log for compact upload-efficiency evidence.",
+    )
+    watch_brief_parser.add_argument(
+        "--mfc-upload-max-bytes",
+        type=int,
+        default=4_194_304,
+        help="Bytes to scan from --mfc-upload-log for compact upload evidence.",
     )
     watch_brief_parser.add_argument("--slow-read-ms", type=float, default=100.0)
     watch_brief_parser.add_argument("--limit", type=int, default=12)
