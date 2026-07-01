@@ -494,6 +494,85 @@ def test_mfc_upload_log_discovery_prefers_newest_fresh_candidate(tmp_path: Path)
     assert discovered == fresh.resolve()
 
 
+def test_fresh_mfc_upload_log_rejects_stale_candidate(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    log_file = tmp_path / "emulebb-diagnostics-upload-slot.log"
+    log_file.write_text("stale\n", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(log_file, (old, old))
+
+    assert control.fresh_mfc_upload_log(log_file, max_age_seconds=900.0) is None
+
+
+def test_start_upload_monitor_rejects_explicit_stale_mfc_log(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    rust_log = tmp_path / "emulebb-rust-diag-123.jsonl"
+    mfc_log = tmp_path / "emulebb-diagnostics-upload-slot.log"
+    rust_log.write_text("{}\n", encoding="utf-8")
+    mfc_log.write_text("stale\n", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(mfc_log, (old, old))
+
+    with pytest.raises(RuntimeError, match="missing or stale"):
+        control.start_upload_monitor(
+            SimpleNamespace(
+                base_url="http://127.0.0.1:4731/api/v1",
+                api_key="test-key",
+                output_dir=tmp_path / "monitor",
+                log_dir=tmp_path,
+                rust_pid=None,
+                rust_diag_log=rust_log,
+                mfc_upload_log=mfc_log,
+                interval_seconds=300.0,
+                mfc_log_stale_seconds=900.0,
+            )
+        )
+
+
+def test_start_upload_monitor_ignores_stale_reused_mfc_log(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    rust_log = tmp_path / "emulebb-rust-diag-123.jsonl"
+    stale_mfc_log = tmp_path / "old" / "emulebb-diagnostics-upload-slot.log"
+    fresh_mfc_log = tmp_path / "fresh" / "emulebb-diagnostics-upload-slot.log"
+    rust_log.write_text("{}\n", encoding="utf-8")
+    stale_mfc_log.parent.mkdir()
+    fresh_mfc_log.parent.mkdir()
+    stale_mfc_log.write_text("stale\n", encoding="utf-8")
+    fresh_mfc_log.write_text("fresh\n", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(stale_mfc_log, (old, old))
+
+    commands: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            del kwargs
+            commands.append(list(command))
+            self.pid = 4321
+
+    monkeypatch.setattr(control, "existing_monitor_mfc_upload_log", lambda output_dir: stale_mfc_log)
+    monkeypatch.setattr(control, "discover_mfc_upload_log", lambda roots, max_age_seconds: fresh_mfc_log)
+    monkeypatch.setattr(control.subprocess, "Popen", FakePopen)
+
+    result = control.start_upload_monitor(
+        SimpleNamespace(
+            base_url="http://127.0.0.1:4731/api/v1",
+            api_key="test-key",
+            output_dir=tmp_path / "monitor",
+            log_dir=tmp_path,
+            rust_pid=None,
+            rust_diag_log=rust_log,
+            mfc_upload_log=None,
+            interval_seconds=300.0,
+            mfc_log_stale_seconds=900.0,
+        )
+    )
+
+    assert result["monitorPid"] == 4321
+    assert str(fresh_mfc_log) in commands[0]
+    assert str(stale_mfc_log) not in commands[0]
+
+
 def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     logs_dir = tmp_path / "logs"

@@ -213,6 +213,16 @@ def discover_mfc_upload_log(search_roots: list[Path], *, max_age_seconds: float 
     return None
 
 
+def fresh_mfc_upload_log(path: Path | None, *, max_age_seconds: float = 900.0) -> Path | None:
+    """Returns `path` only when it is an existing fresh MFC upload diagnostics log."""
+
+    if path is None or not path.is_file():
+        return None
+    last_write = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    age_seconds = max(0.0, (datetime.now(UTC) - last_write).total_seconds())
+    return path if age_seconds <= max_age_seconds else None
+
+
 def mfc_upload_logs(args: argparse.Namespace) -> dict[str, object]:
     """Lists MFC upload-slot diagnostics log candidates for parity monitoring."""
 
@@ -2759,11 +2769,21 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         stop_path.unlink()
     diag_log = args.rust_diag_log or latest_diag_log(args.log_dir, args.rust_pid)
     script = SCRIPT_PATH.parent / "upload-parity-monitor.py"
-    mfc_upload_log = args.mfc_upload_log or existing_monitor_mfc_upload_log(output_dir)
+    stale_seconds = getattr(args, "mfc_log_stale_seconds", 900.0)
+    explicit_mfc_upload_log = args.mfc_upload_log is not None
+    mfc_upload_log = fresh_mfc_upload_log(
+        args.mfc_upload_log or existing_monitor_mfc_upload_log(output_dir),
+        max_age_seconds=stale_seconds,
+    )
+    if explicit_mfc_upload_log and mfc_upload_log is None:
+        raise RuntimeError(
+            "Provided MFC upload diagnostics log is missing or stale. "
+            "Pass the active persistent-profile log or inspect candidates with mfc-upload-logs."
+        )
     if mfc_upload_log is None:
         mfc_upload_log = discover_mfc_upload_log(
             default_mfc_upload_log_search_roots(),
-            max_age_seconds=getattr(args, "mfc_log_stale_seconds", 900.0),
+            max_age_seconds=stale_seconds,
         )
     if diag_log is None:
         raise RuntimeError(f"No Rust diagnostics log found under {args.log_dir}.")
@@ -2793,7 +2813,7 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
         "--interval-seconds",
         str(args.interval_seconds),
         "--mfc-log-stale-seconds",
-        str(getattr(args, "mfc_log_stale_seconds", 900.0)),
+        str(stale_seconds),
     ]
     process = subprocess.Popen(
         command,
@@ -2808,8 +2828,6 @@ def start_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
 def restart_upload_monitor(args: argparse.Namespace) -> dict[str, object]:
     """Stops then starts the upload parity monitor."""
 
-    if args.mfc_upload_log is None:
-        args.mfc_upload_log = existing_monitor_mfc_upload_log(args.output_dir)
     stopped = stop_upload_monitor(args.output_dir)
     started = start_upload_monitor(args)
     return {"stopped": stopped, "started": started}
