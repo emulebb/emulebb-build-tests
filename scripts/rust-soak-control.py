@@ -35,7 +35,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness.soak_launch import MFC_API_KEY, RUST_API_KEY
+from emule_test_harness.soak_launch import (
+    MFC_API_KEY,
+    RUST_API_KEY,
+    existing_shared_roots,
+    load_shareddir_root_entries,
+    normalize_shared_root_entry,
+    shared_root_is_recursive,
+)
 from emule_test_harness.windows_processes import (
     collect_processes,
     process_command_line,
@@ -57,6 +64,29 @@ def default_runtime_dir() -> Path:
     """Returns the persistent Rust soak runtime directory."""
 
     return output_root() / "soak" / "rust-runtime"
+
+
+def default_mfc_shareddir_file() -> Path:
+    """Returns the default persisted MFC shareddir.dat for the soak profile."""
+
+    return output_root() / "soak" / "mfc-profile" / "config" / "shareddir.dat"
+
+
+def discover_mfc_shareddir_file() -> Path | None:
+    """Finds the newest shareddir.dat below the generated soak output tree."""
+
+    soak_root = output_root() / "soak"
+    if not soak_root.is_dir():
+        return None
+    candidates = [
+        path
+        for path in soak_root.glob("**/shareddir.dat")
+        if path.is_file()
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def default_executable() -> Path:
@@ -971,6 +1001,119 @@ def shared_summary(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
+def apply_mfc_shared_roots(args: argparse.Namespace) -> dict[str, object]:
+    """Applies MFC persisted shared-root intent to the Rust REST profile."""
+
+    shareddir_file = args.shared_dir_file
+    if not shareddir_file.is_file():
+        discovered = discover_mfc_shareddir_file() if args.auto_discover else None
+        if discovered is None:
+            raise RuntimeError("--shared-dir-file does not exist")
+        shareddir_file = discovered
+    root_entries = load_shareddir_root_entries(
+        shareddir_file,
+        extra_roots=[args.extra_root] if args.extra_root is not None else None,
+    )
+    existing_entries, skipped_inaccessible = existing_shared_roots(root_entries)
+    payload_roots = [normalize_shared_root_entry(root) for root in existing_entries]
+    response = request_json(
+        args.base_url,
+        "/shared-directories",
+        api_key=args.api_key,
+        method="PATCH",
+        body={"confirmReplaceRoots": True, "roots": payload_roots},
+        timeout_seconds=args.timeout_seconds,
+    )
+    roots = response.get("roots")
+    items = response.get("items")
+    recursive_count = sum(1 for root in existing_entries if shared_root_is_recursive(root))
+    return {
+        "applied": True,
+        "source": {
+            "shareddirPresent": True,
+            "shareddirSource": "explicit" if shareddir_file == args.shared_dir_file else "discovered",
+            "inputRootCount": len(root_entries),
+            "existingRootCount": len(existing_entries),
+            "skippedInaccessibleRootCount": skipped_inaccessible,
+            "recursiveRootCount": recursive_count,
+            "flatRootCount": len(existing_entries) - recursive_count,
+        },
+        "rust": {
+            "roots": summarize_shared_directory_rows(roots),
+            "items": summarize_shared_directory_rows(items),
+            "hashingCount": response.get("hashingCount"),
+            "reload": response.get("reload"),
+        },
+    }
+
+
+def mfc_rest_shared_root_entries(
+    mfc_base_url: str,
+    mfc_api_key: str,
+    *,
+    collection: str,
+) -> list[object]:
+    """Loads shared-directory roots/items from the live MFC REST model."""
+
+    model = request_json(mfc_base_url, "/shared-directories", api_key=mfc_api_key, timeout_seconds=120.0)
+    roots = model.get(collection)
+    if not isinstance(roots, list):
+        return []
+    entries: list[object] = []
+    for row in roots:
+        if not isinstance(row, dict):
+            continue
+        if row.get("accessible") is False or row.get("shareable") is False:
+            continue
+        path = str(row.get("path") or "").strip()
+        if not path:
+            continue
+        if row.get("recursive") is True:
+            entries.append({"path": path, "recursive": True})
+        else:
+            entries.append(path)
+    return entries
+
+
+def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
+    """Applies the live MFC REST configured shared roots to Rust."""
+
+    root_entries = mfc_rest_shared_root_entries(
+        args.mfc_base_url,
+        args.mfc_api_key,
+        collection=args.collection,
+    )
+    if not root_entries:
+        raise RuntimeError("MFC REST returned no shared-directory entries")
+    payload_roots = [normalize_shared_root_entry(root) for root in root_entries]
+    response = request_json(
+        args.base_url,
+        "/shared-directories",
+        api_key=args.api_key,
+        method="PATCH",
+        body={"confirmReplaceRoots": True, "roots": payload_roots},
+        timeout_seconds=args.timeout_seconds,
+    )
+    roots = response.get("roots")
+    items = response.get("items")
+    recursive_count = sum(1 for root in root_entries if shared_root_is_recursive(root))
+    return {
+        "applied": True,
+        "source": {
+            "mfcRestCollection": args.collection,
+            "mfcRestRootCount": len(root_entries),
+            "recursiveRootCount": recursive_count,
+            "flatRootCount": len(root_entries) - recursive_count,
+        },
+        "rust": {
+            "roots": summarize_shared_directory_rows(roots),
+            "items": summarize_shared_directory_rows(items),
+            "hashingCount": response.get("hashingCount"),
+            "reload": response.get("reload"),
+        },
+    }
+
+
 def pid_exists(pid: int) -> bool:
     """Returns whether a process id is currently live."""
 
@@ -1645,6 +1788,35 @@ def build_parser() -> argparse.ArgumentParser:
     shared_summary_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
     shared_summary_parser.add_argument("--shared-file-sleep-seconds", type=float, default=0.05)
     shared_summary_parser.set_defaults(func=shared_summary)
+
+    apply_roots_parser = sub.add_parser(
+        "apply-mfc-shared-roots",
+        help="Apply MFC persisted shared-root intent to the Rust profile.",
+    )
+    apply_roots_parser.add_argument("--shared-dir-file", type=Path, default=default_mfc_shareddir_file())
+    apply_roots_parser.add_argument("--extra-root", type=Path)
+    apply_roots_parser.add_argument(
+        "--auto-discover",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Opt in to searching generated soak output for a shareddir.dat when --shared-dir-file is absent.",
+    )
+    apply_roots_parser.add_argument("--timeout-seconds", type=float, default=120.0)
+    apply_roots_parser.set_defaults(func=apply_mfc_shared_roots)
+
+    apply_rest_roots_parser = sub.add_parser(
+        "apply-mfc-rest-shared-roots",
+        help="Apply the live MFC REST configured shared roots to Rust.",
+    )
+    apply_rest_roots_parser.add_argument(
+        "--mfc-base-url",
+        default=default_mfc_base_url(),
+        help=f"MFC REST base URL, for example {default_mfc_base_url()}",
+    )
+    apply_rest_roots_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
+    apply_rest_roots_parser.add_argument("--collection", choices=("roots", "items"), default="roots")
+    apply_rest_roots_parser.add_argument("--timeout-seconds", type=float, default=120.0)
+    apply_rest_roots_parser.set_defaults(func=apply_mfc_rest_shared_roots)
 
     stop_parser = sub.add_parser("stop-rust", help="Gracefully stop a running Rust diagnostics daemon.")
     stop_parser.add_argument("--pid", type=int, required=True)
