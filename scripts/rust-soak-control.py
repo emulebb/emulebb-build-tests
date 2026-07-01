@@ -2748,6 +2748,8 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         "mfcHashingRemaining": trend_counter(records, ("mfc", "sharedHashingCount")),
         "mfcUploadKiBps": trend_counter(records, ("mfc", "uploadSpeedKiBps")),
         "mfcActiveUploads": trend_counter(records, ("mfc", "activeUploads")),
+        "monitorRustUploadKiBps": trend_counter(records, ("monitor", "latestRecord", "rustKiBps")),
+        "monitorMfcUploadKiBps": trend_counter(records, ("monitor", "latestRecord", "mfcKiBps")),
     }
     mfc_hashing = counters["mfcHashingRemaining"]
     if isinstance(mfc_hashing, dict) and isinstance(mfc_hashing.get("delta"), (int, float)):

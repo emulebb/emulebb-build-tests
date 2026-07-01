@@ -671,6 +671,12 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
                 "uploadSpeedKiBps": 1.0,
                 "activeUploads": 1,
             },
+            "monitor": {
+                "latestRecord": {
+                    "rustKiBps": 90.0,
+                    "mfcKiBps": 4.0,
+                }
+            },
         },
         {
             "timestampUtc": "2026-01-01T00:10:00+00:00",
@@ -704,6 +710,12 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
                 "uploadSpeedKiBps": 2.0,
                 "activeUploads": 1,
             },
+            "monitor": {
+                "latestRecord": {
+                    "rustKiBps": 180.0,
+                    "mfcKiBps": 10.0,
+                }
+            },
         },
     ]
     jsonl.write_text("\n".join(control.json.dumps(record, sort_keys=True) for record in records) + "\n", encoding="utf-8")
@@ -730,6 +742,10 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
     assert trend["counters"]["mfcHashingRemaining"]["completedPerMinute"] == 6.0
     assert trend["counters"]["mfcHashingRemaining"]["remainingEtaMinutes"] == 140.0
     assert trend["counters"]["mfcHashingRemaining"]["remainingEtaHours"] == 2.33
+    assert trend["counters"]["monitorRustUploadKiBps"]["delta"] == 90.0
+    assert trend["counters"]["monitorRustUploadKiBps"]["perMinute"] == 9.0
+    assert trend["counters"]["monitorMfcUploadKiBps"]["last"] == 10.0
+    assert trend["counters"]["monitorMfcUploadKiBps"]["perMinute"] == 0.6
 
 
 def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -> None:
