@@ -2490,6 +2490,16 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
     if getattr(args, "append_jsonl", False):
         append_jsonl(args.watch_jsonl, payload)
         write_watch_heartbeat(args.watch_heartbeat, payload)
+    if getattr(args, "report", "full") == "brief":
+        report_args = argparse.Namespace(
+            watch_pid_file=getattr(args, "watch_pid_file", args.output_dir / "rust-soak-watch.pid"),
+            watch_jsonl=args.watch_jsonl,
+            watch_stop_file=getattr(args, "watch_stop_file", args.output_dir / "rust-soak-watch.stop"),
+            stale_seconds=args.stale_seconds,
+            limit=getattr(args, "report_limit", 12),
+        )
+        trend = watch_trend(argparse.Namespace(watch_jsonl=args.watch_jsonl, limit=report_args.limit))
+        return watch_brief_from_record(payload, report_args, trend)
     return payload
 
 
@@ -3046,6 +3056,16 @@ def watch_brief(args: argparse.Namespace) -> dict[str, object]:
 
     latest = latest_jsonl_record(args.watch_jsonl) or {}
     trend = watch_trend(argparse.Namespace(watch_jsonl=args.watch_jsonl, limit=args.limit))
+    return watch_brief_from_record(latest, args, trend)
+
+
+def watch_brief_from_record(
+    latest: dict[str, object],
+    args: argparse.Namespace,
+    trend: dict[str, object],
+) -> dict[str, object]:
+    """Builds the compact watch report shape from one retained sample."""
+
     pid = None
     if args.watch_pid_file.exists():
         text = args.watch_pid_file.read_text(encoding="utf-8", errors="replace").strip()
@@ -3391,6 +3411,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--watch-heartbeat",
         type=Path,
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.heartbeat.txt",
+    )
+    watch_parser.add_argument(
+        "--watch-pid-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.pid",
+        help="Detached watch PID file used when --report brief includes loop health.",
+    )
+    watch_parser.add_argument(
+        "--watch-stop-file",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
+        help="Detached watch stop-file path used when --report brief includes loop health.",
+    )
+    watch_parser.add_argument(
+        "--report",
+        choices=("full", "brief"),
+        default="full",
+        help="Print full evidence or a compact one-shot monitoring report.",
+    )
+    watch_parser.add_argument(
+        "--report-limit",
+        type=int,
+        default=12,
+        help="Retained watch samples to include in --report brief trend counters.",
     )
     add_watch_evidence_args(watch_parser)
     watch_parser.set_defaults(func=watch_once)

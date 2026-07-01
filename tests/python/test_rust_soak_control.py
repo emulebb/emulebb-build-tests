@@ -1179,3 +1179,116 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert "recommendations=preserve-mfc-hashing-before-connectivity-restart" in heartbeat_text
     assert "vpnAllWhitelisted=True" in heartbeat_text
     assert "diagnosticsFiles=1" in heartbeat_text
+
+
+def test_watch_once_brief_report_keeps_retained_evidence_full(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    jsonl = tmp_path / "watch.jsonl"
+    heartbeat = tmp_path / "watch.heartbeat.txt"
+    pid_file = tmp_path / "watch.pid"
+    stop_file = tmp_path / "watch.stop"
+    pid_file.write_text("1234\n", encoding="utf-8")
+
+    def fake_sample(base_url: str, api_key: str) -> dict[str, object]:
+        if "4732" in base_url:
+            return {
+                "activeUploads": 1,
+                "ed2kConnected": True,
+                "ed2kHighId": False,
+                "kadConnected": True,
+                "kadFirewalled": True,
+                "sharedHashingActive": True,
+                "sharedHashingCount": 12,
+                "uploadSpeedKiBps": 0.5,
+            }
+        return {
+            "activeUploads": 4,
+            "ed2kConnected": True,
+            "ed2kHighId": True,
+            "ed2kPendingEntries": 100,
+            "ed2kPublishedEntries": 20,
+            "kadConnected": True,
+            "kadFirewalled": False,
+            "sharedHashingActive": False,
+            "sharedHashingCount": 0,
+            "uploadSpeedKiBps": 10.0,
+            "waitingUploads": 0,
+        }
+
+    monkeypatch.setattr(control, "sample", fake_sample)
+    monkeypatch.setattr(control, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(control, "timestamp_age_seconds", lambda timestamp: 30.0)
+    monkeypatch.setattr(
+        control,
+        "upload_monitor_sample",
+        lambda args: {
+            "monitorAlive": True,
+            "monitorStale": False,
+            "latestAgeSeconds": 5.0,
+            "latestRecord": {
+                "rustKiBps": 9.0,
+                "rustUploads": 4,
+                "mfcKiBps": 0.5,
+                "mfcWaiting": 0,
+                "parityGap": False,
+                "mfcLogStale": False,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        control,
+        "optional_watch_diagnostics",
+        lambda args: {
+            "fileCount": 1,
+            "aggregatePatternCounts": {"ed2k": 2},
+            "aggregateJsonCounts": {"event": {"upload_request_outcome": 2}},
+            "files": [{"name": "emulebb-rust-diag-123.jsonl", "jsonRowCount": 2}],
+        },
+    )
+    monkeypatch.setattr(
+        control,
+        "optional_watch_vpn",
+        lambda args: {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+    )
+
+    result = control.watch_once(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            mfc_base_url="http://192.0.2.10:4732/api/v1",
+            mfc_api_key="mfc",
+            output_dir=tmp_path,
+            stale_seconds=900.0,
+            restart_stale_monitor=False,
+            log_dir=tmp_path,
+            rust_pid=None,
+            rust_diag_log=None,
+            mfc_upload_log=None,
+            interval_seconds=300.0,
+            mfc_log_stale_seconds=900.0,
+            append_jsonl=True,
+            watch_jsonl=jsonl,
+            watch_heartbeat=heartbeat,
+            watch_pid_file=pid_file,
+            watch_stop_file=stop_file,
+            report="brief",
+            report_limit=12,
+            diagnostics_log_dir=[],
+            diagnostics_log_file=[],
+            include_vpn_status=True,
+        )
+    )
+
+    assert result["watch"]["alive"] is True
+    assert result["watch"]["stale"] is False
+    assert result["findings"] == ["mfc-ed2k-not-high-id", "mfc-hashing-active", "mfc-kad-firewalled"]
+    assert result["rust"]["activeUploads"] == 4
+    assert result["monitor"]["rustKiBps"] == 9.0
+    assert result["diagnostics"]["jsonCounts"]["event"]["upload_request_outcome"] == 2
+    assert "latestRecord" not in result
+    assert "files" not in result["diagnostics"]
+
+    retained = control.latest_jsonl_record(jsonl)
+    assert retained is not None
+    assert retained["diagnostics"]["files"] == [{"name": "emulebb-rust-diag-123.jsonl", "jsonRowCount": 2}]
+    assert retained["mfc"]["sharedHashingCount"] == 12
