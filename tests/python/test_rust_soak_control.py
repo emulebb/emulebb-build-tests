@@ -1946,6 +1946,61 @@ def test_watch_processes_returns_sanitized_argument_presence(monkeypatch) -> Non
     assert "private-mfc" not in control.json.dumps(result)
 
 
+def test_mfc_processes_only_reports_client_executables(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    profile_dir = tmp_path / "mfc-profile"
+    known_met = profile_dir / "config" / "known.met"
+    known_met.parent.mkdir(parents=True)
+    known_met.write_bytes(b"known")
+    client_process = SimpleNamespace(
+        pid=2345,
+        parent_pid=111,
+        name="emulebb-diagnostics.exe",
+        creation_date="20260101000000.000000+000",
+        command_line=f'emulebb-diagnostics.exe -c "{profile_dir}"',
+    )
+    helper_process = SimpleNamespace(
+        pid=3456,
+        parent_pid=111,
+        name="python.exe",
+        creation_date="20260101000001.000000+000",
+        command_line=f"python helper.py --mfc-exe emulebb-diagnostics.exe -c {profile_dir}",
+    )
+    rust_process = SimpleNamespace(
+        pid=4567,
+        parent_pid=111,
+        name="emulebb-rust-diagnostics.exe",
+        creation_date="20260101000002.000000+000",
+        command_line="emulebb-rust-diagnostics.exe --config runtime.toml",
+    )
+    monkeypatch.setattr(control, "collect_processes", lambda: [helper_process, rust_process, client_process])
+
+    result = control.mfc_processes(SimpleNamespace())
+
+    assert [row["pid"] for row in result["processes"]] == [2345]
+    assert result["processes"][0]["hasProfileArg"] is True
+    assert result["processes"][0]["knownMetPresent"] is True
+
+
+def test_discover_mfc_known_met_ignores_helper_command_lines(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    profile_dir = tmp_path / "mfc-profile"
+    known_met = profile_dir / "config" / "known.met"
+    known_met.parent.mkdir(parents=True)
+    known_met.write_bytes(b"known")
+    helper_process = SimpleNamespace(
+        name="python.exe",
+        command_line=f"python helper.py --mfc-exe emulebb-diagnostics.exe -c {profile_dir}",
+    )
+    client_process = SimpleNamespace(
+        name="emulebb-diagnostics.exe",
+        command_line=f'emulebb-diagnostics.exe -c "{profile_dir}"',
+    )
+    monkeypatch.setattr(control, "collect_processes", lambda: [helper_process, client_process])
+
+    assert control.discover_mfc_known_met_from_processes() == known_met
+
+
 def test_stop_watch_processes_terminates_only_watch_loop_rows(monkeypatch) -> None:
     control = _load_rust_soak_control()
     watch_process = SimpleNamespace(

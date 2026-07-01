@@ -65,6 +65,17 @@ from emule_test_harness.windows_processes import (
 
 ED2K_OFFER_BATCH_SIZE = 200
 ED2K_OFFER_INTERVAL_SECONDS = 60
+MFC_CLIENT_PROCESS_NAMES = {
+    "emule.exe",
+    "emulebb.exe",
+    "emulebb-diagnostics.exe",
+}
+
+
+def is_mfc_client_process(process: object) -> bool:
+    """Returns true only for an actual MFC client executable."""
+
+    return str(getattr(process, "name", "")).lower() in MFC_CLIENT_PROCESS_NAMES
 
 
 def output_root() -> Path:
@@ -148,10 +159,9 @@ def discover_mfc_known_met_from_processes() -> Path | None:
     """Finds MFC known.met from a running eMule-family process command line."""
 
     for process in collect_processes():
-        command_line = getattr(process, "command_line", "")
-        identity = f"{getattr(process, 'name', '')} {command_line}".lower()
-        if "emule" not in identity or "emulebb-rust" in identity:
+        if not is_mfc_client_process(process):
             continue
+        command_line = getattr(process, "command_line", "")
         profile_dir = command_line_profile_dir(command_line)
         if profile_dir is None:
             continue
@@ -2880,10 +2890,9 @@ def mfc_processes(_: argparse.Namespace) -> dict[str, object]:
 
     rows = []
     for process in collect_processes():
-        command_line = getattr(process, "command_line", "")
-        identity = f"{process.name} {command_line}".lower()
-        if "emule" not in identity or "emulebb-rust" in identity:
+        if not is_mfc_client_process(process):
             continue
+        command_line = getattr(process, "command_line", "")
         profile_dir = command_line_profile_dir(command_line)
         known_met = profile_dir / "config" / "known.met" if profile_dir is not None else None
         rows.append(
