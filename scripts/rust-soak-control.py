@@ -2004,6 +2004,9 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
     }
     if mfc is not None:
         payload["mfc"] = mfc
+    if getattr(args, "append_jsonl", False):
+        append_jsonl(args.watch_jsonl, payload)
+        write_watch_heartbeat(args.watch_heartbeat, payload)
     return payload
 
 
@@ -2579,6 +2582,21 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--mfc-log-stale-seconds", type=float, default=900.0)
     watch_parser.add_argument("--restart-stale-monitor", action="store_true", default=True)
     watch_parser.add_argument("--no-restart-stale-monitor", action="store_false", dest="restart_stale_monitor")
+    watch_parser.add_argument(
+        "--append-jsonl",
+        action="store_true",
+        help="Append this one-shot sample to the retained watch JSONL and heartbeat.",
+    )
+    watch_parser.add_argument(
+        "--watch-jsonl",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.jsonl",
+    )
+    watch_parser.add_argument(
+        "--watch-heartbeat",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.heartbeat.txt",
+    )
     watch_parser.set_defaults(func=watch_once)
 
     watch_loop_parser = sub.add_parser("watch-loop", help="Run repeated long-soak cadence checks.")

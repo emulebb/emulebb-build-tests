@@ -504,3 +504,79 @@ def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -
     assert status["watchStale"] is True
     assert status["latestAgeSeconds"] == 901.0
     assert status["findings"] == ["watch-stale"]
+
+
+def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    jsonl = tmp_path / "watch.jsonl"
+    heartbeat = tmp_path / "watch.heartbeat.txt"
+
+    def fake_sample(base_url: str, api_key: str) -> dict[str, object]:
+        if "4732" in base_url:
+            return {
+                "activeUploads": 1,
+                "ed2kConnected": True,
+                "ed2kHighId": False,
+                "kadConnected": True,
+                "kadFirewalled": True,
+                "sharedHashingActive": True,
+                "sharedHashingCount": 10,
+                "uploadSpeedKiBps": 0.5,
+            }
+        return {
+            "activeUploads": 2,
+            "ed2kConnected": True,
+            "ed2kHighId": True,
+            "ed2kPendingEntries": 100,
+            "ed2kPublishedEntries": 20,
+            "kadConnected": True,
+            "kadFirewalled": False,
+            "sharedHashingActive": False,
+            "sharedHashingCount": 0,
+            "uploadSpeedKiBps": 10.0,
+            "waitingUploads": 0,
+        }
+
+    monkeypatch.setattr(control, "sample", fake_sample)
+    monkeypatch.setattr(
+        control,
+        "upload_monitor_sample",
+        lambda args: {
+            "monitorAlive": True,
+            "monitorStale": False,
+            "latestRecord": {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "parityGap": False,
+                "postVisibilityDemandGap": False,
+                "mfcLogStale": False,
+            },
+        },
+    )
+
+    result = control.watch_once(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust",
+            mfc_base_url="http://192.0.2.10:4732/api/v1",
+            mfc_api_key="mfc",
+            output_dir=tmp_path,
+            stale_seconds=900.0,
+            restart_stale_monitor=False,
+            log_dir=tmp_path,
+            rust_pid=None,
+            rust_diag_log=None,
+            mfc_upload_log=None,
+            interval_seconds=300.0,
+            mfc_log_stale_seconds=900.0,
+            append_jsonl=True,
+            watch_jsonl=jsonl,
+            watch_heartbeat=heartbeat,
+        )
+    )
+
+    assert "mfc-hashing-active" in result["findings"]
+    retained = control.latest_jsonl_record(jsonl)
+    assert retained is not None
+    assert retained["findings"] == result["findings"]
+    heartbeat_text = heartbeat.read_text(encoding="utf-8")
+    assert "mfcHashing=10" in heartbeat_text
