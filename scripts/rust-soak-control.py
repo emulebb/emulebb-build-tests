@@ -3418,6 +3418,50 @@ def latest_upload_efficiency(
     return efficiency
 
 
+def compact_upload_efficiency_summary(summary: dict[str, object]) -> dict[str, object]:
+    """Returns upload-efficiency fields suitable for compact live watch briefs."""
+
+    compact: dict[str, object] = {
+        "source": "rustDiagLog",
+        "rowCount": summary.get("rowCount"),
+        "timeRange": summary.get("timeRange"),
+        "outcomes": summary.get("outcomes"),
+        "firstSkipReasons": summary.get("firstSkipReasons"),
+    }
+    numeric = summary.get("numeric")
+    if isinstance(numeric, dict):
+        for field in (
+            "requestedBytes",
+            "servedBytes",
+            "sentPayloadBytes",
+            "sentFileBytes",
+            "payloadReadMs",
+            "throttleDelayMs",
+            "readCacheHits",
+            "readCacheMisses",
+            "readDiskBytes",
+        ):
+            stats = numeric.get(field)
+            if isinstance(stats, dict):
+                compact[field] = {
+                    key: stats.get(key)
+                    for key in ("count", "sum", "average", "max")
+                    if stats.get(key) is not None
+                }
+    for field in (
+        "servedToRequestedRatio",
+        "payloadOverheadBytes",
+        "payloadOverheadRatio",
+        "readCacheHitRatio",
+        "readDiskToServedRatio",
+        "slowReadCount",
+        "slowReadRatio",
+    ):
+        if field in summary:
+            compact[field] = summary[field]
+    return compact
+
+
 def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes retained soak watch JSONL counters over a bounded window."""
 
@@ -3553,6 +3597,20 @@ def watch_brief_from_record(
     monitor = latest.get("monitor") if isinstance(latest.get("monitor"), dict) else {}
     monitor_latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
     diagnostics = latest.get("diagnostics") if isinstance(latest.get("diagnostics"), dict) else {}
+    upload_efficiency = trend.get("latestUploadEfficiency")
+    rust_diag_log = getattr(args, "rust_diag_log", None)
+    if rust_diag_log is not None:
+        current_upload = upload_efficiency_summary(
+            argparse.Namespace(
+                log_dir=None,
+                log_file=[rust_diag_log],
+                limit=1,
+                max_bytes=getattr(args, "upload_efficiency_max_bytes", 33_554_432),
+                slow_read_ms=getattr(args, "slow_read_ms", 100.0),
+                outlier_limit=0,
+            )
+        )
+        upload_efficiency = compact_upload_efficiency_summary(current_upload)
     vpn = latest.get("vpn") if isinstance(latest.get("vpn"), dict) else {}
     counters = trend.get("counters") if isinstance(trend.get("counters"), dict) else {}
     findings = list(latest.get("findings") if isinstance(latest.get("findings"), list) else [])
@@ -3617,7 +3675,7 @@ def watch_brief_from_record(
             "patterns": diagnostics.get("aggregatePatternCounts"),
             "jsonCounts": diagnostics.get("aggregateJsonCounts"),
             "antiFlood": compact_watch_anti_flood_summary(diagnostics.get("antiFloodSummary")),
-            "uploadEfficiency": trend.get("latestUploadEfficiency"),
+            "uploadEfficiency": upload_efficiency,
         },
         "trend": {
             "sampleCount": trend.get("sampleCount"),
@@ -4108,6 +4166,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
+    watch_brief_parser.add_argument(
+        "--rust-diag-log",
+        type=Path,
+        help="Current Rust diagnostics JSONL log to use for upload-efficiency evidence.",
+    )
+    watch_brief_parser.add_argument(
+        "--upload-efficiency-max-bytes",
+        type=int,
+        default=33_554_432,
+        help="Bytes to scan from --rust-diag-log for compact upload-efficiency evidence.",
+    )
+    watch_brief_parser.add_argument("--slow-read-ms", type=float, default=100.0)
     watch_brief_parser.add_argument("--limit", type=int, default=12)
     watch_brief_parser.set_defaults(func=watch_brief)
 
