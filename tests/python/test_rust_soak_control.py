@@ -1530,6 +1530,10 @@ def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
                 "kadFirewalled": False,
             },
             "monitor": {"latestRecord": {"mfcLogStale": False}},
+            "uploadDemand": {
+                "classification": "visibility-limited",
+                "reason": "ed2k-publish-still-maturing",
+            },
             "mfc": {
                 "uploadSpeedKiBps": 0.5,
                 "activeUploads": 1,
@@ -1554,6 +1558,8 @@ def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
     assert "mfcHashing=12" in text
     assert "mfcEd2kHighId=False" in text
     assert "mfcKadFirewalled=True" in text
+    assert "uploadDemandClassification=visibility-limited" in text
+    assert "uploadDemandReason=ed2k-publish-still-maturing" in text
     assert "recommendations=continue-mfc-hashing" in text
     assert "vpnAllWhitelisted=True" in text
     assert "vpnAdapterUp=True" in text
@@ -2317,10 +2323,13 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert retained["diagnostics"]["fileCount"] == 1
     assert retained["diagnostics"]["aggregateJsonCounts"]["event"]["anti_flood_drop"] == 30
     assert retained["diagnostics"]["rustEd2kOfferSummary"]["observedEntriesSent"] == 600
+    assert retained["uploadDemand"]["classification"] == "visibility-limited"
+    assert retained["uploadDemand"]["reason"] == "ed2k-publish-still-maturing"
     assert retained["vpn"]["adapterUp"] is True
     heartbeat_text = heartbeat.read_text(encoding="utf-8")
     assert "mfcHashing=10" in heartbeat_text
     assert "preserve-mfc-hashing-before-connectivity-restart" in heartbeat_text
+    assert "uploadDemandClassification=visibility-limited" in heartbeat_text
     assert "vpnAllWhitelisted=True" in heartbeat_text
     assert "diagnosticsFiles=1" in heartbeat_text
     assert "rustOfferObservedEntries=600" in heartbeat_text

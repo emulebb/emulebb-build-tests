@@ -3496,10 +3496,17 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
         )
     vpn = optional_watch_vpn(args)
     findings = watch_findings(rust, monitor, mfc, diagnostics)
+    monitor_latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
+    upload_demand = upload_demand_classification(
+        rust,
+        mfc if isinstance(mfc, dict) else {},
+        monitor_latest,
+    )
     payload = {
         "timestampUtc": datetime.now(UTC).isoformat(),
         "rust": rust,
         "monitor": monitor,
+        "uploadDemand": upload_demand,
         "findings": findings,
         "recommendations": watch_recommendations(findings, rust, monitor, mfc, vpn),
         "action": action,
@@ -3544,6 +3551,7 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
     mfc = payload.get("mfc") if isinstance(payload.get("mfc"), dict) else {}
     monitor = payload.get("monitor") if isinstance(payload.get("monitor"), dict) else {}
     diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    upload_demand = payload.get("uploadDemand") if isinstance(payload.get("uploadDemand"), dict) else {}
     vpn = payload.get("vpn") if isinstance(payload.get("vpn"), dict) else {}
     latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
     lines = [
@@ -3562,6 +3570,13 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
         f"monitorPostVisibilityDemandGap={latest.get('postVisibilityDemandGap')}",
         f"monitorMfcLogStale={latest.get('mfcLogStale')}",
     ]
+    if upload_demand:
+        lines.extend(
+            [
+                f"uploadDemandClassification={upload_demand.get('classification')}",
+                f"uploadDemandReason={upload_demand.get('reason')}",
+            ]
+        )
     if mfc:
         lines.extend(
             [
