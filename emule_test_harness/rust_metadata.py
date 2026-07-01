@@ -335,6 +335,138 @@ def seed_share_in_place_manifest(
     )
 
 
+def seed_share_in_place_manifests(db_path: Path, manifests: list[dict[str, object]]) -> None:
+    """Seed many completed share-in-place manifests in one SQLite transaction."""
+
+    now = _now_ms()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        for manifest in manifests:
+            _seed_share_in_place_manifest_conn(conn, now=now, **manifest)
+        conn.commit()
+
+
+def _seed_share_in_place_manifest_conn(
+    conn: sqlite3.Connection,
+    *,
+    now: int,
+    ed2k_hash: str,
+    name: str,
+    size_bytes: int,
+    source_path: str,
+    source_mtime_ms: int,
+    md4_hashset: list[str] | None = None,
+    aich_root: str | None = None,
+    aich_hashset: list[str] | None = None,
+    upload_priority: str = "normal",
+    auto_upload_priority: bool = False,
+    all_time_uploaded_bytes: int = 0,
+) -> None:
+    md4_hashset = md4_hashset or []
+    aich_hashset = aich_hashset or []
+    hash_blob = bytes.fromhex(ed2k_hash)
+    piece_size = ED2K_PART_SIZE
+    piece_count = (size_bytes + piece_size - 1) // piece_size if size_bytes and piece_size else 0
+    content_object_id = _upsert_content_object(conn, hash_blob, name, size_bytes, now)
+    conn.execute(
+        """
+        INSERT INTO known_files(
+            content_object_id, ed2k_hash, size_bytes, canonical_name,
+            part_size, part_count, completed, md4_hashset_acquired,
+            aich_hashset_acquired, aich_root, upload_priority,
+            auto_upload_priority, all_time_uploaded_bytes,
+            first_seen_ms, last_seen_ms, updated_at_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ed2k_hash) DO UPDATE SET
+            content_object_id = excluded.content_object_id,
+            size_bytes = excluded.size_bytes,
+            canonical_name = excluded.canonical_name,
+            part_size = excluded.part_size,
+            part_count = excluded.part_count,
+            completed = excluded.completed,
+            md4_hashset_acquired = excluded.md4_hashset_acquired,
+            aich_hashset_acquired = excluded.aich_hashset_acquired,
+            aich_root = excluded.aich_root,
+            upload_priority = excluded.upload_priority,
+            auto_upload_priority = excluded.auto_upload_priority,
+            all_time_uploaded_bytes = excluded.all_time_uploaded_bytes,
+            last_seen_ms = excluded.last_seen_ms,
+            updated_at_ms = excluded.updated_at_ms
+        """,
+        (
+            content_object_id,
+            hash_blob,
+            size_bytes,
+            name,
+            piece_size,
+            piece_count,
+            1 if aich_root is not None else 0,
+            bytes.fromhex(aich_root) if aich_root else None,
+            upload_priority,
+            1 if auto_upload_priority else 0,
+            all_time_uploaded_bytes,
+            now,
+            now,
+            now,
+        ),
+    )
+    known_file_id = conn.execute(
+        "SELECT id FROM known_files WHERE ed2k_hash = ?", (hash_blob,)
+    ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO transfers(
+            known_file_id, visible_state, priority, payload_directory,
+            source_path, source_mtime_ms, created_at_ms, updated_at_ms, completed_at_ms
+        )
+        VALUES (?, 'completed', 'normal', ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(known_file_id) DO UPDATE SET
+            visible_state = excluded.visible_state,
+            priority = excluded.priority,
+            payload_directory = excluded.payload_directory,
+            source_path = excluded.source_path,
+            source_mtime_ms = excluded.source_mtime_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            completed_at_ms = excluded.completed_at_ms,
+            removed_at_ms = NULL
+        """,
+        (known_file_id, ed2k_hash, source_path, source_mtime_ms, now, now, now),
+    )
+    transfer_id = conn.execute(
+        "SELECT id FROM transfers WHERE known_file_id = ?", (known_file_id,)
+    ).fetchone()[0]
+    conn.execute("DELETE FROM transfer_pieces WHERE transfer_id = ?", (transfer_id,))
+    conn.execute("DELETE FROM ed2k_part_hashes WHERE known_file_id = ?", (known_file_id,))
+    conn.execute("DELETE FROM aich_part_hashes WHERE known_file_id = ?", (known_file_id,))
+    conn.execute("DELETE FROM verified_ranges WHERE known_file_id = ?", (known_file_id,))
+    for piece_index in range(piece_count):
+        conn.execute(
+            """
+            INSERT INTO transfer_pieces(transfer_id, piece_index, state, bytes_written, updated_at_ms)
+            VALUES (?, ?, 'Verified', ?, ?)
+            """,
+            (transfer_id, piece_index, expected_piece_length(size_bytes, piece_size, piece_index), now),
+        )
+    for index, part_hash in enumerate(md4_hashset):
+        conn.execute(
+            "INSERT INTO ed2k_part_hashes(known_file_id, part_index, md4_hash) VALUES (?, ?, ?)",
+            (known_file_id, index, bytes.fromhex(part_hash)),
+        )
+    for index, part_hash in enumerate(aich_hashset):
+        conn.execute(
+            "INSERT INTO aich_part_hashes(known_file_id, part_index, aich_hash) VALUES (?, ?, ?)",
+            (known_file_id, index, bytes.fromhex(part_hash)),
+        )
+    conn.execute(
+        """
+        INSERT INTO verified_ranges(known_file_id, start_offset, end_offset, source_kind, created_at_ms)
+        VALUES (?, 0, ?, 'ed2k_transfer', ?)
+        """,
+        (known_file_id, size_bytes, now),
+    )
+
+
 def expected_piece_length(file_size: int, piece_size: int, piece_index: int) -> int:
     start = piece_index * piece_size
     return max(0, min(start + piece_size, file_size) - start)

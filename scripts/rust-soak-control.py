@@ -34,6 +34,7 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import mfc_known_met
 from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.soak_launch import (
     MFC_API_KEY,
@@ -42,6 +43,7 @@ from emule_test_harness.soak_launch import (
     load_shareddir_root_entries,
     normalize_shared_root_entry,
     shared_root_is_recursive,
+    shared_root_path,
 )
 from emule_test_harness.windows_processes import (
     collect_processes,
@@ -89,6 +91,45 @@ def discover_mfc_shareddir_file() -> Path | None:
     return candidates[0]
 
 
+def command_line_profile_dir(command_line: str) -> Path | None:
+    """Extracts an eMule-style -c profile directory from a command line."""
+
+    match = re.search(r'(?:^|\s)-c\s+(?:"([^"]+)"|(\S+))', command_line, flags=re.IGNORECASE)
+    if not match:
+        return None
+    value = match.group(1) or match.group(2)
+    return Path(value) if value else None
+
+
+def discover_mfc_known_met_from_processes() -> Path | None:
+    """Finds MFC known.met from a running eMule-family process command line."""
+
+    for process in collect_processes():
+        command_line = process_command_line(process)
+        identity = f"{getattr(process, 'name', '')} {command_line}".lower()
+        if "emule" not in identity or "emulebb-rust" in identity:
+            continue
+        profile_dir = command_line_profile_dir(command_line)
+        if profile_dir is None:
+            continue
+        known_met = profile_dir / "config" / "known.met"
+        if known_met.is_file():
+            return known_met
+    return None
+
+
+def discover_mfc_known_met_from_soak_output() -> Path | None:
+    """Finds the newest known.met below generated soak output."""
+
+    soak_root = output_root() / "soak"
+    if soak_root.is_dir():
+        candidates = [path for path in soak_root.glob("**/known.met") if path.is_file()]
+        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        if candidates:
+            return candidates[0]
+    return None
+
+
 def default_executable() -> Path:
     """Returns the diagnostics executable built by the workspace orchestrator."""
 
@@ -97,6 +138,18 @@ def default_executable() -> Path:
     if target_triple.exists():
         return target_triple
     return target / "release" / "emulebb-rust-diagnostics.exe"
+
+
+def default_rust_repo() -> Path:
+    """Returns the sibling emulebb-rust checkout used by metadata seed helpers."""
+
+    return REPO_ROOT.parent / "emulebb-rust"
+
+
+def default_metadata_db() -> Path:
+    """Returns the persistent Rust metadata database path."""
+
+    return default_runtime_dir() / "metadata.sqlite"
 
 
 def default_base_url() -> str:
@@ -754,6 +807,39 @@ def fetch_shared_file_catalog_by_root(
     }
 
 
+def fetch_shared_file_rows(
+    base_url: str,
+    api_key: str,
+    *,
+    page_size: int,
+    timeout_seconds: float,
+    sleep_seconds: float,
+) -> list[dict[str, object]]:
+    """Fetches all shared-file rows from one REST endpoint."""
+
+    rows: list[dict[str, object]] = []
+    offset = 0
+    total: int | None = None
+    while total is None or len(rows) < total:
+        page, page_total = shared_file_page_items(
+            request_json(
+                base_url,
+                f"/shared-files?offset={offset}&limit={page_size}",
+                api_key=api_key,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if total is None:
+            total = page_total
+        rows.extend(row for row in page if isinstance(row, dict))
+        if not page:
+            break
+        offset += len(page)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    return rows
+
+
 def compact_shared_catalog_summary(summary: dict[str, object]) -> dict[str, object]:
     """Drops path-to-hash maps from a shared-file catalog summary."""
 
@@ -1114,6 +1200,57 @@ def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def repair_rust_metadata_from_mfc_rest(args: argparse.Namespace) -> dict[str, object]:
+    """Seeds Rust metadata from live MFC REST shared files plus MFC known.met."""
+
+    if args.known_met is not None:
+        known_met = args.known_met
+        known_met_source = "explicit"
+    else:
+        known_met = discover_mfc_known_met_from_processes()
+        known_met_source = "process"
+        if known_met is None and args.allow_known_met_fallback:
+            known_met = discover_mfc_known_met_from_soak_output()
+            known_met_source = "soak-output"
+    if known_met is None or not known_met.is_file():
+        raise RuntimeError("MFC known.met could not be resolved")
+    rows = fetch_shared_file_rows(
+        args.mfc_base_url,
+        args.mfc_api_key,
+        page_size=args.shared_file_page_size,
+        timeout_seconds=args.shared_file_timeout_seconds,
+        sleep_seconds=args.shared_file_sleep_seconds,
+    )
+    root_entries = mfc_rest_shared_root_entries(
+        args.mfc_base_url,
+        args.mfc_api_key,
+        collection="items",
+    )
+    shared_roots = [Path(shared_root_path(root)) for root in root_entries]
+    raw = mfc_known_met.import_mfc_shared_file_rows_hashes(
+        rust_repo=args.rust_repo,
+        metadata_db=args.metadata_db,
+        known_met=known_met,
+        shared_file_rows=rows,
+        shared_roots=shared_roots,
+        dry_run=args.dry_run,
+    )
+    return {
+        "enabled": True,
+        "status": "imported" if not args.dry_run else "dry-run",
+        "knownMetResolved": True,
+        "knownMetSource": known_met_source,
+        "mfcSharedFileRowsFetched": len(rows),
+        "mfcSharedRootItems": len(shared_roots),
+        "knownMetRecords": raw["knownMetRecords"],
+        "sharedFileRows": raw["sharedFileRows"],
+        "matchedRows": raw["matchedRows"],
+        "importedRows": raw["importedRows"],
+        "dryRun": raw["dryRun"],
+        "skipped": raw["skipped"],
+    }
+
+
 def pid_exists(pid: int) -> bool:
     """Returns whether a process id is currently live."""
 
@@ -1289,6 +1426,32 @@ def rust_processes(_: argparse.Namespace) -> dict[str, object]:
             for process in matches
         ]
     }
+
+
+def mfc_processes(_: argparse.Namespace) -> dict[str, object]:
+    """Returns sanitized running eMule-family process rows."""
+
+    rows = []
+    for process in collect_processes():
+        command_line = process_command_line(process)
+        identity = f"{process.name} {command_line}".lower()
+        if "emule" not in identity or "emulebb-rust" in identity:
+            continue
+        profile_dir = command_line_profile_dir(command_line)
+        known_met = profile_dir / "config" / "known.met" if profile_dir is not None else None
+        rows.append(
+            {
+                "pid": process.pid,
+                "parentPid": process.parent_pid,
+                "name": process.name,
+                "creationDate": process.creation_date,
+                "hasProfileArg": profile_dir is not None,
+                "knownMetPresent": bool(known_met and known_met.is_file()),
+                "commandLineFingerprint": hashlib.sha256(command_line.encode("utf-8")).hexdigest()[:16],
+            }
+        )
+    rows.sort(key=lambda row: (str(row["name"]).lower(), int(row["pid"])))
+    return {"processes": rows}
 
 
 def stop_upload_monitor(output_dir: Path, timeout_seconds: float = 20.0) -> dict[str, object]:
@@ -1818,6 +1981,22 @@ def build_parser() -> argparse.ArgumentParser:
     apply_rest_roots_parser.add_argument("--timeout-seconds", type=float, default=120.0)
     apply_rest_roots_parser.set_defaults(func=apply_mfc_rest_shared_roots)
 
+    repair_parser = sub.add_parser(
+        "repair-rust-metadata-from-mfc-rest",
+        help="Seed Rust metadata from live MFC shared-files REST rows and known.met.",
+    )
+    repair_parser.add_argument("--mfc-base-url", default=default_mfc_base_url())
+    repair_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
+    repair_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
+    repair_parser.add_argument("--rust-repo", type=Path, default=default_rust_repo())
+    repair_parser.add_argument("--known-met", type=Path)
+    repair_parser.add_argument("--allow-known-met-fallback", action="store_true")
+    repair_parser.add_argument("--dry-run", action="store_true")
+    repair_parser.add_argument("--shared-file-page-size", type=int, default=1000)
+    repair_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
+    repair_parser.add_argument("--shared-file-sleep-seconds", type=float, default=0.05)
+    repair_parser.set_defaults(func=repair_rust_metadata_from_mfc_rest)
+
     stop_parser = sub.add_parser("stop-rust", help="Gracefully stop a running Rust diagnostics daemon.")
     stop_parser.add_argument("--pid", type=int, required=True)
     stop_parser.add_argument("--shutdown-timeout-seconds", type=float, default=45.0)
@@ -1825,6 +2004,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     rust_processes_parser = sub.add_parser("rust-processes", help="List Rust process rows through Python WMI.")
     rust_processes_parser.set_defaults(func=rust_processes)
+
+    mfc_processes_parser = sub.add_parser("mfc-processes", help="List sanitized MFC process rows through Python WMI.")
+    mfc_processes_parser.set_defaults(func=mfc_processes)
 
     start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted runtime.")
     start_parser.add_argument("--runtime-dir", type=Path, default=default_runtime_dir())

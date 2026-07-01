@@ -136,8 +136,8 @@ def import_mfc_known_met_hashes(
         "ambiguous_path_match": 0,
         "aich_count_mismatch": 0,
     }
-    imported = 0
     matched = 0
+    manifests: list[dict[str, Any]] = []
     for entry in entries:
         if entry.name is None or entry.size_bytes is None:
             reason_counts["missing_identity"] += 1
@@ -161,24 +161,26 @@ def import_mfc_known_met_hashes(
         matched += 1
         if not dry_run:
             candidate = matches[0]
-            rust_metadata.seed_share_in_place_manifest(
-                metadata_db,
-                ed2k_hash=entry.ed2k_hash,
-                name=entry.name,
-                size_bytes=entry.size_bytes,
-                source_path=str(candidate.path),
-                source_mtime_ms=candidate.mtime_ms,
-                md4_hashset=entry.md4_hashset,
-                aich_root=entry.aich_root,
-                aich_hashset=entry.aich_hashset,
+            manifests.append(
+                {
+                    "ed2k_hash": entry.ed2k_hash,
+                    "name": entry.name,
+                    "size_bytes": entry.size_bytes,
+                    "source_path": str(candidate.path),
+                    "source_mtime_ms": candidate.mtime_ms,
+                    "md4_hashset": entry.md4_hashset,
+                    "aich_root": entry.aich_root,
+                    "aich_hashset": entry.aich_hashset,
+                }
             )
-            imported += 1
+    if manifests:
+        rust_metadata.seed_share_in_place_manifests(metadata_db, manifests)
 
     return {
         "knownMetRecords": len(entries),
         "sharedFilesScanned": len(candidates),
         "matchedRecords": matched,
-        "importedRecords": imported,
+        "importedRecords": len(manifests),
         "dryRun": dry_run,
         "skipped": reason_counts,
         "metadataDb": str(metadata_db),
@@ -249,18 +251,22 @@ def import_mfc_shared_file_rows_hashes(
         parsed_rows.append((parsed, entry, stat.st_mtime_ns // 1_000_000))
 
     if not dry_run:
-        for parsed, entry, source_mtime_ms in parsed_rows:
-            rust_metadata.seed_share_in_place_manifest(
-                metadata_db,
-                ed2k_hash=parsed.ed2k_hash,
-                name=parsed.name,
-                size_bytes=parsed.size_bytes,
-                source_path=str(parsed.path),
-                source_mtime_ms=source_mtime_ms,
-                md4_hashset=entry.md4_hashset,
-                aich_root=entry.aich_root,
-                aich_hashset=entry.aich_hashset,
-            )
+        rust_metadata.seed_share_in_place_manifests(
+            metadata_db,
+            [
+                {
+                    "ed2k_hash": parsed.ed2k_hash,
+                    "name": parsed.name,
+                    "size_bytes": parsed.size_bytes,
+                    "source_path": str(parsed.path),
+                    "source_mtime_ms": source_mtime_ms,
+                    "md4_hashset": entry.md4_hashset,
+                    "aich_root": entry.aich_root,
+                    "aich_hashset": entry.aich_hashset,
+                }
+                for parsed, entry, source_mtime_ms in parsed_rows
+            ],
+        )
 
     return {
         "knownMetRecords": len(known_entries),
