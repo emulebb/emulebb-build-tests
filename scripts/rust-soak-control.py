@@ -4254,6 +4254,59 @@ def watch_brief(args: argparse.Namespace) -> dict[str, object]:
     return watch_brief_from_record(latest, args, trend)
 
 
+def upload_demand_classification(
+    rust: dict[str, object],
+    mfc: dict[str, object],
+    monitor_latest: dict[str, object],
+) -> dict[str, object]:
+    """Classifies upload parity status without using raw peer or file metadata."""
+
+    rust_waiting = safe_float(rust.get("waitingUploads"))
+    mfc_waiting = safe_float(monitor_latest.get("mfcWaiting"))
+    rust_kibps = safe_float(rust.get("uploadSpeedKiBps"))
+    monitor_rust_kibps = safe_float(monitor_latest.get("rustKiBps"))
+    mfc_kibps = safe_float(mfc.get("uploadSpeedKiBps")) or safe_float(monitor_latest.get("mfcKiBps"))
+    visibility_percent = safe_float(rust.get("ed2kVisibilityPercent"))
+    pending_entries = safe_float(rust.get("ed2kPendingEntries"))
+    parity_gap = monitor_latest.get("parityGap") is True
+    post_visibility_demand_gap = monitor_latest.get("postVisibilityDemandGap") is True
+
+    classification = "continue-soak"
+    reason = "no-upload-parity-action"
+    if rust.get("ed2kConnected") is not True or rust.get("ed2kHighId") is not True:
+        classification = "connectivity-limited"
+        reason = "rust-ed2k-connectivity"
+    elif rust.get("kadConnected") is not True or rust.get("kadFirewalled") is True:
+        classification = "connectivity-limited"
+        reason = "rust-kad-connectivity"
+    elif (pending_entries or 0.0) > 0.0 and (visibility_percent is None or visibility_percent < 90.0):
+        classification = "visibility-limited"
+        reason = "ed2k-publish-still-maturing"
+    elif post_visibility_demand_gap:
+        classification = "scheduler-investigation"
+        reason = "post-visibility-demand-gap"
+    elif parity_gap and (rust_waiting or 0.0) <= 0.0:
+        classification = "demand-limited"
+        reason = "rust-waiting-queue-empty"
+    elif parity_gap:
+        classification = "scheduler-investigation"
+        reason = "parity-gap-with-rust-demand"
+
+    return {
+        "classification": classification,
+        "reason": reason,
+        "rustKiBps": rust_kibps,
+        "monitorRustKiBps": monitor_rust_kibps,
+        "mfcKiBps": mfc_kibps,
+        "rustWaiting": rust_waiting,
+        "mfcWaiting": mfc_waiting,
+        "ed2kVisibilityPercent": visibility_percent,
+        "ed2kPendingEntries": pending_entries,
+        "parityGap": parity_gap,
+        "postVisibilityDemandGap": post_visibility_demand_gap,
+    }
+
+
 def watch_brief_from_record(
     latest: dict[str, object],
     args: argparse.Namespace,
@@ -4366,6 +4419,7 @@ def watch_brief_from_record(
             "parityGap": monitor_latest.get("parityGap"),
             "mfcLogStale": monitor_latest.get("mfcLogStale"),
         },
+        "uploadDemand": upload_demand_classification(rust, mfc, monitor_latest),
         "vpn": {
             "allWhitelisted": vpn.get("allWhitelisted"),
             "adapterUp": vpn.get("adapterUp"),

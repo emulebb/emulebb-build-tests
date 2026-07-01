@@ -2151,6 +2151,9 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
     assert brief["mfc"]["sharedHashingCount"] == 840
     assert brief["mfc"]["kadFirewalled"] is True
     assert brief["monitor"]["rustKiBps"] == 180.0
+    assert brief["uploadDemand"]["classification"] == "visibility-limited"
+    assert brief["uploadDemand"]["reason"] == "ed2k-publish-still-maturing"
+    assert brief["uploadDemand"]["ed2kVisibilityPercent"] == 12.0
     assert brief["vpn"]["allWhitelisted"] is True
     assert brief["diagnostics"]["jsonCounts"]["event"]["anti_flood_drop"] == 1
     assert brief["diagnostics"]["uploadEfficiency"]["servedToRequestedRatio"] == 0.5
@@ -2167,6 +2170,36 @@ def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, mon
     assert brief["trend"]["rustEd2kPending"]["remainingEtaMinutes"] == 440.0
     assert "latestRecord" not in brief
     assert "files" not in brief["diagnostics"]
+
+
+def test_upload_demand_classification_flags_post_visibility_scheduler_gap() -> None:
+    control = _load_rust_soak_control()
+
+    result = control.upload_demand_classification(
+        {
+            "ed2kConnected": True,
+            "ed2kHighId": True,
+            "kadConnected": True,
+            "kadFirewalled": False,
+            "ed2kVisibilityPercent": 100.0,
+            "ed2kPendingEntries": 0,
+            "waitingUploads": 8,
+            "uploadSpeedKiBps": 256.0,
+        },
+        {"uploadSpeedKiBps": 3000.0},
+        {
+            "rustKiBps": 250.0,
+            "mfcKiBps": 3000.0,
+            "mfcWaiting": 18,
+            "parityGap": True,
+            "postVisibilityDemandGap": True,
+        },
+    )
+
+    assert result["classification"] == "scheduler-investigation"
+    assert result["reason"] == "post-visibility-demand-gap"
+    assert result["rustWaiting"] == 8.0
+    assert result["mfcWaiting"] == 18.0
 
 
 def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) -> None:
