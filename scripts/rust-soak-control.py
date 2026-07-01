@@ -3006,11 +3006,38 @@ def diagnostics_count(diagnostics: dict[str, object] | None, group: str, name: s
     return int(value) if isinstance(value, int) else 0
 
 
+def diagnostics_int(value: object) -> int:
+    """Reads integer diagnostics counters without treating booleans as counts."""
+
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def diagnostics_mapping(value: object) -> dict[str, object]:
+    """Returns a diagnostics mapping or an empty mapping for absent summaries."""
+
+    return value if isinstance(value, dict) else {}
+
+
 def watch_diagnostic_findings(diagnostics: dict[str, object] | None) -> list[str]:
     """Returns compact findings derived from retained diagnostics counters."""
 
     findings: list[str] = []
-    if diagnostics_count(diagnostics, "event", "anti_flood_drop") > 0:
+    anti_flood = diagnostics_mapping(diagnostics.get("antiFloodSummary")) if isinstance(diagnostics, dict) else {}
+    udp_tracker_drops = diagnostics_mapping(anti_flood.get("udpTrackerDrops"))
+    total_events = diagnostics_int(anti_flood.get("totalEvents")) or diagnostics_count(
+        diagnostics,
+        "event",
+        "anti_flood_drop",
+    )
+    unique_peers = diagnostics_int(anti_flood.get("uniquePeers"))
+    max_repeat_count = diagnostics_int(anti_flood.get("maxRepeatCount"))
+    udp_drop_rows = diagnostics_int(udp_tracker_drops.get("rows"))
+    if (
+        udp_drop_rows > 0
+        or total_events >= 25
+        or unique_peers >= 5
+        or max_repeat_count >= 25
+    ):
         findings.append("rust-anti-flood-drop-observed")
     if diagnostics_count(diagnostics, "event", "anti_flood_ban") > 0:
         findings.append("rust-anti-flood-ban-observed")

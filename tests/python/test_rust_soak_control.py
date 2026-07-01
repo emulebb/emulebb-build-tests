@@ -1231,6 +1231,47 @@ def test_watch_recommendations_preserve_mfc_hashing_before_restart() -> None:
     ) == ["continue-soak"]
 
 
+def test_watch_diagnostic_findings_ignore_small_anti_flood_noise() -> None:
+    control = _load_rust_soak_control()
+
+    assert (
+        control.watch_diagnostic_findings(
+            {
+                "aggregateJsonCounts": {"event": {"anti_flood_drop": 2}},
+                "antiFloodSummary": {
+                    "totalEvents": 2,
+                    "uniquePeers": 1,
+                    "maxRepeatCount": 3,
+                    "udpTrackerDrops": {"rows": 0},
+                },
+            }
+        )
+        == []
+    )
+    assert control.watch_diagnostic_findings(
+        {
+            "aggregateJsonCounts": {"event": {"anti_flood_drop": 30}},
+            "antiFloodSummary": {
+                "totalEvents": 30,
+                "uniquePeers": 1,
+                "maxRepeatCount": 3,
+                "udpTrackerDrops": {"rows": 0},
+            },
+        }
+    ) == ["rust-anti-flood-drop-observed"]
+    assert control.watch_diagnostic_findings(
+        {
+            "aggregateJsonCounts": {"event": {"anti_flood_drop": 1}},
+            "antiFloodSummary": {
+                "totalEvents": 1,
+                "uniquePeers": 1,
+                "maxRepeatCount": 1,
+                "udpTrackerDrops": {"rows": 1},
+            },
+        }
+    ) == ["rust-anti-flood-drop-observed"]
+
+
 def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     heartbeat = tmp_path / "heartbeat.txt"
@@ -1841,7 +1882,7 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
             "fileCount": 1,
             "aggregatePatternCounts": {"ed2k": 2},
             "aggregateJsonCounts": {
-                "event": {"upload_request_outcome": 2, "anti_flood_drop": 1},
+                "event": {"upload_request_outcome": 2, "anti_flood_drop": 30},
                 "severity": {"info": 2, "medium": 1},
             },
             "files": [{"name": "emulebb-rust-diag-123.jsonl"}],
@@ -1895,7 +1936,7 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
     assert retained["findings"] == result["findings"]
     assert retained["recommendations"] == result["recommendations"]
     assert retained["diagnostics"]["fileCount"] == 1
-    assert retained["diagnostics"]["aggregateJsonCounts"]["event"]["anti_flood_drop"] == 1
+    assert retained["diagnostics"]["aggregateJsonCounts"]["event"]["anti_flood_drop"] == 30
     assert retained["vpn"]["adapterUp"] is True
     heartbeat_text = heartbeat.read_text(encoding="utf-8")
     assert "mfcHashing=10" in heartbeat_text
