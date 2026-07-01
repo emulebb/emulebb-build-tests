@@ -243,6 +243,17 @@ def private_path_fingerprint(value: object) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+def private_path_prefix_fingerprint(value: object, depth: int) -> str:
+    """Returns a stable fingerprint for the first normalized path components."""
+
+    normalized = normalize_private_path(value)
+    parts = [part for part in normalized.split("\\") if part]
+    if not parts:
+        return private_path_fingerprint("")
+    prefix = "\\".join(parts[: max(1, depth)])
+    return private_path_fingerprint(prefix)
+
+
 def summarize_shared_directory_rows(
     rows: object,
     *,
@@ -581,6 +592,55 @@ def shared_root_for_path(path: str, roots: list[str]) -> str:
     return "unmatched"
 
 
+def add_unmatched_prefix_groups(
+    groups_by_depth: dict[int, dict[str, dict[str, object]]],
+    path: str,
+    file_hash: str,
+) -> None:
+    """Adds one unmatched shared-file path to sanitized prefix buckets."""
+
+    for depth in (2, 3, 4):
+        prefix = private_path_prefix_fingerprint(path, depth)
+        groups = groups_by_depth.setdefault(depth, {})
+        group = groups.setdefault(
+            prefix,
+            {
+                "prefixFingerprint": prefix,
+                "rowCount": 0,
+                "hashes": set(),
+            },
+        )
+        group["rowCount"] = int(group["rowCount"]) + 1
+        hashes = group["hashes"]
+        assert isinstance(hashes, set)
+        hashes.add(file_hash)
+
+
+def compact_unmatched_prefix_groups(
+    groups_by_depth: dict[int, dict[str, dict[str, object]]],
+    *,
+    sample_limit: int = 20,
+) -> dict[str, list[dict[str, object]]]:
+    """Returns bounded sanitized prefix groups for unmatched shared files."""
+
+    result: dict[str, list[dict[str, object]]] = {}
+    for depth, groups in sorted(groups_by_depth.items()):
+        rows = []
+        for group in groups.values():
+            hashes = group["hashes"]
+            assert isinstance(hashes, set)
+            rows.append(
+                {
+                    "prefixFingerprint": group["prefixFingerprint"],
+                    "rowCount": group["rowCount"],
+                    "uniqueHashCount": len(hashes),
+                }
+            )
+        rows.sort(key=lambda row: (-int(row["rowCount"]), str(row["prefixFingerprint"])))
+        result[f"depth{depth}"] = rows[:sample_limit]
+    return result
+
+
 def fetch_shared_file_catalog_by_root(
     base_url: str,
     api_key: str,
@@ -594,6 +654,7 @@ def fetch_shared_file_catalog_by_root(
     directories = request_json(base_url, "/shared-directories", api_key=api_key)
     roots = shared_root_paths(directories)
     groups: dict[str, dict[str, object]] = {}
+    unmatched_prefix_groups: dict[int, dict[str, dict[str, object]]] = {}
     row_count = 0
     offset = 0
     total: int | None = None
@@ -614,6 +675,8 @@ def fetch_shared_file_catalog_by_root(
             if not file_hash or not path:
                 continue
             root = shared_root_for_path(path, roots)
+            if root == "unmatched":
+                add_unmatched_prefix_groups(unmatched_prefix_groups, path, file_hash)
             group = groups.setdefault(
                 root,
                 {
@@ -657,6 +720,7 @@ def fetch_shared_file_catalog_by_root(
         "rootCount": len(roots),
         "groupCount": len(compact_groups),
         "groups": compact_groups,
+        "unmatchedPrefixGroups": compact_unmatched_prefix_groups(unmatched_prefix_groups),
     }
 
 

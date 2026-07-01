@@ -182,6 +182,27 @@ def test_compact_shared_root_catalog_summary_keeps_bounded_top_groups() -> None:
     ]
 
 
+def test_unmatched_prefix_groups_are_sanitized_and_bounded() -> None:
+    control = _load_rust_soak_control()
+    groups = {}
+
+    control.add_unmatched_prefix_groups(groups, r"f:\share\alpha\one.bin", "a" * 32)
+    control.add_unmatched_prefix_groups(groups, r"f:\share\alpha\two.bin", "b" * 32)
+    control.add_unmatched_prefix_groups(groups, r"g:\share\beta\three.bin", "c" * 32)
+
+    compact = control.compact_unmatched_prefix_groups(groups, sample_limit=1)
+
+    assert compact["depth2"] == [
+        {
+            "prefixFingerprint": control.private_path_prefix_fingerprint(r"f:\share\alpha\one.bin", 2),
+            "rowCount": 2,
+            "uniqueHashCount": 2,
+        }
+    ]
+    assert "share" not in str(compact)
+    assert "alpha" not in str(compact)
+
+
 def test_shared_root_for_path_uses_longest_matching_root() -> None:
     control = _load_rust_soak_control()
     roots = [r"f:\share", r"f:\share\nested"]
