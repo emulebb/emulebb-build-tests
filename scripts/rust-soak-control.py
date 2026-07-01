@@ -34,10 +34,18 @@ REPO_ROOT = SCRIPT_PATH.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import mfc_known_met
+from emule_test_harness import soak_launch
+from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.soak_launch import (
+    DEFAULT_MFC_SEED_CONFIG_DIR,
+    MFC_ED2K_PORT,
     MFC_API_KEY,
+    MFC_KAD_PORT,
+    MFC_SERVER_UDP_PORT,
+    OPERATOR_SERVER,
     RUST_API_KEY,
     existing_shared_roots,
     load_shareddir_root_entries,
@@ -67,6 +75,12 @@ def default_mfc_upload_log_search_roots() -> list[Path]:
 
     root = output_root()
     return [root / "soak", root / "logs"]
+
+
+def default_live_wire_inputs() -> Path:
+    """Returns the default local shared-root input contract for soak launch."""
+
+    return REPO_ROOT / "live-wire-inputs.local.json"
 
 
 def default_runtime_dir() -> Path:
@@ -1517,6 +1531,66 @@ def mfc_processes(_: argparse.Namespace) -> dict[str, object]:
     return {"processes": rows}
 
 
+def stop_mfc(args: argparse.Namespace) -> dict[str, object]:
+    """Stops the MFC diagnostics client through REST and a bounded PID fallback."""
+
+    request_rust_shutdown(args.base_url, args.api_key)
+    exited = wait_pid_exit(args.pid, args.shutdown_timeout_seconds) if args.pid else True
+    if args.pid and not exited:
+        terminate_pid_tree(args.pid, markers=("emulebb-diagnostics",), timeout_seconds=15.0)
+    return {"mfcPid": args.pid, "stopped": not args.pid or not pid_exists(args.pid)}
+
+
+def start_mfc(args: argparse.Namespace) -> dict[str, object]:
+    """Starts the MFC diagnostics client against the persistent soak profile."""
+
+    rest_addr = args.rest_host or os.environ.get("X_LOCAL_IP", "").strip()
+    if not rest_addr:
+        raise RuntimeError("X_LOCAL_IP must be set or --rest-host supplied for MFC REST binding.")
+    workspace_output = output_root()
+    exe_path = args.exe or clw.resolve_mfc_diagnostics_exe(
+        workspace_output,
+        variant=args.mfc_variant,
+        arch=args.mfc_arch,
+        configuration=args.mfc_configuration,
+    )
+    if not args.skip_vpn_check:
+        ensure_vpn_ready(exe_path, name="eMuleBB MFC")
+    mods = soak_launch.load_helper_modules("mfc-restart")
+    inputs_path = args.inputs or default_live_wire_inputs()
+    rust_mod = mods["rust"]
+    shared_roots = rust_mod.load_shared_roots(inputs_path)
+    if not shared_roots:
+        raise RuntimeError(f"No shared roots found in {inputs_path}")
+    handles = soak_launch.bring_up_mfc(
+        live_common=mods["live_common"],
+        rest_smoke=mods["rest_smoke"],
+        shared_dirs_mod=mods["shared_dirs"],
+        exe_path=exe_path,
+        artifacts_dir=args.artifacts_dir,
+        seed_config_dir=args.profile_seed_dir,
+        direct_profile_dir=args.direct_profile_dir,
+        rest_host=rest_addr,
+        rest_port=args.rest_port,
+        shared_roots=shared_roots,
+        server_endpoint=args.server,
+        obfuscation=not args.no_obfuscation,
+        timeouts={"rest": args.rest_timeout_seconds, "connect": args.connect_timeout_seconds},
+        upload_limit_kibps=args.upload_limit_kibps,
+        ed2k_port=args.ed2k_port,
+        kad_port=args.kad_port,
+        server_udp_port=args.server_udp_port,
+    )
+    app = handles["app"]
+    log_dir = Path(str(handles["packetDumpDir"]))
+    return {
+        "mfcPid": app.pid,
+        "baseUrl": handles["baseUrl"],
+        "logDir": str(log_dir),
+        "uploadLog": str(log_dir / "emulebb-diagnostics-upload-slot.log"),
+    }
+
+
 def stop_upload_monitor(output_dir: Path, timeout_seconds: float = 20.0) -> dict[str, object]:
     """Requests the upload parity monitor to stop through its stop file."""
 
@@ -2088,6 +2162,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     mfc_processes_parser = sub.add_parser("mfc-processes", help="List sanitized MFC process rows through Python WMI.")
     mfc_processes_parser.set_defaults(func=mfc_processes)
+
+    stop_mfc_parser = sub.add_parser("stop-mfc", help="Gracefully stop a running MFC diagnostics client.")
+    stop_mfc_parser.add_argument("--pid", type=int, required=True)
+    stop_mfc_parser.add_argument("--shutdown-timeout-seconds", type=float, default=45.0)
+    stop_mfc_parser.set_defaults(func=stop_mfc)
+
+    start_mfc_parser = sub.add_parser("start-mfc", help="Start MFC diagnostics against the persistent soak profile.")
+    start_mfc_parser.add_argument("--rest-host")
+    start_mfc_parser.add_argument("--rest-port", type=int, default=4732)
+    start_mfc_parser.add_argument("--inputs", type=Path, default=default_live_wire_inputs())
+    start_mfc_parser.add_argument("--artifacts-dir", type=Path, default=output_root() / "soak" / "mfc-profile")
+    start_mfc_parser.add_argument("--profile-seed-dir", type=Path, default=DEFAULT_MFC_SEED_CONFIG_DIR)
+    start_mfc_parser.add_argument("--direct-profile-dir", type=Path)
+    start_mfc_parser.add_argument("--exe", type=Path)
+    start_mfc_parser.add_argument("--mfc-variant", default=clw.DEFAULT_MFC_VARIANT)
+    start_mfc_parser.add_argument("--mfc-arch", default=clw.DEFAULT_MFC_ARCH)
+    start_mfc_parser.add_argument("--mfc-configuration", default=clw.DEFAULT_MFC_CONFIGURATION)
+    start_mfc_parser.add_argument("--server", default=OPERATOR_SERVER)
+    start_mfc_parser.add_argument("--ed2k-port", type=int, default=MFC_ED2K_PORT)
+    start_mfc_parser.add_argument("--kad-port", type=int, default=MFC_KAD_PORT)
+    start_mfc_parser.add_argument("--server-udp-port", type=int, default=MFC_SERVER_UDP_PORT)
+    start_mfc_parser.add_argument("--upload-limit-kibps", type=int, default=soak_launch.DEFAULT_UPLOAD_LIMIT_KIBPS)
+    start_mfc_parser.add_argument("--rest-timeout-seconds", type=float, default=90.0)
+    start_mfc_parser.add_argument("--connect-timeout-seconds", type=float, default=180.0)
+    start_mfc_parser.add_argument("--skip-vpn-check", action="store_true")
+    start_mfc_parser.add_argument("--no-obfuscation", action="store_true")
+    start_mfc_parser.set_defaults(func=start_mfc)
 
     mfc_logs_parser = sub.add_parser("mfc-upload-logs", help="List MFC upload-slot diagnostics log candidates.")
     mfc_logs_parser.add_argument("--search-root", type=Path, action="append")
