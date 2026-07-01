@@ -414,3 +414,57 @@ def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
     assert "mfcHashing=12" in text
     assert "mfcEd2kHighId=False" in text
     assert "mfcKadFirewalled=True" in text
+
+
+def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    jsonl = tmp_path / "watch.jsonl"
+    records = [
+        {
+            "timestampUtc": "2026-01-01T00:00:00+00:00",
+            "findings": ["mfc-hashing-active"],
+            "rust": {
+                "uploadSpeedKiBps": 100.0,
+                "activeUploads": 2,
+                "ed2kPublishedEntries": 1000,
+                "ed2kPendingEntries": 9000,
+                "kadSourcePublishedTotal": 10,
+            },
+            "mfc": {
+                "sharedFileCount": 100,
+                "sharedHashingCount": 900,
+                "uploadSpeedKiBps": 1.0,
+                "activeUploads": 1,
+            },
+        },
+        {
+            "timestampUtc": "2026-01-01T00:10:00+00:00",
+            "findings": ["mfc-hashing-active", "mfc-kad-firewalled"],
+            "rust": {
+                "uploadSpeedKiBps": 200.0,
+                "activeUploads": 4,
+                "ed2kPublishedEntries": 1200,
+                "ed2kPendingEntries": 8800,
+                "kadSourcePublishedTotal": 14,
+            },
+            "mfc": {
+                "sharedFileCount": 160,
+                "sharedHashingCount": 840,
+                "uploadSpeedKiBps": 2.0,
+                "activeUploads": 1,
+            },
+        },
+    ]
+    jsonl.write_text("\n".join(control.json.dumps(record, sort_keys=True) for record in records) + "\n", encoding="utf-8")
+
+    trend = control.watch_trend(SimpleNamespace(watch_jsonl=jsonl, limit=10))
+
+    assert trend["sampleCount"] == 2
+    assert trend["window"]["elapsedSeconds"] == 600.0
+    assert trend["latestFindings"] == ["mfc-hashing-active", "mfc-kad-firewalled"]
+    assert trend["counters"]["rustEd2kPublished"]["delta"] == 200.0
+    assert trend["counters"]["rustEd2kPublished"]["perMinute"] == 20.0
+    assert trend["counters"]["mfcSharedFiles"]["delta"] == 60.0
+    assert trend["counters"]["mfcHashingRemaining"]["delta"] == -60.0
+    assert trend["counters"]["mfcHashingRemaining"]["completedDelta"] == 60.0
+    assert trend["counters"]["mfcHashingRemaining"]["completedPerMinute"] == 6.0

@@ -2187,6 +2187,146 @@ def latest_jsonl_record(path: Path) -> dict[str, object] | None:
     return None
 
 
+def jsonl_tail_records(path: Path, *, limit: int, max_bytes: int = 1_000_000) -> list[dict[str, object]]:
+    """Returns up to ``limit`` retained JSONL records from the end of a file."""
+
+    if limit <= 0 or not path.exists():
+        return []
+    with path.open("rb") as handle:
+        size = path.stat().st_size
+        if size > max_bytes:
+            handle.seek(-max_bytes, os.SEEK_END)
+            handle.readline()
+        lines = handle.read().decode("utf-8", errors="replace").splitlines()
+    records: list[dict[str, object]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            records.append(parsed)
+    return records[-limit:]
+
+
+def parse_iso_timestamp(timestamp: object) -> datetime | None:
+    """Parses an ISO-8601 timestamp into UTC."""
+
+    if not isinstance(timestamp, str) or not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def record_path_value(record: dict[str, object], path: tuple[str, ...]) -> object:
+    """Reads a nested value from one retained watch record."""
+
+    current: object = record
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def safe_float(value: object) -> float | None:
+    """Converts JSON-ish values to float when possible."""
+
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def trend_counter(records: list[dict[str, object]], path: tuple[str, ...]) -> dict[str, object]:
+    """Returns first/last/delta/rate metadata for one nested numeric counter."""
+
+    numeric: list[tuple[float, datetime | None]] = []
+    for record in records:
+        value = safe_float(record_path_value(record, path))
+        if value is not None:
+            numeric.append((value, parse_iso_timestamp(record.get("timestampUtc"))))
+    if not numeric:
+        return {"samples": 0}
+    first = numeric[0][0]
+    last = numeric[-1][0]
+    delta = last - first
+    first_timestamp = numeric[0][1]
+    last_timestamp = numeric[-1][1]
+    elapsed_seconds = (
+        (last_timestamp - first_timestamp).total_seconds()
+        if first_timestamp is not None and last_timestamp is not None
+        else 0.0
+    )
+    result: dict[str, object] = {
+        "samples": len(numeric),
+        "first": first,
+        "last": last,
+        "delta": delta,
+        "average": round(sum(value for value, _ in numeric) / len(numeric), 3),
+    }
+    if first_timestamp is not None:
+        result["startUtc"] = first_timestamp.isoformat()
+    if last_timestamp is not None:
+        result["endUtc"] = last_timestamp.isoformat()
+    if len(numeric) >= 2:
+        result["elapsedSeconds"] = round(max(0.0, elapsed_seconds), 3)
+    if elapsed_seconds > 0 and len(numeric) >= 2:
+        result["perMinute"] = round(delta * 60.0 / elapsed_seconds, 3)
+    return result
+
+
+def watch_trend(args: argparse.Namespace) -> dict[str, object]:
+    """Summarizes retained soak watch JSONL counters over a bounded window."""
+
+    records = jsonl_tail_records(args.watch_jsonl, limit=args.limit)
+    timestamps = [parse_iso_timestamp(record.get("timestampUtc")) for record in records]
+    timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+    elapsed_seconds = (timestamps[-1] - timestamps[0]).total_seconds() if len(timestamps) >= 2 else 0.0
+    latest = records[-1] if records else {}
+    latest_findings = latest.get("findings") if isinstance(latest.get("findings"), list) else []
+    counters = {
+        "rustUploadKiBps": trend_counter(records, ("rust", "uploadSpeedKiBps")),
+        "rustActiveUploads": trend_counter(records, ("rust", "activeUploads")),
+        "rustEd2kPublished": trend_counter(records, ("rust", "ed2kPublishedEntries")),
+        "rustEd2kPending": trend_counter(records, ("rust", "ed2kPendingEntries")),
+        "rustKadSourcePublished": trend_counter(records, ("rust", "kadSourcePublishedTotal")),
+        "mfcSharedFiles": trend_counter(records, ("mfc", "sharedFileCount")),
+        "mfcHashingRemaining": trend_counter(records, ("mfc", "sharedHashingCount")),
+        "mfcUploadKiBps": trend_counter(records, ("mfc", "uploadSpeedKiBps")),
+        "mfcActiveUploads": trend_counter(records, ("mfc", "activeUploads")),
+    }
+    mfc_hashing = counters["mfcHashingRemaining"]
+    if isinstance(mfc_hashing, dict) and isinstance(mfc_hashing.get("delta"), (int, float)):
+        mfc_hashing["completedDelta"] = -float(mfc_hashing["delta"])
+        counter_elapsed_seconds = safe_float(mfc_hashing.get("elapsedSeconds")) or 0.0
+        if counter_elapsed_seconds > 0 and int(mfc_hashing.get("samples") or 0) >= 2:
+            mfc_hashing["completedPerMinute"] = round(
+                -float(mfc_hashing["delta"]) * 60.0 / counter_elapsed_seconds,
+                3,
+            )
+    return {
+        "watchJsonl": str(args.watch_jsonl),
+        "sampleCount": len(records),
+        "window": {
+            "startUtc": timestamps[0].isoformat() if timestamps else None,
+            "endUtc": timestamps[-1].isoformat() if timestamps else None,
+            "elapsedSeconds": round(max(0.0, elapsed_seconds), 3),
+        },
+        "latestFindings": latest_findings,
+        "counters": counters,
+    }
+
+
 def watch_status(args: argparse.Namespace) -> dict[str, object]:
     """Returns detached soak watch loop health without shell process listings."""
 
@@ -2532,6 +2672,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
     watch_status_parser.set_defaults(func=watch_status)
+
+    watch_trend_parser = sub.add_parser("watch-trend", help="Summarize retained soak watch JSONL trends.")
+    watch_trend_parser.add_argument(
+        "--watch-jsonl",
+        type=Path,
+        default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.jsonl",
+    )
+    watch_trend_parser.add_argument("--limit", type=int, default=24)
+    watch_trend_parser.set_defaults(func=watch_trend)
     return parser
 
 
