@@ -20,6 +20,7 @@ import json
 import os
 import re
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -1056,6 +1057,24 @@ def default_metadata_db() -> Path:
     """Returns the persistent Rust metadata database path."""
 
     return default_runtime_dir() / "metadata.sqlite"
+
+
+def normalized_windows_path_key(value: object) -> str:
+    """Returns a lower-case Windows path key for private-path-free grouping."""
+
+    text = str(value or "").strip().replace("/", "\\")
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    return text.rstrip("\\").casefold()
+
+
+def normalized_root_prefix(value: object) -> str:
+    """Returns a normalized root prefix with one trailing slash."""
+
+    key = normalized_windows_path_key(value)
+    return key if key.endswith("\\") else f"{key}\\"
 
 
 def default_base_url() -> str:
@@ -2356,6 +2375,65 @@ def repair_rust_metadata_from_mfc_rest(args: argparse.Namespace) -> dict[str, ob
         "importedRows": raw["importedRows"],
         "dryRun": raw["dryRun"],
         "skipped": raw["skipped"],
+    }
+
+
+def metadata_source_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Summarizes Rust metadata source-path coverage without returning paths."""
+
+    if not args.metadata_db.is_file():
+        raise RuntimeError("--metadata-db does not exist")
+    roots = [
+        {
+            "rootFingerprint": private_path_fingerprint(normalized_root_prefix(root)),
+            "prefix": normalized_root_prefix(root),
+            "rows": 0,
+            "withSourceMtime": 0,
+        }
+        for root in args.root
+    ]
+    connection = sqlite3.connect(args.metadata_db)
+    try:
+        total_transfers = connection.execute("SELECT COUNT(*) FROM transfers").fetchone()[0]
+        completed_transfers = connection.execute(
+            "SELECT COUNT(*) FROM transfers WHERE completed_at_ms IS NOT NULL"
+        ).fetchone()[0]
+        rows = connection.execute(
+            """
+            SELECT source_path, file_size, source_mtime_ms
+            FROM share_in_place_sources
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    total_sources = len(rows)
+    with_source_mtime = 0
+    source_counts: Counter[str] = Counter()
+    for source_path, _file_size, source_mtime_ms in rows:
+        source_key = normalized_windows_path_key(source_path)
+        source_counts[source_key] += 1
+        for root in roots:
+            if source_key.startswith(str(root["prefix"])):
+                root["rows"] = int(root["rows"]) + 1
+                if source_mtime_ms is not None:
+                    root["withSourceMtime"] = int(root["withSourceMtime"]) + 1
+        if source_mtime_ms is not None:
+            with_source_mtime += 1
+    for root in roots:
+        root.pop("prefix", None)
+
+    duplicate_source_paths = sum(1 for count in source_counts.values() if count > 1)
+    duplicate_source_rows = sum(count for count in source_counts.values() if count > 1)
+    return {
+        "metadataDbExists": True,
+        "totalTransfers": total_transfers,
+        "completedTransfers": completed_transfers,
+        "shareInPlaceSources": total_sources,
+        "shareInPlaceSourcesWithMtime": with_source_mtime,
+        "duplicateSourcePathCount": duplicate_source_paths,
+        "duplicateSourcePathRows": duplicate_source_rows,
+        "roots": roots,
     }
 
 
@@ -3941,6 +4019,14 @@ def build_parser() -> argparse.ArgumentParser:
     repair_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
     repair_parser.add_argument("--shared-file-sleep-seconds", type=float, default=0.05)
     repair_parser.set_defaults(func=repair_rust_metadata_from_mfc_rest)
+
+    metadata_summary_parser = sub.add_parser(
+        "metadata-source-summary",
+        help="Summarize Rust metadata source-path coverage by optional roots.",
+    )
+    metadata_summary_parser.add_argument("--metadata-db", type=Path, default=default_metadata_db())
+    metadata_summary_parser.add_argument("--root", action="append", type=Path, default=[])
+    metadata_summary_parser.set_defaults(func=metadata_source_summary)
 
     stop_parser = sub.add_parser("stop-rust", help="Gracefully stop a running Rust diagnostics daemon.")
     stop_parser.add_argument("--pid", type=int, required=True)
