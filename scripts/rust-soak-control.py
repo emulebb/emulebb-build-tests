@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness import converged_live_wire as clw
+from emule_test_harness import hideme_split_tunnel
 from emule_test_harness import mfc_known_met
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
@@ -361,6 +362,62 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
         "fileCount": len(files),
         "aggregatePatternCounts": dict(sorted(aggregate_patterns.items())),
         "files": files,
+    }
+
+
+def default_vpn_executables() -> list[Path]:
+    """Returns the diagnostics executables that should be VPN allow-listed."""
+
+    executables = [default_executable()]
+    try:
+        executables.append(clw.resolve_mfc_diagnostics_exe(output_root()))
+    except FileNotFoundError:
+        pass
+    return executables
+
+
+def vpn_allowlist_status(args: argparse.Namespace) -> dict[str, object]:
+    """Reports hide.me split-tunnel status without mutating VPN settings."""
+
+    executables = args.exe or default_vpn_executables()
+    rows = []
+    for exe in executables:
+        try:
+            whitelisted = hideme_split_tunnel.is_whitelisted(exe, settings_path=args.settings_path)
+            error = ""
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            whitelisted = False
+            error = type(exc).__name__
+        rows.append(
+            {
+                "name": exe.name,
+                "pathFingerprint": private_path_fingerprint(str(exe)),
+                "exists": exe.is_file(),
+                "whitelisted": whitelisted,
+                "error": error,
+            }
+        )
+    adapter_up = None
+    bind_ip_present = None
+    adapter_error = ""
+    if args.check_adapter:
+        try:
+            adapter_up = hideme_split_tunnel.hideme_adapter_up()
+            bind_ip_present = bool(hideme_split_tunnel.hideme_adapter_ipv4()) if adapter_up else False
+        except RuntimeError as exc:
+            adapter_up = False
+            bind_ip_present = False
+            adapter_error = type(exc).__name__
+    return {
+        "settingsPathFingerprint": (
+            private_path_fingerprint(str(args.settings_path)) if args.settings_path is not None else None
+        ),
+        "allWhitelisted": all(bool(row["whitelisted"]) for row in rows) if rows else False,
+        "adapterChecked": args.check_adapter,
+        "adapterUp": adapter_up,
+        "bindIpPresent": bind_ip_present,
+        "adapterError": adapter_error,
+        "executables": rows,
     }
 
 
@@ -2678,6 +2735,15 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics_parser.add_argument("--limit", type=int, default=12)
     diagnostics_parser.add_argument("--max-bytes", type=int, default=1_048_576)
     diagnostics_parser.set_defaults(func=diagnostics_summary)
+
+    vpn_parser = sub.add_parser(
+        "vpn-allowlist-status",
+        help="Report hide.me split-tunnel allow-list status without changing settings.",
+    )
+    vpn_parser.add_argument("--exe", type=Path, action="append")
+    vpn_parser.add_argument("--settings-path", type=Path)
+    vpn_parser.add_argument("--check-adapter", action="store_true")
+    vpn_parser.set_defaults(func=vpn_allowlist_status)
 
     start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted runtime.")
     start_parser.add_argument("--runtime-dir", type=Path, default=default_runtime_dir())

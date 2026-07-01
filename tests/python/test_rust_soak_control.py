@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import time
 from pathlib import Path
@@ -396,6 +397,36 @@ def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
     rendered = repr(result)
     assert "Private Operator Title" not in rendered
     assert "Private\\Library" not in rendered
+
+
+def test_vpn_allowlist_status_reports_sanitized_executable_state(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    exe = tmp_path / "bin" / "emulebb-rust-diagnostics.exe"
+    exe.parent.mkdir()
+    exe.write_text("placeholder", encoding="utf-8")
+    settings = tmp_path / "vpn.settings"
+    settings.write_text(
+        json.dumps({"SplitTunneling": {"Whitelisted": [{"Path": str(exe)}]}}),
+        encoding="utf-8",
+    )
+
+    result = control.vpn_allowlist_status(
+        SimpleNamespace(exe=[exe], settings_path=settings, check_adapter=False)
+    )
+
+    assert result["allWhitelisted"] is True
+    assert result["adapterChecked"] is False
+    assert result["executables"] == [
+        {
+            "name": "emulebb-rust-diagnostics.exe",
+            "pathFingerprint": control.private_path_fingerprint(str(exe)),
+            "exists": True,
+            "whitelisted": True,
+            "error": "",
+        }
+    ]
+    rendered = repr(result)
+    assert str(tmp_path) not in rendered
 
 
 def test_watch_findings_reports_mfc_status_gaps() -> None:
