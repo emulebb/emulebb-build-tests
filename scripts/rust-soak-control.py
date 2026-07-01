@@ -1125,8 +1125,11 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
             mfc_upload_log=args.mfc_upload_log,
             interval_seconds=args.interval_seconds,
         )
-        action = {"monitorRestarted": True, "restart": restart_upload_monitor(restart_args)}
-        monitor = upload_monitor_sample(monitor_args)
+        try:
+            action = {"monitorRestarted": True, "restart": restart_upload_monitor(restart_args)}
+            monitor = upload_monitor_sample(monitor_args)
+        except Exception as error:
+            action = {"monitorRestarted": False, "monitorRestartError": str(error)}
     return {
         "timestampUtc": datetime.now(UTC).isoformat(),
         "rust": rust,
