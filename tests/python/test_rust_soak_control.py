@@ -352,6 +352,52 @@ def test_mfc_upload_log_discovery_prefers_newest_fresh_candidate(tmp_path: Path)
     assert discovered == fresh.resolve()
 
 
+def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "emulebb-diagnostics-bad-peer.log"
+    jsonl_file = logs_dir / "emulebb-rust-diag-123.jsonl"
+    log_file.write_text(
+        "\n".join(
+            [
+                (
+                    '{"schema":"bad_peer_event_v1","marker":"BadPeerDiagnostics:",'
+                    '"ts_utc":"2026-01-01T00:00:00.000Z","event":"fake_file_search_detected",'
+                    '"severity":"medium","action":"warn",'
+                    '"file":{"name":"Private Operator Title.mkv","path":"F:\\\\Private\\\\Library"}}'
+                ),
+                "UPnP mapped ED2K port and Kad port, High ID established",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    jsonl_file.write_text(
+        '{"schema":"diag_event_v1","event":"capacity_snapshot","severity":"info"}\n',
+        encoding="utf-8",
+    )
+
+    result = control.diagnostics_summary(
+        SimpleNamespace(log_dir=logs_dir, log_file=None, limit=10, max_bytes=2048)
+    )
+
+    assert result["fileCount"] == 2
+    assert result["aggregatePatternCounts"]["upnp"] == 1
+    assert result["aggregatePatternCounts"]["ed2k"] == 1
+    assert result["aggregatePatternCounts"]["kad"] == 1
+    event_counts = {
+        file_summary["name"]: file_summary["jsonCounts"]["event"]
+        for file_summary in result["files"]
+        if "jsonCounts" in file_summary
+    }
+    assert event_counts["emulebb-diagnostics-bad-peer.log"] == {"fake_file_search_detected": 1}
+    assert event_counts["emulebb-rust-diag-123.jsonl"] == {"capacity_snapshot": 1}
+    rendered = repr(result)
+    assert "Private Operator Title" not in rendered
+    assert "Private\\Library" not in rendered
+
+
 def test_watch_findings_reports_mfc_status_gaps() -> None:
     control = _load_rust_soak_control()
 

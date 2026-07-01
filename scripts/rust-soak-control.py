@@ -227,6 +227,143 @@ def mfc_upload_logs(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+DIAGNOSTIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("upnp", re.compile(r"\bupnp\b", re.IGNORECASE)),
+    ("ed2k", re.compile(r"\bed2k\b", re.IGNORECASE)),
+    ("kad", re.compile(r"\bkad(?:emlia)?\b", re.IGNORECASE)),
+    ("high-id", re.compile(r"\bhigh[\s_-]*id\b", re.IGNORECASE)),
+    ("low-id", re.compile(r"\blow[\s_-]*id\b", re.IGNORECASE)),
+    ("firewall", re.compile(r"\bfirewall(?:ed)?\b", re.IGNORECASE)),
+    ("listen", re.compile(r"\blisten(?:ing)?\b", re.IGNORECASE)),
+    ("port", re.compile(r"\bport\b", re.IGNORECASE)),
+    ("upload-slot", re.compile(r"\bupload[\s_-]*slot\b", re.IGNORECASE)),
+    ("ban", re.compile(r"\bban(?:ned|ning)?\b", re.IGNORECASE)),
+)
+
+
+def tail_text_lines(path: Path, *, max_bytes: int) -> list[str]:
+    """Reads a bounded text tail without returning file content to callers."""
+
+    with path.open("rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        if size > max_bytes:
+            handle.seek(-max_bytes, os.SEEK_END)
+            handle.readline()
+        else:
+            handle.seek(0)
+        return handle.read().decode("utf-8", errors="replace").splitlines()
+
+
+def diagnostic_json_value(value: object) -> str | None:
+    """Returns a compact, non-private bucket value from a diagnostics JSON row."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    if len(value) > 80:
+        return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:16]
+    if any(separator in value for separator in ("\\", "/", ":", "@")):
+        return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return value
+
+
+def summarize_diagnostics_log(path: Path, *, max_bytes: int) -> dict[str, object]:
+    """Summarizes one diagnostics log without exposing raw lines or private names."""
+
+    stat = path.stat()
+    lines = tail_text_lines(path, max_bytes=max_bytes)
+    pattern_counts: Counter[str] = Counter()
+    json_counts: dict[str, Counter[str]] = {
+        "schema": Counter(),
+        "marker": Counter(),
+        "event": Counter(),
+        "severity": Counter(),
+        "action": Counter(),
+    }
+    json_rows = 0
+    malformed_json_rows = 0
+    timestamps: list[datetime] = []
+    for line in lines:
+        for name, pattern in DIAGNOSTIC_PATTERNS:
+            if pattern.search(line):
+                pattern_counts[name] += 1
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            malformed_json_rows += 1
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        json_rows += 1
+        for field, counter in json_counts.items():
+            bucket = diagnostic_json_value(parsed.get(field))
+            if bucket is not None:
+                counter[bucket] += 1
+        timestamp = parse_iso_timestamp(parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc"))
+        if timestamp is not None:
+            timestamps.append(timestamp)
+
+    now = datetime.now(UTC)
+    last_write = datetime.fromtimestamp(stat.st_mtime, UTC)
+    result: dict[str, object] = {
+        "pathFingerprint": private_path_fingerprint(str(path)),
+        "name": path.name,
+        "length": stat.st_size,
+        "lastWriteUtc": last_write.isoformat(),
+        "ageSeconds": round(max(0.0, (now - last_write).total_seconds()), 2),
+        "scannedLineCount": len(lines),
+        "jsonRowCount": json_rows,
+        "malformedJsonRowCount": malformed_json_rows,
+        "patternCounts": dict(sorted(pattern_counts.items())),
+    }
+    if timestamps:
+        result["jsonTimeRange"] = {
+            "firstUtc": min(timestamps).isoformat(),
+            "lastUtc": max(timestamps).isoformat(),
+        }
+    compact_json_counts = {
+        field: dict(counter.most_common(12))
+        for field, counter in json_counts.items()
+        if counter
+    }
+    if compact_json_counts:
+        result["jsonCounts"] = compact_json_counts
+    return result
+
+
+def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Summarizes diagnostics logs while keeping operator-owned content private."""
+
+    log_files = list(args.log_file or [])
+    if args.log_dir is not None and args.log_dir.is_dir():
+        log_files.extend(path for path in args.log_dir.glob("emulebb*.log") if path.is_file())
+        log_files.extend(path for path in args.log_dir.glob("emulebb*.jsonl") if path.is_file())
+    unique_files = sorted(
+        {path.resolve() for path in log_files if path.is_file()},
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    selected = unique_files[: args.limit]
+    files = [summarize_diagnostics_log(path, max_bytes=args.max_bytes) for path in selected]
+    aggregate_patterns: Counter[str] = Counter()
+    for file_summary in files:
+        pattern_counts = file_summary.get("patternCounts")
+        if isinstance(pattern_counts, dict):
+            for name, count in pattern_counts.items():
+                if isinstance(name, str) and isinstance(count, int):
+                    aggregate_patterns[name] += count
+    return {
+        "logDir": str(args.log_dir) if args.log_dir is not None else None,
+        "limit": args.limit,
+        "maxBytes": args.max_bytes,
+        "fileCount": len(files),
+        "aggregatePatternCounts": dict(sorted(aggregate_patterns.items())),
+        "files": files,
+    }
+
+
 def default_executable() -> Path:
     """Returns the diagnostics executable built by the workspace orchestrator."""
 
@@ -2531,6 +2668,16 @@ def build_parser() -> argparse.ArgumentParser:
     mfc_logs_parser.add_argument("--fresh-seconds", type=float, default=900.0)
     mfc_logs_parser.add_argument("--limit", type=int, default=20)
     mfc_logs_parser.set_defaults(func=mfc_upload_logs)
+
+    diagnostics_parser = sub.add_parser(
+        "diagnostics-summary",
+        help="Summarize diagnostics logs without exposing private live data.",
+    )
+    diagnostics_parser.add_argument("--log-dir", type=Path)
+    diagnostics_parser.add_argument("--log-file", type=Path, action="append")
+    diagnostics_parser.add_argument("--limit", type=int, default=12)
+    diagnostics_parser.add_argument("--max-bytes", type=int, default=1_048_576)
+    diagnostics_parser.set_defaults(func=diagnostics_summary)
 
     start_parser = sub.add_parser("start-rust", help="Start Rust diagnostics against a persisted runtime.")
     start_parser.add_argument("--runtime-dir", type=Path, default=default_runtime_dir())
