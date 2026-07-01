@@ -907,6 +907,14 @@ def test_mfc_upload_summary_reports_payload_counters_and_redacts_rows(tmp_path: 
                     "sentFileBytes=500 sentPayloadBytes=550 pendingIO=0 "
                     "socketStdQueue=1 rateBytesPerSec=2000"
                 ),
+                (
+                    "2026-01-01 00:00:02 UploadSlotDiagnostics: summary "
+                    "server=example.invalid:4661 sharedFiles=1000 ed2kPublishedFiles=950 "
+                    "ed2kPendingFiles=50 ed2kPendingLargeUnsupportedFiles=0 ed2kOfferLimit=200 "
+                    "kadPublishReady=1 kadSourceDueFiles=20 kadSourceBackoffFiles=980 "
+                    "kadSourceSearches=2 kadSourceSearchCap=3 kadKeywordSearches=1 "
+                    "kadKeywordSearchCap=2 kadNotesSearches=0 kadNotesSearchCap=1"
+                ),
                 "2026-01-01 00:00:02 unrelated peer=198.51.100.12",
             ]
         )
@@ -918,16 +926,22 @@ def test_mfc_upload_summary_reports_payload_counters_and_redacts_rows(tmp_path: 
         SimpleNamespace(log_dir=logs_dir, log_file=None, limit=10, max_bytes=4096)
     )
 
-    assert result["rowCount"] == 2
+    assert result["rowCount"] == 3
     assert result["logDir"] is None
     assert result["logDirFingerprint"] == control.private_path_fingerprint(str(logs_dir))
-    assert result["categories"] == {"payload": 2}
+    assert result["categories"] == {"payload": 2, "summary": 1}
     assert result["outcomes"] == {"sent": 2}
     assert result["numeric"]["sentFileBytes"]["sum"] == 1500.0
     assert result["numeric"]["sentPayloadBytes"]["sum"] == 1650.0
     assert result["numeric"]["pendingIO"]["max"] == 2.0
     assert result["numeric"]["socketStdQueue"]["average"] == 2.0
     assert result["numeric"]["rateBytesPerSec"]["average"] == 3000.0
+    assert result["numeric"]["sharedFiles"]["sum"] == 1000.0
+    assert result["numeric"]["ed2kPublishedFiles"]["sum"] == 950.0
+    assert result["numeric"]["ed2kPendingFiles"]["sum"] == 50.0
+    assert result["numeric"]["ed2kOfferLimit"]["sum"] == 200.0
+    assert result["numeric"]["kadSourceDueFiles"]["sum"] == 20.0
+    assert result["numeric"]["kadSourceSearchCap"]["sum"] == 3.0
     assert result["fileToPayloadRatio"] == 0.9091
     assert result["payloadOverheadRatio"] == 0.0909
     rendered = repr(result)
