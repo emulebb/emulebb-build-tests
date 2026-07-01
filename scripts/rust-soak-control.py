@@ -15,6 +15,7 @@ runtime and are never embedded here.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -33,7 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from emule_test_harness.paths import get_workspace_output_root
-from emule_test_harness.soak_launch import RUST_API_KEY
+from emule_test_harness.soak_launch import MFC_API_KEY, RUST_API_KEY
 from emule_test_harness.windows_processes import (
     collect_processes,
     process_command_line,
@@ -72,6 +74,13 @@ def default_base_url() -> str:
 
     host = os.environ.get("X_LOCAL_IP", "127.0.0.1").strip() or "127.0.0.1"
     return f"http://{host}:4731/api/v1"
+
+
+def default_mfc_base_url() -> str:
+    """Builds the default MFC REST base URL from X_LOCAL_IP when available."""
+
+    host = os.environ.get("X_LOCAL_IP", "127.0.0.1").strip() or "127.0.0.1"
+    return f"http://{host}:4732/api/v1"
 
 
 def api_url(base_url: str, path: str) -> str:
@@ -212,6 +221,485 @@ def sample(base_url: str, api_key: str) -> dict[str, object]:
     """Returns a sanitized live Rust status sample."""
 
     return sanitize_status(request_json(base_url, "/status", api_key=api_key))
+
+
+def normalize_private_path(value: object) -> str:
+    """Returns a comparable path string that is never emitted directly."""
+
+    text = str(value or "").strip().replace("/", "\\")
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    while len(text) > 3 and text.endswith("\\"):
+        text = text[:-1]
+    return text.lower()
+
+
+def private_path_fingerprint(value: object) -> str:
+    """Returns a stable short fingerprint for a private operator path."""
+
+    normalized = normalize_private_path(value)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def summarize_shared_directory_rows(
+    rows: object,
+    *,
+    include_fingerprints: bool = False,
+    sample_limit: int = 20,
+) -> dict[str, object]:
+    """Summarizes shared-directory rows without returning paths."""
+
+    if not isinstance(rows, list):
+        rows = []
+    summaries: list[dict[str, object]] = []
+    fingerprints: list[str] = []
+    duplicate_count = 0
+    seen: set[str] = set()
+    counts = {
+        "accessible": 0,
+        "inaccessible": 0,
+        "shareable": 0,
+        "unshareable": 0,
+        "recursive": 0,
+        "nonRecursive": 0,
+        "monitorOwned": 0,
+        "userOwned": 0,
+    }
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        path_fingerprint = private_path_fingerprint(row.get("path"))
+        if path_fingerprint in seen:
+            duplicate_count += 1
+        seen.add(path_fingerprint)
+        fingerprints.append(path_fingerprint)
+        accessible = bool(row.get("accessible"))
+        shareable = bool(row.get("shareable"))
+        recursive = bool(row.get("recursive"))
+        monitor_owned = bool(row.get("monitorOwned"))
+        counts["accessible" if accessible else "inaccessible"] += 1
+        counts["shareable" if shareable else "unshareable"] += 1
+        counts["recursive" if recursive else "nonRecursive"] += 1
+        counts["monitorOwned" if monitor_owned else "userOwned"] += 1
+        summaries.append(
+            {
+                "fingerprint": path_fingerprint,
+                "accessible": accessible,
+                "shareable": shareable,
+                "recursive": recursive,
+                "monitorOwned": monitor_owned,
+            }
+        )
+    fingerprints = sorted(fingerprints)
+    summaries.sort(key=lambda row: str(row["fingerprint"]))
+    summary: dict[str, object] = {
+        "count": len(summaries),
+        "duplicateCount": duplicate_count,
+        "counts": counts,
+        "fingerprintCount": len(fingerprints),
+        "fingerprintSample": fingerprints[:sample_limit],
+    }
+    if include_fingerprints:
+        summary["fingerprints"] = fingerprints
+        summary["rows"] = summaries
+    return summary
+
+
+def shared_directory_fingerprints(rows: object) -> list[str]:
+    """Returns full path fingerprints for internal comparison."""
+
+    if not isinstance(rows, list):
+        return []
+    return sorted(
+        private_path_fingerprint(row.get("path"))
+        for row in rows
+        if isinstance(row, dict)
+    )
+
+
+def summarize_shared_directories(
+    base_url: str,
+    api_key: str,
+    label: str,
+    *,
+    include_fingerprints: bool = False,
+    sample_limit: int = 20,
+) -> dict[str, object]:
+    """Returns sanitized shared-directory and shared-file totals for one client."""
+
+    directories = request_json(base_url, "/shared-directories", api_key=api_key)
+    files = request_json(base_url, "/shared-files?offset=0&limit=1", api_key=api_key)
+    root_fingerprints = shared_directory_fingerprints(directories.get("roots"))
+    item_fingerprints = shared_directory_fingerprints(directories.get("items"))
+    roots = summarize_shared_directory_rows(
+        directories.get("roots"),
+        include_fingerprints=include_fingerprints,
+        sample_limit=sample_limit,
+    )
+    items = summarize_shared_directory_rows(
+        directories.get("items"),
+        include_fingerprints=include_fingerprints,
+        sample_limit=sample_limit,
+    )
+    reload_diag = directories.get("reload") if isinstance(directories.get("reload"), dict) else {}
+    total = files.get("total")
+    root_set = set(root_fingerprints)
+    item_set = set(item_fingerprints)
+    return {
+        "label": label,
+        "baseUrl": base_url,
+        "sharedFilesTotal": total,
+        "roots": roots,
+        "items": items,
+        "rootFingerprints": root_fingerprints if include_fingerprints else root_fingerprints[:sample_limit],
+        "itemFingerprints": item_fingerprints if include_fingerprints else item_fingerprints[:sample_limit],
+        "rootFingerprintCount": len(root_fingerprints),
+        "itemFingerprintCount": len(item_fingerprints),
+        "monitorOwnedCount": len(directories.get("monitorOwned") or []),
+        "rootsMissingFromItems": sorted(root_set - item_set)[:sample_limit],
+        "itemsMissingFromRoots": sorted(item_set - root_set)[:sample_limit],
+        "rootsMissingFromItemsCount": len(root_set - item_set),
+        "itemsMissingFromRootsCount": len(item_set - root_set),
+        "hashingCount": directories.get("hashingCount"),
+        "reload": {
+            "phase": reload_diag.get("phase"),
+            "running": reload_diag.get("running"),
+            "pending": reload_diag.get("pending"),
+            "scannedCount": reload_diag.get("scannedCount"),
+            "plannedHashCount": reload_diag.get("plannedHashCount"),
+            "reusedCount": reload_diag.get("reusedCount"),
+            "skippedIntakeCount": reload_diag.get("skippedIntakeCount"),
+            "prunedCount": reload_diag.get("prunedCount"),
+            "staleHashCount": reload_diag.get("staleHashCount"),
+        },
+    }
+
+
+def compare_shared_summaries(rust: dict[str, object], mfc: dict[str, object] | None) -> dict[str, object]:
+    """Compares sanitized shared-directory summaries."""
+
+    if mfc is None:
+        return {"enabled": False}
+    rust_roots = rust.get("roots") if isinstance(rust.get("roots"), dict) else {}
+    mfc_roots = mfc.get("roots") if isinstance(mfc.get("roots"), dict) else {}
+    rust_fingerprints = set(rust.get("rootFingerprints") or rust_roots.get("fingerprints") or [])
+    mfc_fingerprints = set(mfc.get("rootFingerprints") or mfc_roots.get("fingerprints") or [])
+    rust_total = safe_int(rust.get("sharedFilesTotal"))
+    mfc_total = safe_int(mfc.get("sharedFilesTotal"))
+    rust_only = sorted(rust_fingerprints - mfc_fingerprints)
+    mfc_only = sorted(mfc_fingerprints - rust_fingerprints)
+    return {
+        "enabled": True,
+        "rootFingerprintsMatch": rust_fingerprints == mfc_fingerprints,
+        "rustOnlyRootFingerprintCount": len(rust_only),
+        "mfcOnlyRootFingerprintCount": len(mfc_only),
+        "rustOnlyRootFingerprints": rust_only[:20],
+        "mfcOnlyRootFingerprints": mfc_only[:20],
+        "sharedFilesDeltaRustMinusMfc": None
+        if rust_total is None or mfc_total is None
+        else rust_total - mfc_total,
+    }
+
+
+def compact_shared_endpoint_summary(summary: dict[str, object], sample_limit: int) -> dict[str, object]:
+    """Drops full fingerprint lists from one endpoint summary."""
+
+    compact = dict(summary)
+    for key in ("rootFingerprints", "itemFingerprints", "rootsMissingFromItems", "itemsMissingFromRoots"):
+        value = compact.get(key)
+        if isinstance(value, list):
+            compact[key] = value[:sample_limit]
+    for key in ("roots", "items"):
+        value = compact.get(key)
+        if isinstance(value, dict):
+            row = dict(value)
+            fingerprints = row.pop("fingerprints", None)
+            row.pop("rows", None)
+            if isinstance(fingerprints, list):
+                row["fingerprintSample"] = fingerprints[:sample_limit]
+            compact[key] = row
+    return compact
+
+
+def shared_file_row_hash(row: dict[str, object]) -> str:
+    """Returns the lowercase ED2K hash from a shared-file REST row."""
+
+    return str(row.get("hash") or row.get("fileHash") or "").strip().lower()
+
+
+def shared_file_hash_fingerprint(file_hash: str) -> str:
+    """Returns a short fingerprint for a shared-file hash."""
+
+    return hashlib.sha256(file_hash.encode("ascii", errors="ignore")).hexdigest()[:16]
+
+
+def shared_file_page_items(payload: dict[str, object]) -> tuple[list[dict[str, object]], int | None]:
+    """Extracts one shared-files page from either envelope shape."""
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("shared-files response did not contain an items list")
+    total = safe_int(payload.get("total"))
+    return [item for item in items if isinstance(item, dict)], total
+
+
+def fetch_shared_file_hashes(
+    base_url: str,
+    api_key: str,
+    *,
+    page_size: int,
+    timeout_seconds: float,
+    sleep_seconds: float,
+) -> dict[str, object]:
+    """Fetches all shared-file hashes without retaining names or paths."""
+
+    hashes: list[str] = []
+    offset = 0
+    total: int | None = None
+    while total is None or len(hashes) < total:
+        page, page_total = shared_file_page_items(
+            request_json(
+                base_url,
+                f"/shared-files?offset={offset}&limit={page_size}",
+                api_key=api_key,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if total is None:
+            total = page_total
+        page_hashes = [shared_file_row_hash(row) for row in page]
+        page_hashes = [file_hash for file_hash in page_hashes if file_hash]
+        hashes.extend(page_hashes)
+        if not page:
+            break
+        offset += len(page)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    counts = Counter(hashes)
+    duplicate_hashes = sorted(file_hash for file_hash, count in counts.items() if count > 1)
+    return {
+        "total": total,
+        "rowCount": len(hashes),
+        "uniqueHashCount": len(counts),
+        "duplicateHashCount": len(duplicate_hashes),
+        "hashes": set(counts),
+        "duplicateHashFingerprints": [shared_file_hash_fingerprint(file_hash) for file_hash in duplicate_hashes[:20]],
+    }
+
+
+def shared_file_row_path(row: dict[str, object]) -> str:
+    """Returns a normalized private path from a shared-file REST row."""
+
+    path = str(row.get("path") or "").strip()
+    if path:
+        return normalize_private_path(path)
+    directory = str(row.get("directory") or "").strip()
+    name = str(row.get("name") or "").strip()
+    if directory and name:
+        return normalize_private_path(str(Path(directory) / name))
+    return ""
+
+
+def fetch_shared_file_catalog(
+    base_url: str,
+    api_key: str,
+    *,
+    page_size: int,
+    timeout_seconds: float,
+    sleep_seconds: float,
+) -> dict[str, object]:
+    """Fetches all shared-file rows as path fingerprints and hashes only."""
+
+    by_path: dict[str, str] = {}
+    path_duplicates = 0
+    row_count = 0
+    offset = 0
+    total: int | None = None
+    while total is None or row_count < total:
+        page, page_total = shared_file_page_items(
+            request_json(
+                base_url,
+                f"/shared-files?offset={offset}&limit={page_size}",
+                api_key=api_key,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if total is None:
+            total = page_total
+        for row in page:
+            file_hash = shared_file_row_hash(row)
+            path = shared_file_row_path(row)
+            if not file_hash or not path:
+                continue
+            path_fingerprint = private_path_fingerprint(path)
+            if path_fingerprint in by_path:
+                path_duplicates += 1
+            by_path[path_fingerprint] = file_hash
+        row_count += len(page)
+        if not page:
+            break
+        offset += len(page)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    return {
+        "total": total,
+        "rowCount": row_count,
+        "pathCount": len(by_path),
+        "duplicatePathCount": path_duplicates,
+        "byPath": by_path,
+    }
+
+
+def compact_shared_catalog_summary(summary: dict[str, object]) -> dict[str, object]:
+    """Drops path-to-hash maps from a shared-file catalog summary."""
+
+    compact = dict(summary)
+    compact.pop("byPath", None)
+    return compact
+
+
+def compare_shared_file_catalogs(
+    rust: dict[str, object],
+    mfc: dict[str, object],
+) -> dict[str, object]:
+    """Compares path-fingerprint keyed shared-file catalogs."""
+
+    rust_by_path = rust.get("byPath") if isinstance(rust.get("byPath"), dict) else {}
+    mfc_by_path = mfc.get("byPath") if isinstance(mfc.get("byPath"), dict) else {}
+    rust_paths = set(rust_by_path)
+    mfc_paths = set(mfc_by_path)
+    rust_only_paths = sorted(rust_paths - mfc_paths)
+    mfc_only_paths = sorted(mfc_paths - rust_paths)
+    changed_paths = sorted(
+        path for path in rust_paths & mfc_paths if rust_by_path.get(path) != mfc_by_path.get(path)
+    )
+    return {
+        "enabled": True,
+        "pathFingerprintsMatch": rust_paths == mfc_paths,
+        "rustOnlyPathCount": len(rust_only_paths),
+        "mfcOnlyPathCount": len(mfc_only_paths),
+        "changedHashForSamePathCount": len(changed_paths),
+        "rustOnlyPathFingerprints": rust_only_paths[:20],
+        "mfcOnlyPathFingerprints": mfc_only_paths[:20],
+        "changedPathFingerprints": changed_paths[:20],
+        "changedPathHashFingerprints": [
+            {
+                "path": path,
+                "rust": shared_file_hash_fingerprint(str(rust_by_path.get(path) or "")),
+                "mfc": shared_file_hash_fingerprint(str(mfc_by_path.get(path) or "")),
+            }
+            for path in changed_paths[:20]
+        ],
+    }
+
+
+def compact_shared_hash_summary(summary: dict[str, object]) -> dict[str, object]:
+    """Drops full file-hash sets from a shared-file hash summary."""
+
+    compact = dict(summary)
+    compact.pop("hashes", None)
+    return compact
+
+
+def compare_shared_file_hashes(
+    rust: dict[str, object],
+    mfc: dict[str, object],
+) -> dict[str, object]:
+    """Compares Rust and MFC shared-file hash sets."""
+
+    rust_hashes = set(rust.get("hashes") or [])
+    mfc_hashes = set(mfc.get("hashes") or [])
+    rust_only = sorted(rust_hashes - mfc_hashes)
+    mfc_only = sorted(mfc_hashes - rust_hashes)
+    return {
+        "enabled": True,
+        "uniqueHashesMatch": rust_hashes == mfc_hashes,
+        "rustOnlyUniqueHashCount": len(rust_only),
+        "mfcOnlyUniqueHashCount": len(mfc_only),
+        "rustOnlyHashFingerprints": [shared_file_hash_fingerprint(file_hash) for file_hash in rust_only[:20]],
+        "mfcOnlyHashFingerprints": [shared_file_hash_fingerprint(file_hash) for file_hash in mfc_only[:20]],
+        "rustDuplicateHashCount": rust.get("duplicateHashCount"),
+        "mfcDuplicateHashCount": mfc.get("duplicateHashCount"),
+        "uniqueHashDeltaRustMinusMfc": len(rust_hashes) - len(mfc_hashes),
+        "rowCountDeltaRustMinusMfc": safe_int(rust.get("rowCount")) - safe_int(mfc.get("rowCount"))
+        if safe_int(rust.get("rowCount")) is not None and safe_int(mfc.get("rowCount")) is not None
+        else None,
+    }
+
+
+def shared_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Returns sanitized shared-library parity metadata for Rust and optional MFC."""
+
+    rust = summarize_shared_directories(
+        args.base_url,
+        args.api_key,
+        "rust",
+        include_fingerprints=True,
+        sample_limit=args.fingerprint_sample_limit,
+    )
+    mfc = (
+        summarize_shared_directories(
+            args.mfc_base_url,
+            args.mfc_api_key,
+            "mfc",
+            include_fingerprints=True,
+            sample_limit=args.fingerprint_sample_limit,
+        )
+        if args.mfc_base_url
+        else None
+    )
+    comparison = compare_shared_summaries(rust, mfc)
+    if not args.include_fingerprints:
+        rust = compact_shared_endpoint_summary(rust, args.fingerprint_sample_limit)
+        mfc = compact_shared_endpoint_summary(mfc, args.fingerprint_sample_limit) if mfc is not None else None
+    result: dict[str, object] = {"rust": rust, "mfc": mfc, "comparison": comparison}
+    if args.compare_shared_file_hashes:
+        if not args.mfc_base_url:
+            raise RuntimeError("--compare-shared-file-hashes requires --mfc-base-url")
+        rust_hashes = fetch_shared_file_hashes(
+            args.base_url,
+            args.api_key,
+            page_size=args.shared_file_page_size,
+            timeout_seconds=args.shared_file_timeout_seconds,
+            sleep_seconds=args.shared_file_sleep_seconds,
+        )
+        mfc_hashes = fetch_shared_file_hashes(
+            args.mfc_base_url,
+            args.mfc_api_key,
+            page_size=args.shared_file_page_size,
+            timeout_seconds=args.shared_file_timeout_seconds,
+            sleep_seconds=args.shared_file_sleep_seconds,
+        )
+        result["sharedFileHashes"] = {
+            "rust": compact_shared_hash_summary(rust_hashes),
+            "mfc": compact_shared_hash_summary(mfc_hashes),
+            "comparison": compare_shared_file_hashes(rust_hashes, mfc_hashes),
+        }
+    if args.compare_shared_file_paths:
+        if not args.mfc_base_url:
+            raise RuntimeError("--compare-shared-file-paths requires --mfc-base-url")
+        rust_catalog = fetch_shared_file_catalog(
+            args.base_url,
+            args.api_key,
+            page_size=args.shared_file_page_size,
+            timeout_seconds=args.shared_file_timeout_seconds,
+            sleep_seconds=args.shared_file_sleep_seconds,
+        )
+        mfc_catalog = fetch_shared_file_catalog(
+            args.mfc_base_url,
+            args.mfc_api_key,
+            page_size=args.shared_file_page_size,
+            timeout_seconds=args.shared_file_timeout_seconds,
+            sleep_seconds=args.shared_file_sleep_seconds,
+        )
+        result["sharedFilePaths"] = {
+            "rust": compact_shared_catalog_summary(rust_catalog),
+            "mfc": compact_shared_catalog_summary(mfc_catalog),
+            "comparison": compare_shared_file_catalogs(rust_catalog, mfc_catalog),
+        }
+    return result
 
 
 def pid_exists(pid: int) -> bool:
@@ -844,6 +1332,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     sample_parser = sub.add_parser("sample", help="Print sanitized Rust status counters.")
     sample_parser.set_defaults(func=lambda args: sample(args.base_url, args.api_key))
+
+    shared_summary_parser = sub.add_parser(
+        "shared-summary",
+        help="Print sanitized shared-directory and shared-file parity metadata.",
+    )
+    shared_summary_parser.add_argument(
+        "--mfc-base-url",
+        default=None,
+        help=f"Optional MFC REST base URL, for example {default_mfc_base_url()}",
+    )
+    shared_summary_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
+    shared_summary_parser.add_argument(
+        "--include-fingerprints",
+        action="store_true",
+        help="Include full path-fingerprint lists and row summaries in the output.",
+    )
+    shared_summary_parser.add_argument("--fingerprint-sample-limit", type=int, default=20)
+    shared_summary_parser.add_argument(
+        "--compare-shared-file-hashes",
+        action="store_true",
+        help="Fetch all shared-file pages and compare unique ED2K hash sets.",
+    )
+    shared_summary_parser.add_argument(
+        "--compare-shared-file-paths",
+        action="store_true",
+        help="Fetch all shared-file pages and compare path fingerprints to hashes.",
+    )
+    shared_summary_parser.add_argument("--shared-file-page-size", type=int, default=1000)
+    shared_summary_parser.add_argument("--shared-file-timeout-seconds", type=float, default=120.0)
+    shared_summary_parser.add_argument("--shared-file-sleep-seconds", type=float, default=0.05)
+    shared_summary_parser.set_defaults(func=shared_summary)
 
     stop_parser = sub.add_parser("stop-rust", help="Gracefully stop a running Rust diagnostics daemon.")
     stop_parser.add_argument("--pid", type=int, required=True)
