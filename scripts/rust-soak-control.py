@@ -338,9 +338,12 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes diagnostics logs while keeping operator-owned content private."""
 
     log_files = list(args.log_file or [])
-    if args.log_dir is not None and args.log_dir.is_dir():
-        log_files.extend(path for path in args.log_dir.glob("emulebb*.log") if path.is_file())
-        log_files.extend(path for path in args.log_dir.glob("emulebb*.jsonl") if path.is_file())
+    raw_log_dirs = args.log_dir or []
+    log_dirs = list(raw_log_dirs) if isinstance(raw_log_dirs, list) else [raw_log_dirs]
+    for log_dir in log_dirs:
+        if log_dir.is_dir():
+            log_files.extend(path for path in log_dir.glob("emulebb*.log") if path.is_file())
+            log_files.extend(path for path in log_dir.glob("emulebb*.jsonl") if path.is_file())
     unique_files = sorted(
         {path.resolve() for path in log_files if path.is_file()},
         key=lambda path: path.stat().st_mtime,
@@ -356,7 +359,8 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
                 if isinstance(name, str) and isinstance(count, int):
                     aggregate_patterns[name] += count
     return {
-        "logDir": str(args.log_dir) if args.log_dir is not None else None,
+        "logDir": str(log_dirs[0]) if len(log_dirs) == 1 else None,
+        "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
         "limit": args.limit,
         "maxBytes": args.max_bytes,
         "fileCount": len(files),
@@ -2917,7 +2921,7 @@ def build_parser() -> argparse.ArgumentParser:
         "diagnostics-summary",
         help="Summarize diagnostics logs without exposing private live data.",
     )
-    diagnostics_parser.add_argument("--log-dir", type=Path)
+    diagnostics_parser.add_argument("--log-dir", type=Path, action="append")
     diagnostics_parser.add_argument("--log-file", type=Path, action="append")
     diagnostics_parser.add_argument("--limit", type=int, default=12)
     diagnostics_parser.add_argument("--max-bytes", type=int, default=1_048_576)

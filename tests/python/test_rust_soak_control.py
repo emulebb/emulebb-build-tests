@@ -399,6 +399,35 @@ def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
     assert "Private\\Library" not in rendered
 
 
+def test_diagnostics_summary_combines_multiple_log_dirs(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    rust_logs = tmp_path / "rust"
+    mfc_logs = tmp_path / "mfc"
+    rust_logs.mkdir()
+    mfc_logs.mkdir()
+    (rust_logs / "emulebb-rust-diag-123.jsonl").write_text(
+        '{"schema":"diag_event_v1","event":"routing_summary","severity":"info","network":"Kad"}\n',
+        encoding="utf-8",
+    )
+    (mfc_logs / "emulebb-diagnostics-packet.log").write_text(
+        '{"schema":"ed2k_packet_v1","direction":"out","network":"ED2K"}\n',
+        encoding="utf-8",
+    )
+
+    result = control.diagnostics_summary(
+        SimpleNamespace(log_dir=[rust_logs, mfc_logs], log_file=None, limit=10, max_bytes=2048)
+    )
+
+    assert result["fileCount"] == 2
+    assert result["logDir"] is None
+    assert len(result["logDirs"]) == 2
+    assert result["aggregatePatternCounts"]["kad"] == 1
+    assert result["aggregatePatternCounts"]["ed2k"] == 1
+    rendered = repr(result)
+    assert str(rust_logs) not in rendered
+    assert str(mfc_logs) not in rendered
+
+
 def test_vpn_allowlist_status_reports_sanitized_executable_state(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     exe = tmp_path / "bin" / "emulebb-rust-diagnostics.exe"
