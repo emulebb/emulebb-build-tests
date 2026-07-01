@@ -1940,6 +1940,39 @@ def test_watch_processes_returns_sanitized_argument_presence(monkeypatch) -> Non
     assert "private-mfc" not in control.json.dumps(result)
 
 
+def test_stop_watch_processes_terminates_only_watch_loop_rows(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    watch_process = SimpleNamespace(
+        pid=8765,
+        parent_pid=111,
+        name="python.exe",
+        creation_date="20260101000000.000000+000",
+        command_line="python rust-soak-control.py watch-loop --diagnostics-log-file C:\\Private\\rust.jsonl",
+    )
+    other_process = SimpleNamespace(
+        pid=9999,
+        parent_pid=111,
+        name="python.exe",
+        creation_date="20260101000000.000000+000",
+        command_line="python unrelated.py",
+    )
+    terminated: list[tuple[int, tuple[str, ...], float]] = []
+
+    def fake_terminate(pid: int, *, markers: tuple[str, ...], timeout_seconds: float) -> None:
+        terminated.append((pid, markers, timeout_seconds))
+
+    monkeypatch.setattr(control, "collect_processes", lambda: [watch_process, other_process])
+    monkeypatch.setattr(control, "terminate_pid_tree", fake_terminate)
+    monkeypatch.setattr(control, "pid_exists", lambda pid: pid != 8765)
+
+    result = control.stop_watch_processes(SimpleNamespace(pid=None, timeout_seconds=7.0, dry_run=False))
+
+    assert terminated == [(8765, ("rust-soak-control.py", "watch-loop"), 7.0)]
+    assert result["stoppedCount"] == 1
+    assert result["processes"][0]["pid"] == 8765
+    assert result["processes"][0]["stopped"] is True
+
+
 def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, monkeypatch) -> None:
     control = _load_rust_soak_control()
     pid_file = tmp_path / "watch.pid"

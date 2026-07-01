@@ -2940,6 +2940,33 @@ def watch_processes(_: argparse.Namespace) -> dict[str, object]:
     return {"processes": rows}
 
 
+def stop_watch_processes(args: argparse.Namespace) -> dict[str, object]:
+    """Stops retained watcher processes through the shared Python process helper."""
+
+    rows = []
+    for process in collect_processes():
+        command_line = getattr(process, "command_line", "")
+        lowered = command_line.lower()
+        if "rust-soak-control.py" not in lowered or "watch-loop" not in lowered:
+            continue
+        if args.pid is not None and process.pid != args.pid:
+            continue
+        row = watch_process_row(process)
+        if not args.dry_run:
+            terminate_pid_tree(
+                process.pid,
+                markers=("rust-soak-control.py", "watch-loop"),
+                timeout_seconds=args.timeout_seconds,
+            )
+        row["stopped"] = not pid_exists(process.pid)
+        rows.append(row)
+    return {
+        "processes": rows,
+        "stoppedCount": sum(1 for row in rows if row.get("stopped") is True),
+        "dryRun": args.dry_run,
+    }
+
+
 def stop_mfc(args: argparse.Namespace) -> dict[str, object]:
     """Stops the MFC diagnostics client through REST and a bounded PID fallback."""
 
@@ -4544,6 +4571,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="List sanitized retained watcher process rows through Python WMI.",
     )
     watch_processes_parser.set_defaults(func=watch_processes)
+
+    stop_watch_processes_parser = sub.add_parser(
+        "stop-watch-processes",
+        help="Stop retained watcher processes through Python WMI.",
+    )
+    stop_watch_processes_parser.add_argument("--pid", type=int)
+    stop_watch_processes_parser.add_argument("--timeout-seconds", type=float, default=15.0)
+    stop_watch_processes_parser.add_argument("--dry-run", action="store_true")
+    stop_watch_processes_parser.set_defaults(func=stop_watch_processes)
 
     stop_mfc_parser = sub.add_parser("stop-mfc", help="Gracefully stop a running MFC diagnostics client.")
     stop_mfc_parser.add_argument("--pid", type=int, required=True)
