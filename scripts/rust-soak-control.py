@@ -2693,6 +2693,36 @@ def trend_counter(records: list[dict[str, object]], path: tuple[str, ...]) -> di
     return result
 
 
+def latest_diagnostics_body_counts(record: dict[str, object]) -> dict[str, dict[str, int]]:
+    """Aggregates safe body buckets from the latest retained diagnostics sample."""
+
+    diagnostics = record.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {}
+    files = diagnostics.get("files")
+    if not isinstance(files, list):
+        return {}
+    aggregate: dict[str, Counter[str]] = {}
+    for file_summary in files:
+        if not isinstance(file_summary, dict):
+            continue
+        body_counts = file_summary.get("jsonBodyCounts")
+        if not isinstance(body_counts, dict):
+            continue
+        for field, counts in body_counts.items():
+            if not isinstance(field, str) or not isinstance(counts, dict):
+                continue
+            counter = aggregate.setdefault(field, Counter())
+            for bucket, count in counts.items():
+                if isinstance(bucket, str) and isinstance(count, int):
+                    counter[bucket] += count
+    return {
+        field: dict(counter.most_common(12))
+        for field, counter in sorted(aggregate.items())
+        if counter
+    }
+
+
 def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     """Summarizes retained soak watch JSONL counters over a bounded window."""
 
@@ -2707,6 +2737,7 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         if isinstance(latest.get("recommendations"), list)
         else []
     )
+    latest_body_counts = latest_diagnostics_body_counts(latest)
     counters = {
         "rustUploadKiBps": trend_counter(records, ("rust", "uploadSpeedKiBps")),
         "rustActiveUploads": trend_counter(records, ("rust", "activeUploads")),
@@ -2743,6 +2774,7 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
         },
         "latestFindings": latest_findings,
         "latestRecommendations": latest_recommendations,
+        "latestDiagnosticsBodyCounts": latest_body_counts,
         "counters": counters,
     }
 
