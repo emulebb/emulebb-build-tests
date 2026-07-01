@@ -932,6 +932,46 @@ def test_vpn_allowlist_status_reports_sanitized_executable_state(tmp_path: Path)
     assert str(tmp_path) not in rendered
 
 
+def test_rust_p2p_start_applies_live_wire_network_preferences(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_request_json(base_url, path, *, api_key, method="GET", body=None, timeout_seconds=8.0):
+        assert base_url == "http://192.0.2.10:4731/api/v1"
+        assert api_key == "key"
+        calls.append((method, path, body))
+        return {"ok": True}
+
+    monkeypatch.setattr(control, "request_json", fake_request_json)
+    monkeypatch.setattr(control, "sample", lambda _base_url, _api_key: {"ed2kConnected": True})
+
+    result = control.rust_p2p_start(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="key",
+            timeout_seconds=1.0,
+            ensure_preferences=True,
+            start_kad=True,
+        )
+    )
+
+    assert result["sample"] == {"ed2kConnected": True}
+    assert calls == [
+        (
+            "PATCH",
+            "/app/preferences",
+            {
+                "autoConnect": True,
+                "reconnect": True,
+                "networkKademlia": True,
+                "networkEd2k": True,
+            },
+        ),
+        ("POST", "/servers/operations/connect", {}),
+        ("POST", "/kad/operations/start", {}),
+    ]
+
+
 def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     rust_logs = tmp_path / "rust"

@@ -1108,6 +1108,98 @@ def request_json(
     raise RuntimeError(f"Rust REST returned a non-object payload for {method} {path}: {parsed!r}")
 
 
+def request_json_attempt(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str,
+    method: str = "GET",
+    body: dict[str, object] | None = None,
+    timeout_seconds: float = 8.0,
+) -> dict[str, object]:
+    """Runs one REST request and returns a compact success/error envelope."""
+
+    try:
+        return {
+            "ok": True,
+            "path": path,
+            "method": method,
+            "data": request_json(
+                base_url,
+                path,
+                api_key=api_key,
+                method=method,
+                body=body,
+                timeout_seconds=timeout_seconds,
+            ),
+        }
+    except HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload: object = json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            payload = {"body": text[:512]}
+        return {
+            "ok": False,
+            "path": path,
+            "method": method,
+            "status": exc.code,
+            "reason": exc.reason,
+            "error": payload,
+        }
+    except URLError as exc:
+        return {
+            "ok": False,
+            "path": path,
+            "method": method,
+            "error": type(exc.reason).__name__ if hasattr(exc, "reason") else type(exc).__name__,
+        }
+
+
+def rust_p2p_start(args: argparse.Namespace) -> dict[str, object]:
+    """Applies live-wire P2P preferences and asks Rust to connect."""
+
+    steps: list[dict[str, object]] = []
+    if args.ensure_preferences:
+        steps.append(
+            request_json_attempt(
+                args.base_url,
+                "/app/preferences",
+                api_key=args.api_key,
+                method="PATCH",
+                body={
+                    "autoConnect": True,
+                    "reconnect": True,
+                    "networkKademlia": True,
+                    "networkEd2k": True,
+                },
+                timeout_seconds=args.timeout_seconds,
+            )
+        )
+    steps.append(
+        request_json_attempt(
+            args.base_url,
+            "/servers/operations/connect",
+            api_key=args.api_key,
+            method="POST",
+            body={},
+            timeout_seconds=args.timeout_seconds,
+        )
+    )
+    if args.start_kad:
+        steps.append(
+            request_json_attempt(
+                args.base_url,
+                "/kad/operations/start",
+                api_key=args.api_key,
+                method="POST",
+                body={},
+                timeout_seconds=args.timeout_seconds,
+            )
+        )
+    return {"steps": steps, "sample": sample(args.base_url, args.api_key)}
+
+
 def safe_int(value: object) -> int | None:
     """Converts JSON-ish values to int when possible."""
 
@@ -3738,6 +3830,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sample_parser = sub.add_parser("sample", help="Print sanitized Rust status counters.")
     sample_parser.set_defaults(func=lambda args: sample(args.base_url, args.api_key))
+
+    rust_p2p_parser = sub.add_parser("rust-p2p-start", help="Apply Rust P2P startup preferences and connect.")
+    rust_p2p_parser.add_argument("--timeout-seconds", type=float, default=30.0)
+    rust_p2p_parser.add_argument("--ensure-preferences", action=argparse.BooleanOptionalAction, default=True)
+    rust_p2p_parser.add_argument("--start-kad", action=argparse.BooleanOptionalAction, default=True)
+    rust_p2p_parser.set_defaults(func=rust_p2p_start)
 
     shared_summary_parser = sub.add_parser(
         "shared-summary",
