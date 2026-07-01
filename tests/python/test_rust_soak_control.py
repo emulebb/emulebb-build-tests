@@ -952,6 +952,72 @@ def test_mfc_upload_summary_reports_payload_counters_and_redacts_rows(tmp_path: 
     assert str(logs_dir) not in rendered
 
 
+def test_rust_ed2k_offer_summary_reports_batches_without_hashes(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    logs_dir = tmp_path / "rust-logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "emulebb-rust-diag-123.jsonl"
+    log_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "shared_publish_offer_batch",
+                        "ts": "2026-01-01T00:00:00Z",
+                        "keys": {"server": "203.0.113.10:4661"},
+                        "body": {
+                            "cursorBefore": 0,
+                            "entriesSent": 200,
+                            "fileHashes": ["abcdefabcdefabcdefabcdefabcdefab"],
+                            "nextCursor": 200,
+                            "skippedDuplicateBatch": False,
+                            "totalEntries": 1000,
+                            "wrapped": False,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema": "diag_event_v1",
+                        "event": "shared_publish_offer_batch",
+                        "ts": "2026-01-01T00:01:00Z",
+                        "keys": {"server": "203.0.113.10:4661"},
+                        "body": {
+                            "cursorBefore": 200,
+                            "entriesSent": 200,
+                            "fileName": "Private Operator Title.mkv",
+                            "nextCursor": 400,
+                            "skippedDuplicateBatch": False,
+                            "totalEntries": 1000,
+                            "wrapped": False,
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = control.rust_ed2k_offer_summary(
+        SimpleNamespace(log_dir=logs_dir, log_file=None, limit=10, max_bytes=4096)
+    )
+
+    assert result["rowCount"] == 2
+    assert result["observedEntriesSent"] == 400
+    assert result["numeric"]["entriesSent"]["sum"] == 400.0
+    assert result["numeric"]["totalEntries"]["max"] == 1000.0
+    assert result["batchIntervalSeconds"]["average"] == 60.0
+    assert result["booleanCounts"]["wrapped"] == {"false": 2}
+    assert result["latestBatch"]["nextCursor"] == 400
+    rendered = repr(result)
+    assert "203.0.113.10" not in rendered
+    assert "abcdef" not in rendered
+    assert "Private Operator Title" not in rendered
+    assert str(logs_dir) not in rendered
+
+
 def test_anti_flood_summary_groups_sanitized_bursts(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     logs_dir = tmp_path / "logs"

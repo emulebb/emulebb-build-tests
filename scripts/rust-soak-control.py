@@ -554,6 +554,116 @@ def diagnostics_summary(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def rust_ed2k_offer_summary(args: argparse.Namespace) -> dict[str, object]:
+    """Summarizes Rust ED2K OP_OFFERFILES batches without exposing hashes."""
+
+    selected, log_dirs = selected_diagnostics_logs(args)
+    rows = 0
+    malformed_json_rows = 0
+    timestamps: list[datetime] = []
+    intervals: list[float] = []
+    previous_timestamp: datetime | None = None
+    server_counts: Counter[str] = Counter()
+    boolean_counts: dict[str, Counter[str]] = {
+        "wrapped": Counter(),
+        "skippedDuplicateBatch": Counter(),
+    }
+    numeric: dict[str, list[float]] = {
+        "cursorBefore": [],
+        "entriesSent": [],
+        "nextCursor": [],
+        "totalEntries": [],
+    }
+    latest_batch: dict[str, object] | None = None
+
+    for path in selected:
+        for line in tail_text_lines(path, max_bytes=args.max_bytes):
+            stripped = line.strip()
+            if not stripped.startswith("{") or "shared_publish_offer_batch" not in stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                malformed_json_rows += 1
+                continue
+            if not isinstance(parsed, dict) or parsed.get("event") != "shared_publish_offer_batch":
+                continue
+            body = parsed.get("body")
+            if not isinstance(body, dict):
+                continue
+
+            rows += 1
+            timestamp = parse_iso_timestamp(
+                parsed.get("ts") or parsed.get("ts_utc") or parsed.get("timestamp") or parsed.get("timestampUtc")
+            )
+            if timestamp is not None:
+                timestamps.append(timestamp)
+                if previous_timestamp is not None:
+                    interval = (timestamp - previous_timestamp).total_seconds()
+                    if interval >= 0:
+                        intervals.append(interval)
+                previous_timestamp = timestamp
+
+            keys = parsed.get("keys")
+            server = keys.get("server") if isinstance(keys, dict) else None
+            server_fingerprint = private_path_fingerprint(str(server)) if server else "unknown"
+            server_counts[server_fingerprint] += 1
+            for field, values in numeric.items():
+                number = diagnostic_json_numeric_value(body.get(field))
+                if number is not None:
+                    values.append(number)
+            for field, counter in boolean_counts.items():
+                value = body.get(field)
+                if isinstance(value, bool):
+                    counter["true" if value else "false"] += 1
+
+            latest_batch = {
+                "timestampUtc": timestamp.isoformat() if timestamp is not None else None,
+                "serverFingerprint": server_fingerprint,
+                "entriesSent": body.get("entriesSent"),
+                "totalEntries": body.get("totalEntries"),
+                "cursorBefore": body.get("cursorBefore"),
+                "nextCursor": body.get("nextCursor"),
+                "wrapped": body.get("wrapped"),
+                "skippedDuplicateBatch": body.get("skippedDuplicateBatch"),
+            }
+
+    result: dict[str, object] = {
+        "logDir": None,
+        "logDirFingerprint": private_path_fingerprint(str(log_dirs[0])) if len(log_dirs) == 1 else None,
+        "logDirs": [private_path_fingerprint(str(log_dir)) for log_dir in log_dirs],
+        "limit": args.limit,
+        "maxBytes": args.max_bytes,
+        "fileCount": len(selected),
+        "rowCount": rows,
+        "malformedJsonRowCount": malformed_json_rows,
+        "serverFingerprints": dict(server_counts.most_common(12)),
+        "booleanCounts": {
+            field: dict(counter)
+            for field, counter in boolean_counts.items()
+            if counter
+        },
+        "numeric": {
+            field: compact_numeric_distribution(values)
+            for field, values in sorted(numeric.items())
+            if values
+        },
+    }
+    if timestamps:
+        result["timeRange"] = {
+            "firstUtc": min(timestamps).isoformat(),
+            "lastUtc": max(timestamps).isoformat(),
+        }
+    if intervals:
+        result["batchIntervalSeconds"] = compact_numeric_distribution(intervals)
+    if latest_batch is not None:
+        result["latestBatch"] = latest_batch
+    entries_sent = numeric.get("entriesSent") or []
+    if entries_sent:
+        result["observedEntriesSent"] = int(sum(entries_sent))
+    return result
+
+
 def safe_upload_outcome_row(path: Path, parsed: dict[str, object]) -> dict[str, object]:
     """Builds a privacy-safe upload outcome row for worst-case diagnostics."""
 
@@ -4363,6 +4473,16 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics_parser.add_argument("--limit", type=int, default=12)
     diagnostics_parser.add_argument("--max-bytes", type=int, default=1_048_576)
     diagnostics_parser.set_defaults(func=diagnostics_summary)
+
+    rust_offer_parser = sub.add_parser(
+        "rust-ed2k-offer-summary",
+        help="Summarize Rust ED2K OP_OFFERFILES batches without exposing hashes.",
+    )
+    rust_offer_parser.add_argument("--log-dir", type=Path, action="append")
+    rust_offer_parser.add_argument("--log-file", type=Path, action="append")
+    rust_offer_parser.add_argument("--limit", type=int, default=12)
+    rust_offer_parser.add_argument("--max-bytes", type=int, default=1_048_576)
+    rust_offer_parser.set_defaults(func=rust_ed2k_offer_summary)
 
     upload_efficiency_parser = sub.add_parser(
         "upload-efficiency-summary",
