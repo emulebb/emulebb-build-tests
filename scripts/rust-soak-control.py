@@ -1034,6 +1034,18 @@ def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | 
         or int((anti_flood.get("udpTrackerDrops") or {}).get("rows") or 0) > 0
     ):
         result["antiFloodSummary"] = anti_flood
+    upload_efficiency = upload_efficiency_summary(
+        argparse.Namespace(
+            log_dir=log_dirs,
+            log_file=log_files,
+            limit=limit,
+            max_bytes=max_bytes,
+            slow_read_ms=100.0,
+            outlier_limit=0,
+        )
+    )
+    if int(upload_efficiency.get("rowCount") or 0) > 0:
+        result["uploadEfficiencySummary"] = compact_upload_efficiency_summary(upload_efficiency)
     return result
 
 
@@ -2973,6 +2985,7 @@ def watch_findings(
         findings.append("visibility-still-maturing")
     elif latest.get("parityGap") is True:
         findings.append("upload-parity-gap")
+    findings.extend(watch_upload_efficiency_findings(rust, diagnostics))
     findings.extend(watch_diagnostic_findings(diagnostics))
     if mfc is not None:
         if "error" in mfc:
@@ -3012,10 +3025,52 @@ def diagnostics_int(value: object) -> int:
     return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
+def diagnostics_float(value: object) -> float | None:
+    """Reads numeric diagnostics values without accepting booleans."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
 def diagnostics_mapping(value: object) -> dict[str, object]:
     """Returns a diagnostics mapping or an empty mapping for absent summaries."""
 
     return value if isinstance(value, dict) else {}
+
+
+def watch_upload_efficiency_findings(
+    rust: dict[str, object],
+    diagnostics: dict[str, object] | None,
+) -> list[str]:
+    """Returns findings from upload efficiency once visibility makes them actionable."""
+
+    if not isinstance(diagnostics, dict):
+        return []
+    efficiency = diagnostics_mapping(diagnostics.get("uploadEfficiencySummary"))
+    row_count = diagnostics_int(efficiency.get("rowCount"))
+    duplicate_ratio = diagnostics_float(efficiency.get("duplicateDoneOutcomeRatio"))
+    served_ratio = diagnostics_float(efficiency.get("servedToRequestedRatio"))
+    slow_read_ratio = diagnostics_float(efficiency.get("slowReadRatio"))
+    if row_count < 100:
+        return []
+    findings: list[str] = []
+    if slow_read_ratio is not None and slow_read_ratio >= 0.15:
+        findings.append("rust-upload-read-slow")
+    pending_entries = diagnostics_int(rust.get("ed2kPendingEntries"))
+    visibility_percent = diagnostics_float(rust.get("ed2kVisibilityPercent")) or 0.0
+    visibility_mature = pending_entries == 0 or visibility_percent >= 95.0
+    if (
+        visibility_mature
+        and duplicate_ratio is not None
+        and served_ratio is not None
+        and duplicate_ratio >= 0.60
+        and served_ratio <= 0.55
+    ):
+        findings.append("rust-duplicate-range-pressure")
+    return findings
 
 
 def watch_diagnostic_findings(diagnostics: dict[str, object] | None) -> list[str]:
@@ -3681,6 +3736,7 @@ def compact_upload_efficiency_summary(summary: dict[str, object]) -> dict[str, o
         "readDiskToServedRatio",
         "slowReadCount",
         "slowReadRatio",
+        "duplicateDoneOutcomeRatio",
     ):
         if field in summary:
             compact[field] = summary[field]
@@ -3839,6 +3895,12 @@ def watch_brief_from_record(
     vpn = latest.get("vpn") if isinstance(latest.get("vpn"), dict) else {}
     counters = trend.get("counters") if isinstance(trend.get("counters"), dict) else {}
     findings = list(latest.get("findings") if isinstance(latest.get("findings"), list) else [])
+    findings.extend(
+        watch_upload_efficiency_findings(
+            rust,
+            {"uploadEfficiencySummary": upload_efficiency} if isinstance(upload_efficiency, dict) else None,
+        )
+    )
     findings.extend(watch_diagnostic_findings(diagnostics))
     if not watch_alive:
         findings.append("watch-not-running")
