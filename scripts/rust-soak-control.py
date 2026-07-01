@@ -38,6 +38,7 @@ from emule_test_harness import converged_live_wire as clw
 from emule_test_harness import mfc_known_met
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
+from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.soak_launch import (
     DEFAULT_MFC_SEED_CONFIG_DIR,
@@ -93,6 +94,12 @@ def default_mfc_shareddir_file() -> Path:
     """Returns the default persisted MFC shareddir.dat for the soak profile."""
 
     return output_root() / "soak" / "mfc-profile" / "config" / "shareddir.dat"
+
+
+def default_mfc_profile_dir() -> Path:
+    """Returns the default persistent MFC soak profile-base directory."""
+
+    return output_root() / "soak" / "mfc-profile" / "profiles" / "converged-soak" / "profile-base"
 
 
 def discover_mfc_shareddir_file() -> Path | None:
@@ -1238,6 +1245,91 @@ def mfc_rest_shared_root_entries(
     return entries
 
 
+def shared_directory_model_persistence_lists(model: dict[str, object]) -> dict[str, list[str]]:
+    """Builds MFC shared-directory persistence lists from one REST model."""
+
+    roots = model.get("roots") if isinstance(model.get("roots"), list) else []
+    items = model.get("items") if isinstance(model.get("items"), list) else []
+
+    def usable_row_path(row: object) -> str:
+        if not isinstance(row, dict):
+            return ""
+        if row.get("accessible") is False or row.get("shareable") is False:
+            return ""
+        return shared_root_path(normalize_shared_root_entry(row.get("path")))
+
+    shared_dirs = [path for path in (usable_row_path(row) for row in items) if path]
+    shared_keys = {normalize_private_path(path) for path in shared_dirs}
+    monitored_roots = [
+        path
+        for path in (usable_row_path(row) for row in roots if isinstance(row, dict) and row.get("recursive") is True)
+        if path and normalize_private_path(path) in shared_keys
+    ]
+
+    row_monitor_owned = [
+        path
+        for path in (usable_row_path(row) for row in items if isinstance(row, dict) and row.get("monitorOwned") is True)
+        if path
+    ]
+    top_level_monitor_owned: list[str] = []
+    monitor_owned_value = model.get("monitorOwned")
+    if isinstance(monitor_owned_value, list):
+        for entry in monitor_owned_value:
+            path = shared_root_path(normalize_shared_root_entry(entry))
+            if path and normalize_private_path(path) in shared_keys:
+                top_level_monitor_owned.append(path)
+
+    monitor_owned = row_monitor_owned + top_level_monitor_owned
+
+    def dedupe_paths(paths: list[str]) -> list[str]:
+        return [shared_root_path(root) for root in soak_launch.dedupe_shared_roots(list(paths))]
+
+    return {
+        "shared": dedupe_paths(shared_dirs),
+        "monitored": dedupe_paths(monitored_roots),
+        "monitorOwned": dedupe_paths(monitor_owned),
+    }
+
+
+def write_mfc_shareddir_from_rest(args: argparse.Namespace) -> dict[str, object]:
+    """Writes MFC shared-directory profile files from a live REST model."""
+
+    target_config_dir = args.target_profile_dir / "config"
+    if not target_config_dir.is_dir():
+        raise RuntimeError(f"Target MFC profile is missing a config directory: {target_config_dir}")
+
+    model = request_json(
+        args.source_base_url,
+        "/shared-directories",
+        api_key=args.source_api_key,
+        timeout_seconds=args.timeout_seconds,
+    )
+    lists = shared_directory_model_persistence_lists(model)
+    if not lists["shared"]:
+        raise RuntimeError("Source REST shared-directory model did not contain any shareable item paths")
+
+    targets = {
+        "shared": target_config_dir / "shareddir.dat",
+        "monitored": target_config_dir / "shareddir.monitored.dat",
+        "monitorOwned": target_config_dir / "shareddir.monitor-owned.dat",
+    }
+    if not args.dry_run:
+        for key, path in targets.items():
+            write_shared_directories_file(path, lists[key])
+
+    return {
+        "written": not args.dry_run,
+        "sourceBaseUrl": args.source_base_url,
+        "targetConfigDir": str(target_config_dir),
+        "counts": {key: len(value) for key, value in lists.items()},
+        "fingerprintSamples": {
+            key: [private_path_fingerprint(path) for path in value[: args.fingerprint_sample_limit]]
+            for key, value in lists.items()
+        },
+        "files": {key: str(path) for key, path in targets.items()},
+    }
+
+
 def apply_mfc_rest_shared_roots(args: argparse.Namespace) -> dict[str, object]:
     """Applies the live MFC REST configured shared roots to Rust."""
 
@@ -2136,6 +2228,18 @@ def build_parser() -> argparse.ArgumentParser:
     apply_rest_roots_parser.add_argument("--collection", choices=("roots", "items"), default="roots")
     apply_rest_roots_parser.add_argument("--timeout-seconds", type=float, default=120.0)
     apply_rest_roots_parser.set_defaults(func=apply_mfc_rest_shared_roots)
+
+    write_mfc_shareddir_parser = sub.add_parser(
+        "write-mfc-shareddir-from-rest",
+        help="Write MFC persisted shared-directory files from a live REST shared-directory model.",
+    )
+    write_mfc_shareddir_parser.add_argument("--source-base-url", default=default_base_url())
+    write_mfc_shareddir_parser.add_argument("--source-api-key", default=RUST_API_KEY)
+    write_mfc_shareddir_parser.add_argument("--target-profile-dir", type=Path, default=default_mfc_profile_dir())
+    write_mfc_shareddir_parser.add_argument("--timeout-seconds", type=float, default=120.0)
+    write_mfc_shareddir_parser.add_argument("--fingerprint-sample-limit", type=int, default=20)
+    write_mfc_shareddir_parser.add_argument("--dry-run", action="store_true")
+    write_mfc_shareddir_parser.set_defaults(func=write_mfc_shareddir_from_rest)
 
     repair_parser = sub.add_parser(
         "repair-rust-metadata-from-mfc-rest",

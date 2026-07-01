@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from types import ModuleType
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 RUST_SOAK_CONTROL = REPO_ROOT / "scripts" / "rust-soak-control.py"
@@ -213,6 +214,76 @@ def test_shared_root_for_path_uses_longest_matching_root() -> None:
         r"f:\share\nested"
     )
     assert control.shared_root_for_path(r"f:\other\file.bin", roots) == "unmatched"
+
+
+def test_shared_directory_model_persistence_lists_preserve_mfc_semantics() -> None:
+    control = _load_rust_soak_control()
+
+    lists = control.shared_directory_model_persistence_lists(
+        {
+            "roots": [
+                {"path": r"C:\Flat", "accessible": True, "shareable": True, "recursive": False},
+                {"path": r"C:\Tree", "accessible": True, "shareable": True, "recursive": True},
+            ],
+            "items": [
+                {"path": r"C:\Flat", "accessible": True, "shareable": True, "monitorOwned": False},
+                {"path": r"C:\Tree", "accessible": True, "shareable": True, "monitorOwned": False},
+                {"path": r"C:\Tree\Child", "accessible": True, "shareable": True, "monitorOwned": True},
+                {"path": r"C:\Offline", "accessible": False, "shareable": True, "monitorOwned": False},
+            ],
+            "monitorOwned": [r"C:\Tree\Child", r"C:\Tree\Missing"],
+        }
+    )
+
+    assert lists == {
+        "shared": ["C:\\Flat\\", "C:\\Tree\\", "C:\\Tree\\Child\\"],
+        "monitored": ["C:\\Tree\\"],
+        "monitorOwned": ["C:\\Tree\\Child\\"],
+    }
+
+
+def test_write_mfc_shareddir_from_rest_writes_three_profile_files(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    profile_dir = tmp_path / "profile-base"
+    config_dir = profile_dir / "config"
+    config_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        control,
+        "request_json",
+        lambda *args, **kwargs: {
+            "roots": [
+                {"path": r"C:\Tree", "accessible": True, "shareable": True, "recursive": True},
+            ],
+            "items": [
+                {"path": r"C:\Tree", "accessible": True, "shareable": True, "monitorOwned": False},
+                {"path": r"C:\Tree\Child", "accessible": True, "shareable": True, "monitorOwned": True},
+            ],
+            "monitorOwned": [r"C:\Tree\Child"],
+        },
+    )
+
+    result = control.write_mfc_shareddir_from_rest(
+        SimpleNamespace(
+            source_base_url="http://192.0.2.10:4731/api/v1",
+            source_api_key="key",
+            target_profile_dir=profile_dir,
+            timeout_seconds=1.0,
+            fingerprint_sample_limit=3,
+            dry_run=False,
+        )
+    )
+
+    assert result["written"] is True
+    assert result["counts"] == {"shared": 2, "monitored": 1, "monitorOwned": 1}
+    assert (config_dir / "shareddir.dat").read_text(encoding="utf-16").splitlines() == [
+        "C:\\Tree\\",
+        "C:\\Tree\\Child\\",
+    ]
+    assert (config_dir / "shareddir.monitored.dat").read_text(encoding="utf-16").splitlines() == ["C:\\Tree\\"]
+    assert (config_dir / "shareddir.monitor-owned.dat").read_text(encoding="utf-16").splitlines() == [
+        "C:\\Tree\\Child\\",
+    ]
 
 
 def test_mfc_upload_log_discovery_prefers_newest_fresh_candidate(tmp_path: Path) -> None:
