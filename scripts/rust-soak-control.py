@@ -2665,6 +2665,11 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     elapsed_seconds = (timestamps[-1] - timestamps[0]).total_seconds() if len(timestamps) >= 2 else 0.0
     latest = records[-1] if records else {}
     latest_findings = latest.get("findings") if isinstance(latest.get("findings"), list) else []
+    latest_recommendations = (
+        latest.get("recommendations")
+        if isinstance(latest.get("recommendations"), list)
+        else []
+    )
     counters = {
         "rustUploadKiBps": trend_counter(records, ("rust", "uploadSpeedKiBps")),
         "rustActiveUploads": trend_counter(records, ("rust", "activeUploads")),
@@ -2700,6 +2705,7 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
             "elapsedSeconds": round(max(0.0, elapsed_seconds), 3),
         },
         "latestFindings": latest_findings,
+        "latestRecommendations": latest_recommendations,
         "counters": counters,
     }
 

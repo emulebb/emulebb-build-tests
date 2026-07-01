@@ -577,6 +577,7 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
         {
             "timestampUtc": "2026-01-01T00:00:00+00:00",
             "findings": ["mfc-hashing-active"],
+            "recommendations": ["continue-mfc-hashing"],
             "rust": {
                 "uploadSpeedKiBps": 100.0,
                 "activeUploads": 2,
@@ -594,6 +595,7 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
         {
             "timestampUtc": "2026-01-01T00:10:00+00:00",
             "findings": ["mfc-hashing-active", "mfc-kad-firewalled"],
+            "recommendations": ["preserve-mfc-hashing-before-connectivity-restart"],
             "rust": {
                 "uploadSpeedKiBps": 200.0,
                 "activeUploads": 4,
@@ -616,6 +618,7 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
     assert trend["sampleCount"] == 2
     assert trend["window"]["elapsedSeconds"] == 600.0
     assert trend["latestFindings"] == ["mfc-hashing-active", "mfc-kad-firewalled"]
+    assert trend["latestRecommendations"] == ["preserve-mfc-hashing-before-connectivity-restart"]
     assert trend["counters"]["rustEd2kPublished"]["delta"] == 200.0
     assert trend["counters"]["rustEd2kPublished"]["perMinute"] == 20.0
     assert trend["counters"]["rustEd2kPending"]["perMinute"] == -20.0
