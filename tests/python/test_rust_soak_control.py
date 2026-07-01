@@ -865,6 +865,7 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
     assert result["servedToRequestedRatio"] == 0.875
     assert result["readCacheHitRatio"] == 0.6
     assert result["readDiskToServedRatio"] == 2.0
+    assert result["duplicateDoneOutcomeRatio"] == 0.25
     assert result["outcomes"] == {"served": 3, "partial": 1}
     assert result["firstSkipReasons"] == {"duplicateDone": 1}
     read_stats = result["numeric"]["payloadReadMs"]

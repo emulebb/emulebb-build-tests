@@ -640,6 +640,10 @@ def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
         result["readCacheHitRatio"] = round(read_cache_hits / (read_cache_hits + read_cache_misses), 4)
     if served_bytes > 0 and read_disk_bytes > 0:
         result["readDiskToServedRatio"] = round(read_disk_bytes / served_bytes, 4)
+    total_outcomes = sum(outcomes.values())
+    duplicate_done = first_skip_reasons.get("duplicateDone", 0)
+    if total_outcomes > 0:
+        result["duplicateDoneOutcomeRatio"] = round(duplicate_done / total_outcomes, 4)
     if timestamps:
         result["timeRange"] = {
             "firstUtc": min(timestamps).isoformat(),
