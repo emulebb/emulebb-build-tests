@@ -1003,6 +1003,62 @@ def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
     assert "remainingEtaMinutes" not in trend["counters"]["monitorMfcUploadKiBps"]
 
 
+def test_watch_trend_segments_rust_publish_counters_after_restart(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    jsonl = tmp_path / "watch.jsonl"
+    records = [
+        {
+            "timestampUtc": "2026-01-01T00:00:00+00:00",
+            "rust": {
+                "ed2kPublishedEntries": 30000,
+                "ed2kPendingEntries": 34000,
+                "kadSourcePublishedTotal": 320,
+            },
+        },
+        {
+            "timestampUtc": "2026-01-01T00:05:00+00:00",
+            "rust": {
+                "ed2kPublishedEntries": 400,
+                "ed2kPendingEntries": 63600,
+                "kadSourcePublishedTotal": 0,
+            },
+        },
+        {
+            "timestampUtc": "2026-01-01T00:10:00+00:00",
+            "rust": {
+                "ed2kPublishedEntries": 600,
+                "ed2kPendingEntries": 63400,
+                "kadSourcePublishedTotal": 3,
+            },
+        },
+    ]
+    jsonl.write_text("\n".join(control.json.dumps(record, sort_keys=True) for record in records) + "\n", encoding="utf-8")
+
+    trend = control.watch_trend(SimpleNamespace(watch_jsonl=jsonl, limit=10))
+
+    published = trend["counters"]["rustEd2kPublished"]
+    assert published["first"] == 400.0
+    assert published["last"] == 600.0
+    assert published["delta"] == 200.0
+    assert published["perMinute"] == 40.0
+    assert published["resetSegment"] is True
+    assert published["droppedSamples"] == 1
+
+    pending = trend["counters"]["rustEd2kPending"]
+    assert pending["first"] == 63600.0
+    assert pending["last"] == 63400.0
+    assert pending["delta"] == -200.0
+    assert pending["perMinute"] == -40.0
+    assert pending["remainingEtaMinutes"] == 1585.0
+    assert pending["resetSegment"] is True
+
+    kad = trend["counters"]["rustKadSourcePublished"]
+    assert kad["first"] == 0.0
+    assert kad["last"] == 3.0
+    assert kad["delta"] == 3.0
+    assert kad["resetSegment"] is True
+
+
 def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -> None:
     control = _load_rust_soak_control()
     pid_file = tmp_path / "watch.pid"

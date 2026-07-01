@@ -2947,6 +2947,8 @@ def trend_counter(
     path: tuple[str, ...],
     *,
     include_remaining_eta: bool = False,
+    reset_on_decrease: bool = False,
+    reset_on_increase: bool = False,
 ) -> dict[str, object]:
     """Returns first/last/delta/rate metadata for one nested numeric counter."""
 
@@ -2957,6 +2959,13 @@ def trend_counter(
             numeric.append((value, parse_iso_timestamp(record.get("timestampUtc"))))
     if not numeric:
         return {"samples": 0}
+    original_samples = len(numeric)
+    reset_index = 0
+    for index, ((previous, _), (current, _)) in enumerate(zip(numeric, numeric[1:]), start=1):
+        if (reset_on_decrease and current < previous) or (reset_on_increase and current > previous):
+            reset_index = index
+    if reset_index:
+        numeric = numeric[reset_index:]
     first = numeric[0][0]
     last = numeric[-1][0]
     delta = last - first
@@ -2974,6 +2983,9 @@ def trend_counter(
         "delta": delta,
         "average": round(sum(value for value, _ in numeric) / len(numeric), 3),
     }
+    if reset_index:
+        result["resetSegment"] = True
+        result["droppedSamples"] = original_samples - len(numeric)
     if first_timestamp is not None:
         result["startUtc"] = first_timestamp.isoformat()
     if last_timestamp is not None:
@@ -3139,13 +3151,22 @@ def watch_trend(args: argparse.Namespace) -> dict[str, object]:
     counters = {
         "rustUploadKiBps": trend_counter(records, ("rust", "uploadSpeedKiBps")),
         "rustActiveUploads": trend_counter(records, ("rust", "activeUploads")),
-        "rustEd2kPublished": trend_counter(records, ("rust", "ed2kPublishedEntries")),
+        "rustEd2kPublished": trend_counter(
+            records,
+            ("rust", "ed2kPublishedEntries"),
+            reset_on_decrease=True,
+        ),
         "rustEd2kPending": trend_counter(
             records,
             ("rust", "ed2kPendingEntries"),
             include_remaining_eta=True,
+            reset_on_increase=True,
         ),
-        "rustKadSourcePublished": trend_counter(records, ("rust", "kadSourcePublishedTotal")),
+        "rustKadSourcePublished": trend_counter(
+            records,
+            ("rust", "kadSourcePublishedTotal"),
+            reset_on_decrease=True,
+        ),
         "mfcSharedFiles": trend_counter(records, ("mfc", "sharedFileCount")),
         "mfcHashingRemaining": trend_counter(records, ("mfc", "sharedHashingCount")),
         "mfcUploadKiBps": trend_counter(records, ("mfc", "uploadSpeedKiBps")),
