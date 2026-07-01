@@ -421,6 +421,89 @@ def vpn_allowlist_status(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def optional_watch_diagnostics(args: argparse.Namespace) -> dict[str, object] | None:
+    """Returns optional sanitized diagnostics evidence for a watch sample."""
+
+    log_files = list(getattr(args, "diagnostics_log_file", None) or [])
+    log_dirs = list(getattr(args, "diagnostics_log_dir", None) or [])
+    if not log_files and not log_dirs:
+        return None
+    files: list[dict[str, object]] = []
+    sources: list[dict[str, object]] = []
+    aggregate_patterns: Counter[str] = Counter()
+    limit = int(getattr(args, "diagnostics_limit", 8) or 8)
+    max_bytes = int(getattr(args, "diagnostics_max_bytes", 262_144) or 262_144)
+    for log_dir in log_dirs:
+        summary = diagnostics_summary(
+            argparse.Namespace(
+                log_dir=log_dir,
+                log_file=None,
+                limit=limit,
+                max_bytes=max_bytes,
+            )
+        )
+        summary_files = summary.get("files", [])
+        if isinstance(summary_files, list):
+            files.extend(summary_files)
+        summary_patterns = summary.get("aggregatePatternCounts") or {}
+        sources.append(
+            {
+                "kind": "directory",
+                "pathFingerprint": private_path_fingerprint(str(log_dir)),
+                "fileCount": summary.get("fileCount"),
+                "aggregatePatternCounts": summary_patterns,
+                "files": summary_files,
+            }
+        )
+        for name, count in summary_patterns.items():
+            if isinstance(name, str) and isinstance(count, int):
+                aggregate_patterns[name] += count
+    if log_files:
+        summary = diagnostics_summary(
+            argparse.Namespace(
+                log_dir=None,
+                log_file=log_files,
+                limit=limit,
+                max_bytes=max_bytes,
+            )
+        )
+        summary_files = summary.get("files", [])
+        if isinstance(summary_files, list):
+            files.extend(summary_files)
+        summary_patterns = summary.get("aggregatePatternCounts") or {}
+        sources.append(
+            {
+                "kind": "files",
+                "fileCount": summary.get("fileCount"),
+                "aggregatePatternCounts": summary_patterns,
+                "files": summary_files,
+            }
+        )
+        for name, count in summary_patterns.items():
+            if isinstance(name, str) and isinstance(count, int):
+                aggregate_patterns[name] += count
+    return {
+        "fileCount": len(files),
+        "aggregatePatternCounts": dict(sorted(aggregate_patterns.items())),
+        "sources": sources,
+        "files": files[:limit],
+    }
+
+
+def optional_watch_vpn(args: argparse.Namespace) -> dict[str, object] | None:
+    """Returns optional VPN allow-list evidence for a watch sample."""
+
+    if not getattr(args, "include_vpn_status", False):
+        return None
+    return vpn_allowlist_status(
+        argparse.Namespace(
+            exe=getattr(args, "vpn_exe", None),
+            settings_path=getattr(args, "vpn_settings_path", None),
+            check_adapter=getattr(args, "check_vpn_adapter", False),
+        )
+    )
+
+
 def default_executable() -> Path:
     """Returns the diagnostics executable built by the workspace orchestrator."""
 
@@ -2198,6 +2281,12 @@ def watch_once(args: argparse.Namespace) -> dict[str, object]:
     }
     if mfc is not None:
         payload["mfc"] = mfc
+    diagnostics = optional_watch_diagnostics(args)
+    if diagnostics is not None:
+        payload["diagnostics"] = diagnostics
+    vpn = optional_watch_vpn(args)
+    if vpn is not None:
+        payload["vpn"] = vpn
     if getattr(args, "append_jsonl", False):
         append_jsonl(args.watch_jsonl, payload)
         write_watch_heartbeat(args.watch_heartbeat, payload)
@@ -2219,6 +2308,8 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
     rust = payload.get("rust") if isinstance(payload.get("rust"), dict) else {}
     mfc = payload.get("mfc") if isinstance(payload.get("mfc"), dict) else {}
     monitor = payload.get("monitor") if isinstance(payload.get("monitor"), dict) else {}
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    vpn = payload.get("vpn") if isinstance(payload.get("vpn"), dict) else {}
     latest = monitor.get("latestRecord") if isinstance(monitor.get("latestRecord"), dict) else {}
     lines = [
         f"timestampUtc={payload.get('timestampUtc')}",
@@ -2244,6 +2335,21 @@ def write_watch_heartbeat(path: Path, payload: dict[str, object]) -> None:
                 f"mfcHashing={mfc.get('sharedHashingCount')}",
                 f"mfcEd2kHighId={mfc.get('ed2kHighId')}",
                 f"mfcKadFirewalled={mfc.get('kadFirewalled')}",
+            ]
+        )
+    if vpn:
+        lines.extend(
+            [
+                f"vpnAllWhitelisted={vpn.get('allWhitelisted')}",
+                f"vpnAdapterUp={vpn.get('adapterUp')}",
+                f"vpnBindIpPresent={vpn.get('bindIpPresent')}",
+            ]
+        )
+    if diagnostics:
+        lines.extend(
+            [
+                f"diagnosticsFiles={diagnostics.get('fileCount')}",
+                f"diagnosticsPatterns={','.join(sorted((diagnostics.get('aggregatePatternCounts') or {}).keys()))}",
             ]
         )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2318,6 +2424,20 @@ def start_watch_loop(args: argparse.Namespace) -> dict[str, object]:
     if args.mfc_base_url:
         command.extend(["--mfc-base-url", args.mfc_base_url, "--mfc-api-key", args.mfc_api_key])
     command.extend(["--mfc-log-stale-seconds", str(args.mfc_log_stale_seconds)])
+    if args.include_vpn_status:
+        command.append("--include-vpn-status")
+    if args.check_vpn_adapter:
+        command.append("--check-vpn-adapter")
+    if args.vpn_settings_path is not None:
+        command.extend(["--vpn-settings-path", str(args.vpn_settings_path)])
+    for exe in args.vpn_exe or []:
+        command.extend(["--vpn-exe", str(exe)])
+    for log_dir in args.diagnostics_log_dir or []:
+        command.extend(["--diagnostics-log-dir", str(log_dir)])
+    for log_file in args.diagnostics_log_file or []:
+        command.extend(["--diagnostics-log-file", str(log_file)])
+    command.extend(["--diagnostics-limit", str(args.diagnostics_limit)])
+    command.extend(["--diagnostics-max-bytes", str(args.diagnostics_max_bytes)])
     if not args.restart_stale_monitor:
         command.append("--no-restart-stale-monitor")
 
@@ -2568,6 +2688,19 @@ def watch_status(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def add_watch_evidence_args(parser: argparse.ArgumentParser) -> None:
+    """Adds optional retained evidence knobs shared by watch commands."""
+
+    parser.add_argument("--include-vpn-status", action="store_true")
+    parser.add_argument("--check-vpn-adapter", action="store_true")
+    parser.add_argument("--vpn-exe", type=Path, action="append")
+    parser.add_argument("--vpn-settings-path", type=Path)
+    parser.add_argument("--diagnostics-log-dir", type=Path, action="append")
+    parser.add_argument("--diagnostics-log-file", type=Path, action="append")
+    parser.add_argument("--diagnostics-limit", type=int, default=8)
+    parser.add_argument("--diagnostics-max-bytes", type=int, default=262_144)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Builds the command-line parser."""
 
@@ -2810,6 +2943,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.heartbeat.txt",
     )
+    add_watch_evidence_args(watch_parser)
     watch_parser.set_defaults(func=watch_once)
 
     watch_loop_parser = sub.add_parser("watch-loop", help="Run repeated long-soak cadence checks.")
@@ -2852,6 +2986,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
+    add_watch_evidence_args(watch_loop_parser)
     watch_loop_parser.set_defaults(func=watch_loop)
 
     start_watch_loop_parser = sub.add_parser("start-watch-loop", help="Start detached repeated soak checks.")
@@ -2888,6 +3023,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=output_root() / "soak" / "parity-monitor" / "rust-soak-watch.stop",
     )
+    add_watch_evidence_args(start_watch_loop_parser)
     start_watch_loop_parser.set_defaults(func=start_watch_loop)
 
     stop_watch_loop_parser = sub.add_parser("stop-watch-loop", help="Request the detached soak watch loop to stop.")

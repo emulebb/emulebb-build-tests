@@ -429,6 +429,42 @@ def test_vpn_allowlist_status_reports_sanitized_executable_state(tmp_path: Path)
     assert str(tmp_path) not in rendered
 
 
+def test_optional_watch_diagnostics_keeps_per_source_summaries(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    rust_logs = tmp_path / "rust"
+    mfc_logs = tmp_path / "mfc"
+    rust_logs.mkdir()
+    mfc_logs.mkdir()
+    (rust_logs / "emulebb-rust-diag-1.jsonl").write_text(
+        '{"schema":"diag_event_v1","event":"packet","severity":"info"} ED2K\n',
+        encoding="utf-8",
+    )
+    (mfc_logs / "emulebb-diagnostics-kad.log").write_text(
+        '{"schema":"kad_event_v1","event":"kad_contact_rejected","severity":"info"} Kad firewalled\n',
+        encoding="utf-8",
+    )
+
+    result = control.optional_watch_diagnostics(
+        SimpleNamespace(
+            diagnostics_log_dir=[rust_logs, mfc_logs],
+            diagnostics_log_file=[],
+            diagnostics_limit=4,
+            diagnostics_max_bytes=2048,
+        )
+    )
+
+    assert result is not None
+    assert result["fileCount"] == 2
+    assert len(result["sources"]) == 2
+    assert result["sources"][0]["fileCount"] == 1
+    assert result["sources"][1]["fileCount"] == 1
+    assert result["aggregatePatternCounts"]["ed2k"] == 1
+    assert result["aggregatePatternCounts"]["firewall"] == 1
+    assert result["aggregatePatternCounts"]["kad"] == 1
+    rendered = repr(result)
+    assert str(tmp_path) not in rendered
+
+
 def test_watch_findings_reports_mfc_status_gaps() -> None:
     control = _load_rust_soak_control()
 
@@ -484,6 +520,15 @@ def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
                 "ed2kHighId": False,
                 "kadFirewalled": True,
             },
+            "vpn": {
+                "allWhitelisted": True,
+                "adapterUp": True,
+                "bindIpPresent": True,
+            },
+            "diagnostics": {
+                "fileCount": 2,
+                "aggregatePatternCounts": {"ed2k": 3, "kad": 4},
+            },
         },
     )
 
@@ -491,6 +536,10 @@ def test_watch_heartbeat_includes_optional_mfc_status(tmp_path: Path) -> None:
     assert "mfcHashing=12" in text
     assert "mfcEd2kHighId=False" in text
     assert "mfcKadFirewalled=True" in text
+    assert "vpnAllWhitelisted=True" in text
+    assert "vpnAdapterUp=True" in text
+    assert "diagnosticsFiles=2" in text
+    assert "diagnosticsPatterns=ed2k,kad" in text
 
 
 def test_watch_trend_summarizes_retained_jsonl_progress(tmp_path: Path) -> None:
@@ -629,6 +678,25 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
             },
         },
     )
+    monkeypatch.setattr(
+        control,
+        "optional_watch_diagnostics",
+        lambda args: {
+            "fileCount": 1,
+            "aggregatePatternCounts": {"ed2k": 2},
+            "files": [{"name": "emulebb-rust-diag-123.jsonl"}],
+        },
+    )
+    monkeypatch.setattr(
+        control,
+        "optional_watch_vpn",
+        lambda args: {
+            "allWhitelisted": True,
+            "adapterUp": True,
+            "bindIpPresent": True,
+            "executables": [],
+        },
+    )
 
     result = control.watch_once(
         SimpleNamespace(
@@ -648,12 +716,21 @@ def test_watch_once_can_append_retained_evidence(tmp_path: Path, monkeypatch) ->
             append_jsonl=True,
             watch_jsonl=jsonl,
             watch_heartbeat=heartbeat,
+            diagnostics_log_dir=[],
+            diagnostics_log_file=[],
+            include_vpn_status=True,
         )
     )
 
     assert "mfc-hashing-active" in result["findings"]
+    assert result["diagnostics"]["aggregatePatternCounts"] == {"ed2k": 2}
+    assert result["vpn"]["allWhitelisted"] is True
     retained = control.latest_jsonl_record(jsonl)
     assert retained is not None
     assert retained["findings"] == result["findings"]
+    assert retained["diagnostics"]["fileCount"] == 1
+    assert retained["vpn"]["adapterUp"] is True
     heartbeat_text = heartbeat.read_text(encoding="utf-8")
     assert "mfcHashing=10" in heartbeat_text
+    assert "vpnAllWhitelisted=True" in heartbeat_text
+    assert "diagnosticsFiles=1" in heartbeat_text
