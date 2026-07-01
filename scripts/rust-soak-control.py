@@ -1582,9 +1582,10 @@ def start_mfc(args: argparse.Namespace) -> dict[str, object]:
         server_udp_port=args.server_udp_port,
     )
     app = handles["app"]
+    mfc_pid = mods["live_common"].resolve_app_process_id(app)
     log_dir = Path(str(handles["packetDumpDir"]))
     return {
-        "mfcPid": app.pid,
+        "mfcPid": mfc_pid,
         "baseUrl": handles["baseUrl"],
         "logDir": str(log_dir),
         "uploadLog": str(log_dir / "emulebb-diagnostics-upload-slot.log"),
