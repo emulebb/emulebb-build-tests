@@ -148,7 +148,7 @@ def discover_mfc_known_met_from_processes() -> Path | None:
     """Finds MFC known.met from a running eMule-family process command line."""
 
     for process in collect_processes():
-        command_line = process_command_line(process)
+        command_line = getattr(process, "command_line", "")
         identity = f"{getattr(process, 'name', '')} {command_line}".lower()
         if "emule" not in identity or "emulebb-rust" in identity:
             continue
@@ -2880,7 +2880,7 @@ def mfc_processes(_: argparse.Namespace) -> dict[str, object]:
 
     rows = []
     for process in collect_processes():
-        command_line = process_command_line(process)
+        command_line = getattr(process, "command_line", "")
         identity = f"{process.name} {command_line}".lower()
         if "emule" not in identity or "emulebb-rust" in identity:
             continue
@@ -2898,6 +2898,45 @@ def mfc_processes(_: argparse.Namespace) -> dict[str, object]:
             }
         )
     rows.sort(key=lambda row: (str(row["name"]).lower(), int(row["pid"])))
+    return {"processes": rows}
+
+
+def watch_process_row(process: object) -> dict[str, object]:
+    """Returns a sanitized long-soak watcher process row."""
+
+    command_line = getattr(process, "command_line", "")
+    lowered = command_line.lower()
+    return {
+        "pid": getattr(process, "pid", None),
+        "parentPid": getattr(process, "parent_pid", None),
+        "name": getattr(process, "name", ""),
+        "creationDate": getattr(process, "creation_date", ""),
+        "commandLineFingerprint": hashlib.sha256(command_line.encode("utf-8")).hexdigest()[:16],
+        "hasWatchLoop": "watch-loop" in lowered,
+        "hasMfcBaseUrl": "--mfc-base-url" in lowered,
+        "hasMfcApiKey": "--mfc-api-key" in lowered,
+        "hasMfcUploadLog": "--mfc-upload-log" in lowered,
+        "hasRustDiagLog": "--rust-diag-log" in lowered,
+        "hasDiagnosticsLogFile": "--diagnostics-log-file" in lowered,
+        "hasDiagnosticsLogDir": "--diagnostics-log-dir" in lowered,
+        "diagnosticsLogFileArgs": lowered.count("--diagnostics-log-file"),
+        "includeVpnStatus": "--include-vpn-status" in lowered,
+        "checkVpnAdapter": "--check-vpn-adapter" in lowered,
+        "commandLineLength": len(command_line),
+    }
+
+
+def watch_processes(_: argparse.Namespace) -> dict[str, object]:
+    """Returns sanitized retained watcher process rows through the Python WMI helper."""
+
+    rows = []
+    for process in collect_processes():
+        command_line = getattr(process, "command_line", "")
+        lowered = command_line.lower()
+        if "rust-soak-control.py" not in lowered or "watch-loop" not in lowered:
+            continue
+        rows.append(watch_process_row(process))
+    rows.sort(key=lambda row: (str(row["name"]).lower(), int(row["pid"] or 0)))
     return {"processes": rows}
 
 
@@ -4145,10 +4184,16 @@ def watch_status(args: argparse.Namespace) -> dict[str, object]:
     """Returns detached soak watch loop health without shell process listings."""
 
     pid = None
+    watch_process = None
     if args.watch_pid_file.exists():
         text = args.watch_pid_file.read_text(encoding="utf-8", errors="replace").strip()
         if text.isdigit():
             pid = int(text)
+    if pid is not None:
+        for process in collect_processes():
+            if process.pid == pid:
+                watch_process = watch_process_row(process)
+                break
     heartbeat = args.watch_heartbeat.read_text(encoding="utf-8", errors="replace") if args.watch_heartbeat.exists() else ""
     latest = latest_jsonl_record(args.watch_jsonl)
     latest_age_seconds = timestamp_age_seconds(latest.get("timestampUtc")) if latest else None
@@ -4169,6 +4214,7 @@ def watch_status(args: argparse.Namespace) -> dict[str, object]:
         "watchJsonl": str(args.watch_jsonl),
         "watchHeartbeat": heartbeat,
         "watchStopFilePresent": args.watch_stop_file.exists(),
+        "watchProcess": watch_process,
         "latestRecord": latest,
     }
 
@@ -4492,6 +4538,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     mfc_processes_parser = sub.add_parser("mfc-processes", help="List sanitized MFC process rows through Python WMI.")
     mfc_processes_parser.set_defaults(func=mfc_processes)
+
+    watch_processes_parser = sub.add_parser(
+        "watch-processes",
+        help="List sanitized retained watcher process rows through Python WMI.",
+    )
+    watch_processes_parser.set_defaults(func=watch_processes)
 
     stop_mfc_parser = sub.add_parser("stop-mfc", help="Gracefully stop a running MFC diagnostics client.")
     stop_mfc_parser.add_argument("--pid", type=int, required=True)

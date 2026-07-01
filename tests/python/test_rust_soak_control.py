@@ -573,6 +573,79 @@ def test_start_upload_monitor_ignores_stale_reused_mfc_log(tmp_path: Path, monke
     assert str(stale_mfc_log) not in commands[0]
 
 
+def test_start_watch_loop_propagates_live_evidence_args(tmp_path: Path, monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    commands: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            del kwargs
+            commands.append(list(command))
+            self.pid = 8765
+
+    monkeypatch.setattr(control.subprocess, "Popen", FakePopen)
+
+    rust_diag = tmp_path / "emulebb-rust-diag-123.jsonl"
+    mfc_upload = tmp_path / "emulebb-diagnostics-upload-slot.log"
+    vpn_exe = tmp_path / "emulebb-rust-diagnostics.exe"
+    result = control.start_watch_loop(
+        SimpleNamespace(
+            base_url="http://192.0.2.10:4731/api/v1",
+            api_key="rust-key",
+            output_dir=tmp_path / "watch",
+            stale_seconds=900.0,
+            log_dir=tmp_path / "packet-dump",
+            rust_pid=123,
+            rust_diag_log=rust_diag,
+            mfc_upload_log=mfc_upload,
+            mfc_base_url="http://192.0.2.10:4732/api/v1",
+            mfc_api_key="mfc-key",
+            interval_seconds=300.0,
+            mfc_log_stale_seconds=900.0,
+            restart_stale_monitor=True,
+            watch_interval_seconds=300.0,
+            max_samples=0,
+            watch_jsonl=tmp_path / "watch" / "watch.jsonl",
+            watch_heartbeat=tmp_path / "watch" / "heartbeat.txt",
+            watch_stop_file=tmp_path / "watch" / "watch.stop",
+            include_vpn_status=True,
+            check_vpn_adapter=True,
+            vpn_settings_path=tmp_path / "vpn.json",
+            vpn_exe=[vpn_exe],
+            diagnostics_log_dir=[],
+            diagnostics_log_file=[rust_diag],
+            diagnostics_limit=20000,
+            diagnostics_max_bytes=4_194_304,
+        )
+    )
+
+    assert result["watchPid"] == 8765
+    command = commands[0]
+    assert "watch-loop" in command
+    assert ["--mfc-base-url", "http://192.0.2.10:4732/api/v1"] == command[
+        command.index("--mfc-base-url") : command.index("--mfc-base-url") + 2
+    ]
+    assert ["--mfc-api-key", "mfc-key"] == command[command.index("--mfc-api-key") : command.index("--mfc-api-key") + 2]
+    assert ["--mfc-upload-log", str(mfc_upload)] == command[
+        command.index("--mfc-upload-log") : command.index("--mfc-upload-log") + 2
+    ]
+    assert ["--rust-diag-log", str(rust_diag)] == command[
+        command.index("--rust-diag-log") : command.index("--rust-diag-log") + 2
+    ]
+    assert ["--diagnostics-log-file", str(rust_diag)] == command[
+        command.index("--diagnostics-log-file") : command.index("--diagnostics-log-file") + 2
+    ]
+    assert "--include-vpn-status" in command
+    assert "--check-vpn-adapter" in command
+    assert ["--vpn-exe", str(vpn_exe)] == command[command.index("--vpn-exe") : command.index("--vpn-exe") + 2]
+    assert ["--diagnostics-limit", "20000"] == command[
+        command.index("--diagnostics-limit") : command.index("--diagnostics-limit") + 2
+    ]
+    assert ["--diagnostics-max-bytes", "4194304"] == command[
+        command.index("--diagnostics-max-bytes") : command.index("--diagnostics-max-bytes") + 2
+    ]
+
+
 def test_diagnostics_summary_redacts_live_log_content(tmp_path: Path) -> None:
     control = _load_rust_soak_control()
     logs_dir = tmp_path / "logs"
@@ -1822,6 +1895,49 @@ def test_watch_status_flags_stale_retained_sample(tmp_path: Path, monkeypatch) -
     assert status["watchStale"] is True
     assert status["latestAgeSeconds"] == 901.0
     assert status["findings"] == ["watch-stale"]
+
+
+def test_watch_processes_returns_sanitized_argument_presence(monkeypatch) -> None:
+    control = _load_rust_soak_control()
+    process = SimpleNamespace(
+        pid=8765,
+        parent_pid=111,
+        name="python.exe",
+        creation_date="20260101000000.000000+000",
+        command_line=(
+            "python rust-soak-control.py --base-url http://192.0.2.10:4731/api/v1 "
+            "--api-key private-rust watch-loop --mfc-base-url http://192.0.2.10:4732/api/v1 "
+            "--mfc-api-key private-mfc --mfc-upload-log C:\\Private\\mfc.log "
+            "--rust-diag-log C:\\Private\\rust.jsonl --diagnostics-log-file C:\\Private\\rust.jsonl "
+            "--include-vpn-status --check-vpn-adapter"
+        ),
+    )
+    monkeypatch.setattr(control, "collect_processes", lambda: [process])
+
+    result = control.watch_processes(SimpleNamespace())
+
+    assert result["processes"] == [
+        {
+            "pid": 8765,
+            "parentPid": 111,
+            "name": "python.exe",
+            "creationDate": "20260101000000.000000+000",
+            "commandLineFingerprint": result["processes"][0]["commandLineFingerprint"],
+            "hasWatchLoop": True,
+            "hasMfcBaseUrl": True,
+            "hasMfcApiKey": True,
+            "hasMfcUploadLog": True,
+            "hasRustDiagLog": True,
+            "hasDiagnosticsLogFile": True,
+            "hasDiagnosticsLogDir": False,
+            "diagnosticsLogFileArgs": 1,
+            "includeVpnStatus": True,
+            "checkVpnAdapter": True,
+            "commandLineLength": len(process.command_line),
+        }
+    ]
+    assert "Private" not in control.json.dumps(result)
+    assert "private-mfc" not in control.json.dumps(result)
 
 
 def test_watch_brief_keeps_regular_monitoring_output_compact(tmp_path: Path, monkeypatch) -> None:
