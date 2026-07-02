@@ -3006,7 +3006,8 @@ def stop_watch_processes(args: argparse.Namespace) -> dict[str, object]:
 def stop_mfc(args: argparse.Namespace) -> dict[str, object]:
     """Stops the MFC diagnostics client through REST and a bounded PID fallback."""
 
-    request_rust_shutdown(args.base_url, args.api_key)
+    if args.mfc_base_url:
+        request_rust_shutdown(args.mfc_base_url, args.mfc_api_key)
     exited = wait_pid_exit(args.pid, args.shutdown_timeout_seconds) if args.pid else True
     if args.pid and not exited:
         terminate_pid_tree(args.pid, markers=("emulebb-diagnostics",), timeout_seconds=15.0)
@@ -4708,6 +4709,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     stop_mfc_parser = sub.add_parser("stop-mfc", help="Gracefully stop a running MFC diagnostics client.")
     stop_mfc_parser.add_argument("--pid", type=int, required=True)
+    stop_mfc_parser.add_argument("--mfc-base-url")
+    stop_mfc_parser.add_argument("--mfc-api-key", default=MFC_API_KEY)
     stop_mfc_parser.add_argument("--shutdown-timeout-seconds", type=float, default=45.0)
     stop_mfc_parser.set_defaults(func=stop_mfc)
 
