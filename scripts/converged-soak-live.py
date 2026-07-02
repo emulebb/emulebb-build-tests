@@ -97,28 +97,14 @@ def parse_duration(text: str) -> float:
 
 
 def _extract_items(payload: Any, *keys: str) -> list[dict[str, Any]]:
-    """Extracts a list from an eMuleBB REST list response, tolerating shapes.
+    """Extracts dict rows from an eMuleBB REST list response, tolerating shapes.
 
-    Accepts a bare list, ``{"items": [...]}``, ``{"data": {"items": [...]}}``, or a
-    named collection key (``searches`` / ``transfers``) at either level.
+    Thin wrapper over the shared soak_launch.api_items envelope logic (dict rows only):
+    accepts a bare list, ``{"items": [...]}``, ``{"data": {"items": [...]}}``, or a named
+    collection key (``searches`` / ``transfers``) at either level.
     """
 
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    containers: list[dict[str, Any]] = []
-    if isinstance(payload, dict):
-        containers.append(payload)
-        data = payload.get("data")
-        if isinstance(data, dict):
-            containers.append(data)
-        elif isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-    for container in containers:
-        for key in ("items", *keys):
-            value = container.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-    return []
+    return soak_launch.api_items(payload, *keys, require_dict=True)
 
 
 def _get_list(

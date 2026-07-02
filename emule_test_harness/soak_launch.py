@@ -235,28 +235,36 @@ def patch_upload_limit(base_url: str, api_key: str, upload_limit_kibps: int) -> 
     )
 
 
-def api_items(payload: Any, key: str) -> list[Any]:
-    """Extracts list rows from common eMuleBB REST envelope shapes."""
+def api_items(payload: Any, *keys: str, require_dict: bool = False) -> list[Any]:
+    """Extracts list rows from common eMuleBB REST envelope shapes.
+
+    Tries the wrapped ``data`` container first, then the top-level payload, matching an
+    ``items`` list or any of the caller's named collection keys (e.g. ``servers`` /
+    ``transfers``). With ``require_dict`` set, non-dict entries are dropped for callers
+    that only want object rows.
+    """
+
+    def _rows(value: list[Any]) -> list[Any]:
+        return [row for row in value if isinstance(row, dict)] if require_dict else value
 
     if isinstance(payload, list):
-        return payload
+        return _rows(payload)
     if not isinstance(payload, dict):
         return []
+    lookup_keys = ("items", *keys)
     data = payload.get("data")
     if isinstance(data, list):
-        return data
+        return _rows(data)
     if isinstance(data, dict):
-        items = data.get("items")
-        if isinstance(items, list):
-            return items
-        keyed_items = data.get(key)
-        if isinstance(keyed_items, list):
-            return keyed_items
-    items = payload.get("items")
-    if isinstance(items, list):
-        return items
-    keyed_items = payload.get(key)
-    return keyed_items if isinstance(keyed_items, list) else []
+        for key in lookup_keys:
+            value = data.get(key)
+            if isinstance(value, list):
+                return _rows(value)
+    for key in lookup_keys:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return _rows(value)
+    return []
 
 
 def server_endpoint_parts(endpoint: str) -> tuple[str, int]:
