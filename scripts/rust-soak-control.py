@@ -3390,6 +3390,8 @@ def watch_upload_efficiency_findings(
     row_count = diagnostics_int(efficiency.get("rowCount"))
     duplicate_ratio = diagnostics_float(efficiency.get("duplicateDoneOutcomeRatio"))
     served_ratio = diagnostics_float(efficiency.get("servedToRequestedRatio"))
+    adjusted_served_ratio = diagnostics_float(efficiency.get("duplicateDoneAdjustedServedToRequestedRatio"))
+    served_or_duplicate_ratio = diagnostics_float(efficiency.get("servedOrDuplicateDoneToRequestedRatio"))
     slow_read_ratio = diagnostics_float(efficiency.get("slowReadRatio"))
     if row_count < 100:
         return []
@@ -3399,12 +3401,17 @@ def watch_upload_efficiency_findings(
     pending_entries = diagnostics_int(rust.get("ed2kPendingEntries"))
     visibility_percent = diagnostics_float(rust.get("ed2kVisibilityPercent")) or 0.0
     visibility_mature = pending_entries == 0 or visibility_percent >= 95.0
+    duplicate_adjustment_proves_full_service = (
+        (adjusted_served_ratio is not None and adjusted_served_ratio >= 0.95)
+        or (served_or_duplicate_ratio is not None and served_or_duplicate_ratio >= 0.95)
+    )
     if (
         visibility_mature
         and duplicate_ratio is not None
         and served_ratio is not None
         and duplicate_ratio >= 0.60
         and served_ratio <= 0.55
+        and not duplicate_adjustment_proves_full_service
     ):
         findings.append("rust-duplicate-range-pressure")
     return findings

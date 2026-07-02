@@ -1549,6 +1549,22 @@ def test_watch_upload_efficiency_findings_wait_for_visibility_maturity() -> None
         {"ed2kPendingEntries": 0, "ed2kVisibilityPercent": 100.0},
         diagnostics,
     ) == ["rust-duplicate-range-pressure"]
+    assert (
+        control.watch_upload_efficiency_findings(
+            {"ed2kPendingEntries": 0, "ed2kVisibilityPercent": 100.0},
+            {
+                "uploadEfficiencySummary": {
+                    "rowCount": 400,
+                    "duplicateDoneOutcomeRatio": 0.75,
+                    "servedToRequestedRatio": 0.42,
+                    "duplicateDoneAdjustedServedToRequestedRatio": 1.0,
+                    "servedOrDuplicateDoneToRequestedRatio": 1.0,
+                    "slowReadRatio": 0.02,
+                }
+            },
+        )
+        == []
+    )
     assert control.watch_upload_efficiency_findings(
         {"ed2kPendingEntries": 0, "ed2kVisibilityPercent": 100.0},
         {"uploadEfficiencySummary": {"rowCount": 20, "slowReadRatio": 0.50}},
