@@ -241,16 +241,31 @@ def require_rust_download_manifest_metadata(
         raise RuntimeError("Rust cross-client manifest did not preserve the file size.")
     if manifest.get("md4_hashset_acquired") is not True or not isinstance(md4_hashset, list):
         raise RuntimeError("Rust did not acquire the MD4 hashset from the cross-client source.")
-    if len(md4_hashset) != expected_hashset_count:
+    # WHY: an eD2K single-part file carries an optional MD4 part-hash list. eMule/emulebb
+    # omit it (the file hash IS that single part hash) so the hashset is empty, while aMule
+    # surfaces the one part hash. Accept 0 or 1 for a single-part file; require the exact
+    # part count for multi-part files. expectedHashsetCount stays 0 for single-part (part
+    # hashes beyond the file hash), which the REST manifest contract asserts.
+    if expected_part_count > 1:
+        if len(md4_hashset) != expected_part_count:
+            raise RuntimeError(
+                f"Rust acquired {len(md4_hashset)} MD4 parts from the cross-client source, expected {expected_part_count}."
+            )
+    elif len(md4_hashset) > 1:
         raise RuntimeError(
-            f"Rust acquired {len(md4_hashset)} MD4 parts from the cross-client source, expected {expected_hashset_count}."
+            f"Rust acquired {len(md4_hashset)} MD4 parts for a single-part file, expected 0 or 1."
         )
     if require_aich_hashset:
         if manifest.get("aich_hashset_acquired") is not True or not isinstance(aich_hashset, list):
             raise RuntimeError("Rust did not acquire the AICH hashset from the cross-client source.")
-        if len(aich_hashset) != expected_hashset_count:
+        if expected_part_count > 1:
+            if len(aich_hashset) != expected_part_count:
+                raise RuntimeError(
+                    f"Rust acquired {len(aich_hashset)} AICH parts from the cross-client source, expected {expected_part_count}."
+                )
+        elif len(aich_hashset) > 1:
             raise RuntimeError(
-                f"Rust acquired {len(aich_hashset)} AICH parts from the cross-client source, expected {expected_hashset_count}."
+                f"Rust acquired {len(aich_hashset)} AICH parts for a single-part file, expected 0 or 1."
             )
     if not isinstance(sources, list) or not sources:
         raise RuntimeError("Rust cross-client manifest did not persist any transfer source.")
