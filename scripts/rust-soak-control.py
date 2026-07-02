@@ -44,6 +44,7 @@ from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
 from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
+from emule_test_harness.rust_client import spawn_rust_daemon
 from emule_test_harness.soak_launch import (
     DEFAULT_MFC_SEED_CONFIG_DIR,
     MFC_ED2K_PORT,
@@ -2945,16 +2946,16 @@ def start_rust(args: argparse.Namespace) -> dict[str, object]:
     env = os.environ.copy()
     env["EMULEBB_RUST_LOG_DIR"] = str(log_dir)
     stdout = (runtime_dir / "daemon.out").open("ab", buffering=0)
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
-    process = subprocess.Popen(
-        [str(exe), "--config", str(config_path)],
-        cwd=str(runtime_dir),
+    # WHY: detached so the daemon outlives this control process (the persisted soak
+    # is driven/observed separately); binary append handle matches the existing log.
+    process = spawn_rust_daemon(
+        exe,
+        config_path,
+        output_handle=stdout,
+        cwd=runtime_dir,
         env=env,
-        stdout=stdout,
-        stderr=subprocess.STDOUT,
-        creationflags=creationflags,
+        detached=True,
+        text=False,
     )
     wait_rest_ready(args.base_url, args.api_key, args.rest_timeout_seconds)
     if args.start_kad:

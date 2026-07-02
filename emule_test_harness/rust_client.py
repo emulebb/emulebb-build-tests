@@ -159,6 +159,37 @@ def start_rust_client_executable(executable: Path, config_path: Path, output_pat
     return start_rust_client_executable_with_output(executable, config_path, output_handle)
 
 
+def spawn_rust_daemon(
+    executable: Path,
+    config_path: Path,
+    *,
+    output_handle,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    detached: bool = False,
+    text: bool = True,
+) -> subprocess.Popen:
+    """Spawns the `emulebb-rust` daemon with the shared argv/stdio wiring.
+
+    ``detached=True`` adds the Windows CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+    flags so the daemon outlives the launcher (used by the persistent soak restart
+    controller); the default keeps it a managed child the launcher tears down.
+    """
+
+    creationflags = 0
+    if detached and os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
+    return subprocess.Popen(
+        [str(executable), "--config", str(config_path)],
+        cwd=str(cwd) if cwd is not None else str(executable.parent),
+        env=env if env is not None else os.environ.copy(),
+        stdout=output_handle,
+        stderr=subprocess.STDOUT,
+        text=text,
+        creationflags=creationflags,
+    )
+
+
 def start_rust_client_executable_with_output(
     executable: Path,
     config_path: Path,
@@ -166,18 +197,7 @@ def start_rust_client_executable_with_output(
 ) -> subprocess.Popen[str]:
     """Starts a staged `emulebb-rust` executable with an already-open output handle."""
 
-    return subprocess.Popen(
-        [
-            str(executable),
-            "--config",
-            str(config_path),
-        ],
-        cwd=executable.parent,
-        env=os.environ.copy(),
-        stdout=output_handle,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    return spawn_rust_daemon(executable, config_path, output_handle=output_handle)
 
 
 def start_rust_client_with_output(
