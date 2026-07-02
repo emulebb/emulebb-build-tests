@@ -3431,6 +3431,8 @@ def watch_diagnostic_findings(diagnostics: dict[str, object] | None) -> list[str
         or max_repeat_count >= 25
     ):
         findings.append("rust-anti-flood-drop-observed")
+    if total_events >= 5 and max_repeat_count >= 8:
+        findings.append("rust-anti-flood-hot-peer")
     if diagnostics_count(diagnostics, "event", "anti_flood_ban") > 0:
         findings.append("rust-anti-flood-ban-observed")
     return findings

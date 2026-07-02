@@ -1461,6 +1461,17 @@ def test_watch_diagnostic_findings_ignore_small_anti_flood_noise() -> None:
     )
     assert control.watch_diagnostic_findings(
         {
+            "aggregateJsonCounts": {"event": {"anti_flood_drop": 10}},
+            "antiFloodSummary": {
+                "totalEvents": 10,
+                "uniquePeers": 1,
+                "maxRepeatCount": 8,
+                "udpTrackerDrops": {"rows": 0},
+            },
+        }
+    ) == ["rust-anti-flood-hot-peer"]
+    assert control.watch_diagnostic_findings(
+        {
             "aggregateJsonCounts": {"event": {"anti_flood_drop": 30}},
             "antiFloodSummary": {
                 "totalEvents": 30,
