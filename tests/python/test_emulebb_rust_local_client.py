@@ -270,6 +270,7 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
     rust_client.stop_process_tree(process, timeout_seconds=5)
 
 
+@pytest.mark.native
 def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")
@@ -792,6 +793,7 @@ def test_emulebb_rust_local_search_download_flow(tmp_path: Path) -> None:
         terminate_process(process)
 
 
+@pytest.mark.native
 def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")
@@ -895,6 +897,7 @@ def test_emulebb_rust_server_connect_uses_configured_p2p_bind(tmp_path: Path) ->
         terminate_process(process)
 
 
+@pytest.mark.native
 def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")
@@ -984,6 +987,7 @@ def test_emulebb_rust_searches_local_goed2k_server_catalog(tmp_path: Path) -> No
         goed2k.stop_server_processes()
 
 
+@pytest.mark.native
 def test_emulebb_rust_peers_exchange_files_via_local_goed2k_sources(tmp_path: Path) -> None:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not available")

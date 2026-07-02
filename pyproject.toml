@@ -25,7 +25,7 @@ addopts = [
 ]
 markers = [
     "unit: fast pure-Python harness tests",
-    "native: tests that require a built emule-tests.exe",
+    "native: tests that require a native build (emule-tests.exe, or a cargo-built emulebb-rust)",
     "live: tests that launch emulebb.exe or drive the Win32 UI",
     "slow: long-running scenarios",
 ]
