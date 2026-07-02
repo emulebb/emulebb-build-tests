@@ -3424,6 +3424,9 @@ def watch_diagnostic_findings(diagnostics: dict[str, object] | None) -> list[str
     unique_peers = diagnostics_int(anti_flood.get("uniquePeers"))
     max_repeat_count = diagnostics_int(anti_flood.get("maxRepeatCount"))
     udp_drop_rows = diagnostics_int(udp_tracker_drops.get("rows"))
+    ban_events = diagnostics_count(diagnostics, "event", "anti_flood_ban")
+    action_counts = diagnostics_mapping(anti_flood.get("actionCounts"))
+    ban_events = max(ban_events, diagnostics_int(action_counts.get("ban")))
     if (
         udp_drop_rows > 0
         or total_events >= 25
@@ -3431,9 +3434,9 @@ def watch_diagnostic_findings(diagnostics: dict[str, object] | None) -> list[str
         or max_repeat_count >= 25
     ):
         findings.append("rust-anti-flood-drop-observed")
-    if total_events >= 5 and max_repeat_count >= 8:
+    if ban_events == 0 and total_events >= 5 and max_repeat_count >= 8:
         findings.append("rust-anti-flood-hot-peer")
-    if diagnostics_count(diagnostics, "event", "anti_flood_ban") > 0:
+    if ban_events > 0:
         findings.append("rust-anti-flood-ban-observed")
     return findings
 
@@ -3464,7 +3467,10 @@ def watch_recommendations(
     ]
     if rust_findings:
         recommendations.append("inspect-rust-p2p")
-    if any(finding.startswith("rust-anti-flood-") for finding in findings):
+    if "rust-anti-flood-hot-peer" in findings or (
+        "rust-anti-flood-drop-observed" in findings
+        and "rust-anti-flood-ban-observed" not in findings
+    ):
         recommendations.append("review-rust-anti-flood-diagnostics")
     mfc_connectivity_gap = any(
         finding in findings

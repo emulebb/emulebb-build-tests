@@ -1440,6 +1440,27 @@ def test_watch_recommendations_preserve_mfc_hashing_before_restart() -> None:
         None,
         {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
     ) == ["continue-soak"]
+    assert control.watch_recommendations(
+        ["rust-anti-flood-ban-observed"],
+        {},
+        {},
+        None,
+        {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+    ) == ["continue-soak"]
+    assert control.watch_recommendations(
+        ["rust-anti-flood-drop-observed"],
+        {},
+        {},
+        None,
+        {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+    ) == ["review-rust-anti-flood-diagnostics"]
+    assert control.watch_recommendations(
+        ["rust-anti-flood-drop-observed", "rust-anti-flood-ban-observed"],
+        {},
+        {},
+        None,
+        {"allWhitelisted": True, "adapterUp": True, "bindIpPresent": True},
+    ) == ["continue-soak"]
 
 
 def test_watch_diagnostic_findings_ignore_small_anti_flood_noise() -> None:
@@ -1470,6 +1491,18 @@ def test_watch_diagnostic_findings_ignore_small_anti_flood_noise() -> None:
             },
         }
     ) == ["rust-anti-flood-hot-peer"]
+    assert control.watch_diagnostic_findings(
+        {
+            "aggregateJsonCounts": {"event": {"anti_flood_drop": 10}},
+            "antiFloodSummary": {
+                "actionCounts": {"ban": 1, "drop": 10},
+                "totalEvents": 11,
+                "uniquePeers": 1,
+                "maxRepeatCount": 8,
+                "udpTrackerDrops": {"rows": 0},
+            },
+        }
+    ) == ["rust-anti-flood-ban-observed"]
     assert control.watch_diagnostic_findings(
         {
             "aggregateJsonCounts": {"event": {"anti_flood_drop": 30}},
