@@ -711,6 +711,7 @@ def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
     worst_rows: list[dict[str, object]] = []
     row_count = 0
     slow_read_count = 0
+    duplicate_done_suppressed_bytes = 0.0
     for path in selected:
         for line in tail_text_lines(path, max_bytes=args.max_bytes):
             stripped = line.strip()
@@ -740,6 +741,15 @@ def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
                 outcomes[outcome] += 1
             if first_skip is not None:
                 first_skip_reasons[first_skip] += 1
+            row_requested_bytes = diagnostic_json_numeric_value(body.get("requestedBytes"))
+            row_served_bytes = diagnostic_json_numeric_value(body.get("servedBytes"))
+            if (
+                first_skip == "duplicateDone"
+                and row_requested_bytes is not None
+                and row_served_bytes is not None
+                and row_requested_bytes > row_served_bytes
+            ):
+                duplicate_done_suppressed_bytes += row_requested_bytes - row_served_bytes
             for field in DIAGNOSTIC_BODY_NUMERIC_FIELDS["upload_request_outcome"]:
                 number = diagnostic_json_numeric_value(body.get(field))
                 if number is not None:
@@ -782,6 +792,23 @@ def upload_efficiency_summary(args: argparse.Namespace) -> dict[str, object]:
         result["slowReadRatio"] = round(slow_read_count / row_count, 4)
     if requested_bytes > 0:
         result["servedToRequestedRatio"] = round(served_bytes / requested_bytes, 4)
+        if duplicate_done_suppressed_bytes > 0:
+            result["duplicateDoneSuppressedBytes"] = round(duplicate_done_suppressed_bytes, 3)
+            result["duplicateDoneSuppressedByteRatio"] = round(
+                duplicate_done_suppressed_bytes / requested_bytes,
+                4,
+            )
+            result["servedOrDuplicateDoneToRequestedRatio"] = round(
+                (served_bytes + duplicate_done_suppressed_bytes) / requested_bytes,
+                4,
+            )
+            adjusted_requested_bytes = max(0.0, requested_bytes - duplicate_done_suppressed_bytes)
+            result["duplicateDoneAdjustedRequestedBytes"] = round(adjusted_requested_bytes, 3)
+            if adjusted_requested_bytes > 0:
+                result["duplicateDoneAdjustedServedToRequestedRatio"] = round(
+                    served_bytes / adjusted_requested_bytes,
+                    4,
+                )
     if read_cache_hits + read_cache_misses > 0:
         result["readCacheHitRatio"] = round(read_cache_hits / (read_cache_hits + read_cache_misses), 4)
     if served_bytes > 0 and read_disk_bytes > 0:
@@ -4092,6 +4119,11 @@ def compact_upload_efficiency_summary(summary: dict[str, object]) -> dict[str, o
         "slowReadCount",
         "slowReadRatio",
         "duplicateDoneOutcomeRatio",
+        "duplicateDoneSuppressedBytes",
+        "duplicateDoneSuppressedByteRatio",
+        "servedOrDuplicateDoneToRequestedRatio",
+        "duplicateDoneAdjustedRequestedBytes",
+        "duplicateDoneAdjustedServedToRequestedRatio",
     ):
         if field in summary:
             compact[field] = summary[field]

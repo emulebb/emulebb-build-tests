@@ -936,6 +936,11 @@ def test_upload_efficiency_summary_reports_percentiles_and_redacts_rows(tmp_path
     assert result["slowReadCount"] == 2
     assert result["slowReadRatio"] == 0.5
     assert result["servedToRequestedRatio"] == 0.875
+    assert result["duplicateDoneSuppressedBytes"] == 500.0
+    assert result["duplicateDoneSuppressedByteRatio"] == 0.125
+    assert result["servedOrDuplicateDoneToRequestedRatio"] == 1.0
+    assert result["duplicateDoneAdjustedRequestedBytes"] == 3500.0
+    assert result["duplicateDoneAdjustedServedToRequestedRatio"] == 1.0
     assert result["readCacheHitRatio"] == 0.6
     assert result["readDiskToServedRatio"] == 2.0
     assert result["duplicateDoneOutcomeRatio"] == 0.25
