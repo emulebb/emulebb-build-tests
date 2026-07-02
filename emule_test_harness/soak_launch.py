@@ -499,8 +499,16 @@ def bring_up_rust(
     upload_limit_kibps: int = DEFAULT_UPLOAD_LIMIT_KIBPS,
     ed2k_port: int = RUST_ED2K_PORT,
     kad_port: int = RUST_KAD_PORT,
+    enable_udp_reask: bool = True,
 ) -> dict[str, Any]:
-    """Starts the rust daemon on the persistent runtime and returns live handles."""
+    """Starts the rust daemon on the persistent runtime and returns live handles.
+
+    ``enable_udp_reask`` defaults to True to match the rust product default
+    (``config.rs`` ``enable_udp_reask: true``); the FEAT-001 client-UDP source
+    reask transport multiplexes OP_REASKFILEPING/OP_REASKACK on the shared Kad
+    UDP socket, so the soak exercises the same source-discovery path as a
+    shipping client instead of an artificially disabled one.
+    """
 
     runtime_dir.mkdir(parents=True, exist_ok=True)
     packet_dump_dir.mkdir(parents=True, exist_ok=True)
@@ -522,6 +530,7 @@ def bring_up_rust(
         obfuscation_enabled=obfuscation,
         kad_bootstrap_nodes=bootstrap_nodes,
         kad_bootstrap_min_routing_contacts=2,
+        enable_udp_reask=enable_udp_reask,
     )
     with config_path.open("a", encoding="utf-8") as cfg:
         cfg.write("\n[nat]\nenabled = true\n")
