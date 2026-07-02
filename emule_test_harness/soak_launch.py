@@ -457,6 +457,21 @@ def load_helper_modules(suffix: str) -> dict[str, ModuleType]:
     }
 
 
+def rust_stats_connected(stats: dict[str, Any], *, require_kad: bool) -> bool:
+    """Returns whether a rust ``/stats`` payload reports the soak's connected state.
+
+    ED2K connectivity is always required. ``require_kad`` additionally requires Kad,
+    the stricter gate the restart controller uses. Both the bring-up and restart paths
+    read the predicate here so they cannot silently diverge on what "connected" means.
+    """
+
+    if not stats.get("ed2kConnected"):
+        return False
+    if require_kad and not stats.get("kadConnected"):
+        return False
+    return True
+
+
 def bring_up_rust(
     *,
     rust_mod: ModuleType,
@@ -531,7 +546,7 @@ def bring_up_rust(
 
     def connected() -> dict[str, Any] | None:
         stats = rust_mod.get_stats(base_url)
-        return stats if stats.get("ed2kConnected") else None
+        return stats if rust_stats_connected(stats, require_kad=False) else None
 
     stats = wait_until("rust ED2K connected", timeouts["connect"], connected)
     log(f"rust connected (highId={bool(stats.get('ed2kHighId'))}) - REST {base_url}")

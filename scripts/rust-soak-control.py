@@ -55,6 +55,7 @@ from emule_test_harness.soak_launch import (
     existing_shared_roots,
     load_shareddir_root_entries,
     normalize_shared_root_entry,
+    rust_stats_connected,
     shared_root_is_recursive,
     shared_root_path,
 )
@@ -2911,7 +2912,7 @@ def wait_connected(base_url: str, api_key: str, timeout_seconds: float) -> dict[
     latest: dict[str, object] = {}
     while time.monotonic() < deadline:
         latest = sample(base_url, api_key)
-        if latest.get("ed2kConnected") is True and latest.get("kadConnected") is True:
+        if rust_stats_connected(latest, require_kad=True):
             return latest
         time.sleep(2.0)
     raise RuntimeError(f"Timed out waiting for ED2K+Kad connected: {latest}")
