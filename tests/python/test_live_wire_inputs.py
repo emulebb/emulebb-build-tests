@@ -92,6 +92,29 @@ def test_parse_live_wire_inputs_keeps_media_corpus_optional() -> None:
     assert inputs.video_roots == ()
 
 
+def test_parse_live_wire_inputs_keeps_mfc_profile_optional() -> None:
+    inputs = live_wire_inputs.parse_live_wire_inputs(payload())
+
+    assert inputs.mfc_profile_dir is None
+
+
+def test_parse_live_wire_inputs_reads_optional_mfc_profile_dir() -> None:
+    with_profile = payload()
+    with_profile["mfc_profile"] = {"profile_dir": " f:\\M\\H06T01\\dldz\\EMULE_BIN "}
+
+    inputs = live_wire_inputs.parse_live_wire_inputs(with_profile)
+
+    assert inputs.mfc_profile_dir == Path("f:\\M\\H06T01\\dldz\\EMULE_BIN").expanduser()
+
+
+def test_parse_live_wire_inputs_rejects_blank_mfc_profile_dir() -> None:
+    bad_profile = payload()
+    bad_profile["mfc_profile"] = {"profile_dir": "   "}
+
+    with pytest.raises(RuntimeError, match="profile_dir"):
+        live_wire_inputs.parse_live_wire_inputs(bad_profile)
+
+
 def test_parse_live_wire_inputs_accepts_legacy_schema_for_local_operator_files() -> None:
     old_payload = payload()
     old_payload["schema"] = live_wire_inputs.LEGACY_SCHEMAS[0]

@@ -1,5 +1,8 @@
 {
   "schema": "emulebb-build-tests.live-wire-inputs.v1",
+  "mfc_profile": {
+    "profile_dir": "%EMULEBB_MFC_SOAK_PROFILE_DIR%"
+  },
   "search_terms": {
     "generic_open": [
       "linux",

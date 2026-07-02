@@ -42,6 +42,7 @@ from emule_test_harness import mfc_known_met
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.live_profiles import write_shared_directories_file
+from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root
 from emule_test_harness.soak_launch import (
     DEFAULT_MFC_SEED_CONFIG_DIR,
@@ -116,13 +117,36 @@ def default_mfc_profile_dir() -> Path:
     return output_root() / "soak" / "mfc-profile" / "profiles" / "converged-soak" / "profile-base"
 
 
+def mfc_profile_dir_from_inputs(inputs_path: Path | None) -> Path | None:
+    """Returns the operator-configured persisted MFC profile dir from live-wire inputs, if set."""
+
+    if inputs_path is None:
+        return None
+    path = Path(inputs_path)
+    if not path.is_file():
+        return None
+    profile_dir = load_live_wire_inputs(path).mfc_profile_dir
+    return profile_dir.resolve() if profile_dir is not None else None
+
+
 def resolve_mfc_start_profile(args: argparse.Namespace) -> tuple[Path | None, str]:
-    """Chooses the MFC profile mode for a soak restart."""
+    """Chooses the MFC profile mode for a soak restart.
+
+    Priority: an explicit ``--direct-profile-dir`` wins, then a requested
+    rebuild-from-inputs, then the operator-configured ``mfc_profile.profile_dir``
+    from the live-wire inputs, then the default persisted soak profile-base."""
 
     if args.direct_profile_dir is not None:
         return args.direct_profile_dir, "explicit-direct"
     if args.rebuild_profile_from_inputs:
         return None, "prepared-from-inputs"
+    inputs_profile = mfc_profile_dir_from_inputs(getattr(args, "inputs", None))
+    if inputs_profile is not None:
+        if not (inputs_profile / "config" / "preferences.ini").is_file():
+            raise RuntimeError(
+                f"live-wire mfc_profile.profile_dir is missing config/preferences.ini: {inputs_profile}"
+            )
+        return inputs_profile, "inputs-json-direct"
     candidate = default_mfc_profile_dir()
     if (candidate / "config" / "preferences.ini").is_file():
         return candidate, "default-direct"

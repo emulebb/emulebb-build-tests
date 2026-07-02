@@ -52,6 +52,7 @@ from emule_test_harness import soak_action_diff as sad
 from emule_test_harness import soak_launch
 from emule_test_harness.hideme_split_tunnel import ensure_vpn_ready
 from emule_test_harness.kad_nodes import DEFAULT_NODES_DAT_URL, fetch_bootstrap_endpoints, load_bootstrap_endpoints
+from emule_test_harness.live_wire_inputs import load_live_wire_inputs
 from emule_test_harness.paths import get_workspace_output_root, reject_windows_temp_path
 from emule_test_harness.rust_client import stop_process_tree
 from emule_test_harness.soak_launch import (
@@ -1008,6 +1009,12 @@ def main(argv: list[str] | None = None) -> int:
 
     inputs_path = Path(args.inputs).resolve()
     mfc_profile_dir = Path(args.mfc_profile_dir).resolve() if args.mfc_profile_dir else None
+    if mfc_profile_dir is None:
+        # Fall back to the operator-configured persisted MFC profile from live-wire
+        # inputs (mfc_profile.profile_dir) when no explicit --mfc-profile-dir is given.
+        inputs_profile = load_live_wire_inputs(inputs_path).mfc_profile_dir
+        if inputs_profile is not None:
+            mfc_profile_dir = inputs_profile.resolve()
     rust_incoming_dir = Path(args.rust_incoming_dir).resolve() if args.rust_incoming_dir else None
     shared_dir_file = Path(args.shared_dir_file).resolve() if args.shared_dir_file else None
     nodes_file = Path(args.nodes_file).resolve() if args.nodes_file else None

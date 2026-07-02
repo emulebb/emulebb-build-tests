@@ -2567,3 +2567,71 @@ def test_watch_once_brief_report_keeps_retained_evidence_full(tmp_path: Path, mo
     assert retained is not None
     assert retained["diagnostics"]["files"] == [{"name": "emulebb-rust-diag-123.jsonl", "jsonRowCount": 2}]
     assert retained["mfc"]["sharedHashingCount"] == 12
+
+
+def _make_profile_base(profile_base: Path) -> Path:
+    config = profile_base / "config"
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "preferences.ini").write_text("[eMule]\n", encoding="utf-8")
+    return profile_base
+
+
+def _write_inputs_with_mfc_profile(path: Path, profile_dir: Path) -> None:
+    payload = {
+        "schema": "emulebb-build-tests.live-wire-inputs.v1",
+        "mfc_profile": {"profile_dir": str(profile_dir)},
+        "search_terms": {
+            "generic_open": ["linux"],
+            "documents": ["debian"],
+            "radarr_movies": ["public domain movie"],
+        },
+        "auto_browse": {
+            "bootstrap_transfer_hashes": ["0031c9cba65c50dd2015c184b2ca2c88"],
+            "direct_bootstrap_transfers": [
+                {"hash": "0031c9cba65c50dd2015c184b2ca2c88", "name": "x.iso", "size": 42, "method": "direct_ed2k"}
+            ],
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_resolve_mfc_start_profile_uses_live_wire_profile_dir(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    profile_base = _make_profile_base(tmp_path / "EMULE_BIN")
+    inputs = tmp_path / "live-wire-inputs.local.json"
+    _write_inputs_with_mfc_profile(inputs, profile_base)
+
+    resolved, mode = control.resolve_mfc_start_profile(
+        SimpleNamespace(direct_profile_dir=None, rebuild_profile_from_inputs=False, inputs=inputs)
+    )
+
+    assert resolved == profile_base.resolve()
+    assert mode == "inputs-json-direct"
+
+
+def test_resolve_mfc_start_profile_explicit_dir_overrides_inputs(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    explicit = _make_profile_base(tmp_path / "EXPLICIT")
+    inputs_profile = _make_profile_base(tmp_path / "EMULE_BIN")
+    inputs = tmp_path / "live-wire-inputs.local.json"
+    _write_inputs_with_mfc_profile(inputs, inputs_profile)
+
+    resolved, mode = control.resolve_mfc_start_profile(
+        SimpleNamespace(direct_profile_dir=explicit, rebuild_profile_from_inputs=False, inputs=inputs)
+    )
+
+    assert resolved == explicit
+    assert mode == "explicit-direct"
+
+
+def test_resolve_mfc_start_profile_rejects_incomplete_live_wire_profile(tmp_path: Path) -> None:
+    control = _load_rust_soak_control()
+    profile_base = tmp_path / "EMULE_BIN"
+    profile_base.mkdir(parents=True, exist_ok=True)
+    inputs = tmp_path / "live-wire-inputs.local.json"
+    _write_inputs_with_mfc_profile(inputs, profile_base)
+
+    with pytest.raises(RuntimeError, match="preferences.ini"):
+        control.resolve_mfc_start_profile(
+            SimpleNamespace(direct_profile_dir=None, rebuild_profile_from_inputs=False, inputs=inputs)
+        )

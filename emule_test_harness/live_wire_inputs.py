@@ -28,6 +28,7 @@ class LiveWireInputs:
     video_roots: tuple[Path, ...]
     bootstrap_transfer_hashes: tuple[str, ...]
     direct_bootstrap_transfers: tuple[dict[str, object], ...]
+    mfc_profile_dir: Path | None = None
 
 
 def get_default_inputs_path(repo_root: Path) -> Path:
@@ -83,6 +84,7 @@ def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None)
     search_terms = require_object(payload, "search_terms")
     auto_browse = require_object(payload, "auto_browse")
     media_corpus = read_optional_object(payload, "media_corpus")
+    mfc_profile = read_optional_object(payload, "mfc_profile")
     return LiveWireInputs(
         path=(path or Path(DEFAULT_INPUTS_FILE_NAME)).resolve(),
         generic_open_terms=read_terms(search_terms, "generic_open"),
@@ -92,6 +94,7 @@ def parse_live_wire_inputs(payload: dict[str, Any], *, path: Path | None = None)
         video_roots=read_optional_paths(media_corpus, "video_roots"),
         bootstrap_transfer_hashes=read_hashes(auto_browse, "bootstrap_transfer_hashes"),
         direct_bootstrap_transfers=read_direct_transfers(auto_browse, "direct_bootstrap_transfers"),
+        mfc_profile_dir=read_optional_single_path(mfc_profile, "profile_dir"),
     )
 
 
@@ -147,6 +150,17 @@ def read_optional_paths(payload: dict[str, Any], key: str) -> tuple[Path, ...]:
             raise RuntimeError(f"Live-wire inputs field {key!r}[{index}] must be a non-empty string.")
         paths.append(Path(item.strip()).expanduser().resolve())
     return tuple(paths)
+
+
+def read_optional_single_path(payload: dict[str, Any], key: str) -> Path | None:
+    """Reads one optional filesystem-path string, or None when the key is absent."""
+
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Live-wire inputs field {key!r} must be a non-empty string.")
+    return Path(value.strip()).expanduser()
 
 
 def read_hashes(payload: dict[str, Any], key: str) -> tuple[str, ...]:
