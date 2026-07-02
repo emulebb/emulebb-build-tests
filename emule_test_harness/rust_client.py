@@ -181,7 +181,7 @@ def spawn_rust_daemon(
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
     return subprocess.Popen(
         [str(executable), "--config", str(config_path)],
-        cwd=str(cwd) if cwd is not None else str(executable.parent),
+        cwd=cwd if cwd is not None else executable.parent,
         env=env if env is not None else os.environ.copy(),
         stdout=output_handle,
         stderr=subprocess.STDOUT,
