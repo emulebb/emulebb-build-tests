@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -247,6 +248,77 @@ def mfc_upload_logs(args: argparse.Namespace) -> dict[str, object]:
         "count": len(rows),
         "logs": rows,
     }
+
+
+def unique_archive_target(path: Path) -> Path:
+    """Returns a non-existing archive target path."""
+
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(1, 10_000):
+        candidate = path.with_name(f"{stem}-{index}{suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"Unable to allocate archive target for {path}")
+
+
+def mfc_archive_logs(args: argparse.Namespace) -> dict[str, object]:
+    """Moves MFC diagnostic logs out of a space-constrained persisted profile."""
+
+    profile_dir = args.profile_dir.resolve()
+    log_dir = (profile_dir / "logs").resolve()
+    if not log_dir.is_dir():
+        raise RuntimeError(f"MFC log directory was not found: {log_dir}")
+    archive_dir = args.archive_dir.resolve()
+    if archive_dir == log_dir or log_dir in archive_dir.parents:
+        raise RuntimeError("Archive directory must not be inside the MFC log directory.")
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    now = time.time()
+    rows: list[dict[str, object]] = []
+    moved_count = 0
+    moved_bytes = 0
+    for path in sorted(log_dir.glob(args.pattern)):
+        resolved = path.resolve()
+        if resolved.parent != log_dir or not resolved.is_file():
+            continue
+        stat = resolved.stat()
+        age_seconds = max(0.0, now - stat.st_mtime)
+        if age_seconds < args.min_age_seconds:
+            continue
+        target = unique_archive_target(archive_dir / resolved.name)
+        row = {
+            "source": str(resolved),
+            "target": str(target),
+            "bytes": stat.st_size,
+            "ageSeconds": round(age_seconds, 3),
+            "moved": False,
+        }
+        if not args.dry_run:
+            shutil.move(str(resolved), str(target))
+            row["moved"] = True
+            moved_count += 1
+            moved_bytes += stat.st_size
+        rows.append(row)
+        if args.limit and len(rows) >= args.limit:
+            break
+    result: dict[str, object] = {
+        "dryRun": args.dry_run,
+        "profileDir": str(profile_dir),
+        "logDir": str(log_dir),
+        "archiveDir": str(archive_dir),
+        "pattern": args.pattern,
+        "selectedCount": len(rows),
+        "movedCount": moved_count,
+        "movedBytes": moved_bytes,
+    }
+    if args.summary_only:
+        result["omittedFileRows"] = len(rows)
+    else:
+        result["files"] = rows
+    return result
 
 
 DIAGNOSTIC_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -4746,6 +4818,23 @@ def build_parser() -> argparse.ArgumentParser:
     mfc_logs_parser.add_argument("--fresh-seconds", type=float, default=900.0)
     mfc_logs_parser.add_argument("--limit", type=int, default=20)
     mfc_logs_parser.set_defaults(func=mfc_upload_logs)
+
+    mfc_archive_logs_parser = sub.add_parser(
+        "mfc-archive-logs",
+        help="Move MFC diagnostic logs from a persisted profile to the workspace output root.",
+    )
+    mfc_archive_logs_parser.add_argument("--profile-dir", type=Path, required=True)
+    mfc_archive_logs_parser.add_argument(
+        "--archive-dir",
+        type=Path,
+        default=output_root() / "soak" / "mfc-log-archive",
+    )
+    mfc_archive_logs_parser.add_argument("--pattern", default="emulebb*.log")
+    mfc_archive_logs_parser.add_argument("--min-age-seconds", type=float, default=0.0)
+    mfc_archive_logs_parser.add_argument("--limit", type=int, default=0)
+    mfc_archive_logs_parser.add_argument("--dry-run", action="store_true")
+    mfc_archive_logs_parser.add_argument("--summary-only", action="store_true")
+    mfc_archive_logs_parser.set_defaults(func=mfc_archive_logs)
 
     diagnostics_parser = sub.add_parser(
         "diagnostics-summary",
